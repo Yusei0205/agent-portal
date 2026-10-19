@@ -1,0 +1,39 @@
+{
+  "name": "agent-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted portal for Claude agents: projects, knowledge base, live agent runs, code review, role-based agents and skills, and learning content.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning dist/server.mjs",
+    "dev": "node scripts/build.mjs --web-only && node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --import tsx server/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx --test test/*.test.ts",
+    "test:ui": "node scripts/build.mjs && node --disable-warning=ExperimentalWarning --import tsx test/ui/ui-smoke.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "@aws-sdk/client-codecommit": "3.1152.0",
+    "@aws-sdk/client-sso": "3.1152.0",
+    "@aws-sdk/client-sso-oidc": "3.1152.0",
+    "dompurify": "^3.4.0",
+    "jszip": "^3.10.1",
+    "marked": "^18.0.0",
+    "mermaid": "^11.16.0",
+    "pdfjs-dist": "^6.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "esbuild": "^0.28.0",
+    "pdf-lib": "^1.17.1",
+    "playwright": "^1.56.0",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.0"
+  }
+}
