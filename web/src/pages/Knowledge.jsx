@@ -339,17 +339,6 @@ function Documents() {
     }
   };
 
-  // Search mode: show results, not the file manager.
-  if (hits || searchError) {
-    return (
-      <div className="stack-lg">
-        <SearchBar q={q} setQ={setQ} projectId={project.id} />
-        <ErrorNote error={searchError} />
-        {hits ? <SearchResults hits={hits} projectId={project.id} onClear={() => { setQ(''); setHits(null); }} /> : null}
-      </div>
-    );
-  }
-
   const movableSelected = [...selectedIds].filter((id) => {
     const d = list.find((x) => x.id === id);
     return d && d.kind === 'upload';
@@ -373,6 +362,17 @@ function Documents() {
       pinned: (d) => d.kind === 'decisions',
     }
   );
+
+  // Search mode: show results, not the file manager. (After every hook, so the hook order never changes.)
+  if (hits || searchError) {
+    return (
+      <div className="stack-lg">
+        <SearchBar q={q} setQ={setQ} projectId={project.id} />
+        <ErrorNote error={searchError} />
+        {hits ? <SearchResults hits={hits} projectId={project.id} onClear={() => { setQ(''); setHits(null); }} /> : null}
+      </div>
+    );
+  }
 
   // Select all visible (sorted) upload rows.
   const toggleAll = () => {
