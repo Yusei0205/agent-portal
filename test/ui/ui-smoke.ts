@@ -17,6 +17,9 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: path.join(shots, `${String(++step).padStart(2, '0')}-${name}.png`), fullPage: true });
 }
 
+/** file:/// address for a local path; Windows paths need forward slashes and three slashes. */
+const fileUrl = (p: string) => `file:///${p.replace(/\\/g, '/').replace(/^\//, '')}`;
+
 function check(cond: unknown, msg: string) {
   if (!cond) throw new Error(`UI check failed: ${msg}`);
   console.log(`  ok - ${msg}`);
@@ -64,7 +67,7 @@ async function main() {
     fs.writeFileSync(fsd, FSD_MD);
     const tsd = path.join(tmp, 'Refunds TSD.docx');
     fs.writeFileSync(tsd, await makeDocx());
-    await page.locator('input[type=file]').setInputFiles([fsd, tsd]);
+    await page.locator('input[type=file]').first().setInputFiles([fsd, tsd]);
     await page.getByRole('link', { name: 'Refunds TSD', exact: true }).waitFor();
     await page.waitForTimeout(400);
     await shot(page, 'documents');
@@ -116,7 +119,7 @@ async function main() {
     await page.getByRole('link', { name: 'Repositories', exact: true }).click();
     await page.getByRole('button', { name: 'Connect a repository', exact: true }).click();
     await page.getByRole('tab', { name: 'Other Git', exact: true }).click();
-    await page.getByLabel('Repository address').fill(`file://${bare}`);
+    await page.getByLabel('Repository address').fill(fileUrl(bare));
     await page.getByLabel('Display name (optional)').fill('refund-service');
     await page.getByRole('button', { name: 'Connect and clone', exact: true }).click();
     await page.locator('.repo .badge', { hasText: 'Ready' }).waitFor({ timeout: 20000 });

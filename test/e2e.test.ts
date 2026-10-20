@@ -215,9 +215,11 @@ test('builder: roles, custom agents and skills, library, and a test run', async 
 
 test('repositories: connect, clone and list branches', async () => {
   bareRepo = makeRepo(path.join(srv.dataDir, 'fixture'));
-  const notAdmin = await editor.req('POST', `/api/projects/${pid}/repos`, { provider: 'git', url: `file://${bareRepo}` });
+  // file:/// with forward slashes, so Windows paths (C:\...) are accepted too.
+  const url = `file:///${bareRepo.replace(/\\/g, '/').replace(/^\//, '')}`;
+  const notAdmin = await editor.req('POST', `/api/projects/${pid}/repos`, { provider: 'git', url });
   assert.equal(notAdmin.status, 400, 'only admins may use local paths');
-  const { repo } = await admin.post(`/api/projects/${pid}/repos`, { provider: 'git', url: `file://${bareRepo}`, name: 'refund-service' });
+  const { repo } = await admin.post(`/api/projects/${pid}/repos`, { provider: 'git', url, name: 'refund-service' });
   repoId = repo.id;
   const ready = await waitFor(async () => {
     const r = (await editor.get(`/api/projects/${pid}/repos`)).repos.find((x: any) => x.id === repoId);
