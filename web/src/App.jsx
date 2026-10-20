@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react';
 import { AppContext, ProjectContext, useApp } from './lib/context.js';
 import { api, setUnauthorizedHandler, stream } from './lib/api.js';
-import { emitProjectEvent } from './lib/events.js';
+import { emitProjectEvent, useProjectEvents } from './lib/events.js';
+import { getTheme, setTheme } from './lib/theme.js';
 import { go, href, useRoute } from './lib/router.js';
 import { cx, money } from './lib/util.js';
 import { Icon } from './components/Icon.jsx';
@@ -12,11 +13,17 @@ import { ProjectSettings } from './pages/ProjectSettings.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
 import { Learn } from './pages/Learn.jsx';
 import { Runs } from './pages/Runs.jsx';
+import { Sessions } from './pages/Sessions.jsx';
+import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
 import { Repos } from './pages/Repos.jsx';
 import { Builder } from './pages/Builder.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { Account } from './pages/Account.jsx';
+import { AwsAccounts } from './pages/AwsAccounts.jsx';
+
+// Insights is lazy-loaded so recharts stays out of the main bundle.
+const InsightsPage = lazy(() => import('./pages/Insights.jsx').then((m) => ({ default: m.Insights })));
 
 
 export function App() {
@@ -46,10 +53,13 @@ export function App() {
 const PROJECT_NAV = [
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
   { tab: 'learn', label: 'Learn', icon: 'learn' },
+  { tab: 'tickets', label: 'Tickets', icon: 'inbox' },
+  { tab: 'sessions', label: 'Sessions', icon: 'play' },
   { tab: 'runs', label: 'Agent runs', icon: 'runs' },
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'repos', label: 'Repositories', icon: 'repos' },
   { tab: 'builder', label: 'Agents and skills', icon: 'builder' },
+  { tab: 'insights', label: 'Insights', icon: 'chart' },
   { tab: 'team', label: 'Project and team', icon: 'user' },
 ];
 
@@ -93,14 +103,71 @@ function Shell({ user, onSignOut }) {
             <ProjectScope key={route.projectId} projectId={route.projectId} route={route} />
           ) : route.tab === 'settings' ? (
             <Settings />
+          ) : route.tab === 'aws' ? (
+            <AwsAccounts />
           ) : route.tab === 'account' ? (
             <Account />
+          ) : route.tab === 'insights' ? (
+            <Suspense fallback={<div className="pad"><Spinner /></div>}>
+              <InsightsPage />
+            </Suspense>
           ) : (
             <Projects />
           )}
         </main>
       </div>
     </AppContext.Provider>
+  );
+}
+
+/** Live readout of what the agents in this project are doing. */
+function AgentActivity({ projectId }) {
+  const [counts, setCounts] = useState({ working: 0, waiting: 0 });
+  const timer = useRef(null);
+  const load = useCallback(async () => {
+    try {
+      const r = await api.get(`/api/projects/${projectId}/runs?limit=30`);
+      const runs = r.runs || [];
+      setCounts({
+        working: runs.filter((x) => x.status === 'running' || x.status === 'queued').length,
+        waiting: runs.filter((x) => x.status === 'waiting').length,
+      });
+    } catch {
+      /* the readout is optional */
+    }
+  }, [projectId]);
+  useEffect(() => {
+    load();
+    return () => clearTimeout(timer.current);
+  }, [load]);
+  // Run updates arrive in bursts; look again once they settle.
+  useProjectEvents(['run.updated'], () => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(load, 400);
+  });
+  const text = counts.waiting ? `${counts.waiting} need${counts.waiting === 1 ? 's' : ''} you` : counts.working ? `${counts.working} agent${counts.working === 1 ? '' : 's'} working` : 'Agents idle';
+  return (
+    <div className={cx('rail-activity', counts.waiting ? 'needs-you' : counts.working ? 'is-active' : '')} role="status" aria-live="polite">
+      <span className="pulse-dot" aria-hidden="true" />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+/** Quick switch between the HUD look and the standard look. */
+function LookSwitch() {
+  const [theme, setT] = useState(getTheme());
+  useEffect(() => {
+    const sync = () => setT(getTheme());
+    window.addEventListener('portal-look', sync);
+    return () => window.removeEventListener('portal-look', sync);
+  }, []);
+  const hud = theme === 'hud';
+  return (
+    <button type="button" className="look-switch" aria-pressed={hud} onClick={() => setTheme(hud ? 'standard' : 'hud')} title="Switch between the HUD and standard look">
+      <span aria-hidden="true">◈</span>
+      <span>{hud ? 'HUD look: on' : 'HUD look: off'}</span>
+    </button>
   );
 }
 
@@ -145,6 +212,11 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
                   {current.open_questions}
                 </span>
               ) : null}
+              {n.tab === 'runs' && current.pending_approvals ? (
+                <span className="rail-count" title="Waiting for your permission">
+                  {current.pending_approvals}
+                </span>
+              ) : null}
             </a>
           ))
         ) : (
@@ -155,15 +227,27 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
         )}
       </nav>
       <div className="rail-foot">
+        <a href="#/aws" className={cx('rail-link', route.tab === 'aws' && 'is-active')}>
+          <Icon name="lock" />
+          <span>AWS accounts</span>
+        </a>
+        <a href="#/insights" className={cx('rail-link', route.tab === 'insights' && !route.projectId && 'is-active')}>
+          <Icon name="chart" />
+          <span>Insights</span>
+        </a>
         {user.is_admin ? (
           <a href="#/settings" className={cx('rail-link', route.tab === 'settings' && 'is-active')}>
             <Icon name="settings" />
             <span>Settings</span>
           </a>
         ) : null}
+        {current ? <AgentActivity projectId={current.id} /> : null}
+        <LookSwitch />
         <div className="rail-status">
-          <Badge tone={meta.provider === 'demo' ? 'warn' : 'accent'}>{meta.provider === 'demo' ? 'Demo mode' : meta.provider === 'bedrock' ? 'Amazon Bedrock' : 'Anthropic API'}</Badge>
-          {spend !== null && meta.provider !== 'demo' ? <span className="muted small">{money(spend, 2)} this month</span> : null}
+          <Badge tone={meta.provider === 'demo' ? 'warn' : 'accent'}>
+            {meta.provider === 'demo' ? 'Demo mode' : meta.provider === 'bedrock' ? 'Amazon Bedrock' : meta.provider === 'kiro' ? 'Kiro CLI' : 'Anthropic API'}
+          </Badge>
+          {spend !== null && meta.provider !== 'demo' && meta.provider !== 'kiro' ? <span className="muted small">{money(spend, 2)} this month</span> : null}
         </div>
         <div className="rail-user">
           <a href="#/account" className="rail-user-name" title="Your account">
@@ -205,12 +289,15 @@ function ProjectScope({ projectId, route }) {
     const handlers = {};
     for (const ev of [
       'run.updated',
+      'workflow.updated',
+      'workflow.deleted',
       'input.created',
       'input.resolved',
       'document.updated',
       'document.deleted',
       'repo.updated',
       'repo.deleted',
+      'repo.progress',
       'review.updated',
       'learn.updated',
       'learn.progress',
@@ -247,6 +334,12 @@ function ProjectScope({ projectId, route }) {
     case 'learn':
       page = <Learn route={route} />;
       break;
+    case 'tickets':
+      page = <Tickets />;
+      break;
+    case 'sessions':
+      page = <Sessions route={route} />;
+      break;
     case 'runs':
       page = <Runs route={route} />;
       break;
@@ -261,6 +354,13 @@ function ProjectScope({ projectId, route }) {
       break;
     case 'team':
       page = <ProjectSettings />;
+      break;
+    case 'insights':
+      page = (
+        <Suspense fallback={<div className="pad"><Spinner /></div>}>
+          <InsightsPage projectId={projectId} />
+        </Suspense>
+      );
       break;
     default:
       page = <Knowledge route={route} />;

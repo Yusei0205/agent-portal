@@ -263,6 +263,104 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (user_id, learn_doc_id)
   );
   `,
+  // Knowledge documents can be grouped by the folder they were uploaded from.
+  `ALTER TABLE documents ADD COLUMN folder TEXT NOT NULL DEFAULT '';`,
+  // ...and by the repository they belong to.
+  `ALTER TABLE documents ADD COLUMN repo_id TEXT;`,
+  // Virtual folders that exist even before any file is placed in them.
+  `CREATE TABLE IF NOT EXISTS project_folders (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    PRIMARY KEY (project_id, path)
+  );`,
+  // Which Jira project (and optional extra JQL) a portal project works on.
+  `CREATE TABLE IF NOT EXISTS project_jira (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    project_key TEXT NOT NULL,
+    jql TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+  );`,
+  // A project's own AWS account (for its repositories and the AWS commands agents run). Keys live in secrets.
+  `CREATE TABLE IF NOT EXISTS project_aws (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    auth TEXT NOT NULL DEFAULT 'inherit',
+    profile TEXT NOT NULL DEFAULT '',
+    region TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+  );`,
+  // The AWS account a set of credentials turned out to belong to, so the AWS accounts screen can group by it.
+  `CREATE TABLE IF NOT EXISTS aws_identities (
+    key TEXT PRIMARY KEY,
+    account TEXT NOT NULL,
+    arn TEXT NOT NULL DEFAULT '',
+    region TEXT NOT NULL DEFAULT '',
+    checked_at TEXT NOT NULL
+  );`,
+  // Autonomous workflow sessions: a saved goal the portal drives through repeated runs, and its history.
+  `CREATE TABLE IF NOT EXISTS workflows (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    stop_reason TEXT NOT NULL DEFAULT '',
+    repo_id TEXT,
+    branch TEXT,
+    model TEXT NOT NULL DEFAULT 'sonnet',
+    budget_usd REAL NOT NULL DEFAULT 5,
+    max_iterations INTEGER NOT NULL DEFAULT 8,
+    verify_command TEXT NOT NULL DEFAULT '',
+    rules TEXT NOT NULL DEFAULT '',
+    iteration INTEGER NOT NULL DEFAULT 0,
+    burst_start INTEGER NOT NULL DEFAULT 0,
+    spent_usd REAL NOT NULL DEFAULT 0,
+    last_run_id TEXT,
+    summary TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS workflows_project ON workflows(project_id, updated_at);
+  CREATE TABLE IF NOT EXISTS workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    run_id TEXT,
+    body TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    consumed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS workflow_events_wf ON workflow_events(workflow_id, id);`,
+  // A session can be started from a Jira ticket; it is read again at every iteration.
+  `ALTER TABLE workflows ADD COLUMN jira_key TEXT NOT NULL DEFAULT '';
+  ALTER TABLE workflows ADD COLUMN jira_summary TEXT NOT NULL DEFAULT '';
+  ALTER TABLE workflows ADD COLUMN jira_url TEXT NOT NULL DEFAULT '';`,
+  // The new branch the agent chose for a session's changes.
+  `ALTER TABLE workflows ADD COLUMN work_branch TEXT NOT NULL DEFAULT '';`,
+  // The project agent that leads a session (plans, delegates to the others); empty means the default main agent.
+  `ALTER TABLE workflows ADD COLUMN lead_agent TEXT NOT NULL DEFAULT '';`,
+  // One connection per project: its model provider, and an AWS SSO account/role picked from the portal's SSO sign-in.
+  // Sessions on Kiro CLI are billed in credits, so they get a credit budget next to the dollar one.
+  `ALTER TABLE project_aws ADD COLUMN provider TEXT NOT NULL DEFAULT 'inherit';
+  ALTER TABLE project_aws ADD COLUMN sso_account_id TEXT NOT NULL DEFAULT '';
+  ALTER TABLE project_aws ADD COLUMN sso_role_name TEXT NOT NULL DEFAULT '';
+  ALTER TABLE workflows ADD COLUMN budget_credits REAL NOT NULL DEFAULT 20;
+  ALTER TABLE workflows ADD COLUMN spent_credits REAL NOT NULL DEFAULT 0;`,
+  // AWS accounts are set up once on the AWS accounts page; a project picks one of them (project_aws.connection_id).
+  `CREATE TABLE IF NOT EXISTS aws_connections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    profile TEXT NOT NULL DEFAULT '',
+    region TEXT NOT NULL,
+    sso_account_id TEXT NOT NULL DEFAULT '',
+    sso_role_name TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  ALTER TABLE project_aws ADD COLUMN connection_id TEXT NOT NULL DEFAULT '';`,
 ];
 
 let db: DatabaseSync | null = null;

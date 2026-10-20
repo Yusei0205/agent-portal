@@ -3,12 +3,15 @@ import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, money, timeAgo } from '../lib/util.js';
+import { useSortable } from '../lib/useSortable.js';
+import { SortHeader } from '../components/SortHeader.jsx';
 import { Badge, Button, ErrorNote, Field, Modal, Note, PageHeader, Spinner, Toggle, useUi } from '../components/ui.jsx';
 
 const PROVIDERS = [
   { value: 'demo', title: 'Demo', body: 'Simulated agents. Free, no key needed. Use it to try every feature.' },
   { value: 'anthropic', title: 'Anthropic API', body: 'Pay per token with an API key from the Claude Console.' },
   { value: 'bedrock', title: 'Amazon Bedrock', body: 'Claude through your AWS account, billed by AWS.' },
+  { value: 'kiro', title: 'Kiro CLI', body: 'Runs through kiro-cli on this server with its Kiro sign-in. Billed as Kiro credits.' },
 ];
 
 /**
@@ -168,6 +171,7 @@ function ProviderSection({ s, reload }) {
         />
       ) : null}
       {s.provider.mode === 'bedrock' ? <p className="muted small">Set the AWS region and sign-in below. Enable the Claude models in the Bedrock console for that region first.</p> : null}
+      {s.provider.mode === 'kiro' ? <KiroPanel s={s} reload={reload} /> : null}
       <ErrorNote error={error} />
       <div className="row">
         <Button
@@ -188,13 +192,53 @@ function ProviderSection({ s, reload }) {
         </Button>
         {test ? (
           test.ok ? (
-            <span className="ok small">Connected. Claude replied in {Math.round(test.ms / 100) / 10}s.</span>
+            <span className="ok small">Connected. {s.provider.mode === 'kiro' ? 'Kiro' : 'Claude'} replied in {Math.round(test.ms / 100) / 10}s.</span>
           ) : (
             <span className="danger small">{test.error || `Unexpected reply: ${test.reply}`}</span>
           )
         ) : null}
       </div>
     </section>
+  );
+}
+
+function KiroPanel({ s, reload }) {
+  const { busy, error, save } = useSave(reload);
+  const [command, setCommand] = useState(s.kiro?.command ?? '');
+  useEffect(() => setCommand(s.kiro?.command ?? ''), [s.kiro?.command]);
+  const dirty = command !== (s.kiro?.command ?? '');
+  return (
+    <div className="stack">
+      <Field label="kiro-cli path" hint="Leave blank to find kiro-cli on the server's PATH.">
+        {(id) => (
+          <input
+            id={id}
+            className="input mono input-md"
+            value={command}
+            onChange={(e) => setCommand(e.target.value.trim())}
+            placeholder="kiro-cli (found on PATH)"
+            aria-describedby="kiro-path-hint"
+          />
+        )}
+      </Field>
+      <SecretRow
+        inline
+        title="Kiro API key (optional)"
+        desc="Only needed on headless servers that have no interactive kiro-cli sign-in. Requires Kiro Pro or above."
+        name="kiro.api_key"
+        info={s.secretsInfo['kiro.api_key']}
+        reload={reload}
+      />
+      <ErrorNote error={error} />
+      <div className="row">
+        <Button variant="primary" busy={busy} disabled={!dirty} onClick={() => save({ kiro: { command, models: s.kiro?.models ?? { sonnet: '', haiku: '', opus: '' } } })}>
+          Save Kiro settings
+        </Button>
+      </div>
+      <p className="muted small">
+        Portal runs use their own Kiro agent profile — no MCP servers; file writes and shell commands ask for your approval. Each run signs in as the Kiro account the server is running as.
+      </p>
+    </div>
   );
 }
 
@@ -205,21 +249,21 @@ function AwsSection({ s, reload }) {
   const dirty = JSON.stringify(aws) !== JSON.stringify(s.aws);
   return (
     <section className="panel">
-      <h2>AWS sign-in</h2>
-      <p className="muted small">Used for Amazon Bedrock and AWS CodeCommit repositories.</p>
+      <h2>AWS credentials for Bedrock</h2>
+      <p className="muted small">Used only for the Amazon Bedrock model. A project can connect to its own AWS account under Project and team › AWS account.</p>
       <div className="stack">
         <Field label="Region">{(id) => <RegionSelect id={id} value={aws.region} onChange={(v) => setAws({ ...aws, region: v })} />}</Field>
-        <fieldset className="field">
-          <legend className="field-label">How the server signs in</legend>
-          {AWS_AUTH.map((a) => (
-            <label key={a.value} className={cx('choice', aws.auth === a.value && 'is-checked')}>
-              <input type="radio" name="aws-auth" checked={aws.auth === a.value} onChange={() => setAws({ ...aws, auth: a.value })} />
-              <span>
-                <strong>{a.label}</strong> <span className="muted">{a.hint}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
+        <Field label="How the server signs in" hint={AWS_AUTH.find((a) => a.value === aws.auth)?.hint}>
+          {(id) => (
+            <select id={id} className="input" value={aws.auth} onChange={(e) => setAws({ ...aws, auth: e.target.value })}>
+              {AWS_AUTH.map((a) => (
+                <option key={a.value} value={a.value}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
         {aws.auth === 'profile' ? (
           <Field label="Profile name">{(id) => <input id={id} className="input input-md" value={aws.profile} onChange={(e) => setAws({ ...aws, profile: e.target.value })} placeholder="dev-sso" />}</Field>
         ) : null}
@@ -515,6 +559,11 @@ function SsoFlow({ s, reload }) {
               )
             }
           </Field>
+          {accounts && accounts.length === 0 && !loadingAccounts ? (
+            <p className="field-hint">
+              AWS returned no accounts for this sign-in. Check that you approved the code as a user with accounts assigned in IAM Identity Center, and that the SSO region above is the Identity Center region. Or sign out and use the Named profile or Access keys method instead.
+            </p>
+          ) : null}
 
           {/* Role selector */}
           {selectedAccount ? (
@@ -567,27 +616,78 @@ function SsoFlow({ s, reload }) {
 
 function ModelsSection({ s, reload }) {
   const { busy, error, save } = useSave(reload);
-  const [m, setM] = useState(s.provider.models);
-  useEffect(() => setM(s.provider.models), [s.provider.models]);
-  const dirty = JSON.stringify(m) !== JSON.stringify(s.provider.models);
+  const isKiro = s.provider.mode === 'kiro';
+  const sourceModels = isKiro ? (s.kiro?.models ?? { sonnet: '', haiku: '', opus: '' }) : s.provider.models;
+  const [m, setM] = useState(sourceModels);
+  useEffect(() => setM(isKiro ? (s.kiro?.models ?? { sonnet: '', haiku: '', opus: '' }) : s.provider.models), [s.provider.models, s.kiro?.models, isKiro]);
+  const dirty = JSON.stringify(m) !== JSON.stringify(sourceModels);
+  const [list, setList] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const canLoad = s.provider.mode !== 'demo';
+  const loadModels = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const data = await api.get('/api/settings/models');
+      setList(data.models);
+    } catch (e) {
+      setList(null);
+      setLoadError(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (canLoad) loadModels();
+    else setList(null);
+  }, [s.provider.mode, s.aws.region, s.aws.auth]);
   return (
     <section className="panel">
       <h2>Model versions</h2>
       <p className="muted small">
-        Agents ask for “sonnet”, “haiku” or “opus”. Leave these empty to use the latest versions. On Bedrock, set the exact model or inference profile IDs your account has enabled.
+        {isKiro
+          ? 'Agents ask for "sonnet", "haiku" or "opus". Leave these blank and Kiro will pick its newest model of that family.'
+          : 'Agents ask for "sonnet", "haiku" or "opus". Leave these on the default to use the latest versions. On Bedrock, pick the model or inference profile your account has enabled.'}
       </p>
       <div className="model-grid">
-        {['haiku', 'sonnet', 'opus'].map((k) => (
-          <Field key={k} label={k[0].toUpperCase() + k.slice(1)}>
-            {(id) => <input id={id} className="input mono" value={m[k]} onChange={(e) => setM({ ...m, [k]: e.target.value.trim() })} placeholder={s.provider.mode === 'bedrock' ? `global.anthropic.claude-${k}-…` : `claude-${k}-5-5`} />}
-          </Field>
-        ))}
+        {['haiku', 'sonnet', 'opus'].map((k) => {
+          const own = (list ?? []).filter((o) => o.family === k);
+          const options = own.length ? own : list ?? [];
+          const missing = m[k] && !options.some((o) => o.id === m[k]);
+          const kiroPlaceholder = k === 'sonnet' ? 'claude-sonnet-5.5' : k === 'haiku' ? 'claude-haiku-4.5' : 'claude-opus-5.5';
+          return (
+            <Field key={k} label={k[0].toUpperCase() + k.slice(1)}>
+              {(id) =>
+                list ? (
+                  <select id={id} className="input mono" value={m[k]} onChange={(e) => setM({ ...m, [k]: e.target.value })}>
+                    <option value="">{isKiro ? 'Kiro picks newest (default)' : 'Latest (default)'}</option>
+                    {missing ? <option value={m[k]}>{m[k]} (current)</option> : null}
+                    {options.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.name === o.id ? o.id : `${o.name} — ${o.id}`}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input id={id} className="input mono" value={m[k]} onChange={(e) => setM({ ...m, [k]: e.target.value.trim() })} placeholder={isKiro ? kiroPlaceholder : s.provider.mode === 'bedrock' ? `global.anthropic.claude-${k}-...` : `claude-${k}-5-5`} />
+                )
+              }
+            </Field>
+          );
+        })}
       </div>
+      {loadError ? <p className="muted small">Could not load the model list ({loadError.message}). You can type the model IDs instead.</p> : null}
       <ErrorNote error={error} />
       <div className="row">
-        <Button variant="primary" disabled={!dirty} busy={busy} onClick={() => save({ provider: { models: m } })}>
+        <Button variant="primary" disabled={!dirty} busy={busy} onClick={() => save(isKiro ? { kiro: { command: s.kiro?.command ?? '', models: m } } : { provider: { models: m } })}>
           Save model versions
         </Button>
+        {canLoad ? (
+          <Button variant="ghost" busy={loading} onClick={loadModels}>
+            Reload model list
+          </Button>
+        ) : null}
       </div>
     </section>
   );
@@ -599,6 +699,17 @@ function BudgetSection({ s, usage, reload }) {
   useEffect(() => setCap(s.budget.monthlyUsd ?? ''), [s.budget.monthlyUsd]);
   const used = usage?.totalUsd ?? s.usage.monthUsd;
   const pct = s.budget.monthlyUsd ? Math.min(100, Math.round((100 * used) / s.budget.monthlyUsd)) : null;
+
+  const BUDGET_COLS = [
+    { key: 'name',  label: 'Project', accessor: 'name', type: 'text' },
+    { key: 'runs',  label: 'Runs',    accessor: 'runs', type: 'number' },
+    { key: 'spend', label: 'Spend',   accessor: 'usd',  type: 'number' },
+  ];
+  const { sorted: sortedBudget, sortKey: bSortKey, sortDir: bSortDir, toggle: bToggle } = useSortable(
+    usage?.byProject || [],
+    { columns: BUDGET_COLS, storageKey: 'sort:settings:budget' }
+  );
+
   return (
     <section className="panel">
       <h2>Budget</h2>
@@ -611,6 +722,7 @@ function BudgetSection({ s, usage, reload }) {
         </div>
       ) : null}
       <p className="muted small">New runs are refused once the cap is reached. Demo runs are free and do not count.</p>
+      {s.provider.mode === 'kiro' ? <p className="muted small">Kiro runs are billed as Kiro credits, not dollars. This dollar cap does not apply to them.</p> : null}
       <div className="row">
         <Field label="Monthly cap in USD" hint="Empty means no cap.">
           {(id) => <input id={id} type="number" min={0} step={1} className="input input-num" value={cap} onChange={(e) => setCap(e.target.value)} />}
@@ -624,13 +736,13 @@ function BudgetSection({ s, usage, reload }) {
         <table className="table compact">
           <thead>
             <tr>
-              <th>Project</th>
-              <th className="num">Runs</th>
-              <th className="num">Spend</th>
+              <SortHeader col={BUDGET_COLS[0]} sortKey={bSortKey} sortDir={bSortDir} onSort={bToggle} />
+              <SortHeader col={BUDGET_COLS[1]} sortKey={bSortKey} sortDir={bSortDir} onSort={bToggle} className="num" />
+              <SortHeader col={BUDGET_COLS[2]} sortKey={bSortKey} sortDir={bSortDir} onSort={bToggle} className="num" />
             </tr>
           </thead>
           <tbody>
-            {usage.byProject.map((p) => (
+            {sortedBudget.map((p) => (
               <tr key={p.id}>
                 <td>{p.name}</td>
                 <td className="num">{p.runs}</td>
@@ -678,8 +790,9 @@ function SecretsSection({ s, reload }) {
   const [x, setX] = useState(s.secrets);
   useEffect(() => setX(s.secrets), [s.secrets]);
   return (
-    <section className="panel">
+    <section className="panel span-2">
       <h2>Where secrets are stored</h2>
+      <div className="choice-row">
       <label className={cx('choice', x.mode === 'local' && 'is-checked')}>
         <input type="radio" name="secrets" checked={x.mode === 'local'} onChange={() => setX({ ...x, mode: 'local' })} />
         <span>
@@ -692,6 +805,7 @@ function SecretsSection({ s, reload }) {
           <strong>AWS Systems Manager Parameter Store</strong> <span className="muted">SecureString parameters, read with the server’s own AWS identity. Needs the AWS CLI.</span>
         </span>
       </label>
+      </div>
       {x.mode === 'aws-ssm' ? (
         <div className="row">
           <Field label="Parameter prefix">{(id) => <input id={id} className="input mono" value={x.prefix} onChange={(e) => setX({ ...x, prefix: e.target.value })} />}</Field>
@@ -789,6 +903,18 @@ function Users() {
       toast(e.message, 'danger');
     }
   };
+
+  const USER_COLS = [
+    { key: 'name',   label: 'Name',   accessor: 'name',  type: 'text' },
+    { key: 'email',  label: 'Email',  accessor: 'email', type: 'text' },
+    { key: 'admin',  label: 'Admin',  accessor: (u) => u.is_admin ? 1 : 0, type: 'number' },
+    { key: 'status', label: 'Status', accessor: (u) => u.disabled ? 'disabled' : 'active', type: 'status' },
+  ];
+  const { sorted: sortedUsers, sortKey: uSortKey, sortDir: uSortDir, toggle: uToggle } = useSortable(
+    users.data?.users || [],
+    { columns: USER_COLS, storageKey: 'sort:settings:users' }
+  );
+
   return (
     <section className="panel span-2">
       <div className="row between">
@@ -801,15 +927,15 @@ function Users() {
         <table className="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Admin</th>
-              <th>Status</th>
+              <SortHeader col={USER_COLS[0]} sortKey={uSortKey} sortDir={uSortDir} onSort={uToggle} />
+              <SortHeader col={USER_COLS[1]} sortKey={uSortKey} sortDir={uSortDir} onSort={uToggle} />
+              <SortHeader col={USER_COLS[2]} sortKey={uSortKey} sortDir={uSortDir} onSort={uToggle} />
+              <SortHeader col={USER_COLS[3]} sortKey={uSortKey} sortDir={uSortDir} onSort={uToggle} />
               <th aria-label="Actions" />
             </tr>
           </thead>
           <tbody>
-            {users.data.users.map((u) => (
+            {sortedUsers.map((u) => (
               <tr key={u.id}>
                 <td>{u.name}</td>
                 <td className="muted">{u.email}</td>

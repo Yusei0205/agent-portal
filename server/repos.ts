@@ -4,9 +4,10 @@ import { all, insert, one, run, update, type Row } from './db.ts';
 import { del, get, patch, post } from './http.ts';
 import { HttpError, badRequest, newId, notFound, now, slugify, str, withLock } from './util.ts';
 import { getProject, notifyProject, projectDir, requireProject, writeClaudeMd } from './projects.ts';
-import { git, gitConfigEnv, PORTAL_GIT_IDENTITY, redact } from './git.ts';
+import { git, gitConfigEnv, gitProgress, PORTAL_GIT_IDENTITY, redact } from './git.ts';
 import { deleteSecret, getSecret, secretInfo, setSecret } from './secrets.ts';
-import { awsEnv, githubToken } from './settings.ts';
+import { githubToken } from './settings.ts';
+import { projectAwsEnv } from './project-aws.ts';
 
 export type Provider = 'github' | 'codecommit' | 'git';
 
@@ -37,7 +38,8 @@ export function repoDir(r: Repo): string {
 
 const GITHUB_RE = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
 const CODECOMMIT_HTTPS_RE = /^https:\/\/git-codecommit\.([a-z0-9-]+)\.amazonaws\.com\/v1\/repos\/([A-Za-z0-9_.-]+)$/;
-const CODECOMMIT_GRC_RE = /^codecommit:(?::([a-z0-9-]+))?\/\/(?:[A-Za-z0-9_-]+@)?([A-Za-z0-9_.-]+)$/;
+// git-remote-codecommit forms: codecommit://repo, codecommit://profile@repo, codecommit::region://[profile@]repo
+const CODECOMMIT_GRC_RE = /^codecommit:(?::([a-z0-9-]+):)?\/\/(?:[A-Za-z0-9_-]+@)?([A-Za-z0-9_.-]+)$/;
 
 export function validateUrl(provider: Provider, url: string, isAdmin: boolean): string {
   const u = url.trim();
@@ -59,6 +61,47 @@ export function validateUrl(provider: Provider, url: string, isAdmin: boolean): 
   throw badRequest('Use an https://, ssh:// or git@host:path address');
 }
 
+export interface LocalRepoInfo {
+  provider: Provider;
+  url: string;
+  name: string;
+  /** Local checkout to borrow objects from while cloning, so the first clone is fast. Null when there is no remote. */
+  seed: string | null;
+  /** True when the address came from the folder's own `origin` remote rather than the folder itself. */
+  fromRemote: boolean;
+}
+
+function providerOf(url: string): Provider {
+  if (GITHUB_RE.test(url)) return 'github';
+  if (CODECOMMIT_HTTPS_RE.test(url) || CODECOMMIT_GRC_RE.test(url)) return 'codecommit';
+  return 'git';
+}
+
+/**
+ * Read a Git repository on the server's own disk and work out which remote it was cloned from,
+ * so the user does not have to type the GitHub / CodeCommit address again.
+ */
+export async function inspectLocalRepo(raw: string): Promise<LocalRepoInfo> {
+  const dir = raw.trim().replace(/^["']|["']$/g, '');
+  if (!dir || !path.isAbsolute(dir)) throw badRequest('Use the full folder path, like C:\\Users\\you\\projects\\my-repo');
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw badRequest('That folder was not found on the server');
+  const top = (await git(['rev-parse', '--show-toplevel'], { cwd: dir }).catch(() => {
+    throw badRequest('That folder is not a Git repository');
+  })).stdout.trim();
+  const name = path.basename(top);
+  const origin = (await git(['remote', 'get-url', 'origin'], { cwd: top }).catch(() => null))?.stdout.trim();
+  if (origin) {
+    try {
+      const provider = providerOf(origin);
+      return { provider, url: validateUrl(provider, origin, true), name, seed: top, fromRemote: true };
+    } catch {
+      /* origin is something we cannot clone from here (for example a relative path); use the folder itself */
+    }
+  }
+  const url = top.startsWith('/') ? top : `file:///${top.replace(/\\/g, '/')}`;
+  return { provider: 'git', url, name, seed: null, fromRemote: false };
+}
+
 export function githubSlug(url: string): { owner: string; repo: string } | null {
   const m = url.match(GITHUB_RE);
   return m ? { owner: m[1], repo: m[2] } : null;
@@ -75,7 +118,8 @@ async function repoToken(r: Repo): Promise<string | null> {
 /** Environment that lets git authenticate for this repository without writing credentials to disk. */
 export async function repoGitEnv(r: Repo): Promise<Record<string, string>> {
   if (r.provider === 'codecommit') {
-    const aws = await awsEnv();
+    // The project's own AWS account, or the Settings credentials when the project has none.
+    const aws = await projectAwsEnv(r.project_id);
     if (r.url.startsWith('https://')) {
       return {
         ...aws,
@@ -103,7 +147,18 @@ function publishRepo(r: Repo) {
   notifyProject(r.project_id, 'repo.updated', view(getRepo(r.id)));
 }
 
-export async function cloneRepo(r: Repo): Promise<void> {
+/** Push clone / fetch progress to the browser, at most about 4 times a second. */
+function progressReporter(r: Repo): (p: { phase: string; percent: number }) => void {
+  let last = 0;
+  return (p) => {
+    const t = Date.now();
+    if (p.percent < 100 && t - last < 250) return;
+    last = t;
+    notifyProject(r.project_id, 'repo.progress', { id: r.id, ...p });
+  };
+}
+
+export async function cloneRepo(r: Repo, seed: string | null = null): Promise<void> {
   const dir = repoDir(r);
   await withLock(`repo:${r.id}`, async () => {
     update('repos', r.id, { status: 'cloning', error: null });
@@ -111,7 +166,9 @@ export async function cloneRepo(r: Repo): Promise<void> {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.mkdirSync(path.dirname(dir), { recursive: true });
-      await git(['clone', '--quiet', '--origin', 'origin', r.url, dir], { env: await repoGitEnv(r), timeoutMs: 15 * 60_000 });
+      // --reference-if-able / --dissociate: reuse objects already on disk, then keep a self-contained clone.
+      const borrow = seed ? ['--reference-if-able', seed, '--dissociate'] : [];
+      await gitProgress(['clone', '--progress', '--origin', 'origin', ...borrow, r.url, dir], { env: await repoGitEnv(r), timeoutMs: 15 * 60_000 }, progressReporter(r));
       const head = await git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: dir }).catch(() => null);
       const def = head?.stdout.trim().replace(/^origin\//, '');
       const branch = r.default_branch || def || 'main';
@@ -123,6 +180,35 @@ export async function cloneRepo(r: Repo): Promise<void> {
   });
 }
 
+/** Git could not update or delete a local ref (e.g. two branch names differing only in case on Windows/macOS). */
+const REF_LOCK_RE = /cannot lock ref|could not delete references|unable to update local ref/i;
+
+/**
+ * Delete local remote-tracking refs whose branch no longer exists on origin, one ref at a time.
+ * `fetch --prune` deletes them all in one transaction, which fails on case-insensitive file systems
+ * when two stale branches differ only in case (both need the same .lock file).
+ */
+export async function pruneStaleRefs(dir: string, env: Record<string, string>): Promise<number> {
+  const remote = await git(['ls-remote', '--heads', 'origin'], { cwd: dir, env });
+  const live = new Set(
+    remote.stdout
+      .split('\n')
+      .map((l) => l.split('\t')[1]?.trim())
+      .filter((ref): ref is string => Boolean(ref))
+      .map((ref) => ref.replace(/^refs\/heads\//, '')),
+  );
+  const local = await git(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin'], { cwd: dir });
+  let removed = 0;
+  for (const ref of local.stdout.split('\n').map((s) => s.trim()).filter(Boolean)) {
+    const name = ref.replace(/^refs\/remotes\/origin\//, '');
+    if (name === 'HEAD' || live.has(name)) continue;
+    // A failure here is retried by the next fetch; don't let one bad ref stop the rest.
+    const ok = await git(['update-ref', '-d', ref], { cwd: dir }).then(() => true, () => false);
+    if (ok) removed++;
+  }
+  return removed;
+}
+
 export async function syncRepo(r: Repo): Promise<void> {
   const dir = repoDir(r);
   if (!fs.existsSync(path.join(dir, '.git'))) return cloneRepo(r);
@@ -130,7 +216,16 @@ export async function syncRepo(r: Repo): Promise<void> {
     update('repos', r.id, { status: 'syncing', error: null });
     publishRepo(r);
     try {
-      await git(['fetch', '--quiet', '--prune', 'origin'], { cwd: dir, env: await repoGitEnv(r), timeoutMs: 10 * 60_000 });
+      const env = await repoGitEnv(r);
+      const fetch = () => gitProgress(['fetch', '--progress', '--prune', 'origin'], { cwd: dir, env, timeoutMs: 10 * 60_000 }, progressReporter(r));
+      try {
+        await fetch();
+      } catch (e: any) {
+        if (!REF_LOCK_RE.test(String(e?.message ?? e))) throw e;
+        // Repair once: prune stale refs individually, then fetch again.
+        await pruneStaleRefs(dir, env);
+        await fetch();
+      }
       const fresh = getRepo(r.id);
       await git(['checkout', '--quiet', '-B', fresh.default_branch, `origin/${fresh.default_branch}`], { cwd: dir });
       await git(['reset', '--quiet', '--hard', `origin/${fresh.default_branch}`], { cwd: dir });
@@ -266,9 +361,20 @@ export function registerRepoRoutes(): void {
   post('/api/projects/:pid/repos', async (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid, 'editor');
     const body = await ctx.json();
-    const provider = checkProvider(body.provider);
-    const url = validateUrl(provider, str(body.url, 'Repository address', { max: 500 }), Boolean(ctx.user!.is_admin));
-    const inferred = url.split(/[/:]/).filter(Boolean).pop()!.replace(/\.git$/, '');
+    let provider: Provider;
+    let url: string;
+    let inferred: string;
+    let seed: string | null = null;
+    if (body.localPath) {
+      if (!ctx.user!.is_admin) throw badRequest('Only admins can connect repositories from the server’s own disk');
+      const local = await inspectLocalRepo(str(body.localPath, 'Folder', { max: 500 }));
+      ({ provider, url, seed } = local);
+      inferred = local.name;
+    } else {
+      provider = checkProvider(body.provider);
+      url = validateUrl(provider, str(body.url, 'Repository address', { max: 500 }), Boolean(ctx.user!.is_admin));
+      inferred = url.split(/[/:]/).filter(Boolean).pop()!.replace(/\.git$/, '');
+    }
     const name = str(body.name, 'Name', { max: 100, optional: true }).trim() || inferred;
     let slug = slugify(name, 40);
     let n = 2;
@@ -293,7 +399,7 @@ export function registerRepoRoutes(): void {
       created_at: now(),
     });
     const repo = getRepo(id);
-    void cloneRepo(repo).then(() => writeClaudeMd(project.id, `Connect repository ${name}`)).catch(() => undefined);
+    void cloneRepo(repo, seed).then(() => writeClaudeMd(project.id, `Connect repository ${name}`)).catch(() => undefined);
     return { repo: view(repo) };
   });
 
@@ -327,10 +433,40 @@ export function registerRepoRoutes(): void {
     return { repo: view(getRepo(repo.id)) };
   });
 
+  // Without ?page the whole list is returned (the Runs and Review pickers rely on that).
+  // With ?page=N[&pageSize=M][&q=text] one page of the (optionally filtered) list is returned.
   get('/api/repos/:id/branches', async (ctx) => {
     const repo = getRepo(ctx.params.id);
     requireProject(ctx, repo.project_id);
-    return { branches: await listBranches(repo), defaultBranch: repo.default_branch };
+    let branches = await listBranches(repo);
+    const base = { defaultBranch: repo.default_branch };
+    const pageParam = ctx.query.get('page');
+    if (pageParam === null) return { branches, ...base };
+    const q = (ctx.query.get('q') ?? '').trim().toLowerCase();
+    if (q) branches = branches.filter((b) => b.name.toLowerCase().includes(q) || b.subject.toLowerCase().includes(q));
+    const pageSize = Math.min(100, Math.max(5, Number(ctx.query.get('pageSize')) || 20));
+    const pages = Math.max(1, Math.ceil(branches.length / pageSize));
+    const page = Math.min(pages, Math.max(1, Number(pageParam) || 1));
+    return { branches: branches.slice((page - 1) * pageSize, page * pageSize), total: branches.length, page, pages, pageSize, ...base };
+  });
+
+  // Delete a branch on the remote (editors and above). The remote can still refuse, for example when the
+  // token or AWS role lacks permission or the branch is protected; its message is passed back.
+  del('/api/repos/:id/branches', async (ctx) => {
+    const repo = getRepo(ctx.params.id);
+    requireProject(ctx, repo.project_id, 'editor');
+    const name = checkBranch(ctx.query.get('name'));
+    if (name === repo.default_branch) throw badRequest(`"${name}" is the default branch and cannot be deleted here`);
+    const dir = repoDir(repo);
+    await withLock(`repo:${repo.id}`, async () => {
+      await git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${name}`], { cwd: dir }).catch(() => {
+        throw notFound(`Branch "${name}" was not found. Sync the repository and try again.`);
+      });
+      await git(['push', '--quiet', 'origin', '--delete', `refs/heads/${name}`], { cwd: dir, env: await repoGitEnv(repo), timeoutMs: 2 * 60_000 });
+      await git(['update-ref', '-d', `refs/remotes/origin/${name}`], { cwd: dir }).catch(() => undefined);
+    });
+    publishRepo(repo);
+    return { ok: true };
   });
 
   get('/api/repos/:id/pulls', async (ctx) => {
@@ -350,6 +486,7 @@ export function registerRepoRoutes(): void {
       fs.rmSync(repoDir(repo), { recursive: true, force: true });
     });
     if (repo.token_secret) deleteSecret(repo.token_secret);
+    run('UPDATE documents SET repo_id = NULL WHERE repo_id = ?', repo.id);
     run('DELETE FROM repos WHERE id = ?', repo.id);
     await writeClaudeMd(repo.project_id, `Disconnect repository ${repo.name}`);
     notifyProject(repo.project_id, 'repo.deleted', { id: repo.id });

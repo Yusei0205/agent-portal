@@ -1,4 +1,10 @@
-/** Starter role templates. Applying one writes a subagent and its skills into the project's .claude folder. */
+/**
+ * Role templates. Applying one writes its agent (and any team of further agents) and skills into the project's
+ * .claude folder. The starter roles are written here; the library roles are generated from Claude Code agents by
+ * scripts/build-role-library.mjs (server/roles-library.ts).
+ */
+import { LIBRARY_ROLES } from './roles-library.ts';
+import { DELIVERY_ROLES } from './roles-delivery.ts';
 
 export interface SkillTemplate {
   name: string;
@@ -6,17 +12,30 @@ export interface SkillTemplate {
   body: string;
 }
 
+export interface AgentTemplate {
+  name: string;
+  description: string;
+  tools: string[];
+  model: 'haiku' | 'sonnet' | 'opus' | 'inherit';
+  prompt: string;
+  /** Skills this agent preloads. When absent, the role's lead preloads all of the role's skills and team members none. */
+  skills?: string[];
+}
+
 export interface RoleTemplate {
   key: string;
   title: string;
   summary: string;
-  agent: { name: string; description: string; tools: string[]; model: 'haiku' | 'sonnet' | 'opus'; prompt: string };
+  /** The agent the main agent talks to (for a team, its lead). */
+  agent: AgentTemplate;
+  /** Further agents installed with the role, for example the section writers of a documentation team. */
+  team?: AgentTemplate[];
   skills: SkillTemplate[];
 }
 
 const CITE = 'Cite every requirement you rely on as `docs/md/<file>.md › <heading>`. If the documents are silent or contradict each other, say so plainly and list the open question; the main agent will ask the team.';
 
-export const ROLE_TEMPLATES: RoleTemplate[] = [
+const STARTER_ROLES: RoleTemplate[] = [
   {
     key: 'business-analyst',
     title: 'Business analyst',
@@ -412,6 +431,13 @@ Both views must come from the same source sections and must not contradict each 
     ],
   },
 ];
+
+export const ROLE_TEMPLATES: RoleTemplate[] = [...STARTER_ROLES, ...LIBRARY_ROLES, ...DELIVERY_ROLES];
+
+/** Every agent a role installs: its lead first, then the team. */
+export function roleAgents(t: RoleTemplate): AgentTemplate[] {
+  return [t.agent, ...(t.team ?? [])];
+}
 
 export function roleTemplate(key: string): RoleTemplate | undefined {
   return ROLE_TEMPLATES.find((r) => r.key === key);

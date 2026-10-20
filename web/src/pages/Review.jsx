@@ -5,8 +5,10 @@ import { useProjectEvents } from '../lib/events.js';
 import { go, href } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, timeAgo } from '../lib/util.js';
+import { useSortable } from '../lib/useSortable.js';
 import { DiffView } from '../components/DiffView.jsx';
 import { Icon } from '../components/Icon.jsx';
+import { SortHeader } from '../components/SortHeader.jsx';
 import { Badge, Button, Empty, ErrorNote, Field, Modal, PageHeader, Segmented, Spinner, Toggle, useUi } from '../components/ui.jsx';
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
@@ -22,6 +24,19 @@ function ReviewList() {
   useProjectEvents(['review.updated'], () => reviews.reload(true));
   const [creating, setCreating] = useState(false);
   const list = reviews.data?.reviews || [];
+
+  const REVIEW_COLS = [
+    { key: 'change',   label: 'Change',       accessor: (r) => r.pr_number ? `PR #${r.pr_number}` : `${r.head} into ${r.base}`, type: 'text' },
+    { key: 'repo',     label: 'Repository',   accessor: 'repo_name',     type: 'text' },
+    { key: 'status',   label: 'Status',       accessor: 'status',        type: 'status' },
+    { key: 'findings', label: 'Open findings',accessor: 'open_findings', type: 'number' },
+    { key: 'started',  label: 'Started',      accessor: 'created_at',    type: 'date' },
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(list, {
+    columns: REVIEW_COLS,
+    storageKey: `sort:reviews:${project.id}`,
+  });
+
   return (
     <div className="page">
       <PageHeader
@@ -39,15 +54,15 @@ function ReviewList() {
         <table className="table">
           <thead>
             <tr>
-              <th>Change</th>
-              <th>Repository</th>
-              <th>Status</th>
-              <th className="num">Open findings</th>
-              <th>Started</th>
+              <SortHeader col={REVIEW_COLS[0]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={REVIEW_COLS[1]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={REVIEW_COLS[2]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={REVIEW_COLS[3]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={REVIEW_COLS[4]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
             </tr>
           </thead>
           <tbody>
-            {list.map((r) => (
+            {sorted.map((r) => (
               <tr key={r.id}>
                 <td>
                   <a className="strong-link" href={href(project.id, 'review', r.id)}>

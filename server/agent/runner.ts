@@ -4,15 +4,18 @@ import { all, insert, one, run as exec, update, type Row } from '../db.ts';
 import { publish, projectChannel, runChannel } from '../events.ts';
 import { agentEnv, assertBudget, getSettings, providerMode } from '../settings.ts';
 import { config } from '../config.ts';
-import { getProject, projectDir, notifyProject, type Project } from '../projects.ts';
+import { ensureBuiltInSkills, getProject, projectDir, notifyProject, type Project } from '../projects.ts';
 import { HttpError, badRequest, newId, now, parseJson, withLock } from '../util.ts';
 import { commitAll } from '../git.ts';
+import { blockedCommand } from '../guardrails.ts';
 import type { CanUseTool, PermissionMode, ProviderRunOptions, SdkMessage } from './types.ts';
 import { sdkRun } from './sdk.ts';
+import { kiroRun } from './kiro.ts';
 import { demoRun, demoModel } from './demo.ts';
 import { listAgentFiles, listSkillNames } from '../builder.ts';
 import { searchForAgent, reindexDecisions } from '../knowledge.ts';
 import { createWorktree, getRepo } from '../repos.ts';
+import { effectiveProvider } from '../project-aws.ts';
 
 export type RunKind = 'chat' | 'test' | 'review' | 'qa' | 'learn' | 'quiz' | 'verify' | 'connection';
 
@@ -33,6 +36,8 @@ export interface StartRunInput {
   systemPrompt?: string;
   maxTurns?: number;
   meta?: Record<string, unknown>;
+  /** Unattended workflow runs: tools are allowed without asking, except the commands in guardrails.ts. */
+  autoApprove?: boolean;
   /** Single-shot tasks: no project settings, no tools. */
   oneshot?: boolean;
   /** Text the demo provider returns for single-shot tasks. */
@@ -243,10 +248,11 @@ export interface StartedRun {
 }
 
 export async function startRun(input: StartRunInput): Promise<StartedRun> {
-  assertBudget();
   const settings = getSettings();
-  const mode = settings.provider.mode;
   const project = getProject(input.projectId);
+  // The project's own connection decides the provider; without one it follows Settings.
+  const mode = effectiveProvider(project.id);
+  assertBudget(mode);
   const pdir = projectDir(project);
   const runId = newId('r_');
   const model = input.model || 'sonnet';
@@ -291,6 +297,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
   const done = (async () => {
     try {
       fs.mkdirSync(workDir, { recursive: true });
+      if (!input.oneshot) ensureBuiltInSkills(project);
       if (input.repoId && !worktree) {
         const repo = getRepo(input.repoId);
         if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
@@ -347,6 +354,15 @@ async function execute(
   }
 
   const canUseTool: CanUseTool = async (toolName, toolInput, { signal }) => {
+    if (input.autoApprove && !input.oneshot) {
+      // Nobody is there to answer: questions are refused and the agent must decide, and only safe commands run.
+      if (toolName === 'AskUserQuestion') return { behavior: 'deny', message: 'No person is available to answer. Choose the most reasonable option and list it under assumptions in your summary.' };
+      if (toolName === 'Bash') {
+        const why = blockedCommand(String((toolInput as any).command ?? ''));
+        if (why) return { behavior: 'deny', message: `Blocked by Agent Portal: ${why} If you need this, report blocked and say what you need.` };
+      }
+      return { behavior: 'allow', updatedInput: toolInput };
+    }
     if (toolName === 'AskUserQuestion') {
       const questions = Array.isArray((toolInput as any).questions) ? (toolInput as any).questions : [];
       const resp = await waitForInput(runId, a, 'question', toolName, { questions }, signal);
@@ -373,7 +389,7 @@ async function execute(
     return `Blocked by Agent Portal: this run may only change files under ${writeDirRel}/.`;
   };
 
-  const env = o.mode === 'demo' ? {} : await agentEnv();
+  const env = o.mode === 'demo' ? {} : await agentEnv(project.id);
   const opts: ProviderRunOptions = {
     prompt,
     cwd: pdir,
@@ -386,7 +402,9 @@ async function execute(
     settingSources: input.oneshot ? [] : ['project'],
     systemAppend:
       input.systemAppend ??
-      'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, use AskUserQuestion instead of guessing. When a task matches a role subagent in .claude/agents, delegate to it.',
+      (o.mode === 'kiro'
+        ? 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, stop and ask your questions in your final reply instead of guessing; the user answers with a follow-up. The role descriptions in .claude/agents/ describe how this team works: apply the matching role yourself.'
+        : 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, use AskUserQuestion instead of guessing. When a task matches a role subagent in .claude/agents, delegate to it.'),
     systemPrompt: input.systemPrompt,
     canUseTool,
     guard: input.oneshot ? undefined : guard,
@@ -413,7 +431,13 @@ async function execute(
   setStatus(runId, 'running', { started_at: now() });
 
   const stream: AsyncIterable<SdkMessage> =
-    o.mode === 'demo' ? (input.oneshot && input.demoOutput ? demoOneshot(opts, input.demoOutput) : demoRun(opts)) : sdkRun(opts);
+    o.mode === 'demo'
+      ? input.oneshot && input.demoOutput
+        ? demoOneshot(opts, input.demoOutput)
+        : demoRun(opts)
+      : o.mode === 'kiro'
+        ? kiroRun(opts)
+        : sdkRun(opts);
 
   let inTok = 0;
   let outTok = 0;
@@ -438,6 +462,7 @@ async function execute(
       const ok = msg.subtype === 'success' && !msg.is_error;
       const meta = parseJson<any>(getRun(runId).meta, {});
       if (typeof msg.estimated_cost_usd === 'number') meta.estimatedUsd = msg.estimated_cost_usd;
+      if (typeof msg.kiro_credits === 'number') meta.kiroCredits = msg.kiro_credits;
       const usage = (msg.usage ?? {}) as Record<string, number>;
       setStatus(runId, ok ? 'completed' : 'failed', {
         result: typeof msg.result === 'string' ? msg.result : '',

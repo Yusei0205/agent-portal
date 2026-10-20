@@ -1,21 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, stream } from '../lib/api.js';
 import { useApp, useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
 import { go, href } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { buildTree, toolSummary } from '../lib/tree.js';
+import { AgentGraph } from '../components/AgentGraph.jsx';
+import { TicketPreview } from '../components/TicketPreview.jsx';
+import { ModelPicker } from '../components/ModelPicker.jsx';
+import { ConnectionBadge } from '../components/ConnectionBadge.jsx';
 import { parseUnifiedDiff } from '../lib/diff.js';
 import { cx, dateTime, duration, hueFor, money, timeAgo, tokens } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Markdown } from '../components/Markdown.jsx';
 import { InputCard } from '../components/InputCard.jsx';
+import { JiraRunBar } from './Tickets.jsx';
 import { DiffView } from '../components/DiffView.jsx';
 import { Badge, Button, Empty, ErrorNote, Field, Modal, Note, Segmented, Spinner, Tabs, Toggle, useUi } from '../components/ui.jsx';
 
 const MODES = [
   { value: 'default', label: 'Ask before changes', hint: 'Edits and commands wait for your approval.' },
-  { value: 'acceptEdits', label: 'Auto-accept edits', hint: 'File edits in the run’s working copy go ahead; commands still ask.' },
+  { value: 'acceptEdits', label: 'Auto-accept edits', hint: "File edits in the run's working copy go ahead; commands still ask." },
   { value: 'plan', label: 'Plan only', hint: 'Reads and plans; changes nothing.' },
 ];
 const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.value, m.label]));
@@ -32,6 +37,14 @@ export function Runs({ route }) {
   const runs = useLoad(() => api.get(`/api/projects/${project.id}/runs?kind=${filter === 'all' ? 'chat,test,review' : filter}`), [project.id, filter]);
   useProjectEvents(['run.updated'], () => runs.reload(true));
   const selected = route.rest[0] && route.rest[0] !== 'new' ? route.rest[0] : null;
+
+  // Support ?jiraKey=PAY-123&jiraUrl=...&jiraSummary=... from the Tickets page "Start a coding run" button
+  const prefill = useMemo(() => {
+    const q = new URLSearchParams(window.location.search);
+    const key = q.get('jiraKey');
+    if (!key) return null;
+    return { jiraKey: key, jiraUrl: q.get('jiraUrl') || '', jiraSummary: q.get('jiraSummary') || '' };
+  }, []);
 
   return (
     <div className="runs-page">
@@ -67,7 +80,7 @@ export function Runs({ route }) {
                     <span className="run-item-title">{r.title}</span>
                     <span className="muted small">
                       {KIND_LABEL[r.kind] ?? r.kind}, {timeAgo(r.created_at)}
-                      {r.cost_usd ? `, ${money(r.cost_usd)}` : ''}
+                      {r.meta?.kiroCredits != null ? `, ${r.meta.kiroCredits} credits` : r.cost_usd ? `, ${money(r.cost_usd)}` : ''}
                     </span>
                   </span>
                   {r.status === 'waiting' ? <Badge status="waiting" /> : null}
@@ -78,7 +91,208 @@ export function Runs({ route }) {
           </ul>
         )}
       </aside>
-      <section className="runs-main">{selected ? <RunView key={selected} runId={selected} /> : <Composer />}</section>
+      <section className="runs-main">{selected ? <RunView key={selected} runId={selected} /> : <Composer prefill={prefill} />}</section>
+    </div>
+  );
+}
+
+/* ---------------- Jira ticket picker (free-task form) ---------------- */
+
+/** KEY_RE mirrors the server's pattern: one or more capital letter-digit prefix, dash, digits. */
+const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]{1,19}-\d{1,9}$/;
+
+/**
+ * Searchable picker that lets developers select a Jira ticket.
+ * Only rendered when the project has Jira connected AND mapped to a project key.
+ */
+export function JiraTicketPicker({ projectId, value, onChange }) {
+  const [q, setQ] = useState('');
+  const [scope, setScope] = useState('mine');
+  const [open, setOpen] = useState(false);
+  const [pages, setPages] = useState({ list: [], next: null });
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+  const loadIdRef = useRef(0);
+
+  // Debounce text search
+  const [debouncedQ, setDebouncedQ] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const load = useCallback(async ({ more = false } = {}) => {
+    const id = ++loadIdRef.current;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const next = more && pages.next ? `&next=${encodeURIComponent(pages.next)}` : '';
+      const r = await api.get(
+        `/api/projects/${projectId}/jira/issues?scope=${scope}&q=${encodeURIComponent(debouncedQ)}${next}`,
+      );
+      if (id !== loadIdRef.current) return;
+      setPages((p) => ({ list: more ? [...p.list, ...r.issues] : r.issues, next: r.next }));
+    } catch (e) {
+      if (id === loadIdRef.current) setLoadError(e);
+    } finally {
+      if (id === loadIdRef.current) setLoading(false);
+    }
+  }, [projectId, scope, debouncedQ, pages.next]);
+
+  // Reset and reload on scope/search change
+  useEffect(() => {
+    setPages({ list: [], next: null });
+    if (open) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, debouncedQ, open]);
+
+  // Close on outside click or Escape
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') { setOpen(false); inputRef.current?.focus(); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector('[role="option"]')?.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  const select = (issue) => {
+    onChange({ key: issue.key, summary: issue.summary, status: issue.status, url: null });
+    setOpen(false);
+    setQ('');
+  };
+
+  // If user types a valid key directly (e.g. PAY-123) and blurs, accept it
+  const handleInputBlur = () => {
+    const trimmed = q.trim().toUpperCase();
+    if (JIRA_KEY_RE.test(trimmed) && !value) {
+      onChange({ key: trimmed, summary: '(key entered manually — details loaded when run starts)', status: null, url: null });
+      setQ('');
+      setOpen(false);
+    }
+  };
+
+  const resultCount = pages.list.length;
+
+  if (value) {
+    // Show the selected ticket card
+    return (
+      <div className="stack" style={{ gap: 8 }}>
+      <div className="jira-ticket-card" role="status" aria-label={`Selected Jira ticket: ${value.key}`}>
+        <span className="jira-ticket-card-key mono">{value.key}</span>
+        <span className="jira-ticket-card-summary">{value.summary}</span>
+        {value.status ? (
+          <Badge tone={value.status.category === 'done' ? 'ok' : value.status.category === 'indeterminate' ? 'accent' : 'muted'}>
+            {value.status.name}
+          </Badge>
+        ) : null}
+        {value.url ? (
+          <a href={value.url} target="_blank" rel="noopener noreferrer" className="icon-btn" aria-label={`Open ${value.key} in Jira`} title="Open in Jira">
+            <Icon name="external" size={14} />
+          </a>
+        ) : null}
+        <button type="button" className="linkish small" aria-expanded={showDetails} onClick={() => setShowDetails((v) => !v)}>
+          {showDetails ? 'Hide details' : 'Show details'}
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label={`Remove selected ticket ${value.key}`}
+          onClick={() => onChange(null)}
+        >
+          <Icon name="x" size={15} />
+        </button>
+      </div>
+      {showDetails ? <div className="panel"><TicketPreview projectId={projectId} ticketKey={value.key} /></div> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="jira-picker" style={{ position: 'relative' }}>
+      <div className="row tight" style={{ gap: 6 }}>
+        <input
+          ref={inputRef}
+          type="search"
+          className="input"
+          placeholder="Search tickets or type a key (e.g. PAY-123)"
+          aria-label="Search Jira tickets"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-controls="jira-picker-list"
+          value={q}
+          onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={handleInputBlur}
+          autoComplete="off"
+        />
+        <Segmented
+          size="sm"
+          value={scope}
+          onChange={(v) => { setScope(v); setOpen(true); }}
+          label="Scope"
+          options={[
+            { value: 'mine', label: 'Mine' },
+            { value: 'open', label: 'Open' },
+            { value: 'all', label: 'All' },
+          ]}
+        />
+      </div>
+      {/* Live region for screen reader announcements */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {loading ? 'Loading tickets…' : open ? `${resultCount} ticket${resultCount === 1 ? '' : 's'} found` : ''}
+      </div>
+      {open ? (
+        <div
+          id="jira-picker-list"
+          role="listbox"
+          aria-label="Jira tickets"
+          ref={listRef}
+          className="jira-picker-dropdown"
+          onMouseDown={(e) => e.preventDefault()} // prevent blur before click
+        >
+          {loading && !pages.list.length ? (
+            <div className="jira-picker-state"><Spinner small /> Loading…</div>
+          ) : loadError ? (
+            <div className="jira-picker-state danger"><Icon name="alert" size={14} /> {loadError.message || 'Could not load tickets'}</div>
+          ) : !pages.list.length ? (
+            <div className="jira-picker-state muted">No tickets found</div>
+          ) : (
+            pages.list.map((issue) => (
+              <button
+                key={issue.key}
+                role="option"
+                aria-selected="false"
+                type="button"
+                className="jira-picker-option"
+                onClick={() => select(issue)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); e.currentTarget.nextElementSibling?.focus(); }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); (e.currentTarget.previousElementSibling || inputRef.current)?.focus(); }
+                  if (e.key === 'Enter') { e.preventDefault(); select(issue); }
+                  if (e.key === 'Escape') { setOpen(false); inputRef.current?.focus(); }
+                }}
+              >
+                <span className="jira-picker-option-key mono">{issue.key}</span>
+                <span className="jira-picker-option-summary">{issue.summary}</span>
+                <Badge tone={issue.status.category === 'done' ? 'ok' : issue.status.category === 'indeterminate' ? 'accent' : 'muted'}>
+                  {issue.status.name}
+                </Badge>
+                {issue.type ? <span className="muted small">{issue.type}</span> : null}
+              </button>
+            ))
+          )}
+          {pages.next ? (
+            <button type="button" className="jira-picker-more" onClick={() => load({ more: true })} disabled={loading}>
+              {loading ? <Spinner small /> : 'Load more'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -92,13 +306,45 @@ const EXAMPLES = [
   'Compare the TSD with the code and list what is missing',
 ];
 
-function Composer() {
+function Composer({ prefill }) {
   const { project, canEdit } = useProject();
   const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
+  const jiraStatus = useLoad(() => api.get(`/api/projects/${project.id}/jira`), [project.id]);
   const [form, setForm] = useState({ prompt: '', repoId: '', branch: '', permissionMode: 'default', model: 'sonnet' });
+  // "Document a repository": the agent reads the repo's copy in place and writes only to its own run folder.
+  const [kind, setKind] = useState('task');
+  const [doc, setDoc] = useState({ repoId: '', scope: '', output: 'markdown-word' });
+  const isDoc = kind === 'document';
+  const chooseKind = (k) => {
+    setKind(k);
+    // Writing documents to the run folder is safe, so default to not asking for every file.
+    setForm((f) => ({ ...f, permissionMode: k === 'document' ? 'acceptEdits' : 'default' }));
+  };
   const [branches, setBranches] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+
+  // Jira ticket selection state
+  const [jiraTicket, setJiraTicket] = useState(null);
+
+  // Prefill from Tickets page "Start a coding run" button
+  useEffect(() => {
+    if (prefill?.jiraKey) {
+      setJiraTicket({ key: prefill.jiraKey, summary: prefill.jiraSummary || prefill.jiraKey, status: null, url: prefill.jiraUrl || null });
+      // Clear the query params so a reload doesn't re-prefill
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete('jiraKey');
+      clean.searchParams.delete('jiraUrl');
+      clean.searchParams.delete('jiraSummary');
+      clean.searchParams.delete('repoId');
+      window.history.replaceState(null, '', clean.pathname + clean.search + clean.hash);
+      // Also pre-select the repo if provided
+      const q = new URLSearchParams(window.location.search);
+      const repoId = prefill.repoId || q.get('repoId');
+      if (repoId) setForm((f) => ({ ...f, repoId }));
+    }
+  }, [prefill]);
+
   useEffect(() => {
     if (!form.repoId) return setBranches([]);
     api.get(`/api/repos/${form.repoId}/branches`).then((r) => {
@@ -108,6 +354,9 @@ function Composer() {
   }, [form.repoId]);
   const readyRepos = (repos.data?.repos || []).filter((r) => r.status === 'ready');
 
+  // Show the Jira picker only when Jira is connected AND mapped
+  const jiraReady = Boolean(jiraStatus.data?.connected && jiraStatus.data?.mapping);
+
   if (!canEdit) {
     return (
       <div className="pad-lg">
@@ -116,12 +365,32 @@ function Composer() {
     );
   }
 
+  // Instruction is optional when a Jira ticket is selected
+  const promptRequired = !jiraTicket;
+  const promptEmpty = !form.prompt.trim();
+
   const start = async (e) => {
     e?.preventDefault();
+    if (!isDoc && promptRequired && promptEmpty) return;
     setBusy(true);
     setError(null);
     try {
-      const { run } = await api.post(`/api/projects/${project.id}/runs`, { ...form, repoId: form.repoId || undefined, branch: form.repoId ? form.branch : undefined });
+      let body;
+      if (isDoc) {
+        body = { document: { repoId: doc.repoId, scope: doc.scope, output: doc.output }, model: form.model, permissionMode: form.permissionMode };
+      } else if (jiraTicket) {
+        body = {
+          jiraKey: jiraTicket.key,
+          prompt: form.prompt.trim() || undefined,
+          repoId: form.repoId || undefined,
+          branch: form.repoId ? form.branch : undefined,
+          model: form.model,
+          permissionMode: form.permissionMode,
+        };
+      } else {
+        body = { ...form, repoId: form.repoId || undefined, branch: form.repoId ? form.branch : undefined };
+      }
+      const { run } = await api.post(`/api/projects/${project.id}/runs`, body);
       go(project.id, 'runs', run.id);
     } catch (err) {
       setError(err);
@@ -132,24 +401,118 @@ function Composer() {
   return (
     <form className="composer" onSubmit={start}>
       <h2>What should the agents do?</h2>
-      <p className="muted">The main agent reads the project documents and decisions first, asks you when something is unclear, and hands parts of the work to the project’s role agents.</p>
-      <textarea
-        className="input composer-input"
-        rows={6}
-        value={form.prompt}
-        onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-        placeholder="Describe the task. Mention the feature, the outcome you want, and anything the agents must not change."
-        aria-label="Task for the agents"
-        autoFocus
-      />
-      <div className="chips">
-        {EXAMPLES.map((x) => (
-          <button key={x} type="button" className="chip" onClick={() => setForm({ ...form, prompt: x })}>
-            {x}
-          </button>
-        ))}
+      <div className="row tight wrap" style={{ marginBottom: 4 }}>
+        <span className="muted small">Connection:</span>
+        <ConnectionBadge projectId={project.id} />
       </div>
+      <Segmented
+        value={kind}
+        onChange={chooseKind}
+        label="Kind of run"
+        options={[
+          { value: 'task', label: 'Free task' },
+          { value: 'document', label: 'Document a repository' },
+        ]}
+      />
+      {isDoc ? (
+        <div className="stack">
+          <p className="muted">The agent maps the repository's code and writes cited documentation. It reads a fresh copy of the repository and writes only to its own run folder, so no code changes.</p>
+          <div className="composer-grid">
+            <Field label="Repository" hint={readyRepos.length ? 'Uses the default branch.' : 'Connect and sync a repository on the Repositories page first.'}>
+              {(id) => (
+                <select id={id} className="input" value={doc.repoId} onChange={(e) => setDoc({ ...doc, repoId: e.target.value })}>
+                  <option value="">Choose a repository…</option>
+                  {readyRepos.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+            <Field label="Output" hint="Word and PowerPoint use the make-documents skill.">
+              {(id) => (
+                <select id={id} className="input" value={doc.output} onChange={(e) => setDoc({ ...doc, output: e.target.value })}>
+                  <option value="markdown">Markdown files</option>
+                  <option value="word">Word document</option>
+                  <option value="markdown-word">Markdown and Word</option>
+                  <option value="slides">PowerPoint overview</option>
+                </select>
+              )}
+            </Field>
+          </div>
+          <Field label="Focus (optional)" hint="Leave empty to cover the whole repository.">
+            {(id) => (
+              <textarea
+                id={id}
+                className="input"
+                rows={3}
+                value={doc.scope}
+                onChange={(e) => setDoc({ ...doc, scope: e.target.value })}
+                placeholder="For example: the Lambda functions, the DynamoDB tables and how a payment flows through them"
+              />
+            )}
+          </Field>
+        </div>
+      ) : (
+        <>
+          <p className="muted">The main agent reads the project documents and decisions first, asks you when something is unclear, and hands parts of the work to the project's role agents.</p>
+
+          {/* Jira ticket picker — only when connected and mapped */}
+          {jiraReady ? (
+            <Field
+              label="Jira ticket (optional)"
+              hint={jiraTicket ? 'The agent receives the full ticket as context. The instruction below becomes optional.' : 'Pick a ticket and the agent receives its details as context.'}
+            >
+              {() => (
+                <JiraTicketPicker
+                  projectId={project.id}
+                  value={jiraTicket}
+                  onChange={setJiraTicket}
+                />
+              )}
+            </Field>
+          ) : jiraStatus.data && !jiraStatus.data.connected ? (
+            <p className="muted small">
+              <a href={href(project.id, 'team')}>Connect Jira</a> to pick a ticket from your board.
+            </p>
+          ) : null}
+
+          <Field
+            label={jiraTicket ? 'Instruction (optional)' : 'Task for the agents'}
+            hint={jiraTicket ? 'Leave empty to implement or fix what the ticket describes. Add a short note to focus or restrict the agent.' : undefined}
+          >
+            {(id) => (
+              <textarea
+                id={id}
+                className="input composer-input"
+                rows={6}
+                value={form.prompt}
+                onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+                placeholder={
+                  jiraTicket
+                    ? `Optional: add a short instruction, e.g. "fix this, add unit tests"`
+                    : 'Describe the task. Mention the feature, the outcome you want, and anything the agents must not change.'
+                }
+                aria-required={!jiraTicket}
+                aria-label={jiraTicket ? 'Optional instruction for the agents' : 'Task for the agents'}
+                autoFocus={!jiraTicket}
+              />
+            )}
+          </Field>
+          {!jiraTicket ? (
+            <div className="chips">
+              {EXAMPLES.map((x) => (
+                <button key={x} type="button" className="chip" onClick={() => setForm({ ...form, prompt: x })}>
+                  {x}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
       <div className="composer-grid">
+        {!isDoc ? (
         <Field label="Repository" hint={readyRepos.length ? 'The run gets its own working copy of this branch.' : 'Connect one on the Repositories page to let agents change code.'}>
           {(id) => (
             <select id={id} className="input" value={form.repoId} onChange={(e) => setForm({ ...form, repoId: e.target.value, branch: '' })}>
@@ -162,7 +525,8 @@ function Composer() {
             </select>
           )}
         </Field>
-        {form.repoId ? (
+        ) : null}
+        {!isDoc && form.repoId ? (
           <Field label="Branch">
             {(id) => (
               <select id={id} className="input" value={form.branch} onChange={(e) => setForm({ ...form, branch: e.target.value })}>
@@ -175,17 +539,7 @@ function Composer() {
             )}
           </Field>
         ) : null}
-        <Field label="Model">
-          {(id) => (
-            <select id={id} className="input" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}>
-              {MODELS.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
+        <Field label="Model">{(id) => <ModelPicker id={id} value={form.model} projectId={project.id} onChange={(model) => setForm({ ...form, model })} />}</Field>
       </div>
       <fieldset className="mode-pick">
         <legend className="field-label">Changes</legend>
@@ -200,8 +554,8 @@ function Composer() {
       </fieldset>
       <ErrorNote error={error} />
       <div className="row">
-        <Button variant="primary" type="submit" icon="play" busy={busy} disabled={!form.prompt.trim()}>
-          Start run
+        <Button variant="primary" type="submit" icon="play" busy={busy} disabled={isDoc ? !doc.repoId : (promptRequired && promptEmpty)}>
+          {isDoc ? 'Start documentation run' : 'Start run'}
         </Button>
       </div>
     </form>
@@ -210,7 +564,7 @@ function Composer() {
 
 /* ---------------- Follow a run ---------------- */
 
-function useRunStream(runId) {
+export function useRunStream(runId) {
   const [state, setState] = useState({ loading: true, run: null, events: [], inputs: [], continuations: [] });
   const lastSeq = useRef(0);
   const reloadDetail = async () => {
@@ -273,8 +627,10 @@ function RunView({ runId }) {
   const node = tree.nodes.get(selectedNode) || tree.root;
   const pending = data.inputs.filter((i) => i.status === 'pending');
   const isDemo = run.provider === 'demo';
+  const isKiro = run.provider === 'kiro';
   const cost = run.cost_usd || 0;
   const est = run.meta?.estimatedUsd ?? tree.root.totals.cost;
+  const kiroCredits = run.meta?.kiroCredits;
 
   return (
     <div className="run-view">
@@ -285,6 +641,7 @@ function RunView({ runId }) {
             <span className="muted small">{KIND_LABEL[run.kind] ?? run.kind}</span>
           </div>
           <h1>{run.title}</h1>
+          <JiraRunBar run={run} />
           <dl className="run-facts">
             <div><dt>Started</dt><dd>{dateTime(run.created_at)}</dd></div>
             <div><dt>Time</dt><dd>{duration(run.started_at || run.created_at, run.finished_at)}</dd></div>
@@ -293,10 +650,15 @@ function RunView({ runId }) {
             {run.branch ? <div><dt>Branch</dt><dd><code>{run.branch}</code></dd></div> : null}
             <div><dt>Tokens</dt><dd>{tokens(run.input_tokens)} in, {tokens(run.output_tokens)} out</dd></div>
             <div>
-              <dt>{isDemo ? 'Would cost' : 'Cost'}</dt>
-              <dd title={isDemo ? 'Demo runs are free. This is what the same run would cost on Claude.' : undefined}>{isDemo ? `≈${money(est)}` : money(cost)}</dd>
+              <dt>{isDemo ? 'Would cost' : isKiro ? 'Credits' : 'Cost'}</dt>
+              <dd title={isDemo ? 'Demo runs are free. This is what the same run would cost on Claude.' : undefined}>
+                {isDemo ? `≈${money(est)}` : isKiro ? (kiroCredits != null ? `${kiroCredits} credits` : '—') : money(cost)}
+              </dd>
             </div>
           </dl>
+          <div className="row tight wrap" style={{ marginTop: 6 }}>
+            <ConnectionBadge projectId={project.id} />
+          </div>
         </div>
         <div className="run-actions">
           {active && canEdit ? (
@@ -333,6 +695,8 @@ function RunView({ runId }) {
           ))}
         </section>
       ) : null}
+
+      {tree.root.totals.subagents || active ? <AgentGraph tree={tree} selected={selectedNode} onSelect={setSelectedNode} /> : null}
 
       <div className="run-body">
         <nav className="tree" aria-label="Agents in this run">
@@ -417,7 +781,7 @@ function TreeNode({ node, selected, onSelect, depth }) {
   );
 }
 
-function Timeline({ node, tree, onSelect, inputs }) {
+export function Timeline({ node, tree, onSelect, inputs }) {
   const endRef = useRef(null);
   const count = node.items.length;
   useEffect(() => {
@@ -559,44 +923,131 @@ function ResultPanel({ run }) {
 }
 
 function Changes({ run }) {
+  const { user } = useApp();
   const ch = useLoad(() => api.get(`/api/runs/${run.id}/changes`), [run.id, run.status]);
   const [file, setFile] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const isAdmin = user?.is_admin;
+
+  const copyPath = () => {
+    const p = ch.data?.absPath || ch.data?.worktree || ch.data?.workDir || '';
+    navigator.clipboard.writeText(p).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
   if (!ch.data) return ch.error ? <ErrorNote error={ch.error} /> : <Spinner />;
   const files = ch.data.diff ? parseUnifiedDiff(ch.data.diff) : [];
+  const hasFiles = ch.data.files.length > 0;
+
+  // Admins see the absolute server path; others see the relative path as before.
+  const displayPath = isAdmin && ch.data.absPath ? ch.data.absPath : (ch.data.worktree || ch.data.workDir);
+
   return (
     <div className="pad-sm stack">
-      {ch.data.worktree ? (
-        <p className="muted small">
-          Working copy: <code>{ch.data.worktree}</code>
-        </p>
-      ) : (
-        <p className="muted small">
-          Run folder: <code>{ch.data.workDir}</code>
-        </p>
-      )}
+      {displayPath ? (
+        <div className="row tight wrap" style={{ alignItems: 'center', gap: 6 }}>
+          <span className="muted small">{ch.data.worktree ? 'Working copy' : 'Run folder'}:</span>
+          <code className="small" style={{ wordBreak: 'break-all' }}>{displayPath}</code>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={copied ? 'Copied' : 'Copy path to clipboard'}
+            title={copied ? 'Copied!' : 'Copy path'}
+            onClick={copyPath}
+            style={{ flexShrink: 0 }}
+          >
+            <Icon name={copied ? 'check' : 'copy'} size={15} />
+          </button>
+          {hasFiles ? (
+            <a
+              className="btn btn-sm btn-default"
+              href={`/api/runs/${run.id}/files/zip`}
+              download
+              aria-label="Download all run files as a ZIP archive"
+              style={{ marginLeft: 'auto' }}
+            >
+              <Icon name="download" size={15} />
+              <span>Download all (.zip)</span>
+            </a>
+          ) : null}
+        </div>
+      ) : null}
       {files.length ? <DiffView files={files} /> : null}
-      {ch.data.files.length ? (
+      {hasFiles ? (
         <ul className="file-list">
           {ch.data.files.map((f) => (
-            <li key={f.path}>
-              <button type="button" className="linkish" onClick={() => setFile(f.path)}>
+            <li key={f.path} className="row tight" style={{ alignItems: 'center', gap: 6 }}>
+              <button type="button" className="linkish" style={{ flex: 1, textAlign: 'left' }} onClick={() => setFile(f.path)}>
                 <Icon name="file" size={15} /> {f.path}
               </button>
+              <span className="muted small" style={{ flexShrink: 0 }}>
+                {f.size < 1024 ? `${f.size} B` : `${Math.round(f.size / 1024)} KB`}
+              </span>
+              <a
+                className="icon-btn"
+                href={`/api/runs/${run.id}/file/download?path=${encodeURIComponent(f.path)}`}
+                download={f.path.split('/').pop()}
+                aria-label={`Download ${f.path}`}
+                title="Download file"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Icon name="download" size={15} />
+              </a>
             </li>
           ))}
         </ul>
       ) : null}
-      {!files.length && !ch.data.files.length ? <p className="muted">No files changed.</p> : null}
+      {!files.length && !hasFiles ? <p className="muted">No files changed.</p> : null}
       {file ? <FileModal run={run} path={file} onClose={() => setFile(null)} /> : null}
     </div>
   );
 }
 
+/** Binary file extensions that cannot be shown as text. */
+const BINARY_EXTS = new Set(['.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.zip', '.tar', '.gz', '.bin', '.exe', '.dll', '.so', '.woff', '.woff2', '.ttf', '.otf', '.mp3', '.mp4', '.wav', '.ogg', '.mov', '.avi']);
+
+function isBinaryPath(p) {
+  const ext = p.slice(p.lastIndexOf('.')).toLowerCase();
+  return BINARY_EXTS.has(ext);
+}
+
 function FileModal({ run, path, onClose }) {
   const f = useLoad(() => api.get(`/api/runs/${run.id}/file?path=${encodeURIComponent(path)}`), [path]);
+  const binary = f.data ? (f.data.binary || isBinaryPath(path)) : isBinaryPath(path);
+  const downloadHref = `/api/runs/${run.id}/file/download?path=${encodeURIComponent(path)}`;
+  const filename = path.split('/').pop();
+
   return (
     <Modal title={path} onClose={onClose} wide>
-      {f.data ? path.endsWith('.md') ? <Markdown text={f.data.content} /> : <pre className="preview">{f.data.content}</pre> : f.error ? <ErrorNote error={f.error} /> : <Spinner />}
+      {f.data ? (
+        binary ? (
+          <div className="stack" style={{ alignItems: 'center', padding: '24px 0', textAlign: 'center' }}>
+            <Icon name="file" size={32} />
+            <p className="muted">Preview not available for this file type.</p>
+            <a className="btn btn-primary btn-sm" href={downloadHref} download={filename} aria-label={`Download ${filename}`}>
+              <Icon name="download" size={15} />
+              <span>Download {filename}</span>
+            </a>
+          </div>
+        ) : path.endsWith('.md') ? (
+          <Markdown text={f.data.content} />
+        ) : (
+          <pre className="preview">{f.data.content}</pre>
+        )
+      ) : f.error ? (
+        <div className="stack" style={{ alignItems: 'center', padding: '24px 0', textAlign: 'center' }}>
+          <ErrorNote error={f.error} />
+          <a className="btn btn-default btn-sm" href={downloadHref} download={filename} aria-label={`Download ${filename}`}>
+            <Icon name="download" size={15} />
+            <span>Download {filename}</span>
+          </a>
+        </div>
+      ) : (
+        <Spinner />
+      )}
     </Modal>
   );
 }
@@ -646,9 +1097,24 @@ function FollowUp({ run }) {
 
 function PushDialog({ run, onClose }) {
   const { toast } = useUi();
-  const [branch, setBranch] = useState(`agent/${run.id.slice(2, 12).toLowerCase()}`);
-  const [message, setMessage] = useState(`Agent Portal: ${run.title}`);
+  const meta = run.meta || {};
+  const jiraKey = meta.jiraKey;
+  const jiraSummary = meta.jiraSummary;
+
+  // Build Jira-aware defaults (mirrors server logic)
+  const defaultBranch = meta.workBranch
+    ? meta.workBranch
+    : jiraKey
+    ? `agent/${jiraKey.toLowerCase()}-${(jiraSummary || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}`
+    : `agent/${run.id.slice(2, 12).toLowerCase()}`;
+  const defaultMessage = jiraKey ? `${jiraKey}: ${jiraSummary || run.title}` : `Agent Portal: ${run.title}`;
+
+  const [branch, setBranch] = useState(defaultBranch);
+  const [message, setMessage] = useState(defaultMessage);
   const [createPr, setCreatePr] = useState(false);
+  const [prBase, setPrBase] = useState(run.branch || '');
+  const branchList = useLoad(() => (run.repo_id ? api.get(`/api/repos/${run.repo_id}/branches`) : Promise.resolve(null)), [run.repo_id]);
+  const [prTitle, setPrTitle] = useState(jiraKey ? `${jiraKey}: ${jiraSummary || run.title}` : run.title);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(null);
@@ -656,7 +1122,7 @@ function PushDialog({ run, onClose }) {
   const isGithub = repo.data?.repos.find((r) => r.id === run.repo_id)?.provider === 'github';
   return (
     <Modal
-      title="Push the run’s changes"
+      title="Push the run's changes"
       onClose={onClose}
       footer={
         done ? (
@@ -671,7 +1137,12 @@ function PushDialog({ run, onClose }) {
                 setBusy(true);
                 setError(null);
                 try {
-                  const r = await api.post(`/api/runs/${run.id}/push`, { branch, message, createPr });
+                  const body = { branch, message, createPr };
+                  if (createPr && isGithub) {
+                    body.prTitle = prTitle;
+                    if (prBase) body.base = prBase;
+                  }
+                  const r = await api.post(`/api/runs/${run.id}/push`, body);
                   setDone(r);
                   toast(`Pushed to ${r.branch}`);
                 } catch (e) {
@@ -700,10 +1171,35 @@ function PushDialog({ run, onClose }) {
         </div>
       ) : (
         <div className="stack">
-          <p className="muted">All changes in the run’s working copy are committed and pushed to a new branch. The default branch is never pushed to.</p>
+          <p className="muted">All changes in the run's working copy are committed and pushed to a new branch. The default branch is never pushed to.</p>
+          {jiraKey ? (
+            <div className="row tight wrap jira-bar small" style={{ marginBottom: 4 }}>
+              <a href={meta.jiraUrl} target="_blank" rel="noopener noreferrer" className="badge badge-accent">
+                Jira {jiraKey} <Icon name="external" size={12} />
+              </a>
+              <span className="muted">{jiraSummary}</span>
+            </div>
+          ) : null}
           <Field label="Branch">{(id) => <input id={id} className="input mono" value={branch} onChange={(e) => setBranch(e.target.value)} />}</Field>
           <Field label="Commit message">{(id) => <textarea id={id} className="input" rows={3} value={message} onChange={(e) => setMessage(e.target.value)} />}</Field>
-          {isGithub ? <Toggle checked={createPr} onChange={setCreatePr} label="Open a draft pull request on GitHub" /> : null}
+          {isGithub ? (
+            <>
+              <Toggle checked={createPr} onChange={setCreatePr} label="Open a draft pull request on GitHub" />
+              {createPr ? (
+                <>
+                  <Field label="Pull request title">{(id) => <input id={id} className="input" value={prTitle} onChange={(e) => setPrTitle(e.target.value)} />}</Field>
+                  <Field label="Open the pull request into" hint="The branch you want these changes reviewed against and merged into later.">
+                    {(id) => (
+                      <select id={id} className="input mono" value={prBase} onChange={(e) => setPrBase(e.target.value)}>
+                        <option value="">Default branch{branchList.data?.defaultBranch ? ` (${branchList.data.defaultBranch})` : ''}</option>
+                        {(branchList.data?.branches || []).filter((b) => b.name !== branch).map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
+                      </select>
+                    )}
+                  </Field>
+                </>
+              ) : null}
+            </>
+          ) : null}
           <ErrorNote error={error} />
         </div>
       )}

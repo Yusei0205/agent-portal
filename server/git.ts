@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { HttpError } from './util.ts';
 
 export interface GitResult {
@@ -6,11 +6,14 @@ export interface GitResult {
   stderr: string;
 }
 
+// Windows stops at 260 characters unless git is told otherwise; some repositories have deeper paths than that.
+const GIT_BASE = ['-c', 'core.longpaths=true'];
+
 export function git(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; maxBuffer?: number } = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      args,
+      GIT_BASE.concat(args),
       {
         cwd: opts.cwd,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', ...opts.env },
@@ -19,7 +22,7 @@ export function git(args: string[], opts: { cwd?: string; env?: Record<string, s
       },
       (err, stdout, stderr) => {
         if (err) {
-          const msg = (stderr || err.message).toString().trim().split('\n').slice(-6).join('\n');
+          const msg = gitErrorSummary(stderr.toString(), err.message);
           reject(new HttpError(400, `git ${args[0]} failed: ${redact(msg)}`));
           return;
         }
@@ -27,6 +30,79 @@ export function git(args: string[], opts: { cwd?: string; env?: Record<string, s
       },
     );
   });
+}
+
+export interface GitProgress {
+  phase: string;
+  /** Overall 0-100 across the whole command, never decreasing. */
+  percent: number;
+}
+
+// Git reports each phase from 0 to 100 on its own; give every phase a slice of one overall bar.
+const PHASES: [RegExp, string, number, number][] = [
+  [/(?:Enumerating|Counting|Compressing) objects/i, 'Preparing', 0, 10],
+  [/Receiving objects/i, 'Downloading', 10, 75],
+  [/Resolving deltas/i, 'Resolving', 75, 90],
+  [/(?:Updating|Checking out) files/i, 'Checking out files', 90, 100],
+];
+
+/** Like git(), but reports progress while it runs. Pass `--progress` in args so git writes progress when not on a terminal. */
+export function gitProgress(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeoutMs?: number } = {}, onProgress: (p: GitProgress) => void): Promise<GitResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', GIT_BASE.concat(args), {
+      cwd: opts.cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', ...opts.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let tail = '';
+    let best = 0;
+    const timer = setTimeout(() => child.kill(), opts.timeoutMs ?? 120_000);
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => {
+      const text = d.toString();
+      stderr = (stderr + text).slice(-8000);
+      // Progress lines end in \r, so split on both.
+      const parts = (tail + text).split(/[\r\n]/);
+      tail = parts.pop() ?? '';
+      for (const line of parts) {
+        const m = line.match(/:\s+(\d{1,3})%/);
+        if (!m) continue;
+        const phase = PHASES.find(([re]) => re.test(line));
+        if (!phase) continue;
+        const percent = Math.round(phase[2] + ((phase[3] - phase[2]) * Math.min(100, Number(m[1]))) / 100);
+        if (percent > best) {
+          best = percent;
+          onProgress({ phase: phase[1], percent });
+        }
+      }
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(new HttpError(400, `git ${args[0]} failed: ${redact(e.message)}`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) return resolve({ stdout, stderr });
+      reject(new HttpError(400, `git ${args[0]} failed: ${redact(gitErrorSummary(stderr, `exit code ${code}`))}`));
+    });
+  });
+}
+
+/**
+ * Pick the lines of git's stderr that explain a failure. Git mixes errors with progress and
+ * per-ref summary lines (fetch --prune can print hundreds of "[deleted]" lines after the real
+ * error), so prefer fatal:/error: lines and rejected refs, and fall back to the last few lines.
+ */
+export function gitErrorSummary(stderr: string, fallback: string): string {
+  const lines = stderr
+    .split(/[\r\n]+/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim() && !/^Cloning into/i.test(l) && !/:\s+\d{1,3}%/.test(l));
+  const important = lines.filter((l) => /^(?:remote:\s*)?(?:fatal|error):/i.test(l.trim()) || /^\s*!\s/.test(l));
+  const picked = important.length ? important.slice(0, 6) : lines.slice(-6);
+  return picked.join('\n').trim() || fallback;
 }
 
 /** Never echo credentials back to the browser. */

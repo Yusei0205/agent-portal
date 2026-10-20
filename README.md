@@ -14,7 +14,8 @@ A self-hosted web portal for running Claude agents on your projects. Built on th
   lines, a cheap Haiku pass and an optional Sonnet deep look, and posting back to GitHub.
 - **Agents and skills**: seven role templates (business analyst, solution architect, backend and
   frontend developer, QA engineer, reviewer, technical writer), your own agents and skills, a
-  shared library, and a one-click test run.
+  shared library, a one-click test run, **import from any `.claude` folder or zip**, and
+  **draft a new agent or skill from a plain-language description**.
 - **Learn**: documentation in a plain-language version and an engineering version, glossaries,
   FAQs, quizzes checked against their sources, onboarding paths and team progress.
 - **Demo mode**: a simulated agent so every feature works without an API key.
@@ -74,11 +75,23 @@ AWS keys are stored at all.
    and answer it under *Open questions*. It appears in the *Decisions log*.
 3. **Agents and skills**: add the *Business analyst*, *QA engineer* and *Technical writer* roles.
    Open an agent, change its instructions, and press *Run test*.
+   - **Import**: click *Import* on the Agents or Skills tab, choose a `.zip`, a folder from your
+     computer, or (admins) a server path. Preview shows conflicts, invalid items and missing skills;
+     choose Overwrite / Skip / Rename per item, then confirm.
+   - **Describe**: click *Describe…* on the Agents or Skills tab, type a plain-language description
+     and optionally toggle "Based on project documents", then review and save the AI-drafted form.
 4. **Repositories**: connect a GitHub, CodeCommit or other Git repository. Wait for *Ready*.
 5. **Agent runs**: start “Design and build the refund approval flow” on that repository with
    *Ask before changes*. Answer the agent’s questions, approve the file write, click the
    subagents in the tree, open *Files and changes*, and *Push changes* to a new branch.
    Start the same task again: it uses the recorded decision and doesn’t ask.
+   - **Jira ticket selector**: if the project has Jira connected and mapped (under *Project and
+     team › Jira*), the *Free task* composer shows an optional *Jira ticket* field. Search or
+     type a key (e.g. `PAY-123`), select a ticket, and the agent receives its full details as
+     context. The instruction becomes optional when a ticket is selected. Branch name, commit
+     message and draft pull-request title all include the ticket key automatically.
+   - **From a ticket**: on the *Tickets* page, open any ticket and click *Start coding run* to
+     open the composer with that ticket pre-selected.
 6. **Code review**: review a feature branch against `main` with *Deep look* on. Accept or
    dismiss findings. For a GitHub pull request, use *Post to GitHub*.
 7. **Learn**: write a *System overview*, switch between *For everyone* and *For engineers*,

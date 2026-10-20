@@ -26,6 +26,7 @@ import { get, post, del } from './http.ts';
 import { encrypt, decrypt } from './secrets.ts';
 import { badRequest } from './util.ts';
 import { one, run as dbRun } from './db.ts';
+import { clearModelListCache } from './model-cache.ts';
 
 // ---- Helpers to read/write AWS settings directly from DB --------
 // (avoids importing from settings.ts which would create a circular dep)
@@ -81,7 +82,8 @@ interface PollState {
 let clientReg: ClientReg | null = null;
 let pollState: PollState = { state: 'pending' };
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
-let shortCredsCache: ShortCreds | null = null;
+/** Temporary role credentials per "account/role", so several projects can use different SSO accounts at once. */
+const roleCredsCache = new Map<string, ShortCreds>();
 
 /**
  * Reset all in-memory SSO state (test helper).
@@ -91,7 +93,7 @@ export function resetSsoState(): void {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   clientReg = null;
   pollState = { state: 'pending' };
-  shortCredsCache = null;
+  roleCredsCache.clear();
 }
 
 // ---- Validation constants ----------------------------------------
@@ -199,7 +201,8 @@ function startPoller(deviceCode: string, interval: number, expiresIn: number, re
         encrypt(payload),
       );
       pollState = { state: 'authorised' };
-      shortCredsCache = null;
+      roleCredsCache.clear();
+      clearModelListCache();
     } catch (e: any) {
       const code: string = e?.name ?? e?.code ?? '';
       if (code === 'AuthorizationPendingException' || code === 'authorization_pending') {
@@ -242,7 +245,7 @@ function loadStoredTokens(): StoredTokens | null {
 
 function deleteStoredTokens(): void {
   dbRun("DELETE FROM settings WHERE key = 'sso_tokens'");
-  shortCredsCache = null;
+  roleCredsCache.clear();
 }
 
 async function refreshAccessToken(tokens: StoredTokens): Promise<StoredTokens | null> {
@@ -270,7 +273,7 @@ async function refreshAccessToken(tokens: StoredTokens): Promise<StoredTokens | 
       "INSERT INTO settings (key, value) VALUES ('sso_tokens', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       encrypt(JSON.stringify(refreshed)),
     );
-    shortCredsCache = null;
+    roleCredsCache.clear();
     return refreshed;
   } catch {
     return null;
@@ -306,45 +309,50 @@ export async function ssoCredentials(): Promise<Record<string, string>> {
   if (!s.ssoAccountId || !s.ssoRoleName) {
     throw badRequest('Select an AWS account and role in Settings › AWS sign-in first.');
   }
+  return ssoRoleCredentials(s.ssoAccountId, s.ssoRoleName);
+}
 
+/**
+ * Temporary credentials for any account and role the portal's SSO sign-in can use. A project picks its own
+ * account/role this way, so one IAM Identity Center sign-in serves every project.
+ */
+export async function ssoRoleCredentials(accountId: string, roleName: string): Promise<Record<string, string>> {
+  const key = `${accountId}/${roleName}`;
+  const cached = roleCredsCache.get(key);
   // Serve from cache if still fresh (5-minute buffer before expiry)
-  if (shortCredsCache && shortCredsCache.expiresAt > Date.now() + 300_000) {
+  if (cached && cached.expiresAt > Date.now() + 300_000) {
     return {
-      AWS_ACCESS_KEY_ID: shortCredsCache.accessKeyId,
-      AWS_SECRET_ACCESS_KEY: shortCredsCache.secretAccessKey,
-      AWS_SESSION_TOKEN: shortCredsCache.sessionToken,
+      AWS_ACCESS_KEY_ID: cached.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: cached.secretAccessKey,
+      AWS_SESSION_TOKEN: cached.sessionToken,
     };
   }
 
+  const s = readAwsSsoSettings();
   const accessToken = await requireAccessToken();
   const region = s.ssoRegion || s.region;
   const client = ssoClient(region);
 
-  const res = await client.send(
-    new GetRoleCredentialsCommand({
-      accessToken,
-      accountId: s.ssoAccountId,
-      roleName: s.ssoRoleName,
-    }),
-  );
+  const res = await client.send(new GetRoleCredentialsCommand({ accessToken, accountId, roleName }));
 
   const creds = res.roleCredentials;
   if (!creds?.accessKeyId || !creds?.secretAccessKey) {
     throw badRequest('AWS SSO did not return credentials. Check the account/role selection.');
   }
 
-  shortCredsCache = {
+  const fresh: ShortCreds = {
     accessKeyId: creds.accessKeyId,
     secretAccessKey: creds.secretAccessKey,
     sessionToken: creds.sessionToken ?? '',
     // expiration is ms epoch
     expiresAt: creds.expiration ?? Date.now() + 3600_000,
   };
+  roleCredsCache.set(key, fresh);
 
   return {
-    AWS_ACCESS_KEY_ID: shortCredsCache.accessKeyId,
-    AWS_SECRET_ACCESS_KEY: shortCredsCache.secretAccessKey,
-    AWS_SESSION_TOKEN: shortCredsCache.sessionToken,
+    AWS_ACCESS_KEY_ID: fresh.accessKeyId,
+    AWS_SECRET_ACCESS_KEY: fresh.secretAccessKey,
+    AWS_SESSION_TOKEN: fresh.sessionToken,
   };
 }
 
@@ -511,8 +519,9 @@ export function registerSsoRoutes(): void {
       const accountId = String(body.accountId ?? '').trim();
       const roleName = String(body.roleName ?? '').trim();
       if (!accountId || !roleName) throw badRequest('accountId and roleName are required');
-      shortCredsCache = null;
+      roleCredsCache.clear();
       patchAwsSettings({ ssoAccountId: accountId, ssoRoleName: roleName });
+      clearModelListCache();
       return { ok: true };
     },
     { auth: 'admin' },
@@ -525,7 +534,8 @@ export function registerSsoRoutes(): void {
       stopPoller();
       pollState = { state: 'pending' };
       deleteStoredTokens();
-      shortCredsCache = null;
+      roleCredsCache.clear();
+      clearModelListCache();
       return { ok: true };
     },
     { auth: 'admin' },

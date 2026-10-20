@@ -107,7 +107,7 @@ const STATUS_LABEL = {
 
 export function Badge({ status, children, tone }) {
   const t = tone || STATUS_TONE[status] || 'muted';
-  return <span className={cx('badge', `badge-${t}`)}>{children ?? STATUS_LABEL[status] ?? (status ? status[0].toUpperCase() + status.slice(1) : '')}</span>;
+  return <span className={cx('badge', `badge-${t}`)} data-status={status || undefined}>{children ?? STATUS_LABEL[status] ?? (status ? status[0].toUpperCase() + status.slice(1) : '')}</span>;
 }
 
 export function Empty({ icon = 'file', title, children, action }) {

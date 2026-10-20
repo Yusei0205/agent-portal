@@ -26,7 +26,7 @@ const web = await esbuild.build({
   sourcemap: 'linked',
   target: ['es2022', 'chrome110', 'safari16', 'firefox115'],
   define: { 'process.env.NODE_ENV': '"production"' },
-  loader: { '.svg': 'file', '.woff2': 'file' },
+  loader: { '.svg': 'file', '.woff2': 'file', '.woff': 'file' },
   metafile: true,
   logLevel: 'warning',
   legalComments: 'none',
@@ -49,12 +49,26 @@ const html = fs
   .replace('<!--JS-->', `<script type="module" src="${js}"></script>`);
 fs.writeFileSync(path.join(webOut, 'index.html'), html);
 fs.copyFileSync(path.join(root, 'web/favicon.svg'), path.join(webOut, 'favicon.svg'));
+fs.copyFileSync(path.join(root, 'web/theme-init.js'), path.join(webOut, 'theme-init.js'));
 
 const sizes = Object.entries(web.metafile.outputs)
   .filter(([f]) => !f.endsWith('.map'))
   .map(([, o]) => o.bytes)
   .reduce((a, b) => a + b, 0);
 console.log(`web: ${js} (${Math.round(sizes / 1024)} KB total, lazy chunks included)`);
+
+// The document generator the agents' make-documents skill runs. Always built, so `npm run dev` has it too.
+await esbuild.build({
+  entryPoints: [path.join(root, 'server/docgen-cli.ts')],
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node22',
+  outfile: path.join(out, 'make-doc.mjs'),
+  packages: 'external',
+  logLevel: 'warning',
+});
+console.log('tool: dist/make-doc.mjs');
 
 if (!webOnly) {
   await esbuild.build({

@@ -139,6 +139,7 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     finalText = yield* workScenario();
   }
 
+  if (opts.prompt.includes('WORKFLOW_STATUS {')) finalText += '\n\n' + demoWorkflowStatus(opts.prompt);
   yield assistant(null, [{ type: 'text', text: finalText }]);
   yield {
     type: 'result',
@@ -397,3 +398,17 @@ export function demoModel(alias: string): string {
 }
 
 export type { DemoContext };
+
+/**
+ * The status line a demo iteration ends with, so autonomous workflows can be tried without a model. The goal can steer it:
+ * [demo-block] reports blocked, [demo-stuck] never finishes, [demo-iterations: N] finishes at iteration N (default 2).
+ */
+function demoWorkflowStatus(prompt: string): string {
+  const n = Number(prompt.match(/This iteration \((\d+) of/)?.[1] ?? 1);
+  const goalDone = Number(prompt.match(/\[demo-iterations: (\d+)\]/)?.[1] ?? 2);
+  let state = n >= goalDone ? 'done' : 'continue';
+  if (prompt.includes('[demo-stuck]')) state = 'continue';
+  if (prompt.includes('[demo-block]')) state = 'blocked';
+  const summary = prompt.includes('[demo-stuck]') ? 'Still working on it.' : `Demo iteration ${n}: made progress and verified it.`;
+  return `WORKFLOW_STATUS ${JSON.stringify({ state, summary, next: state === 'continue' ? 'Keep going.' : '', needs: state === 'blocked' ? 'A decision from a person.' : '', branch: prompt.match(/\[demo-branch: ([^\]]+)\]/)?.[1] ?? 'feature/demo-work' })}`;
+}

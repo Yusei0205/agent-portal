@@ -17,16 +17,23 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
+    "@aws-sdk/client-bedrock": "3.1152.0",
     "@aws-sdk/client-codecommit": "3.1152.0",
     "@aws-sdk/client-sso": "3.1152.0",
     "@aws-sdk/client-sso-oidc": "3.1152.0",
+    "@aws-sdk/credential-providers": "3.1152.0",
+    "@fontsource/orbitron": "5.3.0",
+    "docx": "9.5.0",
     "dompurify": "^3.4.0",
+    "exceljs": "4.4.0",
     "jszip": "^3.10.1",
     "marked": "^18.0.0",
     "mermaid": "^11.16.0",
     "pdfjs-dist": "^6.2.0",
+    "pptxgenjs": "4.0.1",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "recharts": "3.10.1"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",

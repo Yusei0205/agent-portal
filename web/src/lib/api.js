@@ -41,6 +41,7 @@ export const api = {
   patch: (u, b = {}) => request('PATCH', u, b),
   del: (u, b) => request('DELETE', u, b),
   upload: (u, file) => request('PUT', u, undefined, { raw: file }),
+  postRaw: (u, data) => request('POST', u, undefined, { raw: data }),
 };
 
 /** Server-sent events with automatic reconnect. Returns a function that closes the stream. */

@@ -4,9 +4,11 @@ import { useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
 import { go, href } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
-import { cx, timeAgo } from '../lib/util.js';
+import { cx, plural, timeAgo } from '../lib/util.js';
+import { useSortable } from '../lib/useSortable.js';
 import { Icon } from '../components/Icon.jsx';
 import { Markdown } from '../components/Markdown.jsx';
+import { SortHeader } from '../components/SortHeader.jsx';
 import { Badge, Button, Empty, ErrorNote, Field, IconButton, Modal, Note, PageHeader, Progress, Segmented, Spinner, Tabs, Toggle, useUi } from '../components/ui.jsx';
 
 const KINDS = [
@@ -51,32 +53,256 @@ function StatusBadges({ item }) {
   );
 }
 
+// SourcePicker — grouped, collapsible, tri-state tree of source documents.
+// Value/onChange contract: array of doc ids (unchanged).
 function SourcePicker({ value, onChange }) {
   const { project } = useProject();
   const docs = useLoad(() => api.get(`/api/projects/${project.id}/documents`), [project.id]);
-  const list = (docs.data?.documents || []).filter((d) => d.status === 'ready');
+  const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
+  const repoList = repos.data?.repos || [];
+  const repoName = (id) => repoList.find((r) => r.id === id)?.name;
+
+  // All ready documents
+  const list = useMemo(() => (docs.data?.documents || []).filter((d) => d.status === 'ready'), [docs.data]);
+  const uploadDocs = useMemo(() => list.filter((d) => d.kind === 'upload'), [list]);
+  const decisionDoc = useMemo(() => list.find((d) => d.kind === 'decisions'), [list]);
+
+  // Seed value when data first arrives
   useEffect(() => {
-    if (docs.data && value === null) onChange(list.filter((d) => d.kind === 'upload').map((d) => d.id));
+    if (docs.data && value === null) onChange(uploadDocs.map((d) => d.id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs.data]);
+
+  // Group-by mode — same auto rule as Knowledge page
+  const [groupBy, setGroupBy] = useState(() => {
+    try { return localStorage.getItem('kb-group-by') || 'auto'; } catch { return 'auto'; }
+  });
+  const setGroupBySaved = (v) => {
+    setGroupBy(v);
+    try { localStorage.setItem('kb-group-by', v); } catch { /* ok */ }
+  };
+
+  const [filter, setFilter] = useState('');
+  // collapsed: Set of group keys. Default: collapse all groups when there are many (>= 3 groups or > 8 upload docs)
+  const [collapsed, setCollapsed] = useState(null); // null = not yet initialised
+
+  const mode = groupBy !== 'auto' ? groupBy : list.some((d) => d.repo_id) ? 'repo' : 'folder';
+
+  const groupKey = (d) => (mode === 'repo' ? d.repo_id || '' : mode === 'folder' ? d.folder || '' : '');
+  const groupLabel = (key) =>
+    mode === 'repo'
+      ? key ? repoName(key) || 'Removed repository' : 'No repository'
+      : key || 'No folder';
+
+  // Build groups from upload docs only
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const d of uploadDocs) {
+      const k = groupKey(d);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(d);
+    }
+    const arr = [];
+    for (const [key, docs] of map) {
+      docs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      arr.push({ key, docs });
+    }
+    // Untagged first, then A-Z
+    arr.sort((a, b) => a.key === '' ? -1 : b.key === '' ? 1 : groupLabel(a.key).localeCompare(groupLabel(b.key), undefined, { sensitivity: 'base' }));
+    return arr;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadDocs, mode, repoList]);
+
+  const hasGroups = mode !== 'none' && groups.length > 1;
+
+  // Initialise collapsed state when groups are ready
+  const collapsedSet = useMemo(() => {
+    if (collapsed !== null) return collapsed;
+    // Default: collapse when >= 3 groups or > 8 upload docs
+    if (hasGroups && (groups.length >= 3 || uploadDocs.length > 8)) {
+      return new Set(groups.map((g) => g.key));
+    }
+    return new Set();
+  }, [collapsed, groups, hasGroups, uploadDocs.length]);
+
+  const toggleCollapse = (key) => {
+    const next = new Set(collapsedSet);
+    next.has(key) ? next.delete(key) : next.add(key);
+    setCollapsed(next);
+  };
+
+  // Filter text
+  const filterLc = filter.trim().toLowerCase();
+  const matchDoc = (d) => !filterLc || d.name.toLowerCase().includes(filterLc);
+
+  const sel = value || [];
+  const selSet = useMemo(() => new Set(sel), [sel]);
+
+  // Toggle a single doc
+  const toggleDoc = (id) =>
+    onChange(selSet.has(id) ? sel.filter((x) => x !== id) : [...sel, id]);
+
+  // Toggle a group (all upload docs in this group that pass the filter)
+  const groupState = (docs) => {
+    const visible = docs.filter(matchDoc);
+    const checked = visible.filter((d) => selSet.has(d.id)).length;
+    if (checked === 0) return 'unchecked';
+    if (checked === visible.length) return 'checked';
+    return 'indeterminate';
+  };
+
+  const toggleGroup = (docs) => {
+    const visible = docs.filter(matchDoc);
+    const allOn = visible.every((d) => selSet.has(d.id));
+    if (allOn) {
+      onChange(sel.filter((id) => !visible.some((d) => d.id === id)));
+    } else {
+      const add = visible.filter((d) => !selSet.has(d.id)).map((d) => d.id);
+      onChange([...sel, ...add]);
+    }
+  };
+
+  // Select all / Clear (only upload docs, filter-aware)
+  const allUploadFiltered = useMemo(() => uploadDocs.filter(matchDoc), [uploadDocs, filterLc]);
+  const selectAll = () => {
+    const add = allUploadFiltered.filter((d) => !selSet.has(d.id)).map((d) => d.id);
+    if (add.length) onChange([...sel, ...add]);
+  };
+  const clearAll = () => onChange(sel.filter((id) => !allUploadFiltered.some((d) => d.id === id)));
+
+  // Count
+  const selectedUploadCount = uploadDocs.filter((d) => selSet.has(d.id)).length;
+
   if (!docs.data) return <Spinner small />;
-  if (!list.some((d) => d.kind === 'upload')) {
+  if (uploadDocs.length === 0) {
     return (
       <p className="muted small">
         Upload documents in <a href={href(project.id, 'knowledge')}>Knowledge</a> first.
       </p>
     );
   }
-  const sel = value || [];
+
   return (
-    <div className="check-list">
-      {list.map((d) => (
-        <label key={d.id} className="check">
-          <input type="checkbox" checked={sel.includes(d.id)} onChange={() => onChange(sel.includes(d.id) ? sel.filter((x) => x !== d.id) : [...sel, d.id])} />
-          <span>{d.name}</span>
-          <span className="muted small">{d.sections_count} sections</span>
-        </label>
-      ))}
+    <div className="source-picker">
+      {/* Toolbar */}
+      <div className="source-picker-bar">
+        <input
+          className="input input-sm source-picker-filter"
+          type="search"
+          placeholder="Filter documents…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          aria-label="Filter source documents"
+        />
+        {repoList.length ? (
+          <Segmented
+            value={mode}
+            onChange={setGroupBySaved}
+            label="Group by"
+            size="sm"
+            options={[
+              { value: 'repo', label: 'Repository' },
+              { value: 'folder', label: 'Folder' },
+              { value: 'none', label: 'None' },
+            ]}
+          />
+        ) : null}
+      </div>
+      <div className="source-picker-actions">
+        <button type="button" className="linkish small" onClick={selectAll}>Select all</button>
+        <span className="muted" aria-hidden="true">·</span>
+        <button type="button" className="linkish small" onClick={clearAll}>Clear</button>
+        <span className="source-picker-count muted small">
+          {selectedUploadCount} of {uploadDocs.length} selected
+        </span>
+      </div>
+      {/* Document tree */}
+      <div className="check-list source-picker-list" role="tree" aria-label="Source documents">
+        {/* Decisions log always at top */}
+        {decisionDoc ? (
+          <label key={decisionDoc.id} className="check" role="treeitem" aria-level={1}>
+            <input
+              type="checkbox"
+              checked={selSet.has(decisionDoc.id)}
+              onChange={() => toggleDoc(decisionDoc.id)}
+              aria-label={`${decisionDoc.name} (decisions log)`}
+            />
+            <span>{decisionDoc.name}</span>
+            <span className="muted small">decisions log</span>
+          </label>
+        ) : null}
+        {/* Groups or flat list */}
+        {hasGroups
+          ? groups.map((g) => {
+              const visibleDocs = g.docs.filter(matchDoc);
+              if (!visibleDocs.length && filterLc) return null;
+              const state = groupState(g.docs);
+              const isCollapsed = collapsedSet.has(g.key);
+              const label = groupLabel(g.key);
+              const groupId = `spg-${g.key || 'none'}`;
+              return (
+                <div key={g.key} className="source-picker-group" role="group" aria-label={label}>
+                  <div className="source-picker-group-head">
+                    {/* Tri-state group checkbox */}
+                    <span
+                      role="checkbox"
+                      tabIndex={0}
+                      aria-checked={state === 'indeterminate' ? 'mixed' : state === 'checked'}
+                      aria-label={`Select all in ${label}`}
+                      className={`check-tri check-tri-${state}`}
+                      onClick={() => toggleGroup(g.docs)}
+                      onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && toggleGroup(g.docs)}
+                    />
+                    {/* Collapse toggle */}
+                    <button
+                      type="button"
+                      className="source-picker-group-toggle"
+                      aria-expanded={!isCollapsed}
+                      aria-controls={groupId}
+                      onClick={() => toggleCollapse(g.key)}
+                    >
+                      <Icon name={isCollapsed ? 'chevronRight' : 'chevronDown'} size={13} />
+                      <strong>{label}</strong>
+                      <span className="muted small">{plural(g.docs.length, 'doc')}</span>
+                    </button>
+                  </div>
+                  {!isCollapsed ? (
+                    <div id={groupId} className="source-picker-group-docs">
+                      {visibleDocs.length === 0 ? (
+                        <span className="muted small source-picker-empty">No matches</span>
+                      ) : (
+                        visibleDocs.map((d) => (
+                          <label key={d.id} className="check" role="treeitem" aria-level={2}>
+                            <input
+                              type="checkbox"
+                              checked={selSet.has(d.id)}
+                              onChange={() => toggleDoc(d.id)}
+                            />
+                            <span>{d.name}</span>
+                            {d.sections_count ? <span className="muted small">{d.sections_count} sec</span> : null}
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
+          : uploadDocs.filter(matchDoc).map((d) => (
+              <label key={d.id} className="check" role="treeitem" aria-level={1}>
+                <input
+                  type="checkbox"
+                  checked={selSet.has(d.id)}
+                  onChange={() => toggleDoc(d.id)}
+                />
+                <span>{d.name}</span>
+                {d.sections_count ? <span className="muted small">{d.sections_count} sec</span> : null}
+              </label>
+            ))}
+        {filterLc && allUploadFiltered.length === 0 ? (
+          <span className="muted small source-picker-empty">No documents match "{filter}"</span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -211,6 +437,15 @@ function LearnDocView({ id }) {
       /* ignore */
     }
   };
+
+  const GLOSSARY_COLS = [
+    { key: 'term',    label: 'Term',     accessor: 'term',     type: 'text' },
+    { key: 'meaning', label: 'Meaning',  accessor: (g) => view === 'business' ? g.business : g.technical, type: 'text' },
+  ];
+  const { sorted: sortedGlossary, sortKey: gSortKey, sortDir: gSortDir, toggle: gToggle } = useSortable(
+    d.data?.doc?.glossary || [],
+    { columns: GLOSSARY_COLS, storageKey: `sort:glossary:${id}` }
+  );
   if (d.error) return <div className="page"><a className="back" href={href(project.id, 'learn')}>← Learn</a><ErrorNote error={d.error} /></div>;
   if (!d.data) return <div className="page"><Spinner /></div>;
   const doc = d.data.doc;
@@ -332,12 +567,12 @@ function LearnDocView({ id }) {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>Term</th>
-                    <th>{view === 'business' ? 'Meaning' : 'In the system'}</th>
+                    <SortHeader col={GLOSSARY_COLS[0]} sortKey={gSortKey} sortDir={gSortDir} onSort={gToggle} />
+                    <SortHeader col={{ key: 'meaning', label: view === 'business' ? 'Meaning' : 'In the system' }} sortKey={gSortKey} sortDir={gSortDir} onSort={gToggle} />
                   </tr>
                 </thead>
                 <tbody>
-                  {doc.glossary.map((g) => (
+                  {sortedGlossary.map((g) => (
                     <tr key={g.term}>
                       <td><strong>{g.term}</strong></td>
                       <td>{view === 'business' ? g.business : g.technical}</td>
@@ -393,6 +628,20 @@ function QuizList() {
   useProjectEvents(['learn.updated', 'learn.progress'], () => q.reload(true));
   const [creating, setCreating] = useState(false);
   const list = q.data?.quizzes || [];
+
+  const QUIZ_COLS = [
+    { key: 'title',      label: 'Quiz',      accessor: 'title',          type: 'text' },
+    { key: 'audience',   label: 'For',       accessor: (x) => AUDIENCE[x.audience] || x.audience, type: 'text' },
+    { key: 'difficulty', label: 'Level',     accessor: 'difficulty',     type: 'text' },
+    { key: 'questions',  label: 'Questions', accessor: 'question_count', type: 'number' },
+    { key: 'status',     label: 'Status',    accessor: 'status',         type: 'status' },
+    { key: 'best',       label: 'Your best', accessor: (x) => x.my_best ?? null, type: 'number' },
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(list, {
+    columns: QUIZ_COLS,
+    storageKey: `sort:quizzes:${project.id}`,
+  });
+
   return (
     <div className="stack-lg">
       {canEdit ? (
@@ -411,17 +660,17 @@ function QuizList() {
         <table className="table">
           <thead>
             <tr>
-              <th>Quiz</th>
-              <th>For</th>
-              <th>Level</th>
-              <th className="num">Questions</th>
-              <th>Status</th>
-              <th>Your best</th>
+              <SortHeader col={QUIZ_COLS[0]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={QUIZ_COLS[1]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={QUIZ_COLS[2]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={QUIZ_COLS[3]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={QUIZ_COLS[4]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={QUIZ_COLS[5]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
               <th aria-label="Actions" />
             </tr>
           </thead>
           <tbody>
-            {list.map((x) => (
+            {sorted.map((x) => (
               <tr key={x.id}>
                 <td>
                   <a className="strong-link" href={href(project.id, 'learn', 'quiz', x.id)}>
@@ -547,6 +796,16 @@ function QuizEditor({ id }) {
   useProjectEvents(['learn.progress'], () => attempts.reload(true));
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(null);
+
+  const ATTEMPT_COLS = [
+    { key: 'person', label: 'Person', accessor: 'name',       type: 'text' },
+    { key: 'score',  label: 'Score',  accessor: (a) => a.total > 0 ? a.score / a.total : null, type: 'number' },
+    { key: 'when',   label: 'When',   accessor: 'created_at', type: 'date' },
+  ];
+  const { sorted: sortedAttempts, sortKey: aSortKey, sortDir: aSortDir, toggle: aToggle } = useSortable(
+    attempts.data?.attempts || [],
+    { columns: ATTEMPT_COLS, storageKey: `sort:quiz-attempts:${id}` }
+  );
   if (q.error) return <div className="page"><ErrorNote error={q.error} /></div>;
   if (!q.data) return <div className="page"><Spinner /></div>;
   const quiz = q.data.quiz;
@@ -674,13 +933,13 @@ function QuizEditor({ id }) {
           <table className="table">
             <thead>
               <tr>
-                <th>Person</th>
-                <th>Score</th>
-                <th>When</th>
+                <SortHeader col={ATTEMPT_COLS[0]} sortKey={aSortKey} sortDir={aSortDir} onSort={aToggle} />
+                <SortHeader col={ATTEMPT_COLS[1]} sortKey={aSortKey} sortDir={aSortDir} onSort={aToggle} />
+                <SortHeader col={ATTEMPT_COLS[2]} sortKey={aSortKey} sortDir={aSortDir} onSort={aToggle} />
               </tr>
             </thead>
             <tbody>
-              {attempts.data.attempts.map((a) => (
+              {sortedAttempts.map((a) => (
                 <tr key={a.id}>
                   <td>{a.name}</td>
                   <td>
@@ -986,28 +1245,49 @@ function TeamProgress() {
   const { project } = useProject();
   const pr = useLoad(() => api.get(`/api/projects/${project.id}/learn/progress`), [project.id]);
   useProjectEvents(['learn.progress', 'learn.updated'], () => pr.reload(true));
+
+  const members = pr.data?.members || [];
+  const paths = pr.data?.paths || [];
+
+  // Build dynamic columns: Person, Role, one per path, Quizzes passed
+  const progressCols = [
+    { key: 'name',    label: 'Person',         accessor: 'name',          type: 'text' },
+    { key: 'role',    label: 'Role',            accessor: 'role',          type: 'text' },
+    ...paths.map((p) => ({
+      key: `path_${p.id}`,
+      label: p.title,
+      accessor: (m) => m.progress?.[p.id] ?? null,
+      type: 'number',
+    })),
+    { key: 'quizzes', label: 'Quizzes passed',  accessor: 'quizzesPassed', type: 'number' },
+  ];
+  const { sorted: sortedMembers, sortKey: mSortKey, sortDir: mSortDir, toggle: mToggle } = useSortable(
+    members,
+    { columns: progressCols, storageKey: `sort:progress:${project.id}` }
+  );
+
   if (pr.error) return <ErrorNote error={pr.error} />;
   if (!pr.data) return <Spinner />;
   return (
     <div className="stack">
-      {!pr.data.paths.length ? <p className="muted">Publish an onboarding path to track progress through it.</p> : null}
+      {!paths.length ? <p className="muted">Publish an onboarding path to track progress through it.</p> : null}
       <table className="table">
         <thead>
           <tr>
-            <th>Person</th>
-            <th>Role</th>
-            {pr.data.paths.map((p) => (
-              <th key={p.id}>{p.title}</th>
+            <SortHeader col={progressCols[0]} sortKey={mSortKey} sortDir={mSortDir} onSort={mToggle} />
+            <SortHeader col={progressCols[1]} sortKey={mSortKey} sortDir={mSortDir} onSort={mToggle} />
+            {paths.map((p, i) => (
+              <SortHeader key={p.id} col={progressCols[i + 2]} sortKey={mSortKey} sortDir={mSortDir} onSort={mToggle} />
             ))}
-            <th className="num">Quizzes passed</th>
+            <SortHeader col={progressCols[progressCols.length - 1]} sortKey={mSortKey} sortDir={mSortDir} onSort={mToggle} className="num" />
           </tr>
         </thead>
         <tbody>
-          {pr.data.members.map((m) => (
+          {sortedMembers.map((m) => (
             <tr key={m.id}>
               <td>{m.name}</td>
               <td className="muted">{m.role}</td>
-              {pr.data.paths.map((p) => (
+              {paths.map((p) => (
                 <td key={p.id} className="progress-cell">
                   <Progress value={m.progress[p.id]} label={`${m.name}: ${p.title}`} />
                   <span className="small">{m.progress[p.id]}%</span>

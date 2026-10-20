@@ -1,17 +1,26 @@
+import path from 'node:path';
 import { one, run, all } from './db.ts';
 import { get, put, post, del } from './http.ts';
 import { config, dataPath } from './config.ts';
 import { deleteSecret, getSecret, secretInfo, setSecret } from './secrets.ts';
 import { badRequest, monthStart } from './util.ts';
 import { ssoCredentials, ssoStatus } from './sso.ts';
+import { clearModelListCache } from './model-cache.ts';
 
-export type ProviderMode = 'demo' | 'anthropic' | 'bedrock';
+export type ProviderMode = 'demo' | 'anthropic' | 'bedrock' | 'kiro';
 export type AwsAuth = 'ambient' | 'profile' | 'keys' | 'bedrock-key' | 'sso';
 
 export interface Settings {
   provider: {
     mode: ProviderMode;
     /** Optional exact model IDs behind the sonnet / haiku / opus aliases (needed on Bedrock for newer models). */
+    models: { sonnet: string; haiku: string; opus: string };
+  };
+  /** Kiro CLI provider: runs go through `kiro-cli acp` with the server's Kiro sign-in (or a Kiro API key). */
+  kiro: {
+    /** Full path to kiro-cli; blank finds it on PATH. */
+    command: string;
+    /** Kiro model IDs behind the aliases; blank picks Kiro's newest model of that family. */
     models: { sonnet: string; haiku: string; opus: string };
   };
   aws: {
@@ -31,6 +40,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   provider: { mode: 'demo', models: { sonnet: '', haiku: '', opus: '' } },
+  kiro: { command: '', models: { sonnet: '', haiku: '', opus: '' } },
   aws: { region: 'us-east-1', auth: 'ambient', profile: '' },
   budget: { monthlyUsd: 50 },
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
@@ -44,6 +54,7 @@ export const SECRET_NAMES = {
   awsSessionToken: 'aws.session_token',
   bedrockApiKey: 'aws.bedrock_api_key',
   githubToken: 'github.token',
+  kiroApiKey: 'kiro.api_key',
 } as const;
 
 const ALLOWED_SECRETS = new Set<string>(Object.values(SECRET_NAMES));
@@ -61,6 +72,7 @@ export function getSettings(): Settings {
     }
   }
   out.provider.models = { ...DEFAULTS.provider.models, ...(out.provider.models || {}) };
+  out.kiro.models = { ...DEFAULTS.kiro.models, ...(out.kiro.models || {}) };
   return out as Settings;
 }
 
@@ -83,12 +95,26 @@ export function updateSettings(patch: any): Settings {
   const cur = getSettings();
   if (patch.provider) {
     const mode = patch.provider.mode ?? cur.provider.mode;
-    if (!['demo', 'anthropic', 'bedrock'].includes(mode)) throw badRequest('Unknown provider');
+    if (!['demo', 'anthropic', 'bedrock', 'kiro'].includes(mode)) throw badRequest('Unknown provider');
     const models = { ...cur.provider.models, ...(patch.provider.models || {}) };
     for (const [k, v] of Object.entries(models)) {
       if (typeof v !== 'string' || !MODEL_RE.test(v)) throw badRequest(`Model ID for ${k} is not valid`);
     }
     saveSection('provider', { mode, models });
+    clearModelListCache();
+  }
+  if (patch.kiro) {
+    const command = typeof patch.kiro.command === 'string' ? patch.kiro.command.trim() : cur.kiro.command;
+    // Only a kiro-cli executable may be configured: this path is started by the server.
+    if (command && (command.length > 500 || /[\0\r\n"'`$;&|<>]/.test(command) || !/^kiro-cli(\.exe)?$/i.test(path.basename(command)))) {
+      throw badRequest('Kiro CLI path must point to the kiro-cli program (for example C:\\Users\\me\\AppData\\Local\\Kiro-Cli\\kiro-cli.exe)');
+    }
+    const models = { ...cur.kiro.models, ...(patch.kiro.models || {}) };
+    for (const [k, v] of Object.entries(models)) {
+      if (typeof v !== 'string' || !MODEL_RE.test(v)) throw badRequest(`Kiro model ID for ${k} is not valid`);
+    }
+    saveSection('kiro', { command, models });
+    clearModelListCache();
   }
   if (patch.aws) {
     const aws = { ...cur.aws, ...patch.aws };
@@ -102,6 +128,7 @@ export function updateSettings(patch: any): Settings {
       if (!REGION_RE.test(aws.ssoRegion)) throw badRequest('SSO region looks wrong (for example us-east-1)');
     }
     saveSection('aws', aws);
+    clearModelListCache();
   }
   if (patch.budget) {
     const v = patch.budget.monthlyUsd;
@@ -169,24 +196,43 @@ export async function awsEnv(): Promise<Record<string, string>> {
   return env;
 }
 
-/** Full environment for a Claude Agent SDK run. */
-export async function agentEnv(): Promise<Record<string, string>> {
+/** Full environment for a Claude Agent SDK run. With a project, its own connection (provider, AWS account) applies. */
+export async function agentEnv(projectId?: string): Promise<Record<string, string>> {
   const s = getSettings();
   const env = baseEnv();
   env.CLAUDE_CONFIG_DIR = dataPath('claude-home');
-  if (s.provider.mode === 'anthropic') {
+  const pa = projectId ? await import('./project-aws.ts') : null;
+  const mode = pa ? pa.effectiveProvider(projectId) : s.provider.mode;
+  if (mode === 'anthropic') {
     const key = await getSecret(SECRET_NAMES.anthropicKey);
     if (!key) throw badRequest('Add your Anthropic API key in Settings first');
     env.ANTHROPIC_API_KEY = key;
-  } else if (s.provider.mode === 'bedrock') {
+  } else if (mode === 'bedrock') {
     env.CLAUDE_CODE_USE_BEDROCK = '1';
-    if (s.aws.auth === 'bedrock-key') {
+    if (pa && pa.projectModelUsesOwnAws(projectId)) {
+      // One AWS connection for the whole project: Bedrock uses the project's own account.
+      Object.assign(env, await pa.projectAwsEnv(projectId!));
+    } else if (s.aws.auth === 'bedrock-key') {
       const key = await getSecret(SECRET_NAMES.bedrockApiKey);
       if (!key) throw badRequest('Add your Amazon Bedrock API key in Settings first');
       env.AWS_BEARER_TOKEN_BEDROCK = key;
       env.AWS_REGION = s.aws.region;
     } else {
       Object.assign(env, await awsEnv());
+    }
+  } else if (mode === 'kiro') {
+    // kiro-cli uses the server user's own Kiro sign-in (HOME / APPDATA are kept). A stored API key wins.
+    const key = await getSecret(SECRET_NAMES.kiroApiKey);
+    if (key) env.KIRO_API_KEY = key;
+  }
+  // A project with its own AWS account: the agent's AWS commands go there. The model keeps the Settings credentials
+  // unless the project chose Bedrock on its own account (then both already use it).
+  if (pa && projectId) {
+    const { env: extra, pathPrefix } = await pa.projectRunEnv(projectId, mode === 'bedrock');
+    Object.assign(env, extra);
+    if (pathPrefix) {
+      const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+      env[key] = pathPrefix + path.delimiter + (env[key] ?? '');
     }
   }
   const m = s.provider.models;
@@ -208,9 +254,10 @@ export function monthSpend(projectId?: string): number {
   return r?.s ?? 0;
 }
 
-export function assertBudget(): void {
+/** Refuse new runs once the monthly dollar cap is used. Demo and Kiro CLI runs cost no dollars, so they are not capped. */
+export function assertBudget(mode: ProviderMode = getSettings().provider.mode): void {
   const s = getSettings();
-  if (s.provider.mode === 'demo') return;
+  if (mode === 'demo' || mode === 'kiro') return;
   const cap = s.budget.monthlyUsd;
   if (cap !== null && cap !== undefined && monthSpend() >= cap) {
     throw badRequest(`This month's budget of $${cap} is used up. An admin can raise it in Settings.`);

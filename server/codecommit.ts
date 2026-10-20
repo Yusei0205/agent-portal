@@ -15,6 +15,7 @@ import {
   ListRepositoriesCommand,
   BatchGetRepositoriesCommand,
 } from '@aws-sdk/client-codecommit';
+import { fromIni } from '@aws-sdk/credential-providers';
 import { get } from './http.ts';
 import { getSettings } from './settings.ts';
 import { badRequest, HttpError } from './util.ts';
@@ -38,6 +39,8 @@ interface AwsCredentials {
   accessKeyId?: string;
   secretAccessKey?: string;
   sessionToken?: string;
+  /** A named profile on the server (a project that signs in with a profile). */
+  profile?: string;
 }
 
 let _ccFactory: CodeCommitFactory = (region, credentials) => {
@@ -51,6 +54,9 @@ let _ccFactory: CodeCommitFactory = (region, credentials) => {
         sessionToken: credentials.sessionToken,
       },
     });
+  }
+  if (credentials.profile) {
+    return new CodeCommitClient({ region, credentials: fromIni({ profile: credentials.profile, ignoreCache: true }) });
   }
   return new CodeCommitClient({ region });
 };
@@ -75,8 +81,15 @@ const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
  * Throws 400 if bedrock-key is configured (not supported for CodeCommit).
  */
 async function resolveCodeCommitCredentials(
+  projectId: string,
   overrideRegion?: string,
 ): Promise<{ region: string; credentials: AwsCredentials }> {
+  // A project with its own AWS account uses it. Otherwise the Settings credentials apply, as before.
+  const { projectHasOwnAws, projectAwsCredentials } = await import('./project-aws.ts');
+  if (projectHasOwnAws(projectId)) {
+    const c = await projectAwsCredentials(projectId);
+    return { region: overrideRegion || c.region, credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey, sessionToken: c.sessionToken, profile: c.profile } };
+  }
   const s = getSettings();
   const auth = s.aws.auth;
 
@@ -98,6 +111,8 @@ async function resolveCodeCommitCredentials(
     accessKeyId: env.AWS_ACCESS_KEY_ID,
     secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
     sessionToken: env.AWS_SESSION_TOKEN,
+    // A named profile has no keys in the environment; the SDK must be told which profile to read.
+    profile: !env.AWS_ACCESS_KEY_ID ? env.AWS_PROFILE : undefined,
   };
 
   return { region, credentials };
@@ -207,14 +222,14 @@ export function registerCodeCommitRoutes(): void {
    * Auth: project member (any access), bedrock-key → 400, not configured → 400
    */
   get('/api/projects/:pid/codecommit/repos', async (ctx) => {
-    requireProject(ctx, ctx.params.pid);
+    const { project } = requireProject(ctx, ctx.params.pid);
 
     const rawRegion = ctx.query.get('region') ?? '';
     if (rawRegion && !REGION_RE.test(rawRegion)) {
       throw badRequest('Region format looks wrong (for example ap-southeast-1)');
     }
 
-    const { region, credentials } = await resolveCodeCommitCredentials(rawRegion || undefined);
+    const { region, credentials } = await resolveCodeCommitCredentials(project.id, rawRegion || undefined);
     const repos = await listCodeCommitRepos(region, credentials);
     return { repos, region };
   });

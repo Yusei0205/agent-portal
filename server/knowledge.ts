@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { all, insert, one, run, tx, update, type Row } from './db.ts';
-import { del, get, post, put, sendFile } from './http.ts';
+import { del, get, patch, post, put, sendFile } from './http.ts';
 import { config } from './config.ts';
 import { commitProject, getProject, notifyProject, projectDir, requireProject, type Project } from './projects.ts';
 import { SUPPORTED, sectionize, toMarkdown } from './convert.ts';
@@ -16,6 +16,10 @@ export interface DocRow {
   project_id: string;
   name: string;
   slug: string;
+  /** Folder path the document was uploaded from, like "billing/api"; empty for loose files. */
+  folder: string;
+  /** Repository the document belongs to, if any. */
+  repo_id: string | null;
   kind: 'upload' | 'decisions';
   mime: string | null;
   size: number;
@@ -97,27 +101,72 @@ export async function reindexDecisions(projectId: string): Promise<void> {
   else await registerDecisionsDoc(projectId, null);
 }
 
-export async function uploadDocument(project: Project, filename: string, buf: Buffer, userId: string): Promise<DocRow> {
+/** Normalise a folder path from the browser: forward slashes, no empty, "." or ".." parts, bounded length. */
+export function cleanFolder(raw: string): string {
+  return raw
+    .replace(/[\u0000-\u001f]/g, '')
+    .split(/[\\/]+/)
+    .map((s) => s.trim())
+    .filter((s) => s && s !== '.' && s !== '..')
+    .join('/')
+    .slice(0, 200);
+}
+
+export interface UploadOptions {
+  /** Folder the file came from, like "billing/api". */
+  folder?: string;
+  /** Repository this document belongs to. Leave undefined to keep an existing document's repository. */
+  repoId?: string | null;
+  /** Re-process this existing document instead of looking one up by name (used by "Convert again"). */
+  replaceId?: string;
+}
+
+/** A repository id from the browser must belong to the same project. */
+function checkRepoId(projectId: string, repoId: string | null | undefined): string | null {
+  if (!repoId) return null;
+  if (!one('SELECT id FROM repos WHERE id = ? AND project_id = ?', repoId, projectId)) throw badRequest('That repository is not in this project');
+  return repoId;
+}
+
+export async function uploadDocument(project: Project, filename: string, buf: Buffer, userId: string, opts: UploadOptions = {}): Promise<DocRow> {
   const base = path.basename(filename).replace(/[\u0000-\u001f]/g, '').trim();
   const ext = path.extname(base).toLowerCase();
   if (!SUPPORTED.includes(ext)) throw badRequest(`Files of type ${ext || '(none)'} are not supported. Use: ${SUPPORTED.join(', ')}`);
+  const repoId = opts.repoId === undefined ? undefined : checkRepoId(project.id, opts.repoId);
   if (!buf.length) throw badRequest('The file is empty');
   const name = base.slice(0, base.length - ext.length).slice(0, 150) || 'Document';
-  const slug = slugify(name, 60);
+  const replacing = opts.replaceId ? getDoc(opts.replaceId) : undefined;
+  if (replacing && replacing.project_id !== project.id) throw badRequest('That document belongs to another project');
+  const folder = replacing ? replacing.folder : cleanFolder(opts.folder ?? '');
+  // The same file name in different folders or repositories must not collide, so they get a short hash in the slug.
+  const scope = [folder, repoId ?? ''].filter(Boolean).join('|');
+  const slug = replacing ? replacing.slug : scope ? `${slugify(name, 48)}-${sha256(scope).slice(0, 6)}` : slugify(name, 60);
   if (slug === 'decisions') throw badRequest('“decisions” is reserved for the decisions log. Rename the file.');
   const dir = projectDir(project);
-  const existing = one<DocRow>('SELECT * FROM documents WHERE project_id = ? AND slug = ?', project.id, slug);
+  const existing = replacing ?? one<DocRow>('SELECT * FROM documents WHERE project_id = ? AND slug = ?', project.id, slug);
   const id = existing?.id ?? newId('d_');
   const originalRel = `docs/originals/${slug}${ext}`;
   const mdRel = `docs/md/${slug}.md`;
   if (existing) {
-    update('documents', id, { name, mime: ext, size: buf.length, status: 'processing', error: null, original_path: originalRel, updated_at: now(), uploaded_by: userId });
+    update('documents', id, {
+      name,
+      mime: ext,
+      size: buf.length,
+      status: 'processing',
+      error: null,
+      original_path: originalRel,
+      updated_at: now(),
+      uploaded_by: userId,
+      ...(repoId !== undefined ? { repo_id: repoId } : {}),
+    });
   } else {
     insert('documents', {
       id,
       project_id: project.id,
       name,
       slug,
+      folder,
+      repo_id: repoId ?? null,
       kind: 'upload',
       mime: ext,
       size: buf.length,
@@ -343,9 +392,13 @@ export function registerKnowledgeRoutes(): void {
     return {
       documents: all(
         `SELECT d.*, u.name AS uploaded_by_name FROM documents d LEFT JOIN users u ON u.id = d.uploaded_by
-          WHERE d.project_id = ? ORDER BY d.kind = 'decisions' DESC, d.name COLLATE NOCASE`,
+          WHERE d.project_id = ? ORDER BY d.kind = 'decisions' DESC, d.folder COLLATE NOCASE, d.name COLLATE NOCASE`,
         project.id,
       ),
+      folders: all<{ path: string }>(
+        `SELECT path FROM project_folders WHERE project_id = ? ORDER BY path COLLATE NOCASE`,
+        project.id,
+      ).map((r) => r.path),
       supported: SUPPORTED,
       maxUploadMb: Math.round(config.maxUploadBytes / 1024 / 1024),
     };
@@ -355,7 +408,172 @@ export function registerKnowledgeRoutes(): void {
     const { project } = requireProject(ctx, ctx.params.pid, 'editor');
     const filename = str(ctx.query.get('name'), 'File name', { max: 200 });
     const buf = await ctx.raw();
-    return { document: await uploadDocument(project, filename, buf, ctx.user!.id) };
+    const repo = ctx.query.get('repo');
+    return { document: await uploadDocument(project, filename, buf, ctx.user!.id, { folder: ctx.query.get('folder') ?? '', repoId: repo ? repo : undefined }) };
+  });
+
+  // Update a document: move to a folder, assign/clear repository, rename display name.
+  // The decisions log cannot be moved.
+  patch('/api/documents/:id', async (ctx) => {
+    const d = getDoc(ctx.params.id);
+    const { project } = requireProject(ctx, d.project_id, 'editor');
+    if (d.kind !== 'upload') throw badRequest('Only uploaded documents can be modified');
+    const body = await ctx.json();
+
+    const changes: Record<string, string | null> = {};
+
+    if ('repoId' in body) {
+      changes.repo_id = checkRepoId(project.id, body.repoId);
+    }
+
+    if ('name' in body) {
+      const newName = str(body.name, 'Name', { max: 150 }).trim();
+      if (!newName) throw badRequest('Name cannot be empty');
+      changes.name = newName;
+    }
+
+    if ('folder' in body) {
+      const newFolder = cleanFolder(String(body.folder ?? ''));
+      changes.folder = newFolder;
+      // Persist the target folder as a virtual folder so it shows in the tree even if empty.
+      if (newFolder) {
+        run('INSERT OR IGNORE INTO project_folders (project_id, path) VALUES (?, ?)', project.id, newFolder);
+      }
+    }
+
+    if (!Object.keys(changes).length) throw badRequest('Send at least one of: repoId, name, folder');
+
+    changes.updated_at = now();
+    update('documents', d.id, changes);
+    publishDoc(d);
+    return { document: getDoc(d.id) };
+  });
+
+  // Bulk move documents to a folder (or clear folder with '').
+  post('/api/projects/:pid/documents/bulk-move', async (ctx) => {
+    const { project } = requireProject(ctx, ctx.params.pid, 'editor');
+    const body = await ctx.json();
+    if (!Array.isArray(body.ids) || !body.ids.length) throw badRequest('Send ids (array of document ids)');
+    if (typeof body.folder !== 'string') throw badRequest('Send folder (string, empty for root)');
+    const targetFolder = cleanFolder(body.folder);
+    const ids: string[] = body.ids.slice(0, 500).map(String);
+
+    // Validate all docs belong to this project and are not decisions.
+    for (const id of ids) {
+      const doc = one<DocRow>('SELECT id, project_id, kind FROM documents WHERE id = ?', id);
+      if (!doc) throw notFound(`Document ${id} not found`);
+      if (doc.project_id !== project.id) throw badRequest(`Document ${id} does not belong to this project`);
+      if (doc.kind === 'decisions') throw badRequest('The decisions log cannot be moved');
+    }
+
+    tx(() => {
+      for (const id of ids) {
+        run('UPDATE documents SET folder = ?, updated_at = ? WHERE id = ?', targetFolder, now(), id);
+      }
+      // Persist target folder so it shows in the tree.
+      if (targetFolder) {
+        run('INSERT OR IGNORE INTO project_folders (project_id, path) VALUES (?, ?)', project.id, targetFolder);
+      }
+    });
+
+    // Notify clients.
+    notifyProject(project.id, 'document.updated', { bulk: true });
+    return { ok: true, moved: ids.length };
+  });
+
+  // List virtual folders for a project.
+  get('/api/projects/:pid/folders', (ctx) => {
+    const { project } = requireProject(ctx, ctx.params.pid);
+    const folders = all<{ path: string }>(
+      `SELECT path FROM project_folders WHERE project_id = ? ORDER BY path COLLATE NOCASE`,
+      project.id,
+    ).map((r) => r.path);
+    return { folders };
+  });
+
+  // Create a virtual folder (empty, no documents required).
+  post('/api/projects/:pid/folders', async (ctx) => {
+    const { project } = requireProject(ctx, ctx.params.pid, 'editor');
+    const body = await ctx.json();
+    const folderPath = cleanFolder(str(body.path, 'Folder path', { max: 200 }));
+    if (!folderPath) throw badRequest('Folder path cannot be empty');
+    run('INSERT OR IGNORE INTO project_folders (project_id, path) VALUES (?, ?)', project.id, folderPath);
+    notifyProject(project.id, 'document.updated', { folder: folderPath });
+    return { folder: folderPath };
+  });
+
+  // Rename a folder: moves all documents with the old prefix and updates the virtual folder record.
+  patch('/api/projects/:pid/folders', async (ctx) => {
+    const { project } = requireProject(ctx, ctx.params.pid, 'editor');
+    const body = await ctx.json();
+    const oldPath = cleanFolder(str(body.from, 'from', { max: 200 }));
+    const newPath = cleanFolder(str(body.to, 'to', { max: 200 }));
+    if (!oldPath) throw badRequest('"from" cannot be empty');
+    if (!newPath) throw badRequest('"to" cannot be empty');
+    if (oldPath === newPath) return { ok: true };
+
+    // Move all documents with the exact folder or with oldPath as a prefix.
+    const docs = all<DocRow>(
+      `SELECT * FROM documents WHERE project_id = ? AND (folder = ? OR folder LIKE ?)`,
+      project.id,
+      oldPath,
+      `${oldPath}/%`,
+    );
+    tx(() => {
+      for (const d of docs) {
+        const updatedFolder = d.folder === oldPath ? newPath : newPath + d.folder.slice(oldPath.length);
+        run('UPDATE documents SET folder = ?, updated_at = ? WHERE id = ?', updatedFolder, now(), d.id);
+      }
+      // Update virtual folder records (rename exact match and children).
+      const virtualFolders = all<{ path: string }>(
+        `SELECT path FROM project_folders WHERE project_id = ? AND (path = ? OR path LIKE ?)`,
+        project.id,
+        oldPath,
+        `${oldPath}/%`,
+      );
+      for (const vf of virtualFolders) {
+        const updatedPath = vf.path === oldPath ? newPath : newPath + vf.path.slice(oldPath.length);
+        run('DELETE FROM project_folders WHERE project_id = ? AND path = ?', project.id, vf.path);
+        run('INSERT OR IGNORE INTO project_folders (project_id, path) VALUES (?, ?)', project.id, updatedPath);
+      }
+      // Ensure the new path itself is in the table.
+      run('INSERT OR IGNORE INTO project_folders (project_id, path) VALUES (?, ?)', project.id, newPath);
+    });
+
+    notifyProject(project.id, 'document.updated', { folderRenamed: true });
+    return { ok: true, moved: docs.length };
+  });
+
+  // Delete a virtual folder record. Refuses if documents still live there (unless force=true).
+  del('/api/projects/:pid/folders', async (ctx) => {
+    const { project } = requireProject(ctx, ctx.params.pid, 'editor');
+    const body = await ctx.json();
+    const folderPath = cleanFolder(str(body.path, 'Folder path', { max: 200 }));
+    if (!folderPath) throw badRequest('Folder path cannot be empty');
+    const force = Boolean(body.force);
+
+    // Check for documents in this folder or sub-folders.
+    const docCount = one<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM documents WHERE project_id = ? AND (folder = ? OR folder LIKE ?)`,
+      project.id,
+      folderPath,
+      `${folderPath}/%`,
+    )?.c ?? 0;
+    if (docCount > 0 && !force) throw badRequest(`Folder "${folderPath}" still has ${docCount} document${docCount !== 1 ? 's' : ''}. Move or delete them first, or use force:true to move them to root.`);
+
+    tx(() => {
+      if (force && docCount > 0) {
+        // Move all documents in this folder (and sub-folders) to root.
+        run(`UPDATE documents SET folder = '', updated_at = ? WHERE project_id = ? AND (folder = ? OR folder LIKE ?)`,
+          now(), project.id, folderPath, `${folderPath}/%`);
+      }
+      // Remove virtual folder records for this folder and its children.
+      run(`DELETE FROM project_folders WHERE project_id = ? AND (path = ? OR path LIKE ?)`,
+        project.id, folderPath, `${folderPath}/%`);
+    });
+
+    notifyProject(project.id, 'document.updated', { folderDeleted: true });
+    return { ok: true };
   });
 
   get('/api/documents/:id', (ctx) => {
@@ -391,7 +609,7 @@ export function registerKnowledgeRoutes(): void {
     const { project } = requireProject(ctx, d.project_id, 'editor');
     if (d.kind === 'upload' && d.original_path) {
       const buf = fs.readFileSync(path.join(projectDir(project), d.original_path));
-      return { document: await uploadDocument(project, `${d.name}${path.extname(d.original_path)}`, buf, ctx.user!.id) };
+      return { document: await uploadDocument(project, `${d.name}${path.extname(d.original_path)}`, buf, ctx.user!.id, { replaceId: d.id }) };
     }
     await indexDocument(d.id);
     return { document: getDoc(d.id) };
@@ -443,13 +661,16 @@ export function registerKnowledgeRoutes(): void {
   get('/api/projects/:pid/inputs', (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid);
     const status = ctx.query.get('status') || 'pending';
+    // Tool permission requests belong to their run; the team's question list asks for type=question only.
+    const type = ['question', 'approval'].includes(ctx.query.get('type') ?? '') ? ctx.query.get('type')! : '';
     const rows = all(
       `SELECT i.*, r.title AS run_title, u.name AS created_by_name, a.name AS answered_by_name
          FROM inputs i LEFT JOIN runs r ON r.id = i.run_id LEFT JOIN users u ON u.id = i.created_by LEFT JOIN users a ON a.id = i.answered_by
-        WHERE i.project_id = ? ${status === 'all' ? '' : 'AND i.status = ?'}
+        WHERE i.project_id = ? ${status === 'all' ? '' : 'AND i.status = ?'} ${type ? 'AND i.type = ?' : ''}
         ORDER BY i.created_at DESC LIMIT 100`,
       project.id,
       ...(status === 'all' ? [] : [status]),
+      ...(type ? [type] : []),
     );
     return { inputs: rows.map((r) => ({ ...r, payload: parseJson(r.payload, {}), response: parseJson(r.response, null) })) };
   });

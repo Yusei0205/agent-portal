@@ -50,7 +50,8 @@ let mermaidCount = 0;
 function loadMermaid() {
   if (!mermaidPromise) {
     mermaidPromise = import('mermaid').then((m) => {
-      const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+      // The HUD theme is always dark; the standard theme follows the system.
+      const dark = document.documentElement.getAttribute('data-theme') === 'hud' || window.matchMedia?.('(prefers-color-scheme: dark)').matches;
       m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'neutral', fontFamily: 'inherit' });
       return m.default;
     });

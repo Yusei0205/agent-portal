@@ -165,7 +165,10 @@ test('ask the documents, send unknowns to the inbox, answers become decisions', 
 
 test('builder: roles, custom agents and skills, library, and a test run', async () => {
   const roles = await editor.get('/api/roles');
-  assert.equal(roles.roles.length, 7);
+  // 7 starter roles, 8 generated from Claude Code agents (roles-library.ts) and the AI delivery team (roles-delivery.ts).
+  const starters = ['business-analyst', 'solution-architect', 'backend-developer', 'frontend-developer', 'qa-engineer', 'reviewer', 'technical-writer'];
+  assert.equal(roles.roles.length, 16);
+  assert.ok(starters.every((k) => roles.roles.some((r: any) => r.key === k)), 'the starter roles are still offered');
   await editor.post(`/api/projects/${pid}/roles/business-analyst/apply`);
   await editor.post(`/api/projects/${pid}/roles/qa-engineer/apply`);
   await editor.post(`/api/projects/${pid}/roles/reviewer/apply`);

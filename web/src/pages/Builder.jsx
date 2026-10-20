@@ -7,6 +7,8 @@ import { useLoad } from '../lib/useAsync.js';
 import { cx, hueFor, timeAgo } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Markdown } from '../components/Markdown.jsx';
+import { ImportModal } from '../components/ImportModal.jsx';
+import { DraftPromptModal } from '../components/DraftPromptModal.jsx';
 import { Badge, Button, Empty, ErrorNote, Field, PageHeader, Segmented, Spinner, Tabs, Toggle, useUi } from '../components/ui.jsx';
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -60,7 +62,7 @@ function Roles() {
   return (
     <div className="stack-lg">
       <p className="muted">
-        Adding a role writes one agent and its starter skills into this project. The main agent delegates to a role when a task matches it. Edit them afterwards on the Agents and Skills tabs.
+        Adding a role writes its agent (or, for a team, its lead and specialists) and its skills into this project. The main agent delegates to a role when a task matches it. Edit them afterwards on the Agents and Skills tabs.
       </p>
       <div className="role-grid">
         {templates.data.roles.map((t) => {
@@ -75,8 +77,9 @@ function Roles() {
               <p>{t.summary}</p>
               <dl className="role-facts">
                 <div><dt>Model</dt><dd>{t.agent.model}</dd></div>
-                <div><dt>Tools</dt><dd>{t.agent.tools.join(', ')}</dd></div>
-                <div><dt>Skills</dt><dd>{t.skills.map((s) => s.name).join(', ')}</dd></div>
+                <div><dt>Tools</dt><dd>{t.agent.tools.map((x) => (x.startsWith('Agent(') ? 'Agent' : x)).join(', ')}</dd></div>
+                {t.team?.length ? <div><dt>Team</dt><dd>{[t.agent.name, ...t.team.map((a) => a.name)].join(', ')}</dd></div> : null}
+                {t.skills.length ? <div><dt>Skills</dt><dd>{t.skills.map((s) => s.name).join(', ')}</dd></div> : null}
                 {staff.length ? <div><dt>People</dt><dd>{staff.map((s) => s.name).join(', ')}</dd></div> : null}
               </dl>
               {canEdit ? (
@@ -99,7 +102,7 @@ function Roles() {
                         size="sm"
                         variant="ghost"
                         onClick={async () => {
-                          if (!(await confirm({ title: 'Reset role', message: `Overwrite ${t.agent.name} and its skills with the original template? Your edits to them are lost (they stay in the project’s git history).`, confirmLabel: 'Reset' }))) return;
+                          if (!(await confirm({ title: 'Reset role', message: `Overwrite ${t.agent.name}${t.team?.length ? `, its ${t.team.length} team agents` : ''} and its skills with the original template? Your edits to them are lost (they stay in the project’s git history).`, confirmLabel: 'Reset' }))) return;
                           act(t.key, () => api.post(`/api/projects/${project.id}/roles/${t.key}/apply`), `${t.title} reset`);
                         }}
                       >
@@ -109,7 +112,7 @@ function Roles() {
                         size="sm"
                         variant="danger-ghost"
                         onClick={async () => {
-                          if (!(await confirm({ title: 'Remove role', message: `Remove ${t.agent.name} and its skills from this project?`, confirmLabel: 'Remove', danger: true }))) return;
+                          if (!(await confirm({ title: 'Remove role', message: `Remove ${t.agent.name}${t.team?.length ? ` and its ${t.team.length} team agents` : ''} and its skills from this project?`, confirmLabel: 'Remove', danger: true }))) return;
                           act(t.key, () => api.del(`/api/projects/${project.id}/roles/${t.key}`), `${t.title} removed`);
                         }}
                       >
@@ -141,13 +144,30 @@ function useBuilderData() {
   return { agents, skills, tools };
 }
 
-function ItemList({ items, selected, kind, onNew, canEdit, projectId }) {
+function ItemList({ items, selected, kind, onNew, onImport, onDescribe, onCatalog, canEdit, projectId }) {
   return (
     <aside className="item-list">
-      {canEdit ? (
-        <Button icon="plus" size="sm" onClick={onNew}>
-          New {kind === 'agents' ? 'agent' : 'skill'}
+      {onCatalog ? (
+        <Button icon="builder" size="sm" variant={selected === 'catalog' ? 'primary' : 'default'} onClick={onCatalog}>
+          Browse templates
         </Button>
+      ) : null}
+      {canEdit ? (
+        <div className="stack" style={{ gap: '0.3rem' }}>
+          <Button icon="plus" size="sm" onClick={onNew}>
+            New {kind === 'agents' ? 'agent' : 'skill'}
+          </Button>
+          {onDescribe ? (
+            <Button icon="question" size="sm" variant="ghost" onClick={onDescribe} title={`Describe ${kind === 'agents' ? 'an agent' : 'a skill'} in plain language`}>
+              Describe…
+            </Button>
+          ) : null}
+          {onImport ? (
+            <Button icon="upload" size="sm" variant="ghost" onClick={onImport} aria-label="Import from .claude folder or zip">
+              Import
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       <ul>
         {items.map((a) => (
@@ -168,39 +188,91 @@ function ItemList({ items, selected, kind, onNew, canEdit, projectId }) {
 function Agents({ selected }) {
   const { project, canEdit } = useProject();
   const { agents, skills, tools } = useBuilderData();
+  const [showImport, setShowImport] = useState(false);
+  const [draftForm, setDraftForm] = useState(null); // prefilled form from draft
   if (!agents.data || !tools.data || !skills.data) return <Spinner />;
   const list = agents.data.agents;
   const current = selected === 'new' ? null : list.find((a) => a.name === selected) || (selected ? undefined : list[0]);
+
+  function handleDraft(draft) {
+    // Navigate to new agent view with a prefilled form
+    setDraftForm(draft);
+    go(project.id, 'builder', 'agents', 'new');
+  }
+
   return (
     <div className="builder-layout">
-      <ItemList items={list} selected={current?.name ?? selected} kind="agents" onNew={() => go(project.id, 'builder', 'agents', 'new')} canEdit={canEdit} projectId={project.id} />
+      {showImport && (
+        <ImportModal
+          projectId={project.id}
+          onClose={() => setShowImport(false)}
+          onImported={() => { agents.reload(true); skills.reload(true); }}
+        />
+      )}
+      <ItemList
+        items={list}
+        selected={current?.name ?? selected}
+        kind="agents"
+        onNew={() => { setDraftForm(null); go(project.id, 'builder', 'agents', 'new'); }}
+        onImport={canEdit ? () => setShowImport(true) : null}
+        onDescribe={canEdit ? () => setDraftForm('open-modal') : null}
+        canEdit={canEdit}
+        projectId={project.id}
+      />
       <div className="builder-main">
+        {draftForm === 'open-modal' && (
+          <DraftPromptModal
+            kind="agent"
+            projectId={project.id}
+            onClose={() => setDraftForm(null)}
+            onDraft={handleDraft}
+          />
+        )}
         {current === undefined && selected && selected !== 'new' ? (
           <Empty title="Agent not found" />
         ) : !list.length && selected !== 'new' ? (
-          <Empty icon="builder" title="No agents yet" action={canEdit ? <a className="btn btn-primary" href={href(project.id, 'builder')}>Add a role</a> : null}>
-            Start from a role template, or create an agent from scratch.
+          <Empty icon="builder" title="No agents yet" action={
+            canEdit ? (
+              <div className="row tight wrap" style={{ justifyContent: 'center' }}>
+                <a className="btn btn-primary" href={href(project.id, 'builder')}>Add a role</a>
+                <Button icon="upload" onClick={() => setShowImport(true)}>Import</Button>
+              </div>
+            ) : null
+          }>
+            Start from a role template, create an agent from scratch, or import from a .claude folder.
           </Empty>
         ) : (
-          <AgentEditor key={current?.name || 'new'} agent={current} skills={skills.data.skills} tools={tools.data} />
+          <AgentEditor key={`${current?.name || 'new'}-${draftForm?.name || ''}`} agent={current} skills={skills.data.skills} tools={tools.data} draftForm={selected === 'new' && draftForm && draftForm !== 'open-modal' ? draftForm : null} />
         )}
       </div>
     </div>
   );
 }
 
-function AgentEditor({ agent, skills, tools }) {
+function AgentEditor({ agent, skills, tools, draftForm }) {
   const { project, canEdit } = useProject();
   const { toast, confirm } = useUi();
   const isNew = !agent;
-  const [form, setForm] = useState(() => ({
-    name: agent?.name || '',
-    description: agent?.description || '',
-    model: agent?.model || 'inherit',
-    tools: agent?.tools || ['Read', 'Grep', 'Glob'],
-    skills: agent?.skills || [],
-    prompt: agent?.prompt || 'You are the … for this project.\n\nHow to work:\n1. Read docs/decisions.md and search docs/md/ first.\n2. …\n\nCite every requirement you rely on.',
-  }));
+  const [form, setForm] = useState(() => {
+    if (draftForm) {
+      return {
+        name: draftForm.name || '',
+        description: draftForm.description || '',
+        model: draftForm.model || 'inherit',
+        tools: draftForm.tools || ['Read', 'Grep', 'Glob'],
+        skills: draftForm.skills || [],
+        prompt: draftForm.prompt || '',
+      };
+    }
+    return {
+      name: agent?.name || '',
+      description: agent?.description || '',
+      model: agent?.model || 'inherit',
+      tools: agent?.tools || ['Read', 'Grep', 'Glob'],
+      skills: agent?.skills || [],
+      prompt: agent?.prompt || 'You are the … for this project.\n\nHow to work:\n1. Read docs/decisions.md and search docs/md/ first.\n2. …\n\nCite every requirement you rely on.',
+    };
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const nameOk = NAME_RE.test(form.name);
@@ -237,6 +309,12 @@ function AgentEditor({ agent, skills, tools }) {
           </div>
         ) : null}
       </div>
+      {draftForm && isNew && (
+        <div className="note note-info" role="status">
+          <Icon name="question" size={16} />
+          <span>This form was pre-filled by the AI draft. Review every field before saving.</span>
+        </div>
+      )}
       <fieldset className="stack" disabled={!canEdit}>
         {isNew ? (
           <Field label="Name" hint="Lowercase letters, digits and hyphens, like payments-expert." error={form.name && !nameOk ? 'Use lowercase letters, digits and hyphens only' : null}>
@@ -363,30 +441,165 @@ function TestPanel({ type, name }) {
 function Skills({ selected }) {
   const { project, canEdit } = useProject();
   const { skills, tools } = useBuilderData();
+  const [showImport, setShowImport] = useState(false);
+  const [draftForm, setDraftForm] = useState(null);
   if (!skills.data || !tools.data) return <Spinner />;
   const list = skills.data.skills;
-  const current = selected === 'new' ? null : list.find((s) => s.name === selected) || (selected ? undefined : list[0]);
+  const catalog = selected === 'catalog';
+  const current = selected === 'new' || catalog ? null : list.find((s) => s.name === selected) || (selected ? undefined : list[0]);
+
+  function handleDraft(draft) {
+    setDraftForm(draft);
+    go(project.id, 'builder', 'skills', 'new');
+  }
+
   return (
     <div className="builder-layout">
-      <ItemList items={list} selected={current?.name ?? selected} kind="skills" onNew={() => go(project.id, 'builder', 'skills', 'new')} canEdit={canEdit} projectId={project.id} />
+      {showImport && (
+        <ImportModal
+          projectId={project.id}
+          onClose={() => setShowImport(false)}
+          onImported={() => skills.reload(true)}
+        />
+      )}
+      <ItemList
+        items={list}
+        selected={current?.name ?? selected}
+        kind="skills"
+        onNew={() => { setDraftForm(null); go(project.id, 'builder', 'skills', 'new'); }}
+        onImport={canEdit ? () => setShowImport(true) : null}
+        onDescribe={canEdit ? () => setDraftForm('open-modal') : null}
+        onCatalog={() => go(project.id, 'builder', 'skills', 'catalog')}
+        canEdit={canEdit}
+        projectId={project.id}
+      />
       <div className="builder-main">
-        {current === undefined && selected && selected !== 'new' ? <Empty title="Skill not found" /> : <SkillEditor key={current?.name || 'new'} skill={current} tools={tools.data} />}
+        {draftForm === 'open-modal' && (
+          <DraftPromptModal
+            kind="skill"
+            projectId={project.id}
+            onClose={() => setDraftForm(null)}
+            onDraft={handleDraft}
+          />
+        )}
+        {catalog ? (
+          <SkillCatalog installed={new Set(list.map((s) => s.name))} />
+        ) : current === undefined && selected && selected !== 'new' ? (
+          <Empty title="Skill not found" />
+        ) : !list.length && selected !== 'new' ? (
+          <Empty icon="builder" title="No skills yet" action={
+            canEdit ? (
+              <div className="row tight wrap" style={{ justifyContent: 'center' }}>
+                <Button icon="plus" variant="primary" onClick={() => go(project.id, 'builder', 'skills', 'new')}>New skill</Button>
+                <Button icon="upload" onClick={() => setShowImport(true)}>Import</Button>
+              </div>
+            ) : null
+          }>
+            Create a skill from scratch, import from a .claude folder, browse the templates, or add a role on the Roles tab.
+          </Empty>
+        ) : (
+          <SkillEditor key={`${current?.name || 'new'}-${draftForm?.name || ''}`} skill={current} tools={tools.data} draftForm={selected === 'new' && draftForm && draftForm !== 'open-modal' ? draftForm : null} />
+        )}
       </div>
     </div>
   );
 }
 
-function SkillEditor({ skill, tools }) {
+/** Every skill the role templates carry, installable on its own (without taking the whole role). */
+function SkillCatalog({ installed }) {
+  const { project, canEdit } = useProject();
+  const { toast } = useUi();
+  const templates = useLoad(() => api.get('/api/skill-templates'), []);
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(null); // skill name being previewed
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const togglePreview = async (name) => {
+    if (open === name) return setOpen(null);
+    setOpen(name);
+    setPreview(null);
+    try {
+      setPreview((await api.get(`/api/skill-templates/${encodeURIComponent(name)}`)).skill);
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  };
+  const add = async (name) => {
+    setBusy(name);
+    try {
+      await api.post(`/api/projects/${project.id}/skill-templates/${encodeURIComponent(name)}/add`);
+      toast(`${name} added to the project`);
+    } catch (e) {
+      toast(e.message, 'danger');
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (!templates.data) return <Spinner />;
+  const all = templates.data.skills;
+  const needle = q.trim().toLowerCase();
+  const list = needle ? all.filter((s) => s.name.includes(needle) || s.description.toLowerCase().includes(needle) || s.roles.some((r) => r.title.toLowerCase().includes(needle))) : all;
+  return (
+    <div className="stack">
+      <div className="stack" style={{ gap: '0.25rem' }}>
+        <h2>Skill templates</h2>
+        <p className="muted small">
+          {all.length} skills come with the role templates. Add one here to use it on its own, or add its role on the Roles tab to get the role’s agents too. Skills already in this project show as Added.
+        </p>
+      </div>
+      <input className="input input-md" type="search" placeholder="Search skills or roles" aria-label="Search skill templates" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="skill-catalog">
+        {list.map((s) => {
+          const has = installed.has(s.name);
+          return (
+            <article key={s.name} className="panel skill-card" style={{ '--role-h': hueFor(s.name) }}>
+              <header>
+                <h3 className="mono">{s.name}</h3>
+                {has ? <Badge tone="ok">Added</Badge> : null}
+              </header>
+              <p className="small">{s.description}</p>
+              <p className="muted small">Role{s.roles.length === 1 ? '' : 's'}: {s.roles.map((r) => r.title).join(', ')}</p>
+              <div className="row tight wrap">
+                <Button size="sm" variant="ghost" onClick={() => togglePreview(s.name)} aria-expanded={open === s.name}>
+                  {open === s.name ? 'Hide preview' : 'Preview'}
+                </Button>
+                {canEdit ? (
+                  <Button size="sm" variant="primary" icon="plus" disabled={has} busy={busy === s.name} onClick={() => add(s.name)}>
+                    {has ? 'Already added' : 'Add to project'}
+                  </Button>
+                ) : null}
+              </div>
+              {open === s.name ? <div className="skill-preview">{preview ? <Markdown text={preview.body} /> : <Spinner small />}</div> : null}
+            </article>
+          );
+        })}
+        {!list.length ? <p className="muted small">No skill matches “{q}”.</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function SkillEditor({ skill, tools, draftForm }) {
   const { project, canEdit } = useProject();
   const { toast, confirm } = useUi();
   const isNew = !skill;
   const builtIn = skill?.name === 'project-docs';
-  const [form, setForm] = useState(() => ({
-    name: skill?.name || '',
-    description: skill?.description || '',
-    body: skill?.body || '# Skill title\n\nWhat to do, step by step.\n\n1. …\n2. …\n',
-    allowedTools: skill?.allowedTools || [],
-  }));
+  const [form, setForm] = useState(() => {
+    if (draftForm) {
+      return {
+        name: draftForm.name || '',
+        description: draftForm.description || '',
+        body: draftForm.body || '# Skill title\n\nWhat to do, step by step.\n\n1. …\n2. …\n',
+        allowedTools: [],
+      };
+    }
+    return {
+      name: skill?.name || '',
+      description: skill?.description || '',
+      body: skill?.body || '# Skill title\n\nWhat to do, step by step.\n\n1. …\n2. …\n',
+      allowedTools: skill?.allowedTools || [],
+    };
+  });
   const [view, setView] = useState('edit');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -426,6 +639,13 @@ function SkillEditor({ skill, tools }) {
           </div>
         ) : null}
       </div>
+      {draftForm && isNew && (
+        <div className="note note-info" role="status">
+          <Icon name="question" size={16} />
+          <span>This form was pre-filled by the AI draft. Review every field before saving.</span>
+        </div>
+      )}
+
       <fieldset className="stack" disabled={!canEdit}>
         {isNew ? (
           <Field label="Name" hint="Lowercase letters, digits and hyphens." error={form.name && !nameOk ? 'Use lowercase letters, digits and hyphens only' : null}>
