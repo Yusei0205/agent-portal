@@ -110,6 +110,7 @@ export function Settings() {
         />
         <BudgetSection s={s.data} usage={usage.data} reload={reload} />
         <AgentsSection s={s.data} reload={reload} />
+        <DelegationSection s={s.data} reload={reload} />
         <SecretsSection s={s.data} reload={reload} />
         <Users />
       </div>
@@ -785,6 +786,31 @@ function AgentsSection({ s, reload }) {
       <ErrorNote error={error} />
       <Button variant="primary" busy={busy} onClick={() => save({ agents: a })} disabled={JSON.stringify(a) === JSON.stringify(s.agents)}>
         Save defaults
+      </Button>
+    </section>
+  );
+}
+
+/** Limits for sessions handing tasks to separate sessions. */
+function DelegationSection({ s, reload }) {
+  const { busy, error, save } = useSave(reload);
+  const [d, setD] = useState(s.delegation);
+  useEffect(() => setD(s.delegation), [s.delegation]);
+  const num = (k, min, max) => (id) => <input id={id} type="number" min={min} max={max} className="input input-num" value={d[k]} onChange={(e) => setD({ ...d, [k]: Number(e.target.value) })} />;
+  return (
+    <section className="panel stack">
+      <h2>Delegated sessions</h2>
+      <p className="muted small">A session (its agents, or a person) can hand a task to a separate session with its own working copy and branch. These limits apply to everyone.</p>
+      <Toggle checked={d.enabled} onChange={(enabled) => setD({ ...d, enabled })} label="Delegation is on" />
+      <div className="row wrap">
+        <Field label="Running per session" hint="Delegated sessions one session can have running at once (0–10).">{num('maxPerParent', 0, 10)}</Field>
+        <Field label="Running per person" hint="Across all of one person's sessions (0–20).">{num('maxPerUser', 0, 20)}</Field>
+        <Field label="Subagent advice" hint="Above this many subagents at once, agents are told to delegate heavy work instead (0: never).">{num('nudgeThreshold', 0, 20)}</Field>
+      </div>
+      <Toggle checked={d.allowNested} onChange={(allowNested) => setD({ ...d, allowNested })} label="A delegated session may delegate further" />
+      <ErrorNote error={error} />
+      <Button variant="primary" busy={busy} onClick={() => save({ delegation: d })} disabled={JSON.stringify(d) === JSON.stringify(s.delegation)}>
+        Save limits
       </Button>
     </section>
   );

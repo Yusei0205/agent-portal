@@ -140,6 +140,7 @@ function SessionRow({ w, projectId, active, now }) {
         <span className={cx('dot', `dot-${w.status === 'running' ? 'running' : w.status === 'done' ? 'completed' : needsYou(w) ? 'waiting' : w.status}`)} aria-hidden="true" />
         <span className="ws-item-main">
           <span className="ws-item-title">{w.title}</span>
+          {w.parent ? <span className="muted small">↰ delegated by {w.parent.title}</span> : null}
           {now ? <span className="ws-now small">{now}</span> : <span className="ws-item-sub muted small">{w.summary || w.stop_reason || w.goal}</span>}
           <span className="muted small">
             {st.label} · iteration {w.iteration} · {b.unit === 'credits' ? `${b.spent} of ${b.total} credits` : `${money(b.spent, 2)} of ${money(b.total, 2)}`} · {timeAgo(w.updated_at)}

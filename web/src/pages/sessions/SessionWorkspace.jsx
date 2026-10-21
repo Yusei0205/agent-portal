@@ -16,7 +16,7 @@ import { Changes } from '../../components/run/Changes.jsx';
 import { CONTEXT_ICON, CONTEXT_KIND_LABEL, ContextChips, ContextPicker, sendFiles } from '../../components/ContextPicker.jsx';
 import { Icon } from '../../components/Icon.jsx';
 import { PushDialog } from '../../components/run/PushDialog.jsx';
-import { Badge, Button, Empty, ErrorNote, Note, Progress, Spinner, Tabs, useUi } from '../../components/ui.jsx';
+import { Badge, Button, Empty, ErrorNote, Field, Modal, Note, Progress, Spinner, Tabs, useUi } from '../../components/ui.jsx';
 import { SessionSettings } from './NewSessionDialog.jsx';
 import { budgetOf, statusOf } from './status.js';
 
@@ -94,6 +94,7 @@ function SessionHeader({ w, canEdit, reload }) {
   const { project } = useProject();
   const { toast, confirm } = useUi();
   const [busy, setBusy] = useState('');
+  const [delegating, setDelegating] = useState(false);
   const st = statusOf(w);
   const running = w.status === 'running';
   const burst = w.iteration - w.burst_start;
@@ -136,6 +137,9 @@ function SessionHeader({ w, canEdit, reload }) {
                 Resume
               </Button>
             )}
+            <Button icon="plus" onClick={() => setDelegating(true)} title="Hand a task of this session to a separate session with its own working copy and branch">
+              Delegate a task
+            </Button>
             {running ? (
               <Button variant="danger-ghost" busy={busy === 'stop'} onClick={call('stop', 'stop')}>
                 Stop now
@@ -192,6 +196,23 @@ function SessionHeader({ w, canEdit, reload }) {
           </a>
         ) : null}
       </div>
+      {w.parent || w.children?.length ? (
+        <div className="row tight wrap ws-family">
+          {w.parent ? (
+            <a className="chip-static small" href={href(project.id, 'sessions', w.parent.id)}>
+              ↰ delegated by <strong>{w.parent.title}</strong>
+            </a>
+          ) : null}
+          {w.children?.length ? <span className="muted small">Delegated sessions:</span> : null}
+          {(w.children || []).map((c) => (
+            <a key={c.id} className={cx('chip-static small ws-child', `ws-child-${c.status}`)} href={href(project.id, 'sessions', c.id)} title={c.summary || c.status}>
+              <span className={cx('dot', `dot-${c.status === 'running' ? 'running' : c.status === 'done' ? 'completed' : c.status === 'blocked' ? 'waiting' : c.status}`)} aria-hidden="true" />
+              {c.title}
+              <span className="muted">· {c.status === 'running' ? 'working' : c.status}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
       {w.status === 'done' ? (
         <Note tone="success" icon="check">
           The agents report the goal is met{w.verify_command ? ' and your check passes' : ''}. Review the Changes, push them, or tell the agents what to improve below.
@@ -201,7 +222,60 @@ function SessionHeader({ w, canEdit, reload }) {
           {w.stop_reason}
         </Note>
       ) : null}
+      {delegating ? <DelegateDialog w={w} onClose={() => setDelegating(false)} onDone={reload} /> : null}
     </header>
+  );
+}
+
+/** Hand a task of this session to a separate session. */
+function DelegateDialog({ w, onClose, onDone }) {
+  const { project } = useProject();
+  const { toast } = useUi();
+  const [title, setTitle] = useState('');
+  const [goal, setGoal] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.post(`/api/workflows/${w.id}/delegate`, { title: title || undefined, goal });
+      toast(`Started "${r.workflow.title}"`);
+      onDone();
+      onClose();
+      go(project.id, 'sessions', r.workflow.id);
+    } catch (e) {
+      setError(e);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      wide
+      title="Delegate a task"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" icon="play" busy={busy} disabled={!goal.trim()} onClick={start}>
+            Start delegated session
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p className="muted small">
+          A separate session takes the task, with its own working copy and branch of the same repositories, the same integrations, engine and limits. This session sees how it is doing and what it reports.
+        </p>
+        <Field label="Title (optional)">{(id) => <input id={id} className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Frontend: show the refund limit" />}</Field>
+        <Field label="Task" hint="Everything the delegated session needs to know: it does not see this session's conversation.">
+          {(id) => <textarea id={id} className="input" rows={6} value={goal} onChange={(e) => setGoal(e.target.value)} autoFocus />}
+        </Field>
+        <ErrorNote error={error} />
+      </div>
+    </Modal>
   );
 }
 

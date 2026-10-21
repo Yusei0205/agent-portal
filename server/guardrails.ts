@@ -39,6 +39,8 @@ export interface WorkflowStatus {
   needs: string;
   /** The new branch the agent wants its changes pushed to, as it wrote it. */
   branch: string;
+  /** Tasks the agent hands to separate sessions; only present when it asked for some. */
+  delegate?: { title: string; goal: string }[];
 }
 
 const SHARED_BRANCHES = new Set(['main', 'master', 'develop', 'development', 'dev', 'release', 'production', 'prod', 'staging', 'stage', 'trunk', 'head']);
@@ -60,7 +62,15 @@ export function parseStatus(text: string | null | undefined): WorkflowStatus | n
     const j = JSON.parse(last[1]);
     const state = ['continue', 'done', 'blocked'].includes(j.state) ? j.state : null;
     if (!state) return null;
-    return { state, summary: String(j.summary ?? '').slice(0, 2000), next: String(j.next ?? '').slice(0, 1000), needs: String(j.needs ?? '').slice(0, 1000), branch: String(j.branch ?? '').slice(0, 120) };
+    const out: WorkflowStatus = { state, summary: String(j.summary ?? '').slice(0, 2000), next: String(j.next ?? '').slice(0, 1000), needs: String(j.needs ?? '').slice(0, 1000), branch: String(j.branch ?? '').slice(0, 120) };
+    const tasks = Array.isArray(j.delegate)
+      ? j.delegate
+          .filter((d: any) => d && typeof d.goal === 'string' && d.goal.trim())
+          .slice(0, 5)
+          .map((d: any) => ({ title: String(d.title ?? '').trim().slice(0, 80), goal: String(d.goal).trim().slice(0, 4000) }))
+      : [];
+    if (tasks.length) out.delegate = tasks;
+    return out;
   } catch {
     return null;
   }
@@ -95,6 +105,15 @@ export interface IterationInput {
   repos?: { name: string; branch: string }[];
   /** Material the team attached to the session: files to read, and notes or earlier results given inline. */
   context?: ContextForPrompt[];
+  /** Separate sessions this one handed tasks to, and whether it may hand out more. */
+  delegation?: {
+    /** How many more it may start now (0: none). */
+    canStart: number;
+    why?: string;
+    children: { title: string; status: string; summary: string; isNew: boolean }[];
+    /** Above this many subagents at once, heavy work should go to a delegated session instead (0: no advice). */
+    nudge: number;
+  };
 }
 
 export interface ContextForPrompt {
@@ -157,6 +176,10 @@ export function composeIterationPrompt(i: IterationInput): string {
     );
   }
   if (i.context?.length) parts.push(...composeContext(i.context));
+  if (i.delegation?.children.length) {
+    parts.push('', '## Delegated sessions', 'Tasks this session handed to separate sessions (each with its own working copy and branch):');
+    for (const c of i.delegation.children) parts.push(`- ${c.title}: ${c.status}${c.isNew ? ' (new since the last iteration)' : ''}${c.summary ? ` — ${c.summary.replace(/\s+/g, ' ').slice(0, 600)}` : ''}`);
+  }
   if (i.rules.trim()) parts.push('', '## Standing rules from the team', i.rules.trim());
   if (i.progress.trim()) parts.push('', '## Progress so far', i.progress.trim());
   if (i.instructions.length) {
@@ -191,6 +214,13 @@ export function composeIterationPrompt(i: IterationInput): string {
     '- done: the goal is met and you verified it.',
     '- blocked: you cannot go on without a person.',
   );
+  if (i.delegation) {
+    parts.push(
+      i.delegation.canStart > 0
+        ? `To hand a large, independent piece of work to a separate session (its own working copy, branch and agents, running in parallel), add "delegate":[{"title":"short name","goal":"everything that session needs to know"}] to your status line, at most ${i.delegation.canStart} now. Use it for heavy work, not for small steps you can do yourself.${i.delegation.nudge ? ` Prefer it over running more than ${i.delegation.nudge} subagents at once.` : ''}`
+        : `Starting delegated sessions is not possible now${i.delegation.why ? ` (${i.delegation.why})` : ''}.`,
+    );
+  }
   return parts.join('\n');
 }
 

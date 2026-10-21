@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { blockedCommand, composeIterationPrompt, composeLeadAppend, parseStatus, safeBranchName, stagnated } from '../server/guardrails.ts';
-import { bootServer, Client, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer } from './client.ts';
 
 test('commands that change the outside world are blocked for unattended agents, reading is not', () => {
   for (const cmd of [
@@ -505,4 +505,63 @@ test('demo mode stays demo whatever engine is picked', async () => {
   const run = (await admin.get(`/api/runs/${d.workflow.last_run_id}`)).run;
   assert.equal(run.provider, 'demo');
   assert.equal(run.meta.engine, 'kiro', 'the choice is recorded on the run');
+});
+
+/* ---------------- delegated sessions ---------------- */
+
+test('the status line can hand tasks to separate sessions', () => {
+  const s = parseStatus('WORKFLOW_STATUS {"state":"continue","summary":"s","delegate":[{"title":"API","goal":"Build the API"},{"goal":"  "},{"title":"x"}]}');
+  assert.deepEqual(s?.delegate, [{ title: 'API', goal: 'Build the API' }], 'tasks without a goal are dropped');
+  const p = composeIterationPrompt({ title: 't', goal: 'g', rules: '', progress: '', instructions: [], check: null, iteration: 1, maxIterations: 3, budgetLeftUsd: 1, hasRepo: false, delegation: { canStart: 2, children: [{ title: 'API', status: 'done', summary: 'Built it', isNew: true }], nudge: 4 } });
+  assert.match(p, /## Delegated sessions\n.*\n- API: done \(new since the last iteration\) — Built it/);
+  assert.match(p, /"delegate":\[\{"title":"short name"/);
+  assert.match(p, /at most 2 now/);
+  assert.match(p, /more than 4 subagents at once/);
+  const none = composeIterationPrompt({ title: 't', goal: 'g', rules: '', progress: '', instructions: [], check: null, iteration: 1, maxIterations: 3, budgetLeftUsd: 1, hasRepo: false, delegation: { canStart: 0, why: 'delegation is turned off', children: [], nudge: 0 } });
+  assert.match(none, /not possible now \(delegation is turned off\)/);
+  assert.ok(!none.includes('"delegate":['));
+});
+
+test('a session delegates, waits for its child, then carries on to bring the work together', async () => {
+  const { workflow } = await create({ goal: 'Split it [demo-delegate: backend] [demo-iterations: 1]' });
+  const parent = await waitFor(async () => {
+    const d = await admin.get(`/api/workflows/${workflow.id}`);
+    return d.workflow.status === 'done' && !d.driving ? d : null;
+  }, 'parent done after its child', 60_000);
+  assert.equal(parent.workflow.children.length, 1);
+  const childId = parent.workflow.children[0].id;
+  const child = (await admin.get(`/api/workflows/${childId}`)).workflow;
+  assert.equal(child.title, 'backend');
+  assert.equal(child.status, 'done');
+  assert.equal(child.parent.id, workflow.id);
+  assert.equal(child.depth, 1);
+  const kinds = parent.events.map((e: any) => `${e.kind}:${e.body}`).join('\n');
+  assert.match(kinds, /delegate:The agents handed "backend" to a separate session/);
+  assert.match(kinds, /Waiting for 1 delegated session/);
+  assert.match(kinds, /delegate:Delegated session "backend" finished/);
+  assert.match(kinds, /carries on to bring their work together/);
+  const lastRun = (await admin.get(`/api/runs/${parent.workflow.last_run_id}`)).run;
+  assert.match(lastRun.prompt, /## Delegated sessions\n.*\n- backend: done \(new since the last iteration\)/, 'the parent reads what its child did');
+  assert.ok(!(await admin.get(`/api/workflows/${childId}`)).workflow.children.length, 'a delegated session cannot delegate further by default');
+});
+
+test('people can delegate too, within the limits in Settings', async () => {
+  const { workflow } = await create({ goal: 'Parked parent', start: false });
+  await admin.put('/api/settings', { delegation: { maxPerParent: 1 } });
+  const { workflow: child } = await admin.post(`/api/workflows/${workflow.id}/delegate`, { title: 'Docs', goal: 'Write the docs [demo-stuck]' });
+  assert.equal(child.parent.id, workflow.id);
+  // Demo sessions finish at once in tests; mark the child as still running to check the limit.
+  await settle(child.id);
+  exec("UPDATE workflows SET status = 'running' WHERE id = ?", child.id);
+  const second = await admin.req('POST', `/api/workflows/${workflow.id}/delegate`, { goal: 'More' });
+  assert.equal(second.status, 400);
+  assert.match(second.data.error, /1 delegated sessions of this one are running already/);
+  assert.equal((await viewer.req('POST', `/api/workflows/${workflow.id}/delegate`, { goal: 'x' })).status, 403);
+  await admin.post(`/api/workflows/${child.id}/stop`);
+  await admin.put('/api/settings', { delegation: { enabled: false } });
+  assert.match((await admin.req('POST', `/api/workflows/${workflow.id}/delegate`, { goal: 'x' })).data.error, /turned off/);
+  await admin.put('/api/settings', { delegation: { enabled: true, maxPerParent: 3 } });
+  // Deleting the parent leaves the child, on its own.
+  await admin.del(`/api/workflows/${workflow.id}`);
+  assert.equal((await admin.get(`/api/workflows/${child.id}`)).workflow.parent, null);
 });

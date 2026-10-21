@@ -242,6 +242,15 @@ async function main() {
     await page.getByRole('link', { name: 'History', exact: true }).click();
     await page.locator('.wf-human', { hasText: 'exactly 500' }).waitFor();
     check(true, 'instructions show in the history');
+    await page.getByRole('button', { name: 'Delegate a task', exact: true }).click();
+    await page.getByLabel('Task', { exact: true }).fill('Write the release notes for the refund limit [demo-iterations: 1]');
+    await page.getByRole('button', { name: 'Start delegated session', exact: true }).click();
+    await page.locator('.ws-family', { hasText: 'delegated by' }).waitFor();
+    check(true, 'a delegated session shows where it came from');
+    await page.locator('.ws-family a').first().click();
+    await page.locator('.ws-child').first().waitFor();
+    check(true, 'the parent lists its delegated sessions');
+    await shot(page, 'session-delegated');
 
     console.log('old links');
     await page.goto(`${base}/#/p/${pid}/runs/${singleRunId}`);

@@ -448,6 +448,12 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens(user_id);`,
   // The engine a session runs on ('claude' or 'kiro'); empty follows the project's connection.
   `ALTER TABLE workflows ADD COLUMN engine TEXT NOT NULL DEFAULT '';`,
+  // Delegated sessions: a session can hand a task to a separate child session.
+  `ALTER TABLE workflows ADD COLUMN parent_id TEXT;
+  ALTER TABLE workflows ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE workflows ADD COLUMN waiting_children INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE workflows ADD COLUMN seen_by_parent INTEGER NOT NULL DEFAULT 1;
+  CREATE INDEX IF NOT EXISTS workflows_parent ON workflows(parent_id);`,
 ];
 
 let db: DatabaseSync | null = null;

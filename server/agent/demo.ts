@@ -410,5 +410,8 @@ function demoWorkflowStatus(prompt: string): string {
   if (prompt.includes('[demo-stuck]')) state = 'continue';
   if (prompt.includes('[demo-block]')) state = 'blocked';
   const summary = prompt.includes('[demo-stuck]') ? 'Still working on it.' : `Demo iteration ${n}: made progress and verified it.`;
-  return `WORKFLOW_STATUS ${JSON.stringify({ state, summary, next: state === 'continue' ? 'Keep going.' : '', needs: state === 'blocked' ? 'A decision from a person.' : '', branch: prompt.match(/\[demo-branch: ([^\]]+)\]/)?.[1] ?? 'feature/demo-work' })}`;
+  // [demo-delegate: title] hands one task to a separate session, once: when delegating is offered and none exists yet.
+  const delegateTitle = prompt.match(/\[demo-delegate: ([^\]]+)\]/)?.[1];
+  const delegate = delegateTitle && prompt.includes('"delegate":[') && !prompt.includes('## Delegated sessions') ? [{ title: delegateTitle, goal: `Do the ${delegateTitle} part [demo-iterations: 1]` }] : undefined;
+  return `WORKFLOW_STATUS ${JSON.stringify({ state, summary, next: state === 'continue' ? 'Keep going.' : '', needs: state === 'blocked' ? 'A decision from a person.' : '', branch: prompt.match(/\[demo-branch: ([^\]]+)\]/)?.[1] ?? 'feature/demo-work', ...(delegate ? { delegate } : {}) })}`;
 }

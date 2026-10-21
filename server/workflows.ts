@@ -27,6 +27,7 @@ import { addContext, contextForIteration, registerContextRoutes, removeContextFi
 import { readRepoChoices } from './runs.ts';
 import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
 import { readIntegrationIds } from './integrations.ts';
+import { getSettings } from './settings.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -81,6 +82,10 @@ function view(w: Row) {
     branch: w.branch,
     repos: reposView(w),
     workspace: w.workspace_id ? (one<Row>('SELECT id, name FROM workspaces WHERE id = ?', w.workspace_id) ?? null) : null,
+    parent: w.parent_id ? (one<Row>('SELECT id, title, status FROM workflows WHERE id = ?', w.parent_id) ?? null) : null,
+    children: all<Row>('SELECT id, title, status, summary FROM workflows WHERE parent_id = ? ORDER BY created_at', w.id),
+    depth: Number(w.depth ?? 0),
+    waiting_children: Boolean(w.waiting_children),
     integrations: parseJson<string[]>(w.integrations, []),
     integration_list: parseJson<string[]>(w.integrations, []).map((id) => one<Row>('SELECT id, name, kind, allow_writes FROM integrations WHERE id = ?', id) ?? { id, name: '(removed integration)', kind: '', allow_writes: 0 }),
     model: w.model,
@@ -173,6 +178,100 @@ function runCheck(command: string, cwd: string): Promise<{ ok: boolean; output: 
 function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'paused' | 'stopped', reason: string): void {
   patch(id, { status, stop_reason: reason });
   log(id, 'status', reason ? `${status}: ${reason}` : status);
+  childStopped(id);
+}
+
+/* ------------------------------------------------------------------ */
+/* Delegated sessions                                                  */
+/* ------------------------------------------------------------------ */
+
+function childrenOf(id: string): Row[] {
+  return all<Row>('SELECT id, title, status, summary, stop_reason, seen_by_parent FROM workflows WHERE parent_id = ? ORDER BY created_at', id);
+}
+
+function runningChildren(id: string): number {
+  return Number(one<Row>("SELECT COUNT(*) AS n FROM workflows WHERE parent_id = ? AND status = 'running'", id)?.n ?? 0);
+}
+
+/** How many more delegated sessions this session may start now (Settings › Delegated sessions), and why not. */
+export function delegationRoom(w: Row): { canStart: number; why?: string } {
+  const d = getSettings().delegation;
+  if (!d.enabled) return { canStart: 0, why: 'delegation is turned off' };
+  if (Number(w.depth) >= 1 && !d.allowNested) return { canStart: 0, why: 'a delegated session cannot delegate further' };
+  const perParent = d.maxPerParent - runningChildren(w.id);
+  const perUser = d.maxPerUser - Number(one<Row>("SELECT COUNT(*) AS n FROM workflows WHERE parent_id IS NOT NULL AND created_by = ? AND status = 'running'", w.created_by)?.n ?? 0);
+  const n = Math.max(0, Math.min(perParent, perUser));
+  if (n) return { canStart: n };
+  return { canStart: 0, why: perParent <= 0 ? `${d.maxPerParent} delegated sessions of this one are running already` : `${d.maxPerUser} delegated sessions of this person are running already` };
+}
+
+/**
+ * Hand a task to a new session that inherits the parent's repositories, integrations, engine, model, limits and rules,
+ * and works on its own working copy and branch. It starts at once.
+ */
+export function createChild(parent: Row, task: { title?: string; goal: string }, by: { id: string; name: string }): Row {
+  const room = delegationRoom(parent);
+  if (!room.canStart) throw badRequest(`Cannot delegate now: ${room.why}.`);
+  const goal = task.goal.trim();
+  if (!goal) throw badRequest('Say what the delegated session should do');
+  const id = newId('w_');
+  const title = (task.title?.trim() || goal.split('\n')[0]).slice(0, 80);
+  insert('workflows', {
+    id,
+    project_id: parent.project_id,
+    title,
+    goal: `${goal}\n\nThis task was delegated by the session "${parent.title}" (goal: ${String(parent.goal).slice(0, 300)}). Do only this task, and say in your summary what you changed and verified.`,
+    status: 'running',
+    stop_reason: '',
+    repo_id: parent.repo_id,
+    branch: parent.branch,
+    repos: parent.repos,
+    model: parent.model,
+    budget_usd: parent.budget_usd,
+    budget_credits: parent.budget_credits,
+    max_iterations: parent.max_iterations,
+    verify_command: parent.verify_command,
+    rules: parent.rules,
+    iteration: 0,
+    burst_start: 0,
+    spent_usd: 0,
+    spent_credits: 0,
+    work_branch: '',
+    lead_agent: '',
+    jira_key: parent.jira_key,
+    jira_summary: parent.jira_summary,
+    jira_url: parent.jira_url,
+    summary: '',
+    workspace_id: parent.workspace_id,
+    engine: parent.engine,
+    integrations: parent.integrations,
+    parent_id: parent.id,
+    depth: Number(parent.depth) + 1,
+    seen_by_parent: 1,
+    created_by: parent.created_by,
+    created_at: now(),
+    updated_at: now(),
+  });
+  log(id, 'system', `Delegated by ${by.name} from the session "${parent.title}"`);
+  log(parent.id, 'delegate', `${by.name} handed "${title}" to a separate session`, { data: { childId: id, by: by.name } });
+  kick(id);
+  return getWorkflow(id);
+}
+
+/** A delegated session stopped: tell its parent, and let a parent that was waiting for it carry on. */
+function childStopped(id: string): void {
+  const w = one<Row>('SELECT * FROM workflows WHERE id = ?', id);
+  if (!w?.parent_id) return;
+  const parent = one<Row>('SELECT * FROM workflows WHERE id = ?', w.parent_id);
+  if (!parent) return;
+  exec('UPDATE workflows SET seen_by_parent = 0 WHERE id = ?', id);
+  const what = w.status === 'done' ? 'finished' : w.status;
+  log(parent.id, 'delegate', `Delegated session "${w.title}" ${what}: ${String(w.summary || w.stop_reason || '').slice(0, 400)}`, { data: { childId: id, status: w.status } });
+  if (parent.status === 'paused' && parent.waiting_children && !runningChildren(parent.id) && !overBudget(parent)) {
+    patch(parent.id, { status: 'running', stop_reason: '', waiting_children: 0, burst_start: parent.iteration });
+    log(parent.id, 'status', 'Its delegated sessions have stopped; it carries on to bring their work together.');
+    kick(parent.id);
+  }
 }
 
 /**
@@ -228,8 +327,19 @@ async function drive(id: string): Promise<void> {
       workBranch: w.work_branch,
       baseBranch: w.repo_id ? w.branch || getRepo(w.repo_id).default_branch : '',
       context: contextForIteration(id),
+      delegation: (() => {
+        const kids = childrenOf(id);
+        const d = getSettings().delegation;
+        if (!d.enabled && !kids.length) return undefined;
+        return {
+          ...delegationRoom(w),
+          children: kids.map((c) => ({ title: c.title, status: c.status === 'running' ? 'still working' : c.status, summary: c.summary || c.stop_reason || '', isNew: c.status !== 'running' && !c.seen_by_parent })),
+          nudge: d.nudgeThreshold,
+        };
+      })(),
     });
     for (const p of pending) exec('UPDATE workflow_events SET consumed = 1 WHERE id = ?', p.id);
+    exec("UPDATE workflows SET seen_by_parent = 1 WHERE parent_id = ? AND status != 'running'", id);
 
     // A lead agent from the project's team plans and delegates; without one the default main agent decides.
     let systemAppend: string | undefined;
@@ -315,6 +425,16 @@ async function drive(id: string): Promise<void> {
     }
     summaries.push(summary);
 
+    // Tasks the agent handed to separate sessions start now, within the limits; refusals go into the history.
+    for (const task of status?.delegate ?? []) {
+      try {
+        createChild(getWorkflow(id), task, { id: w.created_by, name: 'The agents' });
+      } catch (e: any) {
+        log(id, 'status', `Could not delegate "${task.title || task.goal.slice(0, 60)}": ${String(e?.message ?? e).replace(/^Cannot delegate now: /, '')}`);
+        break;
+      }
+    }
+
     // The team's own check decides what the agent's word is worth.
     lastCheck = null;
     if (w.verify_command.trim()) {
@@ -336,6 +456,12 @@ async function drive(id: string): Promise<void> {
         // Claimed done but the check disagrees: keep going with the check output in front of it.
         log(id, 'status', 'The agent reported done, but the check failed, so it goes on.');
       } else {
+        // Done, but tasks it delegated are still running: wait for them, then carry on to bring their work together.
+        const waiting = runningChildren(id);
+        if (waiting) {
+          patch(id, { waiting_children: 1 });
+          return stopWith(id, 'paused', `Waiting for ${waiting} delegated session${waiting === 1 ? '' : 's'} to finish; it carries on by itself when they do.`);
+        }
         return stopWith(id, 'done', 'The agent reports the goal is met. Review the changes.');
       }
     }
@@ -553,6 +679,15 @@ export function registerWorkflowRoutes(): void {
     return { workflow: view(out) };
   });
 
+  // A person hands a task of this session to a separate session.
+  post('/api/workflows/:id/delegate', async (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id, 'editor');
+    const body = await ctx.json();
+    const child = createChild(w, { title: str(body.title, 'Title', { max: 80, optional: true }), goal: str(body.goal, 'Task', { max: 6000 }) }, { id: ctx.user!.id, name: ctx.user!.name });
+    return { workflow: view(child) };
+  });
+
   // Tell the session something. It is read at the next iteration, and a finished or stopped session starts again.
   post('/api/workflows/:id/messages', async (ctx) => {
     const w = getWorkflow(ctx.params.id);
@@ -563,7 +698,7 @@ export function registerWorkflowRoutes(): void {
     addContextItems(w.id, { id: ctx.user!.id, name: ctx.user!.name }, readContextItems(body.context));
     log(w.id, 'human', text, { data: { by: ctx.user!.name } });
     if (REOPENABLE.includes(w.status)) {
-      patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration });
+      patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0 });
       kick(w.id);
     }
     return { workflow: view(getWorkflow(w.id)) };
@@ -574,7 +709,7 @@ export function registerWorkflowRoutes(): void {
     requireProject(ctx, w.project_id, 'editor');
     if (OPEN.includes(w.status) && driving.has(w.id)) return { workflow: view(w) };
     if (overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first.');
-    patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration });
+    patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0 });
     log(w.id, 'status', 'Resumed');
     kick(w.id);
     return { workflow: view(getWorkflow(w.id)) };
@@ -603,6 +738,8 @@ export function registerWorkflowRoutes(): void {
     const w = getWorkflow(ctx.params.id);
     requireProject(ctx, w.project_id, 'editor');
     if (w.status === 'running') throw badRequest('Stop the session first');
+    // Sessions it delegated to stay, on their own.
+    exec('UPDATE workflows SET parent_id = NULL WHERE parent_id = ?', w.id);
     exec('DELETE FROM workflows WHERE id = ?', w.id);
     removeContextFiles(w.project_id, w.id);
     notifyProject(w.project_id, 'workflow.deleted', { id: w.id });

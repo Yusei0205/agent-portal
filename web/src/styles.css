@@ -5156,3 +5156,14 @@ html[data-theme='hud'] .ins-hbar-fill {
 .vault-meta {
   white-space: nowrap;
 }
+
+/* ---------- Delegated sessions ---------- */
+.ws-family {
+  align-items: center;
+}
+.ws-child {
+  gap: 6px;
+}
+.ws-child .dot {
+  margin-top: 0;
+}

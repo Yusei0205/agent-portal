@@ -36,6 +36,8 @@ export interface Settings {
   budget: { monthlyUsd: number | null };
   secrets: { mode: 'local' | 'aws-ssm'; prefix: string; region: string };
   agents: { defaultPermissionMode: 'default' | 'acceptEdits' | 'plan'; maxTurns: number; resumeAfterRestart: boolean };
+  /** Sessions handing tasks to separate sessions: limits for everyone. */
+  delegation: { enabled: boolean; maxPerParent: number; maxPerUser: number; allowNested: boolean; nudgeThreshold: number };
 }
 
 const DEFAULTS: Settings = {
@@ -45,6 +47,7 @@ const DEFAULTS: Settings = {
   budget: { monthlyUsd: 50 },
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
   agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true },
+  delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
 };
 
 export const SECRET_NAMES = {
@@ -148,6 +151,21 @@ export function updateSettings(patch: any): Settings {
     a.maxTurns = Math.max(1, Math.min(500, Number(a.maxTurns) || 40));
     a.resumeAfterRestart = a.resumeAfterRestart !== false;
     saveSection('agents', a);
+  }
+  if (patch.delegation) {
+    const d = { ...cur.delegation, ...patch.delegation };
+    const n = (v: unknown, lo: number, hi: number, name: string) => {
+      const x = Number(v);
+      if (!Number.isInteger(x) || x < lo || x > hi) throw badRequest(`${name} must be a whole number from ${lo} to ${hi}`);
+      return x;
+    };
+    saveSection('delegation', {
+      enabled: d.enabled !== false,
+      maxPerParent: n(d.maxPerParent, 0, 10, 'Running per session'),
+      maxPerUser: n(d.maxPerUser, 0, 20, 'Running per person'),
+      allowNested: d.allowNested === true,
+      nudgeThreshold: n(d.nudgeThreshold, 0, 20, 'Subagent advice threshold'),
+    });
   }
   return getSettings();
 }
