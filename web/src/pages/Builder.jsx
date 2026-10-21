@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useApp, useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
-import { go, href } from '../lib/router.js';
+import { go, href, runHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, hueFor, timeAgo } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
@@ -421,7 +421,7 @@ function TestPanel({ type, name }) {
             setError(null);
             try {
               const { run } = await api.post(`/api/projects/${project.id}/builder/test`, { type, name, prompt });
-              go(project.id, 'runs', run.id);
+              window.location.hash = runHref(project.id, run.id);
             } catch (e) {
               setError(e);
               setBusy(false);

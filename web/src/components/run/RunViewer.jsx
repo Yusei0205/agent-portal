@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApp, useProject } from '../../lib/context.js';
-import { go, href } from '../../lib/router.js';
+import { runHref, sessionHref } from '../../lib/router.js';
 import { useRunStream } from '../../lib/useRunStream.js';
 import { buildTree } from '../../lib/tree.js';
 import { cx, dateTime, duration, hueFor, money, tokens } from '../../lib/util.js';
@@ -60,6 +60,11 @@ export function RunView({ runId }) {
           <div className="row tight wrap">
             <Badge status={run.status} />
             <span className="muted small">{KIND_LABEL[run.kind] ?? run.kind}</span>
+            {run.meta?.workflowId ? (
+              <a className="small" href={sessionHref(project.id, run.meta.workflowId, { run: run.id })}>
+                Part of a session: open it
+              </a>
+            ) : null}
           </div>
           <h1>{run.title}</h1>
           <JiraRunBar run={run} />
@@ -151,7 +156,7 @@ export function RunView({ runId }) {
                 <p className="small">
                   Follow-ups:{' '}
                   {data.continuations.map((c) => (
-                    <a key={c.id} href={href(project.id, 'runs', c.id)}>
+                    <a key={c.id} href={runHref(project.id, c.id)}>
                       {c.title}{' '}
                     </a>
                   ))}
@@ -159,7 +164,7 @@ export function RunView({ runId }) {
               ) : null}
               {run.resume_of ? (
                 <p className="small">
-                  Continues <a href={href(project.id, 'runs', run.resume_of)}>an earlier run</a>.
+                  Continues <a href={runHref(project.id, run.resume_of)}>an earlier run</a>.
                 </p>
               ) : null}
             </div>
@@ -227,7 +232,7 @@ function FollowUp({ run }) {
         setError(null);
         try {
           const r = await api.post(`/api/runs/${run.id}/continue`, { prompt, permissionMode: mode });
-          go(project.id, 'runs', r.run.id);
+          window.location.hash = runHref(project.id, r.run.id);
         } catch (err) {
           setError(err);
           setBusy(false);

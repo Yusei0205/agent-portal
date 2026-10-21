@@ -96,9 +96,11 @@ export function registerRunRoutes(): void {
   get('/api/projects/:pid/runs', (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid);
     const kinds = (ctx.query.get('kind') || 'chat,test,review').split(',').filter(Boolean);
+    // standalone=1 leaves out the runs a session started for its iterations; the session shows those itself.
+    const standalone = ctx.query.get('standalone') === '1' ? `AND r.meta NOT LIKE '%"workflowId"%'` : '';
     const rows = all<Row>(
       `SELECT r.*, u.name AS created_by_name FROM runs r LEFT JOIN users u ON u.id = r.created_by
-        WHERE r.project_id = ? AND r.kind IN (${kinds.map(() => '?').join(',')})
+        WHERE r.project_id = ? AND r.kind IN (${kinds.map(() => '?').join(',')}) ${standalone}
         ORDER BY r.created_at DESC LIMIT ?`,
       project.id,
       ...kinds,

@@ -36,8 +36,19 @@ function getWorkflow(id: string): Row {
   return w;
 }
 
+/** Live facts for the session list: the latest run's state and how many of its questions or approvals wait. */
+function liveFacts(w: Row) {
+  if (!w.last_run_id) return { last_run_status: null, pending_inputs: 0 };
+  const r = one<Row>(
+    "SELECT status, (SELECT COUNT(*) FROM inputs WHERE run_id = runs.id AND status = 'pending') AS pending FROM runs WHERE id = ?",
+    w.last_run_id,
+  );
+  return { last_run_status: r?.status ?? null, pending_inputs: Number(r?.pending ?? 0) };
+}
+
 function view(w: Row) {
   return {
+    ...liveFacts(w),
     id: w.id,
     project_id: w.project_id,
     title: w.title,

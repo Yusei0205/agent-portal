@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useApp, useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
-import { go, href } from '../lib/router.js';
+import { go, href, runHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, money, timeAgo } from '../lib/util.js';
 import { useSortable } from '../lib/useSortable.js';
@@ -422,7 +422,7 @@ function TicketDetail({ ticketKey, siteUrl, onClose }) {
     try {
       const { run } = await api.post(`/api/projects/${project.id}/jira/issues/${ticketKey}/analyze`, form);
       toast(`Analysis of ${ticketKey} started`);
-      go(project.id, 'runs', run.id);
+      window.location.hash = runHref(project.id, run.id);
     } catch (e) {
       setError(e);
       setBusy(false);
@@ -536,7 +536,7 @@ function TicketDetail({ ticketKey, siteUrl, onClose }) {
               <ul className="plain-list small">
                 {runs.data.runs.map((r) => (
                   <li key={r.id}>
-                    <a href={href(project.id, 'runs', r.id)}>{timeAgo(r.created_at)}</a> <Badge status={r.status} />
+                    <a href={runHref(project.id, r.id)}>{timeAgo(r.created_at)}</a> <Badge status={r.status} />
                     {r.comment ? (
                       <>
                         {' '}
@@ -585,7 +585,7 @@ function TicketDetail({ ticketKey, siteUrl, onClose }) {
                         jiraSummary: t.summary || '',
                         repoId: form.repoId,
                       });
-                      window.location.href = href(project.id, 'runs', 'new') + '?' + params.toString();
+                      window.location.hash = href(project.id, 'sessions', 'new') + '?' + params.toString();
                     }}
                   >
                     Start coding run for {t.key}

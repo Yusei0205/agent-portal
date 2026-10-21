@@ -125,12 +125,17 @@ async function main() {
     await page.locator('.repo .badge', { hasText: 'Ready' }).waitFor({ timeout: 20000 });
     await shot(page, 'repos');
 
-    console.log('agent run');
-    await page.getByRole('link', { name: 'Agent runs', exact: true }).click();
-    await page.getByLabel('Task for the agents').fill('Design and build the refund approval flow for Finance Managers');
-    await page.getByLabel('Repository').selectOption({ label: 'refund-service' });
+    console.log('single run (from Sessions)');
+    await page.getByRole('link', { name: 'Sessions', exact: true }).click();
+    check((await page.getByRole('link', { name: 'Agent runs', exact: true }).count()) === 0, 'Agent runs is no longer in the menu');
+    await page.getByRole('link', { name: 'New', exact: true }).click();
+    await page.getByRole('tab', { name: 'Single run', exact: true }).click();
+    await page.getByLabel('Goal', { exact: true }).fill('Design and build the refund approval flow for Finance Managers');
+    await page.getByLabel('Repository (optional)').selectOption({ label: 'refund-service' });
     await shot(page, 'composer');
     await page.getByRole('button', { name: 'Start run', exact: true }).click();
+    await page.waitForURL(/\/sessions\/run\//);
+    const [, pid, singleRunId] = /\/p\/([^/]+)\/sessions\/run\/([^/?]+)/.exec(page.url())!;
     await page.locator('.pending .input-card').waitFor({ timeout: 20000 });
     await shot(page, 'run-question');
     await page.locator('.pending .choice', { hasText: 'New module' }).click();
@@ -154,6 +159,36 @@ async function main() {
     await page.getByText(/Pushed commit/).waitFor();
     check(/agent\//.test(execFileSync('git', ['branch'], { cwd: bare }).toString()), 'push created a branch in the remote');
     await page.getByRole('button', { name: 'Close', exact: true }).last().click();
+    await page.getByRole('tab', { name: 'Single runs', exact: true }).click();
+    check((await page.locator('.ws-item.is-active').count()) === 1, 'the single run is listed and selected');
+
+    console.log('session');
+    await page.getByRole('link', { name: 'New', exact: true }).click();
+    await page.getByLabel('Goal', { exact: true }).fill('Add a refund limit check for amounts above 500 [demo-iterations: 2]');
+    await page.getByLabel('Repository (optional)').selectOption({ label: 'refund-service' });
+    await page.getByRole('button', { name: 'Start session', exact: true }).click();
+    await page.locator('.ws-head').waitFor();
+    await page.locator('.ws-live').waitFor({ timeout: 20000 });
+    await shot(page, 'session-live');
+    await page.locator('.ws-head .badge', { hasText: 'Ready for review' }).waitFor({ timeout: 60000 });
+    check((await page.locator('.ws-iter').count()) >= 2, 'iteration strip shows each iteration');
+    check((await page.locator('.ws-group-head', { hasText: 'Ready for review' }).count()) === 1, 'the list groups the session under Ready for review');
+    await page.locator('.ws-iter').first().click();
+    await page.getByText('You are looking at an earlier iteration').waitFor();
+    await shot(page, 'session-done');
+    await page.getByRole('link', { name: 'Changes', exact: true }).click();
+    await page.locator('.diff-file, .file-list li').first().waitFor({ timeout: 20000 });
+    await shot(page, 'session-changes');
+    await page.getByLabel('Instruction for the agents').fill('Also cover an amount of exactly 500.');
+    await page.getByRole('button', { name: 'Send and continue', exact: true }).click();
+    await page.getByRole('link', { name: 'History', exact: true }).click();
+    await page.locator('.wf-human', { hasText: 'exactly 500' }).waitFor();
+    check(true, 'instructions show in the history');
+
+    console.log('old links');
+    await page.goto(`${base}/#/p/${pid}/runs/${singleRunId}`);
+    await page.waitForURL(new RegExp(`/sessions/run/${singleRunId}`));
+    check(true, 'an old Agent runs link opens the run under Sessions');
 
     console.log('code review');
     await page.getByRole('link', { name: 'Code review', exact: true }).click();

@@ -12,8 +12,7 @@ import { Projects } from './pages/Projects.jsx';
 import { ProjectSettings } from './pages/ProjectSettings.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
 import { Learn } from './pages/Learn.jsx';
-import { Runs } from './pages/Runs.jsx';
-import { Sessions } from './pages/Sessions.jsx';
+import { Sessions, legacyRunTarget } from './pages/Sessions.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
 import { Repos } from './pages/Repos.jsx';
@@ -55,7 +54,6 @@ const PROJECT_NAV = [
   { tab: 'learn', label: 'Learn', icon: 'learn' },
   { tab: 'tickets', label: 'Tickets', icon: 'inbox' },
   { tab: 'sessions', label: 'Sessions', icon: 'play' },
-  { tab: 'runs', label: 'Agent runs', icon: 'runs' },
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'repos', label: 'Repositories', icon: 'repos' },
   { tab: 'builder', label: 'Agents and skills', icon: 'builder' },
@@ -212,7 +210,7 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
                   {current.open_questions}
                 </span>
               ) : null}
-              {n.tab === 'runs' && current.pending_approvals ? (
+              {n.tab === 'sessions' && current.pending_approvals ? (
                 <span className="rail-count" title="Waiting for your permission">
                   {current.pending_approvals}
                 </span>
@@ -261,6 +259,21 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
       </div>
     </aside>
   );
+}
+
+/** Sends an old #/p/<id>/runs/... link to where that run now lives under Sessions. */
+function LegacyRuns({ projectId, route }) {
+  const runId = route.rest[0] && route.rest[0] !== 'new' ? route.rest[0] : null;
+  useEffect(() => {
+    let alive = true;
+    const send = (run) => alive && window.location.replace(legacyRunTarget(projectId, route.rest, route.query, run));
+    if (runId) api.get(`/api/runs/${runId}`).then((r) => send(r.run), () => send(null));
+    else send(null);
+    return () => {
+      alive = false;
+    };
+  }, [projectId, runId, route.rest, route.query]);
+  return <div className="pad"><Spinner /></div>;
 }
 
 function ProjectScope({ projectId, route }) {
@@ -341,7 +354,8 @@ function ProjectScope({ projectId, route }) {
       page = <Sessions route={route} />;
       break;
     case 'runs':
-      page = <Runs route={route} />;
+      // The Agent runs page is now part of Sessions; old links land in the right place there.
+      page = <LegacyRuns projectId={projectId} route={route} />;
       break;
     case 'review':
       page = <Review route={route} />;

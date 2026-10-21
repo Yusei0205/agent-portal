@@ -614,76 +614,81 @@ test('push route uses jiraKey meta for branch and message; meta on run is correc
 
 /* -------- UI source-level checks for the Jira ticket picker -------- */
 
-describe('UI source: Runs.jsx Jira ticket picker', () => {
-  let runsSrc: string;
+describe('UI source: Jira ticket picker in the New dialog of Sessions', () => {
+  let pickerSrc: string;
+  let composerSrc: string;
+  let pushSrc: string;
   let ticketsSrc: string;
 
   before(() => {
     const toPath = (u: URL) => u.pathname.replace(/^\/([A-Z]:\/)/i, '$1');
-    runsSrc = fs.readFileSync(toPath(new URL('../web/src/pages/Runs.jsx', import.meta.url)), 'utf8');
-    ticketsSrc = fs.readFileSync(toPath(new URL('../web/src/pages/Tickets.jsx', import.meta.url)), 'utf8');
+    const read = (rel: string) => fs.readFileSync(toPath(new URL(rel, import.meta.url)), 'utf8');
+    pickerSrc = read('../web/src/components/JiraTicketPicker.jsx');
+    composerSrc = read('../web/src/pages/sessions/NewSessionDialog.jsx');
+    pushSrc = read('../web/src/components/run/PushDialog.jsx');
+    ticketsSrc = read('../web/src/pages/Tickets.jsx');
   });
 
-  test('JiraTicketPicker component exists in Runs.jsx', () => {
-    assert.ok(runsSrc.includes('function JiraTicketPicker('), 'JiraTicketPicker must be defined in Runs.jsx');
+  test('JiraTicketPicker component exists', () => {
+    assert.ok(pickerSrc.includes('function JiraTicketPicker('), 'JiraTicketPicker must be defined in components/JiraTicketPicker.jsx');
   });
 
   test('JiraTicketPicker uses role="listbox" for the dropdown', () => {
-    const start = runsSrc.indexOf('function JiraTicketPicker(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
+    const start = pickerSrc.indexOf('function JiraTicketPicker(');
+    const end = pickerSrc.indexOf('\nfunction ', start + 1);
+    const fn = pickerSrc.slice(start, end > start ? end : undefined);
     assert.ok(fn.includes('role="listbox"'), 'JiraTicketPicker must use role="listbox" for ARIA');
   });
 
   test('JiraTicketPicker uses role="option" for ticket items', () => {
-    const start = runsSrc.indexOf('function JiraTicketPicker(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
+    const start = pickerSrc.indexOf('function JiraTicketPicker(');
+    const end = pickerSrc.indexOf('\nfunction ', start + 1);
+    const fn = pickerSrc.slice(start, end > start ? end : undefined);
     assert.ok(fn.includes('role="option"'), 'JiraTicketPicker must use role="option" for ticket items');
   });
 
   test('JiraTicketPicker uses aria-expanded and aria-haspopup', () => {
-    const start = runsSrc.indexOf('function JiraTicketPicker(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
+    const start = pickerSrc.indexOf('function JiraTicketPicker(');
+    const end = pickerSrc.indexOf('\nfunction ', start + 1);
+    const fn = pickerSrc.slice(start, end > start ? end : undefined);
     assert.ok(fn.includes('aria-expanded'), 'JiraTicketPicker must use aria-expanded');
     assert.ok(fn.includes('aria-haspopup'), 'JiraTicketPicker must use aria-haspopup="listbox"');
   });
 
   test('Composer hides the picker when jiraReady is false (not connected or not mapped)', () => {
-    const start = runsSrc.indexOf('function Composer(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
+    const start = composerSrc.indexOf('function NewSessionDialog(');
+    const end = composerSrc.indexOf('\nfunction ', start + 1);
+    const fn = composerSrc.slice(start, end > start ? end : undefined);
     assert.ok(fn.includes('jiraReady'), 'Composer must track jiraReady state');
     assert.ok(fn.includes('JiraTicketPicker'), 'Composer must conditionally render JiraTicketPicker');
     assert.ok(fn.includes('jiraReady ?'), 'Composer must guard JiraTicketPicker with jiraReady check');
   });
 
   test('direct key entry validation uses a key pattern (JIRA_KEY_RE)', () => {
-    const start = runsSrc.indexOf('function JiraTicketPicker(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
+    const start = pickerSrc.indexOf('function JiraTicketPicker(');
+    const end = pickerSrc.indexOf('\nfunction ', start + 1);
+    const fn = pickerSrc.slice(start, end > start ? end : undefined);
     assert.ok(fn.includes('JIRA_KEY_RE'), 'JiraTicketPicker must use JIRA_KEY_RE for key validation');
   });
 
   test('selected ticket card shows a clear button to deselect', () => {
-    const start = runsSrc.indexOf('function JiraTicketPicker(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
+    const start = pickerSrc.indexOf('function JiraTicketPicker(');
+    const end = pickerSrc.indexOf('\nfunction ', start + 1);
+    const fn = pickerSrc.slice(start, end > start ? end : undefined);
     assert.ok(fn.includes('onChange(null)'), 'JiraTicketPicker must call onChange(null) to clear the selected ticket');
   });
 
   test('instruction textarea becomes optional (aria-required conditional) when a ticket is selected', () => {
-    const start = runsSrc.indexOf('function Composer(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
-    assert.ok(fn.includes('aria-required') && fn.includes('jiraTicket'), 'textarea aria-required must be conditional on jiraTicket');
+    const start = composerSrc.indexOf('function NewSessionDialog(');
+    const end = composerSrc.indexOf('\nfunction ', start + 1);
+    const fn = composerSrc.slice(start, end > start ? end : undefined);
+    assert.ok(fn.includes('aria-required={!ticket}'), 'textarea aria-required must be conditional on the selected ticket');
   });
 
   test('PushDialog uses jiraKey meta for branch/commit defaults', () => {
-    const start = runsSrc.indexOf('function PushDialog(');
-    const end = runsSrc.indexOf('\nfunction ', start + 1);
-    const fn = runsSrc.slice(start, end > start ? end : undefined);
+    const start = pushSrc.indexOf('function PushDialog(');
+    const end = pushSrc.indexOf('\nfunction ', start + 1);
+    const fn = pushSrc.slice(start, end > start ? end : undefined);
     assert.ok(fn.includes('jiraKey'), 'PushDialog must read jiraKey from run.meta');
     assert.ok(fn.includes('defaultBranch'), 'PushDialog must compute defaultBranch');
     assert.ok(fn.includes('defaultMessage'), 'PushDialog must compute defaultMessage');
@@ -695,9 +700,9 @@ describe('UI source: Runs.jsx Jira ticket picker', () => {
     assert.ok(ticketsSrc.includes('Start a coding run'), '"Start a coding run" section must exist in Tickets.jsx');
   });
 
-  test('Tickets page "Start coding run" button navigates with jiraKey query param', () => {
-    assert.ok(ticketsSrc.includes('jiraKey') && ticketsSrc.includes('runs'), 'TicketDetail must navigate to runs/new with jiraKey');
-    assert.ok(ticketsSrc.includes('jiraUrl') && ticketsSrc.includes('jiraSummary'), 'TicketDetail must pass jiraUrl and jiraSummary to runs page');
+  test('Tickets page "Start coding run" button opens the New dialog of Sessions with the ticket', () => {
+    assert.ok(ticketsSrc.includes('jiraKey') && ticketsSrc.includes("'sessions', 'new'"), 'TicketDetail must navigate to sessions/new with jiraKey');
+    assert.ok(ticketsSrc.includes('jiraUrl') && ticketsSrc.includes('jiraSummary'), 'TicketDetail must pass jiraUrl and jiraSummary to the New dialog');
   });
 });
 

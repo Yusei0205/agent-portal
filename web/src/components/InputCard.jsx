@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../lib/api.js';
-import { href } from '../lib/router.js';
+import { runHref } from '../lib/router.js';
 import { cx, timeAgo } from '../lib/util.js';
 import { toolSummary } from '../lib/tree.js';
 import { Icon } from './Icon.jsx';
@@ -15,7 +15,7 @@ export function InputCard({ input, projectId, canApprove, onDone, compact }) {
         <Icon name={input.type === 'approval' ? 'lock' : 'question'} size={17} />
         <strong>{input.type === 'approval' ? `Allow ${input.tool_name}?` : input.payload?.source === 'qa' ? 'Question for the team' : 'The agent needs your input'}</strong>
         {input.run_id && !compact ? (
-          <a className="small" href={href(projectId, 'runs', input.run_id)}>
+          <a className="small" href={runHref(projectId, input.run_id)}>
             {input.run_title ? `from “${input.run_title}”` : 'open run'}
           </a>
         ) : null}

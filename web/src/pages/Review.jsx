@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
-import { go, href } from '../lib/router.js';
+import { go, href, runHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, timeAgo } from '../lib/util.js';
 import { useSortable } from '../lib/useSortable.js';
@@ -282,7 +282,7 @@ function ReviewDetail({ id }) {
         actions={
           <>
             {run ? (
-              <a className="btn btn-default" href={href(project.id, 'runs', run.id)}>
+              <a className="btn btn-default" href={runHref(project.id, run.id)}>
                 <Icon name="runs" size={17} />
                 <span>Watch the reviewer</span>
               </a>
