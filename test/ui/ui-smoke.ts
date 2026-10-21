@@ -318,6 +318,17 @@ async function main() {
     check((await page.locator('.conn-card', { hasText: 'Read-only' }).count()) === 1, 'a new integration is read-only and passes its MCP handshake');
     await shot(page, 'integrations');
 
+    console.log('api access');
+    await page.goto(`${base}/#/api`);
+    await page.getByRole('heading', { name: 'API access', exact: true }).waitFor();
+    await page.getByLabel('Token name').fill('Smoke test');
+    await page.getByRole('button', { name: 'Create token', exact: true }).click();
+    const shown = await page.locator('.api-token').textContent();
+    check(/^ap_/.test(shown ?? ''), 'a new token is shown once');
+    const listed = await page.locator('.table:not(.api-table)').textContent();
+    check(!(listed ?? '').includes(shown ?? 'x'), 'the token list shows only its beginning');
+    await shot(page, 'api-access');
+
     console.log('settings and mobile');
     await page.goto(`${base}/#/settings`);
     await page.getByRole('heading', { name: 'Model provider', exact: true }).waitFor();

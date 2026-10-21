@@ -54,6 +54,7 @@ function abs(project: Project, rel: string): string {
 }
 
 function mustChange(ctx: Ctx, rel: string): void {
+  if (isProtected(rel) && ctx.apiToken) throw new HttpError(403, `${rel} can only be changed from a signed-in browser, never with an API token`);
   if (isProtected(rel) && !ctx.user!.is_admin) {
     throw new HttpError(403, `Only admins can change ${rel}: settings, hooks and MCP configuration can run commands on the portal server or skip approvals.`);
   }

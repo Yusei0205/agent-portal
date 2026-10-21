@@ -1,3 +1,4 @@
+import { tokenUser } from './api-tokens.ts';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { all, insert, one, run, update } from './db.ts';
 import { get, post, patch, del, setCookie, type Ctx, type User } from './http.ts';
@@ -60,6 +61,14 @@ function startSession(ctx: Ctx, userId: string): void {
 }
 
 export function authenticate(ctx: Ctx): User | null {
+  // A personal access token, when one is sent, is the only identity considered (cookies are ignored).
+  const auth = String(ctx.req.headers.authorization || '');
+  if (/^Bearer\s+/i.test(auth)) {
+    const found = tokenUser(auth.replace(/^Bearer\s+/i, '').trim());
+    if (!found) return null;
+    ctx.apiToken = found.token;
+    return found.user;
+  }
   const cookie = ctx.req.headers.cookie || '';
   const m = cookie.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
   if (!m) return null;

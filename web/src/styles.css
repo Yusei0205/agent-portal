@@ -5117,3 +5117,24 @@ html[data-theme='hud'] .ins-hbar-fill {
     max-height: 40vh;
   }
 }
+
+/* ---------- API access ---------- */
+.table-wrap {
+  overflow-x: auto;
+}
+.api-base,
+.api-token {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  word-break: break-all;
+}
+.api-code {
+  white-space: pre;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.api-table td {
+  vertical-align: top;
+}

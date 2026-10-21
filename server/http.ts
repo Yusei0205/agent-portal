@@ -19,6 +19,8 @@ export interface Ctx {
   query: URLSearchParams;
   params: Record<string, string>;
   user: User | null;
+  /** Set when the request was made with a personal access token instead of a browser session. */
+  apiToken?: { id: string; scope: 'read' | 'write' } | null;
   ip: string;
   /** Parsed JSON body (lazy). */
   json<T = any>(): Promise<T>;
@@ -40,6 +42,17 @@ interface Route {
   keys: string[];
   handler: Handler;
   auth: 'public' | 'user' | 'admin';
+  /** The pattern the route was registered with, like /api/runs/:id. */
+  pattern: string;
+}
+
+/** Decides which routes a personal access token may call (see api-tokens.ts). Without one, tokens can call nothing. */
+type TokenPolicy = (ctx: Ctx, route: { method: string; pattern: string; auth: string }) => void;
+let tokenPolicy: TokenPolicy = () => {
+  throw new HttpError(403, 'API tokens are not enabled');
+};
+export function setTokenPolicy(p: TokenPolicy): void {
+  tokenPolicy = p;
 }
 
 const routes: Route[] = [];
@@ -54,7 +67,7 @@ export function route(method: string, pattern: string, handler: Handler, opts: R
       }) +
       '/?$',
   );
-  routes.push({ method, re, keys, handler, auth: opts.auth ?? 'user' });
+  routes.push({ method, re, keys, handler, auth: opts.auth ?? 'user', pattern });
 }
 
 export const get = (p: string, h: Handler, o?: RouteOpts) => route('GET', p, h, o);
@@ -222,7 +235,9 @@ export function createHandler(authenticate: Authenticator) {
         return;
       }
       // CSRF guard: state-changing API calls must carry the custom header that only same-origin scripts can set.
-      if (ctx.method !== 'GET' && ctx.method !== 'HEAD' && req.headers['x-requested-with'] !== 'agent-portal') {
+      // A bearer token is not sent by browsers on their own, so token requests need no such header.
+      const bearer = /^Bearer\s+\S/i.test(String(req.headers.authorization || ''));
+      if (!bearer && ctx.method !== 'GET' && ctx.method !== 'HEAD' && req.headers['x-requested-with'] !== 'agent-portal') {
         throw new HttpError(403, 'Missing request header');
       }
       let matched: Route | null = null;
@@ -240,6 +255,10 @@ export function createHandler(authenticate: Authenticator) {
       }
       if (!matched) throw new HttpError(methodMismatch ? 405 : 404, methodMismatch ? 'Method not allowed' : 'Not found');
       ctx.user = authenticate(ctx);
+      if (bearer) {
+        if (!ctx.user || !ctx.apiToken) throw new HttpError(401, 'The token is not valid, has expired or was revoked');
+        tokenPolicy(ctx, { method: matched.method, pattern: matched.pattern, auth: matched.auth });
+      }
       if (matched.auth !== 'public' && !ctx.user) throw new HttpError(401, 'Sign in to continue');
       if (matched.auth === 'admin' && !ctx.user?.is_admin) throw new HttpError(403, 'Only admins can do this');
       const out = await matched.handler(ctx);
