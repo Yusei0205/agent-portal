@@ -23,6 +23,7 @@ import { badRequest, newId, notFound, now, parseJson, str } from './util.ts';
 import { composeIterationPrompt, composeLeadAppend, parseStatus, safeBranchName, stagnated } from './guardrails.ts';
 import { listAgentFiles } from './builder.ts';
 import { effectiveProvider } from './project-aws.ts';
+import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -46,9 +47,12 @@ function liveFacts(w: Row) {
   return { last_run_status: r?.status ?? null, pending_inputs: Number(r?.pending ?? 0) };
 }
 
+const contextCount = (id: string) => Number(one<Row>('SELECT COUNT(*) AS n FROM workflow_context WHERE workflow_id = ?', id)?.n ?? 0);
+
 function view(w: Row) {
   return {
     ...liveFacts(w),
+    context_count: contextCount(w.id),
     id: w.id,
     project_id: w.project_id,
     title: w.title,
@@ -193,6 +197,7 @@ async function drive(id: string): Promise<void> {
       hasRepo: Boolean(w.repo_id),
       workBranch: w.work_branch,
       baseBranch: w.repo_id ? w.branch || getRepo(w.repo_id).default_branch : '',
+      context: contextForIteration(id),
     });
     for (const p of pending) exec('UPDATE workflow_events SET consumed = 1 WHERE id = ?', p.id);
 
@@ -354,7 +359,27 @@ function checkLead(project: ReturnType<typeof getProject>, raw: unknown): string
   return name;
 }
 
+/**
+ * Context items sent along with a new session or an instruction (documents, notes, links, earlier results; files are
+ * uploaded separately). All are checked before anything is saved, so a bad item leaves nothing half-added.
+ */
+function readContextItems(raw: unknown): any[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw badRequest('Context must be a list');
+  if (raw.length > 20) throw badRequest('Add at most 20 context items at once');
+  return raw;
+}
+
+function addContextItems(workflowId: string, user: { id: string; name: string }, items: any[]): void {
+  for (const item of items) {
+    const c = addContext(workflowId, user, item);
+    log(workflowId, 'context', `${user.name} added “${c.title}” as context`);
+  }
+}
+
 export function registerWorkflowRoutes(): void {
+  registerContextRoutes((workflowId, message) => log(workflowId, 'context', message));
+
   get('/api/projects/:pid/workflows', (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid);
     return { workflows: all<Row>('SELECT * FROM workflows WHERE project_id = ? ORDER BY updated_at DESC LIMIT 100', project.id).map(view) };
@@ -382,6 +407,7 @@ export function registerWorkflowRoutes(): void {
     }
     const s = readSettings(body);
     const leadAgent = checkLead(project, body.leadAgent);
+    const contextItems = readContextItems(body.context);
     const id = newId('w_');
     insert('workflows', {
       id,
@@ -408,6 +434,13 @@ export function registerWorkflowRoutes(): void {
       updated_at: now(),
     });
     log(id, 'system', `Session created by ${ctx.user!.name}`);
+    try {
+      addContextItems(id, { id: ctx.user!.id, name: ctx.user!.name }, contextItems);
+    } catch (e) {
+      // A bad context item must not leave a half-made session behind.
+      exec('DELETE FROM workflows WHERE id = ?', id);
+      throw e;
+    }
     if (body.start !== false) kick(id);
     return { workflow: view(getWorkflow(id)) };
   });
@@ -443,6 +476,7 @@ export function registerWorkflowRoutes(): void {
     const body = await ctx.json();
     const text = str(body.body, 'Instruction', { max: 4000 }).trim();
     if (REOPENABLE.includes(w.status) && overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first, then send the instruction.');
+    addContextItems(w.id, { id: ctx.user!.id, name: ctx.user!.name }, readContextItems(body.context));
     log(w.id, 'human', text, { data: { by: ctx.user!.name } });
     if (REOPENABLE.includes(w.status)) {
       patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration });
@@ -486,6 +520,7 @@ export function registerWorkflowRoutes(): void {
     requireProject(ctx, w.project_id, 'editor');
     if (w.status === 'running') throw badRequest('Stop the session first');
     exec('DELETE FROM workflows WHERE id = ?', w.id);
+    removeContextFiles(w.project_id, w.id);
     notifyProject(w.project_id, 'workflow.deleted', { id: w.id });
     return { ok: true };
   });

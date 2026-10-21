@@ -361,6 +361,22 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   ALTER TABLE project_aws ADD COLUMN connection_id TEXT NOT NULL DEFAULT '';`,
+  // Material people attach to a session for its agents: documents, files, notes, links, earlier results.
+  `CREATE TABLE IF NOT EXISTS workflow_context (
+    id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    ref TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    seen INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT,
+    created_by_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS workflow_context_wf ON workflow_context(workflow_id, created_at);`,
 ];
 
 let db: DatabaseSync | null = null;

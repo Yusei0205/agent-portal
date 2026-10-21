@@ -4744,3 +4744,128 @@ html[data-theme='hud'] .ins-hbar-fill {
     color: hsl(var(--role-h, 186) 70% 78%);
   }
 }
+
+/* ---------- Session context: picker, chips and the Context tab ---------- */
+.ctx-field {
+  display: grid;
+  gap: 8px;
+}
+.ctx-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 3px 4px 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+  font-size: 0.82rem;
+}
+.ctx-chip-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-chip-x {
+  all: unset;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+.ctx-chip-x:hover,
+.ctx-chip-x:focus-visible {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.ctx-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.ctx-pick-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+}
+.ctx-pick-row:hover {
+  background: var(--line-2);
+}
+.ctx-pick-main {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.ctx-pick-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 560;
+}
+.ctx-drop {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 16px;
+  border: 2px dashed var(--line);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+.ctx-drop p {
+  margin: 0;
+}
+.ctx-drop.is-over {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.ctx-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.ctx-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.ctx-item-main {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.ctx-item-main code {
+  word-break: break-all;
+}
+.ctx-item-body {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  max-height: 9em;
+  overflow: auto;
+  color: var(--ink-2);
+}
+.ws-composer-actions .push {
+  margin-left: auto;
+}

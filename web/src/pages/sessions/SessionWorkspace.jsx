@@ -13,12 +13,14 @@ import { InputCard } from '../../components/InputCard.jsx';
 import { TicketPreview } from '../../components/TicketPreview.jsx';
 import { Timeline } from '../../components/run/Timeline.jsx';
 import { Changes } from '../../components/run/Changes.jsx';
+import { CONTEXT_ICON, CONTEXT_KIND_LABEL, ContextChips, ContextPicker, sendFiles } from '../../components/ContextPicker.jsx';
+import { Icon } from '../../components/Icon.jsx';
 import { PushDialog } from '../../components/run/PushDialog.jsx';
 import { Badge, Button, Empty, ErrorNote, Note, Progress, Spinner, Tabs, useUi } from '../../components/ui.jsx';
 import { SessionSettings } from './NewSessionDialog.jsx';
 import { budgetOf, statusOf } from './status.js';
 
-const TABS = ['live', 'changes', 'history', 'settings'];
+const TABS = ['live', 'changes', 'history', 'context', 'settings'];
 
 /** One session: what its agents are doing now, what changed, what happened, and a box to steer it. */
 export function SessionWorkspace({ id, query }) {
@@ -52,6 +54,7 @@ export function SessionWorkspace({ id, query }) {
           { value: 'live', label: 'Live', href: link({}) },
           { value: 'changes', label: 'Changes', href: link({ tab: 'changes' }) },
           { value: 'history', label: 'History', href: link({ tab: 'history' }), count: data.data.events.filter((e) => e.kind === 'human' && !e.consumed).length || undefined },
+          { value: 'context', label: 'Context', href: link({ tab: 'context' }), count: w.context_count || undefined },
           { value: 'settings', label: 'Settings', href: link({ tab: 'settings' }) },
         ]}
       />
@@ -66,6 +69,8 @@ export function SessionWorkspace({ id, query }) {
           <ChangesTab w={w} canEdit={canEdit} />
         ) : tab === 'history' ? (
           <History events={data.data.events} link={link} />
+        ) : tab === 'context' ? (
+          <ContextTab w={w} canEdit={canEdit} />
         ) : (
           <div className="stack-lg">
             {w.jira_key ? (
@@ -330,8 +335,11 @@ function History({ events, link }) {
 /* ---------------- Composer ---------------- */
 
 function Composer({ workflow, canEdit, onSent }) {
+  const { project } = useProject();
   const { toast } = useUi();
   const [text, setText] = useState('');
+  const [attached, setAttached] = useState([]);
+  const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   if (!canEdit) return null;
   const running = workflow.status === 'running';
@@ -339,8 +347,11 @@ function Composer({ workflow, canEdit, onSent }) {
     if (!text.trim() || busy) return;
     setBusy(true);
     try {
-      await api.post(`/api/workflows/${workflow.id}/messages`, { body: text });
+      // Files first, so the instruction and everything attached to it reach the same iteration.
+      const context = await sendFiles(workflow.id, attached);
+      await api.post(`/api/workflows/${workflow.id}/messages`, { body: text, context });
       setText('');
+      setAttached([]);
       toast(running ? 'Queued for the next step' : 'Instruction sent; the session is running again');
       onSent();
     } catch (e) {
@@ -357,6 +368,7 @@ function Composer({ workflow, canEdit, onSent }) {
         send();
       }}
     >
+      <ContextChips items={attached} onRemove={(i) => setAttached((a) => a.filter((_, j) => j !== i))} />
       <textarea
         className="input"
         rows={2}
@@ -372,11 +384,99 @@ function Composer({ workflow, canEdit, onSent }) {
         placeholder={running ? 'Added to the next step. For example: also cover the case where the amount is exactly 500.' : 'Tell the agents what to improve or do next. This starts the session again.'}
       />
       <div className="ws-composer-actions">
-        <span className="muted small">Ctrl+Enter to send</span>
+        <Button size="sm" variant="ghost" icon="plus" onClick={() => setPicking(true)} title="Attach documents, files, notes or links to this instruction">
+          Attach context
+        </Button>
+        <span className="muted small push">Ctrl+Enter to send</span>
         <Button type="submit" variant="primary" busy={busy} disabled={!text.trim()}>
           {running ? 'Queue instruction' : 'Send and continue'}
         </Button>
       </div>
+      {picking ? <ContextPicker projectId={project.id} excludeSessionId={workflow.id} onAdd={(item) => setAttached((a) => [...a, item])} onClose={() => setPicking(false)} /> : null}
     </form>
+  );
+}
+
+/* ---------------- Context ---------------- */
+
+/** Everything the agents were given to read, who added it, and a way to add or remove items. */
+function ContextTab({ w, canEdit }) {
+  const { project } = useProject();
+  const { toast } = useUi();
+  const ctx = useLoad(() => api.get(`/api/workflows/${w.id}/context`), [w.id, w.context_count]);
+  const [picking, setPicking] = useState(false);
+  const add = async (item) => {
+    try {
+      if (item.kind === 'file') await sendFiles(w.id, [item]);
+      else await api.post(`/api/workflows/${w.id}/context`, { kind: item.kind, ref: item.ref, title: item.title, body: item.body });
+      ctx.reload(true);
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  };
+  const remove = async (c) => {
+    try {
+      await api.del(`/api/workflows/${w.id}/context/${c.id}`);
+      ctx.reload(true);
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  };
+  if (ctx.error) return <ErrorNote error={ctx.error} />;
+  if (!ctx.data) return <Spinner />;
+  const items = ctx.data.context;
+  return (
+    <div className="stack">
+      <div className="row between wrap">
+        <p className="muted small">The agents read this before every iteration. Items added since the last iteration are pointed out to them as new.</p>
+        {canEdit ? (
+          <Button icon="plus" onClick={() => setPicking(true)}>
+            Add context
+          </Button>
+        ) : null}
+      </div>
+      {!items.length ? (
+        <Empty icon="knowledge" title="No context yet">
+          Attach documents, files, notes, links or earlier work so the agents start from what you already know.
+        </Empty>
+      ) : (
+        <ul className="ctx-list">
+          {items.map((c) => (
+            <li key={c.id} className="ctx-item">
+              <Icon name={CONTEXT_ICON[c.kind] ?? 'file'} size={17} />
+              <div className="ctx-item-main">
+                <strong>{c.title}</strong>
+                <span className="muted small">
+                  {CONTEXT_KIND_LABEL[c.kind] ?? c.kind}
+                  {c.path ? (
+                    <>
+                      {' · '}
+                      <code>{c.path}</code>
+                    </>
+                  ) : null}
+                  {c.kind === 'url' ? (
+                    <>
+                      {' · '}
+                      <a href={c.ref} target="_blank" rel="noopener noreferrer">
+                        {c.ref}
+                      </a>
+                    </>
+                  ) : null}
+                  {' · '}added by {c.created_by_name || 'someone'} {timeAgo(c.created_at)}
+                  {c.seen ? '' : ' · not read yet'}
+                </span>
+                {c.body ? <p className="ctx-item-body">{c.body}</p> : null}
+              </div>
+              {canEdit ? (
+                <Button size="sm" variant="ghost" icon="trash" onClick={() => remove(c)} aria-label={`Remove ${c.title}`}>
+                  Remove
+                </Button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      {picking ? <ContextPicker projectId={project.id} excludeSessionId={w.id} onAdd={add} onClose={() => setPicking(false)} /> : null}
+    </div>
   );
 }

@@ -143,16 +143,24 @@ export function Segmented({ value, onChange, options, label, size }) {
 
 export function Modal({ title, onClose, children, footer, wide }) {
   const ref = useRef(null);
+  // onClose is often a new function on every render; keep the latest without re-running the focus effect.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     const prev = document.activeElement;
     ref.current?.querySelector('input, textarea, select, button')?.focus();
-    const onKey = (e) => e.key === 'Escape' && onClose();
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      // With dialogs stacked, Escape closes only the top one.
+      const open = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      if (open[open.length - 1] === ref.current) closeRef.current();
+    };
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
       prev?.focus?.();
     };
-  }, [onClose]);
+  }, []);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={cx('modal', wide && 'modal-wide')} role="dialog" aria-modal="true" aria-label={title} ref={ref}>

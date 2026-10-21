@@ -8,6 +8,7 @@ import { MODES } from '../../components/run/RunViewer.jsx';
 import { ModelPicker } from '../../components/ModelPicker.jsx';
 import { ConnectionBadge } from '../../components/ConnectionBadge.jsx';
 import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
+import { ContextChips, ContextPicker, sendFiles } from '../../components/ContextPicker.jsx';
 import { Button, ErrorNote, Field, Modal, Segmented, useUi } from '../../components/ui.jsx';
 
 const KINDS = [
@@ -104,6 +105,9 @@ export function NewSessionDialog({ prefill, onClose }) {
   });
   const [ticket, setTicket] = useState(prefill?.jiraKey ? { key: prefill.jiraKey, summary: prefill.jiraSummary || prefill.jiraKey, status: null, url: prefill.jiraUrl || null } : null);
   const [more, setMore] = useState(false);
+  const [context, setContext] = useState([]);
+  const [picking, setPicking] = useState(false);
+  const { toast } = useUi();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const branches = useBranches(f.repoId);
@@ -116,7 +120,11 @@ export function NewSessionDialog({ prefill, onClose }) {
     setError(null);
     try {
       if (kind === 'session') {
+        // With files the session starts paused, gets its files, then starts, so the first iteration sees them all.
+        const files = context.filter((c) => c.kind === 'file');
         const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, {
+          context: context.filter((c) => c.kind !== 'file').map(({ kind: k, ref, title, body }) => ({ kind: k, ref, title, body })),
+          start: files.length ? false : undefined,
           goal: f.goal,
           repoId: f.repoId || undefined,
           branch: f.repoId ? f.branch : undefined,
@@ -127,6 +135,14 @@ export function NewSessionDialog({ prefill, onClose }) {
           leadAgent: f.leadAgent,
           jiraKey: ticket?.key || undefined,
         });
+        if (files.length) {
+          try {
+            await sendFiles(workflow.id, files);
+            await api.post(`/api/workflows/${workflow.id}/resume`);
+          } catch (e) {
+            toast(`The session was created but not started: ${e.message}`, 'danger');
+          }
+        }
         go(project.id, 'sessions', workflow.id);
       } else {
         const body = isDoc
@@ -252,6 +268,21 @@ export function NewSessionDialog({ prefill, onClose }) {
                 )}
               </Field>
             </div>
+            {kind === 'session' ? (
+              <div className="ctx-field">
+                <div className="row between wrap">
+                  <span className="field-label">Context for the agents (optional)</span>
+                  <Button size="sm" icon="plus" onClick={() => setPicking(true)}>
+                    Add context
+                  </Button>
+                </div>
+                {context.length ? (
+                  <ContextChips items={context} onRemove={(i) => setContext((c) => c.filter((_, j) => j !== i))} />
+                ) : (
+                  <p className="muted small">Documents, files, notes, links or earlier work the agents should read first.</p>
+                )}
+              </div>
+            ) : null}
             {kind === 'single' ? (
               <fieldset className="mode-pick">
                 <legend className="field-label">Changes</legend>
@@ -289,6 +320,7 @@ export function NewSessionDialog({ prefill, onClose }) {
         ) : null}
         <ErrorNote error={error} />
       </div>
+      {picking ? <ContextPicker projectId={project.id} onAdd={(item) => setContext((c) => [...c, item])} onClose={() => setPicking(false)} /> : null}
     </Modal>
   );
 }
