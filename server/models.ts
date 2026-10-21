@@ -27,7 +27,7 @@ import { dataPath } from './config.ts';
 import { getSecret } from './secrets.ts';
 import { badRequest, HttpError } from './util.ts';
 import { clearModelListCache, modelListCacheRef } from './model-cache.ts';
-import { effectiveProvider, projectAwsEnv, projectModelUsesOwnAws } from './project-aws.ts';
+import { effectiveProvider, engineProvider, projectAwsEnv, projectModelUsesOwnAws } from './project-aws.ts';
 import { requireProject } from './projects.ts';
 
 export interface ModelOption {
@@ -225,7 +225,13 @@ export function registerModelRoutes(): void {
   get('/api/models', async (ctx) => {
     const pid = ctx.query.get('projectId') || '';
     if (pid) requireProject(ctx, pid);
-    const mode = effectiveProvider(pid || null);
+    // ?engine=claude|kiro lists what that engine offers, for runs that pick one.
+    let mode;
+    try {
+      mode = engineProvider(pid || null, ctx.query.get('engine') || null);
+    } catch (e: any) {
+      return { mode: 'none', models: [], error: String(e?.message ?? e) };
+    }
     if (mode === 'demo') return { mode, models: [], error: '' };
     // Projects that bring their own Bedrock account see their own list.
     const key = pid && mode === 'bedrock' && projectModelUsesOwnAws(pid) ? `${mode}:${pid}` : mode;

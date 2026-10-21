@@ -496,3 +496,13 @@ test('after a restart, sessions that were running carry on by themselves unless 
   assert.ok(done.events.some((e: any) => /server restarted; the session carries on/.test(e.body)), 'the history says why it started again');
   assert.equal((await admin.get(`/api/workflows/${b.id}`)).workflow.status, 'paused');
 });
+
+test('demo mode stays demo whatever engine is picked', async () => {
+  const { workflow } = await create({ goal: 'Engine pick [demo-iterations: 1]', engine: 'kiro' });
+  assert.equal(workflow.engine, 'kiro');
+  assert.equal(workflow.provider, 'demo');
+  const d = await settle(workflow.id);
+  const run = (await admin.get(`/api/runs/${d.workflow.last_run_id}`)).run;
+  assert.equal(run.provider, 'demo');
+  assert.equal(run.meta.engine, 'kiro', 'the choice is recorded on the run');
+});

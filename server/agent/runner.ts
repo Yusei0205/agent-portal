@@ -15,7 +15,7 @@ import { demoRun, demoModel } from './demo.ts';
 import { listAgentFiles, listSkillNames } from '../builder.ts';
 import { searchForAgent, reindexDecisions } from '../knowledge.ts';
 import { createWorktree, getRepo } from '../repos.ts';
-import { effectiveProvider } from '../project-aws.ts';
+import { engineProvider } from '../project-aws.ts';
 import { integrationGuard, resolveIntegrations, type RunIntegrations } from '../integrations.ts';
 
 export type RunKind = 'chat' | 'test' | 'review' | 'qa' | 'learn' | 'quiz' | 'verify' | 'connection';
@@ -28,6 +28,8 @@ export interface StartRunInput {
   prompt: string;
   repoId?: string | null;
   branch?: string | null;
+  /** 'claude' or 'kiro' to pick the engine for this run; empty follows the project's connection. */
+  engine?: string | null;
   /** Integration ids (MCP tools) the run's agents may use; checked against the person the run acts for. */
   integrations?: string[] | null;
   /** Several repositories, each with its own working copy in the run folder. The first is the run's main one. */
@@ -308,7 +310,9 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
   const settings = getSettings();
   const project = getProject(input.projectId);
   // The project's own connection decides the provider; without one it follows Settings.
-  const mode = effectiveProvider(project.id);
+  // A continued run keeps the engine of the run it continues.
+  if (input.resumeOf && input.engine === undefined) input.engine = parseJson<any>(getRun(input.resumeOf).meta, {}).engine ?? null;
+  const mode = engineProvider(project.id, input.engine);
   assertBudget(mode);
   const pdir = projectDir(project);
   const runId = newId('r_');
@@ -357,7 +361,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     model,
     permission_mode: permissionMode,
     provider: mode,
-    meta: JSON.stringify({ ...(input.meta ?? {}), workDir: relToProject(project, workDir), ...(inheritedRepos ? { repos: inheritedRepos } : {}) }),
+    meta: JSON.stringify({ ...(input.meta ?? {}), workDir: relToProject(project, workDir), ...(inheritedRepos ? { repos: inheritedRepos } : {}), ...(input.engine ? { engine: input.engine } : {}) }),
     created_by: input.userId,
     created_at: now(),
   });
@@ -508,7 +512,7 @@ async function execute(
     return `Blocked by Agent Portal: this run may only change files under ${writeDirRel}/.`;
   };
 
-  const env = o.mode === 'demo' ? {} : await agentEnv(project.id);
+  const env = o.mode === 'demo' ? {} : await agentEnv(project.id, o.mode as any);
   const opts: ProviderRunOptions = {
     prompt,
     cwd: pdir,

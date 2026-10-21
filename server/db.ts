@@ -446,6 +446,8 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens(user_id);`,
+  // The engine a session runs on ('claude' or 'kiro'); empty follows the project's connection.
+  `ALTER TABLE workflows ADD COLUMN engine TEXT NOT NULL DEFAULT '';`,
 ];
 
 let db: DatabaseSync | null = null;

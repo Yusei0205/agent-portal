@@ -14,6 +14,7 @@ import { PRICES } from './agent/pricing.ts';
 import { providerMode } from './settings.ts';
 import JSZip from 'jszip';
 import { readIntegrationIds } from './integrations.ts';
+import { engineProvider } from './project-aws.ts';
 import { issueDetail, mustMapping, checkKey } from './jira.ts';
 import { composeRunPrompt, ticketMarkdown } from './jira-text.ts';
 
@@ -178,6 +179,7 @@ export function registerRunRoutes(): void {
       branch,
       repos: repos.length > 1 ? repos : null,
       integrations: readIntegrationIds(body.integrations, ctx.user!.id),
+      engine: body.engine ? (engineProvider(project.id, String(body.engine)), String(body.engine)) : null,
       permissionMode: mode,
       model,
       meta: Object.keys(meta).length ? meta : undefined,

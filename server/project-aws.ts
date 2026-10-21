@@ -66,6 +66,32 @@ export function effectiveProvider(projectId?: string | null): ProviderMode {
   return getSettings().provider.mode;
 }
 
+export type Engine = 'claude' | 'kiro';
+
+/** The Claude provider a run would use in this project (its own, else Settings), or null when none is set up. */
+export function claudeProvider(projectId?: string | null): ProviderMode | null {
+  const own = effectiveProvider(projectId);
+  if (own === 'anthropic' || own === 'bedrock') return own;
+  const s = getSettings().provider.mode;
+  return s === 'anthropic' || s === 'bedrock' ? s : null;
+}
+
+/**
+ * The provider for a run that picked an engine: Kiro, or Claude through whichever Claude provider applies. Without a
+ * choice the project's connection decides, as before. Demo mode stays demo whatever is picked.
+ */
+export function engineProvider(projectId: string | null | undefined, engine?: string | null): ProviderMode {
+  const base = effectiveProvider(projectId);
+  if (!engine || base === 'demo') return base;
+  if (engine === 'kiro') return 'kiro';
+  if (engine === 'claude') {
+    const p = claudeProvider(projectId);
+    if (!p) throw badRequest('Claude is not set up: choose Anthropic or Amazon Bedrock under Settings › Model provider, or for this project under Project and team.');
+    return p;
+  }
+  throw badRequest('Choose the Claude or the Kiro engine');
+}
+
 /**
  * True when the project chose Bedrock itself and has its own AWS account: then that one account serves the model,
  * CodeCommit and the agents' AWS commands. A project that inherits the provider keeps the Settings credentials for

@@ -21,18 +21,19 @@ const OTHER = '__other__';
  * bypasses its 5-minute cache. The button is keyboard-accessible and announces its result
  * to screen readers via an aria-live region.
  */
-export function ModelPicker({ id, value, onChange, className = 'input', projectId }) {
+export function ModelPicker({ id, value, onChange, className = 'input', projectId, engine }) {
   // Bump to force a cache-busting reload (?refresh=1). loadGen > 0 means the user
   // has pressed "Reload list" at least once.
   const [loadGen, setLoadGen] = useState(0);
 
   // Build the URL: prefer projectId-scoped endpoint when available.
+  // With an engine picked for the run, list what that engine offers.
   const baseUrl = projectId
-    ? `/api/models?projectId=${encodeURIComponent(projectId)}`
+    ? `/api/models?projectId=${encodeURIComponent(projectId)}${engine ? `&engine=${encodeURIComponent(engine)}` : ''}`
     : '/api/models';
   const list = useLoad(
-    () => api.get(loadGen > 0 ? `${baseUrl}&refresh=1` : baseUrl),
-    [loadGen, projectId],
+    () => api.get(loadGen > 0 ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}refresh=1` : baseUrl),
+    [loadGen, projectId, engine],
   );
 
   const [reloading, setReloading] = useState(false);
@@ -53,9 +54,7 @@ export function ModelPicker({ id, value, onChange, className = 'input', projectI
       setLoadGen((g) => g + 1);
       // Also do a direct call to capture the result for the announcement text,
       // since we cannot easily await the useLoad re-fetch.
-      const refreshUrl = projectId
-        ? `/api/models?projectId=${encodeURIComponent(projectId)}&refresh=1`
-        : '/api/models?refresh=1';
+      const refreshUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}refresh=1`;
       const fresh = await api.get(refreshUrl);
       const count = (fresh.models || []).length;
       setReloadAnnouncement(

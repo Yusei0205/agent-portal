@@ -13,6 +13,8 @@ import { IntegrationPicker } from '../Integrations.jsx';
 import { Icon } from '../../components/Icon.jsx';
 import { Button, ErrorNote, Field, Modal, Segmented, useUi } from '../../components/ui.jsx';
 
+const ENGINE_LABEL = { anthropic: 'Anthropic API', bedrock: 'Amazon Bedrock', kiro: 'Kiro CLI', demo: 'Demo' };
+
 const KINDS = [
   { value: 'session', label: 'Session', hint: 'Keeps working toward the goal on its own, iteration after iteration, until it is done or needs you.' },
   { value: 'single', label: 'Single run', hint: 'One run. You choose whether edits and commands wait for your approval.' },
@@ -152,6 +154,9 @@ export function NewSessionDialog({ prefill, onClose }) {
   const ready = (repos.data?.repos || []).filter((r) => r.status === 'ready');
 
   const [kind, setKind] = useState('session');
+  // '' follows the project's connection; 'claude' or 'kiro' picks the engine for this work.
+  const engines = useLoad(() => api.get(`/api/projects/${project.id}/engines`), [project.id]);
+  const [engine, setEngine] = useState('');
   const [f, setF] = useState({
     goal: '',
     repoId: prefill?.repoId || '',
@@ -208,6 +213,7 @@ export function NewSessionDialog({ prefill, onClose }) {
           repos: chosen,
           workspaceId: workspaceId || undefined,
           integrations,
+          engine: engine || undefined,
           model: f.model,
           budgetUsd: kiro ? undefined : Number(f.budgetUsd),
           budgetCredits: kiro ? Number(f.budgetCredits) : undefined,
@@ -232,6 +238,7 @@ export function NewSessionDialog({ prefill, onClose }) {
               jiraKey: ticket?.key || undefined,
               repos: chosen,
               integrations,
+              engine: engine || undefined,
               model: f.model,
               permissionMode: f.permissionMode,
             };
@@ -270,6 +277,25 @@ export function NewSessionDialog({ prefill, onClose }) {
           </span>
         </div>
         <p className="muted small">{kindInfo.hint}</p>
+        {engines.data && engines.data.default !== 'demo' ? (
+          <div className="row tight wrap engine-pick">
+            <span className="field-label">Engine</span>
+            <Segmented
+              size="sm"
+              value={engine}
+              onChange={(e) => {
+                setEngine(e);
+                setF((cur) => ({ ...cur, model: 'sonnet' }));
+              }}
+              label="Engine"
+              options={[
+                { value: '', label: `Project default (${ENGINE_LABEL[engines.data.default] ?? engines.data.default})` },
+                ...(engines.data.claude ? [{ value: 'claude', label: `Claude Code (${ENGINE_LABEL[engines.data.claude]})` }] : []),
+                { value: 'kiro', label: 'Kiro' },
+              ]}
+            />
+          </div>
+        ) : null}
 
         {isDoc ? (
           <>
@@ -372,7 +398,7 @@ export function NewSessionDialog({ prefill, onClose }) {
           <summary>More options</summary>
           <div className="stack">
             <Field label="Model" hint="Pick a tier or any model your provider offers, or paste a model ID.">
-              {(id) => <ModelPicker id={id} value={f.model} projectId={project.id} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}
+              {(id) => <ModelPicker id={id} value={f.model} projectId={project.id} engine={engine || undefined} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}
             </Field>
             {!isDoc ? (
               <Field label={`Integrations${integrations.length ? ` (${integrations.length})` : ''}`} hint="MCP tools the agents may use in this work: Jira, AWS, a browser… Read-only unless writes are allowed.">

@@ -5138,3 +5138,7 @@ html[data-theme='hud'] .ins-hbar-fill {
 .api-table td {
   vertical-align: top;
 }
+
+.engine-pick {
+  align-items: center;
+}

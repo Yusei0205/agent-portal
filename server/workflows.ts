@@ -22,7 +22,7 @@ import { getRun, isActive, startRun, stopRun } from './agent/runner.ts';
 import { badRequest, newId, notFound, now, parseJson, str } from './util.ts';
 import { composeIterationPrompt, composeLeadAppend, parseStatus, safeBranchName, stagnated } from './guardrails.ts';
 import { listAgentFiles } from './builder.ts';
-import { effectiveProvider } from './project-aws.ts';
+import { claudeProvider, effectiveProvider, engineProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
 import { readRepoChoices } from './runs.ts';
 import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
@@ -87,7 +87,14 @@ function view(w: Row) {
     budget_usd: w.budget_usd,
     budget_credits: w.budget_credits,
     spent_credits: w.spent_credits,
-    provider: effectiveProvider(w.project_id),
+    engine: w.engine || '',
+    provider: (() => {
+      try {
+        return engineProvider(w.project_id, w.engine || null);
+      } catch {
+        return effectiveProvider(w.project_id);
+      }
+    })(),
     max_iterations: w.max_iterations,
     verify_command: w.verify_command,
     rules: w.rules,
@@ -249,6 +256,7 @@ async function drive(id: string): Promise<void> {
         branch: w.branch || null,
         repos: sessionRepos(w).length > 1 ? sessionRepos(w) : null,
         integrations: parseJson<string[]>(w.integrations, []),
+        engine: w.engine || null,
         permissionMode: 'acceptEdits',
         autoApprove: true,
         model: w.model,
@@ -426,7 +434,20 @@ function addContextItems(workflowId: string, user: { id: string; name: string },
   }
 }
 
+/** '' (the project's connection), 'claude' or 'kiro'; checked to be usable now. */
+export function readEngine(projectId: string, raw: unknown): string {
+  const engine = raw === undefined || raw === null || raw === '' ? '' : String(raw);
+  if (engine) engineProvider(projectId, engine);
+  return engine;
+}
+
 export function registerWorkflowRoutes(): void {
+  // Which engines a project can run on, for the New dialog.
+  get('/api/projects/:pid/engines', (ctx) => {
+    const { project } = requireProject(ctx, ctx.params.pid);
+    return { default: effectiveProvider(project.id), claude: claudeProvider(project.id), kiro: true };
+  });
+
   registerContextRoutes((workflowId, message) => log(workflowId, 'context', message));
 
   get('/api/projects/:pid/workflows', (ctx) => {
@@ -457,6 +478,7 @@ export function registerWorkflowRoutes(): void {
       if (!Array.isArray(body.integrations)) body.integrations = workspaceIntegrations(workspace);
     }
     const integrationIds = readIntegrationIds(body.integrations, ctx.user!.id);
+    const engine = readEngine(project.id, body.engine);
     // Without a branch, a single repository keeps following its default branch, as before.
     const repos = readRepoChoices(project.id, body);
     const single = !Array.isArray(body.repos) && repos.length === 1;
@@ -476,6 +498,7 @@ export function registerWorkflowRoutes(): void {
       branch: single ? str(body.branch, 'Branch', { max: 200, optional: true }).trim() || null : (repos[0]?.branch ?? null),
       repos: JSON.stringify(repos.length > 1 ? repos : []),
       workspace_id: workspace?.id ?? null,
+      engine,
       integrations: JSON.stringify(integrationIds),
       ...s,
       iteration: 0,
@@ -522,6 +545,7 @@ export function registerWorkflowRoutes(): void {
     const p: Record<string, string | number | null> = { ...s };
     if (body.leadAgent !== undefined) p.lead_agent = checkLead(getProject(w.project_id), body.leadAgent);
     if (body.integrations !== undefined) p.integrations = JSON.stringify(readIntegrationIds(body.integrations, ctx.user!.id));
+    if (body.engine !== undefined) p.engine = readEngine(w.project_id, body.engine);
     if (body.title !== undefined) p.title = str(body.title, 'Title', { max: 120 }).trim();
     if (body.goal !== undefined) p.goal = str(body.goal, 'Goal', { max: 6000 }).trim();
     const out = patch(w.id, p);

@@ -162,6 +162,7 @@ function SessionHeader({ w, canEdit, reload }) {
       </div>
       <div className="row tight wrap ws-chips">
         <ConnectionBadge projectId={project.id} />
+        {w.engine ? <span className="chip-static small" title="The engine this session runs on">{w.engine === 'kiro' ? 'Kiro' : 'Claude Code'}</span> : null}
         <span className="chip-static mono small">{w.model}</span>
         {(w.integration_list || []).map((i) => (
           <a key={i.id} className="chip-static small" href="#/integrations" title={i.allow_writes ? 'Writes allowed' : 'Read-only'}>

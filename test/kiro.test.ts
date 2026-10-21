@@ -209,3 +209,18 @@ test('Kiro integrations: MCP servers in the profile, and read-only ones refuse c
   assert.ok(done.events.some((e: any) => e.type === 'system:mcp_failed' && e.data.server === 'broken'), 'a server that did not start is recorded');
   assert.deepEqual(done.run.meta.integrations.map((x: any) => [x.server, x.readOnly]), [['tickets', true]]);
 });
+
+test('engine per run: Kiro can be picked; Claude is refused clearly while no Claude provider is set up', async () => {
+  const engines = await c.get(`/api/projects/${pid}/engines`);
+  assert.deepEqual(engines, { default: 'kiro', claude: null, kiro: true });
+  const refused = await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'claude' });
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /Claude is not set up/);
+  assert.equal((await c.req('POST', `/api/projects/${pid}/runs`, { prompt: 'x', engine: 'claude' })).status, 400);
+  assert.equal((await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'gpt' })).status, 400);
+  const { workflow } = await c.post(`/api/projects/${pid}/workflows`, { goal: 'On Kiro', start: false, engine: 'kiro' });
+  assert.equal(workflow.engine, 'kiro');
+  assert.equal(workflow.provider, 'kiro');
+  const models = await c.get(`/api/models?projectId=${pid}&engine=claude`);
+  assert.match(models.error, /Claude is not set up/, 'the model list says why it is empty');
+});

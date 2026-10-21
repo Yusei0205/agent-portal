@@ -198,12 +198,13 @@ export async function awsEnv(): Promise<Record<string, string>> {
 }
 
 /** Full environment for a Claude Agent SDK run. With a project, its own connection (provider, AWS account) applies. */
-export async function agentEnv(projectId?: string): Promise<Record<string, string>> {
+export async function agentEnv(projectId?: string, modeOverride?: ProviderMode): Promise<Record<string, string>> {
   const s = getSettings();
   const env = baseEnv();
   env.CLAUDE_CONFIG_DIR = dataPath('claude-home');
   const pa = projectId ? await import('./project-aws.ts') : null;
-  const mode = pa ? pa.effectiveProvider(projectId) : s.provider.mode;
+  // A run that picked its engine says which provider to set up; otherwise the project's connection decides.
+  const mode = modeOverride ?? (pa ? pa.effectiveProvider(projectId) : s.provider.mode);
   if (mode === 'anthropic') {
     const key = await getSecret(SECRET_NAMES.anthropicKey);
     if (!key) throw badRequest('Add your Anthropic API key in Settings first');
