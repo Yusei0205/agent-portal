@@ -55,6 +55,10 @@ interface Active {
   pending: Map<string, Pending>;
   seq: number;
   seenMessageIds: Set<string>;
+  /** For the project's live "what is happening" line: whose run this is and when it was last announced. */
+  projectId?: string;
+  workflowId?: string;
+  activityAt?: number;
 }
 
 const active = new Map<string, Active>();
@@ -113,6 +117,33 @@ function recordEvent(runId: string, a: Active, type: string, parent: string | nu
   const small = shrink(data);
   insert('run_events', { run_id: runId, seq, ts, type, parent_tool_use_id: parent, data: JSON.stringify(small) });
   publish(runChannel(runId), 'event', { seq, ts, type, parent, data: small });
+  if (type === 'assistant') announceActivity(runId, a, parent, data);
+}
+
+/** At most this often per run, the project hears one line about what the run is doing. */
+const ACTIVITY_EVERY_MS = 1000;
+
+/** One short line from an assistant message: the last tool it calls, else the start of what it says. */
+export function activityLine(message: any): string {
+  const blocks: any[] = Array.isArray(message?.message?.content) ? message.message.content : [];
+  const tool = [...blocks].reverse().find((b) => b?.type === 'tool_use');
+  if (tool) {
+    const i = tool.input ?? {};
+    const what = i.subagent_type ? `${i.subagent_type}: ${i.description ?? ''}` : i.file_path ?? i.pattern ?? i.command ?? i.skill ?? i.url ?? i.query ?? i.description ?? '';
+    return `${tool.name} ${String(what)}`.replace(/\s+/g, ' ').trim().slice(0, 140);
+  }
+  const text = blocks.filter((b) => b?.type === 'text').map((b) => b.text).join(' ');
+  return text.replace(/\s+/g, ' ').trim().slice(0, 140);
+}
+
+function announceActivity(runId: string, a: Active, parent: string | null, data: unknown): void {
+  if (!a.projectId) return;
+  const t = Date.now();
+  if (a.activityAt && t - a.activityAt < ACTIVITY_EVERY_MS) return;
+  const line = activityLine(data);
+  if (!line) return;
+  a.activityAt = t;
+  notifyProject(a.projectId, 'run.activity', { runId, workflowId: a.workflowId ?? null, line, subagent: Boolean(parent) });
 }
 
 /* ------------------------------------------------------------------ */
@@ -290,7 +321,15 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     created_by: input.userId,
     created_at: now(),
   });
-  const a: Active = { abort: new AbortController(), allowAll: new Set(), pending: new Map(), seq: 0, seenMessageIds: new Set() };
+  const a: Active = {
+    abort: new AbortController(),
+    allowAll: new Set(),
+    pending: new Map(),
+    seq: 0,
+    seenMessageIds: new Set(),
+    projectId: project.id,
+    workflowId: typeof input.meta?.workflowId === 'string' ? input.meta.workflowId : undefined,
+  };
   active.set(runId, a);
   notifyProject(project.id, 'run.updated', runSummary(getRun(runId)));
 

@@ -471,3 +471,13 @@ test('context: documents, notes, links and files are checked, stored and given t
   await admin.del(`/api/workflows/${id}`);
   assert.ok(!fs.existsSync(path.join(projectRoot, 'work', 'sessions', id)));
 });
+
+test('the live activity line names the tool being called, or the start of what the agent says', async () => {
+  const { activityLine } = await import('../server/agent/runner.ts');
+  const msg = (content: unknown[]) => ({ message: { content } });
+  assert.equal(activityLine(msg([{ type: 'text', text: 'Looking around' }, { type: 'tool_use', name: 'Read', input: { file_path: 'src/refund.ts' } }])), 'Read src/refund.ts');
+  assert.equal(activityLine(msg([{ type: 'tool_use', name: 'Agent', input: { subagent_type: 'qa-engineer', description: 'Write tests' } }])), 'Agent qa-engineer: Write tests');
+  assert.equal(activityLine(msg([{ type: 'text', text: 'I will start   with\nthe decisions log.' }])), 'I will start with the decisions log.');
+  assert.equal(activityLine(msg([{ type: 'text', text: 'x'.repeat(500) }])).length, 140);
+  assert.equal(activityLine({}), '');
+});

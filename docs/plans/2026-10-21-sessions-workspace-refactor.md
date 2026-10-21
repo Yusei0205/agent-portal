@@ -1,6 +1,6 @@
 # Sessions workspace refactor — implementation plan
 
-Status: **draft for review** (nothing implemented yet) · 2026-10-21
+Status: **implemented** on branch `feat/sessions-workspace` (phases 0–5) · 2026-10-21
 
 ## 1. Goal
 

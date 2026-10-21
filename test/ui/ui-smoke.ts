@@ -178,11 +178,15 @@ async function main() {
     check((await page.locator('.ctx-chip').count()) === 2, 'picked context shows as chips in the New dialog');
     await page.getByRole('button', { name: 'Start session', exact: true }).click();
     await page.locator('.ws-head').waitFor();
+    await page.locator('.ws-item .ws-now').first().waitFor({ timeout: 20000 });
+    check(true, 'the session list shows what a running session is doing right now');
     await page.locator('.ws-live').waitFor({ timeout: 20000 });
     await shot(page, 'session-live');
     await page.locator('.ws-head .badge', { hasText: 'Ready for review' }).waitFor({ timeout: 60000 });
     check((await page.locator('.ws-iter').count()) >= 2, 'iteration strip shows each iteration');
-    check((await page.locator('.ws-group-head', { hasText: 'Ready for review' }).count()) === 1, 'the list groups the session under Ready for review');
+    // The list refreshes shortly after the session's own header does.
+    await page.locator('.ws-group-head', { hasText: 'Ready for review' }).waitFor({ timeout: 5000 });
+    check(true, 'the list groups the session under Ready for review');
     check((await page.locator('.ac-bubble').count()) >= 3, 'the canvas shows the main agent and its subagents as bubbles');
     await page.locator('.ac-bubble:not(.ac-main)').first().click();
     await page.locator('.ws-inspector .tl-brief').waitFor();
@@ -277,6 +281,12 @@ async function main() {
     await shot(page, 'mobile-projects');
     await page.getByRole('button', { name: 'Menu', exact: true }).click();
     await shot(page, 'mobile-menu');
+    await page.goto(`${base}/#/p/${pid}/sessions`);
+    await page.locator('.ws-item').first().click();
+    await page.locator('.ws-head').waitFor();
+    await shot(page, 'mobile-session');
+    const overflow = (await page.evaluate('document.documentElement.scrollWidth')) as number - page.viewportSize()!.width;
+    check(overflow <= 1, `a session fits a phone screen without sideways scrolling (${overflow}px over)`);
 
     check(errors.length === 0, `no browser errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     console.log('UI smoke test passed');

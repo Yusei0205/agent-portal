@@ -4869,3 +4869,46 @@ html[data-theme='hud'] .ins-hbar-fill {
 .ws-composer-actions .push {
   margin-left: auto;
 }
+
+/* ---------- Sessions list: live activity line and notifications ---------- */
+.ws-now {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--accent-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+}
+.ws-now::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.ws-list-head {
+  gap: 8px;
+}
+.ws-list-head h1 {
+  margin-right: auto;
+}
+.ws-bell.is-on {
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-now::before {
+    animation: none;
+  }
+}
+/* Keep the session detail within narrow screens: its single column may shrink below its content's min width. */
+.ws-detail {
+  grid-template-columns: minmax(0, 1fr);
+}
+.ws-meters {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}

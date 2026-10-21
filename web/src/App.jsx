@@ -302,6 +302,7 @@ function ProjectScope({ projectId, route }) {
     const handlers = {};
     for (const ev of [
       'run.updated',
+      'run.activity',
       'workflow.updated',
       'workflow.deleted',
       'input.created',
