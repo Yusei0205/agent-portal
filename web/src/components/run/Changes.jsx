@@ -62,6 +62,15 @@ export function Changes({ run }) {
           ) : null}
         </div>
       ) : null}
+      {ch.data.repos?.length > 1 ? (
+        <ul className="row tight wrap changes-repos" aria-label="Changes per repository">
+          {ch.data.repos.map((r) => (
+            <li key={r.repoId} className="chip-static small">
+              <strong>{r.name}</strong> {r.changed ? `${r.changed} file${r.changed === 1 ? '' : 's'}` : 'no changes'}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {files.length ? <DiffView files={files} /> : null}
       {hasFiles ? (
         <ul className="file-list">

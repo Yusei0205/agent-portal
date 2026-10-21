@@ -131,7 +131,8 @@ async function main() {
     await page.getByRole('link', { name: 'New', exact: true }).click();
     await page.getByRole('tab', { name: 'Single run', exact: true }).click();
     await page.getByLabel('Goal', { exact: true }).fill('Design and build the refund approval flow for Finance Managers');
-    await page.getByLabel('Repository (optional)').selectOption({ label: 'refund-service' });
+    await page.getByRole('button', { name: 'Add repository', exact: true }).click();
+    await page.getByLabel('Repository 1', { exact: true }).selectOption({ label: 'refund-service' });
     await shot(page, 'composer');
     await page.getByRole('button', { name: 'Start run', exact: true }).click();
     await page.waitForURL(/\/sessions\/run\//);
@@ -165,7 +166,8 @@ async function main() {
     console.log('session');
     await page.getByRole('link', { name: 'New', exact: true }).click();
     await page.getByLabel('Goal', { exact: true }).fill('Add a refund limit check for amounts above 500 [demo-iterations: 2]');
-    await page.getByLabel('Repository (optional)').selectOption({ label: 'refund-service' });
+    await page.getByRole('button', { name: 'Add repository', exact: true }).click();
+    await page.getByLabel('Repository 1', { exact: true }).selectOption({ label: 'refund-service' });
     await page.getByRole('button', { name: 'Add context', exact: true }).click();
     await page.locator('.ctx-pick-row', { hasText: 'Refunds FSD' }).getByRole('button', { name: 'Add', exact: true }).click();
     await page.getByRole('tab', { name: 'Note', exact: true }).click();

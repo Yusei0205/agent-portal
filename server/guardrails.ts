@@ -91,6 +91,8 @@ export interface IterationInput {
   workBranch?: string;
   /** The branch the working copy started from; it is never pushed to. */
   baseBranch?: string;
+  /** With several repositories: each one's name and the branch its working copy started from. */
+  repos?: { name: string; branch: string }[];
   /** Material the team attached to the session: files to read, and notes or earlier results given inline. */
   context?: ContextForPrompt[];
 }
@@ -168,12 +170,16 @@ export function composeIterationPrompt(i: IterationInput): string {
     '',
     `## This iteration (${i.iteration} of at most ${i.maxIterations}, about $${Math.max(0, i.budgetLeftUsd).toFixed(2)} of budget left)`,
     'Work in small verified steps: plan, change, check, fix. Delegate to the project\'s role subagents when a task fits one.',
-    i.hasRepo ? 'Change code only inside the repository working copy. Commit nothing and push nothing; a person reviews the diff.' : 'Put any files you create in the run folder.',
+    i.hasRepo
+      ? i.repos && i.repos.length > 1
+        ? `This session spans ${i.repos.length} repositories (${i.repos.map((r) => `${r.name} from ${r.branch}`).join(', ')}). Change code only inside their working copies, each change in the repository it belongs to. Commit nothing and push nothing; a person reviews the diff.`
+        : 'Change code only inside the repository working copy. Commit nothing and push nothing; a person reviews the diff.'
+      : 'Put any files you create in the run folder.',
     ...(i.hasRepo
       ? [
           i.workBranch
             ? `Your changes will be pushed to the new branch "${i.workBranch}". Keep using that name in your status line.`
-            : `Choose a short, descriptive name for the NEW branch your changes go to (for example fix/RLP-101-refund-limit or feature/audit-trail) and put it in the "branch" field of your status line. A person pushes it after review${i.baseBranch ? `; "${i.baseBranch}" and the other shared branches are never pushed to` : ''}.`,
+            : `Choose a short, descriptive name for the NEW branch your changes go to (for example fix/RLP-101-refund-limit or feature/audit-trail) and put it in the "branch" field of your status line${i.repos && i.repos.length > 1 ? '; the same name is used in every repository' : ''}. A person pushes it after review${i.baseBranch ? `; "${i.baseBranch}" and the other shared branches are never pushed to` : ''}.`,
         ]
       : []),
     'Do not ask questions. When something is unclear, pick the most reasonable option and list it under "assumptions" in your summary.',

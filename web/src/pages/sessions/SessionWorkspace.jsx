@@ -163,11 +163,12 @@ function SessionHeader({ w, canEdit, reload }) {
       <div className="row tight wrap ws-chips">
         <ConnectionBadge projectId={project.id} />
         <span className="chip-static mono small">{w.model}</span>
-        {w.repo_id ? (
-          <span className="chip-static small" title="The agents work on a new branch and a pull request goes into the base branch">
-            <code>{w.work_branch || 'new branch, named by the agents'}</code> → <code>{w.branch || 'default branch'}</code>
+        {(w.repos?.length ? w.repos : []).map((r) => (
+          <span key={r.repoId} className="chip-static small" title={`${r.name}: the agents work on a new branch, and a pull request goes into ${r.branch}`}>
+            {w.repos.length > 1 ? <strong>{r.name}</strong> : null}
+            <code>{w.work_branch || 'new branch, named by the agents'}</code> → <code>{r.branch || 'default branch'}</code>
           </span>
-        ) : null}
+        ))}
         {w.lead_agent ? (
           <span className="chip-static small">
             led by <code>{w.lead_agent}</code>
@@ -265,7 +266,7 @@ function ChangesTab({ w, canEdit }) {
   return (
     <div className="stack">
       <div className="row between wrap">
-        <p className="muted small">{r.worktree ? 'All changes the session made in its working copy so far.' : 'Files the session wrote to its run folder.'}</p>
+        <p className="muted small">{r.worktree ? (r.meta?.repos?.length > 1 ? `All changes the session made so far, across ${r.meta.repos.length} repositories.` : 'All changes the session made in its working copy so far.') : 'Files the session wrote to its run folder.'}</p>
         {canEdit && r.worktree ? (
           <Button icon="branch" disabled={active} title={active ? 'Wait for the current iteration to finish' : undefined} onClick={() => setPushing(true)}>
             Push changes

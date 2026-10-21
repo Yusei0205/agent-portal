@@ -4912,3 +4912,57 @@ html[data-theme='hud'] .ins-hbar-fill {
 .ws-meters {
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
 }
+
+/* ---------- Several repositories: picker rows, push results ---------- */
+.repo-rows {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.repo-rows-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.repo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.changes-repos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.push-repos {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.push-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.push-results li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+@media (max-width: 560px) {
+  .repo-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .repo-row select.mono {
+    grid-column: 1;
+  }
+}

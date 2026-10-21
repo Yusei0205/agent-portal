@@ -24,6 +24,7 @@ import { composeIterationPrompt, composeLeadAppend, parseStatus, safeBranchName,
 import { listAgentFiles } from './builder.ts';
 import { effectiveProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
+import { readRepoChoices } from './runs.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -49,6 +50,21 @@ function liveFacts(w: Row) {
 
 const contextCount = (id: string) => Number(one<Row>('SELECT COUNT(*) AS n FROM workflow_context WHERE workflow_id = ?', id)?.n ?? 0);
 
+/** The session's repositories: the repos column, or the single repo_id / branch of sessions made before it. */
+function sessionRepos(w: Row): { repoId: string; branch: string | null }[] {
+  const list = parseJson<{ repoId: string; branch: string | null }[]>(w.repos, []);
+  if (list.length) return list;
+  return w.repo_id ? [{ repoId: w.repo_id, branch: w.branch }] : [];
+}
+
+/** Repository names for the UI; a repository removed from the project since shows as such. */
+function reposView(w: Row) {
+  return sessionRepos(w).map((x) => {
+    const r = one<Row>('SELECT name, default_branch FROM repos WHERE id = ?', x.repoId);
+    return { repoId: x.repoId, name: r?.name ?? '(removed repository)', branch: x.branch || r?.default_branch || '' };
+  });
+}
+
 function view(w: Row) {
   return {
     ...liveFacts(w),
@@ -61,6 +77,7 @@ function view(w: Row) {
     stop_reason: w.stop_reason,
     repo_id: w.repo_id,
     branch: w.branch,
+    repos: reposView(w),
     model: w.model,
     budget_usd: w.budget_usd,
     budget_credits: w.budget_credits,
@@ -195,6 +212,7 @@ async function drive(id: string): Promise<void> {
       maxIterations: w.max_iterations,
       budgetLeftUsd: w.budget_usd - w.spent_usd,
       hasRepo: Boolean(w.repo_id),
+      repos: reposView(w).map((r) => ({ name: r.name, branch: r.branch })),
       workBranch: w.work_branch,
       baseBranch: w.repo_id ? w.branch || getRepo(w.repo_id).default_branch : '',
       context: contextForIteration(id),
@@ -224,6 +242,7 @@ async function drive(id: string): Promise<void> {
         prompt,
         repoId: w.repo_id || null,
         branch: w.branch || null,
+        repos: sessionRepos(w).length > 1 ? sessionRepos(w) : null,
         permissionMode: 'acceptEdits',
         autoApprove: true,
         model: w.model,
@@ -263,9 +282,10 @@ async function drive(id: string): Promise<void> {
     if (summary) patch(id, { summary: summary.slice(0, 4000) });
     // The agent names the new branch once; after that the name is kept so every iteration and the push agree.
     if (w.repo_id && !w.work_branch && status?.branch) {
-      const base = (w.branch || getRepo(w.repo_id).default_branch).toLowerCase();
+      // The new branch must not be the starting branch of any of the session's repositories.
+      const bases = new Set(reposView(w).map((r) => r.branch.toLowerCase()));
       const name = safeBranchName(status.branch);
-      if (name && name !== base) {
+      if (name && !bases.has(name)) {
         patch(id, { work_branch: name });
         log(id, 'status', `The agents will push their changes to the new branch "${name}".`);
       } else {
@@ -285,7 +305,10 @@ async function drive(id: string): Promise<void> {
     lastCheck = null;
     if (w.verify_command.trim()) {
       const run = getRun(finished.id);
-      const cwd = run.worktree ? path.join(projectDir(getProject(w.project_id)), run.worktree) : projectDir(getProject(w.project_id));
+      // With several repositories the check runs in the run folder that holds all of their working copies.
+      const pdir = projectDir(getProject(w.project_id));
+      const workDir = parseJson<any>(run.meta, {}).workDir;
+      const cwd = sessionRepos(w).length > 1 && workDir ? path.join(pdir, workDir) : run.worktree ? path.join(pdir, run.worktree) : pdir;
       const res = await runCheck(w.verify_command, cwd);
       lastCheck = { command: w.verify_command, ok: res.ok, output: res.output };
       log(id, 'check', res.ok ? 'Check passed' : 'Check failed', { runId: finished.id, data: { command: w.verify_command, ok: res.ok, output: res.output } });
@@ -399,12 +422,10 @@ export function registerWorkflowRoutes(): void {
     let goal = str(body.goal, 'Goal', { max: 6000, optional: Boolean(jira.key) }).trim();
     if (!goal && jira.key) goal = `Implement or fix what ticket ${jira.key} describes (${jira.summary}), following the project documents and decisions.`;
     const title = str(body.title, 'Title', { max: 120, optional: true }).trim() || (jira.key ? `${jira.key}: ${jira.summary}`.slice(0, 120) : goal.split('\n')[0].slice(0, 80));
-    let repoId: string | null = null;
-    if (body.repoId) {
-      const repo = getRepo(String(body.repoId));
-      if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
-      repoId = repo.id;
-    }
+    // Without a branch, a single repository keeps following its default branch, as before.
+    const repos = readRepoChoices(project.id, body);
+    const single = !Array.isArray(body.repos) && repos.length === 1;
+    const repoId: string | null = repos[0]?.repoId ?? null;
     const s = readSettings(body);
     const leadAgent = checkLead(project, body.leadAgent);
     const contextItems = readContextItems(body.context);
@@ -417,7 +438,8 @@ export function registerWorkflowRoutes(): void {
       status: body.start === false ? 'paused' : 'running',
       stop_reason: body.start === false ? 'Not started yet. Press Resume to start.' : '',
       repo_id: repoId,
-      branch: str(body.branch, 'Branch', { max: 200, optional: true }).trim() || null,
+      branch: single ? str(body.branch, 'Branch', { max: 200, optional: true }).trim() || null : (repos[0]?.branch ?? null),
+      repos: JSON.stringify(repos.length > 1 ? repos : []),
       ...s,
       iteration: 0,
       burst_start: 0,

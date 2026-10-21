@@ -27,6 +27,8 @@ export interface StartRunInput {
   prompt: string;
   repoId?: string | null;
   branch?: string | null;
+  /** Several repositories, each with its own working copy in the run folder. The first is the run's main one. */
+  repos?: RepoChoice[] | null;
   permissionMode?: PermissionMode;
   model?: string;
   resumeOf?: string | null;
@@ -42,6 +44,27 @@ export interface StartRunInput {
   oneshot?: boolean;
   /** Text the demo provider returns for single-shot tasks. */
   demoOutput?: () => string | Promise<string>;
+}
+
+export interface RepoChoice {
+  repoId: string;
+  branch?: string | null;
+}
+
+/** A repository working copy of a run, as kept in run.meta.repos. */
+export interface RunRepo {
+  repoId: string;
+  name: string;
+  branch: string;
+  worktree: string;
+}
+
+/** The working copies of a run: meta.repos when it has several, else the single repo_id / worktree columns. */
+export function runRepos(r: Row): RunRepo[] {
+  const meta = parseJson<any>(r.meta, {});
+  if (Array.isArray(meta.repos) && meta.repos.length) return meta.repos;
+  if (r.repo_id && r.worktree) return [{ repoId: r.repo_id, name: meta.repoName ?? '', branch: r.branch ?? '', worktree: r.worktree }];
+  return [];
 }
 
 interface Pending {
@@ -292,6 +315,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
   let resumeSession: string | undefined;
   let workDir = path.join(pdir, 'work', runId);
   let worktree: string | null = null;
+  let inheritedRepos: RunRepo[] | null = null;
   if (input.resumeOf) {
     const prev = getRun(input.resumeOf);
     if (prev.project_id !== project.id) throw badRequest('That run belongs to another project');
@@ -301,6 +325,18 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     worktree = prev.worktree;
     input.repoId = input.repoId ?? prev.repo_id;
     input.branch = input.branch ?? prev.branch;
+    if (Array.isArray(prevMeta.repos) && prevMeta.repos.length) inheritedRepos = prevMeta.repos;
+  }
+  // One list of repositories either way; the first one fills the run's own repo_id / branch / worktree columns.
+  const choices: RepoChoice[] = inheritedRepos ? [] : input.repos?.length ? input.repos : input.repoId ? [{ repoId: input.repoId, branch: input.branch }] : [];
+  if (choices.length) {
+    const seen = new Set<string>();
+    for (const c of choices) {
+      if (seen.has(c.repoId)) throw badRequest('Each repository can be chosen once');
+      seen.add(c.repoId);
+    }
+    input.repoId = choices[0].repoId;
+    input.branch = choices[0].branch ?? input.branch ?? null;
   }
 
   insert('runs', {
@@ -317,7 +353,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     model,
     permission_mode: permissionMode,
     provider: mode,
-    meta: JSON.stringify({ ...(input.meta ?? {}), workDir: relToProject(project, workDir) }),
+    meta: JSON.stringify({ ...(input.meta ?? {}), workDir: relToProject(project, workDir), ...(inheritedRepos ? { repos: inheritedRepos } : {}) }),
     created_by: input.userId,
     created_at: now(),
   });
@@ -337,7 +373,21 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     try {
       fs.mkdirSync(workDir, { recursive: true });
       if (!input.oneshot) ensureBuiltInSkills(project);
-      if (input.repoId && !worktree) {
+      if (choices.length > 1 && !worktree) {
+        // Several repositories: one working copy each, side by side in the run folder.
+        const made: RunRepo[] = [];
+        for (const c of choices) {
+          const repo = getRepo(c.repoId);
+          if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
+          const branch = c.branch || repo.default_branch;
+          const dest = path.join(workDir, repo.slug);
+          await createWorktree(repo, branch, dest);
+          made.push({ repoId: repo.id, name: repo.name, branch, worktree: relToProject(project, dest) });
+        }
+        worktree = made[0].worktree;
+        const meta = parseJson<any>(getRun(runId).meta, {});
+        update('runs', runId, { worktree, branch: made[0].branch, meta: JSON.stringify({ ...meta, repos: made }) });
+      } else if (input.repoId && !worktree) {
         const repo = getRepo(input.repoId);
         if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
         const dest = path.join(workDir, repo.slug);
@@ -373,9 +423,11 @@ async function execute(
   o: { mode: string; model: string; permissionMode: PermissionMode; workDir: string; resumeSession?: string; worktree: string | null },
 ): Promise<void> {
   const pdir = projectDir(project);
-  const writeDirRel = relToProject(project, o.worktree ? path.join(pdir, o.worktree) : o.workDir);
-  const writeDirAbs = path.join(pdir, writeDirRel);
   const r0 = getRun(runId);
+  const repos = runRepos(r0);
+  // With several working copies the agent may change any of them, so it writes anywhere in the run folder.
+  const writeDirRel = relToProject(project, repos.length > 1 ? o.workDir : o.worktree ? path.join(pdir, o.worktree) : o.workDir);
+  const writeDirAbs = path.join(pdir, writeDirRel);
   const user = one<{ name: string }>('SELECT name FROM users WHERE id = ?', input.userId);
 
   let prompt = input.prompt;
@@ -383,9 +435,15 @@ async function execute(
     const repo = input.repoId ? getRepo(input.repoId) : null;
     prompt = [
       `You are working in the project "${project.name}". Read CLAUDE.md first.`,
-      repo
-        ? `Working copy for this run: ${writeDirRel}/ (branch ${r0.branch}, repository "${repo.name}"). Make code changes only inside it.`
-        : `If you create files, put them under ${writeDirRel}/.`,
+      repos.length > 1
+        ? [
+            'This run works across several repositories, each with its own working copy:',
+            ...repos.map((x) => `- ${x.worktree}/ (repository "${x.name}", branch ${x.branch})`),
+            'Make code changes only inside these working copies; keep each change in the repository it belongs to.',
+          ].join('\n')
+        : repo
+          ? `Working copy for this run: ${writeDirRel}/ (branch ${r0.branch}, repository "${repo.name}"). Make code changes only inside it.`
+          : `If you create files, put them under ${writeDirRel}/.`,
       `This request comes from ${user?.name ?? 'a team member'}.`,
       '---',
       input.prompt,

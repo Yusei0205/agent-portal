@@ -9,7 +9,7 @@ import { checkDocOutput, composeDocumentPrompt } from './docrun.ts';
 import { HttpError, badRequest, notFound, parseJson, safeJoin, str } from './util.ts';
 import { runChannel, subscribe } from './events.ts';
 import { git } from './git.ts';
-import { answerInput, getRun, inputView, isActive, oneshot, runSummary, startRun, stopRun } from './agent/runner.ts';
+import { answerInput, getRun, inputView, isActive, oneshot, runRepos, runSummary, startRun, stopRun, type RepoChoice } from './agent/runner.ts';
 import { PRICES } from './agent/pricing.ts';
 import { providerMode } from './settings.ts';
 import JSZip from 'jszip';
@@ -69,7 +69,7 @@ function mimeFor(file: string): string {
 /** Returns the resolved base directory for a run's files. */
 function runBase(r: Row, p: { slug: string }): string | null {
   const meta = parseJson<any>(r.meta, {});
-  const rel = r.worktree || meta.workDir;
+  const rel = runRepos(r).length > 1 ? meta.workDir : r.worktree || meta.workDir;
   if (!rel) return null;
   return path.join(projectDir(p), rel);
 }
@@ -88,6 +88,24 @@ function walkRunFiles(base: string): string[] {
   };
   walk(base, '', 0);
   return results;
+}
+
+/**
+ * The repositories a request picks: "repos" ([{ repoId, branch }]) or the single "repoId" / "branch". Each must belong
+ * to the project, appear once, and each branch must be a valid name; an empty branch means the repository's default.
+ */
+export function readRepoChoices(projectId: string, body: any): RepoChoice[] {
+  const raw: any[] = Array.isArray(body?.repos) ? body.repos : body?.repoId ? [{ repoId: body.repoId, branch: body.branch }] : [];
+  if (raw.length > 8) throw badRequest('Pick at most 8 repositories');
+  const out: RepoChoice[] = [];
+  for (const x of raw) {
+    if (!x?.repoId) continue;
+    const repo = getRepo(String(x.repoId));
+    if (repo.project_id !== projectId) throw badRequest('That repository belongs to another project');
+    if (out.some((o) => o.repoId === repo.id)) throw badRequest(`${repo.name} is chosen twice`);
+    out.push({ repoId: repo.id, branch: x.branch ? checkBranch(String(x.branch)) : repo.default_branch });
+  }
+  return out;
 }
 
 export function registerRunRoutes(): void {
@@ -141,11 +159,10 @@ export function registerRunRoutes(): void {
     const mode = ['default', 'acceptEdits', 'plan'].includes(body.permissionMode) ? body.permissionMode : undefined;
     let repoId: string | null = null;
     let branch: string | null = null;
-    if (body.repoId) {
-      const repo = getRepo(String(body.repoId));
-      if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
-      repoId = repo.id;
-      branch = body.branch ? checkBranch(body.branch) : repo.default_branch;
+    const repos = readRepoChoices(project.id, body);
+    if (repos.length) {
+      repoId = repos[0].repoId;
+      branch = repos[0].branch ?? null;
     }
     const meta: Record<string, unknown> = body._jiraMeta
       ? { ...body._jiraMeta, repoName: repoId ? getRepo(repoId).name : null }
@@ -158,6 +175,7 @@ export function registerRunRoutes(): void {
       prompt,
       repoId,
       branch,
+      repos: repos.length > 1 ? repos : null,
       permissionMode: mode,
       model,
       meta: Object.keys(meta).length ? meta : undefined,
@@ -236,23 +254,28 @@ export function registerRunRoutes(): void {
       walk(base, '', 0);
     }
     let diff = '';
-    if (r.worktree) {
-      const wt = path.join(projectDir(p), r.worktree);
-      if (fs.existsSync(wt)) {
-        await git(['add', '-A', '--intent-to-add'], { cwd: wt }).catch(() => undefined);
-        diff = (await git(['diff', '--no-color', 'HEAD'], { cwd: wt, maxBuffer: 16 * 1024 * 1024 }).catch(() => ({ stdout: '' }))).stdout;
-      }
+    const repos = runRepos(r);
+    const repoDiffs: { repoId: string; name: string; branch: string; changed: number }[] = [];
+    for (const x of repos) {
+      const wt = path.join(projectDir(p), x.worktree);
+      if (!fs.existsSync(wt)) continue;
+      const folder = path.posix.basename(x.worktree);
+      const prefix = repos.length > 1 ? ['--src-prefix', `a/${folder}/`, '--dst-prefix', `b/${folder}/`] : [];
+      await git(['add', '-A', '--intent-to-add'], { cwd: wt }).catch(() => undefined);
+      const d = (await git(['diff', '--no-color', ...prefix, 'HEAD'], { cwd: wt, maxBuffer: 16 * 1024 * 1024 }).catch(() => ({ stdout: '' }))).stdout;
+      diff += d;
+      repoDiffs.push({ repoId: x.repoId, name: x.name || getRepo(x.repoId).name, branch: x.branch, changed: (d.match(/^diff --git /gm) || []).length });
     }
     // Absolute path only for admins (reveals server filesystem layout).
     const absPath = ctx.user?.is_admin ? runBase(r, p) : null;
-    return { worktree: r.worktree, workDir: meta.workDir, absPath, files, diff: diff.slice(0, 500_000) };
+    return { worktree: r.worktree, workDir: meta.workDir, absPath, files, diff: diff.slice(0, 500_000), repos: repoDiffs };
   });
 
   get('/api/runs/:id/file', (ctx) => {
     const r = runAccess(ctx, ctx.params.id);
     const p = getProject(r.project_id);
     const meta = parseJson<any>(r.meta, {});
-    const base = path.join(projectDir(p), r.worktree || meta.workDir);
+    const base = runBase(r, p) ?? path.join(projectDir(p), meta.workDir);
     const rel = str(ctx.query.get('path'), 'Path', { max: 500 });
     const file = safeJoin(base, rel);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw notFound('File not found');
@@ -269,7 +292,7 @@ export function registerRunRoutes(): void {
     const r = runAccess(ctx, ctx.params.id);
     const p = getProject(r.project_id);
     const meta = parseJson<any>(r.meta, {});
-    const base = path.join(projectDir(p), r.worktree || meta.workDir);
+    const base = runBase(r, p) ?? path.join(projectDir(p), meta.workDir);
     const rel = str(ctx.query.get('path'), 'Path', { max: 500 });
     const file = safeJoin(base, rel);
     const stat = fs.existsSync(file) ? fs.statSync(file) : null;
@@ -303,9 +326,13 @@ export function registerRunRoutes(): void {
   post('/api/runs/:id/push', async (ctx) => {
     const r = runAccess(ctx, ctx.params.id, 'editor');
     if (isActive(r.id)) throw badRequest('Wait for the run to finish before pushing');
-    if (!r.repo_id || !r.worktree) throw badRequest('This run has no repository working copy');
-    const repo = getRepo(r.repo_id);
     const body = await ctx.json();
+    const repos = runRepos(r);
+    if (!repos.length) throw badRequest('This run has no repository working copy');
+    const target = body.repoId ? repos.find((x) => x.repoId === body.repoId) : repos[0];
+    if (!target) throw badRequest('That repository is not part of this run');
+    const repo = getRepo(target.repoId);
+    const startBranch = target.branch || repo.default_branch;
     const meta = parseJson<any>(r.meta, {});
     const jiraKey: string | undefined = meta.jiraKey;
     const jiraSummary: string | undefined = meta.jiraSummary;
@@ -322,13 +349,13 @@ export function registerRunRoutes(): void {
 
     const branch = checkBranch(body.branch || defaultBranch);
     // The branch a pull request is opened into: chosen at push time, else the one the work started from.
-    const prBase = checkBranch(body.base || r.branch || repo.default_branch);
+    const prBase = checkBranch(body.base || startBranch);
     if (body.base) await git(['rev-parse', '--verify', '--quiet', `origin/${prBase}`], { cwd: repoDir(repo) }).catch(() => {
       throw badRequest(`Branch "${prBase}" was not found in ${repo.name}`);
     });
-    if (branch === repo.default_branch || branch === r.branch || branch === prBase) throw badRequest(`Push to a new branch. "${branch}" is the branch this work started from, and nothing is pushed to it.`);
+    if (branch === repo.default_branch || branch === startBranch || branch === prBase) throw badRequest(`Push to a new branch. "${branch}" is the branch this work started from, and nothing is pushed to it.`);
     const message = str(body.message, 'Commit message', { max: 2000, optional: true }) || defaultMessage;
-    const wt = path.join(projectDir(getProject(r.project_id)), r.worktree);
+    const wt = path.join(projectDir(getProject(r.project_id)), target.worktree);
     const out = await pushWorktree(repo, wt, branch, message);
     let pr: { number: number; url: string } | null = null;
     if (body.createPr && repo.provider === 'github' && githubSlug(repo.url)) {
@@ -346,16 +373,18 @@ export function registerRunRoutes(): void {
       });
       pr = { number: created.number, url: created.html_url };
     }
-    return { ...out, branch, pr };
+    return { ...out, branch, pr, repoId: repo.id, repoName: repo.name };
   });
 
   del('/api/runs/:id/worktree', async (ctx) => {
     const r = runAccess(ctx, ctx.params.id, 'editor');
     if (isActive(r.id)) throw badRequest('Stop the run first');
-    if (!r.worktree || !r.repo_id) throw badRequest('This run has no working copy');
-    const repo = getRepo(r.repo_id);
-    await removeWorktree(repo, path.join(projectDir(getProject(r.project_id)), r.worktree));
-    exec('UPDATE runs SET worktree = NULL WHERE id = ?', r.id);
+    const repos = runRepos(r);
+    if (!repos.length) throw badRequest('This run has no working copy');
+    for (const x of repos) await removeWorktree(getRepo(x.repoId), path.join(projectDir(getProject(r.project_id)), x.worktree));
+    const meta = parseJson<any>(r.meta, {});
+    delete meta.repos;
+    exec('UPDATE runs SET worktree = NULL, meta = ? WHERE id = ?', JSON.stringify(meta), r.id);
     return { ok: true };
   });
 

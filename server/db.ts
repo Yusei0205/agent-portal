@@ -377,6 +377,8 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS workflow_context_wf ON workflow_context(workflow_id, created_at);`,
+  // A session can work across several repositories: [{ repoId, branch }]; repo_id / branch keep the first one.
+  `ALTER TABLE workflows ADD COLUMN repos TEXT NOT NULL DEFAULT '[]';`,
 ];
 
 let db: DatabaseSync | null = null;

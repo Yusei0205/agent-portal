@@ -432,3 +432,46 @@ test('usage, connection test and budget', async () => {
   assert.ok(runs.runs.length >= 4);
   assert.ok(runs.runs.every((r: any) => ['chat', 'test', 'review'].includes(r.kind)));
 });
+
+test('several repositories: one working copy each, a combined diff, and a push per repository', async () => {
+  const bare2 = makeRepo(path.join(srv.dataDir, 'fixture-two'));
+  const url2 = `file:///${bare2.replace(/\\/g, '/').replace(/^\//, '')}`;
+  const { repo: repo2 } = await admin.post(`/api/projects/${pid}/repos`, { provider: 'git', url: url2, name: 'refund-web' });
+  await waitFor(async () => {
+    const r = (await editor.get(`/api/projects/${pid}/repos`)).repos.find((x: any) => x.id === repo2.id);
+    return r.status === 'ready' ? r : r.status === 'error' ? Promise.reject(new Error(r.error)) : null;
+  }, 'clone of the second repository');
+
+  const twice = await editor.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, repos: [{ repoId }, { repoId }] });
+  assert.equal(twice.status, 400, 'a repository cannot be chosen twice');
+
+  const { workflow } = await editor.post(`/api/projects/${pid}/workflows`, {
+    goal: 'Change both services [demo-iterations: 1]',
+    model: 'haiku',
+    repos: [{ repoId, branch: 'main' }, { repoId: repo2.id }],
+  });
+  assert.deepEqual(workflow.repos.map((r: any) => r.name), ['refund-service', 'refund-web']);
+  const d = await waitFor(async () => {
+    const x = await editor.get(`/api/workflows/${workflow.id}`);
+    return ['done', 'blocked', 'failed', 'paused'].includes(x.workflow.status) && !x.driving ? x : null;
+  }, 'multi-repo session');
+  const run = (await editor.get(`/api/runs/${d.workflow.last_run_id}`)).run;
+  assert.equal(run.meta.repos.length, 2);
+  for (const x of run.meta.repos) assert.ok(fs.existsSync(path.join(projectDir, x.worktree, 'src', 'refunds.ts')), `working copy of ${x.name}`);
+  assert.match(run.prompt, /This session spans 2 repositories \(refund-service from main, refund-web from main\)/);
+  assert.match(run.prompt, /refund-service/);
+  assert.match(run.prompt, /refund-web/);
+
+  // A change in the second repository shows up under its folder, and is pushed to that repository only.
+  fs.writeFileSync(path.join(projectDir, run.meta.repos[1].worktree, 'src', 'web.ts'), 'export const web = 1;\n');
+  const ch = await editor.get(`/api/runs/${run.id}/changes`);
+  assert.deepEqual(ch.repos.map((r: any) => r.changed), [0, 1]);
+  assert.match(ch.diff, /^diff --git a\/refund-web\/src\/web\.ts b\/refund-web\/src\/web\.ts/m);
+  const file = await editor.get(`/api/runs/${run.id}/file?path=${encodeURIComponent('refund-web/src/web.ts')}`);
+  assert.equal(file.content, 'export const web = 1;\n');
+  const pushed = await editor.post(`/api/runs/${run.id}/push`, { repoId: repo2.id, branch: 'feature/two-repos', message: 'Both' });
+  assert.equal(pushed.repoName, 'refund-web');
+  assert.match(execFileSync('git', ['branch'], { cwd: bare2 }).toString(), /feature\/two-repos/);
+  assert.doesNotMatch(execFileSync('git', ['branch'], { cwd: bareRepo }).toString(), /feature\/two-repos/);
+  assert.equal((await editor.req('POST', `/api/runs/${run.id}/push`, { repoId: 'repo_nope', branch: 'x/y' })).status, 400);
+});

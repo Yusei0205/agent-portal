@@ -9,6 +9,7 @@ import { ModelPicker } from '../../components/ModelPicker.jsx';
 import { ConnectionBadge } from '../../components/ConnectionBadge.jsx';
 import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
 import { ContextChips, ContextPicker, sendFiles } from '../../components/ContextPicker.jsx';
+import { Icon } from '../../components/Icon.jsx';
 import { Button, ErrorNote, Field, Modal, Segmented, useUi } from '../../components/ui.jsx';
 
 const KINDS = [
@@ -79,6 +80,66 @@ function LimitFields({ f, set, kiro }) {
   );
 }
 
+/** The repositories a session or run works in: one row each, with the branch its working copy starts from. */
+function RepoRows({ rows, setRows, ready, session }) {
+  const update = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const remove = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
+  const used = new Set(rows.map((r) => r.repoId).filter(Boolean));
+  const free = ready.filter((r) => !used.has(r.id));
+  return (
+    <fieldset className="repo-rows">
+      <legend className="field-label">Repositories (optional)</legend>
+      {rows.length ? (
+        <ul className="repo-rows-list">
+          {rows.map((row, i) => (
+            <RepoRow key={i} row={row} options={ready.filter((r) => r.id === row.repoId || !used.has(r.id))} onChange={(p) => update(i, p)} onRemove={() => remove(i)} index={i} />
+          ))}
+        </ul>
+      ) : (
+        <p className="muted small">No repository: the agents work with the project documents only.</p>
+      )}
+      <div className="row between wrap">
+        <span className="muted small">
+          {rows.length > 1
+            ? 'Each repository gets its own working copy. The changes go to one new branch name in every repository; nothing is pushed until you do it.'
+            : session
+              ? 'The agents change a working copy on a new branch they name. Nothing is pushed until you do it.'
+              : 'The run gets its own working copy of the base branch.'}
+        </span>
+        <Button size="sm" icon="plus" disabled={!free.length} onClick={() => setRows((rs) => [...rs, { repoId: free[0].id, branch: '' }])} title={free.length ? undefined : ready.length ? 'Every repository is already added' : 'Connect a repository on the Repositories page first'}>
+          Add repository
+        </Button>
+      </div>
+    </fieldset>
+  );
+}
+
+function RepoRow({ row, options, onChange, onRemove, index }) {
+  const branches = useBranches(row.repoId);
+  return (
+    <li className="repo-row">
+      <select className="input" aria-label={`Repository ${index + 1}`} value={row.repoId} onChange={(e) => onChange({ repoId: e.target.value, branch: '' })}>
+        {options.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.name}
+          </option>
+        ))}
+      </select>
+      <select className="input mono" aria-label={`Base branch for repository ${index + 1}`} title="Work starts from this branch, and a pull request goes into it. It is never pushed to directly." value={row.branch} onChange={(e) => onChange({ branch: e.target.value })}>
+        <option value="">{`Default branch${branches.def ? ` (${branches.def})` : ''}`}</option>
+        {branches.list.map((b) => (
+          <option key={b} value={b}>
+            {b}
+          </option>
+        ))}
+      </select>
+      <button type="button" className="icon-btn" onClick={onRemove} aria-label={`Remove repository ${index + 1}`} title="Remove">
+        <Icon name="x" size={15} />
+      </button>
+    </li>
+  );
+}
+
 /** Start a session, a single run or a documentation run. */
 export function NewSessionDialog({ prefill, onClose }) {
   const { project } = useProject();
@@ -110,7 +171,9 @@ export function NewSessionDialog({ prefill, onClose }) {
   const { toast } = useUi();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const branches = useBranches(f.repoId);
+  // Repositories to work in, each with the branch its working copy starts from ('' = its default branch).
+  const [rows, setRows] = useState(() => (prefill?.repoId ? [{ repoId: prefill.repoId, branch: '' }] : []));
+  const chosen = rows.filter((r) => r.repoId).map(({ repoId, branch }) => ({ repoId, branch: branch || undefined }));
   const set = (k) => (e) => setF((cur) => ({ ...cur, [k]: e.target.value }));
   const isDoc = kind === 'document';
   const canStart = isDoc ? Boolean(f.repoId) : Boolean(f.goal.trim() || ticket);
@@ -126,8 +189,7 @@ export function NewSessionDialog({ prefill, onClose }) {
           context: context.filter((c) => c.kind !== 'file').map(({ kind: k, ref, title, body }) => ({ kind: k, ref, title, body })),
           start: files.length ? false : undefined,
           goal: f.goal,
-          repoId: f.repoId || undefined,
-          branch: f.repoId ? f.branch : undefined,
+          repos: chosen,
           model: f.model,
           budgetUsd: kiro ? undefined : Number(f.budgetUsd),
           budgetCredits: kiro ? Number(f.budgetCredits) : undefined,
@@ -150,8 +212,7 @@ export function NewSessionDialog({ prefill, onClose }) {
           : {
               prompt: f.goal.trim() || undefined,
               jiraKey: ticket?.key || undefined,
-              repoId: f.repoId || undefined,
-              branch: f.repoId ? f.branch || branches.def : undefined,
+              repos: chosen,
               model: f.model,
               permissionMode: f.permissionMode,
             };
@@ -242,32 +303,7 @@ export function NewSessionDialog({ prefill, onClose }) {
                 />
               )}
             </Field>
-            <div className="row wrap">
-              <Field label="Repository (optional)" hint={kind === 'session' ? 'The agents change a working copy on a new branch they name. Nothing is pushed until you do it.' : 'The run gets its own working copy of this branch.'}>
-                {(id) => (
-                  <select id={id} className="input" value={f.repoId} onChange={(e) => setF({ ...f, repoId: e.target.value, branch: '' })}>
-                    <option value="">No repository (documents only)</option>
-                    {ready.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-              <Field label="Base branch" hint="Work starts from this branch, and a pull request goes into it. It is never pushed to directly.">
-                {(id) => (
-                  <select id={id} className="input mono" value={f.branch} disabled={!f.repoId} onChange={set('branch')}>
-                    <option value="">{f.repoId ? `Default branch${branches.def ? ` (${branches.def})` : ''}` : 'Pick a repository first'}</option>
-                    {branches.list.map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-            </div>
+            <RepoRows rows={rows} setRows={setRows} ready={ready} session={kind === 'session'} />
             {kind === 'session' ? (
               <div className="ctx-field">
                 <div className="row between wrap">
