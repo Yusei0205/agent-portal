@@ -11,7 +11,13 @@ export const STATUS = {
 export const statusOf = (w) => STATUS[w.status] ?? { tone: 'muted', label: w.status };
 
 /** A session needs a person when it is blocked or its current run waits for an answer or approval. */
-export const needsYou = (w) => w.status === 'blocked' || w.pending_inputs > 0 || w.last_run_status === 'waiting';
+export const needsYou = (w) => w.status === 'blocked' || w.pending_inputs > 0 || w.last_run_status === 'waiting' || Boolean(w.pending_push);
+
+export const PUSH_MODES = [
+  { value: 'never', label: 'Never', hint: 'Agents never push; a person pushes from the Changes tab.' },
+  { value: 'ask', label: 'Ask me each time', hint: 'When the agents ask, the session waits until a person allows or declines the push.' },
+  { value: 'auto', label: 'Allowed', hint: 'The portal pushes when the agents ask, without waiting.' },
+];
 
 /** List groups, in the order people should look at them. */
 export const GROUPS = [

@@ -24,7 +24,8 @@ import { composeIterationPrompt, composeLeadAppend, parseStatus, safeBranchName,
 import { listAgentFiles } from './builder.ts';
 import { claudeProvider, effectiveProvider, engineProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
-import { readRepoChoices } from './runs.ts';
+import { pushRun, readRepoChoices } from './runs.ts';
+import { runRepos } from './agent/runner.ts';
 import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
 import { readIntegrationIds } from './integrations.ts';
 import { getSettings } from './settings.ts';
@@ -86,6 +87,8 @@ function view(w: Row) {
     children: all<Row>('SELECT id, title, status, summary FROM workflows WHERE parent_id = ? ORDER BY created_at', w.id),
     depth: Number(w.depth ?? 0),
     waiting_children: Boolean(w.waiting_children),
+    push_mode: w.push_mode || 'never',
+    pending_push: w.pending_push ? parseJson<any>(w.pending_push, null) : null,
     integrations: parseJson<string[]>(w.integrations, []),
     integration_list: parseJson<string[]>(w.integrations, []).map((id) => one<Row>('SELECT id, name, kind, allow_writes FROM integrations WHERE id = ?', id) ?? { id, name: '(removed integration)', kind: '', allow_writes: 0 }),
     model: w.model,
@@ -327,6 +330,7 @@ async function drive(id: string): Promise<void> {
       workBranch: w.work_branch,
       baseBranch: w.repo_id ? w.branch || getRepo(w.repo_id).default_branch : '',
       context: contextForIteration(id),
+      pushMode: (w.push_mode || 'never') as 'never' | 'ask' | 'auto',
       delegation: (() => {
         const kids = childrenOf(id);
         const d = getSettings().delegation;
@@ -450,6 +454,27 @@ async function drive(id: string): Promise<void> {
 
     w = getWorkflow(id);
     if (w.status !== 'running') return;
+
+    // The agents asked the portal to push: never, after a person approves, or at once, depending on the session.
+    if (status?.push) {
+      const mode = w.push_mode || 'never';
+      const why = pushBlocker(w, lastCheck);
+      if (mode === 'never') {
+        log(id, 'status', 'The agents asked to push, but agent pushes are off for this session. Push from the Changes tab, or allow agent pushes in its settings.');
+      } else if (why) {
+        log(id, 'status', `The agents asked to push, but it cannot happen now: ${why}.`);
+      } else {
+        const req: PushRequest = { message: status.push.message, pr: status.push.pr, runId: finished.id, branch: w.work_branch, state: status.state, at: now() };
+        if (mode === 'auto') {
+          await pushForSession(w, req, 'The agents');
+        } else {
+          patch(id, { pending_push: JSON.stringify(req) });
+          return stopWith(id, 'paused', `Waiting for you to allow pushing to "${w.work_branch}".`);
+        }
+      }
+      w = getWorkflow(id);
+      if (w.status !== 'running') return;
+    }
     if (status?.state === 'blocked') return stopWith(id, 'blocked', status.needs || status.summary || 'The agent needs a person.');
     if (status?.state === 'done') {
       if (lastCheck && !lastCheck.ok) {
@@ -531,7 +556,56 @@ function readSettings(body: any, current?: Row) {
     max_iterations: Math.round(num(body.maxIterations, 'Iterations', 1, 50, current?.max_iterations ?? 8)),
     verify_command: body.verifyCommand === undefined ? current?.verify_command ?? '' : str(body.verifyCommand, 'Check command', { max: 500, optional: true }).trim(),
     rules: body.rules === undefined ? current?.rules ?? '' : str(body.rules, 'Rules', { max: 4000, optional: true }).trim(),
+    push_mode: readPushMode(body.pushMode, current?.push_mode),
   };
+}
+
+function readPushMode(raw: unknown, current?: string): string {
+  if (raw === undefined || raw === null || raw === '') return current || 'never';
+  if (!['never', 'ask', 'auto'].includes(String(raw))) throw badRequest('Agent pushes must be never, ask or auto');
+  return String(raw);
+}
+
+/* ------------------------------------------------------------------ */
+/* Agent pushes                                                        */
+/* ------------------------------------------------------------------ */
+
+interface PushRequest {
+  message: string;
+  pr: boolean;
+  runId: string;
+  branch: string;
+  /** What the agent reported with the request, so approving can finish a session that was done. */
+  state: string;
+  at: string;
+}
+
+/** Push every working copy of a session's run to its new branch; the results go into the history. */
+async function pushForSession(w: Row, req: PushRequest, by: string) {
+  const run = getRun(req.runId);
+  const results: { repo: string; ok: boolean; commit?: string; pr?: string; error?: string }[] = [];
+  for (const x of runRepos(run)) {
+    try {
+      const r = await pushRun(run, { repoId: x.repoId, branch: req.branch, message: req.message || undefined, createPr: req.pr, agent: true });
+      results.push({ repo: r.repoName, ok: true, commit: r.commit ?? undefined, pr: r.pr?.url });
+    } catch (e: any) {
+      results.push({ repo: x.name || getRepo(x.repoId).name, ok: false, error: String(e?.message ?? e).slice(0, 300) });
+    }
+  }
+  const ok = results.filter((r) => r.ok);
+  const body = ok.length
+    ? `${by} pushed to "${req.branch}"${results.length > 1 ? ` in ${ok.length} of ${results.length} repositories` : ''}${ok.some((r) => r.pr) ? ' and opened a draft pull request' : ''}.`
+    : `Nothing was pushed to "${req.branch}": ${results.map((r) => r.error).join('; ')}`;
+  log(w.id, 'push', body, { runId: req.runId, data: { branch: req.branch, by, results } });
+  return { ok: ok.length > 0, results };
+}
+
+/** Why a push the agents asked for cannot happen now, or ''. */
+function pushBlocker(w: Row, lastCheck: { ok: boolean } | null): string {
+  if (!w.repo_id) return 'this session has no repository';
+  if (!w.work_branch) return 'the new branch has no name yet (the agents name it in their status line first)';
+  if (lastCheck && !lastCheck.ok) return 'the check failed';
+  return '';
 }
 
 /** The lead agent named in a request must be one of the project's enabled agents; empty means the default. */
@@ -679,6 +753,45 @@ export function registerWorkflowRoutes(): void {
     return { workflow: view(out) };
   });
 
+  // A person allows the push the agents asked for: the portal pushes, then the session finishes or carries on.
+  post('/api/workflows/:id/push/allow', async (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id, 'editor');
+    const req = w.pending_push ? parseJson<PushRequest | null>(w.pending_push, null) : null;
+    if (!req) throw badRequest('This session is not waiting for a push');
+    if (w.status === 'running' || driving.has(w.id)) throw badRequest('Wait for the current iteration to finish');
+    const body = await ctx.json().catch(() => ({}));
+    if (body.message) req.message = str(body.message, 'Commit message', { max: 500 });
+    if (body.pr !== undefined) req.pr = Boolean(body.pr);
+    exec("UPDATE workflows SET pending_push = '' WHERE id = ?", w.id);
+    const out = await pushForSession(w, req, ctx.user!.name);
+    if (req.state === 'done' && out.ok) {
+      stopWith(w.id, 'done', `Pushed to "${req.branch}". The agents report the goal is met.`);
+    } else {
+      patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration });
+      kick(w.id);
+    }
+    return { workflow: view(getWorkflow(w.id)), push: out };
+  });
+
+  // A person declines it; the reason goes to the agents as an instruction and the session carries on.
+  post('/api/workflows/:id/push/deny', async (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id, 'editor');
+    const req = w.pending_push ? parseJson<PushRequest | null>(w.pending_push, null) : null;
+    if (!req) throw badRequest('This session is not waiting for a push');
+    const reason = str((await ctx.json().catch(() => ({}))).reason, 'Reason', { max: 2000, optional: true }).trim();
+    exec("UPDATE workflows SET pending_push = '' WHERE id = ?", w.id);
+    log(w.id, 'human', `Do not push yet.${reason ? ` ${reason}` : ' Ask again only when told to.'}`, { data: { by: ctx.user!.name } });
+    if (req.state === 'done' && !reason) {
+      stopWith(w.id, 'done', `${ctx.user!.name} declined the push. The agents report the goal is met.`);
+    } else {
+      patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration });
+      kick(w.id);
+    }
+    return { workflow: view(getWorkflow(w.id)) };
+  });
+
   // A person hands a task of this session to a separate session.
   post('/api/workflows/:id/delegate', async (ctx) => {
     const w = getWorkflow(ctx.params.id);
@@ -698,7 +811,7 @@ export function registerWorkflowRoutes(): void {
     addContextItems(w.id, { id: ctx.user!.id, name: ctx.user!.name }, readContextItems(body.context));
     log(w.id, 'human', text, { data: { by: ctx.user!.name } });
     if (REOPENABLE.includes(w.status)) {
-      patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0 });
+      patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0, pending_push: '' });
       kick(w.id);
     }
     return { workflow: view(getWorkflow(w.id)) };
@@ -709,7 +822,7 @@ export function registerWorkflowRoutes(): void {
     requireProject(ctx, w.project_id, 'editor');
     if (OPEN.includes(w.status) && driving.has(w.id)) return { workflow: view(w) };
     if (overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first.');
-    patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0 });
+    patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0, pending_push: '' });
     log(w.id, 'status', 'Resumed');
     kick(w.id);
     return { workflow: view(getWorkflow(w.id)) };

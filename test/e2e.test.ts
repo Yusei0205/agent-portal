@@ -499,3 +499,71 @@ test('workspaces: named repository sets that a session copies when it starts', a
   assert.equal(after.repos.length, 2);
   await editor.del(`/api/workflows/${workflow.id}`);
 });
+
+test('agent pushes: never by default, after approval in ask mode, at once in auto mode, never to shared branches', async () => {
+  const { parseStatus, composeIterationPrompt, isGitPush } = await import('../server/guardrails.ts');
+  assert.deepEqual(parseStatus('WORKFLOW_STATUS {"state":"done","summary":"s","push":{"message":"Fix","pr":true}}')?.push, { message: 'Fix', pr: true });
+  for (const c of ['git push', 'git -C repo push origin x', 'cd a && git push -u origin b']) assert.ok(isGitPush(c), c);
+  assert.ok(!isGitPush('git pull') && !isGitPush('git status'));
+  const base = { title: 't', goal: 'g', rules: '', progress: '', instructions: [], check: null, iteration: 1, maxIterations: 3, budgetLeftUsd: 1, hasRepo: true };
+  assert.match(composeIterationPrompt(base), /Commit nothing and push nothing/);
+  assert.match(composeIterationPrompt({ ...base, pushMode: 'ask' }), /"push":\{"message"[^]*A person approves each push first/);
+  assert.ok(!/push nothing/.test(composeIterationPrompt({ ...base, pushMode: 'auto' })));
+
+  const branches = () => execFileSync('git', ['branch', '--list'], { cwd: bareRepo }).toString();
+  const settled = (id: string, wanted: string[]) =>
+    waitFor(async () => {
+      const d = await editor.get(`/api/workflows/${id}`);
+      return wanted.includes(d.workflow.status) && !d.driving ? d : null;
+    }, `session ${wanted.join('/')}`, 40_000);
+  const start = (goal: string, pushMode?: string) => editor.post(`/api/projects/${pid}/workflows`, { goal, repoId, model: 'haiku', ...(pushMode ? { pushMode } : {}) });
+
+  // Default: never. The agents' request is only noted.
+  const never = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: feature/never-pushed]')).workflow;
+  assert.equal(never.push_mode, 'never');
+  const n = await settled(never.id, ['done']);
+  assert.ok(!n.events.some((e: any) => e.kind === 'push'));
+  assert.ok(!branches().includes('feature/never-pushed'), 'with pushes off the agents cannot ask the portal to push');
+
+  // Ask: the session waits for a person; viewers cannot allow; allowing pushes and finishes.
+  const ask = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: feature/asked-push]', 'ask')).workflow;
+  const waiting = await settled(ask.id, ['paused']);
+  assert.equal(waiting.workflow.pending_push.branch, 'feature/asked-push');
+  assert.match(waiting.workflow.stop_reason, /Waiting for you to allow pushing/);
+  assert.equal((await viewer.req('POST', `/api/workflows/${ask.id}/push/allow`)).status, 403);
+  const allowed = await editor.post(`/api/workflows/${ask.id}/push/allow`, { message: 'Refund limit check' });
+  assert.equal(allowed.push.ok, true);
+  assert.equal(allowed.workflow.status, 'done');
+  assert.ok(branches().includes('feature/asked-push'), 'the branch is in the remote');
+  assert.match(execFileSync('git', ['log', '-1', '--format=%s', 'feature/asked-push'], { cwd: bareRepo }).toString(), /Refund limit check/);
+  const hist = (await editor.get(`/api/workflows/${ask.id}`)).events;
+  assert.ok(hist.some((e: any) => e.kind === 'push' && /Eddie pushed to "feature\/asked-push"/.test(e.body)), 'the history says who pushed');
+
+  // Auto: pushed at once.
+  const auto = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: feature/auto-push]', 'auto')).workflow;
+  const a = await settled(auto.id, ['done']);
+  assert.ok(a.events.some((e: any) => e.kind === 'push' && /The agents pushed/.test(e.body)));
+  assert.ok(branches().includes('feature/auto-push'));
+
+  // Shared branches are refused even in auto mode.
+  const shared = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: develop]', 'auto')).workflow;
+  const s = await settled(shared.id, ['done']);
+  // The branch name is refused when the agents pick it, so the push cannot even be asked for.
+  assert.ok(s.events.some((e: any) => /The branch name "develop" cannot be used/.test(e.body)));
+  assert.ok(s.events.some((e: any) => /asked to push, but it cannot happen now: the new branch has no name yet/.test(e.body)));
+  assert.ok(!branches().includes('develop'));
+  // And the push itself refuses shared branches for agents, as a second line.
+  const { isSharedBranch } = await import('../server/runs.ts');
+  for (const b of ['main', 'master', 'develop', 'dev-sg', 'release/1.2', 'production', 'staging', 'hotfix/x']) assert.ok(isSharedBranch(b), b);
+  for (const b of ['feature/x', 'fix/RLP-1-refund', 'agent/abc', 'devops-tooling']) assert.ok(!isSharedBranch(b), b);
+
+  // Declining: the reason reaches the agents, who do not ask again, and nothing is pushed.
+  const deny = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: feature/denied-push]', 'ask')).workflow;
+  await settled(deny.id, ['paused']);
+  await editor.post(`/api/workflows/${deny.id}/push/deny`, { reason: 'Add tests first.' });
+  const d = await settled(deny.id, ['done']);
+  assert.equal(d.workflow.pending_push, null);
+  const lastRun = (await editor.get(`/api/runs/${d.workflow.last_run_id}`)).run;
+  assert.match(lastRun.prompt, /Do not push yet\. Add tests first\./);
+  assert.ok(!branches().includes('feature/denied-push'));
+});

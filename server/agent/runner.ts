@@ -7,7 +7,7 @@ import { config } from '../config.ts';
 import { ensureBuiltInSkills, getProject, projectDir, notifyProject, type Project } from '../projects.ts';
 import { HttpError, badRequest, newId, now, parseJson, withLock } from '../util.ts';
 import { commitAll } from '../git.ts';
-import { blockedCommand } from '../guardrails.ts';
+import { blockedCommand, isGitPush } from '../guardrails.ts';
 import type { CanUseTool, PermissionMode, ProviderRunOptions, SdkMessage } from './types.ts';
 import { sdkRun } from './sdk.ts';
 import { kiroRun } from './kiro.ts';
@@ -504,6 +504,10 @@ async function execute(
   };
 
   const guard = (toolName: string, toolInput: Record<string, unknown>): string | null => {
+    // Agents never push with git themselves (they have no repository credentials anyway): the portal pushes for them.
+    if (toolName === 'Bash' && isGitPush(String(toolInput.command ?? ''))) {
+      return 'Blocked by Agent Portal: do not run git push. In a session that allows agent pushes, add "push" to your status line and the portal pushes for you; otherwise a person pushes from the portal after review.';
+    }
     if (o.integ?.readOnly.size) {
       const why = integrationGuard(o.integ.readOnly, toolName);
       if (why) return why;

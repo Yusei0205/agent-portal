@@ -5167,3 +5167,19 @@ html[data-theme='hud'] .ins-hbar-fill {
 .ws-child .dot {
   margin-top: 0;
 }
+
+/* ---------- Agent push requests ---------- */
+.push-request {
+  display: block;
+}
+.push-pr {
+  align-self: end;
+  padding-bottom: 8px;
+}
+.push-reason {
+  flex: 1;
+  min-width: 200px;
+}
+.wf-push .wf-body strong {
+  color: var(--ok);
+}

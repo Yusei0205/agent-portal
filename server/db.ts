@@ -454,6 +454,9 @@ const MIGRATIONS: string[] = [
   ALTER TABLE workflows ADD COLUMN waiting_children INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE workflows ADD COLUMN seen_by_parent INTEGER NOT NULL DEFAULT 1;
   CREATE INDEX IF NOT EXISTS workflows_parent ON workflows(parent_id);`,
+  // Agent pushes: never (default), ask (a person approves each push) or auto; a push waiting for approval.
+  `ALTER TABLE workflows ADD COLUMN push_mode TEXT NOT NULL DEFAULT 'never';
+  ALTER TABLE workflows ADD COLUMN pending_push TEXT NOT NULL DEFAULT '';`,
 ];
 
 let db: DatabaseSync | null = null;

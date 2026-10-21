@@ -110,6 +110,81 @@ export function readRepoChoices(projectId: string, body: any): RepoChoice[] {
   return out;
 }
 
+/** Branch names agents may never push to, whatever they ask: the shared, long-lived branches. */
+const SHARED_BRANCH = /^(main|master|trunk|develop|development|dev([/_-].*)?|release([/_-].*)?|prod(uction)?([/_-].*)?|staging|hotfix\/.*)$/i;
+
+export function isSharedBranch(name: string): boolean {
+  return SHARED_BRANCH.test(name);
+}
+
+export interface PushOptions {
+  repoId?: string;
+  branch?: string;
+  message?: string;
+  createPr?: boolean;
+  prTitle?: string;
+  base?: string;
+  /** Agent pushes: refuse the shared branches (main, develop, release…) too. */
+  agent?: boolean;
+}
+
+/**
+ * Commit one working copy of a run and push it to a new branch, optionally opening a draft pull request. Used by the
+ * Push button and by sessions whose agents may push. Never pushes to the branch the work started from, the default
+ * branch or the pull request's base; never forces.
+ */
+export async function pushRun(r: Row, o: PushOptions) {
+  if (isActive(r.id)) throw badRequest('Wait for the run to finish before pushing');
+  const repos = runRepos(r);
+  if (!repos.length) throw badRequest('This run has no repository working copy');
+  const target = o.repoId ? repos.find((x) => x.repoId === o.repoId) : repos[0];
+  if (!target) throw badRequest('That repository is not part of this run');
+  const repo = getRepo(target.repoId);
+  const startBranch = target.branch || repo.default_branch;
+  const meta = parseJson<any>(r.meta, {});
+  const jiraKey: string | undefined = meta.jiraKey;
+  const jiraSummary: string | undefined = meta.jiraSummary;
+
+  // Build Jira-aware defaults when the run came from a ticket
+  const defaultBranch = typeof meta.workBranch === 'string' && meta.workBranch
+    ? meta.workBranch
+    : jiraKey
+    ? `agent/${jiraKey.toLowerCase()}-${(jiraSummary ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}`
+    : `agent/${r.id.slice(2, 12).toLowerCase()}`;
+  const defaultMessage = jiraKey
+    ? `${jiraKey}: ${jiraSummary ?? r.title}`
+    : `Agent Portal: ${r.title}`;
+
+  const branch = checkBranch(o.branch || defaultBranch);
+  // The branch a pull request is opened into: chosen at push time, else the one the work started from.
+  const prBase = checkBranch(o.base || startBranch);
+  if (o.base) await git(['rev-parse', '--verify', '--quiet', `origin/${prBase}`], { cwd: repoDir(repo) }).catch(() => {
+    throw badRequest(`Branch "${prBase}" was not found in ${repo.name}`);
+  });
+  if (branch === repo.default_branch || branch === startBranch || branch === prBase) throw badRequest(`Push to a new branch. "${branch}" is the branch this work started from, and nothing is pushed to it.`);
+  if (o.agent && isSharedBranch(branch)) throw badRequest(`Agents may not push to the shared branch "${branch}". Use a new branch for the changes.`);
+  const message = str(o.message, 'Commit message', { max: 2000, optional: true }) || defaultMessage;
+  const wt = path.join(projectDir(getProject(r.project_id)), target.worktree);
+  const out = await pushWorktree(repo, wt, branch, message);
+  let pr: { number: number; url: string } | null = null;
+  if (o.createPr && repo.provider === 'github' && githubSlug(repo.url)) {
+    const prTitle = str(o.prTitle, 'Pull request title', { max: 200, optional: true })
+      || (jiraKey ? `${jiraKey}: ${jiraSummary ?? r.title}` : r.title);
+    const prBody = jiraKey && meta.jiraUrl
+      ? `Jira: [${jiraKey}](${meta.jiraUrl})\n\nCreated from Agent Portal run "${r.title}".\n\n${(r.result || '').slice(0, 2800)}`
+      : `Created from Agent Portal run "${r.title}".\n\n${(r.result || '').slice(0, 3000)}`;
+    const created = await githubApi(repo, 'POST', '/pulls', {
+      title: prTitle,
+      head: branch,
+      base: prBase,
+      body: prBody,
+      draft: true,
+    });
+    pr = { number: created.number, url: created.html_url };
+  }
+  return { ...out, branch, pr, repoId: repo.id, repoName: repo.name };
+}
+
 export function registerRunRoutes(): void {
   get('/api/meta', () => ({ provider: providerMode(), prices: PRICES, models: MODEL_CHOICES }));
 
@@ -329,55 +404,15 @@ export function registerRunRoutes(): void {
 
   post('/api/runs/:id/push', async (ctx) => {
     const r = runAccess(ctx, ctx.params.id, 'editor');
-    if (isActive(r.id)) throw badRequest('Wait for the run to finish before pushing');
     const body = await ctx.json();
-    const repos = runRepos(r);
-    if (!repos.length) throw badRequest('This run has no repository working copy');
-    const target = body.repoId ? repos.find((x) => x.repoId === body.repoId) : repos[0];
-    if (!target) throw badRequest('That repository is not part of this run');
-    const repo = getRepo(target.repoId);
-    const startBranch = target.branch || repo.default_branch;
-    const meta = parseJson<any>(r.meta, {});
-    const jiraKey: string | undefined = meta.jiraKey;
-    const jiraSummary: string | undefined = meta.jiraSummary;
-
-    // Build Jira-aware defaults when the run came from a ticket
-    const defaultBranch = typeof meta.workBranch === 'string' && meta.workBranch
-      ? meta.workBranch
-      : jiraKey
-      ? `agent/${jiraKey.toLowerCase()}-${(jiraSummary ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}`
-      : `agent/${r.id.slice(2, 12).toLowerCase()}`;
-    const defaultMessage = jiraKey
-      ? `${jiraKey}: ${jiraSummary ?? r.title}`
-      : `Agent Portal: ${r.title}`;
-
-    const branch = checkBranch(body.branch || defaultBranch);
-    // The branch a pull request is opened into: chosen at push time, else the one the work started from.
-    const prBase = checkBranch(body.base || startBranch);
-    if (body.base) await git(['rev-parse', '--verify', '--quiet', `origin/${prBase}`], { cwd: repoDir(repo) }).catch(() => {
-      throw badRequest(`Branch "${prBase}" was not found in ${repo.name}`);
+    return pushRun(r, {
+      repoId: body.repoId,
+      branch: body.branch,
+      message: body.message,
+      createPr: Boolean(body.createPr),
+      prTitle: body.prTitle,
+      base: body.base,
     });
-    if (branch === repo.default_branch || branch === startBranch || branch === prBase) throw badRequest(`Push to a new branch. "${branch}" is the branch this work started from, and nothing is pushed to it.`);
-    const message = str(body.message, 'Commit message', { max: 2000, optional: true }) || defaultMessage;
-    const wt = path.join(projectDir(getProject(r.project_id)), target.worktree);
-    const out = await pushWorktree(repo, wt, branch, message);
-    let pr: { number: number; url: string } | null = null;
-    if (body.createPr && repo.provider === 'github' && githubSlug(repo.url)) {
-      const prTitle = str(body.prTitle, 'Pull request title', { max: 200, optional: true })
-        || (jiraKey ? `${jiraKey}: ${jiraSummary ?? r.title}` : r.title);
-      const prBody = jiraKey && meta.jiraUrl
-        ? `Jira: [${jiraKey}](${meta.jiraUrl})\n\nCreated from Agent Portal run "${r.title}".\n\n${(r.result || '').slice(0, 2800)}`
-        : `Created from Agent Portal run "${r.title}".\n\n${(r.result || '').slice(0, 3000)}`;
-      const created = await githubApi(repo, 'POST', '/pulls', {
-        title: prTitle,
-        head: branch,
-        base: prBase,
-        body: prBody,
-        draft: true,
-      });
-      pr = { number: created.number, url: created.html_url };
-    }
-    return { ...out, branch, pr, repoId: repo.id, repoName: repo.name };
   });
 
   del('/api/runs/:id/worktree', async (ctx) => {

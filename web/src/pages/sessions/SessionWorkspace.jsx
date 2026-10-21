@@ -174,6 +174,11 @@ function SessionHeader({ w, canEdit, reload }) {
             {i.kind !== 'browser' && !i.allow_writes ? ' · read-only' : ''}
           </a>
         ))}
+        {w.push_mode && w.push_mode !== 'never' ? (
+          <span className="chip-static small" title="Whether the agents may ask the portal to push">
+            agent pushes: <strong>{w.push_mode === 'ask' ? 'ask me' : 'allowed'}</strong>
+          </span>
+        ) : null}
         {w.workspace ? (
           <a className="chip-static small" href={href(project.id, 'workspaces')} title="The workspace this session started from">
             workspace <strong>{w.workspace.name}</strong>
@@ -213,6 +218,7 @@ function SessionHeader({ w, canEdit, reload }) {
           ))}
         </div>
       ) : null}
+      {w.pending_push && canEdit ? <PushRequestCard w={w} reload={reload} /> : null}
       {w.status === 'done' ? (
         <Note tone="success" icon="check">
           The agents report the goal is met{w.verify_command ? ' and your check passes' : ''}. Review the Changes, push them, or tell the agents what to improve below.
@@ -224,6 +230,70 @@ function SessionHeader({ w, canEdit, reload }) {
       ) : null}
       {delegating ? <DelegateDialog w={w} onClose={() => setDelegating(false)} onDone={reload} /> : null}
     </header>
+  );
+}
+
+/** The agents asked the portal to push: show what and where, and let a person allow or decline it. */
+function PushRequestCard({ w, reload }) {
+  const { toast } = useUi();
+  const req = w.pending_push;
+  const changes = useLoad(() => api.get(`/api/runs/${req.runId}/changes`), [req.runId]);
+  const [message, setMessage] = useState(req.message || '');
+  const [pr, setPr] = useState(Boolean(req.pr));
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState('');
+  const counts = changes.data?.repos ?? [];
+  const files = counts.reduce((n, r) => n + r.changed, 0);
+  const act = async (what) => {
+    setBusy(what);
+    try {
+      if (what === 'allow') {
+        const r = await api.post(`/api/workflows/${w.id}/push/allow`, { message: message || undefined, pr });
+        const failed = r.push.results.filter((x) => !x.ok);
+        toast(r.push.ok ? `Pushed to ${req.branch}` : `Nothing was pushed: ${failed.map((x) => x.error).join('; ')}`, r.push.ok ? 'ok' : 'danger');
+      } else {
+        await api.post(`/api/workflows/${w.id}/push/deny`, { reason });
+        toast('Push declined; the agents were told why');
+      }
+      reload();
+    } catch (e) {
+      toast(e.message, 'danger');
+    } finally {
+      setBusy('');
+    }
+  };
+  return (
+    <section className="note note-warn push-request" aria-label="Push waiting for you">
+      <div className="stack">
+        <strong>
+          The agents ask to push {changes.data ? `${files} changed file${files === 1 ? '' : 's'}` : 'their changes'} to <code>{req.branch}</code>
+          {counts.length > 1 ? ` in ${counts.filter((c) => c.changed).length} repositories` : ''}.
+        </strong>
+        {counts.length > 1 ? (
+          <span className="small">
+            {counts.map((c) => `${c.name}: ${c.changed ? `${c.changed} file${c.changed === 1 ? '' : 's'}` : 'no changes'}`).join(' · ')}
+          </span>
+        ) : null}
+        <a className="small" href={`#/p/${w.project_id}/sessions/${w.id}?tab=changes`}>
+          Review the changes first
+        </a>
+        <div className="row wrap">
+          <Field label="Commit message">{(id) => <input id={id} className="input" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Agent Portal: …" />}</Field>
+          <label className="row tight small push-pr">
+            <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Open a draft pull request (GitHub)
+          </label>
+        </div>
+        <div className="row wrap">
+          <Button variant="primary" icon="branch" busy={busy === 'allow'} disabled={Boolean(busy)} onClick={() => act('allow')}>
+            Allow push
+          </Button>
+          <input className="input input-sm push-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why not? (optional, sent to the agents)" aria-label="Reason for declining" />
+          <Button variant="danger-ghost" busy={busy === 'deny'} disabled={Boolean(busy)} onClick={() => act('deny')}>
+            Decline
+          </Button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -391,6 +461,19 @@ function History({ events, link }) {
                   <summary className="small">Output</summary>
                   <pre className="prompt-box">{e.data.output}</pre>
                 </details>
+              ) : null}
+            </div>
+          ) : e.kind === 'push' ? (
+            <div className="wf-body">
+              <strong>{e.body}</strong>
+              {(e.data.results || []).length > 1 || (e.data.results || []).some((r) => !r.ok || r.pr) ? (
+                <ul className="plain-list small">
+                  {e.data.results.map((r) => (
+                    <li key={r.repo}>
+                      {r.repo}: {r.ok ? <>pushed <code>{(r.commit || '').slice(0, 10)}</code>{r.pr ? <> · <a href={r.pr} target="_blank" rel="noreferrer">pull request</a></> : null}</> : <span className="danger">{r.error}</span>}
+                    </li>
+                  ))}
+                </ul>
               ) : null}
             </div>
           ) : e.kind === 'iteration' ? (

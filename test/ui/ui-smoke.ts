@@ -252,6 +252,20 @@ async function main() {
     check(true, 'the parent lists its delegated sessions');
     await shot(page, 'session-delegated');
 
+    console.log('agent push');
+    await page.getByRole('link', { name: 'New', exact: true }).click();
+    await page.getByLabel('Goal', { exact: true }).fill('Ship [demo-push] [demo-branch: feature/ui-agent-push] [demo-iterations: 1]');
+    await page.getByRole('button', { name: 'Add repository', exact: true }).click();
+    await page.getByText('More options', { exact: true }).click();
+    await page.getByLabel('Agent pushes').selectOption('ask');
+    await page.getByRole('button', { name: 'Start session', exact: true }).click();
+    await page.getByRole('button', { name: 'Allow push', exact: true }).waitFor({ timeout: 60000 });
+    check((await page.locator('.push-request', { hasText: 'feature/ui-agent-push' }).count()) === 1, 'the session asks before the agents push');
+    await shot(page, 'agent-push-request');
+    await page.getByRole('button', { name: 'Allow push', exact: true }).click();
+    await page.locator('.ws-head .badge', { hasText: 'Ready for review' }).waitFor({ timeout: 30000 });
+    check(execFileSync('git', ['branch'], { cwd: bare }).toString().includes('feature/ui-agent-push'), 'allowing pushes the branch to the remote');
+
     console.log('old links');
     await page.goto(`${base}/#/p/${pid}/runs/${singleRunId}`);
     await page.waitForURL(new RegExp(`/sessions/run/${singleRunId}`));

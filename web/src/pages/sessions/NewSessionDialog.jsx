@@ -10,6 +10,7 @@ import { ConnectionBadge } from '../../components/ConnectionBadge.jsx';
 import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
 import { ContextChips, ContextPicker, sendFiles } from '../../components/ContextPicker.jsx';
 import { IntegrationPicker } from '../Integrations.jsx';
+import { PUSH_MODES } from './status.js';
 import { Icon } from '../../components/Icon.jsx';
 import { Button, ErrorNote, Field, Modal, Segmented, useUi } from '../../components/ui.jsx';
 
@@ -56,6 +57,24 @@ function LeadField({ team, value, onChange }) {
             <option key={a.name} value={a.name}>
               {a.name}
               {a.description ? ` — ${a.description.slice(0, 60)}` : ''}
+            </option>
+          ))}
+        </select>
+      )}
+    </Field>
+  );
+}
+
+/** Whether the agents may ask the portal to push their changes to the session's new branch. */
+function PushModeField({ value, onChange }) {
+  const mode = PUSH_MODES.find((m) => m.value === value) ?? PUSH_MODES[0];
+  return (
+    <Field label="Agent pushes" hint={`${mode.hint} Only ever to the session's own new branch, never to the base or shared branches like main.`}>
+      {(id) => (
+        <select id={id} className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+          {PUSH_MODES.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
             </option>
           ))}
         </select>
@@ -169,6 +188,7 @@ export function NewSessionDialog({ prefill, onClose }) {
     permissionMode: 'default',
     docScope: '',
     docOutput: 'markdown-word',
+    pushMode: 'never',
   });
   const [ticket, setTicket] = useState(prefill?.jiraKey ? { key: prefill.jiraKey, summary: prefill.jiraSummary || prefill.jiraKey, status: null, url: prefill.jiraUrl || null } : null);
   const [more, setMore] = useState(false);
@@ -212,6 +232,7 @@ export function NewSessionDialog({ prefill, onClose }) {
           goal: f.goal,
           repos: chosen,
           workspaceId: workspaceId || undefined,
+          pushMode: f.pushMode,
           integrations,
           engine: engine || undefined,
           model: f.model,
@@ -409,6 +430,7 @@ export function NewSessionDialog({ prefill, onClose }) {
               <>
                 <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} />
                 <LimitFields f={f} set={set} kiro={kiro} />
+                {chosen.length ? <PushModeField value={f.pushMode} onChange={(pushMode) => setF((cur) => ({ ...cur, pushMode }))} /> : null}
               </>
             ) : null}
           </div>
@@ -438,6 +460,7 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
     budgetCredits: workflow.budget_credits ?? 20,
     maxIterations: workflow.max_iterations,
     leadAgent: workflow.lead_agent ?? '',
+    pushMode: workflow.push_mode ?? 'never',
   });
   const [f, setF] = useState(initial);
   useEffect(() => setF(initial()), [workflow.id, workflow.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -478,6 +501,7 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
       <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} />
       <Field label="Model">{(id) => <ModelPicker id={id} value={f.model} projectId={project.id} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}</Field>
       <LimitFields f={f} set={set} kiro={kiro} />
+      {workflow.repos?.length ? <PushModeField value={f.pushMode} onChange={(pushMode) => setF((cur) => ({ ...cur, pushMode }))} /> : null}
       {workflow.rules ? (
         <>
           <h3 className="small">Standing rules</h3>

@@ -41,6 +41,13 @@ export interface WorkflowStatus {
   branch: string;
   /** Tasks the agent hands to separate sessions; only present when it asked for some. */
   delegate?: { title: string; goal: string }[];
+  /** The agent asks the portal to push its changes (only present when it asked). */
+  push?: { message: string; pr: boolean };
+}
+
+/** git push in any form (also with -C, -c and other options before it). */
+export function isGitPush(command: string): boolean {
+  return /\bgit\s+(?:(?:-C|-c|--git-dir|--work-tree)\s+\S+\s+|-\S+\s+)*push\b/i.test(command);
 }
 
 const SHARED_BRANCHES = new Set(['main', 'master', 'develop', 'development', 'dev', 'release', 'production', 'prod', 'staging', 'stage', 'trunk', 'head']);
@@ -70,6 +77,8 @@ export function parseStatus(text: string | null | undefined): WorkflowStatus | n
           .map((d: any) => ({ title: String(d.title ?? '').trim().slice(0, 80), goal: String(d.goal).trim().slice(0, 4000) }))
       : [];
     if (tasks.length) out.delegate = tasks;
+    if (j.push === true) out.push = { message: '', pr: false };
+    else if (j.push && typeof j.push === 'object') out.push = { message: String(j.push.message ?? '').trim().slice(0, 500), pr: j.push.pr === true };
     return out;
   } catch {
     return null;
@@ -105,6 +114,8 @@ export interface IterationInput {
   repos?: { name: string; branch: string }[];
   /** Material the team attached to the session: files to read, and notes or earlier results given inline. */
   context?: ContextForPrompt[];
+  /** Whether the agents may ask the portal to push: never (default), ask (a person approves) or auto. */
+  pushMode?: 'never' | 'ask' | 'auto';
   /** Separate sessions this one handed tasks to, and whether it may hand out more. */
   delegation?: {
     /** How many more it may start now (0: none). */
@@ -159,6 +170,8 @@ function composeContext(items: ContextForPrompt[]): string[] {
 
 /** One iteration's prompt: the standing goal and rules, what happened so far, and what changed since. */
 export function composeIterationPrompt(i: IterationInput): string {
+  const pushing = i.hasRepo && (i.pushMode === 'ask' || i.pushMode === 'auto');
+  const pushRule = pushing ? 'Do not commit and never run git push yourself: the portal commits and pushes when you ask it to (see below).' : 'Commit nothing and push nothing; a person reviews the diff.';
   const parts: string[] = [
     `You are running as an unattended workflow ("${i.title}") inside Agent Portal. Nobody answers questions while you work; a person reviews the result when you report done or blocked.`,
     '',
@@ -195,8 +208,8 @@ export function composeIterationPrompt(i: IterationInput): string {
     'Work in small verified steps: plan, change, check, fix. Delegate to the project\'s role subagents when a task fits one.',
     i.hasRepo
       ? i.repos && i.repos.length > 1
-        ? `This session spans ${i.repos.length} repositories (${i.repos.map((r) => `${r.name} from ${r.branch}`).join(', ')}). Change code only inside their working copies, each change in the repository it belongs to. Commit nothing and push nothing; a person reviews the diff.`
-        : 'Change code only inside the repository working copy. Commit nothing and push nothing; a person reviews the diff.'
+        ? `This session spans ${i.repos.length} repositories (${i.repos.map((r) => `${r.name} from ${r.branch}`).join(', ')}). Change code only inside their working copies, each change in the repository it belongs to. ${pushRule}`
+        : `Change code only inside the repository working copy. ${pushRule}`
       : 'Put any files you create in the run folder.',
     ...(i.hasRepo
       ? [
@@ -214,6 +227,11 @@ export function composeIterationPrompt(i: IterationInput): string {
     '- done: the goal is met and you verified it.',
     '- blocked: you cannot go on without a person.',
   );
+  if (pushing) {
+    parts.push(
+      `When your changes are ready and verified, ask the portal to push them to your new branch by adding "push":{"message":"the commit message","pr":true} to your status line ("pr": true also opens a draft pull request). ${i.pushMode === 'ask' ? 'A person approves each push first; the session waits for that.' : 'The portal pushes them right away.'} It never pushes to the branch the work started from or to shared branches like main or develop.`,
+    );
+  }
   if (i.delegation) {
     parts.push(
       i.delegation.canStart > 0
