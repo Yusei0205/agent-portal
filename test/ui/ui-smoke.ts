@@ -329,6 +329,14 @@ async function main() {
     check(!(listed ?? '').includes(shown ?? 'x'), 'the token list shows only its beginning');
     await shot(page, 'api-access');
 
+    console.log('vault');
+    await page.goto(`${base}/#/vault`);
+    await page.getByRole('heading', { name: 'Vault', exact: true }).waitFor();
+    await page.getByLabel('Files to upload').setInputFiles(fsd);
+    await page.locator('.vault-files', { hasText: 'Refunds FSD.md' }).waitFor();
+    check(true, 'a file can be added to the vault');
+    await shot(page, 'vault');
+
     console.log('settings and mobile');
     await page.goto(`${base}/#/settings`);
     await page.getByRole('heading', { name: 'Model provider', exact: true }).waitFor();

@@ -13,6 +13,7 @@ import { registerWorkspaceRoutes } from './workspaces.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
 import { registerConfigRoutes } from './config-files.ts';
 import { registerApiTokenRoutes } from './api-tokens.ts';
+import { registerVaultRoutes } from './vault.ts';
 import { registerCodeCommitRoutes } from './codecommit.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
 import { registerBuilderRoutes } from './builder.ts';
@@ -45,6 +46,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerIntegrationRoutes();
     registerConfigRoutes();
     registerApiTokenRoutes();
+    registerVaultRoutes();
     registerCodeCommitRoutes();
     registerKnowledgeRoutes();
     registerBuilderRoutes();

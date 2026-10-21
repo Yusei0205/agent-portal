@@ -5142,3 +5142,17 @@ html[data-theme='hud'] .ins-hbar-fill {
 .engine-pick {
   align-items: center;
 }
+
+/* ---------- Vault ---------- */
+.vault-drop.is-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
+.vault-usage {
+  display: grid;
+  gap: 4px;
+  max-width: 420px;
+}
+.vault-meta {
+  white-space: nowrap;
+}

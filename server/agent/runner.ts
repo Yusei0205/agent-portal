@@ -17,6 +17,7 @@ import { searchForAgent, reindexDecisions } from '../knowledge.ts';
 import { createWorktree, getRepo } from '../repos.ts';
 import { engineProvider } from '../project-aws.ts';
 import { integrationGuard, resolveIntegrations, type RunIntegrations } from '../integrations.ts';
+import { copyVaultsInto } from '../vault.ts';
 
 export type RunKind = 'chat' | 'test' | 'review' | 'qa' | 'learn' | 'quiz' | 'verify' | 'connection';
 
@@ -412,7 +413,9 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
           update('runs', runId, { meta: JSON.stringify({ ...meta, integrations: integ.summary }) });
         }
       }
-      await execute(runId, a, project, input, { mode, model, permissionMode, workDir, resumeSession, worktree, integ });
+      // The team vault and the owner's vault, copied into the run folder for agents to read.
+      const vaultNote = !input.oneshot && (input.kind === 'chat' || input.kind === 'test') ? copyVaultsInto(workDir, relToProject(project, workDir), input.userId) : '';
+      await execute(runId, a, project, input, { mode, model, permissionMode, workDir, resumeSession, worktree, integ, vaultNote });
     } catch (e: any) {
       const aborted = e?.name === 'AbortError' || a.abort.signal.aborted;
       const r = getRun(runId);
@@ -437,7 +440,7 @@ async function execute(
   a: Active,
   project: Project,
   input: StartRunInput,
-  o: { mode: string; model: string; permissionMode: PermissionMode; workDir: string; resumeSession?: string; worktree: string | null; integ?: RunIntegrations | null },
+  o: { mode: string; model: string; permissionMode: PermissionMode; workDir: string; resumeSession?: string; worktree: string | null; integ?: RunIntegrations | null; vaultNote?: string },
 ): Promise<void> {
   const pdir = projectDir(project);
   const r0 = getRun(runId);
@@ -466,6 +469,7 @@ async function execute(
             `Tools from integrations: ${o.integ.summary.map((x) => `${x.server} (${x.name}${x.readOnly ? ', read-only' : ''})`).join(', ')}. Read-only integrations refuse tools that change something.`,
           ]
         : []),
+      ...(o.vaultNote ? [o.vaultNote] : []),
       `This request comes from ${user?.name ?? 'a team member'}.`,
       '---',
       input.prompt,

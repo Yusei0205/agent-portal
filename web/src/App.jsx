@@ -25,6 +25,7 @@ import { AwsAccounts } from './pages/AwsAccounts.jsx';
 import { Connections } from './pages/Connections.jsx';
 import { Integrations } from './pages/Integrations.jsx';
 import { ApiAccess } from './pages/ApiAccess.jsx';
+import { Vault } from './pages/Vault.jsx';
 
 // Insights is lazy-loaded so recharts stays out of the main bundle.
 const InsightsPage = lazy(() => import('./pages/Insights.jsx').then((m) => ({ default: m.Insights })));
@@ -116,6 +117,8 @@ function Shell({ user, onSignOut }) {
             <Integrations />
           ) : route.tab === 'api' ? (
             <ApiAccess />
+          ) : route.tab === 'vault' ? (
+            <Vault />
           ) : route.tab === 'account' ? (
             <Account />
           ) : route.tab === 'insights' ? (
@@ -245,6 +248,10 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
         <a href="#/integrations" className={cx('rail-link', route.tab === 'integrations' && 'is-active')}>
           <Icon name="builder" />
           <span>Integrations</span>
+        </a>
+        <a href="#/vault" className={cx('rail-link', route.tab === 'vault' && 'is-active')}>
+          <Icon name="inbox" />
+          <span>Vault</span>
         </a>
         <a href="#/api" className={cx('rail-link', route.tab === 'api' && 'is-active')}>
           <Icon name="lock" />
