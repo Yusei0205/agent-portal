@@ -26,6 +26,7 @@ import { effectiveProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
 import { readRepoChoices } from './runs.ts';
 import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
+import { readIntegrationIds } from './integrations.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -81,6 +82,7 @@ function view(w: Row) {
     repos: reposView(w),
     workspace: w.workspace_id ? (one<Row>('SELECT id, name FROM workspaces WHERE id = ?', w.workspace_id) ?? null) : null,
     integrations: parseJson<string[]>(w.integrations, []),
+    integration_list: parseJson<string[]>(w.integrations, []).map((id) => one<Row>('SELECT id, name, kind, allow_writes FROM integrations WHERE id = ?', id) ?? { id, name: '(removed integration)', kind: '', allow_writes: 0 }),
     model: w.model,
     budget_usd: w.budget_usd,
     budget_credits: w.budget_credits,
@@ -246,6 +248,7 @@ async function drive(id: string): Promise<void> {
         repoId: w.repo_id || null,
         branch: w.branch || null,
         repos: sessionRepos(w).length > 1 ? sessionRepos(w) : null,
+        integrations: parseJson<string[]>(w.integrations, []),
         permissionMode: 'acceptEdits',
         autoApprove: true,
         model: w.model,
@@ -433,6 +436,7 @@ export function registerWorkflowRoutes(): void {
       if (!Array.isArray(body.repos) && !body.repoId) body.repos = workspaceRepos(workspace);
       if (!Array.isArray(body.integrations)) body.integrations = workspaceIntegrations(workspace);
     }
+    const integrationIds = readIntegrationIds(body.integrations, ctx.user!.id);
     // Without a branch, a single repository keeps following its default branch, as before.
     const repos = readRepoChoices(project.id, body);
     const single = !Array.isArray(body.repos) && repos.length === 1;
@@ -452,7 +456,7 @@ export function registerWorkflowRoutes(): void {
       branch: single ? str(body.branch, 'Branch', { max: 200, optional: true }).trim() || null : (repos[0]?.branch ?? null),
       repos: JSON.stringify(repos.length > 1 ? repos : []),
       workspace_id: workspace?.id ?? null,
-      integrations: JSON.stringify(Array.isArray(body.integrations) ? body.integrations.map(String).slice(0, 10) : []),
+      integrations: JSON.stringify(integrationIds),
       ...s,
       iteration: 0,
       burst_start: 0,
@@ -497,6 +501,7 @@ export function registerWorkflowRoutes(): void {
     const s = readSettings(body, w);
     const p: Record<string, string | number | null> = { ...s };
     if (body.leadAgent !== undefined) p.lead_agent = checkLead(getProject(w.project_id), body.leadAgent);
+    if (body.integrations !== undefined) p.integrations = JSON.stringify(readIntegrationIds(body.integrations, ctx.user!.id));
     if (body.title !== undefined) p.title = str(body.title, 'Title', { max: 120 }).trim();
     if (body.goal !== undefined) p.goal = str(body.goal, 'Goal', { max: 6000 }).trim();
     const out = patch(w.id, p);

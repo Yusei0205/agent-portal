@@ -13,6 +13,7 @@ import { answerInput, getRun, inputView, isActive, oneshot, runRepos, runSummary
 import { PRICES } from './agent/pricing.ts';
 import { providerMode } from './settings.ts';
 import JSZip from 'jszip';
+import { readIntegrationIds } from './integrations.ts';
 import { issueDetail, mustMapping, checkKey } from './jira.ts';
 import { composeRunPrompt, ticketMarkdown } from './jira-text.ts';
 
@@ -176,6 +177,7 @@ export function registerRunRoutes(): void {
       repoId,
       branch,
       repos: repos.length > 1 ? repos : null,
+      integrations: readIntegrationIds(body.integrations, ctx.user!.id),
       permissionMode: mode,
       model,
       meta: Object.keys(meta).length ? meta : undefined,

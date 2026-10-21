@@ -223,14 +223,19 @@ export interface KiroTeamMember {
  * user's global Kiro agents, whose settings could pre-approve writes and so skip the portal's checks). Subagent writes
  * and commands still ask, so the portal checks them exactly like the main agent's.
  */
-export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabled: boolean, roles: KiroRole[] = []): { name: string; file: string; files: string[]; team: KiroTeamMember[] } {
+export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabled: boolean, roles: KiroRole[] = [], mcp: ProviderRunOptions['mcpServers'] = {}): { name: string; file: string; files: string[]; team: KiroTeamMember[] } {
   const name = `agent-portal-${randomBytes(4).toString('hex')}`;
   const dir = path.join(projectDir, '.kiro', 'agents');
   fs.mkdirSync(dir, { recursive: true });
   const files: string[] = [];
   const team: KiroTeamMember[] = [];
+  // The run's integrations, in Kiro's mcpServers shape; subagents get them too.
+  const mcpServers: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(toolsEnabled ? mcp ?? {} : {})) {
+    mcpServers[k] = v.type === 'http' ? { type: 'http', url: v.url, headers: v.headers } : { command: v.command, args: v.args, env: v.env };
+  }
   const shared = {
-    mcpServers: {},
+    mcpServers,
     includeMcpJson: false,
     permissions: { rules: [{ capability: 'fs_read', match: ['**'], effect: 'allow' }] },
   };
@@ -257,7 +262,7 @@ export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabl
             name: kiroName,
             description: `${m.role}: ${m.description}`.slice(0, 300),
             prompt: m.prompt,
-            tools: m.tools,
+            tools: [...m.tools, ...(Object.keys(mcpServers).length ? ['@mcp'] : [])],
             allowedTools: m.tools.filter((t) => READ_ONLY.includes(t)),
             ...shared,
             resources: [...claudeMd, ...skills],
@@ -283,14 +288,14 @@ export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabl
     name,
     description: 'Agent Portal run (generated; deleted when the run ends)',
     prompt: prompt + teamText,
-    tools: toolsEnabled ? [...ALL_TOOLS, ...(team.length ? ['subagent'] : [])] : [],
+    mcpServers,
+    tools: toolsEnabled ? [...ALL_TOOLS, ...(team.length ? ['subagent'] : []), ...(Object.keys(mcpServers).length ? ['@mcp'] : [])] : [],
     ...(team.length ? { toolsSettings: { subagent: { availableAgents: team.map((t) => t.kiroName) } } } : {}),
     // CLI 2.x: tools that run without asking. Writes and commands always ask, so the portal can check them.
     allowedTools: toolsEnabled ? ['read', 'grep', 'glob'] : [],
     // CLI V3 equivalent of allowedTools.
     permissions: { rules: toolsEnabled ? [{ capability: 'fs_read', match: ['**'], effect: 'allow' }] : [] },
-    mcpServers: {},
-    // No MCP servers from the user's mcp.json. (CLI 2.x treats useLegacyMcpJson as an alias: never set both.)
+    // Only the run's own integrations: no MCP servers from the user's mcp.json. (CLI 2.x treats useLegacyMcpJson as an alias: never set both.)
     includeMcpJson: false,
     resources: toolsEnabled && fs.existsSync(path.join(projectDir, 'CLAUDE.md')) ? ['file://CLAUDE.md'] : [],
   };
@@ -440,7 +445,7 @@ class Queue<T> {
 export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessage> {
   const toolsEnabled = !(Array.isArray(opts.tools) && opts.tools.length === 0);
   const prompt = opts.systemPrompt ?? opts.systemAppend ?? '';
-  const profile = writeAgentProfile(opts.cwd, prompt, toolsEnabled, toolsEnabled ? readProjectRoles(opts.cwd) : []);
+  const profile = writeAgentProfile(opts.cwd, prompt, toolsEnabled, toolsEnabled ? readProjectRoles(opts.cwd) : [], opts.mcpServers);
   const roleOf = new Map(profile.team.map((t) => [t.kiroName, t.role]));
   const conn = new AcpConnection(opts.cwd, opts.env, ['--agent', profile.name]);
   const out = new Queue<SdkMessage>();
@@ -556,6 +561,9 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
       }
     } else if (method === '_kiro.dev/metadata' && Array.isArray(params.meteringUsage)) {
       for (const m of params.meteringUsage) if (typeof m?.value === 'number') credits += m.value;
+    } else if (method === '_kiro.dev/mcp/server_init_failure' && (!params.sessionId || params.sessionId === sessionId)) {
+      // An integration's MCP server did not start: say so in the run instead of the tools silently missing.
+      out.push({ type: 'system', subtype: 'mcp_failed', session_id: sessionId, server: params.serverName, error: String(params.error ?? '').slice(0, 500) });
     } else if (method === '_kiro.dev/subagent/list_update' && Array.isArray(params.subagents) && params.subagents.length) {
       out.push({ type: 'system', subtype: 'kiro_subagents', session_id: sessionId, ...params });
       for (const sub of params.subagents) {

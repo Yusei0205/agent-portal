@@ -8,6 +8,7 @@ import { del, get, post, put } from './http.ts';
 import { notifyProject, requireProject } from './projects.ts';
 import { checkBranch, getRepo } from './repos.ts';
 import { badRequest, newId, notFound, now, parseJson, str } from './util.ts';
+import { checkWorkspaceIntegrations } from './integrations.ts';
 
 export interface WorkspaceRepo {
   repoId: string;
@@ -62,6 +63,7 @@ function readBody(projectId: string, body: any, cur?: Row) {
   }
   const integrations = body.integrations === undefined ? workspaceIntegrations(cur ?? ({} as Row)) : Array.isArray(body.integrations) ? body.integrations.map(String) : [];
   if (integrations.length > 10) throw badRequest('Attach at most 10 integrations');
+  if (body.integrations !== undefined) checkWorkspaceIntegrations(integrations);
   const description = str(body.description ?? cur?.description ?? '', 'Description', { max: 500, optional: true }).trim();
   return { name, description, repos: JSON.stringify(repos), integrations: JSON.stringify([...new Set(integrations)]) };
 }

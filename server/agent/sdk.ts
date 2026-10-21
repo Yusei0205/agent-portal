@@ -82,6 +82,7 @@ export async function* sdkRun(opts: ProviderRunOptions): AsyncIterable<SdkMessag
   if (opts.maxTurns) options.maxTurns = opts.maxTurns;
   if (opts.resume) options.resume = opts.resume;
   if (opts.additionalDirectories?.length) options.additionalDirectories = opts.additionalDirectories;
+  if (opts.mcpServers && Object.keys(opts.mcpServers).length) options.mcpServers = opts.mcpServers;
 
   const q = sdk.query({ prompt: input(), options });
   try {

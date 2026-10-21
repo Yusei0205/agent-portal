@@ -16,6 +16,7 @@ import { listAgentFiles, listSkillNames } from '../builder.ts';
 import { searchForAgent, reindexDecisions } from '../knowledge.ts';
 import { createWorktree, getRepo } from '../repos.ts';
 import { effectiveProvider } from '../project-aws.ts';
+import { integrationGuard, resolveIntegrations, type RunIntegrations } from '../integrations.ts';
 
 export type RunKind = 'chat' | 'test' | 'review' | 'qa' | 'learn' | 'quiz' | 'verify' | 'connection';
 
@@ -27,6 +28,8 @@ export interface StartRunInput {
   prompt: string;
   repoId?: string | null;
   branch?: string | null;
+  /** Integration ids (MCP tools) the run's agents may use; checked against the person the run acts for. */
+  integrations?: string[] | null;
   /** Several repositories, each with its own working copy in the run folder. The first is the run's main one. */
   repos?: RepoChoice[] | null;
   permissionMode?: PermissionMode;
@@ -326,6 +329,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     input.repoId = input.repoId ?? prev.repo_id;
     input.branch = input.branch ?? prev.branch;
     if (Array.isArray(prevMeta.repos) && prevMeta.repos.length) inheritedRepos = prevMeta.repos;
+    if (!input.integrations && Array.isArray(prevMeta.integrations)) input.integrations = prevMeta.integrations.map((x: any) => x.id);
   }
   // One list of repositories either way; the first one fills the run's own repo_id / branch / worktree columns.
   const choices: RepoChoice[] = inheritedRepos ? [] : input.repos?.length ? input.repos : input.repoId ? [{ repoId: input.repoId, branch: input.branch }] : [];
@@ -395,7 +399,16 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
         worktree = relToProject(project, dest);
         update('runs', runId, { worktree, branch: input.branch || repo.default_branch });
       }
-      await execute(runId, a, project, input, { mode, model, permissionMode, workDir, resumeSession, worktree });
+      // Integrations become MCP servers. Demo runs only record them; real ones start them with their secrets.
+      let integ: RunIntegrations | null = null;
+      if (input.integrations?.length && !input.oneshot) {
+        integ = mode === 'demo' ? await resolveIntegrations(input.integrations, input.userId).catch(() => null) : await resolveIntegrations(input.integrations, input.userId);
+        if (integ) {
+          const meta = parseJson<any>(getRun(runId).meta, {});
+          update('runs', runId, { meta: JSON.stringify({ ...meta, integrations: integ.summary }) });
+        }
+      }
+      await execute(runId, a, project, input, { mode, model, permissionMode, workDir, resumeSession, worktree, integ });
     } catch (e: any) {
       const aborted = e?.name === 'AbortError' || a.abort.signal.aborted;
       const r = getRun(runId);
@@ -420,7 +433,7 @@ async function execute(
   a: Active,
   project: Project,
   input: StartRunInput,
-  o: { mode: string; model: string; permissionMode: PermissionMode; workDir: string; resumeSession?: string; worktree: string | null },
+  o: { mode: string; model: string; permissionMode: PermissionMode; workDir: string; resumeSession?: string; worktree: string | null; integ?: RunIntegrations | null },
 ): Promise<void> {
   const pdir = projectDir(project);
   const r0 = getRun(runId);
@@ -444,6 +457,11 @@ async function execute(
         : repo
           ? `Working copy for this run: ${writeDirRel}/ (branch ${r0.branch}, repository "${repo.name}"). Make code changes only inside it.`
           : `If you create files, put them under ${writeDirRel}/.`,
+      ...(o.integ?.summary.length
+        ? [
+            `Tools from integrations: ${o.integ.summary.map((x) => `${x.server} (${x.name}${x.readOnly ? ', read-only' : ''})`).join(', ')}. Read-only integrations refuse tools that change something.`,
+          ]
+        : []),
       `This request comes from ${user?.name ?? 'a team member'}.`,
       '---',
       input.prompt,
@@ -478,6 +496,10 @@ async function execute(
   };
 
   const guard = (toolName: string, toolInput: Record<string, unknown>): string | null => {
+    if (o.integ?.readOnly.size) {
+      const why = integrationGuard(o.integ.readOnly, toolName);
+      if (why) return why;
+    }
     if (!WRITE_TOOLS.has(toolName)) return null;
     const target = String(toolInput.file_path ?? toolInput.notebook_path ?? '');
     if (!target) return null;
@@ -500,7 +522,7 @@ async function execute(
     systemAppend:
       input.systemAppend ??
       (o.mode === 'kiro'
-        ? 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, stop and ask your questions in your final reply instead of guessing; the user answers with a follow-up. The role descriptions in .claude/agents/ describe how this team works: apply the matching role yourself.'
+        ? 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, stop and ask your questions in your final reply instead of guessing; the user answers with a follow-up. When a task matches one of the project roles, hand it to that role with the subagent tool (the roles are listed below).'
         : 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, use AskUserQuestion instead of guessing. When a task matches a role subagent in .claude/agents, delegate to it.'),
     systemPrompt: input.systemPrompt,
     canUseTool,
@@ -508,6 +530,7 @@ async function execute(
     onHook: (event, data) => recordEvent(runId, a, `hook:${event}`, null, data),
     abort: a.abort,
     env,
+    mcpServers: o.mode === 'demo' ? undefined : o.integ?.servers,
     demo:
       o.mode === 'demo'
         ? {

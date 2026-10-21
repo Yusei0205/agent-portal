@@ -9,6 +9,7 @@ import { ModelPicker } from '../../components/ModelPicker.jsx';
 import { ConnectionBadge } from '../../components/ConnectionBadge.jsx';
 import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
 import { ContextChips, ContextPicker, sendFiles } from '../../components/ContextPicker.jsx';
+import { IntegrationPicker } from '../Integrations.jsx';
 import { Icon } from '../../components/Icon.jsx';
 import { Button, ErrorNote, Field, Modal, Segmented, useUi } from '../../components/ui.jsx';
 
@@ -176,10 +177,14 @@ export function NewSessionDialog({ prefill, onClose }) {
   // A workspace fills in the repositories; they can still be changed for this one session.
   const workspaces = useLoad(() => api.get(`/api/projects/${project.id}/workspaces`), [project.id]);
   const [workspaceId, setWorkspaceId] = useState('');
+  const [integrations, setIntegrations] = useState([]);
   const pickWorkspace = (id) => {
     setWorkspaceId(id);
     const w = (workspaces.data?.workspaces || []).find((x) => x.id === id);
-    if (w) setRows(w.repos.filter((r) => r.status !== 'missing').map((r) => ({ repoId: r.repoId, branch: r.branch })));
+    if (w) {
+      setRows(w.repos.filter((r) => r.status !== 'missing').map((r) => ({ repoId: r.repoId, branch: r.branch })));
+      setIntegrations(w.integrations);
+    }
   };
   useEffect(() => {
     if (prefill?.workspaceId && workspaces.data && !workspaceId) pickWorkspace(prefill.workspaceId);
@@ -202,6 +207,7 @@ export function NewSessionDialog({ prefill, onClose }) {
           goal: f.goal,
           repos: chosen,
           workspaceId: workspaceId || undefined,
+          integrations,
           model: f.model,
           budgetUsd: kiro ? undefined : Number(f.budgetUsd),
           budgetCredits: kiro ? Number(f.budgetCredits) : undefined,
@@ -225,6 +231,7 @@ export function NewSessionDialog({ prefill, onClose }) {
               prompt: f.goal.trim() || undefined,
               jiraKey: ticket?.key || undefined,
               repos: chosen,
+              integrations,
               model: f.model,
               permissionMode: f.permissionMode,
             };
@@ -367,6 +374,11 @@ export function NewSessionDialog({ prefill, onClose }) {
             <Field label="Model" hint="Pick a tier or any model your provider offers, or paste a model ID.">
               {(id) => <ModelPicker id={id} value={f.model} projectId={project.id} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}
             </Field>
+            {!isDoc ? (
+              <Field label={`Integrations${integrations.length ? ` (${integrations.length})` : ''}`} hint="MCP tools the agents may use in this work: Jira, AWS, a browser… Read-only unless writes are allowed.">
+                {() => <IntegrationPicker value={integrations} onChange={setIntegrations} />}
+              </Field>
+            ) : null}
             {kind === 'session' ? (
               <>
                 <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} />

@@ -415,6 +415,23 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS workspaces_project ON workspaces(project_id);
   ALTER TABLE workflows ADD COLUMN workspace_id TEXT;
   ALTER TABLE workflows ADD COLUMN integrations TEXT NOT NULL DEFAULT '[]';`,
+  // MCP integrations agents can use (Integrations page); secrets live in the secrets store.
+  `CREATE TABLE IF NOT EXISTS integrations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'team',
+    owner_id TEXT,
+    config TEXT NOT NULL DEFAULT '{}',
+    allow_writes INTEGER NOT NULL DEFAULT 0,
+    test_ok INTEGER,
+    test_message TEXT NOT NULL DEFAULT '',
+    tested_at TEXT,
+    created_by TEXT,
+    updated_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );`,
 ];
 
 let db: DatabaseSync | null = null;

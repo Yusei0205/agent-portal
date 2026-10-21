@@ -190,3 +190,22 @@ test('Kiro subagents: the project roles become the team, each subagent is its ow
   const agentsDir = path.join(projectPath, '.kiro', 'agents');
   await waitFor(async () => !fs.existsSync(agentsDir) || fs.readdirSync(agentsDir).length === 0, 'all generated profiles removed');
 });
+
+test('Kiro integrations: MCP servers in the profile, and read-only ones refuse changing tools', async () => {
+  clearLog();
+  const { integration } = await c.post('/api/integrations', { kind: 'http', name: 'Tickets', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer t-123' } });
+  const { run } = await c.post(`/api/projects/${pid}/runs`, { prompt: 'Use the tickets [mcp]', integrations: [integration.id] });
+  const done = await waitFor(async () => {
+    const r = await c.get(`/api/runs/${run.id}`);
+    return ['completed', 'failed'].includes(r.run.status) ? r : null;
+  }, 'completion');
+  assert.equal(done.run.status, 'completed', done.run.error);
+  const start = entries().find((e) => e.event === 'start');
+  assert.deepEqual(start.profile.mcpServers, { tickets: { type: 'http', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer t-123' } } });
+  assert.ok(start.profile.tools.includes('@mcp'));
+  assert.deepEqual(entries().filter((e) => e.event === 'permission').map((p) => [p.tool, p.decision]), [['@tickets/create_issue', 'reject_once']], 'refused without asking anyone');
+  const blocked = done.events.find((e: any) => e.type === 'system:portal_blocked');
+  assert.match(blocked.data.reason, /read-only/);
+  assert.ok(done.events.some((e: any) => e.type === 'system:mcp_failed' && e.data.server === 'broken'), 'a server that did not start is recorded');
+  assert.deepEqual(done.run.meta.integrations.map((x: any) => [x.server, x.readOnly]), [['tickets', true]]);
+});

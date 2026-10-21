@@ -294,6 +294,18 @@ async function main() {
     check((await page.locator('.conn-card', { hasText: '…0001' }).count()) === 1, 'a new connection shows only the last characters of its token');
     await shot(page, 'connections');
 
+    console.log('integrations');
+    await page.goto(`${base}/#/integrations`);
+    await page.getByRole('heading', { name: 'Integrations', exact: true }).waitFor();
+    await page.getByRole('button', { name: /Custom MCP \(command\)/ }).click();
+    await page.getByLabel('Name', { exact: true }).fill('Local tools');
+    await page.getByLabel('Command', { exact: true }).fill(process.execPath);
+    await page.getByLabel('Arguments', { exact: true }).fill(path.join(import.meta.dirname, '..', 'fake-mcp.mjs'));
+    await page.getByRole('button', { name: 'Save and test', exact: true }).click();
+    await page.locator('.conn-card', { hasText: 'Local tools' }).locator('.badge', { hasText: 'Working' }).waitFor({ timeout: 30000 });
+    check((await page.locator('.conn-card', { hasText: 'Read-only' }).count()) === 1, 'a new integration is read-only and passes its MCP handshake');
+    await shot(page, 'integrations');
+
     console.log('settings and mobile');
     await page.goto(`${base}/#/settings`);
     await page.getByRole('heading', { name: 'Model provider', exact: true }).waitFor();

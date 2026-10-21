@@ -163,6 +163,12 @@ function SessionHeader({ w, canEdit, reload }) {
       <div className="row tight wrap ws-chips">
         <ConnectionBadge projectId={project.id} />
         <span className="chip-static mono small">{w.model}</span>
+        {(w.integration_list || []).map((i) => (
+          <a key={i.id} className="chip-static small" href="#/integrations" title={i.allow_writes ? 'Writes allowed' : 'Read-only'}>
+            {i.name}
+            {i.kind !== 'browser' && !i.allow_writes ? ' · read-only' : ''}
+          </a>
+        ))}
         {w.workspace ? (
           <a className="chip-static small" href={href(project.id, 'workspaces')} title="The workspace this session started from">
             workspace <strong>{w.workspace.name}</strong>

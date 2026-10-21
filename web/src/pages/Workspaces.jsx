@@ -7,6 +7,7 @@ import { href } from '../lib/router.js';
 import { timeAgo } from '../lib/util.js';
 import { Badge, Button, Empty, ErrorNote, Field, Modal, PageHeader, Spinner, useUi } from '../components/ui.jsx';
 import { RepoRows } from './sessions/NewSessionDialog.jsx';
+import { IntegrationPicker } from './Integrations.jsx';
 
 /** Workspaces: named sets of this project's repositories to start sessions over. */
 export function Workspaces() {
@@ -73,6 +74,11 @@ function WorkspaceCard({ w, canEdit, onEdit, reload }) {
         ))}
         {!w.repos.length ? <li className="muted small">No repositories: sessions work with the project documents only.</li> : null}
       </ul>
+      {w.integrations.length ? (
+        <p className="small">
+          {w.integrations.length} integration{w.integrations.length === 1 ? '' : 's'} attached
+        </p>
+      ) : null}
       <p className="muted small">
         {w.sessions} session{w.sessions === 1 ? '' : 's'} started from it · updated {timeAgo(w.updated_at)}
         {w.updated_by ? ` by ${w.updated_by}` : ''}
@@ -103,13 +109,14 @@ function WorkspaceForm({ workspace, onClose, onSaved }) {
   const [name, setName] = useState(workspace?.name ?? '');
   const [description, setDescription] = useState(workspace?.description ?? '');
   const [rows, setRows] = useState(() => (workspace?.repos || []).map((r) => ({ repoId: r.repoId, branch: r.branch })));
+  const [integrations, setIntegrations] = useState(workspace?.integrations ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      const body = { name, description, repos: rows.filter((r) => r.repoId).map(({ repoId, branch }) => ({ repoId, branch: branch || undefined })) };
+      const body = { name, description, integrations, repos: rows.filter((r) => r.repoId).map(({ repoId, branch }) => ({ repoId, branch: branch || undefined })) };
       if (workspace) await api.put(`/api/workspaces/${workspace.id}`, body);
       else await api.post(`/api/projects/${project.id}/workspaces`, body);
       onSaved();
@@ -140,6 +147,11 @@ function WorkspaceForm({ workspace, onClose, onSaved }) {
         <Field label="Name">{(id) => <input id={id} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Backend and admin portal" autoFocus />}</Field>
         <Field label="Description (optional)">{(id) => <input id={id} className="input" value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
         {repos.loading && !repos.data ? <Spinner /> : <RepoRows rows={rows} setRows={setRows} ready={ready} session />}
+        <fieldset className="repo-rows">
+          <legend className="field-label">Integrations</legend>
+          <p className="muted small">MCP tools every session of this workspace gets. Only team integrations can be attached here.</p>
+          <IntegrationPicker value={integrations} onChange={setIntegrations} teamOnly />
+        </fieldset>
         <ErrorNote error={error} />
       </div>
     </Modal>

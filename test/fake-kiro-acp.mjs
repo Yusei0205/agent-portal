@@ -67,6 +67,12 @@ async function runPrompt(sessionId, text) {
   if (!profile.tools.length) {
     chunk('O');
     chunk('K');
+  } else if (text.includes('[mcp]')) {
+    // An integration tool that would change something; the portal must refuse it for a read-only integration.
+    const server = Object.keys(profile.mcpServers)[0];
+    await toolCall(sessionId, 't-mcp', `@${server}/create_issue`, 'other', { summary: 'x' }, true);
+    send({ method: '_kiro.dev/mcp/server_init_failure', params: { sessionId, serverName: 'broken', error: 'could not connect\nmore' } });
+    chunk('Tried.');
   } else if (text.includes('[delegate]') && profile.tools.includes('subagent')) {
     // What kiro-cli 2.33 does when the main agent delegates (seen with a live probe): a "subagent" crew call that asks
     // first, then a separate session per stage, announced by subagent/list_update, whose tools ask for themselves.

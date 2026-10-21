@@ -4999,3 +4999,43 @@ html[data-theme='hud'] .ins-hbar-fill {
   display: grid;
   gap: 6px;
 }
+
+/* ---------- Integrations ---------- */
+.integ-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: 10px;
+}
+.integ-kind {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.integ-kind:hover:not(:disabled),
+.integ-kind:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.integ-kind:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.integ-kind-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.integ-pick {
+  display: grid;
+  gap: 6px;
+}
+.chip-warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
+}

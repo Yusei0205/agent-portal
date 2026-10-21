@@ -67,6 +67,14 @@ export function buildTree(events, { prices, runStatus } = {}) {
       root.meta = d;
       root.model = d.model || root.model;
       root.items.push({ kind: 'system', seq: e.seq, text: `Session started${d.model ? ` on ${d.model}` : ''}`, data: d });
+      // Claude reports the state of each integration's MCP server when the session starts.
+      for (const s of Array.isArray(d.mcp_servers) ? d.mcp_servers : []) {
+        if (s?.status && s.status !== 'connected') root.items.push({ kind: 'system', seq: e.seq, text: `Integration ${s.name} is ${s.status}: its tools are not available in this run.` });
+      }
+      continue;
+    }
+    if (e.type === 'system:mcp_failed') {
+      root.items.push({ kind: 'system', seq: e.seq, text: `Integration ${d.server} could not start: ${String(d.error || '').split('\n')[0].slice(0, 200)}` });
       continue;
     }
     if (e.type === 'assistant') {

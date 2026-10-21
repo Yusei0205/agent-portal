@@ -87,6 +87,8 @@ export interface ProviderRunOptions {
   abort: AbortController;
   env: Record<string, string>;
   demo?: DemoContext;
+  /** MCP servers from the run's integrations, keyed by the name agents see. */
+  mcpServers?: Record<string, import('../integrations.ts').McpServer>;
 }
 
 export type ProviderRun = (opts: ProviderRunOptions) => AsyncIterable<SdkMessage>;
