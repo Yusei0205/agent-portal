@@ -81,7 +81,7 @@ function LimitFields({ f, set, kiro }) {
 }
 
 /** The repositories a session or run works in: one row each, with the branch its working copy starts from. */
-function RepoRows({ rows, setRows, ready, session }) {
+export function RepoRows({ rows, setRows, ready, session }) {
   const update = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const remove = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
   const used = new Set(rows.map((r) => r.repoId).filter(Boolean));
@@ -173,6 +173,17 @@ export function NewSessionDialog({ prefill, onClose }) {
   const [error, setError] = useState(null);
   // Repositories to work in, each with the branch its working copy starts from ('' = its default branch).
   const [rows, setRows] = useState(() => (prefill?.repoId ? [{ repoId: prefill.repoId, branch: '' }] : []));
+  // A workspace fills in the repositories; they can still be changed for this one session.
+  const workspaces = useLoad(() => api.get(`/api/projects/${project.id}/workspaces`), [project.id]);
+  const [workspaceId, setWorkspaceId] = useState('');
+  const pickWorkspace = (id) => {
+    setWorkspaceId(id);
+    const w = (workspaces.data?.workspaces || []).find((x) => x.id === id);
+    if (w) setRows(w.repos.filter((r) => r.status !== 'missing').map((r) => ({ repoId: r.repoId, branch: r.branch })));
+  };
+  useEffect(() => {
+    if (prefill?.workspaceId && workspaces.data && !workspaceId) pickWorkspace(prefill.workspaceId);
+  }, [workspaces.data]); // eslint-disable-line react-hooks/exhaustive-deps
   const chosen = rows.filter((r) => r.repoId).map(({ repoId, branch }) => ({ repoId, branch: branch || undefined }));
   const set = (k) => (e) => setF((cur) => ({ ...cur, [k]: e.target.value }));
   const isDoc = kind === 'document';
@@ -190,6 +201,7 @@ export function NewSessionDialog({ prefill, onClose }) {
           start: files.length ? false : undefined,
           goal: f.goal,
           repos: chosen,
+          workspaceId: workspaceId || undefined,
           model: f.model,
           budgetUsd: kiro ? undefined : Number(f.budgetUsd),
           budgetCredits: kiro ? Number(f.budgetCredits) : undefined,
@@ -303,6 +315,20 @@ export function NewSessionDialog({ prefill, onClose }) {
                 />
               )}
             </Field>
+            {workspaces.data?.workspaces?.length ? (
+              <Field label="Workspace (optional)" hint="Fills in the repositories below; you can still change them for this one.">
+                {(id) => (
+                  <select id={id} className="input" value={workspaceId} onChange={(e) => pickWorkspace(e.target.value)}>
+                    <option value="">No workspace: pick repositories yourself</option>
+                    {workspaces.data.workspaces.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name} · {w.repos.length} repo{w.repos.length === 1 ? '' : 's'}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            ) : null}
             <RepoRows rows={rows} setRows={setRows} ready={ready} session={kind === 'session'} />
             {kind === 'session' ? (
               <div className="ctx-field">

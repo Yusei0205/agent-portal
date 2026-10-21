@@ -56,7 +56,7 @@ export function Sessions({ route }) {
   }
 
   const prefill = isNew
-    ? { jiraKey: route.query.get('jiraKey') || '', jiraUrl: route.query.get('jiraUrl') || '', jiraSummary: route.query.get('jiraSummary') || '', repoId: route.query.get('repoId') || '' }
+    ? { jiraKey: route.query.get('jiraKey') || '', jiraUrl: route.query.get('jiraUrl') || '', jiraSummary: route.query.get('jiraSummary') || '', repoId: route.query.get('repoId') || '', workspaceId: route.query.get('workspaceId') || '' }
     : null;
 
   return (

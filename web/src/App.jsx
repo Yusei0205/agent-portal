@@ -16,6 +16,7 @@ import { Sessions, legacyRunTarget } from './pages/Sessions.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
 import { Repos } from './pages/Repos.jsx';
+import { Workspaces } from './pages/Workspaces.jsx';
 import { Builder } from './pages/Builder.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { Account } from './pages/Account.jsx';
@@ -57,6 +58,7 @@ const PROJECT_NAV = [
   { tab: 'sessions', label: 'Sessions', icon: 'play' },
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'repos', label: 'Repositories', icon: 'repos' },
+  { tab: 'workspaces', label: 'Workspaces', icon: 'projects' },
   { tab: 'builder', label: 'Agents and skills', icon: 'builder' },
   { tab: 'insights', label: 'Insights', icon: 'chart' },
   { tab: 'team', label: 'Project and team', icon: 'user' },
@@ -319,6 +321,7 @@ function ProjectScope({ projectId, route }) {
       'repo.updated',
       'repo.deleted',
       'repo.progress',
+      'workspace.updated',
       'review.updated',
       'learn.updated',
       'learn.progress',
@@ -370,6 +373,9 @@ function ProjectScope({ projectId, route }) {
       break;
     case 'repos':
       page = <Repos />;
+      break;
+    case 'workspaces':
+      page = <Workspaces />;
       break;
     case 'builder':
       page = <Builder route={route} />;

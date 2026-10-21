@@ -125,6 +125,15 @@ async function main() {
     await page.locator('.repo .badge', { hasText: 'Ready' }).waitFor({ timeout: 20000 });
     await shot(page, 'repos');
 
+    console.log('workspaces');
+    await page.getByRole('link', { name: 'Workspaces', exact: true }).click();
+    await page.getByRole('button', { name: 'Create a workspace', exact: true }).click();
+    await page.getByLabel('Name', { exact: true }).fill('Refunds');
+    await page.getByRole('button', { name: 'Add repository', exact: true }).click();
+    await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+    await page.locator('.conn-card', { hasText: 'refund-service' }).waitFor();
+    check(true, 'a workspace lists its repositories');
+
     console.log('single run (from Sessions)');
     await page.getByRole('link', { name: 'Sessions', exact: true }).click();
     check((await page.getByRole('link', { name: 'Agent runs', exact: true }).count()) === 0, 'Agent runs is no longer in the menu');

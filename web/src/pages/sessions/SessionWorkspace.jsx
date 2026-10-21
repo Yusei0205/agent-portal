@@ -5,7 +5,7 @@ import { useProjectEvents } from '../../lib/events.js';
 import { useLoad } from '../../lib/useAsync.js';
 import { useRunStream } from '../../lib/useRunStream.js';
 import { buildTree } from '../../lib/tree.js';
-import { go, sessionHref } from '../../lib/router.js';
+import { go, href, sessionHref } from '../../lib/router.js';
 import { cx, money, timeAgo } from '../../lib/util.js';
 import { AgentView } from '../../components/AgentCanvas.jsx';
 import { ConnectionBadge } from '../../components/ConnectionBadge.jsx';
@@ -163,6 +163,11 @@ function SessionHeader({ w, canEdit, reload }) {
       <div className="row tight wrap ws-chips">
         <ConnectionBadge projectId={project.id} />
         <span className="chip-static mono small">{w.model}</span>
+        {w.workspace ? (
+          <a className="chip-static small" href={href(project.id, 'workspaces')} title="The workspace this session started from">
+            workspace <strong>{w.workspace.name}</strong>
+          </a>
+        ) : null}
         {(w.repos?.length ? w.repos : []).map((r) => (
           <span key={r.repoId} className="chip-static small" title={`${r.name}: the agents work on a new branch, and a pull request goes into ${r.branch}`}>
             {w.repos.length > 1 ? <strong>{r.name}</strong> : null}

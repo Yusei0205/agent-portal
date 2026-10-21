@@ -25,6 +25,7 @@ import { listAgentFiles } from './builder.ts';
 import { effectiveProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
 import { readRepoChoices } from './runs.ts';
+import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -78,6 +79,8 @@ function view(w: Row) {
     repo_id: w.repo_id,
     branch: w.branch,
     repos: reposView(w),
+    workspace: w.workspace_id ? (one<Row>('SELECT id, name FROM workspaces WHERE id = ?', w.workspace_id) ?? null) : null,
+    integrations: parseJson<string[]>(w.integrations, []),
     model: w.model,
     budget_usd: w.budget_usd,
     budget_credits: w.budget_credits,
@@ -422,6 +425,14 @@ export function registerWorkflowRoutes(): void {
     let goal = str(body.goal, 'Goal', { max: 6000, optional: Boolean(jira.key) }).trim();
     if (!goal && jira.key) goal = `Implement or fix what ticket ${jira.key} describes (${jira.summary}), following the project documents and decisions.`;
     const title = str(body.title, 'Title', { max: 120, optional: true }).trim() || (jira.key ? `${jira.key}: ${jira.summary}`.slice(0, 120) : goal.split('\n')[0].slice(0, 80));
+    // A workspace fills in the repositories (and integrations) unless the request lists its own.
+    let workspace: Row | null = null;
+    if (body.workspaceId) {
+      workspace = getWorkspace(String(body.workspaceId));
+      if (workspace.project_id !== project.id) throw badRequest('That workspace belongs to another project');
+      if (!Array.isArray(body.repos) && !body.repoId) body.repos = workspaceRepos(workspace);
+      if (!Array.isArray(body.integrations)) body.integrations = workspaceIntegrations(workspace);
+    }
     // Without a branch, a single repository keeps following its default branch, as before.
     const repos = readRepoChoices(project.id, body);
     const single = !Array.isArray(body.repos) && repos.length === 1;
@@ -440,6 +451,8 @@ export function registerWorkflowRoutes(): void {
       repo_id: repoId,
       branch: single ? str(body.branch, 'Branch', { max: 200, optional: true }).trim() || null : (repos[0]?.branch ?? null),
       repos: JSON.stringify(repos.length > 1 ? repos : []),
+      workspace_id: workspace?.id ?? null,
+      integrations: JSON.stringify(Array.isArray(body.integrations) ? body.integrations.map(String).slice(0, 10) : []),
       ...s,
       iteration: 0,
       burst_start: 0,

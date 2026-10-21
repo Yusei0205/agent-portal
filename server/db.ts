@@ -399,6 +399,22 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   ALTER TABLE repos ADD COLUMN connection_id TEXT;`,
+  // Named sets of a project's repositories (and integrations) to start sessions over.
+  `CREATE TABLE IF NOT EXISTS workspaces (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    repos TEXT NOT NULL DEFAULT '[]',
+    integrations TEXT NOT NULL DEFAULT '[]',
+    created_by TEXT,
+    updated_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS workspaces_project ON workspaces(project_id);
+  ALTER TABLE workflows ADD COLUMN workspace_id TEXT;
+  ALTER TABLE workflows ADD COLUMN integrations TEXT NOT NULL DEFAULT '[]';`,
 ];
 
 let db: DatabaseSync | null = null;

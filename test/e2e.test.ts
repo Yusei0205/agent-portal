@@ -475,3 +475,27 @@ test('several repositories: one working copy each, a combined diff, and a push p
   assert.doesNotMatch(execFileSync('git', ['branch'], { cwd: bareRepo }).toString(), /feature\/two-repos/);
   assert.equal((await editor.req('POST', `/api/runs/${run.id}/push`, { repoId: 'repo_nope', branch: 'x/y' })).status, 400);
 });
+
+test('workspaces: named repository sets that a session copies when it starts', async () => {
+  const repos = (await editor.get(`/api/projects/${pid}/repos`)).repos;
+  const web = repos.find((r: any) => r.name === 'refund-web');
+  const svc = repos.find((r: any) => r.name === 'refund-service');
+  const { workspace } = await editor.post(`/api/projects/${pid}/workspaces`, { name: 'Full stack', repos: [{ repoId: svc.id, branch: 'main' }, { repoId: web.id }] });
+  assert.deepEqual(workspace.repos.map((r: any) => [r.name, r.branch]), [['refund-service', 'main'], ['refund-web', '']]);
+  assert.equal((await editor.req('POST', `/api/projects/${pid}/workspaces`, { name: 'full STACK' })).status, 400, 'names are unique in a project');
+  assert.equal((await editor.req('POST', `/api/projects/${pid}/workspaces`, { name: 'Twice', repos: [{ repoId: svc.id }, { repoId: svc.id }] })).status, 400);
+  assert.equal((await viewer.req('POST', `/api/projects/${pid}/workspaces`, { name: 'Viewer' })).status, 403);
+
+  const { workflow } = await editor.post(`/api/projects/${pid}/workflows`, { goal: 'From a workspace', start: false, workspaceId: workspace.id });
+  assert.equal(workflow.workspace.name, 'Full stack');
+  assert.deepEqual(workflow.repos.map((r: any) => r.name), ['refund-service', 'refund-web']);
+
+  // Editing or deleting the workspace leaves the session's own copy alone.
+  await editor.put(`/api/workspaces/${workspace.id}`, { repos: [{ repoId: web.id }] });
+  assert.equal((await editor.get(`/api/workflows/${workflow.id}`)).workflow.repos.length, 2);
+  await editor.del(`/api/workspaces/${workspace.id}`);
+  const after = (await editor.get(`/api/workflows/${workflow.id}`)).workflow;
+  assert.equal(after.workspace, null);
+  assert.equal(after.repos.length, 2);
+  await editor.del(`/api/workflows/${workflow.id}`);
+});
