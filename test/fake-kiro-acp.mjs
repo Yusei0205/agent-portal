@@ -67,6 +67,29 @@ async function runPrompt(sessionId, text) {
   if (!profile.tools.length) {
     chunk('O');
     chunk('K');
+  } else if (text.includes('[delegate]') && profile.tools.includes('subagent')) {
+    // What kiro-cli 2.33 does when the main agent delegates (seen with a live probe): a "subagent" crew call that asks
+    // first, then a separate session per stage, announced by subagent/list_update, whose tools ask for themselves.
+    const work = /(work\/r_[A-Za-z0-9_-]+)/.exec(text)?.[1] ?? 'work/unknown';
+    const role = profile.toolsSettings.subagent.availableAgents[0];
+    const roleProfile = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.kiro', 'agents', `${role}.json`), 'utf8'));
+    log({ event: 'role-profile', role, roleProfile });
+    chunk('Delegating.');
+    const crew = { task: 'Write the notes', mode: 'blocking', stages: [{ name: 'write_notes', role, prompt_template: 'Write notes.md' }] };
+    update(sessionId, { sessionUpdate: 'tool_call', toolCallId: 't-crew', title: 'Spawning agent crew', rawInput: crew, _meta: { kiro: { toolName: 'subagent' } } });
+    const ok = await askPermission(sessionId, { toolCallId: 't-crew', title: 'Spawning agent crew', rawInput: crew });
+    log({ event: 'permission', tool: 'subagent', decision: ok.outcome?.optionId });
+    const sub = { sessionId: 'kiro-sub-1', sessionName: 'write_notes', agentName: role, initialQuery: 'Write notes.md', status: { type: 'working' }, role };
+    send({ method: '_kiro.dev/subagent/list_update', params: { subagents: [sub], pendingStages: [] } });
+    update('kiro-sub-1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Writing the notes.' } });
+    await toolCall('kiro-sub-1', 't-sub-out', 'write', 'edit', { command: 'create', path: path.resolve(process.cwd(), '..', 'escape.txt'), content: 'x' }, true);
+    await toolCall('kiro-sub-1', 't-sub-in', 'write', 'edit', { command: 'create', path: path.join(process.cwd(), work, 'notes.md'), content: '# notes' }, true);
+    update('kiro-sub-1', { sessionUpdate: 'tool_call', toolCallId: 't-sum', title: 'Summarizing', rawInput: { taskDescription: 'Write notes.md', taskResult: 'Wrote notes.md.' }, _meta: { kiro: { toolName: 'summary' } } });
+    update('kiro-sub-1', { sessionUpdate: 'tool_call_update', toolCallId: 't-sum', status: 'completed' });
+    send({ method: '_kiro.dev/metadata', params: { sessionId: 'kiro-sub-1', meteringUsage: [{ value: 0.05, unit: 'credit' }] } });
+    send({ method: '_kiro.dev/subagent/list_update', params: { subagents: [{ ...sub, status: { type: 'terminated' } }], pendingStages: [] } });
+    update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 't-crew', status: 'completed', rawOutput: { items: [{ Text: 'crew done' }] } });
+    chunk('All done.');
   } else {
     const work = /(work\/r_[A-Za-z0-9_-]+)/.exec(text)?.[1] ?? 'work/unknown';
     chunk('Working on it.');

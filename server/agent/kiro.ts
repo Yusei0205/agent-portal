@@ -7,7 +7,8 @@
  *  session/update tool_call               → assistant tool_use (Kiro tool names mapped to Read / Write / Bash …)
  *  session/update tool_call_update        → user tool_result once completed or failed
  *  session/request_permission             → guard + canUseTool (approvals UI)
- *  _kiro.dev/metadata meteringUsage       → credits on the result message
+ *  _kiro.dev/metadata meteringUsage       → credits on the result message (subagents included)
+ *  subagent tool + other sessionIds       → an Agent tool_use per subagent session, its events under it
  *  session/prompt response stopReason     → result
  *
  * Each run gets its own Kiro agent profile in <project>/.kiro/agents/ (git-excluded) with no MCP servers
@@ -18,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { ProviderRunOptions, SdkMessage } from './types.ts';
-import { HttpError, badRequest } from '../util.ts';
+import { HttpError, badRequest, listValue, parseFrontmatter, slugify } from '../util.ts';
 import { getSettings } from '../settings.ts';
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
@@ -173,16 +174,117 @@ async function initialize(conn: AcpConnection): Promise<any> {
 /* Agent profile                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Write a per-run Kiro agent profile into <project>/.kiro/agents and keep it out of git. */
-export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabled: boolean): { name: string; file: string } {
+/** A project role agent (.claude/agents/<name>.md) that a Kiro run may delegate to. */
+export interface KiroRole {
+  name: string;
+  description: string;
+  prompt: string;
+  /** Claude Code tool names from the agent's frontmatter; empty means all. */
+  tools: string[];
+  skills: string[];
+}
+
+/** The project's enabled role agents, read from <project>/.claude/agents. */
+export function readProjectRoles(projectDir: string): KiroRole[] {
+  const dir = path.join(projectDir, '.claude', 'agents');
+  if (!fs.existsSync(dir)) return [];
+  const out: KiroRole[] = [];
+  for (const file of fs.readdirSync(dir).filter((x) => x.endsWith('.md')).sort()) {
+    try {
+      const { data, body } = parseFrontmatter(fs.readFileSync(path.join(dir, file), 'utf8'));
+      out.push({ name: String(data.name || path.basename(file, '.md')), description: String(data.description || ''), prompt: body.trim(), tools: listValue(data.tools), skills: listValue(data.skills) });
+    } catch {
+      /* an unreadable agent file is left out */
+    }
+  }
+  return out;
+}
+
+const KIRO_TOOL: Record<string, string> = { Read: 'read', Grep: 'grep', Glob: 'glob', LS: 'read', Write: 'write', Edit: 'write', MultiEdit: 'write', NotebookEdit: 'write', Bash: 'shell', WebFetch: 'web_fetch', WebSearch: 'web_search' };
+const ALL_TOOLS = ['read', 'write', 'shell', 'grep', 'glob'];
+const READ_ONLY = ['read', 'grep', 'glob'];
+
+/** Kiro tools for a role: its Claude Code tools mapped to Kiro names, all of them when it lists none. */
+export function kiroToolsFor(tools: string[]): string[] {
+  if (!tools.length) return ALL_TOOLS;
+  return [...new Set(['read', ...tools.map((t) => KIRO_TOOL[t.trim()]).filter(Boolean)])];
+}
+
+/** A subagent the main agent may hand work to: its Kiro profile name and the role it stands for. */
+export interface KiroTeamMember {
+  kiroName: string;
+  role: string;
+  description: string;
+}
+
+/**
+ * Write a per-run Kiro agent profile into <project>/.kiro/agents and keep it out of git. With tools, the run also gets
+ * one profile per project role plus a general helper, and the main agent may hand work only to those (never to the
+ * user's global Kiro agents, whose settings could pre-approve writes and so skip the portal's checks). Subagent writes
+ * and commands still ask, so the portal checks them exactly like the main agent's.
+ */
+export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabled: boolean, roles: KiroRole[] = []): { name: string; file: string; files: string[]; team: KiroTeamMember[] } {
   const name = `agent-portal-${randomBytes(4).toString('hex')}`;
   const dir = path.join(projectDir, '.kiro', 'agents');
   fs.mkdirSync(dir, { recursive: true });
+  const files: string[] = [];
+  const team: KiroTeamMember[] = [];
+  const shared = {
+    mcpServers: {},
+    includeMcpJson: false,
+    permissions: { rules: [{ capability: 'fs_read', match: ['**'], effect: 'allow' }] },
+  };
+  const claudeMd = fs.existsSync(path.join(projectDir, 'CLAUDE.md')) ? ['file://CLAUDE.md'] : [];
+  if (toolsEnabled) {
+    const members = [
+      ...roles.map((r) => ({ role: r.name, description: r.description, prompt: r.prompt, tools: kiroToolsFor(r.tools), skills: r.skills })),
+      { role: 'general', description: 'General-purpose helper for any task that fits no role', prompt: 'You are a careful general-purpose engineer helping the main agent. Do exactly the task you are given, verify it, and report what you did.', tools: ALL_TOOLS, skills: [] as string[] },
+    ];
+    const used = new Set<string>();
+    for (const m of members) {
+      let kiroName = `${name}-${slugify(m.role, 40) || 'agent'}`;
+      while (used.has(kiroName)) kiroName += 'x';
+      used.add(kiroName);
+      const skills = m.skills
+        .map((sk) => path.join(projectDir, '.claude', 'skills', sk, 'SKILL.md'))
+        .filter((p) => fs.existsSync(p))
+        .map((p) => `file://${path.relative(projectDir, p).split(path.sep).join('/')}`);
+      const file = path.join(dir, `${kiroName}.json`);
+      fs.writeFileSync(
+        file,
+        JSON.stringify(
+          {
+            name: kiroName,
+            description: `${m.role}: ${m.description}`.slice(0, 300),
+            prompt: m.prompt,
+            tools: m.tools,
+            allowedTools: m.tools.filter((t) => READ_ONLY.includes(t)),
+            ...shared,
+            resources: [...claudeMd, ...skills],
+          },
+          null,
+          2,
+        ),
+      );
+      files.push(file);
+      team.push({ kiroName, role: m.role, description: m.description });
+    }
+  }
+  const teamText = team.length
+    ? [
+        '',
+        '## Delegating to subagents',
+        'You can hand parts of the work to subagents with the `subagent` tool (other instructions may call it the Agent tool; here it is `subagent`). Give each stage one of these roles, written exactly as shown:',
+        ...team.map((t) => `- ${t.kiroName} — ${t.role}${t.description ? `: ${t.description}` : ''}`),
+        'Stages that do not depend on each other run in parallel. A subagent starts with no memory of this conversation, so put everything it needs into its prompt: the goal, the files and folders to work in, and what to report back. Check what each one returns before you rely on it.',
+      ].join('\n')
+    : '';
   const profile = {
     name,
     description: 'Agent Portal run (generated; deleted when the run ends)',
-    prompt,
-    tools: toolsEnabled ? ['read', 'write', 'shell', 'grep', 'glob'] : [],
+    prompt: prompt + teamText,
+    tools: toolsEnabled ? [...ALL_TOOLS, ...(team.length ? ['subagent'] : [])] : [],
+    ...(team.length ? { toolsSettings: { subagent: { availableAgents: team.map((t) => t.kiroName) } } } : {}),
     // CLI 2.x: tools that run without asking. Writes and commands always ask, so the portal can check them.
     allowedTools: toolsEnabled ? ['read', 'grep', 'glob'] : [],
     // CLI V3 equivalent of allowedTools.
@@ -194,8 +296,9 @@ export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabl
   };
   const file = path.join(dir, `${name}.json`);
   fs.writeFileSync(file, JSON.stringify(profile, null, 2));
+  files.unshift(file);
   excludeFromGit(projectDir);
-  return { name, file };
+  return { name, file, files, team };
 }
 
 function excludeFromGit(projectDir: string) {
@@ -279,6 +382,9 @@ export function mapTool(kiroName: string, kind: string | undefined, raw: any, lo
   if (n === 'glob') return { name: 'Glob', input };
   if (n === 'web_fetch') return { name: 'WebFetch', input };
   if (n === 'web_search') return { name: 'WebSearch', input };
+  // Starting subagents: each subagent session is shown as its own Agent call; this is the request that started them.
+  if (n === 'subagent' || n === 'invoke_subagent' || n === 'use_subagent') return { name: 'Subagents', input: { ...input, description: String(raw?.task ?? '') } };
+  if (n === 'summary') return { name: 'Summary', input: { description: String(raw?.taskResult ?? raw?.taskDescription ?? '') } };
   return { name: kiroName || kind || 'tool', input };
 }
 
@@ -334,7 +440,8 @@ class Queue<T> {
 export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessage> {
   const toolsEnabled = !(Array.isArray(opts.tools) && opts.tools.length === 0);
   const prompt = opts.systemPrompt ?? opts.systemAppend ?? '';
-  const profile = writeAgentProfile(opts.cwd, prompt, toolsEnabled);
+  const profile = writeAgentProfile(opts.cwd, prompt, toolsEnabled, toolsEnabled ? readProjectRoles(opts.cwd) : []);
+  const roleOf = new Map(profile.team.map((t) => [t.kiroName, t.role]));
   const conn = new AcpConnection(opts.cwd, opts.env, ['--agent', profile.name]);
   const out = new Queue<SdkMessage>();
   const signal = opts.abort.signal;
@@ -349,12 +456,49 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
   let model = '';
   const tools = new Map<string, { name: string; kiroName: string; kind?: string; raw: any; locations?: any[]; done: boolean }>();
 
-  const assistant = (content: any[]): SdkMessage => ({
+  const assistant = (content: any[], parent: string | null = null): SdkMessage => ({
     type: 'assistant',
     session_id: sessionId,
-    parent_tool_use_id: null,
+    parent_tool_use_id: parent,
     message: { id: `kiro_${sessionId}_${++msgSeq}`, role: 'assistant', model, content },
   });
+  const toolResult = (toolUseId: string, content: string, isError: boolean, parent: string | null = null): SdkMessage => ({
+    type: 'user',
+    session_id: sessionId,
+    parent_tool_use_id: parent,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }] },
+  });
+
+  // Subagents run in sessions of their own. Each becomes an Agent tool call of the main agent (so the portal shows it
+  // as a child), and everything its session does is attached under that call.
+  interface Child {
+    id: string;
+    text: string;
+    result: string;
+    done: boolean;
+  }
+  const children = new Map<string, Child>();
+  const childFor = (sid: string, info?: any): Child => {
+    let c = children.get(sid);
+    if (c) return c;
+    flushText();
+    c = { id: `kiro_sub_${sid}`, text: '', result: '', done: false };
+    children.set(sid, c);
+    const role = roleOf.get(info?.agentName) ?? info?.role ?? info?.agentName ?? 'subagent';
+    out.push(assistant([{ type: 'tool_use', id: c.id, name: 'Agent', input: { subagent_type: roleOf.get(role) ?? role, description: info?.sessionName ?? '', prompt: info?.initialQuery ?? '' } }]));
+    return c;
+  };
+  const flushChild = (c: Child) => {
+    if (!c.text) return;
+    out.push(assistant([{ type: 'text', text: c.text }], c.id));
+    c.text = '';
+  };
+  const endChild = (c: Child, failed = false) => {
+    if (c.done) return;
+    flushChild(c);
+    c.done = true;
+    out.push(toolResult(c.id, c.result || (failed ? 'The subagent stopped.' : 'Finished.'), failed));
+  };
   const flushText = () => {
     if (!text) return;
     out.push(assistant([{ type: 'text', text }]));
@@ -367,6 +511,27 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     if (method === 'session/update' || method === 'session/notification') {
       const u = params.update ?? {};
       const kind = u.sessionUpdate;
+      const sid = params.sessionId;
+      if (sid && sessionId && sid !== sessionId) {
+        // A subagent's session.
+        const c = childFor(sid);
+        if (kind === 'agent_message_chunk' && u.content?.type === 'text') c.text += u.content.text;
+        else if (kind === 'tool_call') {
+          flushChild(c);
+          const kiroName = u._meta?.kiro?.toolName ?? u.title ?? '';
+          const t = mapTool(kiroName, u.kind, u.rawInput, u.locations);
+          if (kiroName === 'summary' && u.rawInput?.taskResult) c.result = String(u.rawInput.taskResult);
+          tools.set(u.toolCallId, { name: t.name, kiroName, kind: u.kind, raw: u.rawInput, locations: u.locations, done: false });
+          out.push(assistant([{ type: 'tool_use', id: u.toolCallId, name: t.name, input: { ...t.input, title: u.title } }], c.id));
+        } else if (kind === 'tool_call_update' && (u.status === 'completed' || u.status === 'failed')) {
+          const t = tools.get(u.toolCallId);
+          if (t && !t.done) {
+            t.done = true;
+            out.push(toolResult(u.toolCallId, outputText(u), u.status === 'failed', c.id));
+          }
+        }
+        return;
+      }
       if (kind === 'agent_message_chunk' && u.content?.type === 'text') {
         text += u.content.text;
         allText += u.content.text;
@@ -393,6 +558,12 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
       for (const m of params.meteringUsage) if (typeof m?.value === 'number') credits += m.value;
     } else if (method === '_kiro.dev/subagent/list_update' && Array.isArray(params.subagents) && params.subagents.length) {
       out.push({ type: 'system', subtype: 'kiro_subagents', session_id: sessionId, ...params });
+      for (const sub of params.subagents) {
+        if (!sub?.sessionId) continue;
+        const c = childFor(sub.sessionId, sub);
+        const state = sub.status?.type;
+        if (state === 'terminated' || state === 'completed' || state === 'failed' || state === 'cancelled') endChild(c, state === 'failed' || state === 'cancelled');
+      }
     }
   };
 
@@ -464,10 +635,11 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
       if (wanted && wanted !== s?.models?.currentModelId) {
         await conn.request('session/set_model', { sessionId, modelId: wanted }, 30_000);
       }
-      out.push({ type: 'system', subtype: 'init', session_id: sessionId, model, tools: toolsEnabled ? ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob'] : [], provider: 'kiro' });
+      out.push({ type: 'system', subtype: 'init', session_id: sessionId, model, tools: toolsEnabled ? ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', ...(profile.team.length ? ['Agent'] : [])] : [], provider: 'kiro', agents: profile.team.map((t) => t.role) });
 
       const started = Date.now();
       const res = await conn.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: opts.prompt }] });
+      for (const c of children.values()) endChild(c);
       flushText();
       const stop = res?.stopReason ?? 'end_turn';
       if (stop === 'cancelled' || signal.aborted) return;
@@ -508,6 +680,8 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
   } finally {
     signal.removeEventListener('abort', onAbort);
     // Shut kiro-cli down in the background so the run is released as soon as its result is recorded.
-    void conn.close().finally(() => fs.rmSync(profile.file, { force: true }));
+    void conn.close().finally(() => {
+      for (const file of profile.files) fs.rmSync(file, { force: true });
+    });
   }
 }

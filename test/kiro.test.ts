@@ -96,8 +96,10 @@ test('Kiro run: guard, approvals, tool events, credits, profile cleanup', async 
   assert.ok(done.events.some((e: any) => e.type === 'user'), 'tool results are recorded');
 
   const start = entries().find((e) => e.event === 'start');
-  assert.deepEqual(start.profile.tools, ['read', 'write', 'shell', 'grep', 'glob']);
+  assert.deepEqual(start.profile.tools, ['read', 'write', 'shell', 'grep', 'glob', 'subagent']);
   assert.deepEqual(start.profile.allowedTools, ['read', 'grep', 'glob']);
+  assert.deepEqual(start.profile.toolsSettings.subagent.availableAgents, [`${start.profile.name}-general`], 'only the run’s own subagents, never the user’s global Kiro agents');
+  assert.equal(start.profile.toolsSettings.subagent.trustedAgents, undefined, 'subagents are never trusted to skip the portal’s checks');
   assert.equal(start.cwd, projectPath);
   assert.match(start.profile.prompt, /Agent Portal/);
   assert.equal(rpc('session/set_model')[0].params.modelId, 'claude-sonnet-5.5', 'sonnet alias resolves to the newest sonnet');
@@ -142,4 +144,49 @@ test('Kiro model list and an unavailable pinned model', async () => {
   assert.equal(failed.run.status, 'failed');
   assert.match(failed.run.error, /does not offer the model "claude-opus-9"/);
   await c.put('/api/settings', { kiro: { models: { opus: '' } } });
+});
+
+test('Kiro subagents: the project roles become the team, each subagent is its own agent, and its writes are checked', async () => {
+  clearLog();
+  fs.mkdirSync(path.join(projectPath, '.claude', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(projectPath, '.claude', 'agents', 'backend-agent.md'), '---\nname: backend-agent\ndescription: Builds the API\ntools: Read, Grep, Write, Bash\n---\nYou build backend code.\n');
+  const { run } = await c.post(`/api/projects/${pid}/runs`, { prompt: 'Split the work [delegate]', permissionMode: 'acceptEdits' });
+
+  // Starting subagents asks first, like any tool that is not a plain edit.
+  const spawn = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Subagents' && i.status === 'pending'), 'subagent approval');
+  await c.post(`/api/inputs/${spawn.id}/answer`, { decision: 'allow' });
+  const done = await waitFor(async () => {
+    const r = await c.get(`/api/runs/${run.id}`);
+    return ['completed', 'failed'].includes(r.run.status) ? r : null;
+  }, 'completion');
+  assert.equal(done.run.status, 'completed', done.run.error);
+  assert.equal(done.run.result, 'All done.', 'the subagent’s words do not end up in the main agent’s answer');
+  assert.equal(done.run.meta.kiroCredits, 0.25, 'subagent credits count too');
+
+  const start = entries().find((e) => e.event === 'start');
+  const names = start.profile.toolsSettings.subagent.availableAgents;
+  assert.deepEqual(names, [`${start.profile.name}-backend-agent`, `${start.profile.name}-general`]);
+  assert.match(start.profile.prompt, new RegExp(`- ${start.profile.name}-backend-agent — backend-agent: Builds the API`));
+  const role = entries().find((e) => e.event === 'role-profile').roleProfile;
+  assert.deepEqual(role.tools, ['read', 'grep', 'write', 'shell']);
+  assert.deepEqual(role.allowedTools, ['read', 'grep'], 'writes and commands of a subagent still ask');
+  assert.match(role.prompt, /You build backend code/);
+  assert.ok(!role.tools.includes('subagent'), 'subagents do not start subagents of their own');
+
+  // The subagent's write outside the run folder was refused by the portal; the one inside went ahead.
+  const perms = entries().filter((e) => e.event === 'permission').map((p) => [p.tool, p.decision]);
+  assert.deepEqual(perms, [['subagent', 'allow_once'], ['write', 'reject_once'], ['write', 'allow_once']]);
+
+  // The subagent shows as an Agent call of the main agent, with its own work under it.
+  const assistant = done.events.filter((e: any) => e.type === 'assistant');
+  const agentCall = assistant.flatMap((e: any) => e.data.message.content).find((b: any) => b.type === 'tool_use' && b.name === 'Agent');
+  assert.equal(agentCall.input.subagent_type, 'backend-agent');
+  const under = assistant.filter((e: any) => e.parent === agentCall.id).flatMap((e: any) => e.data.message.content);
+  assert.deepEqual(under.filter((b: any) => b.type === 'tool_use').map((b: any) => b.name), ['Write', 'Write', 'Summary']);
+  assert.ok(under.some((b: any) => b.type === 'text' && b.text === 'Writing the notes.'));
+  const closed = done.events.find((e: any) => e.type === 'user' && e.data.message.content[0].tool_use_id === agentCall.id);
+  assert.equal(closed.data.message.content[0].content, 'Wrote notes.md.', 'the subagent’s summary is its report');
+
+  const agentsDir = path.join(projectPath, '.kiro', 'agents');
+  await waitFor(async () => !fs.existsSync(agentsDir) || fs.readdirSync(agentsDir).length === 0, 'all generated profiles removed');
 });
