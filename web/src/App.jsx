@@ -17,6 +17,7 @@ import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
 import { Repos } from './pages/Repos.jsx';
 import { Workspaces } from './pages/Workspaces.jsx';
+import { Configuration } from './pages/Configuration.jsx';
 import { Builder } from './pages/Builder.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { Account } from './pages/Account.jsx';
@@ -61,6 +62,7 @@ const PROJECT_NAV = [
   { tab: 'repos', label: 'Repositories', icon: 'repos' },
   { tab: 'workspaces', label: 'Workspaces', icon: 'projects' },
   { tab: 'builder', label: 'Agents and skills', icon: 'builder' },
+  { tab: 'config', label: 'Configuration', icon: 'settings' },
   { tab: 'insights', label: 'Insights', icon: 'chart' },
   { tab: 'team', label: 'Project and team', icon: 'user' },
 ];
@@ -383,6 +385,9 @@ function ProjectScope({ projectId, route }) {
       break;
     case 'workspaces':
       page = <Workspaces />;
+      break;
+    case 'config':
+      page = <Configuration />;
       break;
     case 'builder':
       page = <Builder route={route} />;

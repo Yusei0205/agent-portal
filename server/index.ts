@@ -11,6 +11,7 @@ import { registerRepoRoutes } from './repos.ts';
 import { registerGitConnectionRoutes } from './git-connections.ts';
 import { registerWorkspaceRoutes } from './workspaces.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
+import { registerConfigRoutes } from './config-files.ts';
 import { registerCodeCommitRoutes } from './codecommit.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
 import { registerBuilderRoutes } from './builder.ts';
@@ -40,6 +41,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerGitConnectionRoutes();
     registerWorkspaceRoutes();
     registerIntegrationRoutes();
+    registerConfigRoutes();
     registerCodeCommitRoutes();
     registerKnowledgeRoutes();
     registerBuilderRoutes();

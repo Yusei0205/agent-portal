@@ -5039,3 +5039,81 @@ html[data-theme='hud'] .ins-hbar-fill {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
 }
+
+/* ---------- Configuration editor ---------- */
+.cfg-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.cfg-tree {
+  display: grid;
+  gap: 10px;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  position: sticky;
+  top: 12px;
+}
+.cfg-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+  font-size: 0.86rem;
+}
+.cfg-file {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  border-radius: 6px;
+  padding-right: 4px;
+}
+.cfg-file:hover,
+.cfg-file.is-open {
+  background: var(--line-2);
+}
+.cfg-name {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  color: var(--ink);
+}
+.cfg-file.is-dir .cfg-name {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.cfg-del {
+  opacity: 0;
+  width: 22px;
+  height: 22px;
+}
+.cfg-file:hover .cfg-del,
+.cfg-del:focus-visible {
+  opacity: 1;
+}
+.cfg-text {
+  min-height: 60vh;
+  resize: vertical;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+@media (max-width: 900px) {
+  .cfg-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cfg-tree {
+    position: static;
+    max-height: 40vh;
+  }
+}

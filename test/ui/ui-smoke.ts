@@ -125,6 +125,18 @@ async function main() {
     await page.locator('.repo .badge', { hasText: 'Ready' }).waitFor({ timeout: 20000 });
     await shot(page, 'repos');
 
+    console.log('configuration');
+    await page.getByRole('link', { name: 'Configuration', exact: true }).click();
+    await page.getByRole('button', { name: 'business-analyst.md', exact: true }).click();
+    const editor = page.getByLabel('Contents of .claude/agents/business-analyst.md');
+    await editor.waitFor();
+    await editor.press('End');
+    await editor.pressSequentially('\nAlways cite the FSD.');
+    await page.keyboard.press('Control+s');
+    await page.getByText('Saved .claude/agents/business-analyst.md').waitFor();
+    check(true, 'an agent file can be edited and saved in Configuration');
+    await shot(page, 'configuration');
+
     console.log('workspaces');
     await page.getByRole('link', { name: 'Workspaces', exact: true }).click();
     await page.getByRole('button', { name: 'Create a workspace', exact: true }).click();
