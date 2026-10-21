@@ -22,7 +22,7 @@ import {
 } from '@aws-sdk/client-bedrock';
 import { fromIni, fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import { get } from './http.ts';
-import { agentEnv, awsEnv, getSettings, SECRET_NAMES } from './settings.ts';
+import { agentEnv, awsEnv, getSettings, parseExtraModels, SECRET_NAMES } from './settings.ts';
 import { dataPath } from './config.ts';
 import { getSecret } from './secrets.ts';
 import { badRequest, HttpError } from './util.ts';
@@ -219,6 +219,19 @@ export function requireModel(raw: unknown): string {
 
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
+/** Settings › Extra models, added to a Claude provider's list (also when the provider's own list cannot be read). */
+function withExtras(mode: string, models: ModelOption[]): ModelOption[] {
+  if (mode !== 'anthropic' && mode !== 'bedrock') return models;
+  const extra = parseExtraModels(getSettings().modelList?.extra ?? '');
+  const out = [...models];
+  for (const e of extra) {
+    if (out.some((m) => m.id === e.id)) continue;
+    const id = e.id.toLowerCase();
+    out.push({ id: e.id, name: e.label, family: id.includes('haiku') ? 'haiku' : id.includes('opus') ? 'opus' : id.includes('sonnet') ? 'sonnet' : 'other' });
+  }
+  return out;
+}
+
 export function registerModelRoutes(): void {
   // The same list as Settings, for the model picker everywhere else. A failure is not an error
   // here: people can still type an ID. ?projectId= lists what that project's connection offers.
@@ -247,7 +260,7 @@ export function registerModelRoutes(): void {
       (cache.key ?? cache.mode) === key &&
       Date.now() - cache.at < CACHE_TTL_MS
     ) {
-      return { mode, models: cache.models, error: '' };
+      return { mode, models: withExtras(mode, cache.models), error: '' };
     }
 
     let models: ModelOption[] = [];
@@ -261,7 +274,7 @@ export function registerModelRoutes(): void {
       // Do not cache errors — next call will try again immediately
       error = String(e?.message ?? e).slice(0, 400);
     }
-    return { mode, models, error };
+    return { mode, models: withExtras(mode, models), error };
   });
 
   get(

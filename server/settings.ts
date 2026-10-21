@@ -36,6 +36,8 @@ export interface Settings {
   budget: { monthlyUsd: number | null };
   secrets: { mode: 'local' | 'aws-ssm'; prefix: string; region: string };
   agents: { defaultPermissionMode: 'default' | 'acceptEdits' | 'plan'; maxTurns: number; resumeAfterRestart: boolean };
+  /** Extra Claude models for the model picker, one per line as "model id | label"; added without a deploy. */
+  modelList: { extra: string };
   /** Sessions handing tasks to separate sessions: limits for everyone. */
   delegation: { enabled: boolean; maxPerParent: number; maxPerUser: number; allowNested: boolean; nudgeThreshold: number };
 }
@@ -48,6 +50,7 @@ const DEFAULTS: Settings = {
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
   agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true },
   delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
+  modelList: { extra: '' },
 };
 
 export const SECRET_NAMES = {
@@ -93,6 +96,20 @@ export function providerMode(): ProviderMode {
 
 const MODEL_RE = /^[A-Za-z0-9._:\/@-]{0,200}$/;
 const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
+
+/** Lines of "model id | label" (label optional); an invalid id is refused with its line number. */
+export function parseExtraModels(text: string): { id: string; label: string }[] {
+  const out: { id: string; label: string }[] = [];
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) return;
+    const [idPart, ...rest] = line.split('|');
+    const id = idPart.trim();
+    if (!id || !MODEL_RE.test(id)) throw badRequest(`Line ${i + 1}: "${id}" is not a model ID`);
+    if (!out.some((o) => o.id === id)) out.push({ id, label: rest.join('|').trim().slice(0, 80) || id });
+  });
+  return out;
+}
 
 export function updateSettings(patch: any): Settings {
   const cur = getSettings();
@@ -151,6 +168,13 @@ export function updateSettings(patch: any): Settings {
     a.maxTurns = Math.max(1, Math.min(500, Number(a.maxTurns) || 40));
     a.resumeAfterRestart = a.resumeAfterRestart !== false;
     saveSection('agents', a);
+  }
+  if (patch.modelList) {
+    const text = String(patch.modelList.extra ?? '');
+    const lines = parseExtraModels(text);
+    if (lines.length > 50) throw badRequest('List at most 50 extra models');
+    saveSection('modelList', { extra: lines.map((l) => (l.label !== l.id ? `${l.id} | ${l.label}` : l.id)).join('\n') });
+    clearModelListCache();
   }
   if (patch.delegation) {
     const d = { ...cur.delegation, ...patch.delegation };

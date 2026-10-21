@@ -111,6 +111,7 @@ export function Settings() {
         <BudgetSection s={s.data} usage={usage.data} reload={reload} />
         <AgentsSection s={s.data} reload={reload} />
         <DelegationSection s={s.data} reload={reload} />
+        <ExtraModelsSection s={s.data} reload={reload} />
         <SecretsSection s={s.data} reload={reload} />
         <Users />
       </div>
@@ -786,6 +787,26 @@ function AgentsSection({ s, reload }) {
       <ErrorNote error={error} />
       <Button variant="primary" busy={busy} onClick={() => save({ agents: a })} disabled={JSON.stringify(a) === JSON.stringify(s.agents)}>
         Save defaults
+      </Button>
+    </section>
+  );
+}
+
+/** Extra Claude models for the picker, added without a deploy. */
+function ExtraModelsSection({ s, reload }) {
+  const { busy, error, save } = useSave(reload);
+  const [text, setText] = useState(s.modelList?.extra ?? '');
+  useEffect(() => setText(s.modelList?.extra ?? ''), [s.modelList?.extra]);
+  return (
+    <section className="panel stack">
+      <h2>Extra Claude models</h2>
+      <p className="muted small">
+        Models for the picker of Claude sessions and runs (Anthropic API or Amazon Bedrock), for example one released after the provider's list was read. One per line: <code>model id | label</code>. The id goes to the provider as written, like <code>global.anthropic.claude-opus-5-5</code> on Bedrock. New runs see them at once.
+      </p>
+      <textarea className="input mono" rows={5} value={text} onChange={(e) => setText(e.target.value)} aria-label="Extra models" placeholder={'global.anthropic.claude-opus-5-5 | Claude Opus 5.5\nclaude-sonnet-5-5'} />
+      <ErrorNote error={error} />
+      <Button variant="primary" busy={busy} onClick={() => save({ modelList: { extra: text } })} disabled={text === (s.modelList?.extra ?? '')}>
+        Save models
       </Button>
     </section>
   );
