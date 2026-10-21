@@ -13,6 +13,9 @@
  *
  * Each run gets its own Kiro agent profile in <project>/.kiro/agents/ (git-excluded) with no MCP servers
  * and only read tools pre-approved, so the user's global kiro-cli config cannot silently trust writes.
+ *
+ * When the project has its own Kiro agents (.kiro/agents/*.json), the run's profiles are copies of those instead
+ * (writeNativeProfile), under the same rules: writes and commands always ask, no MCP servers but the run's own.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
@@ -21,6 +24,7 @@ import { randomBytes } from 'node:crypto';
 import type { ProviderRunOptions, SdkMessage } from './types.ts';
 import { HttpError, badRequest, listValue, parseFrontmatter, slugify } from '../util.ts';
 import { getSettings } from '../settings.ts';
+import { listKiroAgentsAt, runProfileOf, type KiroAgentFile } from './kiro-project.ts';
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
@@ -306,6 +310,93 @@ export function writeAgentProfile(projectDir: string, prompt: string, toolsEnabl
   return { name, file, files, team };
 }
 
+/**
+ * Per-run profiles built from the project's own Kiro agents (.kiro/agents/*.json), or null when the project has none
+ * or the named lead is not one of them (then the .claude agents are used, as before).
+ *
+ * With a lead, the lead is the main agent and its team is its toolsSettings.subagent.availableAgents that exist in the
+ * project. Without one, the portal's main agent leads and every enabled project Kiro agent is on the team. Each team
+ * member gets a per-run copy whose name starts with the run's id; subagents cannot start further subagents, so nobody
+ * reaches an agent outside the team. Every copy keeps its prompt, tools, resources, model, hooks and tool settings but
+ * loses its pre-approvals of writes and commands (see runProfileOf), and gets only the run's own integrations.
+ */
+export function writeNativeProfile(
+  projectDir: string,
+  prompt: string,
+  leadName: string | null | undefined,
+  mcp: ProviderRunOptions['mcpServers'] = {},
+): { name: string; file: string; files: string[]; team: KiroTeamMember[] } | null {
+  const agents = listKiroAgentsAt(projectDir, { includeDisabled: false });
+  if (!agents.length) return null;
+  const lead = leadName ? agents.find((a) => a.name === leadName) : undefined;
+  if (leadName && !lead) return null;
+  const members = lead ? lead.team.filter((n, i, all) => n !== lead.name && all.indexOf(n) === i).map((n) => agents.find((a) => a.name === n)).filter((a): a is KiroAgentFile => Boolean(a)) : agents;
+
+  const name = `agent-portal-${randomBytes(4).toString('hex')}`;
+  const dir = path.join(projectDir, '.kiro', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const mcpServers: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(mcp ?? {})) {
+    mcpServers[k] = v.type === 'http' ? { type: 'http', url: v.url, headers: v.headers } : { command: v.command, args: v.args, env: v.env };
+  }
+  const withMcp = (tools: unknown) => [...(tools as string[]), ...(Object.keys(mcpServers).length ? ['@mcp'] : [])];
+  const files: string[] = [];
+  const team: KiroTeamMember[] = [];
+  const used = new Set<string>();
+  for (const m of members) {
+    let kiroName = `${name}-${slugify(m.name, 40) || 'agent'}`;
+    while (used.has(kiroName)) kiroName += 'x';
+    used.add(kiroName);
+    const base = runProfileOf(m);
+    const file = path.join(dir, `${kiroName}.json`);
+    fs.writeFileSync(file, JSON.stringify({ ...base, name: kiroName, description: `${m.name}: ${m.description}`.slice(0, 300), tools: withMcp(base.tools), mcpServers }, null, 2));
+    files.push(file);
+    team.push({ kiroName, role: m.name, description: m.description });
+  }
+
+  const teamText = team.length
+    ? [
+        '',
+        '## Delegating to subagents',
+        'Hand parts of the work to your team with the `subagent` tool (other instructions may call it the Agent tool, or use the agents\' plain names; here use the names below). Give each stage one of these agent names, written exactly as shown:',
+        ...team.map((t) => `- ${t.kiroName} — ${t.role}${t.description ? `: ${t.description}` : ''}`),
+        'Stages that do not depend on each other run in parallel. A subagent starts with no memory of this conversation, so put everything it needs into its prompt: the goal, the files and folders to work in, and what to report back. Check what each one returns before you rely on it.',
+      ].join('\n')
+    : '';
+  const subagent = team.length ? { subagent: { availableAgents: team.map((t) => t.kiroName) } } : {};
+  let profile: Record<string, unknown>;
+  if (lead) {
+    const base = runProfileOf(lead);
+    profile = {
+      ...base,
+      name,
+      description: `Agent Portal run led by ${lead.name} (generated; deleted when the run ends)`,
+      prompt: [lead.prompt.trim(), teamText, prompt].filter(Boolean).join('\n\n'),
+      tools: withMcp([...(base.tools as string[]), ...(team.length ? ['subagent'] : [])]),
+      toolsSettings: { ...(base.toolsSettings as Record<string, unknown>), ...subagent },
+      mcpServers,
+    };
+  } else {
+    profile = {
+      name,
+      description: 'Agent Portal run (generated; deleted when the run ends)',
+      prompt: prompt + teamText,
+      tools: withMcp([...ALL_TOOLS, ...(team.length ? ['subagent'] : [])]),
+      toolsSettings: subagent,
+      allowedTools: READ_ONLY,
+      permissions: { rules: [{ capability: 'fs_read', match: ['**'], effect: 'allow' }] },
+      includeMcpJson: false,
+      resources: fs.existsSync(path.join(projectDir, 'CLAUDE.md')) ? ['file://CLAUDE.md'] : [],
+      mcpServers,
+    };
+  }
+  const file = path.join(dir, `${name}.json`);
+  fs.writeFileSync(file, JSON.stringify(profile, null, 2));
+  files.unshift(file);
+  excludeFromGit(projectDir);
+  return { name, file, files, team };
+}
+
 function excludeFromGit(projectDir: string) {
   const exclude = path.join(projectDir, '.git', 'info', 'exclude');
   try {
@@ -445,9 +536,11 @@ class Queue<T> {
 export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessage> {
   const toolsEnabled = !(Array.isArray(opts.tools) && opts.tools.length === 0);
   const prompt = opts.systemPrompt ?? opts.systemAppend ?? '';
+  // The project's own Kiro agents when it has them; otherwise profiles built from its .claude agents.
   // The lead of a session is the main agent itself, so it is not offered to itself as a subagent.
-  const roles = toolsEnabled ? readProjectRoles(opts.cwd).filter((r) => r.name !== opts.leadAgent) : [];
-  const profile = writeAgentProfile(opts.cwd, prompt, toolsEnabled, roles, opts.mcpServers);
+  const profile =
+    (toolsEnabled ? writeNativeProfile(opts.cwd, prompt, opts.leadAgent, opts.mcpServers) : null) ??
+    writeAgentProfile(opts.cwd, prompt, toolsEnabled, toolsEnabled ? readProjectRoles(opts.cwd).filter((r) => r.name !== opts.leadAgent) : [], opts.mcpServers);
   const roleOf = new Map(profile.team.map((t) => [t.kiroName, t.role]));
   const conn = new AcpConnection(opts.cwd, opts.env, ['--agent', profile.name]);
   const out = new Queue<SdkMessage>();

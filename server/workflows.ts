@@ -22,7 +22,7 @@ import { ticketMarkdown } from './jira-text.ts';
 import { getRun, isActive, startRun, stopRun } from './agent/runner.ts';
 import { badRequest, newId, notFound, now, parseJson, str } from './util.ts';
 import { composeIterationPrompt, parseTrustedPush, parseStatus, safeBranchName, stagnated } from './guardrails.ts';
-import { listAgentFiles } from './builder.ts';
+import { leadChoices, resolveLead, type RunLead } from './kiro-agents.ts';
 import { claudeProvider, effectiveProvider, engineProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
 import { pushRun, readRepoChoices, isSharedBranch } from './runs.ts';
@@ -354,13 +354,12 @@ async function drive(id: string): Promise<void> {
     exec("UPDATE workflows SET seen_by_parent = 1 WHERE parent_id = ? AND status != 'running'", id);
 
     // A lead agent from the project's team plans and delegates; without one the default main agent decides.
-    // The runner words its instructions for the run's engine (Claude's Agent tool or Kiro's subagent tool).
-    let lead: { name: string; description: string; prompt: string; team: { name: string; description: string }[] } | undefined;
+    // On Kiro a project Kiro agent leads with its own profile; a .claude agent's instructions become the system text,
+    // which the runner words for the run's engine (Claude's Agent tool or Kiro's subagent tool).
+    let lead: RunLead | undefined;
     if (w.lead_agent) {
-      const team = listAgentFiles(getProject(w.project_id)).filter((a) => a.enabled);
-      const found = team.find((a) => a.name === w.lead_agent);
-      if (found) lead = { name: found.name, description: found.description, prompt: found.prompt, team: team.map((a) => ({ name: a.name, description: a.description })) };
-      else if (!leadWarned) {
+      lead = resolveLead(getProject(w.project_id), w.lead_agent, isKiro(w.project_id, w.engine)) ?? undefined;
+      if (!lead && !leadWarned) {
         log(id, 'status', `The lead agent "${w.lead_agent}" is not enabled in this project any more, so the default agent leads.`);
         leadWarned = true;
       }
@@ -628,11 +627,11 @@ interface PushRequest {
 /** Push every working copy of a session's run to its new branch; the results go into the history. */
 async function pushForSession(w: Row, req: PushRequest, by: string) {
   const run = getRun(req.runId);
-  const results: { repo: string; ok: boolean; commit?: string; pr?: string; error?: string }[] = [];
+  const results: { repo: string; ok: boolean; commit?: string; pr?: string; repoId?: string; prNumber?: number; error?: string }[] = [];
   for (const x of runRepos(run)) {
     try {
       const r = await pushRun(run, { repoId: x.repoId, branch: req.branch, message: req.message || undefined, createPr: req.pr, agent: true });
-      results.push({ repo: r.repoName, ok: true, commit: r.commit ?? undefined, pr: r.pr?.url });
+      results.push({ repo: r.repoName, ok: true, commit: r.commit ?? undefined, pr: r.pr?.url, repoId: r.repoId, prNumber: r.pr?.number });
     } catch (e: any) {
       results.push({ repo: x.name || getRepo(x.repoId).name, ok: false, error: String(e?.message ?? e).slice(0, 300) });
     }
@@ -739,11 +738,31 @@ function deriveBranchName(w: Row): string {
   return `agent/${slug || 'task'}-${suffix}`;
 }
 
-/** The lead agent named in a request must be one of the project's enabled agents; empty means the default. */
-function checkLead(project: ReturnType<typeof getProject>, raw: unknown): string {
+/** True when a session on this engine runs on Kiro. */
+function isKiro(projectId: string, engine: string | null | undefined): boolean {
+  try {
+    return engineProvider(projectId, engine || null) === 'kiro';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The lead agent named in a request must be able to lead on the session's engine: one of the project's enabled Kiro
+ * agents on Kiro (when it has any), otherwise one of its enabled .claude agents. Empty means the default.
+ */
+function checkLead(project: ReturnType<typeof getProject>, raw: unknown, engine?: string | null): string {
   const name = typeof raw === 'string' ? raw.trim() : '';
   if (!name) return '';
-  if (!listAgentFiles(project).some((a) => a.enabled && a.name === name)) throw badRequest(`"${name}" is not an enabled agent in this project. Add or enable it under Agents and skills.`);
+  const kiro = isKiro(project.id, engine);
+  const choices = leadChoices(project, kiro);
+  if (!choices.some((c) => c.name === name)) {
+    throw badRequest(
+      choices[0]?.kind === 'kiro'
+        ? `"${name}" is not an enabled Kiro agent in this project. Add or enable it under Agents and skills › Kiro.`
+        : `"${name}" is not an enabled agent in this project. Add or enable it under Agents and skills.`,
+    );
+  }
   return name;
 }
 
@@ -820,7 +839,7 @@ export function registerWorkflowRoutes(): void {
       throw badRequest('Pick a repository or workspace, or start it as a playground with no repository.');
     }
     const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
-    const leadAgent = checkLead(project, body.leadAgent);
+    const leadAgent = checkLead(project, body.leadAgent, engine);
     const contextItems = readContextItems(body.context);
     const id = newId('w_');
     insert('workflows', {
@@ -880,9 +899,9 @@ export function registerWorkflowRoutes(): void {
     const body = await ctx.json();
     const s = readSettings(body, w, { hasRepos: sessionRepos(w).length > 0, isPlayground: Boolean(w.playground) });
     const p: Record<string, string | number | null> = { ...s };
-    if (body.leadAgent !== undefined) p.lead_agent = checkLead(getProject(w.project_id), body.leadAgent);
-    if (body.integrations !== undefined) p.integrations = JSON.stringify(readIntegrationIds(body.integrations, ctx.user!.id));
     if (body.engine !== undefined) p.engine = readEngine(w.project_id, body.engine);
+    if (body.leadAgent !== undefined) p.lead_agent = checkLead(getProject(w.project_id), body.leadAgent, p.engine === undefined ? w.engine : String(p.engine));
+    if (body.integrations !== undefined) p.integrations = JSON.stringify(readIntegrationIds(body.integrations, ctx.user!.id));
     if (body.title !== undefined) p.title = str(body.title, 'Title', { max: 120 }).trim();
     if (body.goal !== undefined) p.goal = str(body.goal, 'Goal', { max: 6000 }).trim();
     // Repositories can be attached (or changed) later; the next iteration starts on fresh working copies of them.
@@ -1267,6 +1286,7 @@ export function registerWorkflowRoutes(): void {
 
     // Open draft PR if requested and repo is GitHub.
     let prHtmlUrl: string | null = null;
+    let prNumber: number | null = null;
     if (body.pr && repo.provider === 'github') {
       try {
         if (githubSlug(repo.url)) {
@@ -1279,12 +1299,13 @@ export function registerWorkflowRoutes(): void {
             draft: true,
           });
           prHtmlUrl = created.html_url ?? null;
+          prNumber = typeof created.number === 'number' ? created.number : null;
         }
       } catch { /* PR creation is best-effort */ }
     }
 
     // Record history event using the same shape as pushForSession (pr = html_url string).
-    const results = [{ repo: repo.name, ok: true, commit: commit ?? undefined, pr: prHtmlUrl ?? undefined }];
+    const results = [{ repo: repo.name, ok: true, commit: commit ?? undefined, pr: prHtmlUrl ?? undefined, repoId: repo.id, prNumber: prNumber ?? undefined }];
     const msg = `Pushed working copy at "${rawPath}" to "${branch}" in ${repo.name}${prHtmlUrl ? ' and opened a draft pull request' : ''}.`;
     const currentW = getWorkflow(w.id);
     log(w.id, 'push', msg, { data: { branch, by: ctx.user!.name, results } });

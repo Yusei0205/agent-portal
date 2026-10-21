@@ -140,6 +140,19 @@ async function main() {
     await page.getByRole('link', { name: 'Skills', exact: true }).click();
     await page.locator('.editor-head h2').waitFor();
     await shot(page, 'skill-editor');
+    // Kiro agents sit apart from the Claude Code ones.
+    await page.getByRole('tab', { name: 'Kiro', exact: true }).click();
+    await page.getByText('No Kiro agents yet').waitFor();
+    await page.getByRole('button', { name: 'New agent', exact: true }).first().click();
+    await page.getByLabel('Name').fill('kiro-reviewer');
+    await page.getByLabel('Description').fill('Reviews changes');
+    await page.getByRole('button', { name: 'Create agent', exact: true }).click();
+    await page.getByRole('heading', { name: 'kiro-reviewer', exact: true }).waitFor();
+    await page.getByRole('tab', { name: 'JSON', exact: true }).click();
+    await page.getByLabel('Agent definition').waitFor();
+    await shot(page, 'kiro-agent-editor');
+    check((await page.getByLabel('Agent definition').inputValue()).includes('"description": "Reviews changes"'), 'a Kiro agent is created from the Kiro tab');
+    await page.getByRole('tab', { name: 'Claude Code', exact: true }).click();
 
     console.log('repositories');
     const bare = makeRepo(path.join(dataDir, 'fixture'));

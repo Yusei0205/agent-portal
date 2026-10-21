@@ -624,7 +624,7 @@ function ProjectScope({ projectId, route }) {
       page = <Workspaces />;
       break;
     case 'config':
-      page = <Configuration />;
+      page = <Configuration route={route} />;
       break;
     case 'builder':
       page = <Builder route={route} />;

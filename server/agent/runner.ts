@@ -42,7 +42,7 @@ export interface StartRunInput {
   allowedTools?: string[];
   systemAppend?: string;
   /** A project agent that leads this run: its instructions become the system text, worded for the run's engine. */
-  lead?: { name: string; description: string; prompt: string; team: { name: string; description: string }[] };
+  lead?: { name: string; description: string; prompt: string; team: { name: string; description: string }[]; isKiroNative?: boolean };
   systemPrompt?: string;
   maxTurns?: number;
   meta?: Record<string, unknown>;
@@ -593,7 +593,7 @@ async function execute(
     systemAppend:
       input.systemAppend ??
       (input.lead
-        ? composeLeadAppend(input.lead, input.lead.team, o.mode === 'kiro' ? 'kiro' : o.mode === 'demo' ? 'demo' : 'claude')
+        ? composeLeadAppend(input.lead, input.lead.team, o.mode === 'kiro' ? 'kiro' : o.mode === 'demo' ? 'demo' : 'claude', Boolean(input.lead.isKiroNative))
         : o.mode === 'kiro'
           ? 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, stop and ask your questions in your final reply instead of guessing; the user answers with a follow-up. When a task matches one of the project roles, hand it to that role with the subagent tool (the roles are listed below).'
           : 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, use AskUserQuestion instead of guessing. When a task matches a role subagent in .claude/agents, delegate to it.'),

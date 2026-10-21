@@ -18,6 +18,7 @@ import { registerCodeCommitRoutes } from './codecommit.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
 import { registerBuilderRoutes } from './builder.ts';
 import { registerImporterRoutes } from './importer.ts';
+import { registerKiroAgentRoutes } from './kiro-agents.ts';
 import { registerRunRoutes } from './runs.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLearnRoutes } from './learn.ts';
@@ -51,6 +52,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerKnowledgeRoutes();
     registerBuilderRoutes();
     registerImporterRoutes();
+    registerKiroAgentRoutes();
     registerRunRoutes();
     registerReviewRoutes();
     registerLearnRoutes();

@@ -17,6 +17,7 @@ import { readIntegrationIds } from './integrations.ts';
 import { engineProvider } from './project-aws.ts';
 import { issueDetail, mustMapping, checkKey } from './jira.ts';
 import { composeRunPrompt, ticketMarkdown } from './jira-text.ts';
+import { resolveLead } from './kiro-agents.ts';
 
 const MODEL_CHOICES = ['haiku', 'sonnet', 'opus'];
 
@@ -244,6 +245,11 @@ export function registerRunRoutes(): void {
     const meta: Record<string, unknown> = body._jiraMeta
       ? { ...body._jiraMeta, repoName: repoId ? getRepo(repoId).name : null }
       : {};
+    const engine = body.engine ? (engineProvider(project.id, String(body.engine)), String(body.engine)) : null;
+    // An optional lead, as in sessions: on Kiro a project Kiro agent leads with its own profile.
+    const leadName = typeof body.leadAgent === 'string' ? body.leadAgent.trim() : '';
+    const lead = leadName ? resolveLead(project, leadName, engineProvider(project.id, engine) === 'kiro') : null;
+    if (leadName && !lead) throw badRequest(`"${leadName}" cannot lead a run on this engine: it is not an enabled agent of this project.`);
     const { run } = await startRun({
       projectId: project.id,
       userId: ctx.user!.id,
@@ -254,9 +260,10 @@ export function registerRunRoutes(): void {
       branch,
       repos: repos.length > 1 ? repos : null,
       integrations: readIntegrationIds(body.integrations, ctx.user!.id),
-      engine: body.engine ? (engineProvider(project.id, String(body.engine)), String(body.engine)) : null,
+      engine,
       permissionMode: mode,
       model,
+      lead: lead ?? undefined,
       meta: Object.keys(meta).length ? meta : undefined,
     });
     return { run: runSummary(run) };

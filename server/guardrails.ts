@@ -358,12 +358,25 @@ export function composeIterationPrompt(i: IterationInput): string {
 /**
  * The system text for a session led by one of the project's agents: that agent's own instructions, plus how to
  * hand work to the rest of the team. Without a lead the portal's default text is used instead.
+ *
+ * A project Kiro agent (`kiroNative`) leads with its own profile: its instructions and team are already in the
+ * run's profile (see writeNativeProfile), so only the portal's rules are added after them.
  */
 export function composeLeadAppend(
   lead: { name: string; description: string; prompt: string },
   team: { name: string; description: string }[],
   engine: 'claude' | 'kiro' | 'demo' = 'claude',
+  kiroNative = false,
 ): string {
+  if (kiroNative) {
+    return [
+      '## Agent Portal rules (these override the instructions above where they conflict)',
+      '- You run inside Agent Portal. Follow CLAUDE.md when the project has one.',
+      '- Nobody answers questions while you work and nobody approves plans: skip any "ask", "clarify" or "get approval" step, pick the most reasonable option and note it as an assumption.',
+      '- Use only the tools you actually have here. If your instructions mention a tool or service you do not have, leave that step out.',
+      '- When there is a "Delegating to subagents" list above, delegate with the `subagent` tool using the exact agent names from it (they start with agent-portal-); each stands for one of your team.',
+    ].join('\n');
+  }
   const others = team.filter((a) => a.name !== lead.name);
   // Kiro names its subagents per run (agent-portal-<id>-<role>) and lists them, with the tool to use, after this text.
   const delegate =

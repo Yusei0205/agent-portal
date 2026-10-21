@@ -42,17 +42,27 @@ function useBranches(repoId) {
   return b;
 }
 
-function useTeam(projectId) {
-  const agents = useLoad(() => api.get(`/api/projects/${projectId}/agents`), [projectId]);
-  return (agents.data?.agents || []).filter((a) => a.enabled);
+/** The agents that can lead on an engine: the project's Kiro agents on Kiro when it has any, otherwise its Claude Code agents. */
+function useLeads(projectId, kiro) {
+  const leads = useLoad(() => api.get(`/api/projects/${projectId}/leads?engine=${kiro ? 'kiro' : 'claude'}`), [projectId, kiro]);
+  return leads.data?.leads;
 }
 
-function LeadField({ team, value, onChange }) {
+function LeadField({ team = [], value, onChange, kiro }) {
+  const own = team[0]?.kind === 'kiro';
+  const hint = own
+    ? 'A lead runs as the main agent with its own Kiro profile and hands tasks to the agents on its team (its availableAgents), then checks what they return.'
+    : team.length
+      ? 'A lead plans the work, hands tasks to the other agents of this project and checks what they return.'
+      : kiro
+        ? 'No agents in this project yet. Add Kiro agents under Agents and skills › Kiro (or Claude Code agents) and a lead can delegate to them.'
+        : 'No agents in this project yet. Add some under Agents and skills and a lead can delegate to them.';
   return (
-    <Field label="Lead agent" hint={team.length ? 'A lead plans the work, hands tasks to the other agents of this project and checks what they return.' : 'No agents in this project yet. Add some under Agents and skills and a lead can delegate to them.'}>
+    <Field label="Lead agent" hint={hint}>
       {(id) => (
         <select id={id} className="input" value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="">Default (the main agent decides)</option>
+          {value && !team.some((a) => a.name === value) ? <option value={value}>{value} (cannot lead on this engine)</option> : null}
           {team.map((a) => (
             <option key={a.name} value={a.name}>
               {a.name}
@@ -200,13 +210,13 @@ export function NewSessionDialog({ prefill, onClose }) {
   const jira = useLoad(() => api.get(`/api/projects/${project.id}/jira`), [project.id]);
   const jiraReady = Boolean(jira.data?.connected && jira.data?.mapping);
   const kiro = useProjectProvider(project.id) === 'kiro';
-  const team = useTeam(project.id);
   const ready = (repos.data?.repos || []).filter((r) => r.status === 'ready');
 
   const [kind, setKind] = useState('session');
   // '' follows the project's connection; 'claude' or 'kiro' picks the engine for this work.
   const engines = useLoad(() => api.get(`/api/projects/${project.id}/engines`), [project.id]);
   const [engine, setEngine] = useState('');
+  const team = useLeads(project.id, engine ? engine === 'kiro' : kiro);
   const [f, setF] = useState({
     goal: '',
     repoId: prefill?.repoId || '',
@@ -495,7 +505,7 @@ export function NewSessionDialog({ prefill, onClose }) {
             ) : null}
             {kind === 'session' ? (
               <>
-                <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} />
+                <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} kiro={engine ? engine === 'kiro' : kiro} />
                 <LimitFields f={f} set={set} kiro={kiro} />
                 {hasRepos ? <PushModeField value={f.pushMode} onChange={(pushMode) => (setPushTouched(true), setF((cur) => ({ ...cur, pushMode })))} /> : null}
                 <TrustToolsField value={trustTools} onChange={setTrustTools} hasRepos={hasRepos} />
@@ -519,8 +529,8 @@ export function NewSessionDialog({ prefill, onClose }) {
 export function SessionSettings({ workflow, canEdit, onSaved }) {
   const { project } = useProject();
   const { toast } = useUi();
-  const team = useTeam(project.id);
   const kiro = workflow.provider === 'kiro';
+  const team = useLeads(project.id, kiro);
   const initial = () => ({
     goal: workflow.goal,
     model: workflow.model,
@@ -578,7 +588,7 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
       <Field label="Goal" hint="The agents re-read this before every iteration.">
         {(id) => <textarea id={id} className="input" rows={5} value={f.goal} onChange={set('goal')} />}
       </Field>
-      <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} />
+      <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} kiro={kiro} />
       <Field label="Model">{(id) => <ModelPicker id={id} value={f.model} projectId={project.id} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}</Field>
       <LimitFields f={f} set={set} kiro={kiro} />
       {running ? (

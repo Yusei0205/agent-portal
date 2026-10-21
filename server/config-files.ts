@@ -4,8 +4,8 @@
  *
  * Every change is committed to the project's git repository, so it can be traced and restored. Files that can run
  * commands on the portal server or loosen approvals (settings files, hooks, Kiro settings and MCP config) can only be
- * changed by admins. The portal's own generated Kiro profiles (.kiro/agents/agent-portal-*) are neither shown nor
- * editable. JSON is checked before it is saved.
+ * changed by admins, and so can the hooks and MCP servers inside Kiro agents. The portal's own generated Kiro
+ * profiles (.kiro/agents/agent-portal-*) are neither shown nor editable. JSON is checked before it is saved.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,6 +13,7 @@ import JSZip from 'jszip';
 import { del, get, post, put, sendFile, type Ctx } from './http.ts';
 import { commitProject, notifyProject, projectDir, requireProject, type Project } from './projects.ts';
 import { HttpError, badRequest, notFound, str } from './util.ts';
+import { mustKeepKiroCommands } from './kiro-agents.ts';
 
 export const CONFIG_ROOTS = ['.claude', '.kiro'] as const;
 const MAX_FILE = 512 * 1024;
@@ -58,6 +59,18 @@ function mustChange(ctx: Ctx, rel: string): void {
   if (isProtected(rel) && !ctx.user!.is_admin) {
     throw new HttpError(403, `Only admins can change ${rel}: settings, hooks and MCP configuration can run commands on the portal server or skip approvals.`);
   }
+}
+
+/** A Kiro agent's hooks and MCP servers run commands on the server: changing them needs an admin. */
+function mustKeepAgentCommands(ctx: Ctx, project: Project, rel: string, content: string): void {
+  if (!/^\.kiro\/agents(-disabled)?\/[^/]+\.json$/.test(rel)) return;
+  let before: Record<string, unknown> | null = null;
+  try {
+    before = JSON.parse(fs.readFileSync(abs(project, rel), 'utf8'));
+  } catch {
+    /* a new file */
+  }
+  mustKeepKiroCommands(ctx, before, JSON.parse(content) ?? {});
 }
 
 /** Refuse content the engines could not read. */
@@ -132,6 +145,7 @@ export function registerConfigRoutes(): void {
     mustChange(ctx, rel);
     const content = typeof body.content === 'string' ? body.content : '';
     checkContent(rel, content);
+    mustKeepAgentCommands(ctx, project, rel, content);
     const file = abs(project, rel);
     if (fs.existsSync(file) && fs.statSync(file).isDirectory()) throw badRequest('That is a folder');
     const existed = fs.existsSync(file);
@@ -203,6 +217,7 @@ export function registerConfigRoutes(): void {
       if (total > MAX_IMPORT) throw badRequest('The files in that zip are larger than 20 MB in total');
       checkContent(rel, content);
       mustChange(ctx, rel);
+      mustKeepAgentCommands(ctx, project, rel, content);
       plan.push({ rel, content });
     }
     if (!plan.length) throw badRequest('That zip has no files');

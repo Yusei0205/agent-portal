@@ -13,10 +13,10 @@ const ROOTS = [
 ];
 
 /** Configuration: the project's .claude and .kiro folders as files, edited directly. Every save is committed. */
-export function Configuration() {
+export function Configuration({ route }) {
   const { project, canEdit } = useProject();
   const { toast, confirm } = useUi();
-  const [root, setRoot] = useState('.claude');
+  const [root, setRoot] = useState(() => (route?.query?.get('root') === '.kiro' ? '.kiro' : '.claude'));
   const files = useLoad(() => api.get(`/api/projects/${project.id}/config/files?root=${root}`), [project.id, root]);
   useProjectEvents(['builder.updated'], () => files.reload(true));
   const [open, setOpen] = useState(null); // path
