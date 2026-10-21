@@ -10,25 +10,27 @@
  * keeps reporting the same thing, two failed runs in a row, and blocked commands (see guardrails.ts).
  */
 import path from 'node:path';
+import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { all, insert, one, run as exec, update, type Row } from './db.ts';
 import { del, get, post, put } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
-import { getRepo } from './repos.ts';
+import { getRepo, repoGitEnv, pushWorktree, checkBranch, githubApi, githubSlug } from './repos.ts';
 import { checkKey, issueDetail, mustMapping } from './jira.ts';
 import { requireModel } from './models.ts';
 import { ticketMarkdown } from './jira-text.ts';
 import { getRun, isActive, startRun, stopRun } from './agent/runner.ts';
 import { badRequest, newId, notFound, now, parseJson, str } from './util.ts';
-import { composeIterationPrompt, composeLeadAppend, parseStatus, safeBranchName, stagnated } from './guardrails.ts';
+import { composeIterationPrompt, parseTrustedPush, parseStatus, safeBranchName, stagnated } from './guardrails.ts';
 import { listAgentFiles } from './builder.ts';
 import { claudeProvider, effectiveProvider, engineProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
-import { pushRun, readRepoChoices } from './runs.ts';
+import { pushRun, readRepoChoices, isSharedBranch } from './runs.ts';
 import { runRepos } from './agent/runner.ts';
 import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
 import { readIntegrationIds } from './integrations.ts';
 import { getSettings } from './settings.ts';
+import { git, redact } from './git.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -118,6 +120,8 @@ function view(w: Row) {
     summary: w.summary,
     created_at: w.created_at,
     updated_at: w.updated_at,
+    playground: Boolean(w.playground),
+    trust_tools: Boolean(w.trust_tools),
   };
 }
 
@@ -251,6 +255,9 @@ export function createChild(parent: Row, task: { title?: string; goal: string },
     parent_id: parent.id,
     depth: Number(parent.depth) + 1,
     seen_by_parent: 1,
+    push_mode: parent.push_mode,
+    playground: parent.playground,
+    trust_tools: parent.trust_tools,
     created_by: parent.created_by,
     created_at: now(),
     updated_at: now(),
@@ -331,6 +338,7 @@ async function drive(id: string): Promise<void> {
       baseBranch: w.repo_id ? w.branch || getRepo(w.repo_id).default_branch : '',
       context: contextForIteration(id),
       pushMode: (w.push_mode || 'never') as 'never' | 'ask' | 'auto',
+      trustTools: Boolean(w.trust_tools),
       delegation: (() => {
         const kids = childrenOf(id);
         const d = getSettings().delegation;
@@ -346,11 +354,12 @@ async function drive(id: string): Promise<void> {
     exec("UPDATE workflows SET seen_by_parent = 1 WHERE parent_id = ? AND status != 'running'", id);
 
     // A lead agent from the project's team plans and delegates; without one the default main agent decides.
-    let systemAppend: string | undefined;
+    // The runner words its instructions for the run's engine (Claude's Agent tool or Kiro's subagent tool).
+    let lead: { name: string; description: string; prompt: string; team: { name: string; description: string }[] } | undefined;
     if (w.lead_agent) {
       const team = listAgentFiles(getProject(w.project_id)).filter((a) => a.enabled);
-      const lead = team.find((a) => a.name === w.lead_agent);
-      if (lead) systemAppend = composeLeadAppend(lead, team);
+      const found = team.find((a) => a.name === w.lead_agent);
+      if (found) lead = { name: found.name, description: found.description, prompt: found.prompt, team: team.map((a) => ({ name: a.name, description: a.description })) };
       else if (!leadWarned) {
         log(id, 'status', `The lead agent "${w.lead_agent}" is not enabled in this project any more, so the default agent leads.`);
         leadWarned = true;
@@ -360,6 +369,9 @@ async function drive(id: string): Promise<void> {
     let started;
     try {
       const prev = w.last_run_id ? getRun(w.last_run_id) : null;
+      // Continue the last run's conversation and working copies, unless the session's repositories changed since.
+      const repoIds = (list: { repoId: string }[]) => list.map((r) => r.repoId).sort().join(',');
+      const sameRepos = prev ? repoIds(runRepos(prev).length ? runRepos(prev) : prev.repo_id ? [{ repoId: String(prev.repo_id) }] : []) === repoIds(sessionRepos(w)) : false;
       started = await startRun({
         projectId: w.project_id,
         userId: w.created_by,
@@ -373,10 +385,12 @@ async function drive(id: string): Promise<void> {
         engine: w.engine || null,
         permissionMode: 'acceptEdits',
         autoApprove: true,
+        trustTools: Boolean(w.trust_tools),
+        trustedPushHandler: w.trust_tools ? (branch) => performTrustedPush(id, branch) : undefined,
         model: w.model,
-        resumeOf: prev && prev.session_id ? prev.id : null,
-        systemAppend,
-        meta: { workflowId: id, iteration, leadAgent: systemAppend ? w.lead_agent : '' },
+        resumeOf: prev && prev.session_id && sameRepos ? prev.id : null,
+        lead,
+        meta: { workflowId: id, iteration, leadAgent: lead ? w.lead_agent : '' },
       });
     } catch (e: any) {
       return stopWith(id, 'paused', String(e?.message ?? e).slice(0, 300));
@@ -458,6 +472,13 @@ async function drive(id: string): Promise<void> {
     // The agents asked the portal to push: never, after a person approves, or at once, depending on the session.
     if (status?.push) {
       const mode = w.push_mode || 'never';
+      // Auto-derive a branch name if the agents didn't name one yet.
+      if (!w.work_branch) {
+        const derived = deriveBranchName(w);
+        patch(id, { work_branch: derived });
+        log(id, 'status', `No branch name was given; using "${derived}".`);
+        w = getWorkflow(id);
+      }
       const why = pushBlocker(w, lastCheck);
       if (mode === 'never') {
         log(id, 'status', 'The agents asked to push, but agent pushes are off for this session. Push from the Changes tab, or allow agent pushes in its settings.');
@@ -541,7 +562,7 @@ export function resumeAfterRestart(ids: string[]): number {
 /* Routes                                                              */
 /* ------------------------------------------------------------------ */
 
-function readSettings(body: any, current?: Row) {
+function readSettings(body: any, current?: Row, ctx?: { hasRepos?: boolean; isPlayground?: boolean }) {
   const num = (v: unknown, name: string, min: number, max: number, fallback: number) => {
     if (v === undefined || v === null || v === '') return fallback;
     const n = Number(v);
@@ -556,14 +577,38 @@ function readSettings(body: any, current?: Row) {
     max_iterations: Math.round(num(body.maxIterations, 'Iterations', 1, 50, current?.max_iterations ?? 8)),
     verify_command: body.verifyCommand === undefined ? current?.verify_command ?? '' : str(body.verifyCommand, 'Check command', { max: 500, optional: true }).trim(),
     rules: body.rules === undefined ? current?.rules ?? '' : str(body.rules, 'Rules', { max: 4000, optional: true }).trim(),
-    push_mode: readPushMode(body.pushMode, current?.push_mode),
+    push_mode: effectivePushMode(body.pushMode, current?.push_mode, ctx?.hasRepos ?? false, ctx?.isPlayground ?? false),
+    trust_tools: body.trustTools === undefined ? (current?.trust_tools ?? 0) : body.trustTools ? 1 : 0,
   };
 }
 
 function readPushMode(raw: unknown, current?: string): string {
-  if (raw === undefined || raw === null || raw === '') return current || 'never';
+  if (raw === undefined || raw === null || raw === '') return current || getSettings().agents.defaultPushMode || 'never';
   if (!['never', 'ask', 'auto'].includes(String(raw))) throw badRequest('Agent pushes must be never, ask or auto');
   return String(raw);
+}
+
+/**
+ * Determine the push mode for a new or updated session.
+ * - Explicit values always win if valid.
+ * - Playground sessions without an explicit value stay 'never'.
+ * - On update (current defined): keep the current value exactly — never escalate.
+ * - On create (current undefined): use settings default; else 'ask' if repos; else 'never'.
+ */
+function effectivePushMode(raw: unknown, current: string | undefined, hasRepos: boolean, isPlayground: boolean): string {
+  const explicit = raw !== undefined && raw !== null && raw !== '';
+  if (explicit) {
+    if (!['never', 'ask', 'auto'].includes(String(raw))) throw badRequest('Agent pushes must be never, ask or auto');
+    return String(raw);
+  }
+  // No explicit value: playground sessions stay never.
+  if (isPlayground) return 'never';
+  // On update (current is the existing stored value): keep it exactly — never escalate.
+  if (current !== undefined) return current || 'never';
+  // On create: use settings default, then repo-presence heuristic.
+  const settingsDefault = getSettings().agents.defaultPushMode;
+  if (settingsDefault) return settingsDefault;
+  return hasRepos ? 'ask' : 'never';
 }
 
 /* ------------------------------------------------------------------ */
@@ -602,10 +647,96 @@ async function pushForSession(w: Row, req: PushRequest, by: string) {
 
 /** Why a push the agents asked for cannot happen now, or ''. */
 function pushBlocker(w: Row, lastCheck: { ok: boolean } | null): string {
-  if (!w.repo_id) return 'this session has no repository';
-  if (!w.work_branch) return 'the new branch has no name yet (the agents name it in their status line first)';
+  if (!sessionRepos(w).length) return 'this session has no repository';
   if (lastCheck && !lastCheck.ok) return 'the check failed';
   return '';
+}
+
+/**
+ * Called by the trusted-push handler when an agent runs `git push` in a trust_tools session.
+ * Validates the branch, performs the push via pushRun, records a history event, and returns a
+ * human-readable result string for the agent.
+ */
+async function performTrustedPush(workflowId: string, requestedBranch: string | null): Promise<string> {
+  let w = getWorkflow(workflowId);
+  // Must have a repository.
+  const repos = sessionRepos(w);
+  if (!repos.length) {
+    return 'No repository is attached to this session. Attach one under session settings and push again.';
+  }
+  // Must have an active run.
+  if (!w.last_run_id) throw new Error('No active run for this session');
+  const run = getRun(w.last_run_id);
+
+  // Resolve the branch name.
+  let branch: string;
+  if (!requestedBranch) {
+    // Use session work_branch or derive one.
+    if (!w.work_branch) {
+      const derived = deriveBranchName(w);
+      exec('UPDATE workflows SET work_branch = ?, updated_at = ? WHERE id = ?', derived, now(), w.id);
+      w = getWorkflow(workflowId);
+      branch = derived;
+    } else {
+      branch = w.work_branch;
+    }
+  } else {
+    branch = requestedBranch;
+  }
+
+  // Validate: must not be a shared branch or the session's base branch.
+  const repoRow = getRepo(repos[0].repoId);
+  const baseBranch = repos[0].branch || repoRow.default_branch;
+  if (branch === baseBranch || branch === repoRow.default_branch) {
+    return `Push refused: "${branch}" is the base/default branch. The portal only pushes to a new branch. Use a name like agent/${branch}-changes or feature/my-task.`;
+  }
+  if (isSharedBranch(branch)) {
+    return `Push refused: "${branch}" is a shared branch (main, develop, release, etc.). The portal never pushes to shared branches. Use a new branch name.`;
+  }
+  // Validate: not --force / --mirror / --delete / --tags (already handled by parseTrustedPush in the guard,
+  // but double-check here since this can be called directly too).
+
+  // Perform the push.
+  const results: { repo: string; ok: boolean; commit?: string; error?: string }[] = [];
+  for (const x of runRepos(run)) {
+    try {
+      const r = await pushRun(run, { repoId: x.repoId, branch, agent: true });
+      results.push({ repo: r.repoName, ok: true, commit: r.commit ?? undefined });
+      // Update work_branch if not set.
+      if (!w.work_branch) exec('UPDATE workflows SET work_branch = ?, updated_at = ? WHERE id = ?', branch, now(), workflowId);
+    } catch (e: any) {
+      results.push({ repo: x.name || getRepo(x.repoId).name, ok: false, error: String(e?.message ?? e).slice(0, 300) });
+    }
+  }
+  const ok = results.filter((r) => r.ok);
+  const body = ok.length
+    ? `Agent pushed to "${branch}"${results.length > 1 ? ` in ${ok.length} of ${results.length} repositories` : ''}${ok[0]?.commit ? ` (${ok[0].commit.slice(0, 7)})` : ''}.`
+    : `Agent push to "${branch}" failed: ${results.map((r) => r.error).join('; ')}`;
+  log(workflowId, 'push', body, { runId: w.last_run_id, data: { branch, by: 'agent (trusted)', results } });
+  if (ok.length) {
+    return `Pushed to "${branch}"${ok[0]?.commit ? ` (${ok[0].commit.slice(0, 7)})` : ''}. The push was performed by the portal with stored credentials.`;
+  }
+  throw new Error(results.map((r) => r.error).filter(Boolean).join('; ') || 'Push failed');
+}
+
+/**
+ * Derive a branch name from the session's Jira key or title when work_branch is empty.
+ * Format: agent/<jira key lowercased, else slug of the title, max 40 chars>-<last 6 of session id>
+ */
+function deriveBranchName(w: Row): string {
+  const suffix = w.id.slice(-6).toLowerCase();
+  if (w.jira_key) {
+    return `agent/${w.jira_key.toLowerCase()}-${suffix}`;
+  }
+  const slug = String(w.title || w.goal)
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '');
+  return `agent/${slug || 'task'}-${suffix}`;
 }
 
 /** The lead agent named in a request must be one of the project's enabled agents; empty means the default. */
@@ -645,7 +776,7 @@ export function registerWorkflowRoutes(): void {
   // Which engines a project can run on, for the New dialog.
   get('/api/projects/:pid/engines', (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid);
-    return { default: effectiveProvider(project.id), claude: claudeProvider(project.id), kiro: true };
+    return { default: effectiveProvider(project.id), claude: claudeProvider(project.id), kiro: true, pushMode: getSettings().agents.defaultPushMode || 'never' };
   });
 
   registerContextRoutes((workflowId, message) => log(workflowId, 'context', message));
@@ -683,7 +814,12 @@ export function registerWorkflowRoutes(): void {
     const repos = readRepoChoices(project.id, body);
     const single = !Array.isArray(body.repos) && repos.length === 1;
     const repoId: string | null = repos[0]?.repoId ?? null;
-    const s = readSettings(body);
+    const playground = Boolean(body.playground);
+    // A session must have a repository, a workspace, or be explicitly marked as a playground.
+    if (!repoId && !workspace && !playground) {
+      throw badRequest('Pick a repository or workspace, or start it as a playground with no repository.');
+    }
+    const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
     const leadAgent = checkLead(project, body.leadAgent);
     const contextItems = readContextItems(body.context);
     const id = newId('w_');
@@ -700,6 +836,7 @@ export function registerWorkflowRoutes(): void {
       workspace_id: workspace?.id ?? null,
       engine,
       integrations: JSON.stringify(integrationIds),
+      playground: playground ? 1 : 0,
       ...s,
       iteration: 0,
       burst_start: 0,
@@ -741,13 +878,23 @@ export function registerWorkflowRoutes(): void {
     const w = getWorkflow(ctx.params.id);
     requireProject(ctx, w.project_id, 'editor');
     const body = await ctx.json();
-    const s = readSettings(body, w);
+    const s = readSettings(body, w, { hasRepos: sessionRepos(w).length > 0, isPlayground: Boolean(w.playground) });
     const p: Record<string, string | number | null> = { ...s };
     if (body.leadAgent !== undefined) p.lead_agent = checkLead(getProject(w.project_id), body.leadAgent);
     if (body.integrations !== undefined) p.integrations = JSON.stringify(readIntegrationIds(body.integrations, ctx.user!.id));
     if (body.engine !== undefined) p.engine = readEngine(w.project_id, body.engine);
     if (body.title !== undefined) p.title = str(body.title, 'Title', { max: 120 }).trim();
     if (body.goal !== undefined) p.goal = str(body.goal, 'Goal', { max: 6000 }).trim();
+    // Repositories can be attached (or changed) later; the next iteration starts on fresh working copies of them.
+    if (body.repos !== undefined || body.repoId !== undefined) {
+      if (w.status === 'running' || driving.has(w.id)) throw badRequest('Stop or pause the session before changing its repositories');
+      const repos = readRepoChoices(w.project_id, body);
+      const single = !Array.isArray(body.repos) && repos.length === 1;
+      p.repo_id = repos[0]?.repoId ?? null;
+      p.branch = single ? str(body.branch, 'Branch', { max: 200, optional: true }).trim() || null : (repos[0]?.branch ?? null);
+      p.repos = JSON.stringify(repos.length > 1 ? repos : []);
+      if (JSON.stringify(sessionRepos({ ...w, ...p } as Row)) !== JSON.stringify(sessionRepos(w))) p.work_branch = '';
+    }
     const out = patch(w.id, p);
     log(w.id, 'system', `Settings changed by ${ctx.user!.name}`);
     return { workflow: view(out) };
@@ -857,6 +1004,302 @@ export function registerWorkflowRoutes(): void {
     removeContextFiles(w.project_id, w.id);
     notifyProject(w.project_id, 'workflow.deleted', { id: w.id });
     return { ok: true };
+  });
+
+  /* -------- rescue routes -------- */
+
+  /** List all git working copies inside the session's run folders (read-only, newest run first, last 10 runs). */
+  get('/api/workflows/:id/working-copies', async (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id);
+    const project = getProject(w.project_id);
+    const pdir = projectDir(project);
+    // Collect the last 10 runs belonging to this session, newest first.
+    const runs = all<Row>(
+      "SELECT id, meta FROM runs WHERE project_id = ? AND meta LIKE ? ORDER BY created_at DESC LIMIT 10",
+      w.project_id,
+      `%"workflowId":"${w.id}"%`,
+    );
+    // Build a set of root-commit -> repoId mappings for all project repos.
+    const projectRepos = all<Row>('SELECT id, name FROM repos WHERE project_id = ?', w.project_id);
+    const repoRootMap = new Map<string, { repoId: string; repoName: string }>();
+    for (const repo of projectRepos) {
+      try {
+        const repoSlug = all<Row>('SELECT slug FROM repos WHERE id = ?', repo.id)[0]?.slug ?? '';
+        const repoPath = path.join(pdir, 'repos', repoSlug);
+        if (!fs.existsSync(repoPath)) continue;
+        const res = await git(['rev-list', '--max-parents=0', 'HEAD'], { cwd: repoPath }).catch(() => null);
+        const rootSha = res?.stdout.trim();
+        if (rootSha) repoRootMap.set(rootSha, { repoId: repo.id, repoName: String(repo.name) });
+      } catch { /* skip */ }
+    }
+
+    const items: {
+      runId: string; path: string; branch: string; head: string; subject: string;
+      dirty: boolean; repoId: string | null; repoName: string;
+    }[] = [];
+    // Dedupe: track absolute paths already added so runs that resume with the same work folder appear once.
+    const seenPaths = new Set<string>();
+
+    for (const run of runs) {
+      const meta = parseJson<any>(run.meta, {});
+      // Find the base work directory for this run.
+      const worktree: string | undefined = meta.workDir;
+      const singleWt: string | undefined = meta.repos?.[0]?.worktree ?? run.worktree ?? undefined;
+      const runFolderRel = worktree ?? singleWt;
+      if (!runFolderRel) continue;
+      const runFolderAbs = path.join(pdir, runFolderRel);
+      if (!fs.existsSync(runFolderAbs)) continue;
+
+      // Walk max depth 2 below run folder for .git dirs (same logic as before).
+      const gitDirs: string[] = [];
+      if (fs.existsSync(path.join(runFolderAbs, '.git'))) {
+        gitDirs.push(runFolderAbs);
+      } else {
+        try {
+          for (const e of fs.readdirSync(runFolderAbs, { withFileTypes: true })) {
+            if (!e.isDirectory() || e.name === 'node_modules') continue;
+            const sub = path.join(runFolderAbs, e.name);
+            if (fs.existsSync(path.join(sub, '.git'))) {
+              gitDirs.push(sub);
+            } else {
+              try {
+                for (const e2 of fs.readdirSync(sub, { withFileTypes: true })) {
+                  if (!e2.isDirectory() || e2.name === 'node_modules') continue;
+                  const sub2 = path.join(sub, e2.name);
+                  if (fs.existsSync(path.join(sub2, '.git'))) gitDirs.push(sub2);
+                }
+              } catch { /* skip */ }
+            }
+          }
+        } catch { /* skip */ }
+      }
+
+      for (const gitDir of gitDirs) {
+        const relPath = path.relative(pdir, gitDir).replace(/\\/g, '/');
+        // Dedupe by absolute path: same folder appears only once even when multiple runs share it.
+        if (seenPaths.has(gitDir)) continue;
+        seenPaths.add(gitDir);
+        try {
+          const g = (args: string[]) => git(args, { cwd: gitDir }).then((r) => r.stdout.trim()).catch(() => '');
+          const branch = await g(['rev-parse', '--abbrev-ref', 'HEAD']);
+          const head = await g(['rev-parse', '--short', 'HEAD']);
+          const subject = await g(['log', '-1', '--format=%s']);
+          const dirtyOut = await g(['status', '--porcelain']);
+          const dirty = dirtyOut.length > 0;
+          let repoId: string | null = null;
+          let repoName = '';
+          const rootSha = await g(['rev-list', '--max-parents=0', 'HEAD']);
+          const match = repoRootMap.get(rootSha);
+          if (match) { repoId = match.repoId; repoName = match.repoName; }
+          items.push({ runId: run.id, path: relPath, branch, head, subject, dirty, repoId, repoName });
+        } catch { /* skip */ }
+      }
+    }
+
+    return { copies: items };
+  });
+
+  /** Attach a repository to a session that has none (rescue stuck playground sessions). */
+  post('/api/workflows/:id/attach-repo', async (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id, 'editor');
+    if (sessionRepos(w).length) throw badRequest('This session already has repositories');
+    if (w.status === 'running' || driving.has(w.id)) throw badRequest('Stop the session before attaching a repository');
+    // Active-run guard: last run still active.
+    if (w.last_run_id && isActive(w.last_run_id)) throw badRequest('Wait for the current run to finish before attaching a repository');
+    const body = await ctx.json();
+    const repo = getRepo(String(body.repoId ?? ''));
+    if (repo.project_id !== w.project_id) throw badRequest('That repository belongs to another project');
+    const branch = body.branch ? checkBranch(String(body.branch)) : repo.default_branch;
+    const repos = [{ repoId: repo.id, branch }];
+    // Upgrade push_mode from 'never' to 'ask' now that we have a repo.
+    const newPushMode = w.push_mode === 'never' ? 'ask' : w.push_mode;
+    exec(
+      "UPDATE workflows SET repo_id = ?, branch = ?, repos = ?, playground = 0, push_mode = ?, updated_at = ? WHERE id = ?",
+      repo.id, branch, JSON.stringify(repos), newPushMode, now(), w.id,
+    );
+    log(w.id, 'system', `Repository "${repo.name}" attached by ${ctx.user!.name}; agent pushes set to "${newPushMode}".`);
+    return { workflow: view(getWorkflow(w.id)) };
+  });
+
+  /** Push an arbitrary working copy from a run folder to a new branch on a connected repo. */
+  post('/api/workflows/:id/push-copy', async (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id, 'editor');
+
+    // Active-run guard: refuse if the session is currently running, being driven, or has an active last run.
+    if (w.status === 'running' || driving.has(w.id)) throw badRequest('Stop the session before pushing a working copy');
+    if (w.last_run_id && isActive(w.last_run_id)) throw badRequest('Wait for the current run to finish before pushing');
+
+    const body = await ctx.json();
+    const project = getProject(w.project_id);
+    const pdir = projectDir(project);
+
+    // Validate and resolve the path — must be inside one of this session's run folders.
+    const rawPath = str(body.path, 'path', { max: 500 });
+    let absPath: string;
+    try {
+      absPath = path.resolve(pdir, rawPath.replace(/\//g, path.sep));
+    } catch {
+      throw badRequest('Invalid path');
+    }
+    if (!absPath.startsWith(pdir + path.sep) && absPath !== pdir) throw badRequest('Path is outside the project directory');
+    // Resolve symlinks to detect traversal.
+    let realAbs: string;
+    try {
+      realAbs = fs.realpathSync(absPath);
+    } catch {
+      throw badRequest('Path does not exist');
+    }
+    if (!realAbs.startsWith(pdir + path.sep) && realAbs !== pdir) throw badRequest('Path resolves outside the project directory');
+
+    // Must be inside a run folder that belongs to this session.
+    const runs = all<Row>(
+      "SELECT id, meta FROM runs WHERE project_id = ? AND meta LIKE ? ORDER BY created_at DESC LIMIT 50",
+      w.project_id,
+      `%"workflowId":"${w.id}"%`,
+    );
+    const isInsideRunFolder = runs.some((r) => {
+      const meta = parseJson<any>(r.meta, {});
+      const candidates: string[] = [];
+      if (meta.workDir) candidates.push(path.resolve(pdir, meta.workDir.replace(/\//g, path.sep)));
+      if (Array.isArray(meta.repos)) {
+        for (const rr of meta.repos) if (rr.worktree) candidates.push(path.resolve(pdir, rr.worktree.replace(/\//g, path.sep)));
+      }
+      if (r.worktree) candidates.push(path.resolve(pdir, r.worktree.replace(/\//g, path.sep)));
+      return candidates.some((c) => realAbs === c || realAbs.startsWith(c + path.sep));
+    });
+    if (!isInsideRunFolder) throw badRequest('Path is not inside any run folder of this session');
+
+    // Verify it is a git repo.
+    if (!fs.existsSync(path.join(realAbs, '.git'))) throw badRequest('No git repository found at that path');
+
+    // Validate repo and branch.
+    const repo = getRepo(String(body.repoId ?? ''));
+    if (repo.project_id !== w.project_id) throw badRequest('That repository belongs to another project');
+
+    // Derive branch if not given.
+    let branch: string;
+    if (body.branch) {
+      branch = checkBranch(String(body.branch));
+    } else {
+      if (!w.work_branch) {
+        const derived = deriveBranchName(w);
+        exec('UPDATE workflows SET work_branch = ?, updated_at = ? WHERE id = ?', derived, now(), w.id);
+        branch = derived;
+      } else {
+        branch = w.work_branch;
+      }
+    }
+
+    // Guards: never push to base/default/shared branches.
+    if (branch === repo.default_branch) throw badRequest(`Push to a new branch. "${branch}" is the default branch of the repository.`);
+    if (isSharedBranch(branch)) throw badRequest(`Agents may not push to the shared branch "${branch}". Use a new branch for the changes.`);
+
+    // Verify git history using async git() helper (sets GIT_TERMINAL_PROMPT=0, redacts credentials on error).
+    const gitAt = (args: string[]) => git(args, { cwd: realAbs });
+
+    let wcRootSha: string;
+    try {
+      wcRootSha = (await gitAt(['rev-list', '--max-parents=0', 'HEAD'])).stdout.trim();
+    } catch (e: any) {
+      throw badRequest(`Cannot read git history at that path: ${redact(String(e?.message ?? e)).slice(0, 200)}`);
+    }
+    const repoSlug = all<Row>('SELECT slug FROM repos WHERE id = ?', repo.id)[0]?.slug ?? '';
+    const repoPath = path.join(pdir, 'repos', repoSlug);
+    let repoRootSha: string;
+    try {
+      repoRootSha = (await git(['rev-list', '--max-parents=0', 'HEAD'], { cwd: repoPath })).stdout.trim();
+    } catch (e: any) {
+      throw badRequest(`Cannot read the history of repository "${repo.name}": ${redact(String(e?.message ?? e)).slice(0, 200)}`);
+    }
+    if (wcRootSha !== repoRootSha) throw badRequest(`The working copy's history does not match the repository "${repo.name}". Cannot push.`);
+
+    // Handle dirty working copy.
+    let dirty = false;
+    try {
+      dirty = (await gitAt(['status', '--porcelain'])).stdout.trim().length > 0;
+    } catch { /* assume clean */ }
+
+    if (dirty) {
+      const message = str(body.message, 'Commit message', { max: 2000, optional: true }).trim();
+      if (!message) throw badRequest('The working copy has uncommitted changes. Provide a commit message to commit them first.');
+      try {
+        await gitAt(['add', '-A']);
+        await git(['-c', 'user.name=Agent Portal', '-c', 'user.email=portal@localhost', 'commit', '-m', message], { cwd: realAbs });
+      } catch (e: any) {
+        throw badRequest(`Could not commit: ${redact(String(e?.message ?? e)).slice(0, 200)}`);
+      }
+    }
+
+    // Checkout the target branch.
+    try {
+      await gitAt(['checkout', '-B', branch]);
+    } catch (e: any) {
+      throw badRequest(`Could not switch to branch "${branch}": ${redact(String(e?.message ?? e)).slice(0, 200)}`);
+    }
+
+    // Set remote URL using credentials env (never leaks URL into process args).
+    const credEnv = await repoGitEnv(repo);
+    try {
+      await git(['remote', 'set-url', 'origin', repo.url], { cwd: realAbs, env: credEnv });
+    } catch {
+      try {
+        await git(['remote', 'add', 'origin', repo.url], { cwd: realAbs, env: credEnv });
+      } catch (e: any) {
+        throw badRequest(`Could not configure remote: ${redact(String(e?.message ?? e)).slice(0, 200)}`);
+      }
+    }
+
+    // Capture HEAD commit for the history record.
+    let commit: string | null = null;
+    try {
+      commit = (await gitAt(['rev-parse', 'HEAD'])).stdout.trim();
+    } catch { /* skip */ }
+
+    // Perform the push using the async git helper (captures and redacts stderr on failure).
+    try {
+      await git(['push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`], { cwd: realAbs, env: credEnv, timeoutMs: 5 * 60_000 });
+    } catch (e: any) {
+      throw badRequest(`Push failed: ${redact(String(e?.message ?? e)).slice(0, 300)}`);
+    }
+
+    // Open draft PR if requested and repo is GitHub.
+    let prHtmlUrl: string | null = null;
+    if (body.pr && repo.provider === 'github') {
+      try {
+        if (githubSlug(repo.url)) {
+          const baseBranch = sessionRepos(getWorkflow(w.id))[0]?.branch || repo.default_branch;
+          const created = await githubApi(repo, 'POST', '/pulls', {
+            title: branch,
+            head: branch,
+            base: baseBranch,
+            body: `Created from Agent Portal session "${w.title}".`,
+            draft: true,
+          });
+          prHtmlUrl = created.html_url ?? null;
+        }
+      } catch { /* PR creation is best-effort */ }
+    }
+
+    // Record history event using the same shape as pushForSession (pr = html_url string).
+    const results = [{ repo: repo.name, ok: true, commit: commit ?? undefined, pr: prHtmlUrl ?? undefined }];
+    const msg = `Pushed working copy at "${rawPath}" to "${branch}" in ${repo.name}${prHtmlUrl ? ' and opened a draft pull request' : ''}.`;
+    const currentW = getWorkflow(w.id);
+    log(w.id, 'push', msg, { data: { branch, by: ctx.user!.name, results } });
+
+    // Set work_branch if empty.
+    if (!currentW.work_branch) {
+      exec('UPDATE workflows SET work_branch = ?, updated_at = ? WHERE id = ?', branch, now(), w.id);
+    }
+    // Mark blocked sessions as done.
+    if (currentW.status === 'blocked') {
+      exec("UPDATE workflows SET status = 'done', stop_reason = ?, updated_at = ? WHERE id = ?",
+        `Pushed to "${branch}" via push-copy.`, now(), w.id);
+    }
+
+    return { workflow: view(getWorkflow(w.id)), push: { ok: true, results } };
   });
 }
 

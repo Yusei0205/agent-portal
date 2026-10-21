@@ -45,7 +45,7 @@ export async function* sdkRun(opts: ProviderRunOptions): AsyncIterable<SdkMessag
   };
 
   const preToolUse = async (hookInput: any) => {
-    const reason = opts.guard?.(hookInput.tool_name, hookInput.tool_input ?? {});
+    const reason = await opts.guard?.(hookInput.tool_name, hookInput.tool_input ?? {});
     if (reason) {
       return {
         hookSpecificOutput: {

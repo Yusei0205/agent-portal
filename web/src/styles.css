@@ -177,6 +177,7 @@ code {
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 .brand {
   display: flex;
@@ -199,10 +200,6 @@ code {
 }
 .switcher-select {
   font-weight: 600;
-}
-.rail-nav {
-  display: grid;
-  gap: 2px;
 }
 .rail-link {
   display: flex;
@@ -231,6 +228,108 @@ code {
   font-weight: 700;
   border-radius: 999px;
   padding: 0 7px;
+}
+
+/* ---------- Drill-down rail nav ---------- */
+.rail-nav-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Two panels sit side-by-side; the wrap clips them so only one is visible.
+   Under prefers-reduced-motion we skip the slide. */
+.rail-panels {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  transition: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rail-panels {
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+.rail-panels.show-sub {
+  transform: translateX(-50%);
+}
+.rail-panel {
+  width: 50%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.rail-nav {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+/* Group entry — a button that looks like a rail-link */
+.rail-group-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-weight: 520;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-group-btn:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+/* Highlight the group button when any of its children is active */
+.rail-group-btn.has-active-child {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.rail-group-chevron {
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+/* Flip icon for the Back button chevron */
+.icon-flip-h {
+  transform: rotate(180deg);
+}
+
+/* Submenu back button */
+.rail-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.rail-back-btn:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.rail-sub-label {
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-3);
+  padding: 2px 10px 6px;
 }
 .rail-foot {
   margin-top: auto;
@@ -3384,7 +3483,7 @@ hr.rule {
 }
 .jira-picker-option {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto auto auto;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -3414,6 +3513,10 @@ hr.rule {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+}
+.jira-picker-option-date {
+  white-space: nowrap;
+  font-size: 12px;
 }
 .jira-picker-state {
   padding: 12px;
@@ -4366,6 +4469,25 @@ html[data-theme='hud'] .ins-hbar-fill {
   display: grid;
   gap: 4px;
   align-content: start;
+}
+/* What people typed: the goal and the instructions an iteration picked up, kept as written. */
+.ws-asked {
+  display: grid;
+  gap: 8px;
+}
+.ws-asked summary {
+  cursor: pointer;
+}
+.ws-asked-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+.ws-asked-msg {
+  border-left: 2px solid var(--accent, currentColor);
+  padding-left: 10px;
 }
 .ws-iters {
   display: flex;

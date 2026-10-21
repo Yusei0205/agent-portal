@@ -50,7 +50,7 @@ test('a token is shown once, acts as its owner, and reads without a browser', as
 
 test('a write token starts and steers sessions, without the browser-only header', async () => {
   const { token } = await admin.post('/api/tokens', { name: 'Bot', scope: 'write', days: 90 });
-  const created = await call(token, 'POST', `/api/projects/${pid}/workflows`, { goal: 'Started from a script', start: false });
+  const created = await call(token, 'POST', `/api/projects/${pid}/workflows`, { goal: 'Started from a script', start: false, playground: true });
   assert.equal(created.status, 200, JSON.stringify(created.data));
   const id = created.data.workflow.id;
   assert.equal((await call(token, 'POST', `/api/workflows/${id}/messages`, { body: 'and go' })).status, 200);

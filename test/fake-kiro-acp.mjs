@@ -132,8 +132,11 @@ process.stdin.on('data', async (d) => {
     else if (m.method === 'session/load') {
       // History replay that the portal must ignore.
       update(m.params.sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'OLD HISTORY' } });
-      send({ id: m.id, result: { modes: { currentModeId: agent }, models: MODELS } });
-    } else if (m.method === 'session/set_model') send({ id: m.id, result: {} });
+      // Like kiro-cli: a loaded session keeps the agent it was created with; that per-run profile is gone, so it reports
+      // kiro_default until the client switches it with session/set_mode.
+      send({ id: m.id, result: { modes: { currentModeId: 'kiro_default' }, models: MODELS } });
+    } else if (m.method === 'session/set_mode') send({ id: m.id, result: {} });
+    else if (m.method === 'session/set_model') send({ id: m.id, result: {} });
     else if (m.method === 'session/prompt') {
       const text = m.params.prompt.map((p) => p.text).join('\n');
       runPrompt(m.params.sessionId, text).then((result) => send({ id: m.id, result }));

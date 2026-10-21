@@ -387,6 +387,44 @@ function SuccessRing({ pct }) {
 
 // ─── Big chart: Runs & Latency ────────────────────────────────────────────────
 
+function RunsLatencyDataTable({ daily }) {
+  const COLS = [
+    { key: 'date',   label: 'Date',   accessor: 'date',     type: 'date' },
+    { key: 'runs',   label: 'Runs',   accessor: 'runs',     type: 'number' },
+    { key: 'failed', label: 'Failed', accessor: 'failed',   type: 'number' },
+    { key: 'median', label: 'Median', accessor: 'medianMs', type: 'number' },
+    { key: 'p95',    label: 'p95',    accessor: 'p95Ms',    type: 'number' },
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(daily, {
+    columns: COLS,
+    storageKey: 'sort:insights:latency-table',
+  });
+  return (
+    <table className="table compact">
+      <thead>
+        <tr>
+          <SortHeader col={COLS[0]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+          <SortHeader col={COLS[1]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+          <SortHeader col={COLS[2]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+          <SortHeader col={COLS[3]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+          <SortHeader col={COLS[4]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((d) => (
+          <tr key={d.date}>
+            <td>{d.date}</td>
+            <td className="num">{d.runs}</td>
+            <td className="num">{d.failed}</td>
+            <td className="num">{fmtDuration(d.medianMs)}</td>
+            <td className="num">{fmtDuration(d.p95Ms)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function RunsLatencyChart({ daily, reduced }) {
   if (!daily?.length) {
     return (
@@ -426,28 +464,7 @@ function RunsLatencyChart({ daily, reduced }) {
         </ComposedChart>
       </ResponsiveContainer>
       <TableToggle label="Runs and latency data">
-        <table className="table compact">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th className="num">Runs</th>
-              <th className="num">Failed</th>
-              <th className="num">Median</th>
-              <th className="num">p95</th>
-            </tr>
-          </thead>
-          <tbody>
-            {daily.map((d) => (
-              <tr key={d.date}>
-                <td>{d.date}</td>
-                <td className="num">{d.runs}</td>
-                <td className="num">{d.failed}</td>
-                <td className="num">{fmtDuration(d.medianMs)}</td>
-                <td className="num">{fmtDuration(d.p95Ms)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <RunsLatencyDataTable daily={daily} />
       </TableToggle>
     </div>
   );
@@ -459,6 +476,43 @@ const MODEL_COLORS = [
   'var(--accent)', 'var(--ok)', 'var(--warn)',
   '#a78bfa', '#f472b6', '#38bdf8', '#fb923c', '#34d399',
 ];
+
+function TokensByModelDataTable({ daily, modelIds }) {
+  const COLS = [
+    { key: 'date', label: 'Date', accessor: 'date', type: 'date' },
+    ...modelIds.map((m) => ({
+      key: m,
+      label: m.split('.').pop(),
+      accessor: (d) => d.tokensByModel?.[m] || 0,
+      type: 'number',
+    })),
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(daily, {
+    columns: COLS,
+    storageKey: 'sort:insights:tokens-table',
+  });
+  return (
+    <table className="table compact">
+      <thead>
+        <tr>
+          {COLS.map((c, i) => (
+            <SortHeader key={c.key} col={c} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className={i > 0 ? 'num' : undefined} />
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((d) => (
+          <tr key={d.date}>
+            <td>{d.date}</td>
+            {modelIds.map((m) => (
+              <td key={m} className="num">{tokens(d.tokensByModel?.[m] || 0)}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 function TokensByModelChart({ daily, reduced }) {
   const modelIds = [...new Set((daily || []).flatMap((d) => Object.keys(d.tokensByModel || {})))];
@@ -511,24 +565,7 @@ function TokensByModelChart({ daily, reduced }) {
         </BarChart>
       </ResponsiveContainer>
       <TableToggle label="Tokens by model data">
-        <table className="table compact">
-          <thead>
-            <tr>
-              <th>Date</th>
-              {modelIds.map((m) => <th key={m} className="num">{m.split('.').pop()}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {daily.map((d) => (
-              <tr key={d.date}>
-                <td>{d.date}</td>
-                {modelIds.map((m) => (
-                  <td key={m} className="num">{tokens(d.tokensByModel?.[m] || 0)}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <TokensByModelDataTable daily={daily} modelIds={modelIds} />
       </TableToggle>
     </div>
   );
@@ -713,6 +750,21 @@ function AgentPerformance({ agents, onSelect, reduced }) {
 // ─── Agent leaderboard ────────────────────────────────────────────────────────
 
 function AgentLeaderboard({ agents, agentsSampled, selectedAgent }) {
+  const AGENT_COLS = [
+    { key: 'name',     label: 'Agent',        accessor: 'name',       type: 'text' },
+    { key: 'kind',     label: 'Kind',         accessor: 'kind',       type: 'text' },
+    { key: 'runs',     label: 'Runs',         accessor: 'runs',       type: 'number' },
+    { key: 'success',  label: 'Success',      accessor: (a) => a.successRate ?? null, type: 'number' },
+    { key: 'duration', label: 'Avg duration', accessor: 'avgDurationMs', type: 'number' },
+    { key: 'tokens',   label: 'Tokens',       accessor: (a) => (a.inputTokens || 0) + (a.outputTokens || 0), type: 'number' },
+    { key: 'cost',     label: 'Est. cost',    accessor: 'estCostUsd', type: 'number' },
+    { key: 'tools',    label: 'Top tools',    accessor: (a) => (a.topTools || []).slice(0, 3).map((t) => t.name).join(', '), type: 'text' },
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(agents || [], {
+    columns: AGENT_COLS,
+    storageKey: 'sort:insights:agents',
+  });
+
   if (!agents?.length) {
     return (
       <div className="panel stack">
@@ -729,18 +781,18 @@ function AgentLeaderboard({ agents, agentsSampled, selectedAgent }) {
         <table className="table compact" aria-label="Agent leaderboard">
           <thead>
             <tr>
-              <th>Agent</th>
-              <th>Kind</th>
-              <th className="num">Runs</th>
-              <th className="num">Success</th>
-              <th className="num">Avg duration</th>
-              <th className="num">Tokens</th>
-              <th className="num">Est. cost</th>
-              <th>Top tools</th>
+              <SortHeader col={AGENT_COLS[0]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={AGENT_COLS[1]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={AGENT_COLS[2]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={AGENT_COLS[3]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={AGENT_COLS[4]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={AGENT_COLS[5]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={AGENT_COLS[6]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={AGENT_COLS[7]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
             </tr>
           </thead>
           <tbody>
-            {agents.map((a) => (
+            {sorted.map((a) => (
               <tr
                 key={a.name}
                 className={selectedAgent === a.name ? 'ins-row-selected' : undefined}
@@ -831,7 +883,21 @@ function RunBriefRow({ run }) {
 }
 
 function RunList({ title, runs }) {
+  const RUN_COLS = [
+    { key: 'run',      label: 'Run',      accessor: (r) => r.title || r.id,  type: 'text' },
+    { key: 'status',   label: 'Status',   accessor: 'status',                type: 'status' },
+    { key: 'provider', label: 'Provider', accessor: 'provider',              type: 'text' },
+    { key: 'cost',     label: 'Cost',     accessor: (r) => r.costUsd ?? r.credits ?? null, type: 'number' },
+    { key: 'duration', label: 'Duration', accessor: 'durationMs',            type: 'number' },
+    { key: 'error',    label: 'Error',    accessor: 'error',                 type: 'text' },
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(runs || [], {
+    columns: RUN_COLS,
+    storageKey: `sort:insights:runlist:${title}`,
+  });
+
   if (!runs?.length) return null;
+
   return (
     <div className="panel stack">
       <h2>{title}</h2>
@@ -839,16 +905,16 @@ function RunList({ title, runs }) {
         <table className="table compact" aria-label={title}>
           <thead>
             <tr>
-              <th>Run</th>
-              <th>Status</th>
-              <th>Provider</th>
-              <th className="num">Cost</th>
-              <th className="num">Duration</th>
-              <th>Error</th>
+              <SortHeader col={RUN_COLS[0]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={RUN_COLS[1]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={RUN_COLS[2]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={RUN_COLS[3]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={RUN_COLS[4]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={RUN_COLS[5]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
             </tr>
           </thead>
           <tbody>
-            {runs.map((r) => <RunBriefRow key={r.id} run={r} />)}
+            {sorted.map((r) => <RunBriefRow key={r.id} run={r} />)}
           </tbody>
         </table>
       </div>
@@ -860,6 +926,18 @@ function RunList({ title, runs }) {
 
 function ToolUsage({ tools, approvals, blocked }) {
   const hasData = tools?.length || approvals?.asked || blocked;
+
+  const TOOL_COLS = [
+    { key: 'tool',      label: 'Tool',       accessor: 'name',   type: 'text' },
+    { key: 'calls',     label: 'Calls',      accessor: 'calls',  type: 'number' },
+    { key: 'errors',    label: 'Errors',     accessor: 'errors', type: 'number' },
+    { key: 'errorrate', label: 'Error rate', accessor: (t) => t.calls > 0 ? t.errors / t.calls : null, type: 'number' },
+  ];
+  const { sorted: sortedTools, sortKey: toolSortKey, sortDir: toolSortDir, toggle: toolToggle } = useSortable(
+    tools || [],
+    { columns: TOOL_COLS, storageKey: 'sort:insights:tools' }
+  );
+
   if (!hasData) {
     return (
       <div className="panel stack">
@@ -877,14 +955,14 @@ function ToolUsage({ tools, approvals, blocked }) {
           <table className="table compact" aria-label="Tool usage">
             <thead>
               <tr>
-                <th>Tool</th>
-                <th className="num">Calls</th>
-                <th className="num">Errors</th>
-                <th className="num">Error rate</th>
+                <SortHeader col={TOOL_COLS[0]} sortKey={toolSortKey} sortDir={toolSortDir} onSort={toolToggle} />
+                <SortHeader col={TOOL_COLS[1]} sortKey={toolSortKey} sortDir={toolSortDir} onSort={toolToggle} className="num" />
+                <SortHeader col={TOOL_COLS[2]} sortKey={toolSortKey} sortDir={toolSortDir} onSort={toolToggle} className="num" />
+                <SortHeader col={TOOL_COLS[3]} sortKey={toolSortKey} sortDir={toolSortDir} onSort={toolToggle} className="num" />
               </tr>
             </thead>
             <tbody>
-              {tools.map((t) => (
+              {sortedTools.map((t) => (
                 <tr key={t.name}>
                   <td><code>{t.name}</code></td>
                   <td className="num">{t.calls}</td>
@@ -914,7 +992,22 @@ function ToolUsage({ tools, approvals, blocked }) {
 // ─── Model / Provider / Kind breakdowns ──────────────────────────────────────
 
 function ModelBreakdown({ models }) {
+  const MODEL_COLS = [
+    { key: 'model',    label: 'Model',    accessor: 'model',      type: 'text' },
+    { key: 'provider', label: 'Provider', accessor: 'provider',   type: 'text' },
+    { key: 'runs',     label: 'Runs',     accessor: 'runs',       type: 'number' },
+    { key: 'success',  label: 'Success',  accessor: (m) => m.successRate ?? null, type: 'number' },
+    { key: 'tokens',   label: 'Tokens',   accessor: 'tokens',     type: 'number' },
+    { key: 'cost',     label: 'Cost',     accessor: (m) => m.costUsd ?? m.credits ?? null, type: 'number' },
+    { key: 'median',   label: 'Median',   accessor: 'medianMs',   type: 'number' },
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(models || [], {
+    columns: MODEL_COLS,
+    storageKey: 'sort:insights:models',
+  });
+
   if (!models?.length) return null;
+
   return (
     <div className="panel stack">
       <h2>Model breakdown</h2>
@@ -922,17 +1015,17 @@ function ModelBreakdown({ models }) {
         <table className="table compact" aria-label="Model breakdown">
           <thead>
             <tr>
-              <th>Model</th>
-              <th>Provider</th>
-              <th className="num">Runs</th>
-              <th className="num">Success</th>
-              <th className="num">Tokens</th>
-              <th className="num">Cost</th>
-              <th className="num">Median</th>
+              <SortHeader col={MODEL_COLS[0]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={MODEL_COLS[1]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+              <SortHeader col={MODEL_COLS[2]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={MODEL_COLS[3]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={MODEL_COLS[4]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={MODEL_COLS[5]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+              <SortHeader col={MODEL_COLS[6]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
             </tr>
           </thead>
           <tbody>
-            {models.map((m) => (
+            {sorted.map((m) => (
               <tr key={`${m.provider}:${m.model}`}>
                 <td><code className="small">{m.model}</code></td>
                 <td className="muted">{m.provider}</td>

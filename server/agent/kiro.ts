@@ -445,7 +445,9 @@ class Queue<T> {
 export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessage> {
   const toolsEnabled = !(Array.isArray(opts.tools) && opts.tools.length === 0);
   const prompt = opts.systemPrompt ?? opts.systemAppend ?? '';
-  const profile = writeAgentProfile(opts.cwd, prompt, toolsEnabled, toolsEnabled ? readProjectRoles(opts.cwd) : [], opts.mcpServers);
+  // The lead of a session is the main agent itself, so it is not offered to itself as a subagent.
+  const roles = toolsEnabled ? readProjectRoles(opts.cwd).filter((r) => r.name !== opts.leadAgent) : [];
+  const profile = writeAgentProfile(opts.cwd, prompt, toolsEnabled, roles, opts.mcpServers);
   const roleOf = new Map(profile.team.map((t) => [t.kiroName, t.role]));
   const conn = new AcpConnection(opts.cwd, opts.env, ['--agent', profile.name]);
   const out = new Queue<SdkMessage>();
@@ -597,7 +599,7 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     void (async () => {
       try {
         if (!toolsEnabled) return reject();
-        const blocked = opts.guard?.(name, input);
+        const blocked = await opts.guard?.(name, input);
         if (blocked) {
           out.push({ type: 'system', subtype: 'portal_blocked', session_id: sessionId, tool_use_id: tc.toolCallId, tool_name: name, reason: blocked });
           return reject();
@@ -634,7 +636,15 @@ export async function* kiroRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
         sessionId = s.sessionId;
       }
       const mode = s?.modes?.currentModeId;
-      if (mode && mode !== profile.name) {
+      if (mode && mode !== profile.name && opts.resume) {
+        // A loaded session comes back with the agent it was created with, whose per-run profile is gone by now
+        // (kiro-cli then reports kiro_default). Switch it to this run's profile.
+        try {
+          await conn.request('session/set_mode', { sessionId, modeId: profile.name }, 30_000);
+        } catch (e: any) {
+          throw new HttpError(502, `kiro-cli could not switch the continued session to the Agent Portal agent profile (it used "${mode}"): ${e?.message ?? e}`);
+        }
+      } else if (mode && mode !== profile.name) {
         throw new HttpError(502, `kiro-cli did not load the Agent Portal agent profile (it used "${mode}"). Update Kiro CLI and try again.`);
       }
       const available: KiroModel[] = s?.models?.availableModels ?? [];

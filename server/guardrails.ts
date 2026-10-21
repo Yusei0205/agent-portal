@@ -3,32 +3,60 @@
  * state, and how each iteration's prompt is assembled. No database or process access here, so it can be tested alone.
  */
 
-/** Commands an unattended agent must never run. They are left for a person, after review. */
-const BLOCKED: [RegExp, string][] = [
+/**
+ * Commands that are ALWAYS blocked, even in a trusted session (Trust all tools ON).
+ * These include deploys, infrastructure mutations, and file deletes outside the working copy.
+ * Pattern + human-readable reason. These run before the trust-gated list.
+ */
+const ALWAYS_BLOCKED: [RegExp, string][] = [
+  // git push is special: trusted sessions handle it via the portal, not here.
+  // Deploy / cloud mutations — never safe to run unattended.
+  [/\b(?:terraform|tofu)\s+(?:apply|destroy|import|state\s+(?:rm|mv))\b/i, 'Deploying infrastructure is never allowed. Report blocked and describe what you need deployed.'],
+  [/\b(?:cdk|sam|serverless|sls|pulumi)\s+(?:deploy|destroy|remove|up)\b/i, 'Deploying is never allowed. Report blocked and describe what you need deployed.'],
+  [/\baws\s+cloudformation\s+(?:deploy|create-stack|update-stack|delete-stack)\b/i, 'Changing CloudFormation stacks is never allowed.'],
+  [/\baws\s+lambda\s+(?:update-function-code|update-function-configuration|create-function|delete-function|publish-version)\b/i, 'Changing Lambda functions is never allowed.'],
+  [/\bamplify\s+(?:publish|push)\b/i, 'Deploying via Amplify is never allowed.'],
+  [/\bkubectl\s+(?:apply|delete|replace|patch|scale|rollout)\b/i, 'Changing a cluster is never allowed.'],
+  [/\bhelm\s+(?:install|upgrade|uninstall|rollback)\b/i, 'Changing a cluster with Helm is never allowed.'],
+  [/\bdocker\s+push\b/i, 'Pushing an image is never allowed.'],
+  [/\baws\s+(?:--\S+\s+\S+\s+)*[a-z0-9-]+\s+(?:delete|terminate|remove|put|create|update|modify|attach|detach|invoke|publish|send|start|stop|reboot|run|register|deregister|tag|untag|set|enable|disable|import|restore|reset|revoke|associate|disassociate|authorize|deploy|execute)\S*/i, 'Changing AWS resources is never allowed. Read-only commands (describe, list, get) are fine.'],
+  [/\baws\s+s3\s+(?:rm|mv|sync|rb|mb|website)\b/i, 'Changing S3 is never allowed.'],
+];
+
+/** Commands blocked only when running without a trusted session (Trust all tools OFF). */
+const UNTRUSTED_BLOCKED: [RegExp, string][] = [
   [/\bgit\s+(?:(?:-C|-c|--git-dir|--work-tree)\s+\S+\s+|-\S+\s+)*push\b/i, 'Pushing is done by a person after reviewing the changes.'],
   [/\bsudo\b/i, 'sudo is not allowed.'],
   [/\brm\s+(?:-\S*\s+)*-\S*[rf]\S*\s+(?:-\S+\s+)*(?:\/|~|\$home|\.\.|[a-z]:[\\/]|\*)(?:\s|$)/i, 'Deleting outside the working copy is not allowed.'],
-  [/\b(?:terraform|tofu)\s+(?:apply|destroy|import|state\s+(?:rm|mv))\b/i, 'Applying infrastructure changes is not allowed.'],
-  [/\b(?:cdk|sam|serverless|sls|pulumi)\s+(?:deploy|destroy|remove|up)\b/i, 'Deploying is not allowed.'],
-  [/\bkubectl\s+(?:apply|delete|replace|patch|scale|rollout)\b/i, 'Changing a cluster is not allowed.'],
   [/\b(?:npm|yarn|pnpm)\s+publish\b/i, 'Publishing a package is not allowed.'],
-  [/\bdocker\s+push\b/i, 'Pushing an image is not allowed.'],
   [/\b(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/i, 'Piping a download into a shell is not allowed.'],
   [/\b(?:mkfs|shutdown|reboot|halt)\b|\bdd\s+if=|\bformat\s+[a-z]:/i, 'System commands are not allowed.'],
-  [/\baws\s+(?:--\S+\s+\S+\s+)*[a-z0-9-]+\s+(?:delete|terminate|remove|put|create|update|modify|attach|detach|invoke|publish|send|start|stop|reboot|run|register|deregister|tag|untag|set|enable|disable|import|restore|reset|revoke|associate|disassociate|authorize|deploy|execute)\S*/i, 'Changing AWS resources is not allowed. Read-only commands (describe, list, get) are fine.'],
-  [/\baws\s+s3\s+(?:rm|mv|sync|rb|mb|website)\b/i, 'Changing S3 is not allowed.'],
 ];
 
-/** Why this Bash command is refused to an unattended agent, or null when it may run. */
-export function blockedCommand(command: string): string | null {
+/**
+ * Commands that are always blocked regardless of trust state — used to refuse them with a clear message
+ * even in trusted sessions.
+ */
+export function alwaysBlockedCommand(command: string): string | null {
   const text = String(command ?? '');
-  for (const [re, why] of BLOCKED) if (re.test(text)) return why;
+  for (const [re, why] of ALWAYS_BLOCKED) if (re.test(text)) return why;
   // `aws s3 cp <local> s3://…` uploads; only downloads are allowed.
   const cp = text.match(/\baws\s+s3\s+cp\b([^\n;&|]*)/i);
   if (cp) {
     const parts = cp[1].trim().split(/\s+/).filter((p) => !p.startsWith('--'));
-    if (parts.length >= 2 && /^s3:\/\//i.test(parts[parts.length - 1])) return 'Uploading to S3 is not allowed.';
+    if (parts.length >= 2 && /^s3:\/\//i.test(parts[parts.length - 1])) return 'Uploading to S3 is never allowed.';
   }
+  return null;
+}
+
+/** Why this Bash command is refused to an unattended agent, or null when it may run. */
+export function blockedCommand(command: string): string | null {
+  const text = String(command ?? '');
+  // Always-blocked first.
+  const always = alwaysBlockedCommand(text);
+  if (always) return always;
+  // Then the trust-gated list.
+  for (const [re, why] of UNTRUSTED_BLOCKED) if (re.test(text)) return why;
   return null;
 }
 
@@ -48,6 +76,75 @@ export interface WorkflowStatus {
 /** git push in any form (also with -C, -c and other options before it). */
 export function isGitPush(command: string): boolean {
   return /\bgit\s+(?:(?:-C|-c|--git-dir|--work-tree)\s+\S+\s+|-\S+\s+)*push\b/i.test(command);
+}
+
+/**
+ * In a trusted session the portal intercepts `git push` and performs it on the agent's behalf.
+ * Returns the branch the agent tried to push to (from HEAD, `origin <branch>` or `origin HEAD:<branch>`),
+ * or null if the command is not a git push.
+ * Returns 'UNSAFE' if the push uses flags we never allow (--force, --mirror, --delete, --tags).
+ */
+export function parseTrustedPush(command: string): { branch: string | null } | { unsafe: string } | null {
+  if (!isGitPush(command)) return null;
+  const text = String(command ?? '');
+  // Refuse dangerous flags. Handle chained commands.
+  if (/(?:^|\s|;|&&|\|)(?:--force|--force-with-lease|--mirror|--delete|--tags|-f\b|-d\b)/i.test(text)) {
+    return { unsafe: 'Only plain pushes to a new branch are allowed. --force, --force-with-lease, --mirror, --delete and --tags are never permitted.' };
+  }
+  // Refuse a different remote URL (anything that looks like a URL in the push args).
+  if (/\bgit\s+(?:[^|;&\n]*\s)?push\s+(?:[^|;&\n]*\s)?(?:https?:\/\/|git@|ssh:\/\/)/i.test(text)) {
+    return { unsafe: 'Pushing to a URL directly is not allowed. The portal uses the session\'s attached repository.' };
+  }
+  // Extract branch: `git push origin HEAD:refs/heads/<branch>`, `git push origin <branch>`, or `git push` / `git push origin` (uses tracking).
+  // A branch refspec must contain a '/' or not match known remote names (origin, upstream, etc.).
+  // The pattern `git push origin <branch>` means branch must be after the remote name.
+  // We match: git push [<remote>] [HEAD:<branch> | <branch>]
+  // For `git push origin` alone, there is no branch specified → return null (use tracking).
+  const headRef = text.match(/\bgit\s+(?:[^|;&\n]*\s)?push\s+(?:\S+\s+)?HEAD:refs\/heads\/([^\s;&|]+)/i);
+  if (headRef) return { branch: headRef[1] };
+  // Look for `git push <remote> <branch>` — the branch must follow the remote name.
+  // We need to distinguish `git push origin` (2 tokens) from `git push origin my-branch` (3 tokens).
+  // Extract the push args (everything after 'push', stripping git flags before 'push').
+  const pushMatch = text.match(/\bgit\s+(?:[^|;&\n]*?\s)?push\s+(.*?)(?:\s*[;&|]|$)/i);
+  if (!pushMatch) return { branch: null };
+  const pushArgs = pushMatch[1].trim().split(/\s+/).filter((a) => a && !a.startsWith('-'));
+  // pushArgs[0] is the remote (if given), pushArgs[1] is the branch (if given).
+  if (pushArgs.length >= 2) {
+    // There's a branch after the remote.
+    const branch = pushArgs[1];
+    return { branch };
+  }
+  // Only remote given (or no args at all) — use tracking branch.
+  return { branch: null };
+}
+
+/**
+ * Detect file-delete commands whose target is outside the given working copy directory.
+ * Used with trust_tools ON to block outside-working-copy deletes.
+ * Returns a reason string if blocked, null if allowed.
+ */
+export function outsideDeleteReason(command: string, workDirAbs: string): string | null {
+  const text = String(command ?? '');
+  // Detect rm/del/Remove-Item/rmdir/rd patterns.
+  const deleteMatch = text.match(/\b(?:rm|del|rmdir|rd|Remove-Item|ri)\b(.+)/i);
+  if (!deleteMatch) return null;
+  const args = deleteMatch[1];
+  // Skip safe flags: -r, -f, -v, -rf, etc. Pick the last non-flag token as the target.
+  const tokens = args.trim().split(/\s+/).filter((t) => !t.startsWith('-') && t);
+  for (const token of tokens) {
+    // Expand common starting patterns to absolute paths.
+    let target = token;
+    // Reject absolute paths and paths starting with ~ or ..
+    if (/^(?:\/|~|\.\.)/.test(target) || /^[a-z]:[\\\/]/i.test(target)) {
+      // Check if the target is inside the work dir.
+      const norm = target.replace(/\\/g, '/');
+      const wdNorm = workDirAbs.replace(/\\/g, '/');
+      if (!norm.startsWith(wdNorm + '/') && norm !== wdNorm) {
+        return 'Deleting files outside the run\'s working copy is never allowed.';
+      }
+    }
+  }
+  return null;
 }
 
 const SHARED_BRANCHES = new Set(['main', 'master', 'develop', 'development', 'dev', 'release', 'production', 'prod', 'staging', 'stage', 'trunk', 'head']);
@@ -116,6 +213,9 @@ export interface IterationInput {
   context?: ContextForPrompt[];
   /** Whether the agents may ask the portal to push: never (default), ask (a person approves) or auto. */
   pushMode?: 'never' | 'ask' | 'auto';
+  /** Trust all tools ON: the agent may run file edits and shell commands without asking for approval, and may
+   *  `git push` to its own session branch — the portal performs the push with stored credentials. */
+  trustTools?: boolean;
   /** Separate sessions this one handed tasks to, and whether it may hand out more. */
   delegation?: {
     /** How many more it may start now (0: none). */
@@ -171,7 +271,12 @@ function composeContext(items: ContextForPrompt[]): string[] {
 /** One iteration's prompt: the standing goal and rules, what happened so far, and what changed since. */
 export function composeIterationPrompt(i: IterationInput): string {
   const pushing = i.hasRepo && (i.pushMode === 'ask' || i.pushMode === 'auto');
-  const pushRule = pushing ? 'Do not commit and never run git push yourself: the portal commits and pushes when you ask it to (see below).' : 'Commit nothing and push nothing; a person reviews the diff.';
+  const trustedPush = Boolean(i.trustTools && i.hasRepo);
+  const pushRule = trustedPush
+    ? `You may run \`git push\` to push your changes to your session branch only. The portal intercepts the push and performs it with stored credentials — never push to any other branch.`
+    : pushing
+      ? 'Do not commit and never run git push yourself: the portal commits and pushes when you ask it to (see below).'
+      : 'Commit nothing and push nothing; a person reviews the diff.';
   const parts: string[] = [
     `You are running as an unattended workflow ("${i.title}") inside Agent Portal. Nobody answers questions while you work; a person reviews the result when you report done or blocked.`,
     '',
@@ -210,7 +315,7 @@ export function composeIterationPrompt(i: IterationInput): string {
       ? i.repos && i.repos.length > 1
         ? `This session spans ${i.repos.length} repositories (${i.repos.map((r) => `${r.name} from ${r.branch}`).join(', ')}). Change code only inside their working copies, each change in the repository it belongs to. ${pushRule}`
         : `Change code only inside the repository working copy. ${pushRule}`
-      : 'Put any files you create in the run folder.',
+      : 'This session has no repository attached, so put any files you create in the run folder. Do not clone repositories yourself: the portal cannot review or push a copy you made. If the goal needs changes in a repository, report blocked and say which repository is needed so a person can attach it in the session settings.',
     ...(i.hasRepo
       ? [
           i.workBranch
@@ -219,7 +324,9 @@ export function composeIterationPrompt(i: IterationInput): string {
         ]
       : []),
     'Do not ask questions. When something is unclear, pick the most reasonable option and list it under "assumptions" in your summary.',
-    'Commands that change the outside world (push, deploy, delete, AWS writes) are blocked. If you need one, report blocked and say what you need.',
+    i.trustTools
+      ? 'Commands that are always blocked even here: deploys (cdk deploy, sam deploy, serverless deploy, kubectl apply, helm install, docker push), AWS writes (cloudformation deploy, lambda update-function-code, s3 sync/cp/rm to s3://), terraform/tofu apply/destroy/import. Deleting files outside your working copy is also blocked. If you need one of these, report blocked and say what you need.'
+      : 'Commands that change the outside world (push, deploy, delete, AWS writes) are blocked. If you need one, report blocked and say what you need.',
     '',
     'Finish your reply with exactly one line, on its own, in this form:',
     'WORKFLOW_STATUS {"state":"continue|done|blocked","summary":"what is done and what you verified","next":"what you will do next","needs":"what you need from a person, if blocked","branch":"the new branch name for your changes"}',
@@ -230,6 +337,12 @@ export function composeIterationPrompt(i: IterationInput): string {
   if (pushing) {
     parts.push(
       `When your changes are ready and verified, ask the portal to push them to your new branch by adding "push":{"message":"the commit message","pr":true} to your status line ("pr": true also opens a draft pull request). ${i.pushMode === 'ask' ? 'A person approves each push first; the session waits for that.' : 'The portal pushes them right away.'} It never pushes to the branch the work started from or to shared branches like main or develop.`,
+    );
+  }
+  if (trustedPush && !pushing) {
+    const branchName = i.workBranch || 'your session branch (set in the branch field of your status line)';
+    parts.push(
+      `Trusted session — you may run \`git push origin HEAD:refs/heads/${i.workBranch || '<your-branch>'}\` (or \`git push\` when tracking is set). The portal performs the push with stored credentials. Only to "${branchName}". Never to main, develop, master, release, staging or the base branch. Never with --force, --mirror, --delete or --tags. The portal blocks any other push with a clear error.`,
     );
   }
   if (i.delegation) {
@@ -246,16 +359,31 @@ export function composeIterationPrompt(i: IterationInput): string {
  * The system text for a session led by one of the project's agents: that agent's own instructions, plus how to
  * hand work to the rest of the team. Without a lead the portal's default text is used instead.
  */
-export function composeLeadAppend(lead: { name: string; description: string; prompt: string }, team: { name: string; description: string }[]): string {
+export function composeLeadAppend(
+  lead: { name: string; description: string; prompt: string },
+  team: { name: string; description: string }[],
+  engine: 'claude' | 'kiro' | 'demo' = 'claude',
+): string {
   const others = team.filter((a) => a.name !== lead.name);
+  // Kiro names its subagents per run (agent-portal-<id>-<role>) and lists them, with the tool to use, after this text.
+  const delegate =
+    engine === 'kiro'
+      ? 'Delegate with the `subagent` tool instead of doing everything yourself. Use the exact agent names from the "Delegating to subagents" list below (they start with agent-portal-); each stands for one of your team roles. Ignore any other way of naming or starting agents in the role instructions above.'
+      : `Delegate with the Agent tool (subagent_type = the agent's name) instead of doing everything yourself. Your team:\n${others.map((a) => `- ${a.name}${a.description ? `: ${a.description}` : ''}`).join('\n')}`;
   return [
-    'You run inside Agent Portal. Follow CLAUDE.md. Nobody answers questions while you work.',
-    `In this workflow you act as the lead agent "${lead.name}"${lead.description ? ` (${lead.description})` : ''}. Your role instructions:`,
+    `You run inside Agent Portal. Follow CLAUDE.md. In this workflow you act as the lead agent "${lead.name}"${lead.description ? ` (${lead.description})` : ''}. Your role instructions:`,
+    '',
     lead.prompt.trim(),
     '',
+    // After the role text, so these win where a role written for another tool says otherwise.
+    '## Agent Portal rules (these override the role instructions above where they conflict)',
+    '- Nobody answers questions while you work and nobody approves plans: skip any "ask", "clarify" or "get approval" step, pick the most reasonable option and note it as an assumption.',
+    '- Use only the tools you actually have here. If the role instructions mention a tool or service you do not have, leave that step out.',
     others.length
-      ? `Delegate with the Agent tool instead of doing everything yourself. Your team:\n${others.map((a) => `- ${a.name}${a.description ? `: ${a.description}` : ''}`).join('\n')}`
-      : 'There are no other agents in this project, so do the work yourself.',
-    'Plan first, then give each agent a complete brief (the goal, the exact files, what to return). Run independent tasks in parallel. Read what each returns and check it before you rely on it. Only subagents you list may be used, and subagents cannot start other subagents.',
+      ? `- ${delegate}`
+      : '- There are no other agents in this project, so do the work yourself.',
+    ...(others.length
+      ? ['- Plan first, then give each agent a complete brief (the goal, the exact files, what to return). Run independent tasks in parallel. Read what each returns and check it before you rely on it. Subagents cannot start other subagents.']
+      : []),
   ].join('\n');
 }

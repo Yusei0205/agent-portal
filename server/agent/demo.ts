@@ -79,10 +79,10 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     const toolId = id('toolu');
     yield assistant(parent, [{ type: 'tool_use', id: toolId, name, input }], model);
     await pause(250);
-    const blocked = opts.guard?.(name, input);
+    const blocked = await opts.guard?.(name, input);
     if (blocked) {
       yield toolResult(parent, toolId, blocked, true);
-      return { ok: false, output: blocked, input };
+      return { ok: false, output: blocked as string, input };
     }
     let finalInput = input;
     if (needsPermission) {

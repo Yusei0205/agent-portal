@@ -457,6 +457,10 @@ const MIGRATIONS: string[] = [
   // Agent pushes: never (default), ask (a person approves each push) or auto; a push waiting for approval.
   `ALTER TABLE workflows ADD COLUMN push_mode TEXT NOT NULL DEFAULT 'never';
   ALTER TABLE workflows ADD COLUMN pending_push TEXT NOT NULL DEFAULT '';`,
+  // Playground sessions have no repository and are exempt from the repo-required rule.
+  `ALTER TABLE workflows ADD COLUMN playground INTEGER NOT NULL DEFAULT 0;`,
+  // Trust all tools: file edits and shell commands run without asking for approval.
+  `ALTER TABLE workflows ADD COLUMN trust_tools INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 let db: DatabaseSync | null = null;

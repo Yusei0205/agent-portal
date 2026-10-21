@@ -7,7 +7,7 @@ import { config } from '../config.ts';
 import { ensureBuiltInSkills, getProject, projectDir, notifyProject, type Project } from '../projects.ts';
 import { HttpError, badRequest, newId, now, parseJson, withLock } from '../util.ts';
 import { commitAll } from '../git.ts';
-import { blockedCommand, isGitPush } from '../guardrails.ts';
+import { blockedCommand, alwaysBlockedCommand, parseTrustedPush, composeLeadAppend, isGitPush } from '../guardrails.ts';
 import type { CanUseTool, PermissionMode, ProviderRunOptions, SdkMessage } from './types.ts';
 import { sdkRun } from './sdk.ts';
 import { kiroRun } from './kiro.ts';
@@ -41,11 +41,21 @@ export interface StartRunInput {
   tools?: string[];
   allowedTools?: string[];
   systemAppend?: string;
+  /** A project agent that leads this run: its instructions become the system text, worded for the run's engine. */
+  lead?: { name: string; description: string; prompt: string; team: { name: string; description: string }[] };
   systemPrompt?: string;
   maxTurns?: number;
   meta?: Record<string, unknown>;
   /** Unattended workflow runs: tools are allowed without asking, except the commands in guardrails.ts. */
   autoApprove?: boolean;
+  /** Trust all tools: file edits and shell commands run without asking; git push intercepted by the portal. */
+  trustTools?: boolean;
+  /**
+   * When trustTools is true, the portal intercepts git push and calls this to perform it.
+   * Receives the parsed branch name (or null to use the session's work branch).
+   * Returns a message string ("Pushed to branch X (commit abc1234)." or an error).
+   */
+  trustedPushHandler?: (branch: string | null) => Promise<string>;
   /** Single-shot tasks: no project settings, no tools. */
   oneshot?: boolean;
   /** Text the demo provider returns for single-shot tasks. */
@@ -478,12 +488,30 @@ async function execute(
 
   const canUseTool: CanUseTool = async (toolName, toolInput, { signal }) => {
     if (input.autoApprove && !input.oneshot) {
-      // Nobody is there to answer: questions are refused and the agent must decide, and only safe commands run.
+      // Nobody is there to answer: questions are refused and the agent must decide.
       if (toolName === 'AskUserQuestion') return { behavior: 'deny', message: 'No person is available to answer. Choose the most reasonable option and list it under assumptions in your summary.' };
+      if (input.trustTools) {
+        // Trusted + unattended: file edits and shell commands run without asking.
+        // always-blocked commands are already refused by the guard; here just allow everything else.
+        return { behavior: 'allow', updatedInput: toolInput };
+      }
+      // Untrusted unattended: only safe commands run.
       if (toolName === 'Bash') {
         const why = blockedCommand(String((toolInput as any).command ?? ''));
         if (why) return { behavior: 'deny', message: `Blocked by Agent Portal: ${why} If you need this, report blocked and say what you need.` };
       }
+      return { behavior: 'allow', updatedInput: toolInput };
+    }
+    // Trust all tools in an interactive (non-autoApprove) session: file edits and shell commands run without asking.
+    // Blocked commands are still refused via the guard.
+    if (input.trustTools && !input.oneshot) {
+      if (toolName === 'AskUserQuestion') {
+        // Questions still flow to the person.
+        const questions = Array.isArray((toolInput as any).questions) ? (toolInput as any).questions : [];
+        const resp = await waitForInput(runId, a, 'question', toolName, { questions }, signal);
+        return { behavior: 'allow', updatedInput: { ...toolInput, questions, answers: resp.answers, ...(resp.response ? { response: resp.response } : {}) } };
+      }
+      // always-blocked commands are checked in the guard; here just allow.
       return { behavior: 'allow', updatedInput: toolInput };
     }
     if (toolName === 'AskUserQuestion') {
@@ -503,10 +531,41 @@ async function execute(
     return { behavior: 'deny', message: resp.message ? `The user declined: ${resp.message}` : 'The user declined this action.' };
   };
 
-  const guard = (toolName: string, toolInput: Record<string, unknown>): string | null => {
-    // Agents never push with git themselves (they have no repository credentials anyway): the portal pushes for them.
-    if (toolName === 'Bash' && isGitPush(String(toolInput.command ?? ''))) {
-      return 'Blocked by Agent Portal: do not run git push. In a session that allows agent pushes, add "push" to your status line and the portal pushes for you; otherwise a person pushes from the portal after review.';
+  const guard = async (toolName: string, toolInput: Record<string, unknown>): Promise<string | null> => {
+    if (toolName === 'Bash') {
+      const command = String(toolInput.command ?? '');
+      if (input.trustTools && !input.oneshot) {
+        // Trusted session: always-blocked commands still refused.
+        const alwaysBlocked = alwaysBlockedCommand(command);
+        if (alwaysBlocked) return `Blocked by Agent Portal: ${alwaysBlocked}`;
+        // Intercept git push: perform it via the portal, return success/failure as the "block" reason.
+        if (isGitPush(command)) {
+          const parsed = parseTrustedPush(command);
+          if (!parsed) return null; // not a push (shouldn't happen)
+          if ('unsafe' in parsed) return `Blocked by Agent Portal: ${parsed.unsafe}`;
+          if (input.trustedPushHandler) {
+            try {
+              const msg = await input.trustedPushHandler(parsed.branch);
+              return `Agent Portal performed the push: ${msg}`;
+            } catch (e: any) {
+              return `Agent Portal could not push: ${String(e?.message ?? e).slice(0, 300)}`;
+            }
+          }
+          return 'Blocked by Agent Portal: no repository is attached to this session. Attach a repository in the session settings and try again.';
+        }
+        // Integration read-only check.
+        if (o.integ?.readOnly.size) {
+          const why = integrationGuard(o.integ.readOnly, toolName);
+          if (why) return why;
+        }
+        return null;
+      }
+      // Untrusted: git push is blocked.
+      if (isGitPush(command)) {
+        return 'Blocked by Agent Portal: do not run git push. In a session that allows agent pushes, add "push" to your status line and the portal pushes for you; otherwise a person pushes from the portal after review.';
+      }
+      // blockedCommand already covers the always-blocked list; call it here for untrusted sessions.
+      // (The canUseTool for autoApprove also calls blockedCommand but guard is called first by SDK.)
     }
     if (o.integ?.readOnly.size) {
       const why = integrationGuard(o.integ.readOnly, toolName);
@@ -533,9 +592,12 @@ async function execute(
     settingSources: input.oneshot ? [] : ['project'],
     systemAppend:
       input.systemAppend ??
-      (o.mode === 'kiro'
-        ? 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, stop and ask your questions in your final reply instead of guessing; the user answers with a follow-up. When a task matches one of the project roles, hand it to that role with the subagent tool (the roles are listed below).'
-        : 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, use AskUserQuestion instead of guessing. When a task matches a role subagent in .claude/agents, delegate to it.'),
+      (input.lead
+        ? composeLeadAppend(input.lead, input.lead.team, o.mode === 'kiro' ? 'kiro' : o.mode === 'demo' ? 'demo' : 'claude')
+        : o.mode === 'kiro'
+          ? 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, stop and ask your questions in your final reply instead of guessing; the user answers with a follow-up. When a task matches one of the project roles, hand it to that role with the subagent tool (the roles are listed below).'
+          : 'You run inside Agent Portal. Follow CLAUDE.md. When requirements are unclear, use AskUserQuestion instead of guessing. When a task matches a role subagent in .claude/agents, delegate to it.'),
+    leadAgent: input.lead?.name,
     systemPrompt: input.systemPrompt,
     canUseTool,
     guard: input.oneshot ? undefined : guard,

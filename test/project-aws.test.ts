@@ -33,6 +33,7 @@ fs.writeFileSync(
 const seen = {};
 for (const [k, v] of Object.entries(process.env)) if (/^AWS_/.test(k)) seen[k] = v;
 fs.writeFileSync(process.env.FAKE_AWS_OUT, JSON.stringify({ argv: process.argv.slice(2), seen }));
+if (process.env.FAKE_AWS_FAIL === 'silent') { process.stderr.write('\\r\\n'); process.exit(255); }
 if (process.env.FAKE_AWS_FAIL) { console.error('An error occurred (InvalidClientTokenId) when calling the GetCallerIdentity operation'); process.exit(255); }
 console.log(JSON.stringify({ UserId: 'AIDAEXAMPLE', Account: '111122223333', Arn: 'arn:aws:iam::111122223333:user/dev' }));
 `,
@@ -146,6 +147,12 @@ test('Test connection reports the account behind the project’s credentials, an
   delete process.env.FAKE_AWS_FAIL;
   assert.equal(bad.status, 502);
   assert.match(bad.data.error, /AWS did not accept these credentials: .*InvalidClientTokenId/);
+  // A CLI that fails without a message (only a Windows line break) still gives a reason, never an empty one.
+  process.env.FAKE_AWS_FAIL = 'silent';
+  const silent = await admin.req('POST', `/api/projects/${pid}/aws/test`);
+  delete process.env.FAKE_AWS_FAIL;
+  assert.equal(silent.status, 502);
+  assert.match(silent.data.error, /exited with code 255 without saying why/);
   process.env.PORTAL_AWS_BIN = path.join(tmp, 'no-such-aws');
   const missing = await admin.req('POST', `/api/projects/${pid}/aws/test`);
   process.env.PORTAL_AWS_BIN = process.execPath;

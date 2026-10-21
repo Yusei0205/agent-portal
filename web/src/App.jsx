@@ -55,19 +55,290 @@ export function App() {
   return <UiProvider>{body}</UiProvider>;
 }
 
-const PROJECT_NAV = [
+/**
+ * The main-menu items visible when a project is selected.
+ * Groups are identified by a `group` key instead of a `tab` key.
+ */
+const PROJECT_MAIN_ITEMS = [
+  { tab: 'sessions', label: 'Sessions', icon: 'play' },
+  { tab: 'workspaces', label: 'Workspaces', icon: 'projects' },
+  { tab: 'tickets', label: 'Tickets', icon: 'inbox' },
+  { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
   { tab: 'learn', label: 'Learn', icon: 'learn' },
-  { tab: 'tickets', label: 'Tickets', icon: 'inbox' },
-  { tab: 'sessions', label: 'Sessions', icon: 'play' },
-  { tab: 'review', label: 'Code review', icon: 'review' },
+  { group: 'setup', label: 'Project setup', icon: 'settings' },
+  { group: 'portal', label: 'Portal', icon: 'lock' },
+];
+
+const PROJECT_SETUP_ITEMS = [
   { tab: 'repos', label: 'Repositories', icon: 'repos' },
-  { tab: 'workspaces', label: 'Workspaces', icon: 'projects' },
   { tab: 'builder', label: 'Agents and skills', icon: 'builder' },
   { tab: 'config', label: 'Configuration', icon: 'settings' },
-  { tab: 'insights', label: 'Insights', icon: 'chart' },
   { tab: 'team', label: 'Project and team', icon: 'user' },
+  { tab: 'insights', label: 'Project insights', icon: 'chart', projectScoped: true },
 ];
+
+const PORTAL_ITEMS = [
+  { tab: 'connections', label: 'Connections', icon: 'branch', global: true },
+  { tab: 'integrations', label: 'Integrations', icon: 'builder', global: true },
+  { tab: 'aws', label: 'AWS accounts', icon: 'lock', global: true },
+  { tab: 'vault', label: 'Vault', icon: 'inbox', global: true },
+  { tab: 'api', label: 'API access', icon: 'lock', global: true },
+  { tab: 'insights', label: 'All insights', icon: 'chart', global: true },
+  { tab: 'settings', label: 'Settings', icon: 'settings', global: true, adminOnly: true },
+];
+
+/** Which group (if any) does a given tab belong to for the drill-down nav? */
+function groupForTab(tab) {
+  if (PROJECT_SETUP_ITEMS.some((i) => i.tab === tab)) return 'setup';
+  if (PORTAL_ITEMS.some((i) => i.tab === tab)) return 'portal';
+  return null;
+}
+
+/**
+ * Drill-down navigation menu inside the rail.
+ *
+ * Props:
+ *   route        – current route from useRoute()
+ *   projectId    – the current project ID (or null)
+ *   current      – the current project object (or null)
+ *   user         – the authenticated user
+ *   onNavigate   – called when a leaf link is clicked (closes mobile nav)
+ */
+function NavMenu({ route, projectId, current, user, onNavigate }) {
+  // Which group is open: null = main menu, 'setup' | 'portal' = submenu
+  const initialGroup = projectId ? groupForTab(route.tab) : (PORTAL_ITEMS.some((i) => i.tab === route.tab) ? 'portal' : null);
+  const [openGroup, setOpenGroup] = useState(initialGroup);
+
+  // When the route changes (navigation, refresh), re-sync to the correct panel.
+  useEffect(() => {
+    if (projectId) {
+      setOpenGroup(groupForTab(route.tab));
+    } else {
+      setOpenGroup(PORTAL_ITEMS.some((i) => i.tab === route.tab) ? 'portal' : null);
+    }
+  }, [route.tab, projectId]);
+
+  const backRef = useRef(null);
+  const groupBtnRefs = useRef({});
+
+  const openSub = (group) => {
+    setOpenGroup(group);
+    // Move focus to Back button after the panel slides in.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => backRef.current?.focus());
+    });
+  };
+
+  const closeSub = () => {
+    const prev = openGroup;
+    setOpenGroup(null);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => groupBtnRefs.current[prev]?.focus());
+    });
+  };
+
+  const handleLinkClick = () => {
+    onNavigate?.();
+  };
+
+  const showSub = openGroup !== null;
+
+  // Build the submenu items for whichever group is (or was last) open.
+  // We keep rendering the last group even while sliding back so the content
+  // doesn't vanish mid-animation.
+  const [renderedGroup, setRenderedGroup] = useState(initialGroup);
+  useEffect(() => {
+    if (openGroup !== null) setRenderedGroup(openGroup);
+  }, [openGroup]);
+
+  const subItems = renderedGroup === 'setup'
+    ? PROJECT_SETUP_ITEMS
+    : PORTAL_ITEMS.filter((i) => !i.adminOnly || user.is_admin);
+
+  const subLabel = renderedGroup === 'setup' ? 'Project setup' : 'Portal';
+  const subId = 'rail-sub';
+
+  if (!projectId) {
+    // No project selected: Projects + Portal group
+    return (
+      <div className="rail-nav-wrap">
+        <div className={cx('rail-panels', showSub && 'show-sub')} role="presentation">
+          {/* Main panel */}
+          <div className="rail-panel" inert={showSub ? true : undefined} aria-hidden={showSub ? true : undefined}>
+            <nav className="rail-nav" aria-label="Pages">
+              <a
+                href="#/projects"
+                className={cx('rail-link', route.tab === 'projects' && 'is-active')}
+                aria-current={route.tab === 'projects' ? 'page' : undefined}
+                onClick={handleLinkClick}
+              >
+                <Icon name="projects" />
+                <span>Projects</span>
+              </a>
+              <button
+                ref={(el) => { groupBtnRefs.current['portal'] = el; }}
+                type="button"
+                className={cx('rail-group-btn', PORTAL_ITEMS.some((i) => i.tab === route.tab) && 'has-active-child')}
+                aria-haspopup="menu"
+                aria-expanded={openGroup === 'portal'}
+                aria-controls="rail-sub"
+                onClick={() => openSub('portal')}
+              >
+                <Icon name="lock" />
+                <span>Portal ›</span>
+                <Icon name="chevronRight" size={14} className="rail-group-chevron" aria-hidden="true" />
+              </button>
+            </nav>
+          </div>
+
+          {/* Portal submenu */}
+          <div className="rail-panel" inert={!showSub ? true : undefined} aria-hidden={!showSub ? true : undefined}>
+            <nav
+              id="rail-sub"
+              className="rail-nav"
+              aria-label="Portal settings"
+            >
+              <button
+                ref={showSub ? backRef : null}
+                type="button"
+                className="rail-back-btn"
+                onClick={closeSub}
+              >
+                <Icon name="chevronRight" size={14} className="icon-flip-h" aria-hidden="true" />
+                Back
+              </button>
+              <div className="rail-sub-label" aria-hidden="true">Portal</div>
+              {PORTAL_ITEMS.filter((i) => !i.adminOnly || user.is_admin).map((item) => {
+                const linkHref = `#/${item.tab}`;
+                const isActive = route.tab === item.tab && !route.projectId;
+                return (
+                  <a
+                    key={item.tab}
+                    href={linkHref}
+                    className={cx('rail-link', isActive && 'is-active')}
+                    aria-current={isActive ? 'page' : undefined}
+                    onClick={handleLinkClick}
+                  >
+                    <Icon name={item.icon} />
+                    <span>{item.label}</span>
+                  </a>
+                );
+              })}
+            </nav>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Project selected — wait for the project list to resolve before rendering links
+  // that need current (e.g. open_questions badge). Use projectId (always from the
+  // URL) as the href fallback so navigation still works before /api/projects loads.
+  if (!current) {
+    return <div className="rail-nav-wrap" />;
+  }
+
+  return (
+    <div className="rail-nav-wrap">
+      <div className={cx('rail-panels', showSub && 'show-sub')} role="presentation">
+        {/* Main panel */}
+        <div className="rail-panel" inert={showSub ? true : undefined} aria-hidden={showSub ? true : undefined}>
+          <nav className="rail-nav" aria-label="Pages">
+            {PROJECT_MAIN_ITEMS.map((item) => {
+              if (item.group) {
+                // Determine if any child of this group is active
+                const childActive = item.group === 'setup'
+                  ? PROJECT_SETUP_ITEMS.some((c) => c.tab === route.tab)
+                  : PORTAL_ITEMS.some((c) => c.tab === route.tab) && !route.projectId;
+                return (
+                  <button
+                    key={item.group}
+                    ref={(el) => { groupBtnRefs.current[item.group] = el; }}
+                    type="button"
+                    className={cx('rail-group-btn', childActive && 'has-active-child')}
+                    aria-haspopup="menu"
+                    aria-expanded={openGroup === item.group}
+                    aria-controls="rail-sub"
+                    onClick={() => openSub(item.group)}
+                  >
+                    <Icon name={item.icon} />
+                    <span>{item.label} ›</span>
+                    <Icon name="chevronRight" size={14} className="rail-group-chevron" aria-hidden="true" />
+                  </button>
+                );
+              }
+
+              // Regular link — use projectId (always available from route) so links
+              // work before /api/projects resolves and current is still undefined.
+              const linkHref = href(projectId, item.tab);
+              const isActive = route.tab === item.tab;
+              return (
+                <a
+                  key={item.tab}
+                  href={linkHref}
+                  className={cx('rail-link', isActive && 'is-active')}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={handleLinkClick}
+                >
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                  {item.tab === 'knowledge' && current.open_questions ? (
+                    <span className="rail-count" title="Open questions">{current.open_questions}</span>
+                  ) : null}
+                  {item.tab === 'sessions' && current.pending_approvals ? (
+                    <span className="rail-count" title="Waiting for your permission">{current.pending_approvals}</span>
+                  ) : null}
+                </a>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* Submenu panel — content swaps between setup and portal */}
+        <div className="rail-panel" inert={!showSub ? true : undefined} aria-hidden={!showSub ? true : undefined}>
+          <nav
+            id={subId}
+            className="rail-nav"
+            aria-label={subLabel}
+          >
+            <button
+              ref={showSub ? backRef : null}
+              type="button"
+              className="rail-back-btn"
+              onClick={closeSub}
+            >
+              <Icon name="chevronRight" size={14} className="icon-flip-h" aria-hidden="true" />
+              Back
+            </button>
+            <div className="rail-sub-label" aria-hidden="true">{subLabel}</div>
+            {subItems.map((item) => {
+              const isProjectItem = 'projectScoped' in item || (!('global' in item));
+              const linkHref = isProjectItem
+                ? href(projectId, item.tab)
+                : `#/${item.tab}`;
+              const isActive = renderedGroup === 'setup'
+                ? route.tab === item.tab && !!route.projectId
+                : route.tab === item.tab && !route.projectId;
+              return (
+                <a
+                  key={`${renderedGroup}-${item.tab}`}
+                  href={linkHref}
+                  className={cx('rail-link', isActive && 'is-active')}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={handleLinkClick}
+                >
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                </a>
+              );
+            })}
+          </nav>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Shell({ user, onSignOut }) {
   const route = useRoute();
@@ -97,7 +368,7 @@ function Shell({ user, onSignOut }) {
     <AppContext.Provider value={ctx}>
       <div className={cx('shell', navOpen && 'nav-open')}>
         <a className="skip" href="#main">Skip to content</a>
-        <Rail route={route} user={user} projects={projects} meta={meta} spend={spend} onSignOut={onSignOut} />
+        <Rail route={route} user={user} projects={projects} meta={meta} spend={spend} onSignOut={onSignOut} onNavigate={() => setNavOpen(false)} />
         <div className="topbar">
           <button className="icon-btn" aria-label="Menu" onClick={() => setNavOpen((v) => !v)}>
             <Icon name="menu" />
@@ -185,7 +456,7 @@ function LookSwitch() {
   );
 }
 
-function Rail({ route, user, projects, meta, spend, onSignOut }) {
+function Rail({ route, user, projects, meta, spend, onSignOut, onNavigate }) {
   const current = projects?.find((p) => p.id === route.projectId);
   const signOut = async () => {
     await api.post('/api/auth/logout');
@@ -215,62 +486,14 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
           ))}
         </select>
       </div>
-      <nav className="rail-nav">
-        {current ? (
-          PROJECT_NAV.map((n) => (
-            <a key={n.tab} href={href(current.id, n.tab)} className={cx('rail-link', route.tab === n.tab && 'is-active')} aria-current={route.tab === n.tab ? 'page' : undefined}>
-              <Icon name={n.icon} />
-              <span>{n.label}</span>
-              {n.tab === 'knowledge' && current.open_questions ? (
-                <span className="rail-count" title="Open questions">
-                  {current.open_questions}
-                </span>
-              ) : null}
-              {n.tab === 'sessions' && current.pending_approvals ? (
-                <span className="rail-count" title="Waiting for your permission">
-                  {current.pending_approvals}
-                </span>
-              ) : null}
-            </a>
-          ))
-        ) : (
-          <a href="#/projects" className={cx('rail-link', route.tab === 'projects' && 'is-active')}>
-            <Icon name="projects" />
-            <span>Projects</span>
-          </a>
-        )}
-      </nav>
+      <NavMenu
+        route={route}
+        projectId={route.projectId}
+        current={current}
+        user={user}
+        onNavigate={onNavigate}
+      />
       <div className="rail-foot">
-        <a href="#/connections" className={cx('rail-link', route.tab === 'connections' && 'is-active')}>
-          <Icon name="branch" />
-          <span>Connections</span>
-        </a>
-        <a href="#/integrations" className={cx('rail-link', route.tab === 'integrations' && 'is-active')}>
-          <Icon name="builder" />
-          <span>Integrations</span>
-        </a>
-        <a href="#/vault" className={cx('rail-link', route.tab === 'vault' && 'is-active')}>
-          <Icon name="inbox" />
-          <span>Vault</span>
-        </a>
-        <a href="#/api" className={cx('rail-link', route.tab === 'api' && 'is-active')}>
-          <Icon name="lock" />
-          <span>API access</span>
-        </a>
-        <a href="#/aws" className={cx('rail-link', route.tab === 'aws' && 'is-active')}>
-          <Icon name="lock" />
-          <span>AWS accounts</span>
-        </a>
-        <a href="#/insights" className={cx('rail-link', route.tab === 'insights' && !route.projectId && 'is-active')}>
-          <Icon name="chart" />
-          <span>Insights</span>
-        </a>
-        {user.is_admin ? (
-          <a href="#/settings" className={cx('rail-link', route.tab === 'settings' && 'is-active')}>
-            <Icon name="settings" />
-            <span>Settings</span>
-          </a>
-        ) : null}
         {current ? <AgentActivity projectId={current.id} /> : null}
         <LookSwitch />
         <div className="rail-status">

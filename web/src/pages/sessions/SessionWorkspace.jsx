@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApp, useProject } from '../../lib/context.js';
 import { useProjectEvents } from '../../lib/events.js';
-import { useLoad } from '../../lib/useAsync.js';
+import { useLoad, useAction } from '../../lib/useAsync.js';
 import { useRunStream } from '../../lib/useRunStream.js';
 import { buildTree } from '../../lib/tree.js';
 import { go, href, sessionHref } from '../../lib/router.js';
@@ -61,7 +61,7 @@ export function SessionWorkspace({ id, query }) {
       <div className="ws-body">
         {tab === 'live' ? (
           runId ? (
-            <LiveTab key={runId} runId={runId} isLatest={runId === w.last_run_id} runs={runs} link={link} />
+            <LiveTab key={runId} runId={runId} isLatest={runId === w.last_run_id} runs={runs} link={link} asked={askedFor(w, data.data.events, runId)} />
           ) : (
             <Empty icon="runs" title="Nothing has run yet">{w.status === 'running' ? 'The first iteration is starting…' : 'Resume the session or send it an instruction to start.'}</Empty>
           )
@@ -179,6 +179,11 @@ function SessionHeader({ w, canEdit, reload }) {
             agent pushes: <strong>{w.push_mode === 'ask' ? 'ask me' : 'allowed'}</strong>
           </span>
         ) : null}
+        {w.trust_tools ? (
+          <span className="chip-static small chip-warn" title="Commands and edits run without asking. Deploys, terraform apply and deleting files outside the working copy stay blocked.">
+            trusts all tools
+          </span>
+        ) : null}
         {w.workspace ? (
           <a className="chip-static small" href={href(project.id, 'workspaces')} title="The workspace this session started from">
             workspace <strong>{w.workspace.name}</strong>
@@ -219,6 +224,9 @@ function SessionHeader({ w, canEdit, reload }) {
         </div>
       ) : null}
       {w.pending_push && canEdit ? <PushRequestCard w={w} reload={reload} /> : null}
+      {!w.repos?.length && !w.playground && ['blocked', 'done', 'stopped', 'failed'].includes(w.status) && canEdit ? (
+        <RescuePushCard w={w} reload={reload} />
+      ) : null}
       {w.status === 'done' ? (
         <Note tone="success" icon="check">
           The agents report the goal is met{w.verify_command ? ' and your check passes' : ''}. Review the Changes, push them, or tell the agents what to improve below.
@@ -297,6 +305,237 @@ function PushRequestCard({ w, reload }) {
   );
 }
 
+/** Base-like branch names that shouldn't be used as the new push branch. */
+const BASE_BRANCHES = new Set(['main', 'master', 'develop', 'development', 'staging', 'production', 'release', 'trunk']);
+
+/**
+ * Shown when a session has no repositories and is blocked/done/stopped: lets the user push
+ * one of its working copies to a repository they choose, or just attach a repository.
+ */
+function RescuePushCard({ w, reload }) {
+  const { project } = useProject();
+  const { toast } = useUi();
+
+  // Working copies: handle both { copies: [...] } and a bare array.
+  const copies = useLoad(() => api.get(`/api/workflows/${w.id}/working-copies`), [w.id]);
+  const rawCopiesAll = copies.data
+    ? Array.isArray(copies.data) ? copies.data : (copies.data.copies || [])
+    : [];
+  // A4: dedupe by path to avoid duplicate option keys.
+  const rawCopies = rawCopiesAll.filter((c, i, arr) => arr.findIndex((x) => x.path === c.path) === i);
+
+  // Connected repos for the project.
+  const reposLoad = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
+  const readyRepos = (reposLoad.data?.repos || []).filter((r) => r.status === 'ready');
+
+  // Pick the newest copy whose repoId is set, else the newest copy overall.
+  const defaultCopy = rawCopies.find((c) => c.repoId) ?? rawCopies[0] ?? null;
+
+  const [selectedPath, setSelectedPath] = useState('');
+  const [repoId, setRepoId] = useState('');
+  const [branch, setBranch] = useState('');
+  const [message, setMessage] = useState('');
+  const [openPr, setOpenPr] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+
+  // When copies load, pre-fill from the best copy.
+  const [prefilled, setPrefilled] = useState(false);
+  useEffect(() => {
+    if (prefilled || !rawCopies.length) return;
+    const c = defaultCopy;
+    if (!c) return;
+    setSelectedPath(c.path);
+    setRepoId(c.repoId || (readyRepos[0]?.id ?? ''));
+    // Prefill branch only if the copy's branch isn't a base/shared branch.
+    const isSafe = c.branch && !BASE_BRANCHES.has(c.branch.toLowerCase());
+    setBranch(isSafe ? c.branch : '');
+    setPrefilled(true);
+  }, [rawCopies.length, readyRepos.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When the selected copy changes, update repoId and branch.
+  const handleCopyChange = useCallback((path) => {
+    setSelectedPath(path);
+    const c = rawCopies.find((x) => x.path === path);
+    if (!c) return;
+    setRepoId(c.repoId || (readyRepos[0]?.id ?? ''));
+    const isSafe = c.branch && !BASE_BRANCHES.has(c.branch.toLowerCase());
+    setBranch(isSafe ? c.branch : '');
+  }, [rawCopies, readyRepos]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectedCopy = rawCopies.find((c) => c.path === selectedPath) ?? defaultCopy;
+  const needsMessage = Boolean(selectedCopy?.dirty);
+
+  const pushAction = useAction();
+  const attachAction = useAction();
+
+  const handlePush = async () => {
+    await pushAction.run(async () => {
+      const r = await api.post(`/api/workflows/${w.id}/push-copy`, {
+        path: selectedCopy.path,
+        repoId,
+        branch: branch || undefined,
+        message: message || undefined,
+        pr: openPr || undefined,
+      });
+      const results = r.push?.results || [];
+      const failed = results.filter((x) => !x.ok);
+      if (r.push?.ok) {
+        // pr is a URL string (same shape as history entries), not an object.
+        const prUrl = results.find((x) => x.pr);
+        toast(
+          prUrl
+            ? `Pushed — draft pull request at ${prUrl.pr}`
+            : `Pushed to ${branch || 'new branch'}`,
+          'ok',
+        );
+      } else {
+        toast(failed.map((x) => x.error).join('; ') || 'Push failed', 'danger');
+      }
+      reload();
+    });
+  };
+
+  // A3: post only { repoId } — branch is the new branch name and must not be sent as base branch.
+  const handleAttach = async () => {
+    await attachAction.run(async () => {
+      await api.post(`/api/workflows/${w.id}/attach-repo`, { repoId });
+      toast('Repository attached');
+      reload();
+    });
+  };
+
+  if (dismissed) return null;
+
+  const canPush = Boolean(selectedCopy && repoId && (!needsMessage || message.trim()));
+  // Attach only requires a repo; no working copy needed.
+  const canAttach = Boolean(repoId);
+
+  return (
+    <section className="note note-info push-request" aria-label="Push this work to a repository">
+      <div className="stack">
+        <div className="row between wrap">
+          <strong>Push this work to a repository</strong>
+          <button type="button" className="icon-btn" onClick={() => setDismissed(true)} aria-label="Dismiss">
+            <Icon name="x" size={15} />
+          </button>
+        </div>
+
+        {/* A2: repo picker and Attach always visible, regardless of working copies */}
+        <div className="row wrap">
+          <Field label="Target repository">
+            {(id) => (
+              <select
+                id={id}
+                className="input"
+                value={repoId}
+                onChange={(e) => setRepoId(e.target.value)}
+                aria-required="true"
+              >
+                <option value="">Choose a repository…</option>
+                {readyRepos.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="New branch name" hint="Leave empty and the server will derive one.">
+            {(id) => (
+              <input
+                id={id}
+                className="input mono"
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                placeholder="agent/feature-name (derived if empty)"
+              />
+            )}
+          </Field>
+        </div>
+
+        {copies.loading ? (
+          <p className="muted small">Loading working copies…</p>
+        ) : rawCopies.length > 0 ? (
+          <>
+            {rawCopies.length > 1 ? (
+              <Field label="Working copy">
+                {(id) => (
+                  <select id={id} className="input" value={selectedPath} onChange={(e) => handleCopyChange(e.target.value)}>
+                    {rawCopies.map((c) => (
+                      <option key={c.path} value={c.path}>
+                        {c.repoName ? `${c.repoName} · ` : ''}{c.branch || 'unknown branch'}{c.dirty ? ' · uncommitted changes' : ''}
+                        {c.subject ? ` — ${c.subject.slice(0, 60)}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            ) : selectedCopy ? (
+              <p className="small muted">
+                {selectedCopy.repoName ? <><strong>{selectedCopy.repoName}</strong> · </> : null}
+                {selectedCopy.branch ? <><code>{selectedCopy.branch}</code>{selectedCopy.subject ? ` — ${selectedCopy.subject.slice(0, 80)}` : ''}</> : 'No branch yet'}
+                {selectedCopy.dirty ? ' · uncommitted changes' : ''}
+              </p>
+            ) : null}
+            <Field
+              label={needsMessage ? 'Commit message (required — there are uncommitted changes)' : 'Commit message (optional)'}
+              error={needsMessage && !message.trim() ? 'Required when there are uncommitted changes' : undefined}
+            >
+              {(id) => (
+                <input
+                  id={id}
+                  className="input"
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="Agent Portal: …"
+                  aria-required={needsMessage}
+                />
+              )}
+            </Field>
+            <label className="row tight small push-pr">
+              <input type="checkbox" checked={openPr} onChange={(e) => setOpenPr(e.target.checked)} />
+              Open a draft pull request (GitHub)
+            </label>
+            <a className="small" href={`#/p/${w.project_id}/sessions/${w.id}?tab=changes`}>
+              Review changes first
+            </a>
+          </>
+        ) : (
+          <p className="muted small">No working copies found. Use "Attach repository only" to connect this session to a repository.</p>
+        )}
+
+        {pushAction.error ? <ErrorNote error={pushAction.error} onClose={() => pushAction.setError(null)} /> : null}
+        {attachAction.error ? <ErrorNote error={attachAction.error} onClose={() => attachAction.setError(null)} /> : null}
+        <div className="row wrap">
+          {rawCopies.length > 0 ? (
+            <Button
+              variant="primary"
+              icon="branch"
+              busy={pushAction.busy}
+              disabled={!canPush || attachAction.busy}
+              onClick={handlePush}
+            >
+              Push
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            busy={attachAction.busy}
+            disabled={!canAttach || pushAction.busy}
+            onClick={handleAttach}
+            title="Attach the repository to this session without pushing"
+          >
+            Attach repository only
+          </Button>
+        </div>
+        {!readyRepos.length && !reposLoad.loading ? (
+          <p className="muted small">
+            No repositories connected. <a href={href(project.id, 'repos')}>Connect one on the Repositories page.</a>
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 /** Hand a task of this session to a separate session. */
 function DelegateDialog({ w, onClose, onDone }) {
   const { project } = useProject();
@@ -352,7 +591,57 @@ function DelegateDialog({ w, onClose, onDone }) {
 /* ---------------- Live ---------------- */
 
 /** The agents of one run of the session, live, with what the selected one is doing. */
-function LiveTab({ runId, isLatest, runs, link }) {
+/**
+ * What people asked for, as they typed it: the session's goal, and the instructions an iteration picked up (those sent
+ * after the previous iteration started and before this one did). Instructions not picked up yet are listed as waiting.
+ */
+function askedFor(w, events, runId) {
+  const starts = events.filter((e) => e.kind === 'iteration' && /started$/.test(e.body) && e.run_id);
+  const at = starts.findIndex((e) => e.run_id === runId);
+  const human = events.filter((e) => e.kind === 'human');
+  const from = at > 0 ? starts[at - 1].id : 0;
+  const to = at >= 0 ? starts[at].id : Infinity;
+  return {
+    goal: w.goal,
+    messages: human.filter((e) => e.id > from && e.id < to),
+    waiting: runId === w.last_run_id ? human.filter((e) => !e.consumed) : [],
+  };
+}
+
+function AskedCard({ asked }) {
+  const msg = (e) => (
+    <li key={e.id} className="ws-asked-msg">
+      <span className="muted small">
+        {e.data?.by || 'A teammate'} · {timeAgo(e.created_at)}
+      </span>
+      <p className="ws-asked-text">{e.body}</p>
+    </li>
+  );
+  return (
+    <section className="panel ws-asked" aria-label="What was asked">
+      <details open={asked.messages.length === 0}>
+        <summary className="small">
+          <strong>Goal</strong>
+        </summary>
+        <p className="ws-asked-text">{asked.goal}</p>
+      </details>
+      {asked.messages.length ? (
+        <>
+          <h3 className="small">Your message{asked.messages.length === 1 ? '' : 's'} for this iteration</h3>
+          <ul className="plain-list stack">{asked.messages.map(msg)}</ul>
+        </>
+      ) : null}
+      {asked.waiting.length ? (
+        <>
+          <h3 className="small">Waiting for the next iteration</h3>
+          <ul className="plain-list stack">{asked.waiting.map(msg)}</ul>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function LiveTab({ runId, isLatest, runs, link, asked }) {
   const { meta } = useApp();
   const { project, canEdit, reload: reloadProject } = useProject();
   const data = useRunStream(runId);
@@ -374,6 +663,7 @@ function LiveTab({ runId, isLatest, runs, link }) {
       ) : null}
       <IterationStrip runs={runs} current={runId} link={link} />
       {!isLatest ? <Note tone="info" icon="alert">You are looking at an earlier iteration. <a href={link({})}>Back to the latest</a></Note> : null}
+      {asked ? <AskedCard asked={asked} /> : null}
       <div className="ws-live">
         <div className="ws-graph">
           <AgentView tree={tree} selected={selected} onSelect={setSelected} live={['queued', 'running', 'waiting'].includes(run.status)} />

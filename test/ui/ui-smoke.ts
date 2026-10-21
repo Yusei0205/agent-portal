@@ -25,6 +25,31 @@ function check(cond: unknown, msg: string) {
   console.log(`  ok - ${msg}`);
 }
 
+/**
+ * Open a rail group (e.g. 'Project setup') only when the submenu is not already
+ * showing. When the submenu is visible the group button is behind an inert panel
+ * and cannot be interacted with — we simply skip the click.
+ */
+async function openRailGroup(page: Page, name: string | RegExp) {
+  const backBtn = page.getByRole('button', { name: 'Back', exact: true });
+  // If the Back button is already visible the submenu is open; nothing to do.
+  if (await backBtn.isVisible()) return;
+  await page.getByRole('button', { name }).click();
+}
+
+/**
+ * Close the currently-open rail submenu by clicking the Back button,
+ * then wait for the main panel to become interactive again.
+ * Call this before targeting a main-menu item (Sessions, Knowledge, etc.)
+ * after navigating through a submenu.
+ */
+async function closeRailGroup(page: Page) {
+  const backBtn = page.getByRole('button', { name: 'Back', exact: true });
+  if (await backBtn.isVisible()) {
+    await backBtn.click();
+  }
+}
+
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-ui-'));
   process.env.DATA_DIR = dataDir;
@@ -99,6 +124,8 @@ async function main() {
     check(true, 'answers land in the decisions log');
 
     console.log('builder');
+    // Agents and skills is in the 'Project setup' group – open it first.
+    await openRailGroup(page, /Project setup/);
     await page.getByRole('link', { name: 'Agents and skills', exact: true }).click();
     await page.getByRole('heading', { name: 'Business analyst', exact: true }).waitFor();
     for (const role of ['Business analyst', 'QA engineer', 'Technical writer and trainer']) {
@@ -116,6 +143,8 @@ async function main() {
 
     console.log('repositories');
     const bare = makeRepo(path.join(dataDir, 'fixture'));
+    // Repositories is in the 'Project setup' group (submenu already open from builder).
+    await openRailGroup(page, /Project setup/);
     await page.getByRole('link', { name: 'Repositories', exact: true }).click();
     await page.getByRole('button', { name: 'Connect a repository', exact: true }).click();
     await page.getByRole('tab', { name: 'Other Git', exact: true }).click();
@@ -126,6 +155,8 @@ async function main() {
     await shot(page, 'repos');
 
     console.log('configuration');
+    // Configuration is in the 'Project setup' group (submenu already open from repos).
+    await openRailGroup(page, /Project setup/);
     await page.getByRole('link', { name: 'Configuration', exact: true }).click();
     await page.getByRole('button', { name: 'business-analyst.md', exact: true }).click();
     const editor = page.getByLabel('Contents of .claude/agents/business-analyst.md');
@@ -138,6 +169,9 @@ async function main() {
     await shot(page, 'configuration');
 
     console.log('workspaces');
+    // Workspaces is now in the main project menu (right after Sessions), not in Project setup.
+    // Close the setup submenu first if it is open, then click the main-menu link.
+    await closeRailGroup(page);
     await page.getByRole('link', { name: 'Workspaces', exact: true }).click();
     await page.getByRole('button', { name: 'Create a workspace', exact: true }).click();
     await page.getByLabel('Name', { exact: true }).fill('Refunds');
@@ -147,6 +181,7 @@ async function main() {
     check(true, 'a workspace lists its repositories');
 
     console.log('single run (from Sessions)');
+    // Sessions is on the main panel – no need to close a submenu.
     await page.getByRole('link', { name: 'Sessions', exact: true }).click();
     check((await page.getByRole('link', { name: 'Agent runs', exact: true }).count()) === 0, 'Agent runs is no longer in the menu');
     await page.getByRole('link', { name: 'New', exact: true }).click();

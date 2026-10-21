@@ -195,6 +195,25 @@ html[data-theme='hud'] .rail-count {
   box-shadow: 0 0 10px rgba(255, 184, 77, 0.35);
 }
 
+/* Drill-down rail nav in HUD theme */
+html[data-theme='hud'] .rail-group-btn {
+  position: relative;
+  transition: background 0.2s, color 0.2s;
+}
+html[data-theme='hud'] .rail-group-btn:hover {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.12), transparent);
+  color: var(--accent-ink);
+}
+html[data-theme='hud'] .rail-group-btn.has-active-child {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.2), rgba(34, 211, 238, 0.03));
+  color: #fff;
+  box-shadow: inset 3px 0 0 var(--accent), 0 0 20px rgba(34, 211, 238, 0.14);
+}
+html[data-theme='hud'] .rail-back-btn:hover {
+  background: rgba(34, 211, 238, 0.08);
+  color: var(--accent-ink);
+}
+
 /* Agent activity readout in the rail */
 .rail-activity {
   display: flex;

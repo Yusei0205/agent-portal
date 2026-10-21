@@ -123,6 +123,11 @@ test('Kiro follow-up resumes the same session and ignores the replayed history',
   assert.equal(done.run.status, 'completed', done.run.error);
   assert.equal(rpc('session/load')[0].params.sessionId, 'kiro-sess-1');
   assert.equal(rpc('session/new').length, 0);
+  // The loaded session reports its old agent; the portal switches it to this run's profile.
+  const setMode = rpc('session/set_mode');
+  assert.equal(setMode.length, 1);
+  assert.match(setMode[0].params.modeId, /^agent-portal-[0-9a-f]{8}$/);
+  assert.equal(setMode[0].params.sessionId, 'kiro-sess-1');
   assert.ok(!JSON.stringify(done.events).includes('OLD HISTORY'));
 });
 
@@ -212,13 +217,13 @@ test('Kiro integrations: MCP servers in the profile, and read-only ones refuse c
 
 test('engine per run: Kiro can be picked; Claude is refused clearly while no Claude provider is set up', async () => {
   const engines = await c.get(`/api/projects/${pid}/engines`);
-  assert.deepEqual(engines, { default: 'kiro', claude: null, kiro: true });
-  const refused = await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'claude' });
+  assert.deepEqual(engines, { default: 'kiro', claude: null, kiro: true, pushMode: 'ask' });
+  const refused = await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'claude', playground: true });
   assert.equal(refused.status, 400);
   assert.match(refused.data.error, /Claude is not set up/);
   assert.equal((await c.req('POST', `/api/projects/${pid}/runs`, { prompt: 'x', engine: 'claude' })).status, 400);
-  assert.equal((await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'gpt' })).status, 400);
-  const { workflow } = await c.post(`/api/projects/${pid}/workflows`, { goal: 'On Kiro', start: false, engine: 'kiro' });
+  assert.equal((await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'gpt', playground: true })).status, 400);
+  const { workflow } = await c.post(`/api/projects/${pid}/workflows`, { goal: 'On Kiro', start: false, engine: 'kiro', playground: true });
   assert.equal(workflow.engine, 'kiro');
   assert.equal(workflow.provider, 'kiro');
   const models = await c.get(`/api/models?projectId=${pid}&engine=claude`);

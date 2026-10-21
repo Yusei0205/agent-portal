@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
+import { timeAgo } from '../lib/util.js';
 import { Icon } from './Icon.jsx';
 import { TicketPreview } from './TicketPreview.jsx';
 import { Badge, Segmented, Spinner } from './ui.jsx';
+
+/** Map a Jira priority name to the Badge tone used across this portal. */
+function severityTone(priority) {
+  if (!priority) return 'muted';
+  const p = priority.toLowerCase();
+  if (p === 'highest' || p === 'critical' || p === 'blocker') return 'danger';
+  if (p === 'high') return 'warn';
+  if (p === 'low' || p === 'lowest') return 'muted';
+  return 'muted'; // Medium and anything else → muted/default
+}
 
 /** KEY_RE mirrors the server's pattern: one or more capital letter-digit prefix, dash, digits. */
 const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]{1,19}-\d{1,9}$/;
@@ -67,7 +78,7 @@ export function JiraTicketPicker({ projectId, value, onChange }) {
   }, [open]);
 
   const select = (issue) => {
-    onChange({ key: issue.key, summary: issue.summary, status: issue.status, url: null });
+    onChange({ key: issue.key, summary: issue.summary, status: issue.status, priority: issue.priority ?? null, updated: issue.updated ?? null, url: null });
     setOpen(false);
     setQ('');
   };
@@ -91,6 +102,9 @@ export function JiraTicketPicker({ projectId, value, onChange }) {
       <div className="jira-ticket-card" role="status" aria-label={`Selected Jira ticket: ${value.key}`}>
         <span className="jira-ticket-card-key mono">{value.key}</span>
         <span className="jira-ticket-card-summary">{value.summary}</span>
+        {value.priority ? (
+          <Badge tone={severityTone(value.priority)}>{value.priority}</Badge>
+        ) : null}
         {value.status ? (
           <Badge tone={value.status.category === 'done' ? 'ok' : value.status.category === 'indeterminate' ? 'accent' : 'muted'}>
             {value.status.name}
@@ -183,12 +197,33 @@ export function JiraTicketPicker({ projectId, value, onChange }) {
                   if (e.key === 'Escape') { setOpen(false); inputRef.current?.focus(); }
                 }}
               >
-                <span className="jira-picker-option-key mono">{issue.key}</span>
-                <span className="jira-picker-option-summary">{issue.summary}</span>
-                <Badge tone={issue.status.category === 'done' ? 'ok' : issue.status.category === 'indeterminate' ? 'accent' : 'muted'}>
+                {/* Visually-hidden full description for screen readers */}
+                <span className="sr-only">
+                  {issue.key} {issue.summary}
+                  {issue.priority ? `, ${issue.priority} severity` : ''}
+                  {`, ${issue.status.name}`}
+                  {issue.type ? `, ${issue.type}` : ''}
+                  {issue.updated ? `, updated ${timeAgo(issue.updated)}` : ''}
+                </span>
+                <span className="jira-picker-option-key mono" aria-hidden="true">{issue.key}</span>
+                <span className="jira-picker-option-summary" aria-hidden="true">{issue.summary}</span>
+                {issue.priority ? (
+                  <Badge tone={severityTone(issue.priority)} aria-hidden="true">{issue.priority}</Badge>
+                ) : <span aria-hidden="true" />}
+                <Badge tone={issue.status.category === 'done' ? 'ok' : issue.status.category === 'indeterminate' ? 'accent' : 'muted'} aria-hidden="true">
                   {issue.status.name}
                 </Badge>
-                {issue.type ? <span className="muted small">{issue.type}</span> : null}
+                {issue.type ? <span className="muted small" aria-hidden="true">{issue.type}</span> : <span aria-hidden="true" />}
+                {issue.updated ? (
+                  <time
+                    className="jira-picker-option-date muted small"
+                    dateTime={issue.updated}
+                    title={new Date(issue.updated).toLocaleString()}
+                    aria-hidden="true"
+                  >
+                    {timeAgo(issue.updated)}
+                  </time>
+                ) : <span aria-hidden="true" />}
               </button>
             ))
           )}

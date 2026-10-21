@@ -135,7 +135,7 @@ test('AWS SSO for a project: admin only, validated, and a clear error without an
 test('a session on Kiro CLI pauses at its credit budget', async () => {
   const pid = pids['Kiro project'];
   // Each fake Kiro run reports 0.2 credits.
-  const { workflow } = await admin.post(`/api/projects/${pid}/workflows`, { goal: 'Keep writing notes', budgetCredits: 0.3, maxIterations: 10 });
+  const { workflow } = await admin.post(`/api/projects/${pid}/workflows`, { goal: 'Keep writing notes', budgetCredits: 0.3, maxIterations: 10, playground: true });
   assert.equal(workflow.provider, 'kiro');
   assert.equal(workflow.budget_credits, 0.3);
   const w = await waitFor(async () => {

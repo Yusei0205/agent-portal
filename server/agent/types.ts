@@ -43,8 +43,8 @@ export type CanUseTool = (
   opts: { signal: AbortSignal; toolUseID?: string; agentID?: string },
 ) => Promise<PermissionResult>;
 
-/** Called before every tool call; return a reason string to block it. */
-export type PreToolGuard = (toolName: string, input: Record<string, unknown>) => string | null;
+/** Called before every tool call; return a reason string to block it (or a promise of one). */
+export type PreToolGuard = (toolName: string, input: Record<string, unknown>) => string | null | Promise<string | null>;
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan';
 
@@ -72,6 +72,8 @@ export interface ProviderRunOptions {
   systemAppend?: string;
   /** Replace the system prompt entirely (single-shot tasks). */
   systemPrompt?: string;
+  /** The project agent leading the run; it is not offered to itself as a subagent. */
+  leadAgent?: string;
   permissionMode: PermissionMode;
   /** Tools that run without asking. */
   allowedTools?: string[];

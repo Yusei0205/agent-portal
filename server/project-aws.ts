@@ -246,8 +246,18 @@ export async function callerIdentity(env: Record<string, string>): Promise<{ acc
     return { account: String(j.Account ?? ''), arn: String(j.Arn ?? ''), userId: String(j.UserId ?? '') };
   } catch (e: any) {
     if (e?.code === 'ENOENT') throw new HttpError(502, 'The AWS CLI is not installed on the server, so the connection cannot be tested.');
-    const err = String(e?.stderr ?? e?.message ?? e).split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 300);
-    throw new HttpError(502, `AWS did not accept these credentials: ${err}`);
+    // Windows output ends lines with \r\n; keep the last two real lines of what the CLI said.
+    const said = (s: unknown) => String(s ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = [...said(e?.stderr), ...said(e?.stdout)];
+    let err = lines.slice(-2).join(' ');
+    if (e?.killed || e?.signal) {
+      const why = `The AWS CLI did not answer within 25 s, so these credentials could not be checked (network, proxy or VPN?)${err ? `: ${err}` : ''}`;
+      console.error('[aws] sts get-caller-identity timed out:', why);
+      throw new HttpError(504, why.slice(0, 400));
+    }
+    if (!err) err = `the AWS CLI exited with code ${e?.code ?? '?'} without saying why${e?.message ? ` (${said(e.message)[0]})` : ''}`;
+    console.error('[aws] sts get-caller-identity failed:', err);
+    throw new HttpError(502, `AWS did not accept these credentials: ${err.slice(0, 300)}`);
   }
 }
 

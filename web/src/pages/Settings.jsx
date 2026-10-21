@@ -6,6 +6,7 @@ import { cx, money, timeAgo } from '../lib/util.js';
 import { useSortable } from '../lib/useSortable.js';
 import { SortHeader } from '../components/SortHeader.jsx';
 import { Badge, Button, ErrorNote, Field, Modal, Note, PageHeader, Spinner, Toggle, useUi } from '../components/ui.jsx';
+import { PUSH_MODES } from './sessions/status.js';
 
 const PROVIDERS = [
   { value: 'demo', title: 'Demo', body: 'Simulated agents. Free, no key needed. Use it to try every feature.' },
@@ -777,6 +778,17 @@ function AgentsSection({ s, reload }) {
         </Field>
         <Field label="Maximum turns per run" hint="Stops runaway runs.">
           {(id) => <input id={id} type="number" min={1} max={500} className="input input-num" value={a.maxTurns} onChange={(e) => setA({ ...a, maxTurns: Number(e.target.value) })} />}
+        </Field>
+        <Field label="Agent pushes for new sessions" hint="Only ever to the session's own new branch, never to the base or shared branches. Each session can change it.">
+          {(id) => (
+            <select id={id} className="input" value={a.defaultPushMode || 'ask'} onChange={(e) => setA({ ...a, defaultPushMode: e.target.value })}>
+              {PUSH_MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          )}
         </Field>
       </div>
       <Toggle

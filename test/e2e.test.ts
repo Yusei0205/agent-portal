@@ -518,8 +518,13 @@ test('agent pushes: never by default, after approval in ask mode, at once in aut
     }, `session ${wanted.join('/')}`, 40_000);
   const start = (goal: string, pushMode?: string) => editor.post(`/api/projects/${pid}/workflows`, { goal, repoId, model: 'haiku', ...(pushMode ? { pushMode } : {}) });
 
-  // Default: never. The agents' request is only noted.
-  const never = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: feature/never-pushed]')).workflow;
+  // New sessions follow Settings › Agent defaults (ask unless changed); it can be set per session.
+  const byDefault = (await editor.post(`/api/projects/${pid}/workflows`, { goal: 'Default push mode', repoId, model: 'haiku', start: false })).workflow;
+  assert.equal(byDefault.push_mode, 'ask');
+  await editor.del(`/api/workflows/${byDefault.id}`);
+
+  // Never: the agents' request is only noted.
+  const never = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: feature/never-pushed]', 'never')).workflow;
   assert.equal(never.push_mode, 'never');
   const n = await settled(never.id, ['done']);
   assert.ok(!n.events.some((e: any) => e.kind === 'push'));
@@ -548,9 +553,9 @@ test('agent pushes: never by default, after approval in ask mode, at once in aut
   // Shared branches are refused even in auto mode.
   const shared = (await start('Ship it [demo-iterations: 1] [demo-push] [demo-branch: develop]', 'auto')).workflow;
   const s = await settled(shared.id, ['done']);
-  // The branch name is refused when the agents pick it, so the push cannot even be asked for.
+  // The branch name is refused when the agents pick it; a derived name is used instead.
   assert.ok(s.events.some((e: any) => /The branch name "develop" cannot be used/.test(e.body)));
-  assert.ok(s.events.some((e: any) => /asked to push, but it cannot happen now: the new branch has no name yet/.test(e.body)));
+  // The portal auto-derives a branch and pushes (no "has no name yet" block any more).
   assert.ok(!branches().includes('develop'));
   // And the push itself refuses shared branches for agents, as a second line.
   const { isSharedBranch } = await import('../server/runs.ts');
@@ -566,4 +571,19 @@ test('agent pushes: never by default, after approval in ask mode, at once in aut
   const lastRun = (await editor.get(`/api/runs/${d.workflow.last_run_id}`)).run;
   assert.match(lastRun.prompt, /Do not push yet\. Add tests first\./);
   assert.ok(!branches().includes('feature/denied-push'));
+
+  // A session made without a repository is told not to clone one, and can get one attached later, then push.
+  const bare = (await editor.post(`/api/projects/${pid}/workflows`, { goal: 'Docs only [demo-iterations: 1]', model: 'haiku', playground: true })).workflow;
+  const b1 = await settled(bare.id, ['done']);
+  assert.match((await editor.get(`/api/runs/${b1.workflow.last_run_id}`)).run.prompt, /Do not clone repositories yourself/);
+  assert.equal((await viewer.req('PUT', `/api/workflows/${bare.id}`, { repos: [{ repoId }] })).status, 403);
+  const attached = (await editor.put(`/api/workflows/${bare.id}`, { repos: [{ repoId }], pushMode: 'auto', goal: 'Ship it [demo-iterations: 1] [demo-push] [demo-branch: feature/attached-later]' })).workflow;
+  assert.equal(attached.repo_id, repoId);
+  assert.equal(attached.repos.length, 1);
+  await editor.post(`/api/workflows/${bare.id}/resume`);
+  const b2 = await settled(bare.id, ['done']);
+  const run2 = (await editor.get(`/api/runs/${b2.workflow.last_run_id}`)).run;
+  assert.equal(run2.resume_of, null, 'with new repositories the next iteration starts on fresh working copies');
+  assert.equal(run2.repo_id, repoId);
+  assert.ok(branches().includes('feature/attached-later'), 'the portal pushed the branch of the attached repository');
 });

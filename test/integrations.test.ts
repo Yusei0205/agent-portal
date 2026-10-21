@@ -96,8 +96,8 @@ test('integrations: write-only secrets, a real MCP handshake to test, and who ma
   const { integration: mine } = await bob.post('/api/integrations', { kind: 'http', name: 'Bob only', scope: 'personal', url: mcpUrl, headers: { Authorization: 'Bearer mcp-secret-42' } });
   assert.ok(!(await admin.get('/api/integrations')).integrations.some((i: any) => i.id === mine.id));
   assert.equal((await bob.req('POST', `/api/projects/${pid}/workspaces`, { name: 'With personal', integrations: [mine.id] })).status, 400);
-  assert.equal((await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, integrations: [mine.id] })).status, 400, 'nobody else can attach it');
-  const own = await bob.post(`/api/projects/${pid}/workflows`, { goal: 'mine', start: false, integrations: [mine.id] });
+  assert.equal((await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, integrations: [mine.id], playground: true })).status, 400, 'nobody else can attach it');
+  const own = await bob.post(`/api/projects/${pid}/workflows`, { goal: 'mine', start: false, integrations: [mine.id], playground: true });
   assert.deepEqual(own.workflow.integrations, [mine.id], 'its owner can');
 
   // Team integrations in a workspace come with every session started from it; they cannot be deleted while attached.

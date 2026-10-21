@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useProject } from '../../lib/context.js';
 import { useLoad } from '../../lib/useAsync.js';
@@ -83,6 +83,37 @@ function PushModeField({ value, onChange }) {
   );
 }
 
+
+
+/**
+ * "Trust all tools" toggle: commands and edits run without approval prompts.
+ * Shown in New session dialog and session Settings.
+ */
+function TrustToolsField({ value, onChange, hasRepos }) {
+  const uid = useId();
+  const id = `trust-tools-${uid}`;
+  const hint = hasRepos
+    ? "Commands and edits run without asking. The agent can push to this session's own new branch (never to dev-sg, main or other shared branches) using the repository's credentials, which it never sees. Deploys, terraform apply and deleting files outside the working copy stay blocked."
+    : "Commands and edits run without asking. The agent can push to this session's own new branch (never to dev-sg, main or other shared branches) using the repository's credentials, which it never sees. Deploys, terraform apply and deleting files outside the working copy stay blocked. This session has no repository, so it can't push.";
+  return (
+    <div className="field">
+      <div className="row tight">
+        <input
+          id={id}
+          type="checkbox"
+          checked={value}
+          onChange={(e) => onChange(e.target.checked)}
+          aria-describedby={`${id}-hint`}
+        />
+        <label htmlFor={id} className="field-label" style={{ marginBottom: 0, cursor: 'pointer' }}>
+          Trust all tools
+        </label>
+      </div>
+      <p id={`${id}-hint`} className="field-hint">{hint}</p>
+    </div>
+  );
+}
+
 function LimitFields({ f, set, kiro }) {
   return (
     <div className="row wrap">
@@ -123,9 +154,9 @@ export function RepoRows({ rows, setRows, ready, session }) {
       <div className="row between wrap">
         <span className="muted small">
           {rows.length > 1
-            ? 'Each repository gets its own working copy. The changes go to one new branch name in every repository; nothing is pushed until you do it.'
+            ? 'Each repository gets its own working copy. The changes go to one new branch name in every repository; pushing follows the Agent pushes setting.'
             : session
-              ? 'The agents change a working copy on a new branch they name. Nothing is pushed until you do it.'
+              ? 'The agents change a working copy on a new branch they name. Pushing follows the Agent pushes setting.'
               : 'The run gets its own working copy of the base branch.'}
         </span>
         <Button size="sm" icon="plus" disabled={!free.length} onClick={() => setRows((rs) => [...rs, { repoId: free[0].id, branch: '' }])} title={free.length ? undefined : ready.length ? 'Every repository is already added' : 'Connect a repository on the Repositories page first'}>
@@ -191,6 +222,8 @@ export function NewSessionDialog({ prefill, onClose }) {
     pushMode: 'never',
   });
   const [ticket, setTicket] = useState(prefill?.jiraKey ? { key: prefill.jiraKey, summary: prefill.jiraSummary || prefill.jiraKey, status: null, url: prefill.jiraUrl || null } : null);
+  const [playground, setPlayground] = useState(false);
+  const [trustTools, setTrustTools] = useState(false);
   const [more, setMore] = useState(false);
   const [context, setContext] = useState([]);
   const [picking, setPicking] = useState(false);
@@ -215,9 +248,28 @@ export function NewSessionDialog({ prefill, onClose }) {
     if (prefill?.workspaceId && workspaces.data && !workspaceId) pickWorkspace(prefill.workspaceId);
   }, [workspaces.data]); // eslint-disable-line react-hooks/exhaustive-deps
   const chosen = rows.filter((r) => r.repoId).map(({ repoId, branch }) => ({ repoId, branch: branch || undefined }));
+  const hasRepos = chosen.length > 0 || Boolean(workspaceId);
+  // New sessions start with the portal's default for agent pushes (Settings › Agent defaults).
+  // When repos are chosen, default to 'ask'; the server mirrors this behaviour.
+  const [pushTouched, setPushTouched] = useState(false);
+  useEffect(() => {
+    if (!pushTouched && engines.data?.pushMode) {
+      // Use the server/settings default push mode (from /api/projects/:id/engines → pushMode)
+      // whenever the user hasn't manually chosen a value yet.
+      setF((cur) => ({ ...cur, pushMode: engines.data.pushMode }));
+    }
+  }, [engines.data?.pushMode, hasRepos, pushTouched]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k) => (e) => setF((cur) => ({ ...cur, [k]: e.target.value }));
   const isDoc = kind === 'document';
-  const canStart = isDoc ? Boolean(f.repoId) : Boolean(f.goal.trim() || ticket);
+  const isSingle = kind === 'single';
+  // Sessions require either repos/workspace or the Playground checkbox.
+  // Single runs and document runs have their own repo requirements.
+  const sessionReady = hasRepos || playground;
+  const canStart = isDoc
+    ? Boolean(f.repoId)
+    : isSingle
+    ? Boolean(f.goal.trim() || ticket)
+    : Boolean((f.goal.trim() || ticket) && sessionReady);
 
   const start = async () => {
     setBusy(true);
@@ -231,8 +283,10 @@ export function NewSessionDialog({ prefill, onClose }) {
           start: files.length ? false : undefined,
           goal: f.goal,
           repos: chosen,
+          playground: chosen.length === 0 && !workspaceId ? true : undefined,
           workspaceId: workspaceId || undefined,
           pushMode: f.pushMode,
+          trustTools: trustTools || undefined,
           integrations,
           engine: engine || undefined,
           model: f.model,
@@ -384,6 +438,19 @@ export function NewSessionDialog({ prefill, onClose }) {
               </Field>
             ) : null}
             <RepoRows rows={rows} setRows={setRows} ready={ready} session={kind === 'session'} />
+            {kind === 'session' && !hasRepos ? (
+              <label className="choice">
+                <input
+                  type="checkbox"
+                  checked={playground}
+                  onChange={(e) => setPlayground(e.target.checked)}
+                />
+                <span>
+                  <strong>Playground</strong>{' '}
+                  <span className="muted">No repository — the agents work with project documents only and can't push changes.</span>
+                </span>
+              </label>
+            ) : null}
             {kind === 'session' ? (
               <div className="ctx-field">
                 <div className="row between wrap">
@@ -430,7 +497,8 @@ export function NewSessionDialog({ prefill, onClose }) {
               <>
                 <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} />
                 <LimitFields f={f} set={set} kiro={kiro} />
-                {chosen.length ? <PushModeField value={f.pushMode} onChange={(pushMode) => setF((cur) => ({ ...cur, pushMode }))} /> : null}
+                {hasRepos ? <PushModeField value={f.pushMode} onChange={(pushMode) => (setPushTouched(true), setF((cur) => ({ ...cur, pushMode })))} /> : null}
+                <TrustToolsField value={trustTools} onChange={setTrustTools} hasRepos={hasRepos} />
               </>
             ) : null}
           </div>
@@ -461,9 +529,19 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
     maxIterations: workflow.max_iterations,
     leadAgent: workflow.lead_agent ?? '',
     pushMode: workflow.push_mode ?? 'never',
+    trustTools: workflow.trust_tools ?? false,
   });
   const [f, setF] = useState(initial);
   useEffect(() => setF(initial()), [workflow.id, workflow.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Repositories can be attached or changed while the session is not running.
+  const repoList = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
+  const ready = (repoList.data?.repos || []).filter((r) => r.status === 'ready');
+  const initialRows = () => (workflow.repos || []).map((r) => ({ repoId: r.repoId, branch: r.branch || '' }));
+  const [rows, setRows] = useState(initialRows);
+  useEffect(() => setRows(initialRows()), [workflow.id, workflow.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
+  const running = workflow.status === 'running';
+  const repoKey = (list) => JSON.stringify(list.filter((r) => r.repoId).map((r) => [r.repoId, r.branch || '']));
+  const reposChanged = repoKey(rows) !== repoKey(initialRows());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const set = (k) => (e) => setF((cur) => ({ ...cur, [k]: e.target.value }));
@@ -476,6 +554,8 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
         budgetUsd: kiro ? undefined : Number(f.budgetUsd),
         budgetCredits: kiro ? Number(f.budgetCredits) : undefined,
         maxIterations: Number(f.maxIterations),
+        trustTools: f.trustTools,
+        ...(reposChanged ? { repos: rows.filter((r) => r.repoId).map(({ repoId, branch }) => ({ repoId, branch: branch || undefined })) } : {}),
       });
       toast('Settings saved');
       onSaved();
@@ -501,7 +581,16 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
       <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} />
       <Field label="Model">{(id) => <ModelPicker id={id} value={f.model} projectId={project.id} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}</Field>
       <LimitFields f={f} set={set} kiro={kiro} />
-      {workflow.repos?.length ? <PushModeField value={f.pushMode} onChange={(pushMode) => setF((cur) => ({ ...cur, pushMode }))} /> : null}
+      {running ? (
+        workflow.repos?.length ? null : <p className="muted small">Pause or stop the session to attach a repository.</p>
+      ) : (
+        <>
+          <RepoRows rows={rows} setRows={setRows} ready={ready} session />
+          {reposChanged ? <p className="muted small">The next iteration starts on fresh working copies of these repositories; the progress summary carries over.</p> : null}
+        </>
+      )}
+      {rows.some((r) => r.repoId) ? <PushModeField value={f.pushMode} onChange={(pushMode) => setF((cur) => ({ ...cur, pushMode }))} /> : null}
+      <TrustToolsField value={f.trustTools} onChange={(trustTools) => setF((cur) => ({ ...cur, trustTools }))} hasRepos={rows.some((r) => r.repoId)} />
       {workflow.rules ? (
         <>
           <h3 className="small">Standing rules</h3>
