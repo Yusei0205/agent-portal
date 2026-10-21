@@ -8,6 +8,7 @@ import { registerModelRoutes } from './models.ts';
 import { registerSsoRoutes } from './sso.ts';
 import { registerProjectRoutes } from './projects.ts';
 import { registerRepoRoutes } from './repos.ts';
+import { registerGitConnectionRoutes } from './git-connections.ts';
 import { registerCodeCommitRoutes } from './codecommit.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
 import { registerBuilderRoutes } from './builder.ts';
@@ -34,6 +35,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerSsoRoutes();
     registerProjectRoutes();
     registerRepoRoutes();
+    registerGitConnectionRoutes();
     registerCodeCommitRoutes();
     registerKnowledgeRoutes();
     registerBuilderRoutes();

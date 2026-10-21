@@ -32,6 +32,79 @@ const PROVIDERS = {
   },
 };
 
+const CONNECTION_PROVIDER = {
+  label: 'From a connection',
+  placeholder: 'Pick a repository above, or paste its address',
+  help: 'Uses a shared sign-in from the Connections page, so no token is stored on this repository.',
+  token: false,
+};
+
+/** Which repository kind a connection makes (Bitbucket and other servers clone as plain Git). */
+const repoKindOf = (provider) => (provider === 'github' ? 'github' : provider === 'codecommit' ? 'codecommit' : 'git');
+export const CONNECTION_LABEL = { github: 'GitHub', bitbucket: 'Bitbucket', codecommit: 'CodeCommit', git: 'Git server' };
+
+/** Pick a connection, then one of the repositories it can see. */
+function ConnectionRepoPicker({ connectionId, setConnectionId, onSelect }) {
+  const conns = useLoad(() => api.get('/api/git-connections'), []);
+  const repos = useLoad(() => (connectionId ? api.get(`/api/git-connections/${connectionId}/repos`) : Promise.resolve(null)), [connectionId]);
+  const [q, setQ] = useState('');
+  const list = conns.data?.connections || [];
+  useEffect(() => {
+    if (!connectionId && list.length) setConnectionId(list[0].id);
+  }, [list.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (conns.loading && !conns.data) return <Spinner />;
+  if (!list.length) {
+    return (
+      <p className="muted small">
+        No connections yet. <a href="#/connections">Add one on the Connections page</a>, then come back.
+      </p>
+    );
+  }
+  const needle = q.trim().toLowerCase();
+  const found = (repos.data?.repos || []).filter((r) => !needle || r.name.toLowerCase().includes(needle));
+  return (
+    <div className="stack">
+      <Field label="Connection">
+        {(id) => (
+          <select id={id} className="input" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
+            {list.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} · {CONNECTION_LABEL[c.provider]}
+                {c.scope === 'personal' ? ' · only you' : ''}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+      {repos.loading && !repos.data ? (
+        <Spinner small />
+      ) : repos.error ? (
+        <ErrorNote error={repos.error} />
+      ) : repos.data?.repos?.length ? (
+        <div className="stack">
+          <input type="search" className="input input-sm" placeholder="Search repositories" aria-label="Search repositories" value={q} onChange={(e) => setQ(e.target.value)} />
+          <ul className="ctx-pick-list conn-repo-list">
+            {found.slice(0, 80).map((r) => (
+              <li key={r.url} className="ctx-pick-row">
+                <Icon name="repos" size={16} />
+                <span className="ctx-pick-main">
+                  <span className="ctx-pick-title">{r.name}</span>
+                  <span className="muted small">{r.description || r.url}</span>
+                </span>
+                <Button size="sm" onClick={() => onSelect({ url: r.url, name: r.name.split('/').pop(), defaultBranch: r.defaultBranch })}>
+                  Use
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : connectionId ? (
+        <p className="muted small">This connection cannot list repositories; paste the address below.</p>
+      ) : null}
+    </div>
+  );
+}
+
 const LOCAL_PROVIDER = {
   label: 'Local folder',
   help: 'GitHub repositories use the GitHub token from Settings. CodeCommit uses the AWS sign-in from Settings. Only committed work is picked up, so commit or stash changes first.',
@@ -102,7 +175,10 @@ export function Repos() {
               <dl className="kv">
                 <div><dt>Default branch</dt><dd><code>{r.default_branch || '…'}</code></dd></div>
                 <div><dt>Last synced</dt><dd>{r.last_sync ? timeAgo(r.last_sync) : 'never'}</dd></div>
-                <div><dt>Token</dt><dd>{r.token.set ? `saved (${r.token.hint})` : r.provider === 'codecommit' ? 'uses AWS sign-in' : 'none'}</dd></div>
+                <div>
+                  <dt>Sign-in</dt>
+                  <dd>{r.connection ? <a href="#/connections">{r.connection.name}</a> : r.token.set ? `token saved (${r.token.hint})` : r.provider === 'codecommit' ? 'the project’s AWS account' : 'none'}</dd>
+                </div>
               </dl>
               <Branches repo={r} canEdit={canEdit} />
               {canEdit ? (
@@ -493,14 +569,16 @@ function CodeCommitPicker({ projectId, settingsRegion, onSelect, manualMode, set
 function AddRepo({ onClose, onAdded }) {
   const { project } = useProject();
   const { user } = useApp();
-  const [form, setForm] = useState({ provider: 'github', url: '', localPath: '', name: '', token: '', username: '', defaultBranch: '' });
+  const [form, setForm] = useState({ provider: 'connection', url: '', localPath: '', name: '', token: '', username: '', defaultBranch: '' });
+  const [connectionId, setConnectionId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   // CodeCommit picker state
   const [ccManualMode, setCcManualMode] = useState(false);
 
   const isLocal = form.provider === 'local';
-  const p = isLocal ? LOCAL_PROVIDER : PROVIDERS[form.provider];
+  const isConn = form.provider === 'connection';
+  const p = isLocal ? LOCAL_PROVIDER : isConn ? CONNECTION_PROVIDER : PROVIDERS[form.provider];
 
   // When switching away from codecommit, reset manual mode
   const handleProviderChange = (provider) => {
@@ -514,7 +592,7 @@ function AddRepo({ onClose, onAdded }) {
     setError(null);
     try {
       await api.post(`/api/projects/${project.id}/repos`, {
-        ...(isLocal ? { localPath: form.localPath } : { provider: form.provider, url: form.url }),
+        ...(isLocal ? { localPath: form.localPath } : isConn ? { connectionId, url: form.url } : { provider: form.provider, url: form.url }),
         name: form.name || undefined,
         token: form.token || undefined,
         username: form.username || undefined,
@@ -535,7 +613,7 @@ function AddRepo({ onClose, onAdded }) {
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={!(isLocal ? form.localPath : form.url).trim()} onClick={submit}>
+          <Button variant="primary" busy={busy} disabled={!(isLocal ? form.localPath : form.url).trim() || (isConn && !connectionId)} onClick={submit}>
             Connect and clone
           </Button>
         </>
@@ -547,6 +625,7 @@ function AddRepo({ onClose, onAdded }) {
           onChange={handleProviderChange}
           label="Where is it hosted?"
           options={[
+            { value: 'connection', label: CONNECTION_PROVIDER.label },
             ...Object.entries(PROVIDERS).map(([value, x]) => ({ value, label: x.label })),
             ...(user.is_admin ? [{ value: 'local', label: LOCAL_PROVIDER.label }] : []),
           ]}
@@ -565,6 +644,17 @@ function AddRepo({ onClose, onAdded }) {
               />
             )}
           </Field>
+        ) : null}
+
+        {isConn ? (
+          <ConnectionRepoPicker
+            connectionId={connectionId}
+            setConnectionId={(id) => {
+              setConnectionId(id);
+              setForm((f) => ({ ...f, url: '', name: '', defaultBranch: '' }));
+            }}
+            onSelect={({ url, name, defaultBranch }) => setForm((f) => ({ ...f, url, name: name || f.name, defaultBranch: defaultBranch || f.defaultBranch }))}
+          />
         ) : null}
 
         {form.provider === 'codecommit' && !ccManualMode ? (
@@ -672,14 +762,16 @@ function AddRepo({ onClose, onAdded }) {
 }
 
 function EditRepo({ repo, onClose, onSaved }) {
-  const [form, setForm] = useState({ name: repo.name, defaultBranch: repo.default_branch, token: '', username: repo.auth_user || '' });
+  const [form, setForm] = useState({ name: repo.name, defaultBranch: repo.default_branch, token: '', username: repo.auth_user || '', connectionId: repo.connection_id || '' });
+  const conns = useLoad(() => api.get('/api/git-connections'), []);
+  const usable = (conns.data?.connections || []).filter((c) => repoKindOf(c.provider) === repo.provider);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const save = async (extra = {}) => {
     setBusy(true);
     setError(null);
     try {
-      const body = { name: form.name, defaultBranch: form.defaultBranch, username: form.username, ...extra };
+      const body = { name: form.name, defaultBranch: form.defaultBranch, username: form.username, connectionId: form.connectionId || null, ...extra };
       if (form.token) body.token = form.token;
       await api.patch(`/api/repos/${repo.id}`, body);
       onSaved();
@@ -705,7 +797,19 @@ function EditRepo({ repo, onClose, onSaved }) {
       <div className="stack">
         <Field label="Display name">{(id) => <input id={id} className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />}</Field>
         <Field label="Default branch">{(id) => <input id={id} className="input mono" value={form.defaultBranch} onChange={(e) => setForm({ ...form, defaultBranch: e.target.value })} />}</Field>
-        {repo.provider !== 'codecommit' ? (
+        <Field label="Sign in with" hint="A shared connection, or this repository's own token / the project's AWS account.">
+          {(id) => (
+            <select id={id} className="input" value={form.connectionId} onChange={(e) => setForm({ ...form, connectionId: e.target.value })}>
+              <option value="">{repo.provider === 'codecommit' ? "The project's AWS account" : "This repository's own token"}</option>
+              {usable.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} · {CONNECTION_LABEL[c.provider]}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        {repo.provider !== 'codecommit' && !form.connectionId ? (
           <>
             <Field label={repo.token.set ? `Replace token (saved, ${repo.token.hint})` : 'Access token'}>
               {(id) => <input id={id} type="password" className="input mono" autoComplete="off" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} />}

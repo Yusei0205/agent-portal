@@ -271,6 +271,20 @@ async function main() {
     await page.locator('.steps').waitFor();
     await shot(page, 'path');
 
+    console.log('connections');
+    await page.goto(`${base}/#/connections`);
+    await page.getByRole('heading', { name: 'Repository connections', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'New connection', exact: true }).click();
+    await page.getByRole('tab', { name: 'Other Git server', exact: true }).click();
+    await page.getByLabel('Name', { exact: true }).fill('Team GitLab');
+    await page.getByLabel('Server address').fill('https://gitlab.example.com');
+    await page.getByLabel('Username', { exact: true }).fill('agent');
+    await page.getByLabel('Token', { exact: true }).fill('glpat-example-0001');
+    await page.getByRole('button', { name: 'Save and test', exact: true }).click();
+    await page.locator('.conn-card', { hasText: 'Team GitLab' }).waitFor();
+    check((await page.locator('.conn-card', { hasText: '…0001' }).count()) === 1, 'a new connection shows only the last characters of its token');
+    await shot(page, 'connections');
+
     console.log('settings and mobile');
     await page.goto(`${base}/#/settings`);
     await page.getByRole('heading', { name: 'Model provider', exact: true }).waitFor();

@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 
+/** Pages that belong to no project: #/<tab>. */
+const GLOBAL_TABS = ['settings', 'aws', 'account', 'insights', 'connections', 'integrations', 'api'];
+
 /** Hash routes: #/projects, #/p/<projectId>/<tab>/<rest…>, optionally followed by ?key=value inside the hash. */
 export function parseHash(hash = window.location.hash) {
   const raw = hash.replace(/^#\/?/, '');
@@ -7,10 +10,7 @@ export function parseHash(hash = window.location.hash) {
   const query = new URLSearchParams(qi >= 0 ? raw.slice(qi + 1) : '');
   const parts = (qi >= 0 ? raw.slice(0, qi) : raw).split('/').filter(Boolean).map(decodeURIComponent);
   if (parts[0] === 'p' && parts[1]) return { projectId: parts[1], tab: parts[2] || 'knowledge', rest: parts.slice(3), query };
-  if (parts[0] === 'settings') return { projectId: null, tab: 'settings', rest: parts.slice(1), query };
-  if (parts[0] === 'aws') return { projectId: null, tab: 'aws', rest: [], query };
-  if (parts[0] === 'account') return { projectId: null, tab: 'account', rest: [], query };
-  if (parts[0] === 'insights') return { projectId: null, tab: 'insights', rest: [], query };
+  if (GLOBAL_TABS.includes(parts[0])) return { projectId: null, tab: parts[0], rest: parts.slice(1), query };
   return { projectId: null, tab: 'projects', rest: parts.slice(1), query };
 }
 
@@ -25,7 +25,7 @@ export function useRoute() {
 }
 
 export function href(projectId, tab, ...rest) {
-  if (!projectId) return tab === 'settings' ? '#/settings' : tab === 'aws' ? '#/aws' : tab === 'account' ? '#/account' : tab === 'insights' ? '#/insights' : '#/projects';
+  if (!projectId) return GLOBAL_TABS.includes(tab) ? `#/${tab}` : '#/projects';
   return `#/p/${encodeURIComponent(projectId)}/${tab}${rest.filter((x) => x !== undefined && x !== null && x !== '').map((x) => '/' + encodeURIComponent(x)).join('')}`;
 }
 

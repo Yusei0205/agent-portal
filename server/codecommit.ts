@@ -151,7 +151,7 @@ function mapAwsError(e: unknown): never {
 // ---- Core logic --------------------------------------------------
 
 /** Fetch all repository names via paginated ListRepositories, then enrich with BatchGetRepositories. */
-async function listCodeCommitRepos(
+export async function listCodeCommitRepos(
   region: string,
   credentials: AwsCredentials,
 ): Promise<CodeCommitRepo[]> {

@@ -8,6 +8,7 @@ import { git, gitConfigEnv, gitProgress, PORTAL_GIT_IDENTITY, redact } from './g
 import { deleteSecret, getSecret, secretInfo, setSecret } from './secrets.ts';
 import { githubToken } from './settings.ts';
 import { projectAwsEnv } from './project-aws.ts';
+import { canUse, connectionGitEnv, connectionToken, getGitConnection, repoProviderFor } from './git-connections.ts';
 
 export type Provider = 'github' | 'codecommit' | 'git';
 
@@ -21,6 +22,8 @@ export interface Repo {
   default_branch: string;
   token_secret: string | null;
   auth_user: string | null;
+  /** A shared sign-in from the Connections page; when set it is used instead of token_secret / the project AWS account. */
+  connection_id: string | null;
   status: string;
   error: string | null;
   last_sync: string | null;
@@ -108,6 +111,8 @@ export function githubSlug(url: string): { owner: string; repo: string } | null 
 }
 
 async function repoToken(r: Repo): Promise<string | null> {
+  const conn = r.connection_id ? getGitConnection(r.connection_id) : null;
+  if (conn) return connectionToken(conn);
   if (r.token_secret) {
     const t = await getSecret(r.token_secret);
     if (t) return t;
@@ -117,6 +122,9 @@ async function repoToken(r: Repo): Promise<string | null> {
 
 /** Environment that lets git authenticate for this repository without writing credentials to disk. */
 export async function repoGitEnv(r: Repo): Promise<Record<string, string>> {
+  const conn = r.connection_id ? getGitConnection(r.connection_id) : null;
+  if (r.connection_id && !conn) throw badRequest(`The connection of ${r.name} was removed. Pick another one for it on the Repositories page.`);
+  if (conn) return connectionGitEnv(conn, r.url);
   if (r.provider === 'codecommit') {
     // The project's own AWS account, or the Settings credentials when the project has none.
     const aws = await projectAwsEnv(r.project_id);
@@ -140,7 +148,8 @@ export async function repoGitEnv(r: Repo): Promise<Record<string, string>> {
 }
 
 function view(r: Repo) {
-  return { ...r, token: r.token_secret ? secretInfo(r.token_secret) : { set: false } };
+  const conn = r.connection_id ? getGitConnection(r.connection_id) : null;
+  return { ...r, token: r.token_secret ? secretInfo(r.token_secret) : { set: false }, connection: conn ? { id: conn.id, name: conn.name, provider: conn.provider } : null };
 }
 
 function publishRepo(r: Repo) {
@@ -371,7 +380,10 @@ export function registerRepoRoutes(): void {
       ({ provider, url, seed } = local);
       inferred = local.name;
     } else {
-      provider = checkProvider(body.provider);
+      // With a connection, its kind decides the provider and its sign-in replaces a token of the repository's own.
+      const conn = body.connectionId ? getGitConnection(String(body.connectionId)) : null;
+      if (body.connectionId && (!conn || !canUse(conn, ctx.user!))) throw badRequest('That connection does not exist or is not shared with you');
+      provider = conn ? repoProviderFor(conn) : checkProvider(body.provider);
       url = validateUrl(provider, str(body.url, 'Repository address', { max: 500 }), Boolean(ctx.user!.is_admin));
       inferred = url.split(/[/:]/).filter(Boolean).pop()!.replace(/\.git$/, '');
     }
@@ -395,6 +407,7 @@ export function registerRepoRoutes(): void {
       default_branch: body.defaultBranch ? checkBranch(body.defaultBranch) : '',
       token_secret: tokenSecret,
       auth_user: body.username ? str(body.username, 'Username', { max: 100 }).trim() : null,
+      connection_id: body.connectionId ? String(body.connectionId) : null,
       status: 'new',
       created_at: now(),
     });
@@ -411,6 +424,14 @@ export function registerRepoRoutes(): void {
     if (body.name !== undefined) p.name = str(body.name, 'Name', { max: 100 }).trim();
     if (body.defaultBranch !== undefined) p.default_branch = checkBranch(body.defaultBranch);
     if (body.username !== undefined) p.auth_user = body.username ? str(body.username, 'Username', { max: 100 }).trim() : null;
+    if (body.connectionId !== undefined) {
+      if (body.connectionId) {
+        const conn = getGitConnection(String(body.connectionId));
+        if (!conn || !canUse(conn, ctx.user!)) throw badRequest('That connection does not exist or is not shared with you');
+        if (repoProviderFor(conn) !== repo.provider) throw badRequest(`${conn.name} is a ${conn.provider} connection; this repository is ${repo.provider}`);
+        p.connection_id = conn.id;
+      } else p.connection_id = null;
+    }
     if (body.token === null) {
       if (repo.token_secret) deleteSecret(repo.token_secret);
       p.token_secret = null;

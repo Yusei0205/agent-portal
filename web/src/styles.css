@@ -4966,3 +4966,31 @@ html[data-theme='hud'] .ins-hbar-fill {
     grid-column: 1;
   }
 }
+
+/* ---------- Repository connections ---------- */
+.conn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: 12px;
+}
+.conn-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.conn-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.conn-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.conn-kv {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+.conn-repo-list {
+  max-height: 260px;
+}

@@ -379,6 +379,26 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS workflow_context_wf ON workflow_context(workflow_id, created_at);`,
   // A session can work across several repositories: [{ repoId, branch }]; repo_id / branch keep the first one.
   `ALTER TABLE workflows ADD COLUMN repos TEXT NOT NULL DEFAULT '[]';`,
+  // Reusable repository sign-ins (Connections page); a repository may use one instead of its own token.
+  `CREATE TABLE IF NOT EXISTS git_connections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'team',
+    owner_id TEXT,
+    host TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    workspace TEXT NOT NULL DEFAULT '',
+    aws_connection_id TEXT NOT NULL DEFAULT '',
+    test_ok INTEGER,
+    test_message TEXT NOT NULL DEFAULT '',
+    tested_at TEXT,
+    created_by TEXT,
+    updated_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  ALTER TABLE repos ADD COLUMN connection_id TEXT;`,
 ];
 
 let db: DatabaseSync | null = null;
