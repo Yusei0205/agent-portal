@@ -1,6 +1,6 @@
 # Improvements drawn from axrail.ai CloudCode — draft
 
-Status: **draft for review** · 2026-10-21 · reference reviewed read-only (nothing created or changed there)
+Status: **implemented** on `feat/sessions-workspace` (2026-10-21), except isolated compute per session (P3 #14) · reference reviewed read-only
 
 CloudCode is a team platform where each session is Kiro CLI or Claude Code running in its own cloud
 container over a private checkout of a workspace's repositories. Below is what it has, how it compares
@@ -95,3 +95,21 @@ keep them.
 
 Pick from P1. The cheapest high-value pair is **(1) engine per session** and **(5) survive restarts**; the
 most requested capability (agents working in parallel) is **(2) delegated sessions + (3) nudge**.
+
+## 6. What was built
+
+| Item | Where |
+|---|---|
+| Repository connections (team / personal, test, used-by, browse repos) | Connections page; Repositories › Connect › From a connection |
+| Workspaces (repo sets + base branches + integrations) | Project › Workspaces; New session › Workspace |
+| Integrations as MCP tools, read-only by default | Integrations page; workspaces, New session › More options |
+| Configuration editor for .claude / .kiro | Project › Configuration |
+| Personal access tokens + REST API | API access page |
+| Engine per session (Claude Code or Kiro) | New session › Engine |
+| Sessions carry on after a restart | Settings › Agent defaults |
+| Vault (personal + team, copied into each run) | Vault page |
+| Delegated sessions + limits + subagent advice | Session › Delegate a task; Settings › Delegated sessions |
+| Extra Claude models without a deploy | Settings › Extra Claude models |
+
+Not built: isolated compute per session (a container or microVM per run). Runs still share the portal host,
+fenced by the write guard, approvals and the command blocklist.
