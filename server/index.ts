@@ -23,7 +23,8 @@ import { registerLearnRoutes } from './learn.ts';
 import { registerJiraRoutes } from './jira.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
-import { recoverWorkflows, registerWorkflowRoutes } from './workflows.ts';
+import { recoverWorkflows, registerWorkflowRoutes, resumeAfterRestart } from './workflows.ts';
+import { getSettings } from './settings.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { recoverRuns } from './agent/runner.ts';
 
@@ -59,7 +60,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     routesRegistered = true;
   }
   recoverRuns();
-  recoverWorkflows();
+  const restarted = recoverWorkflows();
   cleanupSessions();
   // Projects that kept their own AWS credentials move onto AWS accounts (AWS accounts page) once; they keep working the same.
   const { adoptProjectCredentials } = await import('./aws-connections.ts');
@@ -77,6 +78,13 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   const port = opts.port ?? config.port;
   const host = opts.host ?? config.host;
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
+  // Sessions the restart interrupted carry on once the server is up (unless an admin turned that off).
+  if (restarted.length && getSettings().agents.resumeAfterRestart !== false) {
+    setTimeout(() => {
+      const n = resumeAfterRestart(restarted);
+      if (n) console.log(`[sessions] ${n} session(s) carried on after the restart`);
+    }, 2000).unref();
+  }
   const addr = server.address();
   const shown = typeof addr === 'object' && addr ? `http://${host === '0.0.0.0' ? 'localhost' : host}:${addr.port}` : String(addr);
   console.log(`Agent Portal is running at ${shown}`);

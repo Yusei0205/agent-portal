@@ -481,3 +481,18 @@ test('the live activity line names the tool being called, or the start of what t
   assert.equal(activityLine(msg([{ type: 'text', text: 'x'.repeat(500) }])).length, 140);
   assert.equal(activityLine({}), '');
 });
+
+test('after a restart, sessions that were running carry on by themselves unless over budget', async () => {
+  const { resumeAfterRestart } = await import('../server/workflows.ts');
+  const { workflow: a } = await create({ goal: 'Interrupted [demo-iterations: 1]', start: false });
+  const { workflow: b } = await create({ goal: 'Interrupted but spent', start: false, budgetUsd: 1 });
+  exec("UPDATE workflows SET status = 'running' WHERE id IN (?, ?)", a.id, b.id);
+  exec('UPDATE workflows SET spent_usd = 5 WHERE id = ?', b.id);
+  const ids = recoverWorkflows();
+  assert.ok(ids.includes(a.id) && ids.includes(b.id), 'both were paused by the restart');
+  assert.equal(resumeAfterRestart(ids), 1, 'only the one within its budget carries on');
+  const done = await settle(a.id);
+  assert.equal(done.workflow.status, 'done');
+  assert.ok(done.events.some((e: any) => /server restarted; the session carries on/.test(e.body)), 'the history says why it started again');
+  assert.equal((await admin.get(`/api/workflows/${b.id}`)).workflow.status, 'paused');
+});

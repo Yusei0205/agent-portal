@@ -777,6 +777,11 @@ function AgentsSection({ s, reload }) {
           {(id) => <input id={id} type="number" min={1} max={500} className="input input-num" value={a.maxTurns} onChange={(e) => setA({ ...a, maxTurns: Number(e.target.value) })} />}
         </Field>
       </div>
+      <Toggle
+        checked={a.resumeAfterRestart !== false}
+        onChange={(resumeAfterRestart) => setA({ ...a, resumeAfterRestart })}
+        label="Sessions that were running carry on by themselves after the server restarts (within their budget)"
+      />
       <ErrorNote error={error} />
       <Button variant="primary" busy={busy} onClick={() => save({ agents: a })} disabled={JSON.stringify(a) === JSON.stringify(s.agents)}>
         Save defaults

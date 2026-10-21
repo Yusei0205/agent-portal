@@ -351,11 +351,31 @@ function kick(id: string): void {
     .finally(() => driving.delete(id));
 }
 
-/** After a restart nothing is driving any more; sessions that were running wait for someone to resume them. */
-export function recoverWorkflows(): void {
-  for (const w of all<Row>("SELECT id FROM workflows WHERE status = 'running'")) {
-    exec("UPDATE workflows SET status = 'paused', stop_reason = 'The server restarted. Resume to go on.', updated_at = ? WHERE id = ?", now(), w.id);
+const RESTART_REASON = 'The server restarted. Resume to go on.';
+
+/** After a restart nothing is driving any more: sessions that were running are paused. Returns their ids. */
+export function recoverWorkflows(): string[] {
+  const ids = all<Row>("SELECT id FROM workflows WHERE status = 'running'").map((w) => String(w.id));
+  for (const id of ids) exec('UPDATE workflows SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?', 'paused', RESTART_REASON, now(), id);
+  return ids;
+}
+
+/**
+ * Start again the sessions a restart paused (Settings › Agent defaults decides whether this happens). A session that
+ * someone changed in the meantime, or that has used its budget, stays paused. Each continues where it was: the next
+ * iteration resumes the conversation and the working copy of its last run, with its iteration count unchanged.
+ */
+export function resumeAfterRestart(ids: string[]): number {
+  let n = 0;
+  for (const id of ids) {
+    const w = one<Row>('SELECT * FROM workflows WHERE id = ?', id);
+    if (!w || w.status !== 'paused' || w.stop_reason !== RESTART_REASON || overBudget(w)) continue;
+    patch(id, { status: 'running', stop_reason: '' });
+    log(id, 'status', 'The server restarted; the session carries on by itself where it left off.');
+    kick(id);
+    n++;
   }
+  return n;
 }
 
 /* ------------------------------------------------------------------ */

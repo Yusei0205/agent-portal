@@ -35,7 +35,7 @@ export interface Settings {
   };
   budget: { monthlyUsd: number | null };
   secrets: { mode: 'local' | 'aws-ssm'; prefix: string; region: string };
-  agents: { defaultPermissionMode: 'default' | 'acceptEdits' | 'plan'; maxTurns: number };
+  agents: { defaultPermissionMode: 'default' | 'acceptEdits' | 'plan'; maxTurns: number; resumeAfterRestart: boolean };
 }
 
 const DEFAULTS: Settings = {
@@ -44,7 +44,7 @@ const DEFAULTS: Settings = {
   aws: { region: 'us-east-1', auth: 'ambient', profile: '' },
   budget: { monthlyUsd: 50 },
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
-  agents: { defaultPermissionMode: 'default', maxTurns: 40 },
+  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true },
 };
 
 export const SECRET_NAMES = {
@@ -146,6 +146,7 @@ export function updateSettings(patch: any): Settings {
     const a = { ...cur.agents, ...patch.agents };
     if (!['default', 'acceptEdits', 'plan'].includes(a.defaultPermissionMode)) throw badRequest('Unknown permission mode');
     a.maxTurns = Math.max(1, Math.min(500, Number(a.maxTurns) || 40));
+    a.resumeAfterRestart = a.resumeAfterRestart !== false;
     saveSection('agents', a);
   }
   return getSettings();
