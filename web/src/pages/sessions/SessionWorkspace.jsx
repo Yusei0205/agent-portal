@@ -7,7 +7,7 @@ import { useRunStream } from '../../lib/useRunStream.js';
 import { buildTree } from '../../lib/tree.js';
 import { go, sessionHref } from '../../lib/router.js';
 import { cx, money, timeAgo } from '../../lib/util.js';
-import { AgentGraph } from '../../components/AgentGraph.jsx';
+import { AgentView } from '../../components/AgentCanvas.jsx';
 import { ConnectionBadge } from '../../components/ConnectionBadge.jsx';
 import { InputCard } from '../../components/InputCard.jsx';
 import { TicketPreview } from '../../components/TicketPreview.jsx';
@@ -214,7 +214,7 @@ function LiveTab({ runId, isLatest, runs, link }) {
       {!isLatest ? <Note tone="info" icon="alert">You are looking at an earlier iteration. <a href={link({})}>Back to the latest</a></Note> : null}
       <div className="ws-live">
         <div className="ws-graph">
-          <AgentGraph tree={tree} selected={selected} onSelect={setSelected} />
+          <AgentView tree={tree} selected={selected} onSelect={setSelected} live={['queued', 'running', 'waiting'].includes(run.status)} />
         </div>
         <section className="panel ws-inspector" aria-label="Selected agent">
           <h2>{node.kind === 'main' ? 'Main agent' : node.label}</h2>

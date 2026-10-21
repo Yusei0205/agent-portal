@@ -14,6 +14,17 @@ export function useRunStream(runId) {
   useEffect(() => {
     let close = () => {};
     let alive = true;
+    // Events arrive in bursts (a tool call, its result, a subagent's first message); render them once per frame.
+    let queue = [];
+    let frame = 0;
+    const flush = () => {
+      frame = 0;
+      const batch = queue;
+      queue = [];
+      if (alive && batch.length) setState((s) => ({ ...s, events: s.events.concat(batch) }));
+    };
+    const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+    const cancel = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout;
     reloadDetail()
       .then((r) => {
         if (!alive) return;
@@ -22,10 +33,12 @@ export function useRunStream(runId) {
             event: (e) => {
               if (e.seq <= lastSeq.current) return;
               lastSeq.current = e.seq;
-              setState((s) => ({ ...s, events: [...s.events, e] }));
+              queue.push(e);
+              if (!frame) frame = schedule(flush);
               if (e.type === 'portal:input' || e.type === 'portal:input_answered') api.get(`/api/runs/${runId}`).then((r2) => setState((s) => ({ ...s, inputs: r2.inputs })));
             },
             run: (summary) => {
+              flush();
               setState((s) => ({ ...s, run: { ...s.run, ...summary } }));
               if (['completed', 'failed', 'stopped'].includes(summary.status)) reloadDetail();
             },
@@ -35,6 +48,7 @@ export function useRunStream(runId) {
       .catch((error) => setState((s) => ({ ...s, loading: false, error })));
     return () => {
       alive = false;
+      if (frame) cancel(frame);
       close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

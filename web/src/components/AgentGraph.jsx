@@ -1,25 +1,7 @@
 import { cx, hueFor, money, tokens } from '../lib/util.js';
-import { toolSummary } from '../lib/tree.js';
+import { nowLine } from '../lib/tree.js';
 
 const STATUS_TEXT = { running: 'working', done: 'done', failed: 'failed', stopped: 'stopped', waiting: 'waiting for you' };
-
-/** One line about what this agent is doing right now (or did last). */
-function nowLine(node) {
-  for (let i = node.items.length - 1; i >= 0; i--) {
-    const it = node.items[i];
-    if (it.kind === 'tool' && it.status === 'running' && !it.childId) return `${it.name}: ${toolSummary(it.name, it.input)}`;
-  }
-  if (node.status === 'running') {
-    const open = node.children.filter((c) => c.status === 'running');
-    if (open.length) return `waiting for ${open.map((c) => c.label).join(', ')}`;
-  }
-  for (let i = node.items.length - 1; i >= 0; i--) {
-    const it = node.items[i];
-    if (it.kind === 'text') return it.text.replace(/\s+/g, ' ').trim().slice(0, 90);
-    if (it.kind === 'tool' && !it.childId) return `${it.name}: ${toolSummary(it.name, it.input)}`;
-  }
-  return node.description || '';
-}
 
 function GraphNode({ node, selected, onSelect }) {
   const hue = node.kind === 'main' ? null : hueFor(node.label);
@@ -55,8 +37,18 @@ function GraphNode({ node, selected, onSelect }) {
 }
 
 /** The agents of one run as a live graph: the main agent on top, the subagents it started below it. */
-export function AgentGraph({ tree, selected, onSelect }) {
+export function AgentGraph({ tree, selected, onSelect, bare }) {
   const running = [...tree.nodes.values()].filter((n) => n.status === 'running').length;
+  // bare: only the tree, for use inside another panel that has its own heading.
+  if (bare) {
+    return (
+      <div className="agraph-scroll">
+        <ul className="ag-tree">
+          <GraphNode node={tree.root} selected={selected} onSelect={onSelect} />
+        </ul>
+      </div>
+    );
+  }
   return (
     <section className="agraph" aria-label="Agent graph">
       <div className="agraph-head">

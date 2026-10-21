@@ -209,3 +209,21 @@ export function toolSummary(name, input = {}) {
       return Object.values(i).filter((v) => typeof v === 'string').join(' ').slice(0, 120);
   }
 }
+
+/** One line about what this agent is doing right now (or did last). */
+export function nowLine(node) {
+  for (let i = node.items.length - 1; i >= 0; i--) {
+    const it = node.items[i];
+    if (it.kind === 'tool' && it.status === 'running' && !it.childId) return `${it.name}: ${toolSummary(it.name, it.input)}`;
+  }
+  if (node.status === 'running') {
+    const open = node.children.filter((c) => c.status === 'running');
+    if (open.length) return `waiting for ${open.map((c) => c.label).join(', ')}`;
+  }
+  for (let i = node.items.length - 1; i >= 0; i--) {
+    const it = node.items[i];
+    if (it.kind === 'text') return it.text.replace(/\s+/g, ' ').trim().slice(0, 90);
+    if (it.kind === 'tool' && !it.childId) return `${it.name}: ${toolSummary(it.name, it.input)}`;
+  }
+  return node.description || '';
+}

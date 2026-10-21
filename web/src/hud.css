@@ -671,3 +671,17 @@ html[data-theme='hud']:not([data-fx='reduced']) .toast {
     animation: none !important;
   }
 }
+
+/* Agent canvas in the HUD look: glowing orbs and edges. */
+html[data-theme='hud'] .ac-orb {
+  box-shadow: 0 0 14px hsl(var(--role-h, 186) 80% 55% / 0.35);
+}
+html[data-theme='hud'] .ac-edge-running {
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+html[data-theme='hud'] .ac-label {
+  letter-spacing: 0.03em;
+}
+html[data-theme='hud'] .ac-orb {
+  color: hsl(var(--role-h, 186) 80% 76%);
+}

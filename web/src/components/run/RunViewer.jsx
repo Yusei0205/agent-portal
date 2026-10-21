@@ -5,7 +5,7 @@ import { runHref, sessionHref } from '../../lib/router.js';
 import { useRunStream } from '../../lib/useRunStream.js';
 import { buildTree } from '../../lib/tree.js';
 import { cx, dateTime, duration, hueFor, money, tokens } from '../../lib/util.js';
-import { AgentGraph } from '../AgentGraph.jsx';
+import { AgentView } from '../AgentCanvas.jsx';
 import { ConnectionBadge } from '../ConnectionBadge.jsx';
 import { Icon } from '../Icon.jsx';
 import { InputCard } from '../InputCard.jsx';
@@ -122,7 +122,7 @@ export function RunView({ runId }) {
         </section>
       ) : null}
 
-      {tree.root.totals.subagents || active ? <AgentGraph tree={tree} selected={selectedNode} onSelect={setSelectedNode} /> : null}
+      {tree.root.totals.subagents || active ? <AgentView tree={tree} selected={selectedNode} onSelect={setSelectedNode} live={active} /> : null}
 
       <div className="run-body">
         <nav className="tree" aria-label="Agents in this run">

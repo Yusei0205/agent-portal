@@ -173,6 +173,17 @@ async function main() {
     await page.locator('.ws-head .badge', { hasText: 'Ready for review' }).waitFor({ timeout: 60000 });
     check((await page.locator('.ws-iter').count()) >= 2, 'iteration strip shows each iteration');
     check((await page.locator('.ws-group-head', { hasText: 'Ready for review' }).count()) === 1, 'the list groups the session under Ready for review');
+    check((await page.locator('.ac-bubble').count()) >= 3, 'the canvas shows the main agent and its subagents as bubbles');
+    await page.locator('.ac-bubble:not(.ac-main)').first().click();
+    await page.locator('.ws-inspector .tl-brief').waitFor();
+    check(true, 'clicking a bubble shows that agent’s brief and work in the inspector');
+    await page.locator('.ac-main').focus();
+    await page.keyboard.press('ArrowDown');
+    check((await page.locator('.ac-bubble.is-selected:not(.ac-main)').count()) === 1, 'arrow keys move between agents');
+    await shot(page, 'session-canvas');
+    await page.getByRole('tab', { name: 'List', exact: true }).click();
+    check((await page.locator('.ag-node').count()) >= 3, 'the list view shows the same agents');
+    await page.getByRole('tab', { name: 'Canvas', exact: true }).click();
     await page.locator('.ws-iter').first().click();
     await page.getByText('You are looking at an earlier iteration').waitFor();
     await shot(page, 'session-done');
