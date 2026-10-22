@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, stream } from './api.js';
+import { api, pausedWhenHidden, stream } from './api.js';
 
 /** A run's detail plus its live event stream while it is active. */
 export function useRunStream(runId) {
@@ -29,7 +29,9 @@ export function useRunStream(runId) {
       .then((r) => {
         if (!alive) return;
         if (!['completed', 'failed', 'stopped'].includes(r.run.status) || r.active) {
-          close = stream(() => `/api/runs/${runId}/stream?after=${lastSeq.current}`, {
+          // Paused while the tab is in the background (it resumes from the last event it saw), so hidden tabs hold
+          // none of the browser's few connections to the portal.
+          close = pausedWhenHidden(() => stream(() => `/api/runs/${runId}/stream?after=${lastSeq.current}`, {
             event: (e) => {
               if (e.seq <= lastSeq.current) return;
               lastSeq.current = e.seq;
@@ -42,7 +44,7 @@ export function useRunStream(runId) {
               setState((s) => ({ ...s, run: { ...s.run, ...summary } }));
               if (['completed', 'failed', 'stopped'].includes(summary.status)) reloadDetail();
             },
-          });
+          }));
         }
       })
       .catch((error) => setState((s) => ({ ...s, loading: false, error })));

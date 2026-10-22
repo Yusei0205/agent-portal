@@ -83,7 +83,7 @@ export function stream(url, handlers) {
  * waited forever (pages kept loading). Falls back to a plain stream where the browser lacks locks or channels.
  */
 export function sharedStream(url, handlers) {
-  if (typeof navigator === 'undefined' || !navigator.locks || typeof BroadcastChannel === 'undefined') return stream(url, handlers);
+  if (typeof navigator === 'undefined' || !navigator.locks || typeof BroadcastChannel === 'undefined') return pausedWhenHidden(() => stream(url, handlers));
   const key = `portal-sse:${url}`;
   const channel = new BroadcastChannel(key);
   const deliver = (event, data) => {
@@ -96,32 +96,64 @@ export function sharedStream(url, handlers) {
     }
   };
   channel.onmessage = (m) => deliver(m.data?.event, m.data?.data);
-  const abort = new AbortController();
+  // Only a visible tab competes for the connection; a tab that goes to the background lets it go, so a visible tab
+  // (in any window) takes over and background tabs never hold browser connections.
+  let abort = null;
   let closeOwn = null;
   let release = null;
-  navigator.locks
-    .request(key, { signal: abort.signal }, () => {
-      // This tab holds the connection for every tab until it closes the stream.
-      const relay = Object.fromEntries(
-        Object.keys(handlers).map((event) => [
-          event,
-          (data) => {
-            deliver(event, data);
-            channel.postMessage({ event, data });
-          },
-        ]),
-      );
-      closeOwn = stream(url, relay);
-      return new Promise((resolve) => (release = resolve));
-    })
-    .catch(() => {
-      /* aborted before this tab got the lock */
-    });
-  return () => {
-    abort.abort();
+  const join = () => {
+    if (abort) return;
+    abort = new AbortController();
+    navigator.locks
+      .request(key, { signal: abort.signal }, () => {
+        const relay = Object.fromEntries(
+          Object.keys(handlers).map((event) => [
+            event,
+            (data) => {
+              deliver(event, data);
+              channel.postMessage({ event, data });
+            },
+          ]),
+        );
+        closeOwn = stream(url, relay);
+        return new Promise((resolve) => (release = resolve));
+      })
+      .catch(() => {
+        /* aborted before this tab got the lock */
+      });
+  };
+  const leave = () => {
+    abort?.abort();
+    abort = null;
     closeOwn?.();
+    closeOwn = null;
     release?.();
+    release = null;
+  };
+  const onVisibility = () => (document.hidden ? leave() : join());
+  if (!document.hidden) join();
+  document.addEventListener('visibilitychange', onVisibility);
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    leave();
     channel.close();
+  };
+}
+
+/** Run a stream only while the tab is visible (background tabs hold no connection). `open` returns its closer. */
+export function pausedWhenHidden(open) {
+  if (typeof document === 'undefined') return open();
+  let close = document.hidden ? null : open();
+  const onVisibility = () => {
+    if (document.hidden) {
+      close?.();
+      close = null;
+    } else if (!close) close = open();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    close?.();
   };
 }
 
