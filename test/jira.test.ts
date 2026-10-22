@@ -129,6 +129,7 @@ interface Seen {
   jqls: string[];
   comments: any[];
   auths: string[];
+  attachmentDownloads?: number;
 }
 
 let srv: TestServer;
@@ -139,6 +140,7 @@ let fakeBase = '';
 const seen: Seen = { tokenCalls: [], jqls: [], comments: [], auths: [] };
 let refreshBehaviour: 'ok' | 'fail' = 'ok';
 let pid: string;
+let projectSlug: string;
 let repoId: string;
 let tokenN = 0;
 const validTokens = new Set<string>();
@@ -162,7 +164,7 @@ const ISSUE = {
     created: '2026-10-01T10:00:00.000+0000',
     updated: '2026-10-19T10:00:00.000+0000',
     comment: { comments: [{ author: { displayName: 'Ann' }, created: '2026-10-02T10:00:00.000+0000', body: doc(p(t('Please check the FSD'))) }] },
-    attachment: [{ filename: 'trace.png', size: 10, mimeType: 'image/png' }],
+    attachment: [{ id: '10001', filename: 'trace.png', size: 10, mimeType: 'image/png' }],
     issuelinks: [{ type: { outward: 'blocks', inward: 'is blocked by' }, outwardIssue: { key: 'RLP-2', fields: { summary: 'Release', status: { name: 'Open' } } } }],
     subtasks: [],
   },
@@ -202,6 +204,11 @@ before(async () => {
     if (!validTokens.has(auth)) return send(401, { message: 'Unauthorized' });
     if (url.pathname === '/oauth/token/accessible-resources') return send(200, [{ id: 'cloud1', url: 'https://acme.atlassian.net/', name: 'Acme', scopes: [] }]);
     const api = '/ex/jira/cloud1/rest/api/3';
+    if (url.pathname === `${api}/attachment/content/10001`) {
+      seen.attachmentDownloads = (seen.attachmentDownloads ?? 0) + 1;
+      res.writeHead(200, { 'content-type': 'image/png' });
+      return res.end('PNGDATA123');
+    }
     if (url.pathname === `${api}/myself`) return send(200, { accountId: 'acc1', displayName: 'Dev One', emailAddress: 'dev@example.com' });
     if (url.pathname === `${api}/search/jql`) {
       seen.jqls.push(url.searchParams.get('jql')!);
@@ -238,6 +245,7 @@ before(async () => {
   await editor.post('/api/auth/login', { email: 'e@example.com', password: 'a-long-password-2' });
   const { project } = await admin.post('/api/projects', { name: 'Jira demo', description: 'd' });
   pid = project.id;
+  projectSlug = project.slug;
   const { repo } = await admin.post(`/api/projects/${pid}/repos`, { localPath: repoDir, name: 'payments' });
   repoId = repo.id;
   await waitFor(async () => ((await admin.get(`/api/projects/${pid}/repos`)).repos.find((r: any) => r.id === repoId).status === 'ready' ? true : null), 'clone');
@@ -427,6 +435,13 @@ test('analysis: a run starts with the ticket fenced as untrusted data, against t
   assert.match(done.run.prompt, /<<<TICKET[\s\S]*Managers must approve \*\*large refunds\*\*[\s\S]*TICKET>>>/);
   assert.match(done.run.prompt, /untrusted content copied from Jira/);
   assert.match(done.run.prompt, /Extra context from the developer: focus on refund\.py/);
+  // The attachment was downloaded and the agent is told where it is.
+  const shot = path.join(srv.dataDir, 'projects', projectSlug, 'work', 'jira-attachments', 'RLP-1', '10001-trace.png');
+  assert.equal(fs.readFileSync(shot).toString(), 'PNGDATA123', 'the screenshot is in the project folder');
+  assert.ok(done.run.prompt.includes(shot), 'the prompt gives the file path');
+  assert.match(done.run.prompt, /Open them with your read tool \(images included/);
+  assert.equal(seen.attachmentDownloads, 1);
+
   assert.equal(done.run.permission_mode, 'acceptEdits');
   assert.equal(done.run.model, 'haiku');
   const { runs } = await admin.get(`/api/projects/${pid}/jira/issues/RLP-1/runs`);

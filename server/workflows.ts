@@ -16,7 +16,7 @@ import { all, insert, one, run as exec, update, type Row } from './db.ts';
 import { del, get, post, put } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
 import { getRepo, repoGitEnv, pushWorktree, checkBranch, openPullRequest, repoDir } from './repos.ts';
-import { checkKey, issueDetail, mustMapping } from './jira.ts';
+import { checkKey, downloadAttachments, issueDetail, mustMapping } from './jira.ts';
 import { requireModel } from './models.ts';
 import { ticketMarkdown } from './jira-text.ts';
 import { getRun, isActive, startRun, stopRun } from './agent/runner.ts';
@@ -443,7 +443,8 @@ async function drive(id: string): Promise<void> {
     let ticket: { key: string; markdown: string } | null = null;
     if (w.jira_key) {
       try {
-        ticket = { key: w.jira_key, markdown: ticketMarkdown(await issueDetail(w.project_id, mustMapping(w.project_id), w.jira_key)) };
+        // Attachments are downloaded once and kept, so later iterations only fetch new ones.
+        ticket = { key: w.jira_key, markdown: ticketMarkdown(await downloadAttachments(w.project_id, await issueDetail(w.project_id, mustMapping(w.project_id), w.jira_key))) };
       } catch (e: any) {
         if (!ticketWarned) log(id, 'status', `Could not read ${w.jira_key} from Jira, so this iteration goes on without it: ${String(e?.message ?? e).slice(0, 200)}`);
         ticketWarned = true;

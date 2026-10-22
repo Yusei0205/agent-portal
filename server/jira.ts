@@ -223,7 +223,7 @@ export async function issueDetail(projectId: string, mapping: Mapping, key: stri
     updated: f.updated ?? '',
     description: adfToMarkdown(f.description),
     comments: ((f.comment?.comments ?? []) as any[]).map((cm) => ({ author: cm.author?.displayName ?? 'Unknown', created: cm.created ?? '', body: adfToMarkdown(cm.body) })),
-    attachments: ((f.attachment ?? []) as any[]).map((a) => ({ filename: a.filename, size: a.size, mimeType: a.mimeType })),
+    attachments: ((f.attachment ?? []) as any[]).map((a) => ({ id: a.id ? String(a.id) : undefined, filename: a.filename, size: a.size, mimeType: a.mimeType })),
     links: ((f.issuelinks ?? []) as any[]).map((l) => {
       const other = l.outwardIssue ?? l.inwardIssue;
       return { relation: l.outwardIssue ? l.type?.outward : l.type?.inward, key: other?.key, summary: other?.fields?.summary ?? '', status: other?.fields?.status?.name ?? '' };
@@ -231,6 +231,75 @@ export async function issueDetail(projectId: string, mapping: Mapping, key: stri
     parent: f.parent ? { key: f.parent.key, summary: f.parent.fields?.summary ?? '' } : null,
     subtasks: ((f.subtasks ?? []) as any[]).map((s) => ({ key: s.key, summary: s.fields?.summary ?? '', status: s.fields?.status?.name ?? '' })),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Attachments                                                         */
+/* ------------------------------------------------------------------ */
+
+/** Limits for what an agent run gets from a ticket's attachments. */
+export const ATTACHMENT_LIMITS = { maxFiles: 30, maxFileBytes: 20 * 1024 * 1024, maxTotalBytes: 100 * 1024 * 1024 };
+
+/** Where a ticket's attachments are kept: <project>/work/jira-attachments/<KEY>/ (git-ignored with the rest of work/). */
+export function attachmentDir(projectId: string, key: string): string {
+  return path.join(projectDir(getProject(projectId)), 'work', 'jira-attachments', key);
+}
+
+/** A safe file name for an attachment: its id first (unique), then the cleaned original name. */
+function attachmentFileName(id: string, filename: string): string {
+  const clean = path.basename(String(filename || 'file')).replace(/[^\w.\- ]+/g, '_').replace(/^\.+/, '').slice(0, 120) || 'file';
+  return `${id}-${clean}`;
+}
+
+/**
+ * Download a ticket's attachments (screenshots, logs, documents) with the project's Jira sign-in, so agents can open
+ * them, images included. Each file is fetched once and kept; files over the limits are listed but not fetched.
+ * Atlassian's MCP server cannot download attachments, which is why this goes through the REST API.
+ */
+export async function downloadAttachments(projectId: string, t: TicketDetail): Promise<TicketDetail> {
+  if (!t.attachments.length) return t;
+  const dir = attachmentDir(projectId, t.key);
+  const c = await connection(projectId);
+  let total = 0;
+  const out: TicketDetail['attachments'] = [];
+  for (const [i, a] of t.attachments.entries()) {
+    if (!a.id || !/^\d+$/.test(a.id)) {
+      out.push({ ...a, skipped: 'no attachment id' });
+      continue;
+    }
+    if (i >= ATTACHMENT_LIMITS.maxFiles) {
+      out.push({ ...a, skipped: `more than ${ATTACHMENT_LIMITS.maxFiles} attachments` });
+      continue;
+    }
+    if (a.size > ATTACHMENT_LIMITS.maxFileBytes) {
+      out.push({ ...a, skipped: `larger than ${ATTACHMENT_LIMITS.maxFileBytes / 1048576} MB` });
+      continue;
+    }
+    if (total + a.size > ATTACHMENT_LIMITS.maxTotalBytes) {
+      out.push({ ...a, skipped: `the attachments together are over ${ATTACHMENT_LIMITS.maxTotalBytes / 1048576} MB` });
+      continue;
+    }
+    const file = path.join(dir, attachmentFileName(a.id, a.filename));
+    try {
+      if (!(fs.existsSync(file) && fs.statSync(file).size === a.size)) {
+        const res = await fetch(`${API_BASE()}/ex/jira/${c.site.cloudId}/rest/api/3/attachment/content/${a.id}`, {
+          headers: { authorization: `Bearer ${c.access}`, accept: '*/*' },
+          redirect: 'follow',
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!res.ok) throw new Error(`Jira returned ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > ATTACHMENT_LIMITS.maxFileBytes) throw new Error('larger than allowed');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, buf);
+      }
+      total += fs.statSync(file).size;
+      out.push({ ...a, path: file });
+    } catch (e: any) {
+      out.push({ ...a, skipped: String(e?.message ?? e).slice(0, 120) });
+    }
+  }
+  return { ...t, attachments: out };
 }
 
 /**
@@ -449,7 +518,8 @@ export function registerJiraRoutes(): void {
     const body = await ctx.json();
     const repo = getRepo(String(body.repoId ?? ''));
     if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
-    const ticket = await issueDetail(project.id, mapping, ctx.params.key);
+    // The analysis agent gets the ticket's attachments (screenshots included) as files it can open.
+    const ticket = await downloadAttachments(project.id, await issueDetail(project.id, mapping, ctx.params.key));
     await ensureFresh(repo);
     const notes = str(body.notes, 'Notes', { max: 2000, optional: true });
     const model = cleanModel(body.model);

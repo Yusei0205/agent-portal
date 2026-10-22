@@ -15,7 +15,7 @@ import { providerMode } from './settings.ts';
 import JSZip from 'jszip';
 import { readIntegrationIds } from './integrations.ts';
 import { engineProvider } from './project-aws.ts';
-import { issueDetail, mustMapping, checkKey } from './jira.ts';
+import { downloadAttachments, issueDetail, mustMapping, checkKey } from './jira.ts';
 import { composeRunPrompt, ticketMarkdown } from './jira-text.ts';
 import { resolveLead } from './kiro-agents.ts';
 
@@ -228,7 +228,7 @@ export function registerRunRoutes(): void {
       const rawKey = str(body.jiraKey, 'Jira key', { max: 30 }).trim().toUpperCase();
       const mapping = mustMapping(project.id);
       checkKey(mapping, rawKey);
-      const ticket = await issueDetail(project.id, mapping, rawKey);
+      const ticket = await downloadAttachments(project.id, await issueDetail(project.id, mapping, rawKey));
       const instruction = str(body.prompt ?? '', 'Instruction', { max: 50_000, optional: true }).trim();
       const repoName: string | null = body.repoId ? (getRepo(String(body.repoId)).name ?? null) : null;
       prompt = composeRunPrompt({ instruction, repoName, ticket: ticketMarkdown(ticket), key: ticket.key });
