@@ -498,6 +498,18 @@ function LoopSpecPicker({ projectId, value, onChange }) {
 }
 
 /** Start a session, a single run or a documentation run. */
+/** Fill a loop spec's {{ticket.*}} and {{date}} placeholders from the Jira ticket picked in the launcher. */
+export function fillGoalVars(goal, ticket, jiraSite) {
+  const vars = { date: new Date().toISOString().slice(0, 10) };
+  if (ticket?.key) {
+    vars['ticket.key'] = ticket.key;
+    vars['ticket.summary'] = ticket.summary || ticket.key;
+    vars['ticket.url'] = ticket.url || (jiraSite ? `${String(jiraSite).replace(/\/$/, '')}/browse/${ticket.key}` : ticket.key);
+    if (ticket.status) vars['ticket.status'] = typeof ticket.status === 'string' ? ticket.status : ticket.status.name || '';
+  }
+  return String(goal || '').replace(/\{\{([a-z_.]+)\}\}/g, (m, k) => vars[k] ?? m);
+}
+
 export function NewSessionDialog({ prefill, onClose }) {
   const { project } = useProject();
   const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
@@ -616,7 +628,7 @@ export function NewSessionDialog({ prefill, onClose }) {
         const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, {
           context: context.filter((c) => c.kind !== 'file').map(({ kind: k, ref, title, body }) => ({ kind: k, ref, title, body })),
           start: files.length ? false : undefined,
-          goal: f.goal,
+          goal: fillGoalVars(f.goal, ticket, jira.data?.site?.url),
           repos: chosen,
           playground: chosen.length === 0 && !workspaceId ? true : undefined,
           workspaceId: workspaceId || undefined,
@@ -646,7 +658,7 @@ export function NewSessionDialog({ prefill, onClose }) {
         const body = isDoc
           ? { document: { repoId: f.repoId, scope: f.docScope, output: f.docOutput }, model: f.model, permissionMode: 'acceptEdits' }
           : {
-              prompt: f.goal.trim() || undefined,
+              prompt: fillGoalVars(f.goal, ticket, jira.data?.site?.url).trim() || undefined,
               jiraKey: ticket?.key || undefined,
               repos: chosen,
               integrations,

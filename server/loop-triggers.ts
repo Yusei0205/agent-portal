@@ -374,6 +374,7 @@ async function pollJiraForSpec(r: Row): Promise<void> {
         'ticket.key': ticket.key,
         'ticket.summary': ticket.summary,
         'ticket.status': ticket.status,
+        ...((ticket as any).url ? { 'ticket.url': String((ticket as any).url) } : {}),
       };
       const wf = await createWorkflowFromSpec(spec, userId, vars);
       recordTriggerFire(spec.id, 'jira_event', { jql, ticket: ticket.key }, wf.id);

@@ -78,6 +78,7 @@ const TEMPLATE_VARS = [
   { v: '{{ticket.summary}}', desc: 'Jira ticket summary' },
   { v: '{{ticket.description}}', desc: 'Jira ticket description' },
   { v: '{{ticket.status}}', desc: 'Jira ticket status' },
+  { v: '{{ticket.url}}', desc: 'Link to the Jira ticket' },
   { v: '{{repo.name}}', desc: 'Repository name' },
   { v: '{{date}}', desc: 'Today\'s date, YYYY-MM-DD' },
   { v: '{{pr.title}}', desc: 'Pull request title (GitHub event)' },
