@@ -153,9 +153,9 @@ export const BUILT_IN_TEMPLATES: Omit<LoopSpec, 'id' | 'project_id' | 'created_b
     trigger_kind: 'manual',
     trigger_config: { maxPerHour: 3 },
     goal_template: [
-      'Ticket: {{ticket.url}} ({{ticket.key}}: {{ticket.summary}})',
+      'Ticket: {{ticket}}',
       '',
-      '1. Research the ticket, the related code and the project documents.',
+      '1. Research: read the Jira ticket in full (description and comments), then open every attached screenshot and file listed under Attachments with your read tool, and describe what each one shows before you plan anything.',
       '2. Reproduce the issue and record how you did it.',
       '3. Write the root cause analysis (RCA) and the resolution.',
       '4. Follow and align with the project documents and the decisions log.',

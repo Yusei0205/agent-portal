@@ -498,13 +498,21 @@ function LoopSpecPicker({ projectId, value, onChange }) {
 }
 
 /** Start a session, a single run or a documentation run. */
-/** Fill a loop spec's {{ticket.*}} and {{date}} placeholders from the Jira ticket picked in the launcher. */
+/** A Jira key (RLP-2884) from what was typed: the key itself or any link to the ticket. */
+export function ticketKeyFrom(text) {
+  const m = String(text || '').toUpperCase().match(/(?:BROWSE\/|SELECTEDISSUE=|^|[^A-Z0-9])([A-Z][A-Z0-9_]+-\d+)(?![A-Z0-9])/);
+  return m ? m[1] : '';
+}
+
+/** Fill a loop spec's {{ticket}} (and older {{ticket.*}}) and {{date}} placeholders from the chosen Jira ticket. */
 export function fillGoalVars(goal, ticket, jiraSite) {
   const vars = { date: new Date().toISOString().slice(0, 10) };
   if (ticket?.key) {
+    const url = ticket.url || (jiraSite ? `${String(jiraSite).replace(/\/$/, '')}/browse/${ticket.key}` : '');
+    vars.ticket = url ? `${ticket.key} (${url})` : ticket.key;
     vars['ticket.key'] = ticket.key;
     vars['ticket.summary'] = ticket.summary || ticket.key;
-    vars['ticket.url'] = ticket.url || (jiraSite ? `${String(jiraSite).replace(/\/$/, '')}/browse/${ticket.key}` : ticket.key);
+    vars['ticket.url'] = url || ticket.key;
     if (ticket.status) vars['ticket.status'] = typeof ticket.status === 'string' ? ticket.status : ticket.status.name || '';
   }
   return String(goal || '').replace(/\{\{([a-z_.]+)\}\}/g, (m, k) => vars[k] ?? m);
@@ -572,6 +580,7 @@ export function NewSessionDialog({ prefill, onClose }) {
     pushMode: 'never',
   });
   const [ticket, setTicket] = useState(prefill?.jiraKey ? { key: prefill.jiraKey, summary: prefill.jiraSummary || prefill.jiraKey, status: null, url: prefill.jiraUrl || null } : null);
+  const [ticketText, setTicketText] = useState(prefill?.jiraKey || '');
   const [playground, setPlayground] = useState(false);
   const [trustTools, setTrustTools] = useState(false);
   const [more, setMore] = useState(false);
@@ -791,7 +800,32 @@ export function NewSessionDialog({ prefill, onClose }) {
           </>
         ) : (
           <>
-            {jiraReady ? (
+            {/* A spec whose goal has {{ticket}}: one box for the ticket key or link; it becomes the session's ticket. */}
+            {/\{\{ticket(\.[a-z]+)?\}\}/.test(f.goal) ? (
+              <Field
+                label="Ticket"
+                hint={
+                  ticket
+                    ? `Using ${ticket.key}. The agents read the whole ticket and its attachments, screenshots included.`
+                    : 'Type the ticket key (RLP-2884) or paste its link. It fills {{ticket}} in the goal.'
+                }
+              >
+                {(id) => (
+                  <input
+                    id={id}
+                    className="input mono"
+                    value={ticketText}
+                    placeholder="RLP-2884 or https://…/browse/RLP-2884"
+                    onChange={(e) => {
+                      const text = e.target.value;
+                      setTicketText(text);
+                      const key = ticketKeyFrom(text);
+                      setTicket(key ? { key, summary: key, status: null, url: /^https?:\/\//i.test(text.trim()) ? text.trim() : null } : null);
+                    }}
+                  />
+                )}
+              </Field>
+            ) : jiraReady ? (
               <Field label="Jira ticket (optional)" hint={ticket ? 'The agents read the full ticket. The goal below becomes optional.' : 'Pick a ticket and the agents work on it.'}>
                 {() => <JiraTicketPicker projectId={project.id} value={ticket} onChange={setTicket} />}
               </Field>

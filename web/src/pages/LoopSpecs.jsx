@@ -77,6 +77,7 @@ const TEMPLATE_VARS = [
   { v: '{{ticket.key}}', desc: 'Jira ticket key, e.g. PAY-123' },
   { v: '{{ticket.summary}}', desc: 'Jira ticket summary' },
   { v: '{{ticket.description}}', desc: 'Jira ticket description' },
+  { v: '{{ticket}}', desc: 'The Jira ticket: you type its key or link when you start' },
   { v: '{{ticket.status}}', desc: 'Jira ticket status' },
   { v: '{{ticket.url}}', desc: 'Link to the Jira ticket' },
   { v: '{{repo.name}}', desc: 'Repository name' },
