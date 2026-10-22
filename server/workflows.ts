@@ -33,6 +33,10 @@ import { getSettings } from './settings.ts';
 import { git, redact } from './git.ts';
 import { checkConcurrency, isDraining } from './control-plane.ts';
 import { audit, auditRaw } from './audit.ts';
+import { getLoopSpec, type VerificationStep, type StopRules, type MemoryConfig, type EscalationConfig } from './loop-specs.ts';
+import { runPipeline, formatPipelineForPrompt, persistPipelineResult, appendProgress, readProgressFile, deleteProgressFile, isPlanPending, shouldPlanFirst, type PipelineResult } from './loop-verification.ts';
+import { escalateSession, fireWebhooks } from './loop-engine.ts';
+import { recordLoopMetrics } from './loop-specs.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -124,6 +128,8 @@ function view(w: Row) {
     updated_at: w.updated_at,
     playground: Boolean(w.playground),
     trust_tools: Boolean(w.trust_tools),
+    loop_spec_id: w.loop_spec_id ?? null,
+    planning_gate: Boolean(w.planning_gate),
   };
 }
 
@@ -185,9 +191,62 @@ function runCheck(command: string, cwd: string): Promise<{ ok: boolean; output: 
 /* ------------------------------------------------------------------ */
 
 function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'paused' | 'stopped', reason: string): void {
+  const w = one<Row>('SELECT * FROM workflows WHERE id = ?', id);
   patch(id, { status, stop_reason: reason });
   log(id, 'status', reason ? `${status}: ${reason}` : status);
   childStopped(id);
+
+  // Record loop metrics when a session terminates (not just pauses).
+  const terminal = ['done', 'blocked', 'failed', 'stopped'];
+  if (w && terminal.includes(status)) {
+    const specId = w.loop_spec_id ? String(w.loop_spec_id) : null;
+    const savedState = one<Row>('SELECT * FROM loop_run_states WHERE workflow_id = ?', id);
+    const lastCheckData = savedState?.last_check ? parseJson<any>(savedState.last_check, null) : null;
+    const verifPass = lastCheckData?.steps ? (lastCheckData.steps as any[]).filter((s: any) => s.ok && !s.advisory).length : 0;
+    const verifFail = lastCheckData?.steps ? (lastCheckData.steps as any[]).filter((s: any) => !s.ok && !s.advisory).length : 0;
+    const humanInputs = Number(one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM workflow_events WHERE workflow_id = ? AND kind = 'human'", id,
+    )?.n ?? 0);
+    const hasPr = Boolean(one<Row>(
+      "SELECT id FROM workflow_events WHERE workflow_id = ? AND kind = 'push' AND data LIKE '%\"pr\"%' LIMIT 1", id,
+    ));
+    recordLoopMetrics({
+      workflowId: id,
+      specId,
+      projectId: String(w.project_id),
+      terminalState: status,
+      iterationsUsed: Number(w.iteration ?? 0),
+      costUsd: Number(w.spent_usd ?? 0),
+      verifStepsPass: verifPass,
+      verifStepsFail: verifFail,
+      stagnationHit: status === 'blocked' && String(reason).includes('same thing') ? 1 : 0,
+      humanInputs,
+      prOpened: hasPr ? 1 : 0,
+      startedAt: String(w.created_at),
+      finishedAt: now(),
+    });
+
+    // Escalation for blocked/failed sessions that have escalation configured.
+    if ((status === 'blocked' || status === 'failed') && specId) {
+      try {
+        const spec = getLoopSpec(specId);
+        const esc: EscalationConfig = spec.escalation;
+        const shouldEsc = (status === 'blocked' && esc.onBlocked !== false) || (status === 'failed' && esc.onFail !== false);
+        if (shouldEsc) {
+          escalateSession(id, status === 'blocked' ? 'blocked' : 'failed', reason);
+        }
+      } catch { /* spec may have been deleted */ }
+    } else if (status === 'blocked' || status === 'failed') {
+      // Even without a spec, fire webhooks for blocked/failed
+      fireWebhooks(String(w.project_id), status === 'failed' ? 'session.failed' : 'session.blocked', {
+        workflowId: id, projectId: w.project_id, title: w.title, reason,
+      });
+    } else if (status === 'done') {
+      fireWebhooks(String(w.project_id), 'session.done', {
+        workflowId: id, projectId: w.project_id, title: w.title,
+      });
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -304,12 +363,25 @@ async function drive(id: string): Promise<void> {
   let leadWarned = false;
   let lastCheck: { command: string; ok: boolean; output: string } | null = null;
   if (savedState?.last_check && savedState.last_check !== '{}' && savedState.last_check !== 'null') {
-    const parsed = parseJson<{ command?: string; ok?: boolean; output?: string } | null>(savedState.last_check, null);
-    if (parsed && parsed.command !== undefined) {
-      lastCheck = parsed as { command: string; ok: boolean; output: string };
+    const parsed = parseJson<{ command?: string; ok?: boolean; output?: string; steps?: unknown[] } | null>(savedState.last_check, null);
+    // Support both old {command,ok,output} shape and new {steps,overall_ok} shape.
+    if (parsed && (parsed.command !== undefined || (parsed as any).overall_ok !== undefined)) {
+      if ((parsed as any).overall_ok !== undefined) {
+        // New pipeline shape: adapt to legacy interface for the prompt composer.
+        lastCheck = {
+          command: ((parsed as any).steps as any[] ?? []).map((s: any) => s.step).join(', '),
+          ok: Boolean((parsed as any).overall_ok),
+          output: typeof (parsed as any).ran_at === 'string'
+            ? `Pipeline result (${(parsed as any).ran_at}): ${(parsed as any).overall_ok ? 'PASS' : 'FAIL'}`
+            : '',
+        };
+      } else {
+        lastCheck = parsed as { command: string; ok: boolean; output: string };
+      }
     }
   }
   const summaries: string[] = savedState?.summaries ? parseJson<string[]>(savedState.summaries, []) : [];
+  const driveStartedAt = Date.now();
 
   /** Write current loop state to the database (called at the start of every iteration). */
   function persistLoopState(iteration: number): void {
@@ -338,6 +410,18 @@ async function drive(id: string): Promise<void> {
     if (w.iteration - w.burst_start >= w.max_iterations) return stopWith(id, 'paused', `Reached ${w.max_iterations} iterations without finishing. Review it, then send an instruction or resume to go on.`);
     const over = overBudget(w);
     if (over) return stopWith(id, 'paused', over);
+
+    // Wall-clock stop rule from loop spec.
+    {
+      const specSnap = (() => {
+        const s = one<Row>('SELECT spec_snapshot FROM loop_run_states WHERE workflow_id = ?', id);
+        return s?.spec_snapshot ? parseJson<any>(s.spec_snapshot, {}) : {};
+      })();
+      const wallMins = Number(specSnap.stop_rules?.wallClockMinutes ?? 0);
+      if (wallMins > 0 && (Date.now() - driveStartedAt) > wallMins * 60_000) {
+        return stopWith(id, 'paused', `Reached the ${wallMins}-minute wall-clock limit. Resume to go on.`);
+      }
+    }
 
     // The ticket may have changed since the last iteration (new comments, a changed description).
     let ticket: { key: string; markdown: string } | null = null;
@@ -487,16 +571,55 @@ async function drive(id: string): Promise<void> {
     }
 
     // The team's own check decides what the agent's word is worth.
+    // Sessions started from a loop spec use the spec's verification pipeline.
+    // Sessions without a spec fall back to the single verify_command (backward compat).
     lastCheck = null;
-    if (w.verify_command.trim()) {
-      const run = getRun(finished.id);
-      // With several repositories the check runs in the run folder that holds all of their working copies.
+    {
+      const runRow = getRun(finished.id);
       const pdir = projectDir(getProject(w.project_id));
-      const workDir = parseJson<any>(run.meta, {}).workDir;
-      const cwd = sessionRepos(w).length > 1 && workDir ? path.join(pdir, workDir) : run.worktree ? path.join(pdir, run.worktree) : pdir;
-      const res = await runCheck(w.verify_command, cwd);
-      lastCheck = { command: w.verify_command, ok: res.ok, output: res.output };
-      log(id, 'check', res.ok ? 'Check passed' : 'Check failed', { runId: finished.id, data: { command: w.verify_command, ok: res.ok, output: res.output } });
+      const workDir = parseJson<any>(runRow.meta, {}).workDir;
+      const cwd = sessionRepos(w).length > 1 && workDir ? path.join(pdir, workDir) : runRow.worktree ? path.join(pdir, runRow.worktree) : pdir;
+
+      // Resolve verification pipeline: from spec snapshot first, then fallback to verify_command.
+      const savedStateRow = one<Row>('SELECT spec_snapshot FROM loop_run_states WHERE workflow_id = ?', id);
+      const specSnap = savedStateRow?.spec_snapshot ? parseJson<any>(savedStateRow.spec_snapshot, {}) : {};
+      const verificationSteps: VerificationStep[] = specSnap.verification?.length
+        ? specSnap.verification
+        : w.verify_command?.trim()
+          ? [{ step: 'verify', cmd: w.verify_command, timeout: 300, required: true, kind: 'cmd' }]
+          : [];
+
+      if (verificationSteps.length) {
+        const pipelineResult = await runPipeline(verificationSteps, cwd, summary);
+        persistPipelineResult(id, pipelineResult);
+        lastCheck = {
+          command: verificationSteps.map((s) => s.step).join(', '),
+          ok: pipelineResult.overall_ok,
+          output: formatPipelineForPrompt(pipelineResult),
+        };
+        const passCount = pipelineResult.steps.filter((s) => s.ok && !s.advisory).length;
+        const failCount = pipelineResult.steps.filter((s) => !s.ok && !s.advisory).length;
+        log(id, 'check', pipelineResult.overall_ok ? `Pipeline passed (${passCount} steps)` : `Pipeline failed (${failCount} step(s))`, {
+          runId: finished.id,
+          data: {
+            ok: pipelineResult.overall_ok,
+            output: lastCheck.output,
+            overall_ok: pipelineResult.overall_ok,
+            steps: pipelineResult.steps.map((s) => ({ step: s.step, ok: s.ok, advisory: Boolean(s.advisory) })),
+            command: lastCheck.command,
+          },
+        });
+      }
+
+      // Memory: append iteration summary to the per-session progress file if configured.
+      if (summary && specSnap.memory_config?.progressFile !== false) {
+        try { appendProgress(w.project_id, id, summary, iteration, specSnap.memory_config?.maxEntries ?? 20); } catch { /* non-fatal */ }
+      }
+
+      // Planning gate: after the first iteration, pause and wait for a human to approve the plan.
+      if (Boolean(w.planning_gate) && iteration === 1) {
+        return stopWith(id, 'paused', 'Plan ready for approval. Review the plan in the session history and approve to continue.');
+      }
     }
 
     w = getWorkflow(id);
@@ -548,8 +671,8 @@ async function drive(id: string): Promise<void> {
   }
 }
 
-/** Start the loop for a session unless one is already running in this process. */
-function kick(id: string): void {
+/** Start the loop for a session unless one is already running in this process. Exported for loop-triggers.ts. */
+export function kick(id: string): void {
   if (driving.has(id)) return;
   // Don't start new iterations in drain mode.
   if (isDraining()) {
@@ -951,6 +1074,8 @@ export function registerWorkflowRoutes(): void {
       jira_summary: jira.summary,
       jira_url: jira.url,
       summary: '',
+      loop_spec_id: body.loopSpecId ? String(body.loopSpecId) : null,
+      planning_gate: body.planningGate ? 1 : (body.planning_gate ? 1 : 0),
       created_by: ctx.user!.id,
       created_at: now(),
       updated_at: now(),

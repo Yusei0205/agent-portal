@@ -233,6 +233,19 @@ export async function issueDetail(projectId: string, mapping: Mapping, key: stri
   };
 }
 
+/**
+ * Search Jira issues with a JQL query. Used by the loop trigger poller.
+ * Returns a lightweight list suitable for template variable injection.
+ */
+export async function searchJiraIssues(projectId: string, jql: string, maxResults = 25): Promise<{ key: string; summary: string; status: string }[]> {
+  const data = await jira(projectId, `/search/jql?${new URLSearchParams({ jql, fields: LIST_FIELDS, maxResults: String(maxResults) })}`);
+  return ((data.issues ?? []) as any[]).map((i) => ({
+    key: String(i.key ?? ''),
+    summary: String(i.fields?.summary ?? ''),
+    status: String(i.fields?.status?.name ?? ''),
+  }));
+}
+
 /* ------------------------------------------------------------------ */
 /* Routes                                                              */
 /* ------------------------------------------------------------------ */

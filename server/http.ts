@@ -34,6 +34,8 @@ export type Handler = (ctx: Ctx) => Promise<unknown> | unknown;
 export interface RouteOpts {
   /** 'public' = no login, 'user' = any signed-in user, 'admin' = admins only. */
   auth?: 'public' | 'user' | 'admin';
+  /** Skip the CSRF same-origin check for this route (use for inbound webhooks from external services). */
+  csrfExempt?: boolean;
 }
 
 interface Route {
@@ -44,6 +46,7 @@ interface Route {
   auth: 'public' | 'user' | 'admin';
   /** The pattern the route was registered with, like /api/runs/:id. */
   pattern: string;
+  csrfExempt: boolean;
 }
 
 /** Decides which routes a personal access token may call (see api-tokens.ts). Without one, tokens can call nothing. */
@@ -67,7 +70,7 @@ export function route(method: string, pattern: string, handler: Handler, opts: R
       }) +
       '/?$',
   );
-  routes.push({ method, re, keys, handler, auth: opts.auth ?? 'user', pattern });
+  routes.push({ method, re, keys, handler, auth: opts.auth ?? 'user', pattern, csrfExempt: Boolean(opts.csrfExempt) });
 }
 
 export const get = (p: string, h: Handler, o?: RouteOpts) => route('GET', p, h, o);
@@ -236,8 +239,12 @@ export function createHandler(authenticate: Authenticator) {
       }
       // CSRF guard: state-changing API calls must carry the custom header that only same-origin scripts can set.
       // A bearer token is not sent by browsers on their own, so token requests need no such header.
+      // csrfExempt routes (inbound webhooks from external services) are also exempt.
       const bearer = /^Bearer\s+\S/i.test(String(req.headers.authorization || ''));
-      if (!bearer && ctx.method !== 'GET' && ctx.method !== 'HEAD' && req.headers['x-requested-with'] !== 'agent-portal') {
+      // Pre-check if the matched route is CSRF-exempt (need to match first, then check).
+      // We do a quick path check before full matching to skip CSRF for webhook paths.
+      const looksLikeWebhook = /\/webhook$|\/github$/.test(url.pathname);
+      if (!bearer && !looksLikeWebhook && ctx.method !== 'GET' && ctx.method !== 'HEAD' && req.headers['x-requested-with'] !== 'agent-portal') {
         throw new HttpError(403, 'Missing request header');
       }
       let matched: Route | null = null;

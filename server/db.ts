@@ -495,6 +495,78 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE workflows ADD COLUMN locked_by    TEXT;
   ALTER TABLE workflows ADD COLUMN locked_until TEXT;
   ALTER TABLE workflows ADD COLUMN heartbeat_at TEXT;`,
+  // Stage 2: Loop specs — reusable named session templates with triggers, verification, stop rules, memory.
+  `CREATE TABLE IF NOT EXISTS loop_specs (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    trigger_kind    TEXT NOT NULL DEFAULT 'manual',
+    trigger_config  TEXT NOT NULL DEFAULT '{}',
+    goal_template   TEXT NOT NULL DEFAULT '',
+    verification    TEXT NOT NULL DEFAULT '[]',
+    stop_rules      TEXT NOT NULL DEFAULT '{}',
+    memory_config   TEXT NOT NULL DEFAULT '{}',
+    escalation      TEXT NOT NULL DEFAULT '{}',
+    push_mode       TEXT,
+    trust_tools     INTEGER,
+    lead_agent      TEXT,
+    engine          TEXT,
+    monthly_budget_usd REAL,
+    planning_gate   INTEGER NOT NULL DEFAULT 0,
+    is_template     INTEGER NOT NULL DEFAULT 0,
+    created_by      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS loop_specs_project ON loop_specs(project_id);
+  ALTER TABLE workflows ADD COLUMN loop_spec_id TEXT;
+  ALTER TABLE workflows ADD COLUMN planning_gate INTEGER NOT NULL DEFAULT 0;`,
+  // Stage 2: Trigger history — dedup and rate-limit log per spec.
+  `CREATE TABLE IF NOT EXISTS trigger_history (
+    id          TEXT PRIMARY KEY,
+    spec_id     TEXT NOT NULL REFERENCES loop_specs(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    dedup_key   TEXT,
+    workflow_id TEXT,
+    fired_at    TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS trigger_history_spec ON trigger_history(spec_id, fired_at);
+  CREATE INDEX IF NOT EXISTS trigger_history_dedup ON trigger_history(spec_id, dedup_key);`,
+  // Stage 2: Loop metrics — aggregated per session/spec on session close.
+  `CREATE TABLE IF NOT EXISTS loop_metrics (
+    id               TEXT PRIMARY KEY,
+    loop_spec_id     TEXT REFERENCES loop_specs(id),
+    project_id       TEXT NOT NULL,
+    workflow_id      TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+    terminal_state   TEXT NOT NULL,
+    iterations_used  INTEGER NOT NULL DEFAULT 0,
+    cost_usd         REAL NOT NULL DEFAULT 0,
+    verif_steps_pass INTEGER NOT NULL DEFAULT 0,
+    verif_steps_fail INTEGER NOT NULL DEFAULT 0,
+    stagnation_hit   INTEGER NOT NULL DEFAULT 0,
+    human_inputs     INTEGER NOT NULL DEFAULT 0,
+    pr_opened        INTEGER NOT NULL DEFAULT 0,
+    started_at       TEXT NOT NULL,
+    finished_at      TEXT,
+    duration_s       INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS loop_metrics_spec ON loop_metrics(loop_spec_id, started_at);
+  CREATE INDEX IF NOT EXISTS loop_metrics_project ON loop_metrics(project_id, started_at);`,
+  // Stage 2: Outbound webhooks — HMAC-signed delivery subscriptions.
+  `CREATE TABLE IF NOT EXISTS outbound_webhooks (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    url         TEXT NOT NULL,
+    secret      TEXT NOT NULL,
+    secret_hint TEXT NOT NULL DEFAULT '',
+    events      TEXT NOT NULL DEFAULT '[]',
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+  );`,
+  // Stage 2: Add loop_run_states.burst_start column (added in loop_triggers).
+  `ALTER TABLE loop_run_states ADD COLUMN burst_start INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 let db: DatabaseSync | null = null;

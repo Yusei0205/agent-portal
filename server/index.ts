@@ -30,6 +30,9 @@ import { recoverRuns } from './agent/runner.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerAuditRoutes } from './audit.ts';
 import { registerControlPlaneRoutes, startDrain, checkApprovalSla, cleanupWorktrees } from './control-plane.ts';
+import { registerLoopSpecRoutes } from './loop-specs.ts';
+import { registerTriggerRoutes, startTriggerEngine, stopTriggerEngine } from './loop-triggers.ts';
+import { registerLoopEngineRoutes } from './loop-engine.ts';
 
 let routesRegistered = false;
 
@@ -64,6 +67,9 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerInsightsRoutes();
     registerAuditRoutes();
     registerControlPlaneRoutes();
+    registerLoopSpecRoutes();
+    registerTriggerRoutes();
+    registerLoopEngineRoutes();
     routesRegistered = true;
   }
   recoverRuns();
@@ -102,6 +108,9 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   const sessionCleanupTimer = setInterval(cleanupSessions, 6 * 3600_000);
   sessionCleanupTimer.unref();
 
+  // Loop trigger engine (cron + Jira polling)
+  startTriggerEngine();
+
   // Approval SLA checker: runs every minute
   const slaTimer = setInterval(() => {
     const slaMinutes = getSettings().controlPlane?.approvalSlaMinutes ?? 30;
@@ -128,6 +137,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     clearInterval(sessionCleanupTimer);
     clearInterval(slaTimer);
     clearInterval(cleanupTimer);
+    stopTriggerEngine();
     closeDb();
   });
   return server;
