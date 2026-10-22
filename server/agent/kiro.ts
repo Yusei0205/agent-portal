@@ -26,6 +26,30 @@ import { HttpError, badRequest, listValue, parseFrontmatter, slugify } from '../
 import { getSettings } from '../settings.ts';
 import { listKiroAgentsAt, runProfileOf, type KiroAgentFile } from './kiro-project.ts';
 
+/**
+ * Kill a process tree. On Windows, uses taskkill /T /F to terminate the whole
+ * tree. On other platforms, kills the process group with SIGTERM then SIGKILL.
+ */
+function killProcessTree(pid: number): void {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      import('node:child_process').then(({ spawn: spawnCp }) => {
+        spawnCp('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', detached: true }).unref();
+      }).catch(() => {});
+    } else {
+      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* ok */ } }
+      setTimeout(() => {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* ok */ }
+        try { process.kill(pid, 'SIGKILL'); } catch { /* ok */ }
+      }, 2000).unref();
+    }
+  } catch { /* process already gone */ }
+}
+
+/** Export for use by the runner's stopRun(). */
+export { killProcessTree };
+
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
 
@@ -154,6 +178,8 @@ export class AcpConnection {
     } catch {
       /* already closed */
     }
+    // Kill the whole process tree to avoid orphan kiro-cli processes.
+    killProcessTree(this.child.pid ?? 0);
     const t = setTimeout(() => this.child.kill(), 500);
     await Promise.race([this.exited, new Promise((r) => setTimeout(r, 3000))]);
     clearTimeout(t);

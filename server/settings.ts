@@ -40,6 +40,21 @@ export interface Settings {
   modelList: { extra: string };
   /** Sessions handing tasks to separate sessions: limits for everyone. */
   delegation: { enabled: boolean; maxPerParent: number; maxPerUser: number; allowNested: boolean; nudgeThreshold: number };
+  /** Session control plane: concurrency caps, drain, SLA, TTL. */
+  controlPlane: {
+    /** Max top-level running sessions globally (0 = no cap). */
+    globalMax: number;
+    /** Max top-level running sessions per user (0 = no cap). Default 5. */
+    perUserMax: number;
+    /** Max top-level running sessions per project (0 = no cap). */
+    perProjectMax: number;
+    /** Minutes before an unanswered approval is flagged as overdue. Default 30. */
+    approvalSlaMinutes: number;
+    /** Days to keep work/<runId>/ folders for finished sessions. Default 30. */
+    worktreeTtlDays: number;
+    /** Seconds to wait for running iterations to finish on SIGTERM. Default 60. */
+    drainTimeoutSeconds: number;
+  };
 }
 
 const DEFAULTS: Settings = {
@@ -51,6 +66,14 @@ const DEFAULTS: Settings = {
   agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask' },
   delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
   modelList: { extra: '' },
+  controlPlane: {
+    globalMax: 0,
+    perUserMax: 5,
+    perProjectMax: 0,
+    approvalSlaMinutes: 30,
+    worktreeTtlDays: 30,
+    drainTimeoutSeconds: 60,
+  },
 };
 
 export const SECRET_NAMES = {
@@ -192,6 +215,22 @@ export function updateSettings(patch: any): Settings {
       nudgeThreshold: n(d.nudgeThreshold, 0, 20, 'Subagent advice threshold'),
     });
   }
+  if (patch.controlPlane) {
+    const cp = { ...cur.controlPlane, ...patch.controlPlane };
+    const n = (v: unknown, lo: number, hi: number, name: string) => {
+      const x = Number(v);
+      if (!Number.isInteger(x) || x < lo || x > hi) throw badRequest(`${name} must be a whole number from ${lo} to ${hi}`);
+      return x;
+    };
+    saveSection('controlPlane', {
+      globalMax: n(cp.globalMax, 0, 1000, 'Global session cap'),
+      perUserMax: n(cp.perUserMax, 0, 100, 'Per-user session cap'),
+      perProjectMax: n(cp.perProjectMax, 0, 100, 'Per-project session cap'),
+      approvalSlaMinutes: n(cp.approvalSlaMinutes, 0, 10080, 'Approval SLA minutes'),
+      worktreeTtlDays: n(cp.worktreeTtlDays, 1, 3650, 'Worktree retention days'),
+      drainTimeoutSeconds: n(cp.drainTimeoutSeconds, 5, 3600, 'Drain timeout seconds'),
+    });
+  }
   return getSettings();
 }
 
@@ -291,21 +330,57 @@ export async function githubToken(): Promise<string | null> {
   return getSecret(SECRET_NAMES.githubToken);
 }
 
-export function monthSpend(projectId?: string): number {
+export function monthSpend(projectId?: string, userId?: string): number {
   const since = monthStart();
-  const r = projectId
-    ? one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ? AND project_id = ?', since, projectId)
-    : one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ?', since);
+  if (projectId && userId) {
+    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ? AND project_id = ? AND created_by = ?', since, projectId, userId);
+    return r?.s ?? 0;
+  }
+  if (projectId) {
+    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ? AND project_id = ?', since, projectId);
+    return r?.s ?? 0;
+  }
+  if (userId) {
+    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ? AND created_by = ?', since, userId);
+    return r?.s ?? 0;
+  }
+  const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ?', since);
   return r?.s ?? 0;
 }
 
 /** Refuse new runs once the monthly dollar cap is used. Demo and Kiro CLI runs cost no dollars, so they are not capped. */
-export function assertBudget(mode: ProviderMode = getSettings().provider.mode): void {
+export function assertBudget(mode: ProviderMode = getSettings().provider.mode, userId?: string, projectId?: string): void {
   const s = getSettings();
   if (mode === 'demo' || mode === 'kiro') return;
+
+  // Portal-wide monthly cap
   const cap = s.budget.monthlyUsd;
   if (cap !== null && cap !== undefined && monthSpend() >= cap) {
     throw badRequest(`This month's budget of $${cap} is used up. An admin can raise it in Settings.`);
+  }
+
+  // Per-user monthly cap
+  if (userId) {
+    const userRow = one<{ monthly_budget_usd: number | null }>('SELECT monthly_budget_usd FROM users WHERE id = ?', userId);
+    const userCap = userRow?.monthly_budget_usd;
+    if (userCap !== null && userCap !== undefined) {
+      const userSpend = monthSpend(undefined, userId);
+      if (userSpend >= userCap) {
+        throw badRequest(`Your personal monthly budget of $${userCap} is used up. Contact an admin to raise it.`);
+      }
+    }
+  }
+
+  // Per-project monthly cap
+  if (projectId) {
+    const projRow = one<{ monthly_budget_usd: number | null }>('SELECT monthly_budget_usd FROM projects WHERE id = ?', projectId);
+    const projCap = projRow?.monthly_budget_usd;
+    if (projCap !== null && projCap !== undefined) {
+      const projSpend = monthSpend(projectId);
+      if (projSpend >= projCap) {
+        throw badRequest(`This project's monthly budget of $${projCap} is used up. Contact an admin to raise it.`);
+      }
+    }
   }
 }
 

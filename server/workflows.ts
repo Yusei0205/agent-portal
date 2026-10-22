@@ -20,7 +20,7 @@ import { checkKey, issueDetail, mustMapping } from './jira.ts';
 import { requireModel } from './models.ts';
 import { ticketMarkdown } from './jira-text.ts';
 import { getRun, isActive, startRun, stopRun } from './agent/runner.ts';
-import { badRequest, newId, notFound, now, parseJson, str } from './util.ts';
+import { badRequest, HttpError, newId, notFound, now, parseJson, str } from './util.ts';
 import { composeIterationPrompt, parseTrustedPush, parseStatus, safeBranchName, stagnated } from './guardrails.ts';
 import { leadChoices, resolveLead, type RunLead } from './kiro-agents.ts';
 import { claudeProvider, effectiveProvider, engineProvider } from './project-aws.ts';
@@ -31,6 +31,8 @@ import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspace
 import { readIntegrationIds } from './integrations.ts';
 import { getSettings } from './settings.ts';
 import { git, redact } from './git.ts';
+import { checkConcurrency, isDraining } from './control-plane.ts';
+import { audit, auditRaw } from './audit.ts';
 
 const OPEN = ['running'];
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
@@ -295,11 +297,41 @@ function overBudget(w: Row): string {
 }
 
 async function drive(id: string): Promise<void> {
-  let failures = 0;
+  // --- Restore durable loop state from the database ---
+  const savedState = one<Row>('SELECT * FROM loop_run_states WHERE workflow_id = ?', id);
+  let failures = savedState ? Number(savedState.failures) : 0;
   let ticketWarned = false;
   let leadWarned = false;
   let lastCheck: { command: string; ok: boolean; output: string } | null = null;
-  const summaries: string[] = [];
+  if (savedState?.last_check && savedState.last_check !== '{}' && savedState.last_check !== 'null') {
+    const parsed = parseJson<{ command?: string; ok?: boolean; output?: string } | null>(savedState.last_check, null);
+    if (parsed && parsed.command !== undefined) {
+      lastCheck = parsed as { command: string; ok: boolean; output: string };
+    }
+  }
+  const summaries: string[] = savedState?.summaries ? parseJson<string[]>(savedState.summaries, []) : [];
+
+  /** Write current loop state to the database (called at the start of every iteration). */
+  function persistLoopState(iteration: number): void {
+    const ts = now();
+    exec(
+      `INSERT INTO loop_run_states (workflow_id, iteration, failures, last_check, summaries, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(workflow_id) DO UPDATE SET
+         iteration = excluded.iteration,
+         failures  = excluded.failures,
+         last_check = excluded.last_check,
+         summaries = excluded.summaries,
+         updated_at = excluded.updated_at`,
+      id,
+      iteration,
+      failures,
+      JSON.stringify(lastCheck),   // null → 'null'; object → '{...}'
+      JSON.stringify(summaries.slice(-20)),
+      ts,
+    );
+  }
+
   for (;;) {
     let w = getWorkflow(id);
     if (w.status !== 'running') return;
@@ -321,6 +353,8 @@ async function drive(id: string): Promise<void> {
     // Instructions people sent since the last iteration.
     const pending = all<Row>('SELECT id, body FROM workflow_events WHERE workflow_id = ? AND kind = ? AND consumed = 0 ORDER BY id', id, 'human');
     const iteration = w.iteration + 1;
+    // Persist loop state before starting the iteration (checkpoint).
+    persistLoopState(iteration);
     const prompt = composeIterationPrompt({
       title: w.title,
       goal: w.goal,
@@ -517,6 +551,14 @@ async function drive(id: string): Promise<void> {
 /** Start the loop for a session unless one is already running in this process. */
 function kick(id: string): void {
   if (driving.has(id)) return;
+  // Don't start new iterations in drain mode.
+  if (isDraining()) {
+    const w = one<Row>('SELECT status FROM workflows WHERE id = ?', id);
+    if (w?.status === 'running') {
+      exec('UPDATE workflows SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?', 'paused', 'The server is shutting down. Resume to go on.', now(), id);
+    }
+    return;
+  }
   driving.set(id, { runId: null });
   drive(id)
     .catch((e) => {
@@ -530,12 +572,34 @@ function kick(id: string): void {
     .finally(() => driving.delete(id));
 }
 
+/** True if any session is actively running a drive() loop in this process. */
+export function anyDriving(): boolean {
+  return driving.size > 0;
+}
+
 const RESTART_REASON = 'The server restarted. Resume to go on.';
+const INTERRUPTED_REASON = 'Interrupted mid-iteration by a server restart.';
 
 /** After a restart nothing is driving any more: sessions that were running are paused. Returns their ids. */
 export function recoverWorkflows(): string[] {
   const ids = all<Row>("SELECT id FROM workflows WHERE status = 'running'").map((w) => String(w.id));
-  for (const id of ids) exec('UPDATE workflows SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?', 'paused', RESTART_REASON, now(), id);
+  for (const id of ids) {
+    // Check if this session was in the middle of an iteration when it was interrupted.
+    const savedState = one<Row>('SELECT iteration FROM loop_run_states WHERE workflow_id = ?', id);
+    const w = one<Row>('SELECT iteration FROM workflows WHERE id = ?', id);
+    const wasInIteration = savedState && w && Number(savedState.iteration) > Number(w.iteration);
+    const reason = wasInIteration ? INTERRUPTED_REASON : RESTART_REASON;
+    exec('UPDATE workflows SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?', 'paused', reason, now(), id);
+    // If it was interrupted mid-iteration, record the fact in workflow_events so the history is clear.
+    if (wasInIteration) {
+      exec(
+        "INSERT INTO workflow_events (workflow_id, kind, run_id, body, data, consumed, created_at) VALUES (?, 'status', NULL, ?, '{}', 0, ?)",
+        id,
+        `Iteration ${savedState.iteration} was interrupted by a server restart. It will run again from the last checkpoint when resumed.`,
+        now(),
+      );
+    }
+  }
   return ids;
 }
 
@@ -543,12 +607,15 @@ export function recoverWorkflows(): string[] {
  * Start again the sessions a restart paused (Settings › Agent defaults decides whether this happens). A session that
  * someone changed in the meantime, or that has used its budget, stays paused. Each continues where it was: the next
  * iteration resumes the conversation and the working copy of its last run, with its iteration count unchanged.
+ * The durable loop state (failures, summaries, lastCheck) is restored from loop_run_states.
  */
 export function resumeAfterRestart(ids: string[]): number {
   let n = 0;
   for (const id of ids) {
     const w = one<Row>('SELECT * FROM workflows WHERE id = ?', id);
-    if (!w || w.status !== 'paused' || w.stop_reason !== RESTART_REASON || overBudget(w)) continue;
+    if (!w || w.status !== 'paused') continue;
+    if (w.stop_reason !== RESTART_REASON && w.stop_reason !== INTERRUPTED_REASON) continue;
+    if (overBudget(w)) continue;
     patch(id, { status: 'running', stop_reason: '' });
     log(id, 'status', 'The server restarted; the session carries on by itself where it left off.');
     kick(id);
@@ -850,6 +917,11 @@ export function registerWorkflowRoutes(): void {
     if (!repoId && !workspace && !playground) {
       throw badRequest('Pick a repository or workspace, or start it as a playground with no repository.');
     }
+    // Concurrency cap: check before starting (not when start=false / paused).
+    if (body.start !== false) {
+      const concurrencyError = checkConcurrency(ctx.user!.id, project.id);
+      if (concurrencyError) throw new HttpError(429, concurrencyError);
+    }
     const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
     const leadAgent = checkLead(project, body.leadAgent, engine);
     const contextItems = readContextItems(body.context);
@@ -891,6 +963,7 @@ export function registerWorkflowRoutes(): void {
       exec('DELETE FROM workflows WHERE id = ?', id);
       throw e;
     }
+    audit(ctx, 'session.start', `workflow:${id}`, { projectId: project.id, title, start: body.start !== false });
     if (body.start !== false) kick(id);
     return { workflow: view(getWorkflow(id)) };
   });
@@ -1000,8 +1073,14 @@ export function registerWorkflowRoutes(): void {
     requireProject(ctx, w.project_id, 'editor');
     if (OPEN.includes(w.status) && driving.has(w.id)) return { workflow: view(w) };
     if (overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first.');
+    // Concurrency cap applies when resuming a paused top-level session.
+    if (!w.parent_id) {
+      const concurrencyError = checkConcurrency(ctx.user!.id, w.project_id);
+      if (concurrencyError) throw new HttpError(429, concurrencyError);
+    }
     patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0, pending_push: '' });
     log(w.id, 'status', 'Resumed');
+    audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id });
     kick(w.id);
     return { workflow: view(getWorkflow(w.id)) };
   });
@@ -1012,6 +1091,7 @@ export function registerWorkflowRoutes(): void {
     requireProject(ctx, w.project_id, 'editor');
     if (w.status !== 'running') throw badRequest('This session is not running');
     stopWith(w.id, 'paused', 'Paused after the current iteration.');
+    audit(ctx, 'session.pause', `workflow:${w.id}`, { projectId: w.project_id });
     return { workflow: view(getWorkflow(w.id)) };
   });
 
@@ -1022,6 +1102,7 @@ export function registerWorkflowRoutes(): void {
     stopWith(w.id, 'stopped', `Stopped by ${ctx.user!.name}.`);
     const runId = driving.get(w.id)?.runId ?? w.last_run_id;
     if (runId && isActive(runId)) stopRun(runId);
+    audit(ctx, 'session.stop', `workflow:${w.id}`, { projectId: w.project_id });
     return { workflow: view(getWorkflow(w.id)) };
   });
 

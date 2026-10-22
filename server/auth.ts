@@ -3,6 +3,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { all, insert, one, run, update } from './db.ts';
 import { get, post, patch, del, setCookie, type Ctx, type User } from './http.ts';
 import { HttpError, badRequest, newId, now, sha256, str } from './util.ts';
+import { audit } from './audit.ts';
 
 const COOKIE = 'portal_session';
 const SESSION_DAYS = 14;
@@ -87,6 +88,9 @@ function throttleKey(ctx: Ctx, email: string) {
   return `${ctx.ip}|${email}`;
 }
 
+// Rate-limit for /api/auth/setup: 3 attempts per IP per hour.
+const setupAttempts = new Map<string, { count: number; until: number }>();
+
 export function registerAuthRoutes(): void {
   get('/api/auth/state', (ctx) => ({ needsSetup: userCount() === 0, user: ctx.user }), { auth: 'public' });
 
@@ -95,10 +99,22 @@ export function registerAuthRoutes(): void {
   post(
     '/api/auth/setup',
     async (ctx) => {
+      // Rate-limit: 3 attempts per IP per hour
+      const ip = ctx.ip || 'unknown';
+      const sa = setupAttempts.get(ip);
+      if (sa && sa.count >= 3 && sa.until > Date.now()) {
+        throw new HttpError(429, 'Too many setup attempts. Try again in an hour.');
+      }
       if (userCount() > 0) throw new HttpError(409, 'Setup is already done. Sign in instead.');
+      // Record attempt before processing
+      const nextSa = { count: (sa && sa.until > Date.now() ? sa.count : 0) + 1, until: Date.now() + 3600_000 };
+      setupAttempts.set(ip, nextSa);
       const body = await ctx.json();
       const user = createUser({ email: body.email, name: body.name, password: body.password, isAdmin: true });
       startSession(ctx, user.id);
+      audit(ctx, 'auth.setup', `user:${user.id}`, { email: user.email });
+      // Clear the attempt counter on success
+      setupAttempts.delete(ip);
       return { user };
     },
     { auth: 'public' },
@@ -125,6 +141,7 @@ export function registerAuthRoutes(): void {
       }
       failures.delete(key);
       startSession(ctx, row.id);
+      audit(ctx, 'auth.login', `user:${row.id}`, { email });
       return { user: one('SELECT id, email, name, is_admin FROM users WHERE id = ?', row.id) };
     },
     { auth: 'public' },
@@ -136,6 +153,7 @@ export function registerAuthRoutes(): void {
       const m = (ctx.req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
       if (m) run('DELETE FROM sessions WHERE token_hash = ?', sha256(decodeURIComponent(m[1])));
       setCookie(ctx.res, COOKIE, '', { maxAge: 0, secure: ctx.secure });
+      if (ctx.user) audit(ctx, 'auth.logout', `user:${ctx.user.id}`, {});
       return { ok: true };
     },
     { auth: 'public' },
@@ -146,6 +164,7 @@ export function registerAuthRoutes(): void {
     const row = one<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = ?', ctx.user!.id)!;
     if (!verifyPassword(String(body.current || ''), row.password_hash)) throw badRequest('Current password is incorrect');
     update('users', ctx.user!.id, { password_hash: hashPassword(checkPassword(body.password)) });
+    audit(ctx, 'auth.password_change', `user:${ctx.user!.id}`, {});
     return { ok: true };
   });
 
@@ -160,7 +179,9 @@ export function registerAuthRoutes(): void {
     '/api/users',
     async (ctx) => {
       const body = await ctx.json();
-      return { user: createUser({ email: body.email, name: body.name, password: body.password, isAdmin: !!body.isAdmin }) };
+      const user = createUser({ email: body.email, name: body.name, password: body.password, isAdmin: !!body.isAdmin });
+      audit(ctx, 'user.create', `user:${user.id}`, { email: user.email, isAdmin: !!body.isAdmin });
+      return { user };
     },
     { auth: 'admin' },
   );
@@ -183,7 +204,22 @@ export function registerAuthRoutes(): void {
         if (body.disabled) run('DELETE FROM sessions WHERE user_id = ?', ctx.params.id);
       }
       if (body.password) p.password_hash = hashPassword(checkPassword(body.password));
+      // Per-user monthly budget ceiling (admin only)
+      if (body.monthlyBudgetUsd !== undefined) {
+        const v = body.monthlyBudgetUsd;
+        if (v !== null && (typeof v !== 'number' || v < 0 || v > 1_000_000)) throw badRequest('Budget must be a number of dollars, or null for no cap');
+        p.monthly_budget_usd = v ?? null;
+      }
       update('users', ctx.params.id, p);
+      const changes: Record<string, unknown> = {};
+      if (body.name !== undefined) changes.name = p.name;
+      if (body.isAdmin !== undefined) changes.isAdmin = body.isAdmin;
+      if (body.disabled !== undefined) {
+        changes.disabled = body.disabled;
+        audit(ctx, body.disabled ? 'user.disable' : 'user.enable', `user:${ctx.params.id}`, changes);
+      } else {
+        audit(ctx, 'user.update', `user:${ctx.params.id}`, changes);
+      }
       return { ok: true };
     },
     { auth: 'admin' },
@@ -193,7 +229,9 @@ export function registerAuthRoutes(): void {
     '/api/users/:id',
     (ctx) => {
       if (ctx.params.id === ctx.user!.id) throw badRequest('You cannot delete your own account');
+      const target = one<{ email: string }>('SELECT email FROM users WHERE id = ?', ctx.params.id);
       run('DELETE FROM users WHERE id = ?', ctx.params.id);
+      audit(ctx, 'user.delete', `user:${ctx.params.id}`, { email: target?.email ?? '' });
       return { ok: true };
     },
     { auth: 'admin' },

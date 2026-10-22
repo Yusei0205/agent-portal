@@ -3,10 +3,10 @@ import { config, ensureDataDirs } from './config.ts';
 import { openDb, closeDb } from './db.ts';
 import { createHandler } from './http.ts';
 import { authenticate, cleanupSessions, createUser, registerAuthRoutes, userCount } from './auth.ts';
-import { registerSettingsRoutes } from './settings.ts';
+import { registerSettingsRoutes, getSettings } from './settings.ts';
 import { registerModelRoutes } from './models.ts';
 import { registerSsoRoutes } from './sso.ts';
-import { registerProjectRoutes } from './projects.ts';
+import { registerProjectRoutes, getProject, projectDir } from './projects.ts';
 import { registerRepoRoutes } from './repos.ts';
 import { registerGitConnectionRoutes } from './git-connections.ts';
 import { registerWorkspaceRoutes } from './workspaces.ts';
@@ -25,10 +25,11 @@ import { registerLearnRoutes } from './learn.ts';
 import { registerJiraRoutes } from './jira.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
-import { recoverWorkflows, registerWorkflowRoutes, resumeAfterRestart } from './workflows.ts';
-import { getSettings } from './settings.ts';
-import { registerInsightsRoutes } from './insights.ts';
+import { recoverWorkflows, registerWorkflowRoutes, resumeAfterRestart, anyDriving } from './workflows.ts';
 import { recoverRuns } from './agent/runner.ts';
+import { registerInsightsRoutes } from './insights.ts';
+import { registerAuditRoutes } from './audit.ts';
+import { registerControlPlaneRoutes, startDrain, checkApprovalSla, cleanupWorktrees } from './control-plane.ts';
 
 let routesRegistered = false;
 
@@ -61,6 +62,8 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerAwsAccountRoutes();
     registerWorkflowRoutes();
     registerInsightsRoutes();
+    registerAuditRoutes();
+    registerControlPlaneRoutes();
     routesRegistered = true;
   }
   recoverRuns();
@@ -94,10 +97,37 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   console.log(`Agent Portal is running at ${shown}`);
   console.log(`Data folder: ${config.dataDir}`);
   if (userCount() === 0) console.log('Open the address above to create the first admin account.');
-  const timer = setInterval(cleanupSessions, 6 * 3600_000);
-  timer.unref();
+
+  // Periodic jobs
+  const sessionCleanupTimer = setInterval(cleanupSessions, 6 * 3600_000);
+  sessionCleanupTimer.unref();
+
+  // Approval SLA checker: runs every minute
+  const slaTimer = setInterval(() => {
+    const slaMinutes = getSettings().controlPlane?.approvalSlaMinutes ?? 30;
+    checkApprovalSla(slaMinutes);
+  }, 60_000);
+  slaTimer.unref();
+
+  // Worktree TTL cleanup: runs once a day
+  const cleanupTimer = setInterval(async () => {
+    const ttlDays = getSettings().controlPlane?.worktreeTtlDays ?? 30;
+    const getDir = (pid: string) => {
+      try {
+        return projectDir(getProject(pid));
+      } catch { return null; }
+    };
+    const result = await cleanupWorktrees(getDir, ttlDays).catch((e: unknown) => (console.error('[cleanup]', e), { deleted: 0, skipped: 0 }));
+    if (result.deleted || result.skipped) {
+      console.log(`[cleanup] Worktrees: ${result.deleted} removed, ${result.skipped} skipped (uncommitted changes or errors)`);
+    }
+  }, 24 * 3600_000);
+  cleanupTimer.unref();
+
   server.on('close', () => {
-    clearInterval(timer);
+    clearInterval(sessionCleanupTimer);
+    clearInterval(slaTimer);
+    clearInterval(cleanupTimer);
     closeDb();
   });
   return server;
@@ -106,13 +136,22 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
 const isMain = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('server.mjs') || process.argv[1]?.endsWith('index.ts');
 if (isMain && !process.env.PORTAL_NO_AUTOSTART) {
   startServer().then((server) => {
-    const stop = () => {
-      console.log('Shutting down…');
-      server.close();
-      setTimeout(() => process.exit(0), 2000).unref();
+    const stop = async (signal: string) => {
+      console.log(`[${signal}] Graceful shutdown starting…`);
+      const drainTimeout = (getSettings().controlPlane?.drainTimeoutSeconds ?? 60) * 1000;
+      // Enter drain mode: stop accepting new sessions/iterations.
+      await startDrain(drainTimeout, anyDriving);
+      console.log('[drain] All active sessions finished or timed out. Closing server.');
+      server.closeAllConnections?.();
+      server.close(() => {
+        console.log('[drain] Server closed.');
+        setTimeout(() => process.exit(0), 500).unref();
+      });
+      // Hard timeout in case server.close() hangs.
+      setTimeout(() => process.exit(0), drainTimeout + 5000).unref();
     };
-    process.on('SIGINT', stop);
-    process.on('SIGTERM', stop);
+    process.on('SIGINT', () => stop('SIGINT').catch(console.error));
+    process.on('SIGTERM', () => stop('SIGTERM').catch(console.error));
   }).catch((e) => {
     console.error(e);
     process.exit(1);

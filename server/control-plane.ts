@@ -1,0 +1,381 @@
+/**
+ * Session control plane — concurrency caps, graceful drain, queue management,
+ * worktree TTL cleanup, approval SLA, and the status API.
+ *
+ * This module owns the shared mutable state for cap enforcement and drain mode.
+ * It is imported by workflows.ts (to gate new sessions) and by index.ts
+ * (to initiate SIGTERM drain and the periodic cleanup job).
+ */
+import path from 'node:path';
+import fs from 'node:fs';
+import { all, one, run as exec, type Row } from './db.ts';
+import { get, post } from './http.ts';
+import { now } from './util.ts';
+import { publish, projectChannel } from './events.ts';
+import { getSettings } from './settings.ts';
+
+/* ------------------------------------------------------------------ */
+/* Drain state                                                          */
+/* ------------------------------------------------------------------ */
+
+let draining = false;
+let drainStart = 0;
+
+/** True while the server is draining (accepting no new runs/sessions/iterations). */
+export function isDraining(): boolean {
+  return draining;
+}
+
+/**
+ * Enter drain mode: stop accepting new runs/sessions/iterations.
+ * Running iterations are allowed to finish up to timeoutMs.
+ * Returns a promise that resolves when all active sessions have stopped
+ * or the timeout expires (whichever comes first).
+ */
+export function startDrain(timeoutMs: number, checkRunning: () => boolean): Promise<void> {
+  if (draining) return Promise.resolve();
+  draining = true;
+  drainStart = Date.now();
+  console.log('[drain] Drain mode started; waiting up to', Math.round(timeoutMs / 1000), 's for running sessions to finish.');
+  return new Promise<void>((resolve) => {
+    const check = () => {
+      if (!checkRunning() || Date.now() - drainStart >= timeoutMs) {
+        resolve();
+        return;
+      }
+      setTimeout(check, 500).unref();
+    };
+    check();
+  });
+}
+
+export function stopDrain(): void {
+  draining = false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Concurrency cap helpers                                              */
+/* ------------------------------------------------------------------ */
+
+export interface ConcurrencyCaps {
+  /** Max top-level running sessions across all users (0 = no cap). */
+  globalMax: number;
+  /** Max top-level running sessions per user (0 = no cap). */
+  perUserMax: number;
+  /** Max top-level running sessions per project (0 = no cap). */
+  perProjectMax: number;
+}
+
+const DEFAULT_CAPS: ConcurrencyCaps = {
+  globalMax: 0,
+  perUserMax: 5,
+  perProjectMax: 0,
+};
+
+export function getCaps(): ConcurrencyCaps {
+  const s = getSettings();
+  const cp = s.controlPlane ?? {};
+  return {
+    globalMax: Number(cp.globalMax ?? DEFAULT_CAPS.globalMax),
+    perUserMax: Number(cp.perUserMax ?? DEFAULT_CAPS.perUserMax),
+    perProjectMax: Number(cp.perProjectMax ?? DEFAULT_CAPS.perProjectMax),
+  };
+}
+
+/** Count top-level running sessions (depth = 0, status = running). */
+function countRunning(filter?: { userId?: string; projectId?: string }): number {
+  const conditions: string[] = ["status = 'running'", "depth = 0"];
+  const params: string[] = [];
+  if (filter?.userId) { conditions.push('created_by = ?'); params.push(filter.userId); }
+  if (filter?.projectId) { conditions.push('project_id = ?'); params.push(filter.projectId); }
+  return Number(one<{ n: number }>(`SELECT COUNT(*) AS n FROM workflows WHERE ${conditions.join(' AND ')}`, ...params)?.n ?? 0);
+}
+
+/** Total top-level running sessions. */
+export function runningCount(): number {
+  return countRunning();
+}
+
+/**
+ * Check whether a new top-level session can start.
+ * Returns null if it can, or an error message if it cannot.
+ */
+export function checkConcurrency(userId: string, projectId: string): string | null {
+  const caps = getCaps();
+
+  if (isDraining()) {
+    return 'The server is restarting soon. New sessions are paused. Please try again in a moment.';
+  }
+
+  if (caps.globalMax > 0 && countRunning() >= caps.globalMax) {
+    return `The portal already has ${caps.globalMax} sessions running. Stop one to start another.`;
+  }
+
+  if (caps.perUserMax > 0 && countRunning({ userId }) >= caps.perUserMax) {
+    return `You already have ${caps.perUserMax} sessions running. Stop one to start another.`;
+  }
+
+  if (caps.perProjectMax > 0 && countRunning({ projectId }) >= caps.perProjectMax) {
+    return `This project already has ${caps.perProjectMax} sessions running. Stop one to start another.`;
+  }
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Worktree TTL cleanup                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Remove `work/<runId>/` folders for finished sessions that are older than
+ * `ttlDays`. Never deletes folders with uncommitted changes; flags them instead.
+ *
+ * Returns { deleted, skipped } counts.
+ */
+export async function cleanupWorktrees(
+  getProjectDir: (projectId: string) => string | null,
+  ttlDays: number,
+): Promise<{ deleted: number; skipped: number }> {
+  const cutoff = new Date(Date.now() - ttlDays * 86_400_000).toISOString();
+
+  // Finished sessions older than the cutoff
+  const finished = all<Row>(
+    `SELECT w.id AS wid, w.project_id,
+            r.id AS run_id, r.worktree, r.meta, r.finished_at
+       FROM workflows w
+       LEFT JOIN runs r ON r.id = w.last_run_id
+      WHERE w.status IN ('done','stopped','failed')
+        AND w.updated_at < ?`,
+    cutoff,
+  );
+
+  let deleted = 0;
+  let skipped = 0;
+
+  for (const row of finished) {
+    const pdir = getProjectDir(row.project_id);
+    if (!pdir) continue;
+
+    // Collect the work directory for this session's last run.
+    let workDir: string | null = null;
+    if (row.meta) {
+      try {
+        const m = JSON.parse(row.meta);
+        if (m.workDir) workDir = path.join(pdir, m.workDir);
+      } catch { /* ignore */ }
+    }
+    if (!workDir) continue;
+    if (!fs.existsSync(workDir)) continue;
+
+    // Check for uncommitted changes in any git repo inside the work dir.
+    let hasUncommitted = false;
+    try {
+      const entries = fs.readdirSync(workDir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const sub = path.join(workDir, e.name);
+        const gitDir = path.join(sub, '.git');
+        if (!fs.existsSync(gitDir)) continue;
+        const { execFileSync } = await import('node:child_process');
+        try {
+          const out = execFileSync('git', ['-C', sub, 'status', '--porcelain'], {
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 5000,
+          });
+          if (out.toString().trim().length > 0) {
+            hasUncommitted = true;
+            break;
+          }
+        } catch { /* git not available or not a repo — treat as clean */ }
+      }
+    } catch { /* can't read dir, skip */ }
+
+    if (hasUncommitted) {
+      // Flag with a workflow event instead of deleting.
+      skipped++;
+      const flagged = one<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM workflow_events WHERE workflow_id = ? AND kind = 'worktree_dirty'",
+        row.wid,
+      )?.n ?? 0;
+      if (!flagged) {
+        exec(
+          "INSERT INTO workflow_events (workflow_id, kind, run_id, body, data, consumed, created_at) VALUES (?, 'worktree_dirty', ?, ?, ?, 0, ?)",
+          row.wid,
+          row.run_id ?? null,
+          'This session has uncommitted changes in its working copy. Review and push or discard them before the folder is cleaned up.',
+          JSON.stringify({ workDir: path.relative(pdir, workDir).replace(/\\/g, '/'), flagged: true }),
+          now(),
+        );
+        publish(projectChannel(row.project_id), 'workflow.updated', { id: row.wid });
+      }
+      continue;
+    }
+
+    // Safe to delete.
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      deleted++;
+    } catch (e) {
+      console.error('[cleanup] Could not remove', workDir, e);
+      skipped++;
+    }
+  }
+
+  return { deleted, skipped };
+}
+
+/* ------------------------------------------------------------------ */
+/* Approval SLA                                                        */
+/* ------------------------------------------------------------------ */
+
+/** Check for overdue pending inputs and publish events. Called periodically. */
+export function checkApprovalSla(slaMinutes: number): void {
+  if (slaMinutes <= 0) return;
+  const cutoff = new Date(Date.now() - slaMinutes * 60_000).toISOString();
+
+  // Find inputs that have been pending longer than the SLA and haven't been escalated yet
+  const overdue = all<Row>(
+    `SELECT i.id, i.project_id, i.run_id, i.type, i.tool_name,
+            i.created_at, i.expires_at, i.escalated_at
+       FROM inputs i
+      WHERE i.status = 'pending'
+        AND i.created_at < ?
+        AND i.escalated_at IS NULL`,
+    cutoff,
+  );
+
+  for (const inp of overdue) {
+    // Mark as escalated
+    exec(
+      'UPDATE inputs SET escalated_at = ? WHERE id = ?',
+      now(),
+      inp.id,
+    );
+    // Publish an input.overdue event
+    publish(projectChannel(inp.project_id), 'input.overdue', {
+      id: inp.id,
+      project_id: inp.project_id,
+      run_id: inp.run_id,
+      type: inp.type,
+      tool_name: inp.tool_name,
+      created_at: inp.created_at,
+      overdue_since: cutoff,
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Budget threshold events                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Publish budget.threshold events (80 % and 100 %) to the project SSE channel.
+ * Called after each completed run to check if any threshold was just crossed.
+ */
+export function checkBudgetThresholds(opts: {
+  projectId: string | null;
+  userId: string | null;
+  newSpendUsd: number;
+  projectBudgetUsd: number | null;
+  userBudgetUsd: number | null;
+  userMonthSpendUsd: number;
+  projectMonthSpendUsd: number;
+}): void {
+  const thresholds = [0.8, 1.0];
+
+  if (opts.projectBudgetUsd && opts.projectBudgetUsd > 0 && opts.projectId) {
+    for (const t of thresholds) {
+      const prevSpend = Math.max(0, opts.projectMonthSpendUsd - opts.newSpendUsd);
+      const prev = prevSpend / opts.projectBudgetUsd;
+      const cur = opts.projectMonthSpendUsd / opts.projectBudgetUsd;
+      if (prev < t && cur >= t) {
+        publish(projectChannel(opts.projectId), 'budget.threshold', {
+          kind: 'project',
+          project_id: opts.projectId,
+          threshold: t,
+          spent_usd: opts.projectMonthSpendUsd,
+          budget_usd: opts.projectBudgetUsd,
+        });
+      }
+    }
+  }
+
+  if (opts.userBudgetUsd && opts.userBudgetUsd > 0 && opts.userId && opts.projectId) {
+    for (const t of thresholds) {
+      const prevSpend = Math.max(0, opts.userMonthSpendUsd - opts.newSpendUsd);
+      const prev = prevSpend / opts.userBudgetUsd;
+      const cur = opts.userMonthSpendUsd / opts.userBudgetUsd;
+      if (prev < t && cur >= t) {
+        publish(projectChannel(opts.projectId), 'budget.threshold', {
+          kind: 'user',
+          user_id: opts.userId,
+          threshold: t,
+          spent_usd: opts.userMonthSpendUsd,
+          budget_usd: opts.userBudgetUsd,
+        });
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Status API                                                          */
+/* ------------------------------------------------------------------ */
+
+export function registerControlPlaneRoutes(): void {
+  /** Admin status endpoint — queue depth, running counts, drain state, caps. */
+  get('/api/admin/control-plane', (_ctx) => {
+    const caps = getCaps();
+
+    const running = countRunning();
+    const queued = Number(
+      one<{ n: number }>("SELECT COUNT(*) AS n FROM workflows WHERE status = 'queued'")?.n ?? 0,
+    );
+    const waitingApprovals = Number(
+      one<{ n: number }>("SELECT COUNT(*) AS n FROM inputs WHERE status = 'pending'")?.n ?? 0,
+    );
+
+    return {
+      drain: {
+        active: draining,
+        startedAt: draining ? new Date(drainStart).toISOString() : null,
+      },
+      sessions: {
+        running,
+        queued,
+      },
+      approvals: {
+        pending: waitingApprovals,
+      },
+      caps,
+    };
+  }, { auth: 'admin' });
+
+  /** Admin endpoint to toggle drain mode. */
+  post('/api/admin/drain', async (ctx) => {
+    const body = await ctx.json<{ enable: boolean }>();
+    if (body.enable) {
+      if (!draining) {
+        draining = true;
+        drainStart = Date.now();
+      }
+    } else {
+      draining = false;
+    }
+    return { drain: { active: draining, startedAt: draining ? new Date(drainStart).toISOString() : null } };
+  }, { auth: 'admin' });
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-user monthly budget spend helper                               */
+/* ------------------------------------------------------------------ */
+
+export function userMonthSpend(userId: string): number {
+  const d = new Date();
+  const since = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+  const r = one<{ s: number }>(
+    'SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_by = ? AND created_at >= ?',
+    userId, since,
+  );
+  return r?.s ?? 0;
+}

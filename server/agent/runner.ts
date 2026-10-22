@@ -748,6 +748,30 @@ export function stopRun(runId: string): boolean {
   return true;
 }
 
+/**
+ * Kill a process tree for a given PID.
+ * On Windows: taskkill /T /F. On other platforms: SIGTERM to process group.
+ * Used by the Kiro runner (see kiro.ts), exported here for any caller that needs it.
+ */
+export function killProcessTree(pid: number): void {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      // Lazy import via the module already in scope (we already import from node:child_process elsewhere in the file)
+      // spawn is imported at the top of the runner via the SDK path — re-use it.
+      import('node:child_process').then(({ spawn: spawnCp }) => {
+        spawnCp('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', detached: true }).unref();
+      }).catch(() => {});
+    } else {
+      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* ok */ } }
+      setTimeout(() => {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* ok */ }
+        try { process.kill(pid, 'SIGKILL'); } catch { /* ok */ }
+      }, 2000).unref();
+    }
+  } catch { /* process already gone */ }
+}
+
 export function isActive(runId: string): boolean {
   return active.has(runId);
 }

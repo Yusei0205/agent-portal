@@ -464,6 +464,37 @@ const MIGRATIONS: string[] = [
   // Project defaults for new sessions and runs: the lead agent and the model they start with ('' = none).
   `ALTER TABLE projects ADD COLUMN default_lead_agent TEXT NOT NULL DEFAULT '';
   ALTER TABLE projects ADD COLUMN default_model TEXT NOT NULL DEFAULT '';`,
+  // Stage 1: Audit log (OWASP ASVS 7.2), per-user/project budget ceilings, approval SLA columns.
+  `CREATE TABLE IF NOT EXISTS audit_log (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       TEXT NOT NULL,
+    actor_id TEXT,
+    action   TEXT NOT NULL,
+    target   TEXT,
+    detail   TEXT NOT NULL DEFAULT '{}',
+    ip       TEXT
+  );
+  CREATE INDEX IF NOT EXISTS audit_log_ts    ON audit_log(ts);
+  CREATE INDEX IF NOT EXISTS audit_log_actor ON audit_log(actor_id, ts);
+  ALTER TABLE users    ADD COLUMN monthly_budget_usd REAL;
+  ALTER TABLE projects ADD COLUMN monthly_budget_usd REAL;
+  ALTER TABLE inputs ADD COLUMN expires_at   TEXT;
+  ALTER TABLE inputs ADD COLUMN escalated_at TEXT;`,
+  // Stage 1: Durable loop state — persisted per session so restarts do not reset the stagnation window.
+  `CREATE TABLE IF NOT EXISTS loop_run_states (
+    workflow_id   TEXT PRIMARY KEY REFERENCES workflows(id) ON DELETE CASCADE,
+    iteration     INTEGER NOT NULL DEFAULT 0,
+    failures      INTEGER NOT NULL DEFAULT 0,
+    last_check    TEXT NOT NULL DEFAULT 'null',
+    summaries     TEXT NOT NULL DEFAULT '[]',
+    spec_snapshot TEXT NOT NULL DEFAULT '{}',
+    worktree_path TEXT,
+    updated_at    TEXT NOT NULL
+  );`,
+  // Stage 1: Session lease / heartbeat columns to support multi-instance recovery.
+  `ALTER TABLE workflows ADD COLUMN locked_by    TEXT;
+  ALTER TABLE workflows ADD COLUMN locked_until TEXT;
+  ALTER TABLE workflows ADD COLUMN heartbeat_at TEXT;`,
 ];
 
 let db: DatabaseSync | null = null;
