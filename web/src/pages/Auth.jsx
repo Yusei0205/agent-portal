@@ -180,8 +180,8 @@ export function AcceptInvite({ token, onDone }) {
     <AuthFrame
       title={preview.newUser ? 'Create your account' : 'Accept invitation'}
       intro={preview.newUser
-        ? `You've been invited to Agent Portal${preview.project ? ` — ${preview.project}` : ''}. Create your account to join.`
-        : `Accept the invitation${preview.project ? ` to ${preview.project}` : ''}.`}
+        ? `You've been invited to Agent Portal${preview.project_name ? ` — ${preview.project_name}` : ''}. Create your account to join.`
+        : `Accept the invitation${preview.project_name ? ` to ${preview.project_name}` : ''}.`}
     >
       <form onSubmit={submit} className="stack">
         {preview.newUser ? (

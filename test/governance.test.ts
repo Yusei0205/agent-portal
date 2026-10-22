@@ -276,6 +276,13 @@ describe('invitations', () => {
     const r = await admin.req('GET', `/api/invitations/accept/${inv.token}`);
     assert.equal(r.status, 200);
     assert.equal(r.data.email, 'preview@example.com');
+    // Signed in: links to the current account.
+    assert.equal(r.data.newUser, false);
+    assert.ok(r.data.signedInEmail);
+    // Signed out: the form creates an account.
+    const anon = await new Client(srv.base).req('GET', `/api/invitations/accept/${inv.token}`);
+    assert.equal(anon.data.newUser, true);
+    assert.equal(anon.data.signedInEmail, null);
   });
 
   test('accept invitation creates a new user', async () => {

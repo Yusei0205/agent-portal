@@ -6001,34 +6001,21 @@ html[data-theme='hud'] .ins-hbar-fill {
   }
 }
 
-/* HIGH-1: Tab bar horizontal scroll with fade affordance */
-.tabs {
-  position: relative;
-}
-.tabs::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 1px; /* sits above the border-bottom */
-  width: 32px;
-  background: linear-gradient(to right, transparent, var(--canvas));
-  pointer-events: none;
-  /* only show when scrollable — JS-free approach: always show, minimal visual noise */
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-/* Show the fade when there is horizontal overflow */
+/* HIGH-1: Tab bar scrolls horizontally on narrow screens, with a thin visible scrollbar so the hidden tabs are discoverable. */
 @media (max-width: 760px) {
   .tabs {
+    overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent, #3ad1e6) transparent;
+    padding-bottom: 4px;
   }
   .tabs::-webkit-scrollbar {
-    display: none;
+    height: 4px;
   }
-  .tabs::after {
-    opacity: 1;
+  .tabs::-webkit-scrollbar-thumb {
+    background: var(--accent, #3ad1e6);
+    border-radius: 2px;
   }
 }
 

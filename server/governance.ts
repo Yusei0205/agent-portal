@@ -685,6 +685,9 @@ export function registerGovernanceRoutes(): void {
       team_id: row.team_id,
       team_name: teamName,
       expires_at: row.expires_at,
+      // Signed out: the accept form creates an account. Signed in: it links the invite to that account.
+      newUser: !ctx.user,
+      signedInEmail: ctx.user?.email ?? null,
     };
   }, { auth: 'public' });
 
