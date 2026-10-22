@@ -26,29 +26,16 @@ function check(cond: unknown, msg: string) {
 }
 
 /**
- * Open a rail group (e.g. 'Project setup') only when the submenu is not already
- * showing. When the submenu is visible the group button is behind an inert panel
- * and cannot be interacted with — we simply skip the click.
+ * Make sure a rail group (e.g. 'Portal') is expanded. Groups expand in place, so this only clicks when it is closed.
  */
 async function openRailGroup(page: Page, name: string | RegExp) {
-  const backBtn = page.getByRole('button', { name: 'Back', exact: true });
-  // If the Back button is already visible the submenu is open; nothing to do.
-  if (await backBtn.isVisible()) return;
-  await page.getByRole('button', { name }).click();
+  const btn = page.locator('.rail-group-btn', { hasText: name }).first();
+  if (!(await btn.count())) return;
+  if ((await btn.getAttribute('aria-expanded')) !== 'true') await btn.click();
 }
 
-/**
- * Close the currently-open rail submenu by clicking the Back button,
- * then wait for the main panel to become interactive again.
- * Call this before targeting a main-menu item (Sessions, Knowledge, etc.)
- * after navigating through a submenu.
- */
-async function closeRailGroup(page: Page) {
-  const backBtn = page.getByRole('button', { name: 'Back', exact: true });
-  if (await backBtn.isVisible()) {
-    await backBtn.click();
-  }
-}
+/** Nothing to close any more: groups expand in place and never hide the rest of the menu. */
+async function closeRailGroup(_page: Page) {}
 
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-ui-'));

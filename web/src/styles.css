@@ -234,7 +234,9 @@ code {
 .rail-nav-wrap {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  /* The menu scrolls when an expanded group makes it taller than the screen. */
+  overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
 }
 
@@ -6132,5 +6134,30 @@ html[data-theme='hud'] .sheet-backdrop {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+}
+
+/* Rail: the Portal group expands in place under its heading. */
+.rail-group-chevron {
+  transition: transform 0.15s ease;
+}
+.rail-group-chevron.is-rotated {
+  transform: rotate(90deg);
+}
+.rail-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px;
+  border-left: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+  margin-left: 18px;
+}
+.rail-link.rail-link-nested {
+  padding-left: 12px;
+  font-size: 0.95em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-group-chevron {
+    transition: none;
   }
 }
