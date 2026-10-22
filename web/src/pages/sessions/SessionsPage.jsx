@@ -6,6 +6,7 @@ import { Empty } from '../../components/ui.jsx';
 import { SessionList } from './SessionList.jsx';
 import { SessionWorkspace } from './SessionWorkspace.jsx';
 import { NewSessionDialog } from './NewSessionDialog.jsx';
+import { LoopSpecs } from '../LoopSpecs.jsx';
 
 /**
  * Sessions: the one place to start agent work and watch it.
@@ -13,18 +14,31 @@ import { NewSessionDialog } from './NewSessionDialog.jsx';
  *   sessions/new?jiraKey=…    list with the New dialog open
  *   sessions/<workflowId>     one session (?tab=live|changes|history|settings, ?run=<runId>)
  *   sessions/run/<runId>      one single run (agent tests, ticket analyses, reviews, single runs)
+ *   sessions?tab=specs        loop specs library
  */
 export function Sessions({ route }) {
   const { project, canEdit } = useProject();
   const [first, second] = route.rest;
   const isRun = first === 'run' && second;
   const isNew = first === 'new';
+  const isSpecs = !first && route.query.get('tab') === 'specs';
   const workflowId = first && !isRun && !isNew ? first : null;
   const [view, setView] = useState(isRun ? 'runs' : 'sessions');
   useEffect(() => {
     if (isRun) setView('runs');
     else if (workflowId) setView('sessions');
   }, [isRun, workflowId]);
+
+  // Loop specs tab takes over the full page
+  if (isSpecs) {
+    return (
+      <div className="ws-page">
+        <section className="ws-main">
+          <LoopSpecs />
+        </section>
+      </div>
+    );
+  }
 
   let detail;
   if (isRun) {
@@ -43,9 +57,14 @@ export function Sessions({ route }) {
           title="Pick a session to follow it"
           action={
             canEdit ? (
-              <a className="btn btn-primary" href={href(project.id, 'sessions', 'new')}>
-                Start agent work
-              </a>
+              <div className="row tight">
+                <a className="btn btn-primary" href={href(project.id, 'sessions', 'new')}>
+                  Start agent work
+                </a>
+                <a className="btn btn-ghost" href={`${href(project.id, 'sessions')}?tab=specs`}>
+                  Loop specs
+                </a>
+              </div>
             ) : null
           }
         >

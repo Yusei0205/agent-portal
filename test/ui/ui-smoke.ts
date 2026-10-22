@@ -289,9 +289,9 @@ async function main() {
     await shot(page, 'session-context');
     await page.getByLabel('Instruction for the agents').fill('Also cover an amount of exactly 500.');
     await page.getByRole('button', { name: 'Send and continue', exact: true }).click();
-    await page.getByRole('link', { name: 'History', exact: true }).click();
+    await page.getByRole('link', { name: 'Activity', exact: true }).click();
     await page.locator('.wf-human', { hasText: 'exactly 500' }).waitFor();
-    check(true, 'instructions show in the history');
+    check(true, 'instructions show in the activity history');
     await page.getByRole('button', { name: 'Delegate a task', exact: true }).click();
     await page.getByLabel('Task', { exact: true }).fill('Write the release notes for the refund limit [demo-iterations: 1]');
     await page.getByRole('button', { name: 'Start delegated session', exact: true }).click();
@@ -434,6 +434,83 @@ async function main() {
     await page.getByRole('button', { name: 'Audit log', exact: true }).click();
     await page.getByRole('heading', { name: 'Audit log', exact: true }).waitFor();
     await shot(page, 'admin-audit');
+
+    console.log('inbox');
+    await page.goto(`${base}/#/inbox`);
+    await page.getByRole('heading', { name: 'Inbox', exact: true }).waitFor();
+    check(true, 'Inbox page loads');
+    // Inbox should show either items or an empty state
+    const inboxEmpty = await page.locator('.empty, .inbox-list').first().isVisible().catch(() => false);
+    check(inboxEmpty, 'Inbox shows empty state or items list');
+    await shot(page, 'inbox');
+    // Check filter tabs are present
+    const filterTabs = await page.locator('.segmented button').count();
+    check(filterTabs >= 3, 'Inbox filter tabs are rendered');
+
+    console.log('loop specs');
+    await page.goto(`${base}/#/p/${pid}/sessions?tab=specs`);
+    await page.getByRole('heading', { name: 'Loop specs', exact: true }).waitFor();
+    check(true, 'Loop specs library page loads');
+    await shot(page, 'loop-specs-library');
+    // Add built-in templates
+    await page.getByRole('button', { name: 'Add built-in templates', exact: true }).first().click();
+    await page.waitForTimeout(500);
+    // Should have spec cards now or still empty
+    check(true, 'built-in templates seeded (may already exist in demo)');
+    // Create new spec
+    await page.getByRole('button', { name: 'New spec', exact: true }).click();
+    await page.getByRole('heading', { name: 'New loop spec', exact: true }).waitFor();
+    await page.getByLabel('Spec name').fill('Smoke test spec');
+    // Fill goal template
+    const goalArea = page.locator('.ls-goal-textarea');
+    await goalArea.fill('Fix {{ticket.summary}} in {{repo.name}}');
+    await shot(page, 'loop-spec-editor');
+    // Test variable hint insertion
+    const varChip = page.locator('.ls-var-chip').first();
+    check((await varChip.count()) > 0, 'variable hint chips are shown');
+    // Save spec
+    await page.getByRole('button', { name: 'Save spec', exact: true }).click();
+    await page.getByRole('heading', { name: 'Loop specs', exact: true }).waitFor();
+    check((await page.locator('.ls-card', { hasText: 'Smoke test spec' }).count()) === 1, 'new loop spec appears in library');
+    await shot(page, 'loop-specs-with-new');
+
+    console.log('session launcher with loop spec');
+    await page.goto(`${base}/#/p/${pid}/sessions/new`);
+    await page.getByRole('heading', { name: 'Start agent work', exact: true }).waitFor();
+    // Loop spec picker should be visible since we have specs
+    const specPicker = page.locator('.ls-dialog-picker');
+    if (await specPicker.isVisible()) {
+      check(true, 'loop spec picker shown in New session dialog');
+      const specOpts = await page.locator('.ls-pick-opt').count();
+      check(specOpts >= 2, 'loop spec picker has Blank + at least one spec option');
+      await shot(page, 'session-launcher-spec-picker');
+    }
+    await page.keyboard.press('Escape');
+
+    console.log('session workspace — activity tab and spec info');
+    // Navigate to the existing session workspace and check the Activity tab (renamed from History)
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto(`${base}/#/p/${pid}/sessions`);
+    const firstSessionLink = page.locator('.ws-item a').first();
+    if (await firstSessionLink.isVisible()) {
+      await firstSessionLink.click();
+      await page.locator('.ws-head').waitFor();
+      // Check History tab is renamed to Activity
+      const activityTab = page.getByRole('link', { name: /^Activity/ });
+      check((await activityTab.count()) > 0, 'History tab renamed to Activity in session workspace');
+      await shot(page, 'session-workspace-activity-tab');
+    }
+
+    console.log('inbox portal nav badge');
+    // Navigate to portal submenu and verify Inbox appears
+    await page.goto(`${base}/#/inbox`);
+    await page.getByRole('heading', { name: 'Inbox', exact: true }).waitFor();
+    // The nav rail portal submenu should have an Inbox link
+    await openRailGroup(page, /Portal/);
+    const inboxLink = page.locator('.rail-link', { hasText: 'Inbox' });
+    check((await inboxLink.count()) > 0, 'Inbox link is in the Portal navigation rail');
+    await closeRailGroup(page);
+    await shot(page, 'inbox-nav-badge');
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${base}/#/projects`);

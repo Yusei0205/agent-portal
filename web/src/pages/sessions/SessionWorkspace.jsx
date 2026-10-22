@@ -56,11 +56,13 @@ export function SessionWorkspace({ id, query }) {
         tabs={[
           { value: 'live', label: 'Live', href: link({}) },
           { value: 'changes', label: 'Changes', href: link({ tab: 'changes' }) },
-          { value: 'history', label: 'History', href: link({ tab: 'history' }), count: data.data.events.filter((e) => e.kind === 'human' && !e.consumed).length || undefined },
+          { value: 'history', label: 'Activity', href: link({ tab: 'history' }), count: data.data.events.filter((e) => e.kind === 'human' && !e.consumed).length || undefined },
           { value: 'context', label: 'Context', href: link({ tab: 'context' }), count: w.context_count || undefined },
           { value: 'settings', label: 'Settings', href: link({ tab: 'settings' }) },
         ]}
       />
+      {/* Push / approval sticky banner — visible on every tab */}
+      <PendingBanner w={w} canEdit={canEdit} onDone={() => data.reload(true)} />
       <div className="ws-body">
         {tab === 'live' ? (
           runId ? (
@@ -82,11 +84,159 @@ export function SessionWorkspace({ id, query }) {
                 <TicketPreview projectId={project.id} ticketKey={w.jira_key} />
               </details>
             ) : null}
+            {/* Which spec/trigger started this session */}
+            {w.loop_spec_id ? (
+              <details className="panel">
+                <summary>Loop spec</summary>
+                <SpecInfoPanel specId={w.loop_spec_id} projectId={project.id} />
+              </details>
+            ) : null}
+            {/* Verification results per iteration */}
+            {w.loop_run_state?.last_check ? (
+              <details className="panel" open>
+                <summary>Last verification</summary>
+                <VerifResults check={w.loop_run_state.last_check} />
+              </details>
+            ) : null}
             <SessionSettings workflow={w} canEdit={canEdit} onSaved={() => data.reload(true)} />
           </div>
         )}
       </div>
       <Composer workflow={w} canEdit={canEdit} onSent={() => data.reload(true)} />
+    </div>
+  );
+}
+
+/* ---------------- Push / approval sticky banner ---------------- */
+
+/**
+ * Sticky banner at the top of every workspace tab showing push-pending or blocked state.
+ * Visible on all tabs so users never miss an approval.
+ */
+function PendingBanner({ w, canEdit, onDone }) {
+  const { toast } = useUi();
+  const { project } = useProject();
+  const [busy, setBusy] = useState('');
+
+  if (!canEdit) return null;
+
+  // Push pending
+  if (w.pending_push && typeof w.pending_push === 'object' && w.pending_push.branch) {
+    const req = w.pending_push;
+    const allow = async () => {
+      setBusy('allow');
+      try {
+        const r = await api.post(`/api/workflows/${w.id}/push/allow`, {});
+        toast(r.push?.ok ? `Pushed to ${req.branch}` : 'Push completed with warnings', r.push?.ok ? 'ok' : 'warn');
+        onDone();
+      } catch (e) { toast(e.message, 'danger'); } finally { setBusy(''); }
+    };
+    const decline = async () => {
+      setBusy('decline');
+      try {
+        await api.post(`/api/workflows/${w.id}/push/decline`, {});
+        toast('Push declined', 'ok');
+        onDone();
+      } catch (e) { toast(e.message, 'danger'); } finally { setBusy(''); }
+    };
+    return (
+      <div className="ws-pending-banner ws-push-banner" role="alert">
+        <Icon name="branch" size={14} aria-hidden="true" />
+        <span>Push to <strong>{req.branch}</strong> is waiting for your approval.</span>
+        <div className="row tight">
+          <Button variant="primary" size="sm" busy={busy === 'allow'} onClick={allow}>Push</Button>
+          <Button variant="danger" size="sm" busy={busy === 'decline'} onClick={decline}>Decline</Button>
+          <a className="btn btn-ghost btn-sm" href={`#/p/${project.id}/sessions/${w.id}?tab=changes`}>Review changes</a>
+        </div>
+      </div>
+    );
+  }
+
+  // Plan pending
+  if (w.planning_gate && w.status === 'paused' && String(w.stop_reason ?? '').startsWith('Plan ready')) {
+    const approve = async () => {
+      setBusy('approve');
+      try {
+        await api.post(`/api/workflows/${w.id}/approve-plan`, {});
+        toast('Plan approved — session will carry on', 'ok');
+        onDone();
+      } catch (e) { toast(e.message, 'danger'); } finally { setBusy(''); }
+    };
+    return (
+      <div className="ws-pending-banner ws-plan-banner" role="alert">
+        <Icon name="settings" size={14} aria-hidden="true" />
+        <span>Plan is ready for your approval before the agents carry on.</span>
+        <Button variant="primary" size="sm" busy={busy === 'approve'} onClick={approve}>Approve plan</Button>
+      </div>
+    );
+  }
+
+  // Blocked / failed / stopped
+  if (['blocked', 'failed', 'stopped'].includes(w.status) && w.stop_reason) {
+    return (
+      <div className="ws-pending-banner ws-blocked-banner" role="status">
+        <Icon name="alert" size={14} aria-hidden="true" />
+        <span>{w.status === 'blocked' ? 'Blocked' : w.status === 'failed' ? 'Failed' : 'Stopped'}: {w.stop_reason}</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+/* ---------------- Verification results panel ---------------- */
+
+function VerifResults({ check }) {
+  if (!check || !check.steps) return null;
+  return (
+    <div className="ws-verif-results">
+      <div className="row tight wrap">
+        {check.steps.map((s, i) => (
+          <span
+            key={i}
+            className={cx(
+              'ws-verif-chip',
+              s.ok === true ? 'ws-verif-ok' : s.ok === false ? 'ws-verif-fail' : 'ws-verif-skip',
+              s.kind === 'llm' && 'ws-verif-advisory',
+            )}
+            title={s.output ? s.output.slice(0, 200) : undefined}
+          >
+            {s.ok === true ? '✅' : s.ok === false ? '❌' : '⏭'}
+            {' '}{s.step}
+            {s.kind === 'llm' ? ' (advisory)' : null}
+          </span>
+        ))}
+      </div>
+      {check.steps.some((s) => s.kind === 'llm' && s.output) ? (
+        <div className="ws-verif-judge">
+          {check.steps.filter((s) => s.kind === 'llm' && s.output).map((s, i) => (
+            <details key={i} className="ws-verif-judge-item">
+              <summary className="small">LLM judge notes for "{s.step}" <Badge tone="muted">advisory</Badge></summary>
+              <p className="small mono ws-verif-output">{s.output}</p>
+            </details>
+          ))}
+        </div>
+      ) : null}
+      <p className="muted small">
+        {check.overall_ok === true ? '✅ All required steps passed' : check.overall_ok === false ? '❌ One or more required steps failed' : 'Partial results'}
+        {check.ran_at ? ` · ${timeAgo(check.ran_at)}` : null}
+      </p>
+    </div>
+  );
+}
+
+/* ---------------- Spec info panel ---------------- */
+
+function SpecInfoPanel({ specId, projectId }) {
+  const spec = useLoad(() => api.get(`/api/projects/${projectId}/loop-specs/${specId}`), [specId, projectId]);
+  if (spec.loading) return <Spinner />;
+  if (!spec.data?.spec) return <p className="muted small">Spec not found.</p>;
+  const s = spec.data.spec;
+  return (
+    <div className="stack-sm">
+      <p className="small"><strong>{s.name}</strong>{s.description ? ` — ${s.description}` : ''}</p>
+      <p className="small muted">Trigger: {s.trigger_kind}{s.trigger_config?.cron ? ` (${s.trigger_config.cron})` : ''}</p>
+      <a className="small" href={`#/p/${projectId}/sessions?tab=specs`}>View all loop specs →</a>
     </div>
   );
 }

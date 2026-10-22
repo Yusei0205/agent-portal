@@ -1105,6 +1105,92 @@ function InsightsContent({ data, reduced, projectId, selectedAgent, onSelectAgen
   );
 }
 
+// ─── Loop metrics section ────────────────────────────────────────────────────
+
+const OUTCOME_COLORS = {
+  done: '#22c55e',
+  failed: '#ef4444',
+  blocked: '#f59e0b',
+  stopped: '#64748b',
+};
+
+function LoopMetricsSection({ projectId, days, reduced }) {
+  const [lmData, setLmData] = useState(null);
+  const [lmLoading, setLmLoading] = useState(true);
+
+  useEffect(() => {
+    if (!projectId) { setLmLoading(false); return; }
+    const url = `/api/projects/${projectId}/loop-metrics?window=${days}`;
+    setLmLoading(true);
+    api.get(url).then((r) => { setLmData(r); setLmLoading(false); }).catch(() => setLmLoading(false));
+  }, [projectId, days]);
+
+  if (lmLoading || !lmData) return null;
+
+  const specs = lmData.specs ?? [];
+  const overall = lmData.overall ?? {};
+  if (!overall.total) return null;
+
+  const timeRows = lmData.by_day ?? [];
+
+  return (
+    <section className="ins-loop-section" aria-label="Loop metrics">
+      <h2 className="ins-section-title">Loop sessions (last {days} days)</h2>
+      <div className="ins-kpis">
+        <div className="ins-kpi">
+          <span className="ins-kpi-val">{overall.total ?? 0}</span>
+          <span className="ins-kpi-label">total loop runs</span>
+        </div>
+        <div className="ins-kpi">
+          <span className="ins-kpi-val">{overall.success_rate != null ? `${Math.round(overall.success_rate * 100)}%` : '—'}</span>
+          <span className="ins-kpi-label">success rate</span>
+        </div>
+        <div className="ins-kpi">
+          <span className="ins-kpi-val">{overall.autonomy_rate != null ? `${Math.round(overall.autonomy_rate * 100)}%` : '—'}</span>
+          <span className="ins-kpi-label">autonomy rate</span>
+        </div>
+        <div className="ins-kpi">
+          <span className="ins-kpi-val">{overall.avg_cost_usd != null ? money(overall.avg_cost_usd, 3) : '—'}</span>
+          <span className="ins-kpi-label">avg cost / done</span>
+        </div>
+      </div>
+      {timeRows.length > 0 ? (
+        <div className="ins-chart-block">
+          <h3 className="ins-chart-title">Sessions per day by outcome</h3>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={timeRows} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={CHART_TOOLTIP_STYLE} isAnimationActive={!reduced} />
+              <Bar dataKey="done" name="Done" fill={OUTCOME_COLORS.done} isAnimationActive={!reduced} stackId="a" />
+              <Bar dataKey="failed" name="Failed" fill={OUTCOME_COLORS.failed} isAnimationActive={!reduced} stackId="a" />
+              <Bar dataKey="blocked" name="Blocked" fill={OUTCOME_COLORS.blocked} isAnimationActive={!reduced} stackId="a" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+      {specs.length > 0 ? (
+        <TableToggle label="Per-spec breakdown">
+          <table className="table" aria-label="Per-spec loop metrics">
+            <thead><tr><th>Spec</th><th>Runs</th><th>Success</th><th>Avg cost</th></tr></thead>
+            <tbody>
+              {specs.map((s, i) => (
+                <tr key={i}>
+                  <td>{s.spec_name ?? 'Ad-hoc'}</td>
+                  <td>{s.total ?? 0}</td>
+                  <td>{s.success_rate != null ? `${Math.round(s.success_rate * 100)}%` : '—'}</td>
+                  <td>{s.avg_cost_usd != null ? money(s.avg_cost_usd, 3) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableToggle>
+      ) : null}
+    </section>
+  );
+}
+
 // ─── Main exported component ─────────────────────────────────────────────────
 
 export function Insights({ projectId }) {
@@ -1179,13 +1265,16 @@ export function Insights({ projectId }) {
       ) : loading && !data ? (
         <div className="pad"><Spinner /></div>
       ) : data ? (
-        <InsightsContent
-          data={data}
-          reduced={reduced}
-          projectId={projectId}
-          selectedAgent={selectedAgent}
-          onSelectAgent={setSelectedAgent}
-        />
+        <>
+          <InsightsContent
+            data={data}
+            reduced={reduced}
+            projectId={projectId}
+            selectedAgent={selectedAgent}
+            onSelectAgent={setSelectedAgent}
+          />
+          <LoopMetricsSection projectId={projectId} days={filters.days} reduced={reduced} />
+        </>
       ) : null}
     </div>
   );

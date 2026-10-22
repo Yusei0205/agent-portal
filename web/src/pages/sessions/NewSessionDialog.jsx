@@ -223,6 +223,36 @@ function RepoRow({ row, options, onChange, onRemove, index }) {
   );
 }
 
+// ─── Loop spec picker (shown at top of NewSessionDialog for sessions) ─────────
+
+function LoopSpecPicker({ projectId, value, onChange }) {
+  const specs = useLoad(() => api.get(`/api/projects/${projectId}/loop-specs`), [projectId]);
+  const list = specs.data?.specs ?? [];
+  if (!list.length) return null;
+  return (
+    <div className="ls-dialog-picker">
+      <label className="field-label" htmlFor="ls-pick">Loop spec</label>
+      <div className="ls-picker-options" role="radiogroup" aria-label="Loop spec">
+        <label className={cx('ls-pick-opt', !value && 'is-active')}>
+          <input type="radio" name="ls-pick" value="" checked={!value} onChange={() => onChange(null)} />
+          <span>Blank</span>
+        </label>
+        {list.map((s) => (
+          <label key={s.id} className={cx('ls-pick-opt', value?.id === s.id && 'is-active')} title={s.description}>
+            <input type="radio" name="ls-pick" value={s.id} checked={value?.id === s.id} onChange={() => onChange(s)} />
+            <span>{s.name}</span>
+          </label>
+        ))}
+      </div>
+      {value ? (
+        <p className="field-hint muted small">
+          Spec pre-fills goal, verification, stop rules, and push mode. You can change anything.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** Start a session, a single run or a documentation run. */
 export function NewSessionDialog({ prefill, onClose }) {
   const { project } = useProject();
@@ -231,6 +261,21 @@ export function NewSessionDialog({ prefill, onClose }) {
   const jiraReady = Boolean(jira.data?.connected && jira.data?.mapping);
   const kiro = useProjectProvider(project.id) === 'kiro';
   const ready = (repos.data?.repos || []).filter((r) => r.status === 'ready');
+  // Loop spec: picked at the top, pre-fills form fields
+  const [loopSpec, setLoopSpec] = useState(null);
+  const applySpec = (spec) => {
+    setLoopSpec(spec);
+    if (!spec) return;
+    if (spec.goal_template) setF((cur) => ({ ...cur, goal: cur.goal || spec.goal_template }));
+    if (spec.push_mode) setF((cur) => ({ ...cur, pushMode: spec.push_mode }));
+    if (spec.lead_agent) setF((cur) => ({ ...cur, leadAgent: spec.lead_agent }));
+    if (spec.trust_tools !== null && spec.trust_tools !== undefined) setTrustTools(Boolean(spec.trust_tools));
+  };
+  // Save-as-spec modal
+  const [savingAsSpec, setSavingAsSpec] = useState(false);
+  const [specName, setSpecName] = useState('');
+  const [specDesc, setSpecDesc] = useState('');
+  const { toast: toast2 } = useUi();
 
   const [kind, setKind] = useState('session');
   // '' follows the project's connection; 'claude' or 'kiro' picks the engine for this work.
@@ -314,6 +359,8 @@ export function NewSessionDialog({ prefill, onClose }) {
     : isSingle
     ? Boolean(f.goal.trim() || ticket)
     : Boolean((f.goal.trim() || ticket) && sessionReady);
+  // Track the last created workflow ID so "Save as spec" knows which session to use.
+  const [lastWorkflowId, setLastWorkflowId] = useState(null);
 
   const start = async () => {
     setBusy(true);
@@ -339,7 +386,9 @@ export function NewSessionDialog({ prefill, onClose }) {
           maxIterations: Number(f.maxIterations),
           leadAgent: f.leadAgent,
           jiraKey: ticket?.key || undefined,
+          loopSpecId: loopSpec?.id || undefined,
         });
+        setLastWorkflowId(workflow.id);
         if (files.length) {
           try {
             await sendFiles(workflow.id, files);
@@ -371,7 +420,20 @@ export function NewSessionDialog({ prefill, onClose }) {
   };
 
   const kindInfo = KINDS.find((k) => k.value === kind);
+
+  const saveAsSpec = async () => {
+    if (!lastWorkflowId) return;
+    try {
+      await api.post(`/api/workflows/${lastWorkflowId}/save-as-spec`, { name: specName, description: specDesc });
+      toast2('Loop spec saved', 'ok');
+      setSavingAsSpec(false);
+    } catch (e) {
+      toast2(e.message, 'danger');
+    }
+  };
+
   return (
+    <>
     <Modal
       wide
       title="Start agent work"
@@ -381,6 +443,11 @@ export function NewSessionDialog({ prefill, onClose }) {
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
+          {kind === 'session' && lastWorkflowId ? (
+            <Button variant="ghost" size="sm" onClick={() => { setSpecName(f.goal.slice(0, 50) || 'My loop spec'); setSavingAsSpec(true); }}>
+              Save as loop spec
+            </Button>
+          ) : null}
           <Button variant="primary" icon="play" busy={busy} disabled={!canStart} onClick={start}>
             {kind === 'session' ? 'Start session' : isDoc ? 'Start documentation run' : 'Start run'}
           </Button>
@@ -388,6 +455,9 @@ export function NewSessionDialog({ prefill, onClose }) {
       }
     >
       <div className="stack">
+        {kind === 'session' ? (
+          <LoopSpecPicker projectId={project.id} value={loopSpec} onChange={applySpec} />
+        ) : null}
         <div className="row between wrap">
           <Segmented value={kind} onChange={setKind} label="Kind of work" options={KINDS.map(({ value, label }) => ({ value, label }))} />
           <span className="row tight">
@@ -415,6 +485,16 @@ export function NewSessionDialog({ prefill, onClose }) {
               ]}
             />
           </div>
+        ) : null}
+        {/* Effective settings line */}
+        {kind === 'session' && engines.data ? (
+          <p className="ls-effective-settings small muted">
+            Using: <strong>{ENGINE_LABEL[engine || engines.data.default] ?? (engine || engines.data.default)}</strong>
+            {' · '}<strong>{f.model}</strong>
+            {' · '}budget <strong>{effectiveKiro ? `${f.budgetCredits} credits` : `$${f.budgetUsd}`}</strong>
+            {' '}
+            <button type="button" className="btn-link small" onClick={() => setMore(true)}>Change</button>
+          </p>
         ) : null}
 
         {isDoc ? (
@@ -557,6 +637,25 @@ export function NewSessionDialog({ prefill, onClose }) {
       </div>
       {picking ? <ContextPicker projectId={project.id} onAdd={(item) => setContext((c) => [...c, item])} onClose={() => setPicking(false)} /> : null}
     </Modal>
+    {savingAsSpec ? (
+      <Modal title="Save as loop spec" onClose={() => setSavingAsSpec(false)} footer={
+        <>
+          <Button variant="ghost" onClick={() => setSavingAsSpec(false)}>Cancel</Button>
+          <Button variant="primary" disabled={!specName.trim()} onClick={saveAsSpec}>Save spec</Button>
+        </>
+      }>
+        <div className="stack">
+          <p className="muted small">Save this session's settings as a reusable loop spec for future use.</p>
+          <Field label="Spec name">
+            {(id) => <input id={id} className="input" value={specName} onChange={(e) => setSpecName(e.target.value)} placeholder="Feature branch loop" autoFocus />}
+          </Field>
+          <Field label="Description (optional)">
+            {(id) => <input id={id} className="input" value={specDesc} onChange={(e) => setSpecDesc(e.target.value)} placeholder="What does this spec do?" />}
+          </Field>
+        </div>
+      </Modal>
+    ) : null}
+    </>
   );
 }
 

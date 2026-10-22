@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 /** Pages that belong to no project: #/<tab>. */
-const GLOBAL_TABS = ['settings', 'aws', 'account', 'insights', 'connections', 'integrations', 'api', 'vault', 'admin'];
+const GLOBAL_TABS = ['settings', 'aws', 'account', 'insights', 'connections', 'integrations', 'api', 'vault', 'admin', 'inbox'];
 
 /** Hash routes: #/projects, #/p/<projectId>/<tab>/<rest…>, optionally followed by ?key=value inside the hash. */
 export function parseHash(hash = window.location.hash) {

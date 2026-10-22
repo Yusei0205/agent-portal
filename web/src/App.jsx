@@ -29,6 +29,7 @@ import { Vault } from './pages/Vault.jsx';
 import { ProjectSetup } from './pages/ProjectSetup.jsx';
 import { AdminPanel } from './pages/AdminPanel.jsx';
 import { Profile } from './pages/Profile.jsx';
+import { Inbox } from './pages/Inbox.jsx';
 
 // Insights is lazy-loaded so recharts stays out of the main bundle.
 const InsightsPage = lazy(() => import('./pages/Insights.jsx').then((m) => ({ default: m.Insights })));
@@ -91,6 +92,7 @@ const PROJECT_SETUP_ITEMS = [
 ];
 
 const PORTAL_ITEMS = [
+  { tab: 'inbox', label: 'Inbox', icon: 'inbox', global: true },
   { tab: 'connections', label: 'Git connections', icon: 'branch', global: true },
   { tab: 'integrations', label: 'Integrations', icon: 'builder', global: true },
   { tab: 'aws', label: 'AWS accounts', icon: 'lock', global: true },
@@ -117,7 +119,7 @@ function groupForTab(tab) {
  *   user         – the authenticated user
  *   onNavigate   – called when a leaf link is clicked (closes mobile nav)
  */
-function NavMenu({ route, projectId, current, user, onNavigate }) {
+function NavMenu({ route, projectId, current, user, inboxCount, onNavigate }) {
   // Which group is open: null = main menu, 'setup' | 'portal' = submenu
   const initialGroup = projectId ? groupForTab(route.tab) : (PORTAL_ITEMS.some((i) => i.tab === route.tab) ? 'portal' : null);
   const [openGroup, setOpenGroup] = useState(initialGroup);
@@ -223,6 +225,9 @@ function NavMenu({ route, projectId, current, user, onNavigate }) {
                   >
                     <Icon name={item.icon} />
                     <span>{item.label}</span>
+                    {item.tab === 'inbox' && inboxCount > 0 ? (
+                      <span className="rail-count" title={`${inboxCount} item${inboxCount === 1 ? '' : 's'} need your attention`}>{inboxCount}</span>
+                    ) : null}
                   </a>
                 );
               })}
@@ -324,6 +329,9 @@ function NavMenu({ route, projectId, current, user, onNavigate }) {
                 >
                   <Icon name={item.icon} />
                   <span>{item.label}</span>
+                  {item.tab === 'inbox' && inboxCount > 0 ? (
+                    <span className="rail-count" title={`${inboxCount} item${inboxCount === 1 ? '' : 's'} need your attention`}>{inboxCount}</span>
+                  ) : null}
                 </a>
               );
             })}
@@ -340,6 +348,7 @@ function Shell({ user, onSignOut }) {
   const [meta, setMeta] = useState({ provider: 'demo', prices: null, models: [] });
   const [spend, setSpend] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
+  const [inboxCount, setInboxCount] = useState(0);
 
   const loadProjects = useCallback(async () => {
     const r = await api.get('/api/projects');
@@ -356,13 +365,29 @@ function Shell({ user, onSignOut }) {
   }, [loadProjects, loadMeta]);
   useEffect(() => setNavOpen(false), [route.tab, route.projectId]);
 
+  // Live inbox count via SSE
+  useEffect(() => {
+    // Get initial count
+    api.get('/api/inbox?filter=needs_you').then((r) => setInboxCount(r.needs_you ?? 0)).catch(() => {});
+    const close = stream('/api/inbox/events', {
+      'inbox.count': (data) => setInboxCount(data.needs_you ?? 0),
+    });
+    return close;
+  }, []);
+
+  // Browser notifications for new inbox items
+  useEffect(() => {
+    // Only request permission if the user previously enabled it in a session
+    // (we never auto-ask — see notification permission logic in Inbox.jsx)
+  }, []);
+
   const ctx = useMemo(() => ({ user, projects, reloadProjects: loadProjects, meta, reloadMeta: loadMeta }), [user, projects, loadProjects, meta, loadMeta]);
 
   return (
     <AppContext.Provider value={ctx}>
       <div className={cx('shell', navOpen && 'nav-open')}>
         <a className="skip" href="#main">Skip to content</a>
-        <Rail route={route} user={user} projects={projects} meta={meta} spend={spend} onSignOut={onSignOut} onNavigate={() => setNavOpen(false)} />
+        <Rail route={route} user={user} projects={projects} meta={meta} spend={spend} inboxCount={inboxCount} onSignOut={onSignOut} onNavigate={() => setNavOpen(false)} />
         <div className="topbar">
           <button className="icon-btn" aria-label="Menu" onClick={() => setNavOpen((v) => !v)}>
             <Icon name="menu" />
@@ -388,6 +413,8 @@ function Shell({ user, onSignOut }) {
             <Profile />
           ) : route.tab === 'admin' ? (
             <AdminPanel />
+          ) : route.tab === 'inbox' ? (
+            <Inbox />
           ) : route.tab === 'insights' ? (
             <Suspense fallback={<div className="pad"><Spinner /></div>}>
               <InsightsPage />
@@ -452,7 +479,7 @@ function LookSwitch() {
   );
 }
 
-function Rail({ route, user, projects, meta, spend, onSignOut, onNavigate }) {
+function Rail({ route, user, projects, meta, spend, inboxCount, onSignOut, onNavigate }) {
   const current = projects?.find((p) => p.id === route.projectId);
   const signOut = async () => {
     await api.post('/api/auth/logout');
@@ -487,6 +514,7 @@ function Rail({ route, user, projects, meta, spend, onSignOut, onNavigate }) {
         projectId={route.projectId}
         current={current}
         user={user}
+        inboxCount={inboxCount}
         onNavigate={onNavigate}
       />
       <div className="rail-foot">
