@@ -7,7 +7,7 @@ import { go, href, useRoute } from './lib/router.js';
 import { cx, money } from './lib/util.js';
 import { Icon } from './components/Icon.jsx';
 import { Badge, Spinner, UiProvider } from './components/ui.jsx';
-import { Login, Setup } from './pages/Auth.jsx';
+import { Login, Setup, AcceptInvite, ResetPassword } from './pages/Auth.jsx';
 import { Projects } from './pages/Projects.jsx';
 import { ProjectSettings } from './pages/ProjectSettings.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
@@ -26,6 +26,9 @@ import { Connections } from './pages/Connections.jsx';
 import { Integrations } from './pages/Integrations.jsx';
 import { ApiAccess } from './pages/ApiAccess.jsx';
 import { Vault } from './pages/Vault.jsx';
+import { ProjectSetup } from './pages/ProjectSetup.jsx';
+import { AdminPanel } from './pages/AdminPanel.jsx';
+import { Profile } from './pages/Profile.jsx';
 
 // Insights is lazy-loaded so recharts stays out of the main bundle.
 const InsightsPage = lazy(() => import('./pages/Insights.jsx').then((m) => ({ default: m.Insights })));
@@ -46,10 +49,19 @@ export function App() {
     setUnauthorizedHandler(() => setAuth((a) => ({ ...a, user: null })));
   }, [load]);
 
+  // Handle accept-invite and reset-password hash routes before auth check
+  const hash = window.location.hash;
+  const inviteMatch = hash.match(/^#\/?accept-invite\/([A-Za-z0-9_-]+)/);
+  const resetMatch = hash.match(/^#\/?reset-password\/([A-Za-z0-9_-]+)/);
+  // OIDC callback lands as a query param on the root (the server redirects to #/oidc-done on success)
+  const oidcDone = hash.startsWith('#/oidc-done') || hash.startsWith('#oidc-done');
+
   let body;
   if (auth.loading) body = <div className="splash"><Spinner /></div>;
   else if (auth.error) body = <div className="splash"><p>{auth.error.message}</p></div>;
   else if (auth.needsSetup) body = <Setup onDone={load} />;
+  else if (inviteMatch) body = <AcceptInvite token={inviteMatch[1]} onDone={() => { window.location.hash = '#/projects'; load(); }} />;
+  else if (resetMatch) body = <ResetPassword token={resetMatch[1]} onDone={() => { window.location.hash = '#/'; load(); }} />;
   else if (!auth.user) body = <Login onDone={load} />;
   else body = <Shell user={auth.user} onSignOut={load} />;
   return <UiProvider>{body}</UiProvider>;
@@ -66,7 +78,7 @@ const PROJECT_MAIN_ITEMS = [
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
   { tab: 'learn', label: 'Learn', icon: 'learn' },
-  { group: 'setup', label: 'Project setup', icon: 'settings' },
+  { tab: 'setup', label: 'Setup', icon: 'settings' },
   { group: 'portal', label: 'Portal', icon: 'lock' },
 ];
 
@@ -79,18 +91,18 @@ const PROJECT_SETUP_ITEMS = [
 ];
 
 const PORTAL_ITEMS = [
-  { tab: 'connections', label: 'Connections', icon: 'branch', global: true },
+  { tab: 'connections', label: 'Git connections', icon: 'branch', global: true },
   { tab: 'integrations', label: 'Integrations', icon: 'builder', global: true },
   { tab: 'aws', label: 'AWS accounts', icon: 'lock', global: true },
   { tab: 'vault', label: 'Vault', icon: 'inbox', global: true },
   { tab: 'api', label: 'API access', icon: 'lock', global: true },
   { tab: 'insights', label: 'All insights', icon: 'chart', global: true },
+  { tab: 'admin', label: 'Admin', icon: 'user', global: true, adminOnly: true },
   { tab: 'settings', label: 'Settings', icon: 'settings', global: true, adminOnly: true },
 ];
 
 /** Which group (if any) does a given tab belong to for the drill-down nav? */
 function groupForTab(tab) {
-  if (PROJECT_SETUP_ITEMS.some((i) => i.tab === tab)) return 'setup';
   if (PORTAL_ITEMS.some((i) => i.tab === tab)) return 'portal';
   return null;
 }
@@ -144,19 +156,8 @@ function NavMenu({ route, projectId, current, user, onNavigate }) {
 
   const showSub = openGroup !== null;
 
-  // Build the submenu items for whichever group is (or was last) open.
-  // We keep rendering the last group even while sliding back so the content
-  // doesn't vanish mid-animation.
-  const [renderedGroup, setRenderedGroup] = useState(initialGroup);
-  useEffect(() => {
-    if (openGroup !== null) setRenderedGroup(openGroup);
-  }, [openGroup]);
-
-  const subItems = renderedGroup === 'setup'
-    ? PROJECT_SETUP_ITEMS
-    : PORTAL_ITEMS.filter((i) => !i.adminOnly || user.is_admin);
-
-  const subLabel = renderedGroup === 'setup' ? 'Project setup' : 'Portal';
+  const subItems = PORTAL_ITEMS.filter((i) => !i.adminOnly || user.is_admin);
+  const subLabel = 'Portal';
   const subId = 'rail-sub';
 
   if (!projectId) {
@@ -248,9 +249,7 @@ function NavMenu({ route, projectId, current, user, onNavigate }) {
             {PROJECT_MAIN_ITEMS.map((item) => {
               if (item.group) {
                 // Determine if any child of this group is active
-                const childActive = item.group === 'setup'
-                  ? PROJECT_SETUP_ITEMS.some((c) => c.tab === route.tab)
-                  : PORTAL_ITEMS.some((c) => c.tab === route.tab) && !route.projectId;
+                const childActive = PORTAL_ITEMS.some((c) => c.tab === route.tab) && !route.projectId;
                 return (
                   <button
                     key={item.group}
@@ -295,7 +294,7 @@ function NavMenu({ route, projectId, current, user, onNavigate }) {
           </nav>
         </div>
 
-        {/* Submenu panel — content swaps between setup and portal */}
+        {/* Submenu panel — Portal only */}
         <div className="rail-panel" inert={!showSub ? true : undefined} aria-hidden={!showSub ? true : undefined}>
           <nav
             id={subId}
@@ -313,16 +312,11 @@ function NavMenu({ route, projectId, current, user, onNavigate }) {
             </button>
             <div className="rail-sub-label" aria-hidden="true">{subLabel}</div>
             {subItems.map((item) => {
-              const isProjectItem = 'projectScoped' in item || (!('global' in item));
-              const linkHref = isProjectItem
-                ? href(projectId, item.tab)
-                : `#/${item.tab}`;
-              const isActive = renderedGroup === 'setup'
-                ? route.tab === item.tab && !!route.projectId
-                : route.tab === item.tab && !route.projectId;
+              const linkHref = `#/${item.tab}`;
+              const isActive = route.tab === item.tab && !route.projectId;
               return (
                 <a
-                  key={`${renderedGroup}-${item.tab}`}
+                  key={item.tab}
                   href={linkHref}
                   className={cx('rail-link', isActive && 'is-active')}
                   aria-current={isActive ? 'page' : undefined}
@@ -391,7 +385,9 @@ function Shell({ user, onSignOut }) {
           ) : route.tab === 'vault' ? (
             <Vault />
           ) : route.tab === 'account' ? (
-            <Account />
+            <Profile />
+          ) : route.tab === 'admin' ? (
+            <AdminPanel />
           ) : route.tab === 'insights' ? (
             <Suspense fallback={<div className="pad"><Spinner /></div>}>
               <InsightsPage />
@@ -631,6 +627,9 @@ function ProjectScope({ projectId, route }) {
       break;
     case 'team':
       page = <ProjectSettings />;
+      break;
+    case 'setup':
+      page = <ProjectSetup route={route} />;
       break;
     case 'insights':
       page = (

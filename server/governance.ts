@@ -366,9 +366,10 @@ export function registerGovernanceRoutes(): void {
   get('/api/roles-matrix', () => ({ matrix: PERMISSIONS_MATRIX }), { auth: 'user' });
 
   // ── OIDC Settings (admin) ─────────────────────────────────────────────────
-  get('/api/admin/oidc', (_ctx) => {
+  get('/api/admin/oidc', async (_ctx) => {
     const s = getOidcSettings();
-    return { ...s };  // client_secret never returned — stored in secrets
+    const secretSet = !!(await getSecret(OIDC_SECRET_NAME));
+    return { ...s, clientSecretSet: secretSet };  // client_secret never returned — stored in secrets
   }, { auth: 'admin' });
 
   put('/api/admin/oidc', async (ctx) => {
@@ -525,6 +526,12 @@ export function registerGovernanceRoutes(): void {
     },
     { auth: 'public' },
   );
+
+  // ── OIDC enabled check (public — lets the login page show/hide the Google button) ──
+  get('/api/auth/oidc/enabled', () => {
+    const s = getOidcSettings();
+    return { enabled: s.enabled && !!s.clientId };
+  }, { auth: 'public' });
 
   // ── Invitations ───────────────────────────────────────────────────────────
 

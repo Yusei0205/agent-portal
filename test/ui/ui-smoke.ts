@@ -85,6 +85,9 @@ async function main() {
     await page.getByRole('button', { name: 'Create project', exact: true }).click();
     await page.getByRole('heading', { name: 'Knowledge', exact: true }).waitFor();
     check(page.url().includes('/knowledge'), 'lands on Knowledge after creating a project');
+    // Extract the project ID from the URL now, so all navigation tests can use it.
+    const pidFromUrl = /\/p\/([^/]+)\//.exec(page.url());
+    const pid = pidFromUrl ? pidFromUrl[1] : '';
 
     console.log('knowledge');
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-files-'));
@@ -124,9 +127,10 @@ async function main() {
     check(true, 'answers land in the decisions log');
 
     console.log('builder');
-    // Agents and skills is in the 'Project setup' group – open it first.
-    await openRailGroup(page, /Project setup/);
-    await page.getByRole('link', { name: 'Agents and skills', exact: true }).click();
+    // Agents and skills — navigate directly via deep link (no more Project setup submenu).
+    await closeRailGroup(page);
+    await page.goto(`${base}/#/p/${pid}/builder`);
+    await page.getByRole('heading', { name: 'Business analyst', exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Business analyst', exact: true }).waitFor();
     for (const role of ['Business analyst', 'QA engineer', 'Technical writer and trainer']) {
       const card = page.locator('.role-card', { has: page.getByRole('heading', { name: role }) });
@@ -156,9 +160,8 @@ async function main() {
 
     console.log('repositories');
     const bare = makeRepo(path.join(dataDir, 'fixture'));
-    // Repositories is in the 'Project setup' group (submenu already open from builder).
-    await openRailGroup(page, /Project setup/);
-    await page.getByRole('link', { name: 'Repositories', exact: true }).click();
+    // Repositories — navigate directly (no more submenu).
+    await page.goto(`${base}/#/p/${pid}/repos`);
     await page.getByRole('button', { name: 'Connect a repository', exact: true }).click();
     await page.getByRole('tab', { name: 'Other Git', exact: true }).click();
     await page.getByLabel('Repository address').fill(fileUrl(bare));
@@ -168,9 +171,8 @@ async function main() {
     await shot(page, 'repos');
 
     console.log('configuration');
-    // Configuration is in the 'Project setup' group (submenu already open from repos).
-    await openRailGroup(page, /Project setup/);
-    await page.getByRole('link', { name: 'Configuration', exact: true }).click();
+    // Configuration — navigate directly.
+    await page.goto(`${base}/#/p/${pid}/config`);
     await page.getByRole('button', { name: 'business-analyst.md', exact: true }).click();
     const editor = page.getByLabel('Contents of .claude/agents/business-analyst.md');
     await editor.waitFor();
@@ -205,7 +207,7 @@ async function main() {
     await shot(page, 'composer');
     await page.getByRole('button', { name: 'Start run', exact: true }).click();
     await page.waitForURL(/\/sessions\/run\//);
-    const [, pid, singleRunId] = /\/p\/([^/]+)\/sessions\/run\/([^/?]+)/.exec(page.url())!;
+    const [, , singleRunId] = /\/p\/([^/]+)\/sessions\/run\/([^/?]+)/.exec(page.url())!;
     await page.locator('.pending .input-card').waitFor({ timeout: 20000 });
     await shot(page, 'run-question');
     await page.locator('.pending .choice', { hasText: 'New module' }).click();
@@ -414,6 +416,25 @@ async function main() {
     await page.getByRole('button', { name: 'Test connection', exact: true }).click();
     await page.getByText(/Connected/).waitFor();
     await shot(page, 'settings');
+
+    console.log('project setup hub');
+    await page.goto(`${base}/#/p/${pid}/setup`);
+    await page.getByRole('heading', { name: 'Project setup', exact: true }).waitFor();
+    await page.getByRole('region', { name: 'Project readiness' }).waitFor();
+    check((await page.locator('.readiness-table tr').count()) >= 2, 'readiness panel shows items');
+    await shot(page, 'setup-hub');
+
+    console.log('admin panel');
+    await page.goto(`${base}/#/admin`);
+    await page.getByRole('heading', { name: 'Admin', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Users', exact: true }).click();
+    await page.getByRole('heading', { name: 'Users', exact: true }).waitFor();
+    check((await page.locator('table tr').count()) >= 1, 'admin users table is shown');
+    await shot(page, 'admin-users');
+    await page.getByRole('button', { name: 'Audit log', exact: true }).click();
+    await page.getByRole('heading', { name: 'Audit log', exact: true }).waitFor();
+    await shot(page, 'admin-audit');
+
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${base}/#/projects`);
     await page.getByRole('heading', { name: 'Projects', exact: true }).waitFor();
