@@ -520,9 +520,14 @@ export function NewSessionDialog({ prefill, onClose }) {
   // Loop spec: picked at the top, pre-fills form fields
   const [loopSpec, setLoopSpec] = useState(null);
   const applySpec = (spec) => {
+    const prevTemplate = loopSpec?.goal_template || '';
     setLoopSpec(spec);
+    // Switching specs replaces the goal unless the person has written or edited it since the last spec filled it in.
+    setF((cur) => {
+      const untouched = !cur.goal.trim() || cur.goal === prevTemplate;
+      return untouched ? { ...cur, goal: spec?.goal_template || '' } : cur;
+    });
     if (!spec) return;
-    if (spec.goal_template) setF((cur) => ({ ...cur, goal: cur.goal || spec.goal_template }));
     if (spec.push_mode) setF((cur) => ({ ...cur, pushMode: spec.push_mode }));
     if (spec.lead_agent) setF((cur) => ({ ...cur, leadAgent: spec.lead_agent }));
     if (spec.trust_tools !== null && spec.trust_tools !== undefined) setTrustTools(Boolean(spec.trust_tools));

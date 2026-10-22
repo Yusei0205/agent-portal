@@ -61,3 +61,34 @@ test('a run gets copies of the team vault and of its owner’s vault in its fold
   assert.ok(!fs.existsSync(path.join(projectRoot, 'work', bobRun.id, 'vault', 'mine')));
   assert.ok(fs.existsSync(path.join(projectRoot, 'work', bobRun.id, 'vault', 'team', 'glossary.md')));
 });
+
+
+test('a project vault is for that project’s members, and its runs get a copy', async () => {
+  const pq = (p: string) => `scope=project&projectId=${p}`;
+  const upP = (c: Client, p: string, file: string, text: string) => c.req('PUT', `/api/vault/file?${pq(p)}&path=${encodeURIComponent(file)}`, undefined, { raw: Buffer.from(text) });
+  const { project: other } = await ann.post('/api/projects', { name: 'Other', description: 'd' });
+  assert.equal((await upP(ann, pid, 'docs/fsd.md', 'Vaulted FSD')).status, 200);
+  assert.deepEqual((await ann.get(`/api/vault?${pq(pid)}`)).files.map((f: any) => f.path), ['docs', 'docs/fsd.md']);
+  assert.deepEqual((await ann.get(`/api/vault?${pq(other.id)}`)).files, [], 'each project has its own vault');
+  // Bob is an editor of Vaulted (previous test) but not a member of Other.
+  assert.equal((await bob.req('GET', `/api/vault?${pq(other.id)}`)).status, 404, 'non-members cannot see it');
+  assert.equal((await upP(bob, other.id, 'x.md', 'x')).status, 404);
+  assert.equal((await bob.get(`/api/vault?${pq(pid)}`)).files.length, 2, 'members can see it');
+  // Viewers read but cannot change.
+  await ann.req('PATCH', `/api/projects/${pid}/members/${(await ann.get(`/api/projects/${pid}`)).members.find((m: any) => m.email === 'b@example.com').id}`, { access: 'viewer' });
+  assert.equal((await upP(bob, pid, 'y.md', 'y')).status, 403, 'viewers cannot change it');
+  assert.equal((await ann.req('GET', '/api/vault?scope=project')).status, 404, 'a project is needed');
+  // Runs of the project get it; runs of another project do not.
+  const { run } = await ann.post(`/api/projects/${pid}/runs`, { prompt: 'Read the vault', permissionMode: 'plan' });
+  await waitFor(async () => {
+    const r = await ann.get(`/api/runs/${run.id}`);
+    return ['completed', 'failed', 'waiting'].includes(r.run.status) ? r : null;
+  }, 'run');
+  assert.equal(fs.readFileSync(path.join(projectRoot, 'work', run.id, 'vault', 'project', 'docs', 'fsd.md'), 'utf8'), 'Vaulted FSD');
+  const { run: otherRun } = await ann.post(`/api/projects/${other.id}/runs`, { prompt: 'Read', permissionMode: 'plan' });
+  await waitFor(async () => {
+    const r = await ann.get(`/api/runs/${otherRun.id}`);
+    return ['completed', 'failed', 'waiting'].includes(r.run.status) ? r : null;
+  }, 'other run');
+  assert.ok(!fs.existsSync(path.join(srv.dataDir, 'projects', other.slug, 'work', otherRun.id, 'vault', 'project')));
+});

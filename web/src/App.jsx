@@ -86,6 +86,7 @@ const PROJECT_MAIN_ITEMS = [
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
   { tab: 'learn', label: 'Learn', icon: 'learn' },
+  { tab: 'vault', label: 'Vault', icon: 'inbox' },
   { tab: 'setup', label: 'Setup', icon: 'settings' },
   { group: 'portal', label: 'Portal', icon: 'lock' },
 ];
@@ -698,6 +699,9 @@ function ProjectScope({ projectId, route }) {
   switch (route.tab) {
     case 'learn':
       page = <Learn route={route} />;
+      break;
+    case 'vault':
+      page = <Vault projectId={projectId} />;
       break;
     case 'tickets':
       page = <Tickets />;

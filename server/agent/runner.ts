@@ -424,7 +424,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
         }
       }
       // The team vault and the owner's vault, copied into the run folder for agents to read.
-      const vaultNote = !input.oneshot && (input.kind === 'chat' || input.kind === 'test') ? copyVaultsInto(workDir, relToProject(project, workDir), input.userId) : '';
+      const vaultNote = !input.oneshot && (input.kind === 'chat' || input.kind === 'test') ? copyVaultsInto(workDir, relToProject(project, workDir), input.userId, project.id) : '';
       await execute(runId, a, project, input, { mode, model, permissionMode, workDir, resumeSession, worktree, integ, vaultNote });
     } catch (e: any) {
       const aborted = e?.name === 'AbortError' || a.abort.signal.aborted;

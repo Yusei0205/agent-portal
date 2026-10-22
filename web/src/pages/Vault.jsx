@@ -1,22 +1,34 @@
 import { useRef, useState } from 'react';
 import { api } from '../lib/api.js';
+import { useApp } from '../lib/context.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, timeAgo } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Button, ErrorNote, Field, Modal, Note, PageHeader, Progress, Segmented, Spinner, useUi } from '../components/ui.jsx';
 
 const SCOPES = [
-  { value: 'mine', label: 'My vault', hint: 'Only you can see these. Every run you start gets a copy in its folder under vault/mine.' },
-  { value: 'team', label: 'Team vault', hint: 'Everyone can see and change these. Every run gets a copy in its folder under vault/team.' },
+  { value: 'project', label: 'Project vault', hint: 'For this project only: its members can see these, editors can change them. Every run in the project gets a copy under vault/project.' },
+  { value: 'mine', label: 'My vault', hint: 'Only you can see these. Every run you start, in any project, gets a copy in its folder under vault/mine.' },
+  { value: 'team', label: 'Team vault', hint: 'Everyone can see and change these. Every run in every project gets a copy in its folder under vault/team.' },
 ];
 
 const size = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
-/** Vault: files uploaded once and given to every run. */
-export function Vault() {
+/**
+ * Vault: files uploaded once and given to every run. Opened from a project, it starts on that project's vault; on
+ * the portal page you pick which project's vault to show.
+ */
+export function Vault({ projectId: fixedProject = null }) {
   const { toast, confirm } = useUi();
-  const [scope, setScope] = useState('mine');
-  const list = useLoad(() => api.get(`/api/vault?scope=${scope}`), [scope]);
+  // The project list is null until it has loaded.
+  const projects = useApp()?.projects || [];
+  const [scope, setScope] = useState(fixedProject ? 'project' : 'mine');
+  const [pickedProject, setPickedProject] = useState(fixedProject || '');
+  const pid = fixedProject || pickedProject || projects[0]?.id || '';
+  const q = scope === 'project' ? `scope=project&projectId=${encodeURIComponent(pid)}` : `scope=${scope}`;
+  const projectName = projects.find((p) => p.id === pid)?.name || 'project';
+  const vaultName = scope === 'project' ? `${projectName} vault` : scope === 'team' ? 'team vault' : 'vault';
+  const list = useLoad(() => (scope === 'project' && !pid ? Promise.resolve({ files: [], used: 0, limit: 1 }) : api.get(`/api/vault?${q}`)), [q]);
   const [busy, setBusy] = useState('');
   const [drag, setDrag] = useState(false);
   const [folder, setFolder] = useState(false);
@@ -33,7 +45,7 @@ export function Vault() {
     try {
       for (const file of all) {
         const p = file.webkitRelativePath || file.relPath || file.name;
-        await api.upload(`/api/vault/file?scope=${scope}&path=${encodeURIComponent(p)}`, file);
+        await api.upload(`/api/vault/file?${q}&path=${encodeURIComponent(p)}`, file);
         setBusy(`Uploading ${++done} of ${all.length}…`);
       }
       toast(`Uploaded ${done} file${done === 1 ? '' : 's'}`);
@@ -72,9 +84,9 @@ export function Vault() {
     upload(out);
   };
   const remove = async (p, dir) => {
-    if (!(await confirm({ title: 'Delete', message: `Delete ${p}${dir ? ' and everything in it' : ''} from the ${scope === 'team' ? 'team vault' : 'vault'}?`, confirmLabel: 'Delete', danger: true }))) return;
+    if (!(await confirm({ title: 'Delete', message: `Delete ${p}${dir ? ' and everything in it' : ''} from the ${vaultName}?`, confirmLabel: 'Delete', danger: true }))) return;
     try {
-      await api.del(`/api/vault/file?scope=${scope}&path=${encodeURIComponent(p)}`);
+      await api.del(`/api/vault/file?${q}&path=${encodeURIComponent(p)}`);
       list.reload(true);
     } catch (e) {
       toast(e.message, 'danger');
@@ -83,8 +95,22 @@ export function Vault() {
 
   return (
     <div className="page">
-      <PageHeader title="Vault" sub="Files you upload once and use in every run: templates, reference documents, sample data. Agents can read everything in both vaults, so keep secrets out of them." />
-      <Segmented value={scope} onChange={setScope} label="Vault" options={SCOPES.map(({ value, label }) => ({ value, label }))} />
+      <PageHeader title="Vault" sub="Files you upload once and use in every run: documents, templates, test data, evidence. Agents can read everything in the vaults their run gets, so keep secrets you would not show an agent out of them." />
+      <div className="row tight wrap">
+        <Segmented value={scope} onChange={setScope} label="Vault" options={SCOPES.map(({ value, label }) => ({ value, label }))} />
+        {scope === 'project' && !fixedProject ? (
+          <label className="row tight small">
+            <span className="field-label" style={{ marginBottom: 0 }}>Project</span>
+            <select className="input input-sm" value={pid} onChange={(e) => setPickedProject(e.target.value)} aria-label="Project whose vault to show">
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
       <p className="muted small">{info.hint}</p>
       <div
         className={cx('panel stack vault-drop', drag && 'is-over')}
@@ -110,7 +136,7 @@ export function Vault() {
             New folder
           </Button>
           {files.some((f) => !f.dir) ? (
-            <a className="btn btn-default" href={`/api/vault/zip?scope=${scope}`} download>
+            <a className="btn btn-default" href={`/api/vault/zip?${q}`} download>
               <Icon name="download" size={15} />
               <span>Download all</span>
             </a>
@@ -132,7 +158,7 @@ export function Vault() {
         ) : list.error ? (
           <ErrorNote error={list.error} />
         ) : !files.length ? (
-          <p className="muted">The {scope === 'team' ? 'team vault' : 'vault'} is empty.</p>
+          <p className="muted">The {vaultName} is empty.</p>
         ) : (
           <ul className="cfg-files vault-files">
             {files.map((f) => (
@@ -146,7 +172,7 @@ export function Vault() {
                   </span>
                 ) : null}
                 {!f.dir ? (
-                  <a className="icon-btn" href={`/api/vault/download?scope=${scope}&path=${encodeURIComponent(f.path)}`} download aria-label={`Download ${f.path}`} title="Download">
+                  <a className="icon-btn" href={`/api/vault/download?${q}&path=${encodeURIComponent(f.path)}`} download aria-label={`Download ${f.path}`} title="Download">
                     <Icon name="download" size={13} />
                   </a>
                 ) : null}
@@ -161,19 +187,19 @@ export function Vault() {
       <Note tone="info" icon="lock">
         Each run gets its own copy, so agents can read and even change their copy without touching the vault.
       </Note>
-      {folder ? <NewFolder scope={scope} onClose={() => setFolder(false)} onDone={() => list.reload(true)} /> : null}
+      {folder ? <NewFolder q={q} onClose={() => setFolder(false)} onDone={() => list.reload(true)} /> : null}
     </div>
   );
 }
 
-function NewFolder({ scope, onClose, onDone }) {
+function NewFolder({ q, onClose, onDone }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const create = async () => {
     setBusy(true);
     try {
-      await api.post(`/api/vault/folder?scope=${scope}`, { path: name });
+      await api.post(`/api/vault/folder?${q}`, { path: name });
       onDone();
       onClose();
     } catch (e) {

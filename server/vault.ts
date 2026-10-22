@@ -1,10 +1,15 @@
 /**
- * Vault: files uploaded once and given to every run. Each person has their own vault, and there is one team vault
- * that everyone signed in can see and change.
+ * Vault: files uploaded once and given to every run. There are three:
  *
- * A run gets a copy of the team vault and of its owner's vault in its own folder (work/<run>/vault/team and
- * .../vault/mine), so agents can read them, and even change their copies, without ever touching the originals.
- * Agents can read everything in both vaults: keep secrets out of them.
+ *   project  one per project, for its members only: the project's documents, test data, evidence and the like.
+ *            Viewers can read it; editors and owners can change it.
+ *   mine     each person's own, for every run they start in any project.
+ *   team     one for everyone signed in, for every run in every project.
+ *
+ * A run gets a copy of its project's vault, the team vault and its owner's vault in its own folder
+ * (work/<run>/vault/project, .../vault/team and .../vault/mine), so agents can read them, and even change their
+ * copies, without ever touching the originals. Agents can read everything in the vaults they get.
+ * Vaults live under data/vault, outside the project's git repository, so nothing in them is committed.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,22 +17,32 @@ import JSZip from 'jszip';
 import { dataPath } from './config.ts';
 import { del, get, post, put, sendFile, type Ctx } from './http.ts';
 import { HttpError, badRequest, notFound, safeJoin, str } from './util.ts';
+import { requireProject } from './projects.ts';
 
 export const MAX_FILE = 100 * 1024 * 1024;
 export const MAX_VAULT = 1024 * 1024 * 1024;
 /** What a run copies at most; a bigger vault is left out of the run (and the run is told so). */
 export const MAX_RUN_COPY = 200 * 1024 * 1024;
 
-export type VaultScope = 'mine' | 'team';
+export type VaultScope = 'mine' | 'team' | 'project';
 
-export function vaultDir(scope: VaultScope, userId: string): string {
+export function vaultDir(scope: VaultScope, userId: string, projectId?: string): string {
+  if (scope === 'project') {
+    if (!projectId || !/^[A-Za-z0-9_-]+$/.test(projectId)) throw badRequest('Choose a project');
+    return dataPath('vault', 'projects', projectId);
+  }
   return scope === 'team' ? dataPath('vault', 'team') : dataPath('vault', 'users', userId);
 }
 
-function scopeOf(ctx: Ctx): VaultScope {
+/** The vault a request is about. A project vault needs project access: viewer to read, editor to change. */
+function vaultOf(ctx: Ctx, write = false): { scope: VaultScope; dir: string; label: string } {
   const s = ctx.query.get('scope') || 'mine';
-  if (s !== 'mine' && s !== 'team') throw badRequest('Choose your vault or the team vault');
-  return s;
+  if (s !== 'mine' && s !== 'team' && s !== 'project') throw badRequest('Choose your vault, the team vault or a project vault');
+  if (s === 'project') {
+    const { project } = requireProject(ctx, String(ctx.query.get('projectId') || ''), write ? 'editor' : 'viewer');
+    return { scope: s, dir: vaultDir(s, ctx.user!.id, project.id), label: project.slug };
+  }
+  return { scope: s, dir: vaultDir(s, ctx.user!.id), label: s === 'team' ? 'team' : 'my' };
 }
 
 /** A path inside the vault: forward slashes, no empty, hidden-escaping or parent parts. */
@@ -65,14 +80,19 @@ export function listVault(dir: string): Entry[] {
 const used = (dir: string) => listVault(dir).reduce((n, e) => n + e.size, 0);
 
 /**
- * Copy the team vault and the owner's vault into a run folder. Returns what the prompt should say, or '' when both
- * are empty.
+ * Copy the run's project vault, the team vault and the owner's vault into a run folder. Returns what the prompt
+ * should say, or '' when all are empty. The project vault comes first: it is the most relevant to the run.
  */
-export function copyVaultsInto(workDirAbs: string, workDirRel: string, userId: string): string {
+export function copyVaultsInto(workDirAbs: string, workDirRel: string, userId: string, projectId?: string): string {
   const parts: string[] = [];
   let budget = MAX_RUN_COPY;
-  for (const [scope, label] of [['team', 'team vault'], ['mine', 'your vault']] as const) {
-    const src = vaultDir(scope, userId);
+  const scopes: [VaultScope, string][] = [
+    ...(projectId ? ([['project', 'project vault']] as [VaultScope, string][]) : []),
+    ['team', 'team vault'],
+    ['mine', 'your vault'],
+  ];
+  for (const [scope, label] of scopes) {
+    const src = vaultDir(scope, userId, projectId);
     const files = listVault(src).filter((e) => !e.dir);
     if (!files.length) continue;
     const size = files.reduce((n, e) => n + e.size, 0);
@@ -94,15 +114,13 @@ export function copyVaultsInto(workDirAbs: string, workDirRel: string, userId: s
 
 export function registerVaultRoutes(): void {
   get('/api/vault', (ctx) => {
-    const scope = scopeOf(ctx);
-    const dir = vaultDir(scope, ctx.user!.id);
+    const { scope, dir } = vaultOf(ctx);
     const files = listVault(dir);
     return { scope, files, used: files.reduce((n, e) => n + e.size, 0), limit: MAX_VAULT, maxFile: MAX_FILE };
   });
 
   put('/api/vault/file', async (ctx) => {
-    const scope = scopeOf(ctx);
-    const dir = vaultDir(scope, ctx.user!.id);
+    const { dir } = vaultOf(ctx, true);
     const rel = checkRel(ctx.query.get('path'));
     const buf = await ctx.raw(MAX_FILE);
     const target = safeJoin(dir, rel);
@@ -115,35 +133,34 @@ export function registerVaultRoutes(): void {
   });
 
   post('/api/vault/folder', async (ctx) => {
-    const scope = scopeOf(ctx);
+    const { dir } = vaultOf(ctx, true);
     const rel = checkRel((await ctx.json()).path);
-    fs.mkdirSync(safeJoin(vaultDir(scope, ctx.user!.id), rel), { recursive: true });
+    fs.mkdirSync(safeJoin(dir, rel), { recursive: true });
     return { ok: true, path: rel };
   });
 
   del('/api/vault/file', (ctx) => {
-    const scope = scopeOf(ctx);
-    const target = safeJoin(vaultDir(scope, ctx.user!.id), checkRel(ctx.query.get('path')));
+    const { dir } = vaultOf(ctx, true);
+    const target = safeJoin(dir, checkRel(ctx.query.get('path')));
     if (!fs.existsSync(target)) throw notFound('Not in the vault');
     fs.rmSync(target, { recursive: true, force: true });
     return { ok: true };
   });
 
   get('/api/vault/download', (ctx) => {
-    const scope = scopeOf(ctx);
+    const { dir } = vaultOf(ctx);
     const rel = checkRel(ctx.query.get('path'));
-    const target = safeJoin(vaultDir(scope, ctx.user!.id), rel);
+    const target = safeJoin(dir, rel);
     if (!fs.existsSync(target) || !fs.statSync(target).isFile()) throw notFound('Not in the vault');
     return sendFile(ctx.res, fs.readFileSync(target), 'application/octet-stream', path.basename(rel));
   });
 
   get('/api/vault/zip', async (ctx) => {
-    const scope = scopeOf(ctx);
-    const dir = vaultDir(scope, ctx.user!.id);
+    const { dir, label } = vaultOf(ctx);
     const files = listVault(dir).filter((e) => !e.dir);
     if (!files.length) throw new HttpError(404, 'The vault is empty');
     const zip = new JSZip();
     for (const f of files) zip.file(f.path, fs.readFileSync(path.join(dir, f.path)));
-    return sendFile(ctx.res, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }), 'application/zip', `${scope === 'team' ? 'team' : 'my'}-vault.zip`);
+    return sendFile(ctx.res, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }), 'application/zip', `${label}-vault.zip`);
   });
 }

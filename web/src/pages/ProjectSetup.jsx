@@ -13,7 +13,7 @@ import { api } from '../lib/api.js';
 import { useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
 import { useLoad, useAction } from '../lib/useAsync.js';
-import { href, go } from '../lib/router.js';
+import { href, go, parseHash } from '../lib/router.js';
 import { cx } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Badge, Button, ErrorNote, Field, Modal, Note, PageHeader, Spinner, useUi } from '../components/ui.jsx';
@@ -605,7 +605,8 @@ function SetupAgents({ projectId }) {
     import('./Builder.jsx').then((m) => setComponent(() => m.Builder));
   }, []);
   if (!Component) return <Spinner />;
-  return <Component />;
+  // Embedded pages read their sub-page from the route; here they start on their first view.
+  return <Component route={embeddedRoute()} />;
 }
 
 // ─── Team tab ────────────────────────────────────────────────────────────────
@@ -639,7 +640,12 @@ function SetupConfig({ projectId }) {
     import('./Configuration.jsx').then((m) => setComponent(() => m.Configuration));
   }, []);
   if (!Component) return <Spinner />;
-  return <Component />;
+  return <Component route={embeddedRoute()} />;
+}
+
+/** The current route with no sub-page, for a page shown inside a Setup tab. */
+function embeddedRoute() {
+  return { ...parseHash(), rest: [] };
 }
 
 // ─── Budget tab ───────────────────────────────────────────────────────────────
