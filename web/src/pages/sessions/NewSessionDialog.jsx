@@ -13,8 +13,124 @@ import { IntegrationPicker } from '../Integrations.jsx';
 import { PUSH_MODES } from './status.js';
 import { Icon } from '../../components/Icon.jsx';
 import { Button, ErrorNote, Field, Modal, Segmented, useUi } from '../../components/ui.jsx';
+import { PrecedenceTable } from '../ProjectSetup.jsx';
 
 const ENGINE_LABEL = { anthropic: 'Anthropic API', bedrock: 'Amazon Bedrock', kiro: 'Kiro CLI', demo: 'Demo' };
+
+/**
+ * Inline sheet for adding a repository without leaving the dialog.
+ * Uses the same form as RepositoryFix in ProjectSetup.jsx.
+ */
+function AddRepositorySheet({ projectId, onClose, onAdded }) {
+  const { toast } = useUi();
+  const sheetRef = useRef(null);
+  const conns = useLoad(() => api.get('/api/git-connections'), []);
+  const [mode, setMode] = useState('direct');
+  const [form, setForm] = useState({ provider: 'git', url: '', name: '', token: '', username: '', connectionId: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const connections = conns.data?.connections || [];
+
+  useEffect(() => {
+    const prev = document.activeElement;
+    sheetRef.current?.querySelector('input,select,button')?.focus();
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('keydown', onKey); prev?.focus?.(); };
+  }, [onClose]);
+
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const body = mode === 'connection'
+        ? { connectionId: form.connectionId, url: form.url, name: form.name }
+        : { provider: form.provider, url: form.url, name: form.name, token: form.token || undefined, username: form.username || undefined };
+      const r = await api.post(`/api/projects/${projectId}/repos`, body);
+      toast('Repository connected — cloning…');
+      onAdded(r.repo);
+      onClose();
+    } catch (e) {
+      setError(e);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Add repository" ref={sheetRef}>
+      <div className="sheet">
+        <header className="sheet-head">
+          <h2>Add repository</h2>
+          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+            <Icon name="x" size={17} />
+          </button>
+        </header>
+        <div className="sheet-body">
+          <form className="stack" onSubmit={save} noValidate>
+            <div className="row tight" role="group" aria-label="Repository type">
+              <button type="button" className={cx('btn btn-sm', mode === 'direct' && 'btn-primary')} onClick={() => setMode('direct')}>Direct URL</button>
+              <button type="button" className={cx('btn btn-sm', mode === 'connection' && 'btn-primary')} onClick={() => setMode('connection')}>Via a connection</button>
+            </div>
+            {mode === 'direct' ? (
+              <>
+                <Field label="Repository type">
+                  {(id) => (
+                    <select id={id} className="input" value={form.provider} onChange={set('provider')}>
+                      <option value="git">Other Git (HTTPS / SSH)</option>
+                      <option value="github">GitHub</option>
+                      <option value="codecommit">AWS CodeCommit</option>
+                    </select>
+                  )}
+                </Field>
+                <Field label="Repository address">
+                  {(id) => <input id={id} className="input mono" value={form.url} onChange={set('url')} placeholder="https://github.com/owner/repo" required />}
+                </Field>
+                <Field label="Display name (optional)">
+                  {(id) => <input id={id} className="input" value={form.name} onChange={set('name')} placeholder="Leave blank to use the repo name" />}
+                </Field>
+                {(form.provider === 'github' || form.provider === 'git') ? (
+                  <Field label="Token (optional)" hint="Stored encrypted.">
+                    {(id) => <input id={id} type="password" className="input mono" value={form.token} onChange={set('token')} autoComplete="off" />}
+                  </Field>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {!connections.length ? (
+                  <p className="muted small">No git connections yet. <a href="#/connections" onClick={onClose}>Add one on the Git connections page</a>.</p>
+                ) : (
+                  <Field label="Git connection">
+                    {(id) => (
+                      <select id={id} className="input" value={form.connectionId} onChange={set('connectionId')} required>
+                        <option value="">Choose a connection…</option>
+                        {connections.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name} · {c.provider}</option>
+                        ))}
+                      </select>
+                    )}
+                  </Field>
+                )}
+                <Field label="Repository URL">
+                  {(id) => <input id={id} className="input mono" value={form.url} onChange={set('url')} placeholder="https://github.com/owner/repo" required />}
+                </Field>
+                <Field label="Display name (optional)">
+                  {(id) => <input id={id} className="input" value={form.name} onChange={set('name')} />}
+                </Field>
+              </>
+            )}
+            <ErrorNote error={error} />
+            <div className="row">
+              <Button type="submit" variant="primary" busy={busy}>Connect and clone</Button>
+              <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const KINDS = [
   { value: 'session', label: 'Session', hint: 'Keeps working toward the goal on its own, iteration after iteration, until it is done or needs you.' },
@@ -164,11 +280,17 @@ function LimitFields({ f, set, kiro }) {
 }
 
 /** The repositories a session or run works in: one row each, with the branch its working copy starts from. */
-export function RepoRows({ rows, setRows, ready, session }) {
+export function RepoRows({ rows, setRows, ready, session, projectId, onRepoAdded }) {
+  const [addingRepo, setAddingRepo] = useState(false);
   const update = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const remove = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
   const used = new Set(rows.map((r) => r.repoId).filter(Boolean));
   const free = ready.filter((r) => !used.has(r.id));
+  const handleAdded = (repo) => {
+    if (onRepoAdded) onRepoAdded(repo);
+    // Auto-select the newly added repo
+    if (repo?.id) setRows((rs) => [...rs, { repoId: repo.id, branch: '' }]);
+  };
   return (
     <fieldset className="repo-rows">
       <legend className="field-label">Repositories (optional)</legend>
@@ -189,10 +311,34 @@ export function RepoRows({ rows, setRows, ready, session }) {
               ? 'The agents change a working copy on a new branch they name. Pushing follows the Agent pushes setting.'
               : 'The run gets its own working copy of the base branch.'}
         </span>
-        <Button size="sm" icon="plus" disabled={!free.length} onClick={() => setRows((rs) => [...rs, { repoId: free[0].id, branch: '' }])} title={free.length ? undefined : ready.length ? 'Every repository is already added' : 'Connect a repository on the Repositories page first'}>
-          Add repository
-        </Button>
+        <div className="row tight">
+          <Button size="sm" icon="plus" disabled={!free.length} onClick={() => setRows((rs) => [...rs, { repoId: free[0].id, branch: '' }])} title={free.length ? undefined : ready.length ? 'Every repository is already added' : 'Connect a repository below or on the Repositories page first'}>
+            Add repository
+          </Button>
+          {!ready.length && projectId ? (
+            <Button size="sm" variant="ghost" icon="plus" onClick={() => setAddingRepo(true)} title="Connect a new repository inline">
+              Connect repo
+            </Button>
+          ) : null}
+        </div>
       </div>
+      {!ready.length ? (
+        <p className="muted small">
+          No repositories connected yet.{' '}
+          {projectId ? (
+            <button type="button" className="btn-link small" onClick={() => setAddingRepo(true)}>Add one here</button>
+          ) : (
+            <a href="#" className="small">Connect a repository first.</a>
+          )}
+        </p>
+      ) : null}
+      {addingRepo && projectId ? (
+        <AddRepositorySheet
+          projectId={projectId}
+          onClose={() => setAddingRepo(false)}
+          onAdded={handleAdded}
+        />
+      ) : null}
     </fieldset>
   );
 }
@@ -220,6 +366,92 @@ function RepoRow({ row, options, onChange, onRemove, index }) {
         <Icon name="x" size={15} />
       </button>
     </li>
+  );
+}
+
+// ─── Settings precedence row for the launcher ────────────────────────────────
+
+/**
+ * The "Using: ..." line that expands into a full precedence table showing
+ * portal default → project → session-level settings.
+ */
+function SettingsPrecedenceRow({ engines, engine, f, effectiveKiro, project, setMore }) {
+  const [expanded, setExpanded] = useState(false);
+  const effectiveEngine = ENGINE_LABEL[engine || engines.default] ?? (engine || engines.default);
+  const effectiveModel = f.model;
+  const effectiveBudget = effectiveKiro ? `${f.budgetCredits} credits` : `$${f.budgetUsd}`;
+  const effectivePushMode = f.pushMode;
+  const effectiveLead = f.leadAgent || 'None';
+
+  if (!expanded) {
+    return (
+      <p className="ls-effective-settings small muted">
+        Using: <strong>{effectiveEngine}</strong>
+        {' · '}<strong>{effectiveModel}</strong>
+        {' · '}budget <strong>{effectiveBudget}</strong>
+        {' '}
+        <button type="button" className="btn-link small" onClick={() => setExpanded(true)}>Details</button>
+        {' '}
+        <button type="button" className="btn-link small" onClick={() => setMore(true)}>Change</button>
+      </p>
+    );
+  }
+
+  return (
+    <div className="ls-precedence-block">
+      <div className="row between">
+        <span className="field-label">Settings for this session</span>
+        <button type="button" className="btn-link small" onClick={() => setExpanded(false)}>Hide</button>
+      </div>
+      <table className="table compact precedence-table" aria-label="Settings precedence">
+        <thead>
+          <tr>
+            <th>Setting</th>
+            <th>Portal default</th>
+            <th>Project default</th>
+            <th>This session</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Engine / provider</td>
+            <td className="muted small">{ENGINE_LABEL[engines.default] ?? engines.default}</td>
+            <td className="muted small">{engine ? ENGINE_LABEL[engine] ?? engine : <span className="muted">Inherits portal</span>}</td>
+            <td><strong>{effectiveEngine}</strong></td>
+          </tr>
+          <tr>
+            <td>Model</td>
+            <td className="muted small">{project.default_model || 'sonnet'}</td>
+            <td className="muted small"><span className="muted">Inherits portal</span></td>
+            <td><strong>{effectiveModel}</strong></td>
+          </tr>
+          <tr>
+            <td>Lead agent</td>
+            <td className="muted small">{project.default_lead_agent || <span className="muted">None</span>}</td>
+            <td className="muted small"><span className="muted">Inherits project</span></td>
+            <td><strong>{f.leadAgent || project.default_lead_agent || 'None'}</strong></td>
+          </tr>
+          <tr>
+            <td>Budget</td>
+            <td className="muted small">{effectiveKiro ? `${engines.budgetCredits ?? 20} credits` : `$${engines.budgetUsd ?? 5}`}</td>
+            <td className="muted small"><span className="muted">Inherits portal</span></td>
+            <td><strong>{effectiveBudget}</strong></td>
+          </tr>
+          <tr>
+            <td>Agent pushes</td>
+            <td className="muted small">{engines.pushMode || 'never'}</td>
+            <td className="muted small"><span className="muted">Inherits portal</span></td>
+            <td><strong>{effectivePushMode}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      <p className="muted small">
+        <button type="button" className="btn-link small" onClick={() => setMore(true)}>Change session-level values</button>
+        {' · '}
+        <a href="#/settings" className="small">Portal settings</a>
+        {project.id ? <>{' · '}<a href={`#/p/${project.id}/setup`} className="small">Project settings</a></> : null}
+      </p>
+    </div>
   );
 }
 
@@ -486,15 +718,16 @@ export function NewSessionDialog({ prefill, onClose }) {
             />
           </div>
         ) : null}
-        {/* Effective settings line */}
+        {/* Effective settings line — expands into precedence table */}
         {kind === 'session' && engines.data ? (
-          <p className="ls-effective-settings small muted">
-            Using: <strong>{ENGINE_LABEL[engine || engines.data.default] ?? (engine || engines.data.default)}</strong>
-            {' · '}<strong>{f.model}</strong>
-            {' · '}budget <strong>{effectiveKiro ? `${f.budgetCredits} credits` : `$${f.budgetUsd}`}</strong>
-            {' '}
-            <button type="button" className="btn-link small" onClick={() => setMore(true)}>Change</button>
-          </p>
+          <SettingsPrecedenceRow
+            engines={engines.data}
+            engine={engine}
+            f={f}
+            effectiveKiro={effectiveKiro}
+            project={project}
+            setMore={setMore}
+          />
         ) : null}
 
         {isDoc ? (
@@ -562,7 +795,7 @@ export function NewSessionDialog({ prefill, onClose }) {
                 )}
               </Field>
             ) : null}
-            <RepoRows rows={rows} setRows={setRows} ready={ready} session={kind === 'session'} />
+            <RepoRows rows={rows} setRows={setRows} ready={ready} session={kind === 'session'} projectId={project.id} onRepoAdded={() => repos.reload(true)} />
             {kind === 'session' && !hasRepos ? (
               <label className="choice">
                 <input
@@ -630,7 +863,11 @@ export function NewSessionDialog({ prefill, onClose }) {
         </details>
         {!ready.length && !isDoc ? (
           <p className="muted small">
-            To let agents change code, <a href={href(project.id, 'repos')}>connect a repository</a>.
+            To let agents change code,{' '}
+            <a href={href(project.id, 'repos')} onClick={() => {}}>
+              connect a repository
+            </a>{' '}
+            or use the <em>Connect repo</em> button above.
           </p>
         ) : null}
         <ErrorNote error={error} />

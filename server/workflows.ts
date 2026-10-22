@@ -31,7 +31,7 @@ import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspace
 import { readIntegrationIds } from './integrations.ts';
 import { getSettings } from './settings.ts';
 import { git, redact } from './git.ts';
-import { checkConcurrency, isDraining } from './control-plane.ts';
+import { checkConcurrency, isDraining, concurrencyReason, queueReasonLabel, drainQueue } from './control-plane.ts';
 import { audit, auditRaw } from './audit.ts';
 import { getLoopSpec, type VerificationStep, type StopRules, type MemoryConfig, type EscalationConfig } from './loop-specs.ts';
 import { runPipeline, formatPipelineForPrompt, persistPipelineResult, appendProgress, readProgressFile, deleteProgressFile, isPlanPending, shouldPlanFirst, type PipelineResult } from './loop-verification.ts';
@@ -130,6 +130,8 @@ function view(w: Row) {
     trust_tools: Boolean(w.trust_tools),
     loop_spec_id: w.loop_spec_id ?? null,
     planning_gate: Boolean(w.planning_gate),
+    queue_reason: w.queue_reason || '',
+    queued_at: w.queued_at || null,
   };
 }
 
@@ -196,8 +198,22 @@ function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'paused' |
   log(id, 'status', reason ? `${status}: ${reason}` : status);
   childStopped(id);
 
-  // Record loop metrics when a session terminates (not just pauses).
+  // When a top-level session stops/finishes, drain the queue — start any waiting sessions.
   const terminal = ['done', 'blocked', 'failed', 'stopped'];
+  if (w && !w.parent_id && terminal.includes(status)) {
+    setImmediate(() => {
+      try {
+        const ids = drainQueue();
+        for (const qid of ids) {
+          kick(qid);
+        }
+      } catch {
+        /* queue drain is best-effort */
+      }
+    });
+  }
+
+  // Record loop metrics when a session terminates (not just pauses).
   if (w && terminal.includes(status)) {
     const specId = w.loop_spec_id ? String(w.loop_spec_id) : null;
     const savedState = one<Row>('SELECT * FROM loop_run_states WHERE workflow_id = ?', id);
@@ -744,6 +760,14 @@ export function resumeAfterRestart(ids: string[]): number {
     kick(id);
     n++;
   }
+  // On restart, also check if any queued sessions can now start (drain mode may have lifted, or capacity available).
+  try {
+    const started = drainQueue();
+    for (const qid of started) kick(qid);
+    n += started.length;
+  } catch {
+    /* best-effort */
+  }
   return n;
 }
 
@@ -1040,10 +1064,19 @@ export function registerWorkflowRoutes(): void {
     if (!repoId && !workspace && !playground) {
       throw badRequest('Pick a repository or workspace, or start it as a playground with no repository.');
     }
-    // Concurrency cap: check before starting (not when start=false / paused).
+    // Concurrency cap: queue instead of rejecting (when start=false, skip — it starts paused anyway).
+    let queued = false;
+    let queueReason = '';
     if (body.start !== false) {
-      const concurrencyError = checkConcurrency(ctx.user!.id, project.id);
-      if (concurrencyError) throw new HttpError(429, concurrencyError);
+      const reason = concurrencyReason(ctx.user!.id, project.id);
+      if (reason && reason !== 'drain') {
+        queued = true;
+        queueReason = reason;
+      } else if (reason === 'drain') {
+        // During drain, still create as queued (held until drain lifts)
+        queued = true;
+        queueReason = reason;
+      }
     }
     const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
     const leadAgent = checkLead(project, body.leadAgent, engine);
@@ -1054,8 +1087,10 @@ export function registerWorkflowRoutes(): void {
       project_id: project.id,
       title,
       goal,
-      status: body.start === false ? 'paused' : 'running',
-      stop_reason: body.start === false ? 'Not started yet. Press Resume to start.' : '',
+      status: queued ? 'queued' : (body.start === false ? 'paused' : 'running'),
+      stop_reason: queued ? queueReasonLabel(queueReason) : (body.start === false ? 'Not started yet. Press Resume to start.' : ''),
+      queue_reason: queueReason,
+      queued_at: queued ? now() : null,
       repo_id: repoId,
       branch: single ? str(body.branch, 'Branch', { max: 200, optional: true }).trim() || null : (repos[0]?.branch ?? null),
       repos: JSON.stringify(repos.length > 1 ? repos : []),
@@ -1089,7 +1124,7 @@ export function registerWorkflowRoutes(): void {
       throw e;
     }
     audit(ctx, 'session.start', `workflow:${id}`, { projectId: project.id, title, start: body.start !== false });
-    if (body.start !== false) kick(id);
+    if (!queued && body.start !== false) kick(id);
     return { workflow: view(getWorkflow(id)) };
   });
 
@@ -1200,10 +1235,22 @@ export function registerWorkflowRoutes(): void {
     if (overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first.');
     // Concurrency cap applies when resuming a paused top-level session.
     if (!w.parent_id) {
-      const concurrencyError = checkConcurrency(ctx.user!.id, w.project_id);
-      if (concurrencyError) throw new HttpError(429, concurrencyError);
+      const reason = concurrencyReason(ctx.user!.id, w.project_id);
+      if (reason && reason !== 'drain') {
+        // Queue the session instead of rejecting.
+        const label = queueReasonLabel(reason);
+        patch(w.id, { status: 'queued', queue_reason: reason, queued_at: now(), stop_reason: label });
+        log(w.id, 'status', `Queued: ${label}`);
+        audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id, queued: true });
+        return { workflow: view(getWorkflow(w.id)) };
+      } else if (reason === 'drain') {
+        patch(w.id, { status: 'queued', queue_reason: 'drain', queued_at: now(), stop_reason: queueReasonLabel('drain') });
+        log(w.id, 'status', 'Queued during server drain.');
+        audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id, queued: true });
+        return { workflow: view(getWorkflow(w.id)) };
+      }
     }
-    patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0, pending_push: '' });
+    patch(w.id, { status: 'running', stop_reason: '', queue_reason: '', queued_at: null, burst_start: w.iteration, waiting_children: 0, pending_push: '' });
     log(w.id, 'status', 'Resumed');
     audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id });
     kick(w.id);
@@ -1228,6 +1275,17 @@ export function registerWorkflowRoutes(): void {
     const runId = driving.get(w.id)?.runId ?? w.last_run_id;
     if (runId && isActive(runId)) stopRun(runId);
     audit(ctx, 'session.stop', `workflow:${w.id}`, { projectId: w.project_id });
+    return { workflow: view(getWorkflow(w.id)) };
+  });
+
+  // Cancel a queued (waiting) session. Changes its status to 'stopped'.
+  post('/api/workflows/:id/cancel-queued', (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id, 'editor');
+    if (w.status !== 'queued') throw badRequest('This session is not queued');
+    patch(w.id, { status: 'stopped', queue_reason: '', queued_at: null, stop_reason: `Cancelled while queued by ${ctx.user!.name}.` });
+    log(w.id, 'status', `Cancelled while queued by ${ctx.user!.name}`);
+    audit(ctx, 'session.stop', `workflow:${w.id}`, { projectId: w.project_id, wasQueued: true });
     return { workflow: view(getWorkflow(w.id)) };
   });
 

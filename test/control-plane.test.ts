@@ -4,13 +4,14 @@
  * Covers:
  *  1. Audit log: rows written for mutating actions; admin API with filters/pagination.
  *  2. Budget ceilings: portal-wide, per-user, per-project.
- *  3. Concurrency caps: global, per-user, per-project; 429 on breach.
- *  4. Graceful drain: isDraining() gate, drain API.
+ *  3. Concurrency caps: global, per-user, per-project; sessions queued (not 429) on cap breach.
+ *  4. Graceful drain: isDraining() gate, drain API; sessions queued (not dropped) during drain.
  *  5. Durable loop state: loop_run_states persisted and restored.
  *  6. Setup endpoint hardening: 409 after first admin, 429 after 3 attempts.
  *  7. Approval SLA: overdue flag published when past SLA.
  *  8. Control plane status API.
  *  9. Worktree cleanup: TTL job skips dirty trees.
+ * 10. Queue management: drainQueue() starts waiting sessions; cancel-queued endpoint.
  */
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -181,7 +182,7 @@ describe('concurrency caps', () => {
     }
   });
 
-  test('POST /api/projects/:pid/workflows returns 429 when concurrency cap is breached', async () => {
+  test('POST /api/projects/:pid/workflows returns queued status when concurrency cap is breached', async () => {
     const { run: dbRun } = await import('../server/db.ts');
     const { updateSettings } = await import('../server/settings.ts');
 
@@ -197,9 +198,13 @@ describe('concurrency caps', () => {
     );
 
     try {
-      const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'Should fail', playground: true });
-      assert.equal(r.status, 429, 'should return 429');
-      assert.match(r.data.error, /1 session/i);
+      const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'Should queue', playground: true });
+      // Over cap: session is created but with status='queued' (not rejected with 429)
+      assert.equal(r.status, 200, 'should return 200 and create a queued session');
+      assert.equal(r.data.workflow.status, 'queued', 'session should be queued');
+      assert.ok(r.data.workflow.queue_reason, 'queue_reason should be set');
+      // Cleanup the queued session
+      await admin.del(`/api/workflows/${r.data.workflow.id}`);
     } finally {
       dbRun('DELETE FROM workflows WHERE id = ?', wid);
       updateSettings({ controlPlane: { perUserMax: 5, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
@@ -218,11 +223,14 @@ describe('drain mode', () => {
     assert.ok(r.drain.startedAt, 'startedAt set');
   });
 
-  test('drain mode blocks new sessions', async () => {
+  test('drain mode queues new sessions (not 429)', async () => {
     // drain is active from the previous test
-    const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'Should be blocked', playground: true });
-    assert.equal(r.status, 429, 'new session should be blocked during drain');
-    assert.match(r.data.error, /restarting/i);
+    const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'Should be queued', playground: true });
+    // Per the plan: over the cap (drain mode), a session must be created and wait in a visible 'queued' state
+    assert.equal(r.status, 200, 'new session should be accepted (queued)');
+    assert.equal(r.data.workflow.status, 'queued', 'session should be queued during drain');
+    assert.equal(r.data.workflow.queue_reason, 'drain', 'queue_reason should be drain');
+    await admin.del(`/api/workflows/${r.data.workflow.id}`);
   });
 
   test('admin can disable drain mode', async () => {
@@ -596,5 +604,145 @@ describe('controlPlane settings', () => {
     const { updateSettings } = await import('../server/settings.ts');
     assert.throws(() => updateSettings({ controlPlane: { perUserMax: -1 } }), /must be a whole number/i);
     assert.throws(() => updateSettings({ controlPlane: { drainTimeoutSeconds: 2 } }), /must be a whole number/i);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. Queue management
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('queue management', () => {
+  test('session is queued (not rejected) when per-user cap is breached', async () => {
+    const { run: dbRun } = await import('../server/db.ts');
+    const { updateSettings } = await import('../server/settings.ts');
+    updateSettings({ controlPlane: { perUserMax: 1, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
+
+    const adminUser = (await admin.get('/api/auth/me')).user;
+    const wid = `w_q1_${Date.now()}`;
+    dbRun(
+      "INSERT INTO workflows (id, project_id, title, goal, status, stop_reason, model, budget_usd, max_iterations, verify_command, rules, iteration, burst_start, spent_usd, work_branch, lead_agent, jira_key, jira_summary, jira_url, summary, depth, push_mode, budget_credits, spent_credits, playground, trust_tools, created_by, created_at, updated_at) VALUES (?, ?, 'q1', 'x', 'running', '', 'sonnet', 5, 8, '', '', 0, 0, 0, '', '', '', '', '', '', 0, 'never', 20, 0, 0, 0, ?, datetime('now'), datetime('now'))",
+      wid, pid, adminUser.id,
+    );
+
+    try {
+      const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'queued session', playground: true });
+      assert.equal(r.status, 200, 'should create a queued session, not 429');
+      const w = r.data.workflow;
+      assert.equal(w.status, 'queued', 'workflow status should be queued');
+      assert.ok(w.queue_reason, 'queue_reason should be set');
+      assert.ok(w.queued_at, 'queued_at should be set');
+      // Cleanup
+      await admin.del(`/api/workflows/${w.id}`);
+    } finally {
+      dbRun('DELETE FROM workflows WHERE id = ?', wid);
+      updateSettings({ controlPlane: { perUserMax: 5, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
+    }
+  });
+
+  test('drainQueue starts a queued session when a slot opens up', async () => {
+    const { run: dbRun, one: dbOne } = await import('../server/db.ts');
+    const { drainQueue } = await import('../server/control-plane.ts');
+    const { updateSettings } = await import('../server/settings.ts');
+    const adminUser = (await admin.get('/api/auth/me')).user;
+
+    updateSettings({ controlPlane: { perUserMax: 1, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
+
+    // Create a queued session manually
+    const qid = `w_q2_${Date.now()}`;
+    dbRun(
+      "INSERT INTO workflows (id, project_id, title, goal, status, queue_reason, queued_at, stop_reason, model, budget_usd, max_iterations, verify_command, rules, iteration, burst_start, spent_usd, work_branch, lead_agent, jira_key, jira_summary, jira_url, summary, depth, push_mode, budget_credits, spent_credits, playground, trust_tools, created_by, created_at, updated_at) VALUES (?, ?, 'queued', 'x', 'queued', 'user:1', datetime('now'), 'Queued', 'sonnet', 5, 8, '', '', 0, 0, 0, '', '', '', '', '', '', 0, 'never', 20, 0, 0, 0, ?, datetime('now'), datetime('now'))",
+      qid, pid, adminUser.id,
+    );
+
+    try {
+      // With no running sessions, drainQueue should start the queued session
+      const started = drainQueue();
+      assert.ok(started.includes(qid), 'drainQueue should return the queued session id');
+      const w = dbOne<any>('SELECT status FROM workflows WHERE id = ?', qid);
+      assert.equal(w.status, 'running', 'queued session should transition to running');
+    } finally {
+      dbRun('DELETE FROM workflows WHERE id = ?', qid);
+      updateSettings({ controlPlane: { perUserMax: 5, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
+    }
+  });
+
+  test('cancel-queued endpoint stops a queued session', async () => {
+    const adminUser = (await admin.get('/api/auth/me')).user;
+    const { run: dbRun } = await import('../server/db.ts');
+    const { updateSettings } = await import('../server/settings.ts');
+
+    updateSettings({ controlPlane: { perUserMax: 1, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
+
+    // Insert a running session to cause queueing
+    const runningWid = `w_q3r_${Date.now()}`;
+    dbRun(
+      "INSERT INTO workflows (id, project_id, title, goal, status, stop_reason, model, budget_usd, max_iterations, verify_command, rules, iteration, burst_start, spent_usd, work_branch, lead_agent, jira_key, jira_summary, jira_url, summary, depth, push_mode, budget_credits, spent_credits, playground, trust_tools, created_by, created_at, updated_at) VALUES (?, ?, 'running', 'x', 'running', '', 'sonnet', 5, 8, '', '', 0, 0, 0, '', '', '', '', '', '', 0, 'never', 20, 0, 0, 0, ?, datetime('now'), datetime('now'))",
+      runningWid, pid, adminUser.id,
+    );
+
+    try {
+      // Create a queued session
+      const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'to be cancelled', playground: true });
+      assert.equal(r.status, 200);
+      const queuedWid = r.data.workflow.id;
+      assert.equal(r.data.workflow.status, 'queued');
+
+      // Cancel it
+      const cr = await admin.req('POST', `/api/workflows/${queuedWid}/cancel-queued`, {});
+      assert.equal(cr.status, 200, 'cancel-queued should succeed');
+      assert.equal(cr.data.workflow.status, 'stopped', 'session should be stopped');
+
+      // Cleanup
+      await admin.del(`/api/workflows/${queuedWid}`);
+    } finally {
+      dbRun('DELETE FROM workflows WHERE id = ?', runningWid);
+      updateSettings({ controlPlane: { perUserMax: 5, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
+    }
+  });
+
+  test('admin control-plane status shows queued session count', async () => {
+    const { run: dbRun } = await import('../server/db.ts');
+    const adminUser = (await admin.get('/api/auth/me')).user;
+
+    const qid = `w_qcp_${Date.now()}`;
+    dbRun(
+      "INSERT INTO workflows (id, project_id, title, goal, status, queue_reason, queued_at, stop_reason, model, budget_usd, max_iterations, verify_command, rules, iteration, burst_start, spent_usd, work_branch, lead_agent, jira_key, jira_summary, jira_url, summary, depth, push_mode, budget_credits, spent_credits, playground, trust_tools, created_by, created_at, updated_at) VALUES (?, ?, 'qcp', 'x', 'queued', 'user:1', datetime('now'), 'Queued', 'sonnet', 5, 8, '', '', 0, 0, 0, '', '', '', '', '', '', 0, 'never', 20, 0, 0, 0, ?, datetime('now'), datetime('now'))",
+      qid, pid, adminUser.id,
+    );
+
+    try {
+      const r = await admin.get('/api/admin/control-plane');
+      assert.ok(r.sessions.queued >= 1, 'queued count should reflect the queued session');
+    } finally {
+      dbRun('DELETE FROM workflows WHERE id = ?', qid);
+    }
+  });
+
+  test('queuePosition returns correct 1-based position', async () => {
+    const { run: dbRun } = await import('../server/db.ts');
+    const { queuePosition } = await import('../server/control-plane.ts');
+    const adminUser = (await admin.get('/api/auth/me')).user;
+
+    const q1 = `w_qp1_${Date.now()}`;
+    const q2 = `w_qp2_${Date.now() + 1}`;
+    dbRun(
+      "INSERT INTO workflows (id, project_id, title, goal, status, queue_reason, queued_at, stop_reason, model, budget_usd, max_iterations, verify_command, rules, iteration, burst_start, spent_usd, work_branch, lead_agent, jira_key, jira_summary, jira_url, summary, depth, push_mode, budget_credits, spent_credits, playground, trust_tools, created_by, created_at, updated_at) VALUES (?, ?, 'q1', 'x', 'queued', 'user:1', '2024-01-01T00:00:00.000Z', 'Q', 'sonnet', 5, 8, '', '', 0, 0, 0, '', '', '', '', '', '', 0, 'never', 20, 0, 0, 0, ?, datetime('now'), datetime('now'))",
+      q1, pid, adminUser.id,
+    );
+    dbRun(
+      "INSERT INTO workflows (id, project_id, title, goal, status, queue_reason, queued_at, stop_reason, model, budget_usd, max_iterations, verify_command, rules, iteration, burst_start, spent_usd, work_branch, lead_agent, jira_key, jira_summary, jira_url, summary, depth, push_mode, budget_credits, spent_credits, playground, trust_tools, created_by, created_at, updated_at) VALUES (?, ?, 'q2', 'x', 'queued', 'user:1', '2024-01-02T00:00:00.000Z', 'Q', 'sonnet', 5, 8, '', '', 0, 0, 0, '', '', '', '', '', '', 0, 'never', 20, 0, 0, 0, ?, datetime('now'), datetime('now'))",
+      q2, pid, adminUser.id,
+    );
+
+    try {
+      const pos1 = queuePosition(q1);
+      const pos2 = queuePosition(q2);
+      assert.ok(pos1 >= 1, 'first queued session should have position >= 1');
+      assert.ok(pos2 > pos1, 'second queued session should have a higher position');
+    } finally {
+      dbRun('DELETE FROM workflows WHERE id = ?', q1);
+      dbRun('DELETE FROM workflows WHERE id = ?', q2);
+    }
   });
 });

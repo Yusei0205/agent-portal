@@ -21,7 +21,7 @@ import { post, get } from './http.ts';
 import { requireProject, getProject, notifyProject } from './projects.ts';
 import { badRequest, notFound, newId, now, str, parseJson, HttpError } from './util.ts';
 import { audit } from './audit.ts';
-import { checkConcurrency, isDraining } from './control-plane.ts';
+import { checkConcurrency, isDraining, concurrencyReason, queueReasonLabel, drainQueue } from './control-plane.ts';
 import { assertBudget } from './settings.ts';
 import { getLoopSpec, getLoopSpecsByProject, fillTemplate, checkTriggerRateLimit, isDuplicateTrigger, recordTriggerFire, type LoopSpec } from './loop-specs.ts';
 import type { AuditAction } from './audit.ts';
@@ -127,12 +127,13 @@ export async function createWorkflowFromSpec(
   vars: Record<string, string> = {},
   startNow = true,
 ): Promise<Row> {
-  if (isDraining()) throw badRequest('The server is restarting soon. New sessions are paused.');
+  // During drain, queue the session (do not reject — trigger-fired sessions must never be lost).
+  const drainingNow = isDraining();
   const project = getProject(spec.project_id);
 
-  // Concurrency cap
-  const capErr = checkConcurrency(userId, project.id);
-  if (capErr) throw badRequest(capErr);
+  // Concurrency cap: queue instead of rejecting.
+  const capReason = drainingNow ? 'drain' : concurrencyReason(userId, project.id);
+  const shouldQueue = startNow && capReason !== null;
 
   // Budget
   try {
@@ -156,8 +157,10 @@ export async function createWorkflowFromSpec(
     project_id: project.id,
     title,
     goal,
-    status: startNow ? 'running' : 'paused',
-    stop_reason: startNow ? '' : 'Not started yet. Press Resume to start.',
+    status: shouldQueue ? 'queued' : (startNow ? 'running' : 'paused'),
+    stop_reason: shouldQueue ? queueReasonLabel(capReason!) : (startNow ? '' : 'Not started yet. Press Resume to start.'),
+    queue_reason: shouldQueue ? capReason! : '',
+    queued_at: shouldQueue ? ts : null,
     model: 'sonnet',
     budget_usd: budgetUsd,
     budget_credits: 20,
@@ -200,7 +203,7 @@ export async function createWorkflowFromSpec(
     ts,
   );
 
-  if (startNow) {
+  if (startNow && !shouldQueue) {
     const { kick } = await import('./workflows.ts') as any;
     if (typeof kick === 'function') kick(id);
   }

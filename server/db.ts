@@ -633,6 +633,10 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL,
     used_at    TEXT
   );`,
+  // Gap 1: Queue instead of reject — sessions over a concurrency cap wait in 'queued' state.
+  // queue_reason records which cap was hit; queued_at records when it entered the queue.
+  `ALTER TABLE workflows ADD COLUMN queue_reason TEXT NOT NULL DEFAULT '';
+  ALTER TABLE workflows ADD COLUMN queued_at TEXT;`,
 ];
 
 let db: DatabaseSync | null = null;

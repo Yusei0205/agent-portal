@@ -152,13 +152,17 @@ export function escalateSession(workflowId: string, reason: 'blocked' | 'failed'
 /* ------------------------------------------------------------------ */
 
 export interface InboxItem {
-  kind: 'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'done';
+  kind: 'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'done' | 'running' | 'queued';
   workflowId: string;
   projectId: string;
   projectName: string;
   sessionTitle: string;
   detail: string;
   prUrl: string | null;
+  /** Work branch for done items without a PR (used for Code review hand-off). */
+  workBranch?: string | null;
+  /** First repo id for done items (used for Code review hand-off). */
+  repoId?: string | null;
   createdAt: string;
   isOverdue: boolean;
 }
@@ -346,13 +350,16 @@ export function buildInbox(userId: string, projectFilter: string | null): InboxI
       );
   for (const w of doneRows) {
     let prUrl: string | null = null;
+    let workBranch: string | null = null;
     if (w.last_push_data) {
       try {
         const d = JSON.parse(w.last_push_data);
         const results: any[] = d.results ?? [];
         prUrl = results.find((r: any) => r.pr)?.pr ?? null;
+        workBranch = d.branch ?? null;
       } catch { /* skip */ }
     }
+    workBranch = workBranch ?? (w.work_branch || null);
     items.push({
       kind: 'done',
       workflowId: String(w.id),
@@ -361,6 +368,44 @@ export function buildInbox(userId: string, projectFilter: string | null): InboxI
       sessionTitle: String(w.title),
       detail: String(w.stop_reason || w.summary || '').slice(0, 200),
       prUrl,
+      workBranch,
+      repoId: (w.repos ? (() => { try { const r = JSON.parse(w.repos); return r[0]?.repoId ?? w.repo_id ?? null; } catch { return w.repo_id ?? null; } })() : w.repo_id ?? null),
+      createdAt: String(w.updated_at),
+      isOverdue: false,
+    });
+  }
+
+  // -- Running and queued sessions (for the "Running" filter) --
+  const runningRows = projectFilter
+    ? all<Row>(
+        `SELECT w.*, p.name AS project_name
+           FROM workflows w
+           JOIN projects p ON p.id = w.project_id
+          WHERE w.status IN ('running', 'queued') AND w.depth = 0 AND w.project_id = ?
+            AND (w.created_by = ? OR EXISTS (SELECT 1 FROM project_members WHERE project_id = w.project_id AND user_id = ?))
+          ORDER BY w.updated_at DESC LIMIT 50`,
+        projectFilter, userId, userId,
+      )
+    : all<Row>(
+        `SELECT w.*, p.name AS project_name
+           FROM workflows w
+           JOIN projects p ON p.id = w.project_id
+          WHERE w.status IN ('running', 'queued') AND w.depth = 0
+            AND (w.created_by = ? OR EXISTS (SELECT 1 FROM project_members WHERE project_id = w.project_id AND user_id = ?))
+          ORDER BY w.updated_at DESC LIMIT 50`,
+        userId, userId,
+      );
+  for (const w of runningRows) {
+    items.push({
+      kind: w.status === 'queued' ? 'queued' : 'running',
+      workflowId: String(w.id),
+      projectId: String(w.project_id),
+      projectName: String(w.project_name ?? ''),
+      sessionTitle: String(w.title),
+      detail: w.status === 'queued'
+        ? (w.queue_reason ? `Queued: ${String(w.queue_reason).startsWith('user:') ? 'session limit reached' : String(w.queue_reason).startsWith('project:') ? 'project limit' : 'waiting for a slot'}` : 'Waiting for a slot')
+        : String(w.summary || '').slice(0, 200),
+      prUrl: null,
       createdAt: String(w.updated_at),
       isOverdue: false,
     });
@@ -531,11 +576,13 @@ export function registerLoopEngineRoutes(): void {
     // Filter by mode
     let filtered = items;
     if (filterMode === 'needs_you') {
-      filtered = items.filter((i) => i.kind !== 'done');
+      filtered = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation'].includes(i.kind));
+    } else if (filterMode === 'running') {
+      filtered = items.filter((i) => i.kind === 'running' || i.kind === 'queued');
     } else if (filterMode === 'done') {
       filtered = items.filter((i) => i.kind === 'done');
     }
-    const needsYouCount = items.filter((i) => i.kind !== 'done').length;
+    const needsYouCount = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation'].includes(i.kind)).length;
     ctx.res.setHeader('X-Inbox-Needs-You', String(needsYouCount));
     return { items: filtered, needs_you: needsYouCount };
   });

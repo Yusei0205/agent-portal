@@ -383,10 +383,11 @@ function EscalationCard({ item, onDone }) {
  * A running card — just a status update, no action required.
  */
 function RunningCard({ item }) {
+  const isQueued = item.kind === 'queued';
   return (
-    <div className="inbox-card inbox-running" role="article" aria-label={`Running: ${item.sessionTitle}`}>
+    <div className={cx('inbox-card', isQueued ? 'inbox-queued' : 'inbox-running')} role="article" aria-label={`${isQueued ? 'Queued' : 'Running'}: ${item.sessionTitle}`}>
       <div className="inbox-card-head">
-        <Badge status="running">Running</Badge>
+        <Badge status={isQueued ? 'queued' : 'running'}>{isQueued ? 'Queued' : 'Running'}</Badge>
         <span className="inbox-project">{item.projectName}</span>
         <span className="muted small">{timeAgo(item.createdAt)}</span>
       </div>
@@ -409,9 +410,26 @@ function RunningCard({ item }) {
  * A done card with PR link and Code review hand-off.
  */
 function DoneCard({ item }) {
-  const reviewHref = item.prUrl
-    ? `#/p/${item.projectId}/review?branch=${encodeURIComponent(item.prUrl)}`
-    : `#/p/${item.projectId}/review`;
+  // Build the code review link: prefer PR number, fall back to branch, fall back to plain review page.
+  let reviewHref;
+  if (item.prUrl) {
+    // Extract PR number from the URL if it's a GitHub PR URL (e.g. https://github.com/owner/repo/pull/42)
+    const prMatch = item.prUrl.match(/\/pull\/(\d+)/);
+    const prNumber = prMatch ? prMatch[1] : null;
+    if (prNumber && item.repoId) {
+      reviewHref = `#/p/${item.projectId}/review?repo=${encodeURIComponent(item.repoId)}&pr=${prNumber}`;
+    } else if (item.repoId) {
+      reviewHref = `#/p/${item.projectId}/review?repo=${encodeURIComponent(item.repoId)}`;
+    } else {
+      reviewHref = `#/p/${item.projectId}/review`;
+    }
+  } else if (item.workBranch && item.repoId) {
+    reviewHref = `#/p/${item.projectId}/review?repo=${encodeURIComponent(item.repoId)}&branch=${encodeURIComponent(item.workBranch)}`;
+  } else if (item.repoId) {
+    reviewHref = `#/p/${item.projectId}/review?repo=${encodeURIComponent(item.repoId)}`;
+  } else {
+    reviewHref = `#/p/${item.projectId}/review`;
+  }
 
   return (
     <div className="inbox-card inbox-done" role="article" aria-label={`Done: ${item.sessionTitle}`}>
@@ -450,6 +468,7 @@ function InboxCard({ item, onDone }) {
     case 'plan_pending': return <PlanCard item={item} onDone={onDone} />;
     case 'escalation': return <EscalationCard item={item} onDone={onDone} />;
     case 'done': return <DoneCard item={item} />;
+    case 'queued': return <RunningCard item={item} />;
     default: return <RunningCard item={item} />;
   }
 }
@@ -519,7 +538,7 @@ export function Inbox() {
   const grouped = items
     ? {
         needs_you: items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation'].includes(i.kind)),
-        running: items.filter((i) => i.kind === 'running'),
+        running: items.filter((i) => i.kind === 'running' || i.kind === 'queued'),
         done: items.filter((i) => i.kind === 'done'),
       }
     : { needs_you: [], running: [], done: [] };

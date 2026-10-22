@@ -26,6 +26,7 @@ import { useSortable } from '../lib/useSortable.js';
 import { Badge, Button, Empty, ErrorNote, PageHeader, Spinner } from '../components/ui.jsx';
 import { Icon } from '../components/Icon.jsx';
 import { SortHeader } from '../components/SortHeader.jsx';
+import { useApp } from '../lib/context.js';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
@@ -1193,6 +1194,150 @@ function LoopMetricsSection({ projectId, days, reduced }) {
 
 // ─── Main exported component ─────────────────────────────────────────────────
 
+// ─── User & team spend section (admin: all users; members: own) ──────────────
+
+function UserSpendSection({ projectId }) {
+  const { user } = useApp();
+  const isAdmin = user?.is_admin;
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    const url = isAdmin ? '/api/usage/users' : '/api/usage/me';
+    api.get(url).then((r) => { setData(r); setError(null); }).catch(setError).finally(() => setLoading(false));
+  }, [isAdmin]);
+
+  if (loading) return <div className="pad"><Spinner /></div>;
+  if (error) return null; // non-critical; don't block the rest of insights
+  if (!data) return null;
+
+  // Admin view: all users table with team grouping
+  if (isAdmin && data.users) {
+    const users = data.users;
+    const since = data.since;
+    const fmtSince = since ? new Date(since).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : '';
+    // Group by team (users may be in multiple teams; show ungrouped if no teams)
+    const teamGroups = new Map();
+    for (const u of users) {
+      for (const t of (u.teams || [])) {
+        if (!teamGroups.has(t.team_id)) teamGroups.set(t.team_id, { name: t.team_name, users: [] });
+        teamGroups.get(t.team_id).users.push(u);
+      }
+    }
+    const ungrouped = users.filter((u) => !u.teams?.length);
+    return (
+      <section className="ins-user-spend" aria-label="User spend this month">
+        <h2 className="ins-section-title">User spend{fmtSince ? ` — ${fmtSince}` : ''} (admin view)</h2>
+        {teamGroups.size > 0 ? (
+          <>
+            {[...teamGroups.values()].map((tg) => (
+              <div key={tg.name} className="ins-team-group">
+                <h3 className="ins-team-name">{tg.name}</h3>
+                <UserSpendTable users={tg.users} isAdmin />
+              </div>
+            ))}
+            {ungrouped.length > 0 ? (
+              <div className="ins-team-group">
+                <h3 className="ins-team-name">No team</h3>
+                <UserSpendTable users={ungrouped} isAdmin />
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <UserSpendTable users={users} isAdmin />
+        )}
+      </section>
+    );
+  }
+
+  // Member view: own spend only
+  const me = data;
+  const byMonth = me.by_month ?? [];
+  const prev = byMonth[1];
+  return (
+    <section className="ins-user-spend" aria-label="My spend">
+      <h2 className="ins-section-title">My spend</h2>
+      <div className="ins-kpis">
+        <div className="ins-kpi">
+          <span className="ins-kpi-val">{money(me.month_usd ?? 0, 2)}</span>
+          <span className="ins-kpi-label">this month</span>
+        </div>
+        {prev ? (
+          <div className="ins-kpi">
+            <span className="ins-kpi-val">{money(prev.usd ?? 0, 2)}</span>
+            <span className="ins-kpi-label">last month</span>
+          </div>
+        ) : null}
+        {me.user?.monthly_budget_usd ? (
+          <div className="ins-kpi">
+            <span className="ins-kpi-val">{money(me.user.monthly_budget_usd, 2)}</span>
+            <span className="ins-kpi-label">monthly cap</span>
+          </div>
+        ) : null}
+      </div>
+      {(me.by_project || []).length > 0 ? (
+        <table className="table compact" aria-label="My spend by project">
+          <thead><tr><th>Project</th><th className="num">This month</th><th className="num">Runs</th></tr></thead>
+          <tbody>
+            {me.by_project.map((p) => (
+              <tr key={p.id}>
+                <td>{p.name}</td>
+                <td className="num">{money(p.usd ?? 0, 2)}</td>
+                <td className="num">{p.runs ?? 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </section>
+  );
+}
+
+function UserSpendTable({ users, isAdmin }) {
+  const USER_COLS = [
+    { key: 'name',  label: 'Name',        accessor: 'name',      type: 'text' },
+    { key: 'month', label: 'This month',   accessor: 'month_usd', type: 'number' },
+    { key: 'runs',  label: 'Runs',         accessor: 'month_runs',type: 'number' },
+    { key: 'cap',   label: 'Monthly cap',  accessor: (u) => u.monthly_budget_usd ?? 0, type: 'number' },
+  ];
+  const { sorted, sortKey, sortDir, toggle } = useSortable(users, { columns: USER_COLS, storageKey: 'sort:ins:users' });
+  return (
+    <table className="table compact" aria-label="User spend">
+      <thead>
+        <tr>
+          <SortHeader col={USER_COLS[0]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+          <SortHeader col={USER_COLS[1]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+          <SortHeader col={USER_COLS[2]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+          <SortHeader col={USER_COLS[3]} sortKey={sortKey} sortDir={sortDir} onSort={toggle} className="num" />
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((u) => {
+          const budget = u.monthly_budget_usd;
+          const pct = budget && budget > 0 ? Math.round(((u.month_usd ?? 0) / budget) * 100) : null;
+          return (
+            <tr key={u.id}>
+              <td>{u.name}</td>
+              <td className="num">
+                {money(u.month_usd ?? 0, 2)}
+                {pct !== null ? (
+                  <span className={cx('ins-budget-pct small', pct >= 100 && 'danger', pct >= 80 && 'warn')}>
+                    {' '}{pct}%
+                  </span>
+                ) : null}
+              </td>
+              <td className="num">{u.month_runs ?? 0}</td>
+              <td className="num">{budget ? money(budget, 0) : <span className="muted">—</span>}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 export function Insights({ projectId }) {
   const [filters, setFilters] = useState({
     days: '30',
@@ -1274,6 +1419,7 @@ export function Insights({ projectId }) {
             onSelectAgent={setSelectedAgent}
           />
           <LoopMetricsSection projectId={projectId} days={filters.days} reduced={reduced} />
+          {!projectId ? <UserSpendSection /> : null}
         </>
       ) : null}
     </div>

@@ -1,5 +1,6 @@
 // How a session's state reads in the list and the header.
 export const STATUS = {
+  queued: { tone: 'muted', label: 'Queued' },
   running: { tone: 'accent', label: 'Running by itself' },
   done: { tone: 'ok', label: 'Ready for review' },
   paused: { tone: 'warn', label: 'Paused' },
@@ -22,6 +23,7 @@ export const PUSH_MODES = [
 /** List groups, in the order people should look at them. */
 export const GROUPS = [
   { key: 'needs', label: 'Needs you', test: needsYou },
+  { key: 'queued', label: 'Queued', test: (w) => w.status === 'queued' },
   { key: 'running', label: 'Running', test: (w) => w.status === 'running' },
   { key: 'review', label: 'Ready for review', test: (w) => w.status === 'done' },
   { key: 'other', label: 'Paused and stopped', test: () => true },

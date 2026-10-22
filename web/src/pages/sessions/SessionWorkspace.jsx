@@ -915,7 +915,7 @@ function ChangesTab({ w, canEdit }) {
  * matching repo by name for older events that predate the repoId/prNumber fields.
  * Renders nothing when resolution fails.
  */
-function PushReviewLink({ pr, repoId, prNumber, repoName, repoList, projectId }) {
+function PushReviewLink({ pr, repoId, prNumber, repoName, repoList, projectId, branch }) {
   // Prefer the values that were stored alongside the event.
   let resolvedRepoId = repoId || null;
   let resolvedPrNumber = prNumber || null;
@@ -931,14 +931,22 @@ function PushReviewLink({ pr, repoId, prNumber, repoName, repoList, projectId })
     if (found) resolvedRepoId = found.id;
   }
 
-  if (!resolvedRepoId || !resolvedPrNumber) return null;
+  if (!resolvedRepoId) return null;
 
-  const reviewHref = withQuery(href(projectId, 'review'), { repo: resolvedRepoId, pr: resolvedPrNumber });
+  let reviewHref;
+  if (resolvedPrNumber) {
+    reviewHref = withQuery(href(projectId, 'review'), { repo: resolvedRepoId, pr: resolvedPrNumber });
+  } else if (branch) {
+    reviewHref = withQuery(href(projectId, 'review'), { repo: resolvedRepoId, branch });
+  } else {
+    return null;
+  }
+
   return (
     <a
       href={reviewHref}
       className="small"
-      aria-label={`Start code review for pull request #${resolvedPrNumber}`}
+      aria-label={resolvedPrNumber ? `Start code review for pull request #${resolvedPrNumber}` : `Start code review for branch ${branch}`}
     >
       Code review
     </a>
@@ -1002,9 +1010,21 @@ function History({ events, link, canEdit }) {
                                     repoName={r.repo}
                                     repoList={repoList}
                                     projectId={project.id}
+                                    branch={e.data.branch}
                                   />
                                 </>
                               ) : null}
+                            </>
+                          ) : canEdit ? (
+                            <>
+                              {' · '}
+                              <PushReviewLink
+                                repoId={r.repoId}
+                                repoName={r.repo}
+                                repoList={repoList}
+                                projectId={project.id}
+                                branch={e.data.branch}
+                              />
                             </>
                           ) : null}
                         </>

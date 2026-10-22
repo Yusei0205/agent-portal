@@ -7,7 +7,7 @@ import { href, runHref } from '../../lib/router.js';
 import { cx, money, timeAgo } from '../../lib/util.js';
 import { KIND_LABEL } from '../../components/run/RunViewer.jsx';
 import { Icon } from '../../components/Icon.jsx';
-import { Badge, Segmented, Spinner } from '../../components/ui.jsx';
+import { Badge, Segmented, Spinner, useUi } from '../../components/ui.jsx';
 import { budgetOf, groupSessions, needsYou, statusOf } from './status.js';
 
 /** The left column of Sessions: every session of the project, grouped by what it needs, and the single runs. */
@@ -134,22 +134,45 @@ function SessionRow({ w, projectId, active, now }) {
   const st = statusOf(w);
   const b = budgetOf(w);
   const waiting = w.pending_inputs > 0;
+  const isQueued = w.status === 'queued';
+  const { toast } = useUi();
+  const cancelQueued = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await api.post(`/api/workflows/${w.id}/cancel-queued`, {});
+      toast('Queued session cancelled', 'ok');
+    } catch (err) {
+      toast(err.message, 'danger');
+    }
+  };
   return (
     <li>
       <a href={href(projectId, 'sessions', w.id)} className={cx('ws-item', active && 'is-active')} aria-current={active ? 'page' : undefined}>
-        <span className={cx('dot', `dot-${w.status === 'running' ? 'running' : w.status === 'done' ? 'completed' : needsYou(w) ? 'waiting' : w.status}`)} aria-hidden="true" />
+        <span className={cx('dot', `dot-${isQueued ? 'queued' : (w.status === 'running' ? 'running' : w.status === 'done' ? 'completed' : needsYou(w) ? 'waiting' : w.status)}`)} aria-hidden="true" />
         <span className="ws-item-main">
           <span className="ws-item-title">{w.title}</span>
           {w.parent ? <span className="muted small">↰ delegated by {w.parent.title}</span> : null}
-          {now ? <span className="ws-now small">{now}</span> : <span className="ws-item-sub muted small">{w.summary || w.stop_reason || w.goal}</span>}
+          {isQueued ? (
+            <span className="ws-now small">
+              {w.queue_reason
+                ? `Queued: ${w.queue_reason.startsWith('user:') ? 'session limit reached' : w.queue_reason.startsWith('project:') ? 'project limit reached' : w.queue_reason.startsWith('global:') ? 'portal limit reached' : 'waiting for a slot'}`
+                : 'Waiting for a slot…'}
+            </span>
+          ) : now ? <span className="ws-now small">{now}</span> : <span className="ws-item-sub muted small">{w.summary || w.stop_reason || w.goal}</span>}
           <span className="muted small">
-            {st.label} · iteration {w.iteration} · {b.unit === 'credits' ? `${b.spent} of ${b.total} credits` : `${money(b.spent, 2)} of ${money(b.total, 2)}`} · {timeAgo(w.updated_at)}
+            {isQueued ? 'Queued' : st.label} · iteration {w.iteration} · {b.unit === 'credits' ? `${b.spent} of ${b.total} credits` : `${money(b.spent, 2)} of ${money(b.total, 2)}`} · {timeAgo(w.updated_at)}
           </span>
         </span>
         {waiting ? (
           <span className="rail-count" title={`${w.pending_inputs} waiting for an answer`}>
             {w.pending_inputs}
           </span>
+        ) : null}
+        {isQueued ? (
+          <button type="button" className="btn btn-ghost btn-sm ws-cancel-queued" onClick={cancelQueued} title="Cancel this queued session" aria-label="Cancel queued session">
+            ✕
+          </button>
         ) : null}
       </a>
     </li>

@@ -10,8 +10,101 @@ import { DiffView } from '../components/DiffView.jsx';
 import { Icon } from '../components/Icon.jsx';
 import { SortHeader } from '../components/SortHeader.jsx';
 import { Badge, Button, Empty, ErrorNote, Field, Modal, PageHeader, Segmented, Spinner, Toggle, useUi } from '../components/ui.jsx';
+// Inline repo-connection sheet (same form as ProjectSetup RepositoryFix)
+import { useRef } from 'react';
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
+
+/**
+ * Inline add-repository form shown when no repos are connected yet.
+ * Renders inline (no sheet backdrop) inside the modal.
+ */
+function AddRepoInlineSheet({ projectId, onAdded }) {
+  const { toast } = useUi();
+  const conns = useLoad(() => api.get('/api/git-connections'), []);
+  const [mode, setMode] = useState('direct');
+  const [form, setForm] = useState({ provider: 'git', url: '', name: '', token: '', connectionId: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const connections = conns.data?.connections || [];
+
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const body = mode === 'connection'
+        ? { connectionId: form.connectionId, url: form.url, name: form.name }
+        : { provider: form.provider, url: form.url, name: form.name, token: form.token || undefined };
+      const r = await api.post(`/api/projects/${projectId}/repos`, body);
+      toast('Repository connected — cloning…');
+      onAdded(r.repo);
+    } catch (e) {
+      setError(e);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="stack" onSubmit={save} noValidate>
+      <p className="field-label">Connect a repository</p>
+      <div className="row tight" role="group" aria-label="Repository type">
+        <button type="button" className={cx('btn btn-sm', mode === 'direct' && 'btn-primary')} onClick={() => setMode('direct')}>Direct URL</button>
+        <button type="button" className={cx('btn btn-sm', mode === 'connection' && 'btn-primary')} onClick={() => setMode('connection')}>Via a connection</button>
+      </div>
+      {mode === 'direct' ? (
+        <>
+          <Field label="Repository type">
+            {(id) => (
+              <select id={id} className="input" value={form.provider} onChange={set('provider')}>
+                <option value="git">Other Git (HTTPS / SSH)</option>
+                <option value="github">GitHub</option>
+                <option value="codecommit">AWS CodeCommit</option>
+              </select>
+            )}
+          </Field>
+          <Field label="Repository address">
+            {(id) => <input id={id} className="input mono" value={form.url} onChange={set('url')} placeholder="https://github.com/owner/repo" required />}
+          </Field>
+          <Field label="Display name (optional)">
+            {(id) => <input id={id} className="input" value={form.name} onChange={set('name')} />}
+          </Field>
+          {(form.provider === 'github' || form.provider === 'git') ? (
+            <Field label="Token (optional)">
+              {(id) => <input id={id} type="password" className="input mono" value={form.token} onChange={set('token')} autoComplete="off" />}
+            </Field>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {!connections.length ? (
+            <p className="muted small">No git connections yet. <a href="#/connections">Add one first.</a></p>
+          ) : (
+            <Field label="Git connection">
+              {(id) => (
+                <select id={id} className="input" value={form.connectionId} onChange={set('connectionId')} required>
+                  <option value="">Choose a connection…</option>
+                  {connections.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name} · {c.provider}</option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          )}
+          <Field label="Repository URL">
+            {(id) => <input id={id} className="input mono" value={form.url} onChange={set('url')} placeholder="https://github.com/owner/repo" required />}
+          </Field>
+        </>
+      )}
+      <ErrorNote error={error} />
+      <div className="row">
+        <Button type="submit" variant="primary" busy={busy}>Connect and clone</Button>
+      </div>
+      <p className="muted small">After cloning, the repository will appear in the picker above. This may take a moment.</p>
+    </form>
+  );
+}
 
 export function Review({ route }) {
   const id = route.rest[0];
@@ -23,19 +116,20 @@ function ReviewList({ route }) {
   const reviews = useLoad(() => api.get(`/api/projects/${project.id}/reviews`), [project.id]);
   useProjectEvents(['review.updated'], () => reviews.reload(true));
 
-  // Parse optional pre-fill params from the URL query (e.g. review?repo=<id>&pr=<n>).
+  // Parse optional pre-fill params from the URL query (e.g. review?repo=<id>&pr=<n>&branch=<head>).
   const queryRepoId = route?.query?.get('repo') || '';
   const queryPrNumber = route?.query?.get('pr') || '';
+  const queryBranch = route?.query?.get('branch') || '';
 
   // Auto-open the modal when the URL carries pre-fill params.
-  const [creating, setCreating] = useState(Boolean(queryRepoId && queryPrNumber));
+  const [creating, setCreating] = useState(Boolean(queryRepoId && (queryPrNumber || queryBranch)));
 
   const list = reviews.data?.reviews || [];
 
   // Clear the query params when the modal closes so the URL stays clean.
   const handleClose = () => {
     setCreating(false);
-    if (queryRepoId || queryPrNumber) {
+    if (queryRepoId || queryPrNumber || queryBranch) {
       // Strip query from hash without triggering a navigation.
       const hash = window.location.hash;
       const qi = hash.indexOf('?');
@@ -109,6 +203,7 @@ function ReviewList({ route }) {
           onClose={handleClose}
           initialRepoId={queryRepoId}
           initialPrNumber={queryPrNumber}
+          initialBranch={queryBranch}
           existingReviews={list}
         />
       ) : null}
@@ -124,16 +219,16 @@ function ReviewList({ route }) {
  *   initialPrNumber – pre-fill this PR number and switch to PR mode (from URL query ?pr=)
  *   existingReviews – the already-loaded reviews list, used to detect duplicates
  */
-function NewReview({ onClose, initialRepoId = '', initialPrNumber = '', existingReviews = [] }) {
+function NewReview({ onClose, initialRepoId = '', initialPrNumber = '', initialBranch = '', existingReviews = [] }) {
   const { project } = useProject();
   const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
   const ready = (repos.data?.repos || []).filter((r) => r.status === 'ready');
   const [repoId, setRepoId] = useState(initialRepoId || '');
-  // Start in PR mode when a PR number was supplied.
+  // Start in PR mode when a PR number was supplied; branches mode when a branch was supplied.
   const [mode, setMode] = useState(initialPrNumber ? 'pr' : 'branches');
   const [branches, setBranches] = useState([]);
   const [pulls, setPulls] = useState(null);
-  const [form, setForm] = useState({ base: '', head: '', prNumber: initialPrNumber || '', deep: false });
+  const [form, setForm] = useState({ base: '', head: initialBranch || '', prNumber: initialPrNumber || '', deep: false });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const repo = ready.find((r) => r.id === repoId);
@@ -148,7 +243,12 @@ function NewReview({ onClose, initialRepoId = '', initialPrNumber = '', existing
     if (!repoId) return;
     api.get(`/api/repos/${repoId}/branches`).then((r) => {
       setBranches(r.branches);
-      setForm((f) => ({ ...f, base: r.defaultBranch, head: r.branches.find((b) => b.name !== r.defaultBranch)?.name || '' }));
+      setForm((f) => ({
+        ...f,
+        base: r.defaultBranch,
+        // Preserve the initialBranch (from ?branch= param) if it's valid; otherwise pick the first non-default.
+        head: f.head || r.branches.find((b) => b.name !== r.defaultBranch)?.name || '',
+      }));
     });
     // Reset pulls so they reload for the new repo.
     setPulls(null);
@@ -214,9 +314,12 @@ function NewReview({ onClose, initialRepoId = '', initialPrNumber = '', existing
       }
     >
       {repos.data && !ready.length ? (
-        <p>
-          Connect a repository first on the <a href={href(project.id, 'repos')}>Repositories</a> page.
-        </p>
+        <div className="stack">
+          <p>
+            No repositories are connected yet. Connect one to start a code review.
+          </p>
+          <AddRepoInlineSheet projectId={project.id} onAdded={() => repos.reload(true)} />
+        </div>
       ) : (
         <div className="stack">
           {existing ? (

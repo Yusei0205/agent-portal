@@ -6,7 +6,7 @@ import { getTheme, setTheme } from './lib/theme.js';
 import { go, href, useRoute } from './lib/router.js';
 import { cx, money } from './lib/util.js';
 import { Icon } from './components/Icon.jsx';
-import { Badge, Spinner, UiProvider } from './components/ui.jsx';
+import { Badge, Button, Modal, Spinner, UiProvider } from './components/ui.jsx';
 import { Login, Setup, AcceptInvite, ResetPassword } from './pages/Auth.jsx';
 import { Projects } from './pages/Projects.jsx';
 import { ProjectSettings } from './pages/ProjectSettings.jsx';
@@ -342,6 +342,37 @@ function NavMenu({ route, projectId, current, user, inboxCount, onNavigate }) {
   );
 }
 
+// ─── Keyboard shortcuts help dialog ──────────────────────────────────────────
+
+const SHORTCUTS = [
+  { key: 'Alt + I', description: 'Open Inbox' },
+  { key: 'Alt + N', description: 'New session (when in a project)' },
+  { key: '?', description: 'Show this help dialog' },
+];
+
+function KeyboardShortcutsDialog({ onClose, projectId }) {
+  return (
+    <Modal title="Keyboard shortcuts" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}>
+      <table className="table compact" aria-label="Keyboard shortcuts">
+        <thead>
+          <tr><th>Key</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+          {SHORTCUTS.map((s) => (
+            <tr key={s.key}>
+              <td><kbd className="mono small">{s.key}</kbd></td>
+              <td>{s.description}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted small" style={{ marginTop: '0.75rem' }}>
+        Shortcuts never fire while you are typing in an input, textarea, or select.
+      </p>
+    </Modal>
+  );
+}
+
 function Shell({ user, onSignOut }) {
   const route = useRoute();
   const [projects, setProjects] = useState(null);
@@ -349,6 +380,7 @@ function Shell({ user, onSignOut }) {
   const [spend, setSpend] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
   const [inboxCount, setInboxCount] = useState(0);
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
 
   const loadProjects = useCallback(async () => {
     const r = await api.get('/api/projects');
@@ -375,11 +407,37 @@ function Shell({ user, onSignOut }) {
     return close;
   }, []);
 
-  // Browser notifications for new inbox items
+  // Keyboard shortcuts — never fire while the user is typing in an input
   useEffect(() => {
-    // Only request permission if the user previously enabled it in a session
-    // (we never auto-ask — see notification permission logic in Inbox.jsx)
-  }, []);
+    const isTyping = (e) => {
+      const tag = e.target?.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable;
+    };
+    const handler = (e) => {
+      if (isTyping(e)) return;
+      // Alt+I → open Inbox
+      if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'i') {
+        e.preventDefault();
+        window.location.hash = '#/inbox';
+      }
+      // Alt+N → open New session (if in a project)
+      if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'n') {
+        e.preventDefault();
+        if (route.projectId) {
+          window.location.hash = `#/p/${route.projectId}/sessions/new`;
+        } else {
+          window.location.hash = '#/projects';
+        }
+      }
+      // ? → show keyboard shortcut help
+      if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.key === '?') {
+        e.preventDefault();
+        setShowShortcutsHelp((v) => !v);
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [route.projectId]);
 
   const ctx = useMemo(() => ({ user, projects, reloadProjects: loadProjects, meta, reloadMeta: loadMeta }), [user, projects, loadProjects, meta, loadMeta]);
 
@@ -394,6 +452,9 @@ function Shell({ user, onSignOut }) {
           </button>
           <span className="topbar-title">Agent Portal</span>
         </div>
+        {showShortcutsHelp ? (
+          <KeyboardShortcutsDialog onClose={() => setShowShortcutsHelp(false)} projectId={route.projectId} />
+        ) : null}
         <main id="main" className="main" tabIndex={-1}>
           {route.projectId ? (
             <ProjectScope key={route.projectId} projectId={route.projectId} route={route} />

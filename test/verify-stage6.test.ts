@@ -93,11 +93,14 @@ describe('restart/resume at iteration boundary', () => {
 /* ------------------------------------------------------------------ */
 
 describe('drain mode blocks and unblocks', () => {
-  test('drain blocks new sessions with 429', async () => {
+  test('drain queues new sessions (not 429)', async () => {
     await admin.post('/api/admin/drain', { enable: true });
-    const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'blocked by drain', playground: true });
-    assert.equal(r.status, 429, 'new session rejected during drain');
-    assert.match(r.data.error, /restarting|drain/i);
+    const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'queued by drain', playground: true });
+    // Per the plan: sessions must queue, not be dropped.
+    assert.equal(r.status, 200, 'new session should be queued (not rejected) during drain');
+    assert.equal(r.data.workflow.status, 'queued', 'session status should be queued');
+    assert.equal(r.data.workflow.queue_reason, 'drain', 'queue_reason should be drain');
+    await admin.del(`/api/workflows/${r.data.workflow.id}`);
     await admin.post('/api/admin/drain', { enable: false });
   });
 
@@ -113,7 +116,7 @@ describe('drain mode blocks and unblocks', () => {
 /* ------------------------------------------------------------------ */
 
 describe('concurrency cap', () => {
-  test('user hitting per-user cap gets 429', async () => {
+  test('user hitting per-user cap gets a queued session (not 429)', async () => {
     const { run: dbRun } = await import('../server/db.ts');
     const { updateSettings } = await import('../server/settings.ts');
     updateSettings({ controlPlane: { perUserMax: 1, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });
@@ -127,7 +130,11 @@ describe('concurrency cap', () => {
 
     try {
       const r = await admin.req('POST', `/api/projects/${pid}/workflows`, { goal: 'over cap', playground: true });
-      assert.equal(r.status, 429, 'second session rejected when per-user cap is 1');
+      // Per the plan: over cap → session queued, not rejected
+      assert.equal(r.status, 200, 'should return 200 and queue the session');
+      assert.equal(r.data.workflow.status, 'queued', 'second session should be queued when per-user cap is 1');
+      // Cleanup
+      await admin.del(`/api/workflows/${r.data.workflow.id}`);
     } finally {
       dbRun('DELETE FROM workflows WHERE id = ?', wid);
       updateSettings({ controlPlane: { perUserMax: 5, globalMax: 0, perProjectMax: 0, approvalSlaMinutes: 30, worktreeTtlDays: 30, drainTimeoutSeconds: 60 } });

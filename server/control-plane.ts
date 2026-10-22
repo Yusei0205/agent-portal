@@ -123,6 +123,71 @@ export function checkConcurrency(userId: string, projectId: string): string | nu
 }
 
 /* ------------------------------------------------------------------ */
+/* Queue management                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Returns which concurrency cap is hit (and the reason string), or null if none is hit.
+ * Drain mode always returns a reason but does NOT queue — queued sessions stay queued.
+ */
+export function concurrencyReason(userId: string, projectId: string): string | null {
+  const caps = getCaps();
+  if (isDraining()) return 'drain';
+  if (caps.globalMax > 0 && countRunning() >= caps.globalMax) return `global:${caps.globalMax}`;
+  if (caps.perUserMax > 0 && countRunning({ userId }) >= caps.perUserMax) return `user:${caps.perUserMax}`;
+  if (caps.perProjectMax > 0 && countRunning({ projectId }) >= caps.perProjectMax) return `project:${caps.perProjectMax}`;
+  return null;
+}
+
+/** Human-readable label for a queue_reason value. */
+export function queueReasonLabel(reason: string): string {
+  if (!reason) return '';
+  if (reason === 'drain') return 'The server is restarting soon.';
+  if (reason.startsWith('global:')) return `The portal is at its concurrency limit (${reason.split(':')[1]} sessions).`;
+  if (reason.startsWith('user:')) return `You have reached your session limit (${reason.split(':')[1]} running).`;
+  if (reason.startsWith('project:')) return `This project is at its session limit (${reason.split(':')[1]} running).`;
+  return reason;
+}
+
+/** Queue position of a workflow (1-based, among queued workflows in the same project ordered by queued_at). */
+export function queuePosition(workflowId: string): number {
+  const w = one<{ project_id: string; queued_at: string | null }>('SELECT project_id, queued_at FROM workflows WHERE id = ?', workflowId);
+  if (!w || !w.queued_at) return 0;
+  const pos = one<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM workflows WHERE status = 'queued' AND project_id = ? AND queued_at <= ?",
+    w.project_id, w.queued_at,
+  );
+  return Number(pos?.n ?? 1);
+}
+
+/**
+ * Kick the oldest queued top-level session (FIFO by queued_at) in each project whose
+ * concurrency slot just freed. Called by workflows.ts after a session stops/pauses/finishes.
+ * Returns the ids of sessions started.
+ */
+export function drainQueue(): string[] {
+  if (isDraining()) return [];
+  // Find queued sessions, oldest first across all projects.
+  const queued = all<Row>(
+    "SELECT id, project_id, created_by FROM workflows WHERE status = 'queued' AND parent_id IS NULL ORDER BY queued_at ASC, created_at ASC LIMIT 50",
+  );
+  const started: string[] = [];
+  for (const w of queued) {
+    // Re-check caps for this session's user + project.
+    const reason = concurrencyReason(String(w.created_by), String(w.project_id));
+    if (reason) continue; // still over cap
+    // Promote to running.
+    exec(
+      "UPDATE workflows SET status = 'running', queue_reason = '', queued_at = NULL, stop_reason = '', updated_at = ? WHERE id = ?",
+      now(), w.id,
+    );
+    started.push(String(w.id));
+    publish(projectChannel(String(w.project_id)), 'workflow.updated', { id: w.id });
+  }
+  return started;
+}
+
+/* ------------------------------------------------------------------ */
 /* Worktree TTL cleanup                                                */
 /* ------------------------------------------------------------------ */
 
