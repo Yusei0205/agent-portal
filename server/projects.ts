@@ -20,6 +20,10 @@ export interface Project {
   created_by: string;
   created_at: string;
   archived: number;
+  /** Lead agent new sessions start with ('' = the main agent decides). Ignored when it cannot lead on the engine. */
+  default_lead_agent: string;
+  /** Model new sessions and runs start with ('' = sonnet): a tier or an exact model ID. */
+  default_model: string;
 }
 
 export function projectDir(p: Pick<Project, 'slug'>): string {
@@ -366,6 +370,8 @@ export function registerProjectRoutes(): void {
       created_by: ctx.user!.id,
       created_at: now(),
       archived: 0,
+      default_lead_agent: '',
+      default_model: '',
     };
     insert('projects', { ...p });
     insert('project_members', { project_id: p.id, user_id: ctx.user!.id, access: 'owner', role: '' });
@@ -413,6 +419,16 @@ export function registerProjectRoutes(): void {
     if (body.description !== undefined) p.description = str(body.description, 'Description', { max: 4000, optional: true });
     if (body.notes !== undefined) p.notes = str(body.notes, 'Project notes', { max: 20000, optional: true });
     if (body.archived !== undefined) p.archived = body.archived ? 1 : 0;
+    if (body.defaultLeadAgent !== undefined) {
+      const lead = str(body.defaultLeadAgent ?? '', 'Default lead agent', { max: 64, optional: true }).trim();
+      if (lead && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(lead)) throw badRequest('Default lead agent is not a valid agent name');
+      p.default_lead_agent = lead;
+    }
+    if (body.defaultModel !== undefined) {
+      const model = str(body.defaultModel ?? '', 'Default model', { max: 200, optional: true }).trim();
+      if (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(model)) throw badRequest('Default model is not a valid model ID');
+      p.default_model = model;
+    }
     update('projects', project.id, p);
     if (p.name !== undefined || p.description !== undefined || p.notes !== undefined) {
       await writeClaudeMd(project.id, 'Update project notes');

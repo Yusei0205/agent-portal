@@ -5,7 +5,7 @@ import { useProjectEvents } from '../../lib/events.js';
 import { useLoad, useAction } from '../../lib/useAsync.js';
 import { useRunStream } from '../../lib/useRunStream.js';
 import { buildTree } from '../../lib/tree.js';
-import { go, href, sessionHref } from '../../lib/router.js';
+import { go, href, sessionHref, withQuery } from '../../lib/router.js';
 import { cx, money, timeAgo } from '../../lib/util.js';
 import { AgentView } from '../../components/AgentCanvas.jsx';
 import { ConnectionBadge } from '../../components/ConnectionBadge.jsx';
@@ -36,6 +36,9 @@ export function SessionWorkspace({ id, query }) {
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const w = data.data?.workflow;
+  // Leads for the header's agent-kind label. Hooks must run before the early returns below.
+  const effectiveKiro = w?.provider === 'kiro';
+  const leadsData = useLoad(() => api.get(`/api/projects/${project.id}/leads?engine=${effectiveKiro ? 'kiro' : 'claude'}`), [project.id, effectiveKiro]);
   if (data.error) return <div className="pad-lg"><ErrorNote error={data.error} /></div>;
   if (!w) return <div className="pad-lg"><Spinner /></div>;
 
@@ -47,7 +50,7 @@ export function SessionWorkspace({ id, query }) {
 
   return (
     <div className="ws-detail">
-      <SessionHeader w={w} canEdit={canEdit} reload={() => data.reload(true)} />
+      <SessionHeader w={w} canEdit={canEdit} reload={() => data.reload(true)} leads={leadsData.data?.leads} />
       <Tabs
         value={tab}
         tabs={[
@@ -68,7 +71,7 @@ export function SessionWorkspace({ id, query }) {
         ) : tab === 'changes' ? (
           <ChangesTab w={w} canEdit={canEdit} />
         ) : tab === 'history' ? (
-          <History events={data.data.events} link={link} />
+          <History events={data.data.events} link={link} canEdit={canEdit} />
         ) : tab === 'context' ? (
           <ContextTab w={w} canEdit={canEdit} />
         ) : (
@@ -90,7 +93,7 @@ export function SessionWorkspace({ id, query }) {
 
 /* ---------------- Header ---------------- */
 
-function SessionHeader({ w, canEdit, reload }) {
+function SessionHeader({ w, canEdit, reload, leads }) {
   const { project } = useProject();
   const { toast, confirm } = useUi();
   const [busy, setBusy] = useState('');
@@ -166,7 +169,11 @@ function SessionHeader({ w, canEdit, reload }) {
       </div>
       <div className="row tight wrap ws-chips">
         <ConnectionBadge projectId={project.id} />
-        {w.engine ? <span className="chip-static small" title="The engine this session runs on">{w.engine === 'kiro' ? 'Kiro' : 'Claude Code'}</span> : null}
+        {(() => {
+          // Always show the engine chip: use the explicit engine value or fall back to the provider.
+          const engineLabel = w.engine === 'kiro' ? 'Kiro' : w.engine === 'claude' ? 'Claude Code' : w.provider === 'kiro' ? 'Kiro' : 'Claude Code';
+          return <span className="chip-static small" title="The engine this session runs on">{engineLabel}</span>;
+        })()}
         <span className="chip-static mono small">{w.model}</span>
         {(w.integration_list || []).map((i) => (
           <a key={i.id} className="chip-static small" href="#/integrations" title={i.allow_writes ? 'Writes allowed' : 'Read-only'}>
@@ -198,6 +205,11 @@ function SessionHeader({ w, canEdit, reload }) {
         {w.lead_agent ? (
           <span className="chip-static small">
             led by <code>{w.lead_agent}</code>
+            {(() => {
+              const lead = leads?.find((l) => l.name === w.lead_agent);
+              if (!lead) return null;
+              return <span className="muted"> ({lead.kind === 'kiro' ? 'Kiro agent' : 'Claude Code agent'})</span>;
+            })()}
           </span>
         ) : null}
         {w.jira_key ? (
@@ -258,7 +270,13 @@ function PushRequestCard({ w, reload }) {
       if (what === 'allow') {
         const r = await api.post(`/api/workflows/${w.id}/push/allow`, { message: message || undefined, pr });
         const failed = r.push.results.filter((x) => !x.ok);
-        toast(r.push.ok ? `Pushed to ${req.branch}` : `Nothing was pushed: ${failed.map((x) => x.error).join('; ')}`, r.push.ok ? 'ok' : 'danger');
+        const prFailed = r.push.results.filter((x) => x.prError);
+        toast(
+          r.push.ok
+            ? `Pushed to ${req.branch}${prFailed.length ? `. No pull request: ${prFailed.map((x) => x.prError).join('; ')}` : ''}`
+            : `Nothing was pushed: ${failed.map((x) => x.error).join('; ')}`,
+          r.push.ok && !prFailed.length ? 'ok' : 'danger',
+        );
       } else {
         await api.post(`/api/workflows/${w.id}/push/deny`, { reason });
         toast('Push declined; the agents were told why');
@@ -288,7 +306,7 @@ function PushRequestCard({ w, reload }) {
         <div className="row wrap">
           <Field label="Commit message">{(id) => <input id={id} className="input" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Agent Portal: …" />}</Field>
           <label className="row tight small push-pr">
-            <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Open a draft pull request (GitHub)
+            <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Open a pull request (GitHub or CodeCommit)
           </label>
         </div>
         <div className="row wrap">
@@ -313,7 +331,7 @@ const BASE_BRANCHES = new Set(['main', 'master', 'develop', 'development', 'stag
  * one of its working copies to a repository they choose, or just attach a repository.
  */
 function RescuePushCard({ w, reload }) {
-  const { project } = useProject();
+  const { project, canEdit } = useProject();
   const { toast } = useUi();
 
   // Working copies: handle both { copies: [...] } and a bare array.
@@ -337,6 +355,8 @@ function RescuePushCard({ w, reload }) {
   const [message, setMessage] = useState('');
   const [openPr, setOpenPr] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  // Track the last successful push result so we can offer a "Code review" link.
+  const [lastPushResult, setLastPushResult] = useState(null);
 
   // When copies load, pre-fill from the best copy.
   const [prefilled, setPrefilled] = useState(false);
@@ -381,13 +401,15 @@ function RescuePushCard({ w, reload }) {
       const failed = results.filter((x) => !x.ok);
       if (r.push?.ok) {
         // pr is a URL string (same shape as history entries), not an object.
-        const prUrl = results.find((x) => x.pr);
+        const prResult = results.find((x) => x.pr);
+        const prFailed = results.find((x) => x.prError);
         toast(
-          prUrl
-            ? `Pushed — draft pull request at ${prUrl.pr}`
-            : `Pushed to ${branch || 'new branch'}`,
-          'ok',
+          prResult
+            ? `Pushed — pull request at ${prResult.pr}`
+            : `Pushed to ${branch || 'new branch'}${prFailed ? `. No pull request: ${prFailed.prError}` : ''}`,
+          prFailed ? 'danger' : 'ok',
         );
+        if (prResult) setLastPushResult(prResult);
       } else {
         toast(failed.map((x) => x.error).join('; ') || 'Push failed', 'danger');
       }
@@ -492,7 +514,7 @@ function RescuePushCard({ w, reload }) {
             </Field>
             <label className="row tight small push-pr">
               <input type="checkbox" checked={openPr} onChange={(e) => setOpenPr(e.target.checked)} />
-              Open a draft pull request (GitHub)
+              Open a pull request (GitHub or CodeCommit)
             </label>
             <a className="small" href={`#/p/${w.project_id}/sessions/${w.id}?tab=changes`}>
               Review changes first
@@ -525,6 +547,16 @@ function RescuePushCard({ w, reload }) {
           >
             Attach repository only
           </Button>
+          {lastPushResult && canEdit ? (
+            <PushReviewLink
+              pr={lastPushResult.pr}
+              repoId={lastPushResult.repoId}
+              prNumber={lastPushResult.prNumber}
+              repoName={lastPushResult.repo}
+              repoList={readyRepos}
+              projectId={project.id}
+            />
+          ) : null}
         </div>
         {!readyRepos.length && !reposLoad.loading ? (
           <p className="muted small">
@@ -725,9 +757,52 @@ function ChangesTab({ w, canEdit }) {
   );
 }
 
+/* ---------------- Code review link for push results ---------------- */
+
+/**
+ * Renders a "Code review" link next to a push result's pull request URL.
+ * Resolves repoId + prNumber from the result; falls back to parsing the URL and
+ * matching repo by name for older events that predate the repoId/prNumber fields.
+ * Renders nothing when resolution fails.
+ */
+function PushReviewLink({ pr, repoId, prNumber, repoName, repoList, projectId }) {
+  // Prefer the values that were stored alongside the event.
+  let resolvedRepoId = repoId || null;
+  let resolvedPrNumber = prNumber || null;
+
+  // Fallback: parse PR number from the URL (/.../pull/<n>).
+  if (!resolvedPrNumber && pr) {
+    const m = String(pr).match(/\/pull(?:-requests)?\/(\d+)/);
+    if (m) resolvedPrNumber = Number(m[1]);
+  }
+  // Fallback: match repo by name.
+  if (!resolvedRepoId && repoName && repoList.length) {
+    const found = repoList.find((r) => r.name === repoName);
+    if (found) resolvedRepoId = found.id;
+  }
+
+  if (!resolvedRepoId || !resolvedPrNumber) return null;
+
+  const reviewHref = withQuery(href(projectId, 'review'), { repo: resolvedRepoId, pr: resolvedPrNumber });
+  return (
+    <a
+      href={reviewHref}
+      className="small"
+      aria-label={`Start code review for pull request #${resolvedPrNumber}`}
+    >
+      Code review
+    </a>
+  );
+}
+
 /* ---------------- History ---------------- */
 
-function History({ events, link }) {
+function History({ events, link, canEdit }) {
+  const { project } = useProject();
+  // Load repos lazily so we can resolve repo by name for older push events that lack repoId.
+  const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
+  const repoList = repos.data?.repos || [];
+
   if (!events.length) return <p className="muted small">Nothing yet.</p>;
   // "Iteration N started" is replaced by that iteration's result once there is one.
   const reported = new Set(events.filter((e) => e.kind === 'iteration' && e.data.state).map((e) => e.run_id));
@@ -760,7 +835,30 @@ function History({ events, link }) {
                 <ul className="plain-list small">
                   {e.data.results.map((r) => (
                     <li key={r.repo}>
-                      {r.repo}: {r.ok ? <>pushed <code>{(r.commit || '').slice(0, 10)}</code>{r.pr ? <> · <a href={r.pr} target="_blank" rel="noreferrer">pull request</a></> : null}</> : <span className="danger">{r.error}</span>}
+                      {r.repo}: {r.ok ? (
+                        <>
+                          pushed <code>{(r.commit || '').slice(0, 10)}</code>
+                          {r.pr ? (
+                            <>
+                              {' · '}
+                              <a href={r.pr} target="_blank" rel="noreferrer">pull request</a>
+                              {canEdit ? (
+                                <>
+                                  {' · '}
+                                  <PushReviewLink
+                                    pr={r.pr}
+                                    repoId={r.repoId}
+                                    prNumber={r.prNumber}
+                                    repoName={r.repo}
+                                    repoList={repoList}
+                                    projectId={project.id}
+                                  />
+                                </>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </>
+                      ) : <span className="danger">{r.error}</span>}
                     </li>
                   ))}
                 </ul>

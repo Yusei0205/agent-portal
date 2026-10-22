@@ -312,6 +312,49 @@ test('leads per engine: Kiro agents lead on Kiro when the project has them, Clau
   assert.match(p.prompt, /You run inside Agent Portal/);
 });
 
+test('PUT /api/workflows/:id with engine switch validates lead against the new engine', async () => {
+  // Re-enable kiro-other so we have a clean project with all Kiro agents.
+  await admin.put(`/api/projects/${pid}/kiro-agents/kiro-other/enabled`, { enabled: true });
+
+  // Create a workflow on the default Kiro engine (engine: '' = project default = kiro) with no lead.
+  const { workflow } = await admin.post(`/api/projects/${pid}/workflows`, { goal: 'Engine switch test', start: false, playground: true });
+  assert.equal(workflow.engine, '');
+
+  // Setting a Kiro-only lead on kiro engine (explicit) is accepted.
+  const kiroOk = await admin.req('PUT', `/api/workflows/${workflow.id}`, { engine: 'kiro', leadAgent: 'kiro-lead' });
+  assert.equal(kiroOk.status, 200, `Kiro lead on kiro engine should be accepted: ${JSON.stringify(kiroOk.data)}`);
+  assert.equal(kiroOk.data.workflow.engine, 'kiro');
+  assert.equal(kiroOk.data.workflow.lead_agent, 'kiro-lead');
+
+  // Setting a .claude-only agent as lead on kiro engine is refused (Kiro uses kiro agents, not claude agents).
+  const claudeAsLeadRefused = await admin.req('PUT', `/api/workflows/${workflow.id}`, { engine: 'kiro', leadAgent: 'claude-only' });
+  assert.equal(claudeAsLeadRefused.status, 400, `Claude-only agent should be refused on kiro engine: ${JSON.stringify(claudeAsLeadRefused.data)}`);
+  assert.match(claudeAsLeadRefused.data.error, /not an enabled Kiro agent/);
+
+  // Setting a non-existent agent is refused on any engine.
+  const nobody = await admin.req('PUT', `/api/workflows/${workflow.id}`, { engine: 'kiro', leadAgent: 'nobody-agent' });
+  assert.equal(nobody.status, 400, `Non-existent agent should be refused: ${JSON.stringify(nobody.data)}`);
+
+  // Clearing the lead (empty string) always works.
+  const cleared = await admin.req('PUT', `/api/workflows/${workflow.id}`, { engine: 'kiro', leadAgent: '' });
+  assert.equal(cleared.status, 200, `Clearing lead should always work: ${JSON.stringify(cleared.data)}`);
+  assert.equal(cleared.data.workflow.lead_agent, '');
+
+  // On the project default engine (kiro as default), kiro agents are accepted as leads.
+  const defaultEngineKiroLead = await admin.req('PUT', `/api/workflows/${workflow.id}`, { engine: '', leadAgent: 'kiro-backend' });
+  assert.equal(defaultEngineKiroLead.status, 200, `Kiro lead on default-kiro engine should be accepted: ${JSON.stringify(defaultEngineKiroLead.data)}`);
+  assert.equal(defaultEngineKiroLead.data.workflow.engine, '');
+  assert.equal(defaultEngineKiroLead.data.workflow.lead_agent, 'kiro-backend');
+
+  // On the project default engine (kiro as default), claude-only agents are rejected as leads.
+  const defaultEngineClaudeLeadRefused = await admin.req('PUT', `/api/workflows/${workflow.id}`, { engine: '', leadAgent: 'claude-only' });
+  assert.equal(defaultEngineClaudeLeadRefused.status, 400, `Claude-only agent should be refused on default-kiro engine: ${JSON.stringify(defaultEngineClaudeLeadRefused.data)}`);
+  assert.match(defaultEngineClaudeLeadRefused.data.error, /not an enabled Kiro agent/);
+
+  // Cleanup.
+  await admin.del(`/api/workflows/${workflow.id}`);
+});
+
 test('a project without Kiro agents keeps using its .claude agents on Kiro', async () => {
   const { project } = await admin.post('/api/projects', { name: 'Claude only', description: 'd' });
   const other = path.join(srv.dataDir, 'projects', project.slug);

@@ -461,6 +461,9 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE workflows ADD COLUMN playground INTEGER NOT NULL DEFAULT 0;`,
   // Trust all tools: file edits and shell commands run without asking for approval.
   `ALTER TABLE workflows ADD COLUMN trust_tools INTEGER NOT NULL DEFAULT 0;`,
+  // Project defaults for new sessions and runs: the lead agent and the model they start with ('' = none).
+  `ALTER TABLE projects ADD COLUMN default_lead_agent TEXT NOT NULL DEFAULT '';
+  ALTER TABLE projects ADD COLUMN default_model TEXT NOT NULL DEFAULT '';`,
 ];
 
 let db: DatabaseSync | null = null;

@@ -6,6 +6,7 @@ import { money } from '../lib/util.js';
 import { Badge, Button, ErrorNote, Field, IconButton, Note, PageHeader, Spinner, useUi } from '../components/ui.jsx';
 import { useAction, useLoad } from '../lib/useAsync.js';
 import { JiraConnection } from './Tickets.jsx';
+import { ModelPicker } from '../components/ModelPicker.jsx';
 
 const ROLE_SUGGESTIONS = ['Business analyst', 'Solution architect', 'Backend developer', 'Frontend developer', 'QA engineer', 'Reviewer', 'Technical writer', 'Product owner', 'Stakeholder'];
 
@@ -329,6 +330,68 @@ export function Connection() {
  */
 export { Connection as AwsAccount };
 
+/**
+ * The lead agent and model new sessions and runs start with, so they need not be picked every time. Each new session
+ * can still change them. A default lead that cannot lead on the engine a session uses is left out for that session.
+ */
+function WorkDefaults() {
+  const { project, isOwner, reload } = useProject();
+  const { toast } = useUi();
+  const conn = useLoad(() => api.get(`/api/projects/${project.id}/connection`), [project.id]);
+  const kiro = conn.data?.provider === 'kiro';
+  const leads = useLoad(() => (conn.data ? api.get(`/api/projects/${project.id}/leads?engine=${kiro ? 'kiro' : 'claude'}`) : Promise.resolve(null)), [project.id, conn.data, kiro]);
+  const team = leads.data?.leads || [];
+  const initial = () => ({ lead: project.default_lead_agent || '', model: project.default_model || 'sonnet' });
+  const [f, setF] = useState(initial);
+  useEffect(() => setF(initial()), [project]); // eslint-disable-line react-hooks/exhaustive-deps
+  const save = useAction();
+  const dirty = f.lead !== (project.default_lead_agent || '') || f.model !== (project.default_model || 'sonnet');
+  return (
+    <section className="panel">
+      <h2>Defaults for new work</h2>
+      <div className="stack">
+        <p className="muted small">New sessions and runs start with these. You can still change them for each one.</p>
+        <Field label="Lead agent" hint={kiro ? 'From the Kiro agents (.kiro/agents), or the Claude Code agents when there are none.' : 'From the Claude Code agents (.claude/agents).'}>
+          {(id) => (
+            <select id={id} className="input" value={f.lead} disabled={!isOwner} onChange={(e) => setF({ ...f, lead: e.target.value })}>
+              <option value="">None (the main agent decides)</option>
+              {f.lead && !team.some((a) => a.name === f.lead) && !leads.loading ? <option value={f.lead}>{f.lead} (not available on this engine)</option> : null}
+              {team.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.name}
+                  {a.description ? ` — ${a.description.slice(0, 60)}` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Model">{(id) => <ModelPicker id={id} value={f.model} projectId={project.id} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}</Field>
+        <ErrorNote error={save.error} />
+        {isOwner ? (
+          <div className="row">
+            <Button
+              variant="primary"
+              disabled={!dirty || !f.model}
+              busy={save.busy}
+              onClick={() =>
+                save.run(async () => {
+                  await api.patch(`/api/projects/${project.id}`, { defaultLeadAgent: f.lead, defaultModel: f.model === 'sonnet' ? '' : f.model });
+                  await reload();
+                  toast('Defaults saved');
+                })
+              }
+            >
+              Save defaults
+            </Button>
+          </div>
+        ) : (
+          <p className="muted small">Only project owners can change these.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function ProjectSettings() {
   const { project, members, counts, monthUsd, isOwner, reload } = useProject();
   const { reloadProjects, user } = useApp();
@@ -387,6 +450,8 @@ export function ProjectSettings() {
             <div><dt>Spend this month</dt><dd>{money(monthUsd, 2)}</dd></div>
           </dl>
         </section>
+
+        <WorkDefaults />
 
         <section className="panel">
           <h2>Members</h2>

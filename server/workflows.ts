@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { all, insert, one, run as exec, update, type Row } from './db.ts';
 import { del, get, post, put } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
-import { getRepo, repoGitEnv, pushWorktree, checkBranch, githubApi, githubSlug } from './repos.ts';
+import { getRepo, repoGitEnv, pushWorktree, checkBranch, openPullRequest, repoDir } from './repos.ts';
 import { checkKey, issueDetail, mustMapping } from './jira.ts';
 import { requireModel } from './models.ts';
 import { ticketMarkdown } from './jira-text.ts';
@@ -484,7 +484,7 @@ async function drive(id: string): Promise<void> {
       } else if (why) {
         log(id, 'status', `The agents asked to push, but it cannot happen now: ${why}.`);
       } else {
-        const req: PushRequest = { message: status.push.message, pr: status.push.pr, runId: finished.id, branch: w.work_branch, state: status.state, at: now() };
+        const req: PushRequest = { message: status.push.message, pr: status.push.pr, ...(status.push.base ? { base: status.push.base } : {}), runId: finished.id, branch: w.work_branch, state: status.state, at: now() };
         if (mode === 'auto') {
           await pushForSession(w, req, 'The agents');
         } else {
@@ -617,6 +617,8 @@ function effectivePushMode(raw: unknown, current: string | undefined, hasRepos: 
 interface PushRequest {
   message: string;
   pr: boolean;
+  /** The branch the pull request goes into, when the agents named one; otherwise each repository's starting branch. */
+  base?: string;
   runId: string;
   branch: string;
   /** What the agent reported with the request, so approving can finish a session that was done. */
@@ -627,18 +629,27 @@ interface PushRequest {
 /** Push every working copy of a session's run to its new branch; the results go into the history. */
 async function pushForSession(w: Row, req: PushRequest, by: string) {
   const run = getRun(req.runId);
-  const results: { repo: string; ok: boolean; commit?: string; pr?: string; repoId?: string; prNumber?: number; error?: string }[] = [];
+  const results: { repo: string; ok: boolean; commit?: string; pr?: string; repoId?: string; prNumber?: number; prError?: string; error?: string }[] = [];
   for (const x of runRepos(run)) {
     try {
-      const r = await pushRun(run, { repoId: x.repoId, branch: req.branch, message: req.message || undefined, createPr: req.pr, agent: true });
-      results.push({ repo: r.repoName, ok: true, commit: r.commit ?? undefined, pr: r.pr?.url, repoId: r.repoId, prNumber: r.pr?.number });
+      // A base the agents named only applies to repositories that have that branch; the others use their starting one.
+      let base: string | undefined;
+      if (req.pr && req.base) {
+        const repo = getRepo(x.repoId);
+        const ok = await git(['rev-parse', '--verify', '--quiet', `origin/${checkBranch(req.base)}`], { cwd: repoDir(repo) }).then(() => true, () => false);
+        if (ok) base = req.base;
+      }
+      const r = await pushRun(run, { repoId: x.repoId, branch: req.branch, message: req.message || undefined, createPr: req.pr, base, agent: true });
+      results.push({ repo: r.repoName, ok: true, commit: r.commit ?? undefined, pr: r.pr?.url, repoId: r.repoId, prNumber: r.pr?.number, ...(r.prError ? { prError: r.prError } : {}) });
     } catch (e: any) {
       results.push({ repo: x.name || getRepo(x.repoId).name, ok: false, error: String(e?.message ?? e).slice(0, 300) });
     }
   }
   const ok = results.filter((r) => r.ok);
+  const prs = ok.filter((r) => r.pr);
+  const prFailed = ok.filter((r) => r.prError);
   const body = ok.length
-    ? `${by} pushed to "${req.branch}"${results.length > 1 ? ` in ${ok.length} of ${results.length} repositories` : ''}${ok.some((r) => r.pr) ? ' and opened a draft pull request' : ''}.`
+    ? `${by} pushed to "${req.branch}"${results.length > 1 ? ` in ${ok.length} of ${results.length} repositories` : ''}${prs.length ? ` and opened a pull request (${prs.map((r) => r.pr).join(', ')})` : ''}.${prFailed.length ? ` No pull request was opened in ${prFailed.map((r) => `${r.repo}: ${r.prError}`).join('; ')}` : ''}`
     : `Nothing was pushed to "${req.branch}": ${results.map((r) => r.error).join('; ')}`;
   log(w.id, 'push', body, { runId: req.runId, data: { branch: req.branch, by, results } });
   return { ok: ok.length > 0, results };
@@ -699,7 +710,8 @@ async function performTrustedPush(workflowId: string, requestedBranch: string | 
   const results: { repo: string; ok: boolean; commit?: string; error?: string }[] = [];
   for (const x of runRepos(run)) {
     try {
-      const r = await pushRun(run, { repoId: x.repoId, branch, agent: true });
+      // The agent of the running iteration asked for this push itself, so it does not wait for the run to end.
+      const r = await pushRun(run, { repoId: x.repoId, branch, agent: true, duringRun: true });
       results.push({ repo: r.repoName, ok: true, commit: r.commit ?? undefined });
       // Update work_branch if not set.
       if (!w.work_branch) exec('UPDATE workflows SET work_branch = ?, updated_at = ? WHERE id = ?', branch, now(), workflowId);
@@ -1284,29 +1296,25 @@ export function registerWorkflowRoutes(): void {
       throw badRequest(`Push failed: ${redact(String(e?.message ?? e)).slice(0, 300)}`);
     }
 
-    // Open draft PR if requested and repo is GitHub.
+    // Open a pull request if requested (GitHub: draft; CodeCommit: regular). The push already happened, so a failure
+    // is reported in the history instead of failing the request.
     let prHtmlUrl: string | null = null;
     let prNumber: number | null = null;
-    if (body.pr && repo.provider === 'github') {
+    let prError: string | null = null;
+    if (body.pr) {
       try {
-        if (githubSlug(repo.url)) {
-          const baseBranch = sessionRepos(getWorkflow(w.id))[0]?.branch || repo.default_branch;
-          const created = await githubApi(repo, 'POST', '/pulls', {
-            title: branch,
-            head: branch,
-            base: baseBranch,
-            body: `Created from Agent Portal session "${w.title}".`,
-            draft: true,
-          });
-          prHtmlUrl = created.html_url ?? null;
-          prNumber = typeof created.number === 'number' ? created.number : null;
-        }
-      } catch { /* PR creation is best-effort */ }
+        const baseBranch = sessionRepos(getWorkflow(w.id)).find((x) => x.repoId === repo.id)?.branch || repo.default_branch;
+        const created = await openPullRequest(repo, { title: branch, head: branch, base: baseBranch, body: `Created from Agent Portal session "${w.title}".` });
+        prHtmlUrl = created.url;
+        prNumber = created.number;
+      } catch (e: any) {
+        prError = String(e?.message ?? e).slice(0, 300);
+      }
     }
 
     // Record history event using the same shape as pushForSession (pr = html_url string).
-    const results = [{ repo: repo.name, ok: true, commit: commit ?? undefined, pr: prHtmlUrl ?? undefined, repoId: repo.id, prNumber: prNumber ?? undefined }];
-    const msg = `Pushed working copy at "${rawPath}" to "${branch}" in ${repo.name}${prHtmlUrl ? ' and opened a draft pull request' : ''}.`;
+    const results = [{ repo: repo.name, ok: true, commit: commit ?? undefined, pr: prHtmlUrl ?? undefined, repoId: repo.id, prNumber: prNumber ?? undefined, ...(prError ? { prError } : {}) }];
+    const msg = `Pushed working copy at "${rawPath}" to "${branch}" in ${repo.name}${prHtmlUrl ? ` and opened a pull request (${prHtmlUrl})` : ''}.${prError ? ` No pull request was opened: ${prError}` : ''}`;
     const currentW = getWorkflow(w.id);
     log(w.id, 'push', msg, { data: { branch, by: ctx.user!.name, results } });
 

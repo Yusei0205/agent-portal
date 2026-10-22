@@ -70,7 +70,7 @@ export interface WorkflowStatus {
   /** Tasks the agent hands to separate sessions; only present when it asked for some. */
   delegate?: { title: string; goal: string }[];
   /** The agent asks the portal to push its changes (only present when it asked). */
-  push?: { message: string; pr: boolean };
+  push?: { message: string; pr: boolean; base?: string };
 }
 
 /** git push in any form (also with -C, -c and other options before it). */
@@ -175,7 +175,12 @@ export function parseStatus(text: string | null | undefined): WorkflowStatus | n
       : [];
     if (tasks.length) out.delegate = tasks;
     if (j.push === true) out.push = { message: '', pr: false };
-    else if (j.push && typeof j.push === 'object') out.push = { message: String(j.push.message ?? '').trim().slice(0, 500), pr: j.push.pr === true };
+    else if (j.push && typeof j.push === 'object') {
+      out.push = { message: String(j.push.message ?? '').trim().slice(0, 500), pr: j.push.pr === true };
+      // The branch the pull request goes into, when the agents were told one (checked when pushing).
+      const base = typeof j.push.base === 'string' ? j.push.base.trim().slice(0, 200) : '';
+      if (base) out.push.base = base;
+    }
     return out;
   } catch {
     return null;
@@ -336,7 +341,7 @@ export function composeIterationPrompt(i: IterationInput): string {
   );
   if (pushing) {
     parts.push(
-      `When your changes are ready and verified, ask the portal to push them to your new branch by adding "push":{"message":"the commit message","pr":true} to your status line ("pr": true also opens a draft pull request). ${i.pushMode === 'ask' ? 'A person approves each push first; the session waits for that.' : 'The portal pushes them right away.'} It never pushes to the branch the work started from or to shared branches like main or develop.`,
+      `When your changes are ready and verified, ask the portal to push them to your new branch by adding "push":{"message":"the commit message","pr":true} to your status line ("pr": true also opens a pull request on GitHub or CodeCommit, into the branch the work started from; add "base":"<branch>" when the person asked for the pull request to go into a different branch). Asking again for a pull request that is already open returns the open one. ${i.pushMode === 'ask' ? 'A person approves each push first; the session waits for that.' : 'The portal pushes them right away.'} It never pushes to the branch the work started from or to shared branches like main or develop.`,
     );
   }
   if (trustedPush && !pushing) {

@@ -2,8 +2,9 @@ import path from 'node:path';
 import { all, insert, one, run, update, type Row } from './db.ts';
 import { del, get, patch, post } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
-import { checkBranch, diffRefs, ensureFresh, fetchPullRef, getRepo, githubApi, removeWorktree, type Repo } from './repos.ts';
+import { checkBranch, diffRefs, ensureFresh, fetchPullRef, getCodeCommitPull, getRepo, githubApi, removeWorktree, repoDir, syncRepo, type Repo } from './repos.ts';
 import { HttpError, badRequest, extractJson, int, newId, notFound, now, parseJson } from './util.ts';
+import { git } from './git.ts';
 import { parseUnifiedDiff, type Finding, type Severity } from './agent/heuristics.ts';
 import { startRun, READ_ONLY_TOOLS, getRun } from './agent/runner.ts';
 
@@ -154,12 +155,22 @@ export function registerReviewRoutes(): void {
     let prNumber: number | null = null;
     let headSha: string | null = null;
     if (body.prNumber) {
-      if (repo.provider !== 'github') throw badRequest('Pull request numbers work for GitHub repositories only');
       prNumber = int(body.prNumber, 'Pull request', undefined, 1);
-      const pr = await githubApi(repo, 'GET', `/pulls/${prNumber}`);
-      base = checkBranch(pr.base.ref);
-      headSha = pr.head.sha;
-      head = await fetchPullRef(repo, prNumber);
+      if (repo.provider === 'github') {
+        const pr = await githubApi(repo, 'GET', `/pulls/${prNumber}`);
+        base = checkBranch(pr.base.ref);
+        headSha = pr.head.sha;
+        head = await fetchPullRef(repo, prNumber);
+      } else if (repo.provider === 'codecommit') {
+        // CodeCommit pull requests are between two branches of the repository, which the fresh clone already has.
+        const pr = await getCodeCommitPull(repo, prNumber);
+        base = checkBranch(pr.base);
+        head = checkBranch(pr.head);
+        headSha = pr.sha || null;
+        // A branch pushed moments ago may not be in the clone yet.
+        const has = await git(['rev-parse', '--verify', '--quiet', `origin/${head}`], { cwd: repoDir(repo) }).then(() => true, () => false);
+        if (!has) await syncRepo(getRepo(repo.id));
+      } else throw badRequest('Pull request numbers work for GitHub and CodeCommit repositories only');
     } else {
       base = checkBranch(body.base);
       head = checkBranch(body.head);

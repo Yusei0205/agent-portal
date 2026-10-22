@@ -44,7 +44,9 @@ export function PushDialog({ run, onClose }) {
   }, [changes.data]);
   const changedOf = (id) => changes.data?.repos?.find((r) => r.repoId === id)?.changed;
   const chosen = targets.filter((t) => picked.has(t.repoId));
-  const isGithub = chosen.some((t) => providerOf(t.repoId) === 'github');
+  const canPr = (id) => ['github', 'codecommit'].includes(providerOf(id));
+  const canOpenPr = chosen.some((t) => canPr(t.repoId));
+  const onlyCodeCommit = chosen.length > 0 && chosen.every((t) => providerOf(t.repoId) === 'codecommit');
 
   const push = async () => {
     setBusy(true);
@@ -52,7 +54,7 @@ export function PushDialog({ run, onClose }) {
     const results = [];
     for (const t of chosen) {
       try {
-        const body = { branch, message, createPr: createPr && providerOf(t.repoId) === 'github' };
+        const body = { branch, message, createPr: createPr && canPr(t.repoId) };
         if (multi) body.repoId = t.repoId;
         if (body.createPr) {
           body.prTitle = prTitle;
@@ -68,7 +70,11 @@ export function PushDialog({ run, onClose }) {
     if (!multi && results[0]?.error) return setError(new Error(results[0].error));
     setDone(results);
     const ok = results.filter((r) => !r.error).length;
-    toast(ok === results.length ? `Pushed to ${branch}` : `Pushed ${ok} of ${results.length} repositories`, ok === results.length ? 'ok' : 'danger');
+    const prFailed = results.filter((r) => r.prError).length;
+    toast(
+      ok === results.length ? `Pushed to ${branch}${prFailed ? ', but no pull request was opened' : ''}` : `Pushed ${ok} of ${results.length} repositories`,
+      ok === results.length && !prFailed ? 'ok' : 'danger',
+    );
   };
 
   return (
@@ -103,12 +109,13 @@ export function PushDialog({ run, onClose }) {
                     {r.pr ? (
                       <>
                         {' '}
-                        Draft pull request:{' '}
+                        {r.pr.existing ? 'Pull request already open:' : 'Pull request:'}{' '}
                         <a href={r.pr.url} target="_blank" rel="noreferrer">
                           #{r.pr.number}
                         </a>
                       </>
                     ) : null}
+                    {r.prError ? <> No pull request was opened: {r.prError}</> : null}
                   </>
                 )}
               </span>
@@ -162,9 +169,19 @@ export function PushDialog({ run, onClose }) {
           ) : null}
           <Field label="Branch">{(id) => <input id={id} className="input mono" value={branch} onChange={(e) => setBranch(e.target.value)} />}</Field>
           <Field label="Commit message">{(id) => <textarea id={id} className="input" rows={3} value={message} onChange={(e) => setMessage(e.target.value)} />}</Field>
-          {isGithub ? (
+          {canOpenPr ? (
             <>
-              <Toggle checked={createPr} onChange={setCreatePr} label={multi ? 'Open a draft pull request in each GitHub repository' : 'Open a draft pull request on GitHub'} />
+              <Toggle
+                checked={createPr}
+                onChange={setCreatePr}
+                label={
+                  multi
+                    ? 'Open a pull request in each GitHub or CodeCommit repository'
+                    : onlyCodeCommit
+                    ? 'Open a pull request on CodeCommit'
+                    : 'Open a draft pull request on GitHub'
+                }
+              />
               {createPr ? (
                 <>
                   <Field label="Pull request title">{(id) => <input id={id} className="input" value={prTitle} onChange={(e) => setPrTitle(e.target.value)} />}</Field>

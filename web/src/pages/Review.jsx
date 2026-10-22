@@ -15,15 +15,33 @@ const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
 
 export function Review({ route }) {
   const id = route.rest[0];
-  return id ? <ReviewDetail id={id} /> : <ReviewList />;
+  return id ? <ReviewDetail id={id} /> : <ReviewList route={route} />;
 }
 
-function ReviewList() {
+function ReviewList({ route }) {
   const { project, canEdit } = useProject();
   const reviews = useLoad(() => api.get(`/api/projects/${project.id}/reviews`), [project.id]);
   useProjectEvents(['review.updated'], () => reviews.reload(true));
-  const [creating, setCreating] = useState(false);
+
+  // Parse optional pre-fill params from the URL query (e.g. review?repo=<id>&pr=<n>).
+  const queryRepoId = route?.query?.get('repo') || '';
+  const queryPrNumber = route?.query?.get('pr') || '';
+
+  // Auto-open the modal when the URL carries pre-fill params.
+  const [creating, setCreating] = useState(Boolean(queryRepoId && queryPrNumber));
+
   const list = reviews.data?.reviews || [];
+
+  // Clear the query params when the modal closes so the URL stays clean.
+  const handleClose = () => {
+    setCreating(false);
+    if (queryRepoId || queryPrNumber) {
+      // Strip query from hash without triggering a navigation.
+      const hash = window.location.hash;
+      const qi = hash.indexOf('?');
+      if (qi !== -1) window.location.replace(hash.slice(0, qi));
+    }
+  };
 
   const REVIEW_COLS = [
     { key: 'change',   label: 'Change',       accessor: (r) => r.pr_number ? `PR #${r.pr_number}` : `${r.head} into ${r.base}`, type: 'text' },
@@ -48,7 +66,7 @@ function ReviewList() {
         <Spinner />
       ) : list.length === 0 ? (
         <Empty icon="review" title="No reviews yet" action={canEdit ? <Button variant="primary" onClick={() => setCreating(true)}>Review a branch</Button> : null}>
-          Pick two branches, or a GitHub pull request. Findings show up next to the changed lines.
+          Pick two branches, or a GitHub or CodeCommit pull request. Findings show up next to the changed lines.
         </Empty>
       ) : (
         <table className="table">
@@ -86,45 +104,79 @@ function ReviewList() {
           </tbody>
         </table>
       )}
-      {creating ? <NewReview onClose={() => setCreating(false)} /> : null}
+      {creating ? (
+        <NewReview
+          onClose={handleClose}
+          initialRepoId={queryRepoId}
+          initialPrNumber={queryPrNumber}
+          existingReviews={list}
+        />
+      ) : null}
     </div>
   );
 }
 
-function NewReview({ onClose }) {
+/**
+ * Modal for creating a new review.
+ * Props:
+ *   onClose         – called when the modal is dismissed
+ *   initialRepoId   – pre-select this repo (from URL query ?repo=)
+ *   initialPrNumber – pre-fill this PR number and switch to PR mode (from URL query ?pr=)
+ *   existingReviews – the already-loaded reviews list, used to detect duplicates
+ */
+function NewReview({ onClose, initialRepoId = '', initialPrNumber = '', existingReviews = [] }) {
   const { project } = useProject();
   const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
   const ready = (repos.data?.repos || []).filter((r) => r.status === 'ready');
-  const [repoId, setRepoId] = useState('');
-  const [mode, setMode] = useState('branches');
+  const [repoId, setRepoId] = useState(initialRepoId || '');
+  // Start in PR mode when a PR number was supplied.
+  const [mode, setMode] = useState(initialPrNumber ? 'pr' : 'branches');
   const [branches, setBranches] = useState([]);
   const [pulls, setPulls] = useState(null);
-  const [form, setForm] = useState({ base: '', head: '', prNumber: '', deep: false });
+  const [form, setForm] = useState({ base: '', head: '', prNumber: initialPrNumber || '', deep: false });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const repo = ready.find((r) => r.id === repoId);
+
+  // Set a default repo once the list loads, but don't overwrite the pre-filled value.
   useEffect(() => {
     if (!repoId && ready[0]) setRepoId(ready[0].id);
   }, [ready, repoId]);
+
+  // Fetch branches whenever the repo changes.
   useEffect(() => {
     if (!repoId) return;
     api.get(`/api/repos/${repoId}/branches`).then((r) => {
       setBranches(r.branches);
       setForm((f) => ({ ...f, base: r.defaultBranch, head: r.branches.find((b) => b.name !== r.defaultBranch)?.name || '' }));
     });
+    // Reset pulls so they reload for the new repo.
     setPulls(null);
   }, [repoId]);
+
+  // Fetch open PRs when PR mode is active and we haven't loaded them yet (GitHub and CodeCommit).
+  const prCapable = repo?.provider === 'github' || repo?.provider === 'codecommit';
   useEffect(() => {
-    if (mode === 'pr' && repo?.provider === 'github' && !pulls) {
-      api.get(`/api/repos/${repoId}/pulls`).then((r) => setPulls(r.pulls)).catch((e) => setError(e));
+    if (mode === 'pr' && prCapable && !pulls) {
+      // On failure the picker still shows (with the pre-filled PR, if any) instead of spinning forever.
+      api.get(`/api/repos/${repoId}/pulls`).then((r) => setPulls(r.pulls)).catch((e) => {
+        setPulls([]);
+        setError(e);
+      });
     }
-  }, [mode, repo, repoId, pulls]);
+  }, [mode, prCapable, repoId, pulls]);
+
+  // Check whether a review for this repo + PR already exists.
+  const prNum = Number(form.prNumber);
+  const existing = mode === 'pr' && prNum
+    ? existingReviews.find((r) => r.repo_id === repoId && r.pr_number === prNum)
+    : null;
 
   const start = async () => {
     setBusy(true);
     setError(null);
     try {
-      const body = mode === 'pr' ? { repoId, prNumber: Number(form.prNumber), deep: form.deep } : { repoId, base: form.base, head: form.head, deep: form.deep };
+      const body = mode === 'pr' ? { repoId, prNumber: prNum, deep: form.deep } : { repoId, base: form.base, head: form.head, deep: form.deep };
       const { review } = await api.post(`/api/projects/${project.id}/reviews`, body);
       go(project.id, 'review', review.id);
     } catch (e) {
@@ -133,6 +185,15 @@ function NewReview({ onClose }) {
     }
   };
 
+  // Build the PR select options, ensuring the pre-filled PR is always present even if it
+  // hasn't been returned by the open-pulls list (still loading, or already merged/closed).
+  const prefilled = initialPrNumber ? [{ number: Number(initialPrNumber), title: `Pull request #${initialPrNumber}`, head: '', base: '' }] : [];
+  const prOptions = pulls
+    ? (initialPrNumber && !pulls.some((p) => String(p.number) === String(initialPrNumber)) ? [...prefilled, ...pulls] : pulls)
+    : prefilled.length
+      ? prefilled
+      : null;
+
   return (
     <Modal
       title="New review"
@@ -140,9 +201,15 @@ function NewReview({ onClose }) {
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} onClick={start} disabled={!repoId || (mode === 'pr' ? !form.prNumber : !form.base || !form.head)}>
-            Start review
-          </Button>
+          {existing ? (
+            <Button variant="primary" icon="review" onClick={() => go(project.id, 'review', existing.id)}>
+              Open existing review
+            </Button>
+          ) : (
+            <Button variant="primary" busy={busy} onClick={start} disabled={!repoId || (mode === 'pr' ? !form.prNumber : !form.base || !form.head)}>
+              Start review
+            </Button>
+          )}
         </>
       }
     >
@@ -152,6 +219,14 @@ function NewReview({ onClose }) {
         </p>
       ) : (
         <div className="stack">
+          {existing ? (
+            <p className="muted small">
+              A review for pull request #{prNum} already exists. Open it to see the findings, or start a new one.{' '}
+              <Button variant="ghost" onClick={start} busy={busy} disabled={!repoId}>
+                Start new anyway
+              </Button>
+            </p>
+          ) : null}
           <Field label="Repository">
             {(id) => (
               <select id={id} className="input" value={repoId} onChange={(e) => setRepoId(e.target.value)}>
@@ -163,21 +238,24 @@ function NewReview({ onClose }) {
               </select>
             )}
           </Field>
-          {repo?.provider === 'github' ? (
+          {prCapable ? (
             <Segmented value={mode} onChange={setMode} label="What to review" options={[{ value: 'branches', label: 'Two branches' }, { value: 'pr', label: 'Pull request' }]} />
           ) : null}
           {mode === 'pr' ? (
             <Field label="Pull request">
               {(id) =>
-                pulls ? (
-                  <select id={id} className="input" value={form.prNumber} onChange={(e) => setForm({ ...form, prNumber: e.target.value })}>
-                    <option value="">Choose an open pull request</option>
-                    {pulls.map((p) => (
-                      <option key={p.number} value={p.number}>
-                        #{p.number} {p.title} ({p.head} into {p.base})
-                      </option>
-                    ))}
-                  </select>
+                prOptions ? (
+                  <>
+                    <select id={id} className="input" value={form.prNumber} onChange={(e) => setForm({ ...form, prNumber: e.target.value })}>
+                      <option value="">Choose a pull request</option>
+                      {prOptions.map((p) => (
+                        <option key={p.number} value={p.number}>
+                          #{p.number}{p.title ? ` ${p.title}` : ''}{p.head && p.base ? ` (${p.head} into ${p.base})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {!pulls ? <p className="muted small" role="status">Loading the other open pull requests…</p> : null}
+                  </>
                 ) : (
                   <Spinner small />
                 )
@@ -287,7 +365,7 @@ function ReviewDetail({ id }) {
                 <span>Watch the reviewer</span>
               </a>
             ) : null}
-            {canEdit && review.pr_number && review.status === 'done' ? (
+            {canEdit && review.pr_number && review.status === 'done' && review.provider === 'github' ? (
               <Button
                 icon="external"
                 busy={posting}

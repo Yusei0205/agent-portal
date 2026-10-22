@@ -42,8 +42,14 @@ export function ModelPicker({ id, value, onChange, className = 'input', projectI
   const models = list.data?.models || [];
   const currentError = list.data?.error || '';
 
-  const known = TIERS.some((t) => t.value === value) || models.some((m) => m.id === value);
-  const [custom, setCustom] = useState(!known && Boolean(value));
+  const isTier = TIERS.some((t) => t.value === value);
+  const listed = models.some((m) => m.id === value);
+  const known = isTier || listed;
+  // Only the person choosing "Another model ID…" turns the text box on. (Deciding it from `value` on the first
+  // render, before the model list had loaded, stuck a saved model such as claude-opus-5.5 on "Another model ID…"
+  // with an empty box.)
+  const [custom, setCustom] = useState(false);
+  // A saved ID the list does not offer (or a list that failed to load) is shown in the box, so it is never hidden.
   const showText = custom || (!known && Boolean(value) && !list.loading);
 
   async function handleReload() {
@@ -109,6 +115,8 @@ export function ModelPicker({ id, value, onChange, className = 'input', projectI
           }
         }}
       >
+        {/* While the list loads, keep a saved exact ID selectable so the select does not fall back to the first tier. */}
+        {!known && value && list.loading ? <option value={value}>{value}</option> : null}
         <optgroup label="Standard">
           {TIERS.map((t) => (
             <option key={t.value} value={t.value}>
@@ -132,8 +140,8 @@ export function ModelPicker({ id, value, onChange, className = 'input', projectI
         <input
           className="input mono"
           aria-label="Model ID"
-          value={TIERS.some((t) => t.value === value) || models.some((m) => m.id === value) ? '' : value}
-          placeholder="e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+          value={known ? '' : value}
+          placeholder={engine === 'kiro' ? 'e.g. claude-sonnet-4.5' : 'e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0'}
           onChange={(e) => onChange(e.target.value.trim())}
         />
       ) : null}

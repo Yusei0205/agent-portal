@@ -4,7 +4,7 @@ import path from 'node:path';
 import { all, one, run as exec, type Row } from './db.ts';
 import { del, get, post, openSse, HANDLED, sendFile } from './http.ts';
 import { getProject, projectDir, requireProject } from './projects.ts';
-import { ensureFresh, getRepo, githubApi, githubSlug, pushWorktree, removeWorktree, checkBranch, repoDir } from './repos.ts';
+import { ensureFresh, getRepo, openPullRequest, pushWorktree, removeWorktree, checkBranch, repoDir } from './repos.ts';
 import { checkDocOutput, composeDocumentPrompt } from './docrun.ts';
 import { HttpError, badRequest, notFound, parseJson, safeJoin, str } from './util.ts';
 import { runChannel, subscribe } from './events.ts';
@@ -127,6 +127,11 @@ export interface PushOptions {
   base?: string;
   /** Agent pushes: refuse the shared branches (main, develop, release…) too. */
   agent?: boolean;
+  /**
+   * The agent of this very run asked for the push with `git push` in a trusted session, so the run is still going.
+   * Without this a push waits for the run to finish (a person's push must not race the agent's edits).
+   */
+  duringRun?: boolean;
 }
 
 /**
@@ -135,7 +140,7 @@ export interface PushOptions {
  * branch or the pull request's base; never forces.
  */
 export async function pushRun(r: Row, o: PushOptions) {
-  if (isActive(r.id)) throw badRequest('Wait for the run to finish before pushing');
+  if (isActive(r.id) && !o.duringRun) throw badRequest('Wait for the run to finish before pushing');
   const repos = runRepos(r);
   if (!repos.length) throw badRequest('This run has no repository working copy');
   const target = o.repoId ? repos.find((x) => x.repoId === o.repoId) : repos[0];
@@ -167,23 +172,22 @@ export async function pushRun(r: Row, o: PushOptions) {
   const message = str(o.message, 'Commit message', { max: 2000, optional: true }) || defaultMessage;
   const wt = path.join(projectDir(getProject(r.project_id)), target.worktree);
   const out = await pushWorktree(repo, wt, branch, message);
-  let pr: { number: number; url: string } | null = null;
-  if (o.createPr && repo.provider === 'github' && githubSlug(repo.url)) {
+  // The push has happened by now: a pull request that cannot be opened is reported, not thrown.
+  let pr: { number: number; url: string; existing?: boolean } | null = null;
+  let prError: string | null = null;
+  if (o.createPr) {
     const prTitle = str(o.prTitle, 'Pull request title', { max: 200, optional: true })
       || (jiraKey ? `${jiraKey}: ${jiraSummary ?? r.title}` : r.title);
     const prBody = jiraKey && meta.jiraUrl
       ? `Jira: [${jiraKey}](${meta.jiraUrl})\n\nCreated from Agent Portal run "${r.title}".\n\n${(r.result || '').slice(0, 2800)}`
       : `Created from Agent Portal run "${r.title}".\n\n${(r.result || '').slice(0, 3000)}`;
-    const created = await githubApi(repo, 'POST', '/pulls', {
-      title: prTitle,
-      head: branch,
-      base: prBase,
-      body: prBody,
-      draft: true,
-    });
-    pr = { number: created.number, url: created.html_url };
+    try {
+      pr = await openPullRequest(repo, { title: prTitle, head: branch, base: prBase, body: prBody });
+    } catch (e: any) {
+      prError = String(e?.message ?? e).slice(0, 300);
+    }
   }
-  return { ...out, branch, pr, repoId: repo.id, repoName: repo.name };
+  return { ...out, branch, base: prBase, pr, prError, repoId: repo.id, repoName: repo.name };
 }
 
 export function registerRunRoutes(): void {

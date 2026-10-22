@@ -14,6 +14,9 @@ import {
   CodeCommitClient,
   ListRepositoriesCommand,
   BatchGetRepositoriesCommand,
+  CreatePullRequestCommand,
+  GetPullRequestCommand,
+  ListPullRequestsCommand,
 } from '@aws-sdk/client-codecommit';
 import { fromIni } from '@aws-sdk/credential-providers';
 import { get } from './http.ts';
@@ -35,7 +38,7 @@ export interface CodeCommitRepo {
 
 type CodeCommitFactory = (region: string, credentials: AwsCredentials) => CodeCommitClient;
 
-interface AwsCredentials {
+export interface AwsCredentials {
   accessKeyId?: string;
   secretAccessKey?: string;
   sessionToken?: string;
@@ -212,7 +215,167 @@ export async function listCodeCommitRepos(
   return repos;
 }
 
+// ---- Pull requests -----------------------------------------------
+
+const CC_HTTPS_RE = /^https:\/\/git-codecommit\.([a-z0-9-]+)\.amazonaws\.com\/v1\/repos\/([A-Za-z0-9_.-]+)$/;
+const CC_GRC_RE = /^codecommit:(?::([a-z0-9-]+):)?\/\/(?:([A-Za-z0-9_-]+)@)?([A-Za-z0-9_.-]+)$/;
+
+/** Repository name, region and profile named in a CodeCommit address (HTTPS or git-remote-codecommit form). */
+export function codeCommitTarget(url: string): { repositoryName: string; region?: string; profile?: string } | null {
+  const h = url.match(CC_HTTPS_RE);
+  if (h) return { repositoryName: h[2], region: h[1] };
+  const g = url.match(CC_GRC_RE);
+  if (g) return { repositoryName: g[3], region: g[1] || undefined, profile: g[2] || undefined };
+  return null;
+}
+
+/** The CodeCommit console page of a pull request. */
+export function codeCommitPrUrl(region: string, repositoryName: string, id: string | number): string {
+  return `https://${region}.console.aws.amazon.com/codesuite/codecommit/repositories/${encodeURIComponent(repositoryName)}/pull-requests/${id}/details?region=${region}`;
+}
+
+function prError(e: unknown, source: string, destination: string): never {
+  const name: string = (e as any)?.name ?? (e as any)?.code ?? '';
+  const msg: string = (e as any)?.message ?? String(e);
+  if (name === 'AccessDeniedException' || name === 'AuthorizationException') {
+    throw badRequest('The AWS identity may not open pull requests in this CodeCommit repository (it needs codecommit:CreatePullRequest).');
+  }
+  if (name === 'ExpiredTokenException' || name === 'TokenRefreshRequired' || name === 'UnauthorizedException') {
+    throw badRequest('AWS credentials have expired. Sign in with AWS SSO again in Settings › AWS sign-in.');
+  }
+  if (name === 'ReferenceDoesNotExistException') throw badRequest(`CodeCommit has no branch "${source}" or "${destination}" in this repository.`);
+  if (name === 'SourceAndDestinationAreSameException') throw badRequest(`"${source}" and "${destination}" point at the same commit, so there is nothing to review.`);
+  throw new HttpError(502, `CodeCommit could not open the pull request: ${msg}`);
+}
+
+/**
+ * Open a pull request from `source` into `destination`, or return the open one that already does exactly that
+ * (asking twice must not create duplicates). CodeCommit has no draft pull requests.
+ */
+export async function openCodeCommitPullRequest(
+  region: string,
+  credentials: AwsCredentials,
+  repositoryName: string,
+  pr: { title: string; description: string; source: string; destination: string },
+): Promise<{ number: number; url: string; existing: boolean }> {
+  const client = ccClient(region, credentials);
+  const src = `refs/heads/${pr.source}`;
+  const dst = `refs/heads/${pr.destination}`;
+  const same = (ref: string | undefined, want: string) => ref === want || `refs/heads/${ref}` === want;
+  try {
+    // A duplicate would be among the newest open ones.
+    for (const id of await newestOpenIds(client, repositoryName, 20)) {
+      const got = await client.send(new GetPullRequestCommand({ pullRequestId: id }));
+      const t = got.pullRequest?.pullRequestTargets?.find((x) => x.repositoryName === repositoryName);
+      if (t && same(t.sourceReference, src) && same(t.destinationReference, dst)) {
+        return { number: Number(id), url: codeCommitPrUrl(region, repositoryName, id), existing: true };
+      }
+    }
+  } catch (e) {
+    // Reading open pull requests is only a duplicate check; creating still reports a real problem.
+    const name = (e as any)?.name ?? '';
+    if (name !== 'AccessDeniedException' && name !== 'AuthorizationException') prError(e, pr.source, pr.destination);
+  }
+  try {
+    const res = await client.send(
+      new CreatePullRequestCommand({
+        title: pr.title.slice(0, 150),
+        description: pr.description.slice(0, 10_240),
+        targets: [{ repositoryName, sourceReference: src, destinationReference: dst }],
+      }),
+    );
+    const id = res.pullRequest?.pullRequestId ?? '';
+    if (!id) throw new HttpError(502, 'CodeCommit did not return a pull request id');
+    return { number: Number(id), url: codeCommitPrUrl(region, repositoryName, id), existing: false };
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    prError(e, pr.source, pr.destination);
+  }
+}
+
 // ---- Route registration ------------------------------------------
+
+/** One pull request, in the shape the review picker uses. */
+export interface CodeCommitPull {
+  number: number;
+  title: string;
+  head: string;
+  base: string;
+  /** The source branch's commit the pull request points at. */
+  sha: string;
+}
+
+const branchOf = (ref: string | undefined) => String(ref ?? '').replace(/^refs\/heads\//, '');
+
+/** The ids of the newest open pull requests. CodeCommit lists them in no useful order, so all pages are read first. */
+async function newestOpenIds(client: CodeCommitClient, repositoryName: string, n: number): Promise<string[]> {
+  const ids: string[] = [];
+  let nextToken: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    const open = await client.send(new ListPullRequestsCommand({ repositoryName, pullRequestStatus: 'OPEN', maxResults: 100, nextToken }));
+    ids.push(...(open.pullRequestIds ?? []));
+    nextToken = open.nextToken;
+    if (!nextToken) break;
+  }
+  return ids.sort((a, b) => Number(b) - Number(a)).slice(0, n);
+}
+
+async function readPull(client: CodeCommitClient, repositoryName: string, id: string): Promise<CodeCommitPull | null> {
+  const got = await client.send(new GetPullRequestCommand({ pullRequestId: id }));
+  const t = got.pullRequest?.pullRequestTargets?.find((x) => x.repositoryName === repositoryName);
+  if (!t) return null;
+  return { number: Number(id), title: got.pullRequest?.title ?? '', head: branchOf(t.sourceReference), base: branchOf(t.destinationReference), sha: t.sourceCommit ?? '' };
+}
+
+/** The newest open pull requests of a repository (at most 30), newest first. */
+export async function listCodeCommitPullRequests(region: string, credentials: AwsCredentials, repositoryName: string): Promise<CodeCommitPull[]> {
+  const client = ccClient(region, credentials);
+  try {
+    const ids = await newestOpenIds(client, repositoryName, 30);
+    const out: CodeCommitPull[] = [];
+    // A busy repository has dozens open and CodeCommit throttles bursts, so read a few at a time and retry a
+    // throttled read; one that still fails is left out instead of failing the whole list.
+    const readSoft = async (id: string): Promise<CodeCommitPull | null> => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await readPull(client, repositoryName, id);
+        } catch (e) {
+          const name = (e as any)?.name ?? '';
+          const throttled = name === 'ThrottlingException' || /rate exceeded/i.test((e as any)?.message ?? '');
+          if (!throttled) throw e;
+          if (attempt >= 4) return null;
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        }
+      }
+    };
+    for (let i = 0; i < ids.length; i += 4) {
+      for (const p of await Promise.all(ids.slice(i, i + 4).map(readSoft))) if (p) out.push(p);
+    }
+    return out.sort((a, b) => b.number - a.number);
+  } catch (e) {
+    const name = (e as any)?.name ?? '';
+    if (name === 'AccessDeniedException' || name === 'AuthorizationException') {
+      throw badRequest('The AWS identity may not read pull requests in this CodeCommit repository (it needs codecommit:ListPullRequests and codecommit:GetPullRequest).');
+    }
+    mapAwsError(e);
+  }
+}
+
+/** One pull request (any status) of a repository. */
+export async function getCodeCommitPullRequest(region: string, credentials: AwsCredentials, repositoryName: string, id: number): Promise<CodeCommitPull> {
+  const client = ccClient(region, credentials);
+  let p: CodeCommitPull | null = null;
+  try {
+    p = await readPull(client, repositoryName, String(id));
+  } catch (e) {
+    const name = (e as any)?.name ?? '';
+    if (name === 'PullRequestDoesNotExistException') throw badRequest(`CodeCommit has no pull request #${id}`);
+    if (name === 'AccessDeniedException' || name === 'AuthorizationException') throw badRequest('The AWS identity may not read pull requests in this CodeCommit repository (it needs codecommit:GetPullRequest).');
+    mapAwsError(e);
+  }
+  if (!p) throw badRequest(`Pull request #${id} is not for ${repositoryName}`);
+  return p;
+}
 
 export function registerCodeCommitRoutes(): void {
   /**

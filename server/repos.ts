@@ -6,9 +6,11 @@ import { HttpError, badRequest, newId, notFound, now, slugify, str, withLock } f
 import { getProject, notifyProject, projectDir, requireProject, writeClaudeMd } from './projects.ts';
 import { git, gitConfigEnv, gitProgress, PORTAL_GIT_IDENTITY, redact } from './git.ts';
 import { deleteSecret, getSecret, secretInfo, setSecret } from './secrets.ts';
-import { githubToken } from './settings.ts';
+import { getSettings, githubToken } from './settings.ts';
 import { projectAwsEnv } from './project-aws.ts';
 import { canUse, connectionGitEnv, connectionToken, getGitConnection, repoProviderFor } from './git-connections.ts';
+import { connectionEnv } from './aws-connections.ts';
+import { codeCommitPrUrl, codeCommitTarget, getCodeCommitPullRequest, listCodeCommitPullRequests, openCodeCommitPullRequest } from './codecommit.ts';
 
 export type Provider = 'github' | 'codecommit' | 'git';
 
@@ -353,6 +355,55 @@ export async function githubApi(r: Repo, method: string, apiPath: string, body?:
 }
 
 /* ------------------------------------------------------------------ */
+/* Pull requests (GitHub and CodeCommit)                               */
+/* ------------------------------------------------------------------ */
+
+/** True when the portal can open pull requests in this repository. */
+export function supportsPullRequests(r: Repo): boolean {
+  return (r.provider === 'github' && Boolean(githubSlug(r.url))) || (r.provider === 'codecommit' && Boolean(codeCommitTarget(r.url)));
+}
+
+/** The CodeCommit repository name, region and AWS sign-in a repository row uses (same as its git commands). */
+async function codeCommitAccess(r: Repo) {
+  const target = r.provider === 'codecommit' ? codeCommitTarget(r.url) : null;
+  if (!target) return null;
+  const conn = r.connection_id ? getGitConnection(r.connection_id) : null;
+  if (r.connection_id && !conn) throw badRequest(`The connection of ${r.name} was removed. Pick another one for it on the Repositories page.`);
+  const env = conn ? await connectionEnv(conn.aws_connection_id) : await projectAwsEnv(r.project_id);
+  // The repository address names its region (and, for codecommit://profile@repo, its profile); otherwise the sign-in's.
+  const region = target.region || env.AWS_REGION || getSettings().aws.region;
+  const credentials = env.AWS_ACCESS_KEY_ID
+    ? { accessKeyId: env.AWS_ACCESS_KEY_ID, secretAccessKey: env.AWS_SECRET_ACCESS_KEY, sessionToken: env.AWS_SESSION_TOKEN }
+    : { profile: target.profile || env.AWS_PROFILE };
+  return { region, credentials, repositoryName: target.repositoryName };
+}
+
+/** One CodeCommit pull request: its source (head) and destination (base) branch and the source commit. */
+export async function getCodeCommitPull(r: Repo, n: number) {
+  const cc = await codeCommitAccess(r);
+  if (!cc) throw badRequest('This is not a CodeCommit repository');
+  return getCodeCommitPullRequest(cc.region, cc.credentials, cc.repositoryName, n);
+}
+
+/**
+ * Open a pull request from `head` into `base`: a draft on GitHub, a regular one on CodeCommit (it has no drafts).
+ * CodeCommit uses the same AWS sign-in as the repository's git commands. An open pull request between the same two
+ * CodeCommit branches is returned instead of a duplicate.
+ */
+export async function openPullRequest(
+  r: Repo,
+  pr: { title: string; body: string; head: string; base: string },
+): Promise<{ number: number; url: string; existing?: boolean }> {
+  if (r.provider === 'github' && githubSlug(r.url)) {
+    const created = await githubApi(r, 'POST', '/pulls', { title: pr.title, head: pr.head, base: pr.base, body: pr.body, draft: true });
+    return { number: created.number, url: created.html_url };
+  }
+  const cc = await codeCommitAccess(r);
+  if (!cc) throw badRequest(`Pull requests can be opened on GitHub and CodeCommit only. Open one for ${r.name} on its git server.`);
+  return openCodeCommitPullRequest(cc.region, cc.credentials, cc.repositoryName, { title: pr.title, description: pr.body, source: pr.head, destination: pr.base });
+}
+
+/* ------------------------------------------------------------------ */
 /* Routes                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -493,6 +544,12 @@ export function registerRepoRoutes(): void {
   get('/api/repos/:id/pulls', async (ctx) => {
     const repo = getRepo(ctx.params.id);
     requireProject(ctx, repo.project_id);
+    if (repo.provider === 'codecommit') {
+      const cc = await codeCommitAccess(repo);
+      if (!cc) return { pulls: [] };
+      const pulls = await listCodeCommitPullRequests(cc.region, cc.credentials, cc.repositoryName);
+      return { pulls: pulls.map((p) => ({ number: p.number, title: p.title, base: p.base, head: p.head, headSha: p.sha, url: codeCommitPrUrl(cc.region, cc.repositoryName, p.number) })) };
+    }
     if (repo.provider !== 'github') return { pulls: [] };
     const pulls = await githubApi(repo, 'GET', '/pulls?state=open&per_page=50');
     return {

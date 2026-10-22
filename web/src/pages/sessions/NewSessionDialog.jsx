@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useProject } from '../../lib/context.js';
 import { useLoad } from '../../lib/useAsync.js';
@@ -50,6 +50,7 @@ function useLeads(projectId, kiro) {
 
 function LeadField({ team = [], value, onChange, kiro }) {
   const own = team[0]?.kind === 'kiro';
+  const fallback = kiro && team.length > 0 && team[0]?.kind === 'claude';
   const hint = own
     ? 'A lead runs as the main agent with its own Kiro profile and hands tasks to the agents on its team (its availableAgents), then checks what they return.'
     : team.length
@@ -57,19 +58,38 @@ function LeadField({ team = [], value, onChange, kiro }) {
       : kiro
         ? 'No agents in this project yet. Add Kiro agents under Agents and skills › Kiro (or Claude Code agents) and a lead can delegate to them.'
         : 'No agents in this project yet. Add some under Agents and skills and a lead can delegate to them.';
+  // Source label shown under the dropdown so the user knows which agent set is listed.
+  const sourceLabel = team.length
+    ? own
+      ? 'Kiro agents (.kiro/agents)'
+      : fallback
+        ? 'Claude Code agents (.claude/agents) — no Kiro agents in this project yet'
+        : 'Claude Code agents (.claude/agents)'
+    : null;
   return (
     <Field label="Lead agent" hint={hint}>
       {(id) => (
-        <select id={id} className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-          <option value="">Default (the main agent decides)</option>
-          {value && !team.some((a) => a.name === value) ? <option value={value}>{value} (cannot lead on this engine)</option> : null}
-          {team.map((a) => (
-            <option key={a.name} value={a.name}>
-              {a.name}
-              {a.description ? ` — ${a.description.slice(0, 60)}` : ''}
-            </option>
-          ))}
-        </select>
+        <>
+          <select id={id} className="input" value={value} onChange={(e) => onChange(e.target.value)} aria-describedby={sourceLabel ? `${id}-source` : undefined}>
+            <option value="">Default (the main agent decides)</option>
+            {value && !team.some((a) => a.name === value) ? <option value={value}>{value} (cannot lead on this engine)</option> : null}
+            {team.length > 0 ? (
+              <optgroup label={own ? 'Kiro agents (.kiro/agents)' : fallback ? 'Claude Code agents — fallback (.claude/agents)' : 'Claude Code agents (.claude/agents)'}>
+                {team.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.name}
+                    {a.description ? ` — ${a.description.slice(0, 60)}` : ''}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+          </select>
+          {sourceLabel ? (
+            <p id={`${id}-source`} className="field-hint" style={{ marginTop: '0.25rem' }}>
+              Showing: {sourceLabel}
+            </p>
+          ) : null}
+        </>
       )}
     </Field>
   );
@@ -216,16 +236,30 @@ export function NewSessionDialog({ prefill, onClose }) {
   // '' follows the project's connection; 'claude' or 'kiro' picks the engine for this work.
   const engines = useLoad(() => api.get(`/api/projects/${project.id}/engines`), [project.id]);
   const [engine, setEngine] = useState('');
-  const team = useLeads(project.id, engine ? engine === 'kiro' : kiro);
+  const effectiveKiro = engine ? engine === 'kiro' : kiro;
+  const team = useLeads(project.id, effectiveKiro);
+  // When the engine changes, clear the lead if it is no longer valid for the new engine.
+  const prevTeamRef = useRef(null);
+  useEffect(() => {
+    if (team === prevTeamRef.current) return;
+    prevTeamRef.current = team;
+    if (team && f.leadAgent && !team.some((a) => a.name === f.leadAgent)) {
+      setF((cur) => ({ ...cur, leadAgent: '' }));
+    } else if (team && !f.leadAgent && project.default_lead_agent && team.some((a) => a.name === project.default_lead_agent)) {
+      // Back on an engine the project's default lead can lead on: pick it again.
+      setF((cur) => ({ ...cur, leadAgent: project.default_lead_agent }));
+    }
+  }, [team]); // eslint-disable-line react-hooks/exhaustive-deps
   const [f, setF] = useState({
     goal: '',
     repoId: prefill?.repoId || '',
     branch: '',
-    model: 'sonnet',
+    // Project defaults (Project and team › Defaults for new work); a lead that cannot lead on the engine is cleared below.
+    model: project.default_model || 'sonnet',
     budgetUsd: 5,
     budgetCredits: 20,
     maxIterations: 8,
-    leadAgent: '',
+    leadAgent: project.default_lead_agent || '',
     permissionMode: 'default',
     docScope: '',
     docOutput: 'markdown-word',
@@ -300,8 +334,8 @@ export function NewSessionDialog({ prefill, onClose }) {
           integrations,
           engine: engine || undefined,
           model: f.model,
-          budgetUsd: kiro ? undefined : Number(f.budgetUsd),
-          budgetCredits: kiro ? Number(f.budgetCredits) : undefined,
+          budgetUsd: effectiveKiro ? undefined : Number(f.budgetUsd),
+          budgetCredits: effectiveKiro ? Number(f.budgetCredits) : undefined,
           maxIterations: Number(f.maxIterations),
           leadAgent: f.leadAgent,
           jiraKey: ticket?.key || undefined,
@@ -370,7 +404,8 @@ export function NewSessionDialog({ prefill, onClose }) {
               value={engine}
               onChange={(e) => {
                 setEngine(e);
-                setF((cur) => ({ ...cur, model: 'sonnet' }));
+                // The project's default model is meant for its default engine; another engine starts on Sonnet.
+                setF((cur) => ({ ...cur, model: (!e && project.default_model) || 'sonnet' }));
               }}
               label="Engine"
               options={[
@@ -505,8 +540,8 @@ export function NewSessionDialog({ prefill, onClose }) {
             ) : null}
             {kind === 'session' ? (
               <>
-                <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} kiro={engine ? engine === 'kiro' : kiro} />
-                <LimitFields f={f} set={set} kiro={kiro} />
+                <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} kiro={effectiveKiro} />
+                <LimitFields f={f} set={set} kiro={effectiveKiro} />
                 {hasRepos ? <PushModeField value={f.pushMode} onChange={(pushMode) => (setPushTouched(true), setF((cur) => ({ ...cur, pushMode })))} /> : null}
                 <TrustToolsField value={trustTools} onChange={setTrustTools} hasRepos={hasRepos} />
               </>
@@ -529,8 +564,13 @@ export function NewSessionDialog({ prefill, onClose }) {
 export function SessionSettings({ workflow, canEdit, onSaved }) {
   const { project } = useProject();
   const { toast } = useUi();
-  const kiro = workflow.provider === 'kiro';
-  const team = useLeads(project.id, kiro);
+  const engines = useLoad(() => api.get(`/api/projects/${project.id}/engines`), [project.id]);
+  // engine: '' = project default, 'claude' or 'kiro'.
+  const [engine, setEngine] = useState(workflow.engine ?? '');
+  useEffect(() => setEngine(workflow.engine ?? ''), [workflow.id, workflow.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Derive kiro-ness from the chosen engine ('' → engines.default, 'claude' → engines.claude provider, 'kiro' → kiro).
+  const effectiveKiro = engine === 'kiro' ? true : engine === 'claude' ? false : (engines.data ? engines.data.default === 'kiro' : workflow.provider === 'kiro');
+  const team = useLeads(project.id, effectiveKiro);
   const initial = () => ({
     goal: workflow.goal,
     model: workflow.model,
@@ -543,6 +583,15 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
   });
   const [f, setF] = useState(initial);
   useEffect(() => setF(initial()), [workflow.id, workflow.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
+  // When engine changes, clear the lead if it is no longer valid for the new engine, and reset model.
+  const prevTeamRef = useRef(null);
+  useEffect(() => {
+    if (team === prevTeamRef.current) return;
+    prevTeamRef.current = team;
+    if (team && f.leadAgent && !team.some((a) => a.name === f.leadAgent)) {
+      setF((cur) => ({ ...cur, leadAgent: '' }));
+    }
+  }, [team]); // eslint-disable-line react-hooks/exhaustive-deps
   // Repositories can be attached or changed while the session is not running.
   const repoList = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
   const ready = (repoList.data?.repos || []).filter((r) => r.status === 'ready');
@@ -561,8 +610,9 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
     try {
       await api.put(`/api/workflows/${workflow.id}`, {
         ...f,
-        budgetUsd: kiro ? undefined : Number(f.budgetUsd),
-        budgetCredits: kiro ? Number(f.budgetCredits) : undefined,
+        engine: engine || undefined,
+        budgetUsd: effectiveKiro ? undefined : Number(f.budgetUsd),
+        budgetCredits: effectiveKiro ? Number(f.budgetCredits) : undefined,
         maxIterations: Number(f.maxIterations),
         trustTools: f.trustTools,
         ...(reposChanged ? { repos: rows.filter((r) => r.repoId).map(({ repoId, branch }) => ({ repoId, branch: branch || undefined })) } : {}),
@@ -583,14 +633,39 @@ export function SessionSettings({ workflow, canEdit, onSaved }) {
       </div>
     );
   }
+  const showEnginePicker = engines.data && engines.data.default !== 'demo';
   return (
     <div className="stack ws-settings">
       <Field label="Goal" hint="The agents re-read this before every iteration.">
         {(id) => <textarea id={id} className="input" rows={5} value={f.goal} onChange={set('goal')} />}
       </Field>
-      <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} kiro={kiro} />
-      <Field label="Model">{(id) => <ModelPicker id={id} value={f.model} projectId={project.id} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}</Field>
-      <LimitFields f={f} set={set} kiro={kiro} />
+      {showEnginePicker ? (
+        <div className="stack tight">
+          <div className="row tight wrap engine-pick">
+            <span className="field-label">Engine</span>
+            <Segmented
+              size="sm"
+              value={engine}
+              onChange={(e) => {
+                setEngine(e);
+                // The project's default model is meant for its default engine; another engine starts on Sonnet.
+                setF((cur) => ({ ...cur, model: (!e && project.default_model) || 'sonnet' }));
+              }}
+              label="Engine"
+              disabled={running}
+              options={[
+                { value: '', label: `Project default (${ENGINE_LABEL[engines.data.default] ?? engines.data.default})` },
+                ...(engines.data.claude ? [{ value: 'claude', label: `Claude Code (${ENGINE_LABEL[engines.data.claude]})` }] : []),
+                { value: 'kiro', label: 'Kiro' },
+              ]}
+            />
+          </div>
+          {running ? <p className="muted small">Engine changes take effect from the next iteration.</p> : null}
+        </div>
+      ) : null}
+      <LeadField team={team} value={f.leadAgent} onChange={(leadAgent) => setF((cur) => ({ ...cur, leadAgent }))} kiro={effectiveKiro} />
+      <Field label="Model">{(id) => <ModelPicker id={id} value={f.model} projectId={project.id} engine={engine || undefined} onChange={(model) => setF((cur) => ({ ...cur, model }))} />}</Field>
+      <LimitFields f={f} set={set} kiro={effectiveKiro} />
       {running ? (
         workflow.repos?.length ? null : <p className="muted small">Pause or stop the session to attach a repository.</p>
       ) : (
