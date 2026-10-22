@@ -5600,20 +5600,10 @@ html[data-theme='hud'] .ins-hbar-fill {
 
 /* editor */
 .ls-editor {
-  max-width: 780px;
+  width: 100%;
 }
 .ls-editor-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
-}
-.ls-editor-head h2 {
-  margin: 0;
-  font-size: 1.2rem;
+  display: none; /* replaced by PageHeader */
 }
 .ls-section {
   display: flex;
@@ -5925,4 +5915,52 @@ html[data-theme='hud'] .ins-hbar-fill {
 .hud .ws-plan-banner,
 .hud .ws-blocked-banner {
   border-radius: 0;
+}
+
+
+/* ─── Polish: readiness ok row ─────────────────────────────────────────── */
+.readiness-ok-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: .5rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--line);
+}
+
+/* ─── Polish: toolbar (filter bars) ────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+  padding: .75rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* ─── Polish: loop spec editor wider layout ────────────────────────────── */
+.ls-editor-body {
+  margin-top: 0;
+}
+/* Two-column grid for stop rules on wider screens */
+.ls-stop-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .75rem;
+}
+@media (max-width: 600px) {
+  .ls-stop-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Polish: remove duplicate setup quicklinks ─────────────────────────── */
+.setup-quicklinks { display: none; }
+
+/* ─── Polish: Insights page spacing ─────────────────────────────────────── */
+.ins-page-header {
+  margin-bottom: 1.5rem;
 }

@@ -512,7 +512,7 @@ export async function buildReadiness(projectId: string): Promise<ReadinessReport
     const cloning = repos.filter((r) => r.status === 'cloning');
     const errored = repos.filter((r) => r.status === 'error');
     if (ready.length) {
-      items.push({ key: 'repository', status: 'ok', label: 'Repository', message: `${ready.length} repository${ready.length > 1 ? 'ies' : 'y'} ready` });
+      items.push({ key: 'repository', status: 'ok', label: 'Repository', message: `${ready.length} ${ready.length === 1 ? 'repository' : 'repositories'} ready` });
     } else if (cloning.length) {
       items.push({ key: 'repository', status: 'warn', label: 'Repository', message: `${cloning.length} repository cloning…` });
     } else if (errored.length) {

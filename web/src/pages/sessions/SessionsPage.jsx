@@ -31,13 +31,7 @@ export function Sessions({ route }) {
 
   // Loop specs tab takes over the full page
   if (isSpecs) {
-    return (
-      <div className="ws-page">
-        <section className="ws-main">
-          <LoopSpecs />
-        </section>
-      </div>
-    );
+    return <LoopSpecs />;
   }
 
   let detail;

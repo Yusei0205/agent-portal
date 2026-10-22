@@ -47,7 +47,7 @@ function ReadinessPanel({ projectId, onFix }) {
               <td className="readiness-msg muted small">{item.message}</td>
               <td className="readiness-action">
                 {item.status !== 'ok' && onFix ? (
-                  <Button size="sm" variant="ghost" onClick={() => onFix(item)}>
+                  <Button size="sm" variant="primary" onClick={() => onFix(item)}>
                     {item.status === 'missing' ? 'Add' : 'Fix'}
                   </Button>
                 ) : null}
@@ -57,7 +57,10 @@ function ReadinessPanel({ projectId, onFix }) {
         </tbody>
       </table>
       {ready ? (
-        <p className="muted small">All required items are set up. You can start a session.</p>
+        <div className="readiness-ok-row">
+          <span className="muted small">All required items are set up.</span>
+          <a className="btn btn-primary btn-sm" href={href(projectId, 'sessions')}>Start a session →</a>
+        </div>
       ) : (
         <p className="muted small">Fix the items above to start a real session. Demo mode works with anything.</p>
       )}
@@ -490,19 +493,6 @@ export function ProjectSetup({ route }) {
       {/* Readiness panel always at the top */}
       <ReadinessPanel projectId={project.id} onFix={isOwner || canEdit ? handleFix : null} />
 
-      {/* Settings precedence reminder */}
-      <div className="panel precedence-reminder">
-        <h3>Settings precedence</h3>
-        <p className="muted small">
-          <strong>Portal default</strong> (Settings) →{' '}
-          <strong>Project override</strong> (here) →{' '}
-          <strong>Session override</strong> (launcher / workspace)
-        </p>
-        <p className="muted small">
-          A setting at a lower level wins over higher levels. To see what applies, check each section below.
-        </p>
-      </div>
-
       {/* Sub-navigation tabs */}
       <nav className="tabs" aria-label="Setup sections">
         {SETUP_TABS.map((t) => (
@@ -562,18 +552,11 @@ function SetupTabContent({ tab, projectId, onFix }) {
 function SetupOverview({ projectId, onFix }) {
   return (
     <div className="stack">
-      <Note tone="info">
-        Use the sections above to configure each aspect of the project.
-        The <strong>Readiness panel</strong> at the top always shows what's still needed before you can start a session.
-        Click <strong>Add</strong> or <strong>Fix</strong> on any item to configure it right here — no navigating away.
-      </Note>
-      <div className="setup-quicklinks">
-        {SETUP_TABS.filter((t) => t.value !== 'overview').map((t) => (
-          <div key={t.value} className="panel setup-quicklink">
-            <strong>{t.label}</strong>
-          </div>
-        ))}
-      </div>
+      <p className="muted small">
+        Use the tabs above to configure each aspect of the project.
+        The Readiness panel at the top shows what is still needed before you can start a session.
+        Click <strong>Add</strong> or <strong>Fix</strong> on any readiness item to configure it right here — no navigating away.
+      </p>
     </div>
   );
 }

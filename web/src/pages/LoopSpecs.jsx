@@ -471,13 +471,13 @@ function VerifPipelineBuilder({ steps, onChange }) {
 function StopRulesEditor({ rules, onChange }) {
   return (
     <div className="stack-sm">
-      <div className="row tight wrap">
+      <div className="ls-stop-grid">
         <Field label="Max iterations" hint="Maximum loop iterations per burst.">
           {(id) => (
             <input
               id={id}
               type="number"
-              className="input input-sm"
+              className="input"
               min={1}
               max={50}
               value={rules.maxIterations ?? 10}
@@ -490,7 +490,7 @@ function StopRulesEditor({ rules, onChange }) {
             <input
               id={id}
               type="number"
-              className="input input-sm"
+              className="input"
               min={0.1}
               max={1000}
               step={0.5}
@@ -505,7 +505,7 @@ function StopRulesEditor({ rules, onChange }) {
             <input
               id={id}
               type="number"
-              className="input input-sm"
+              className="input"
               min={1}
               max={10}
               value={rules.stagnationWindow ?? 3}
@@ -518,7 +518,7 @@ function StopRulesEditor({ rules, onChange }) {
             <input
               id={id}
               type="number"
-              className="input input-sm"
+              className="input"
               min={1}
               max={10}
               value={rules.maxConsecutiveFailures ?? 2}
@@ -669,252 +669,262 @@ function SpecEditor({ spec, projectId, onSaved, onCancel }) {
 
   return (
     <form className="ls-editor" onSubmit={save} noValidate>
-      <div className="ls-editor-head">
-        <h2>{spec ? 'Edit loop spec' : 'New loop spec'}</h2>
-        <div className="row tight">
-          {spec?.id ? <Button type="button" variant="ghost" size="sm" onClick={runNow} busy={busy}>▶ Run now</Button> : null}
-          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
-          <Button type="submit" variant="primary" size="sm" busy={busy}>Save spec</Button>
-        </div>
-      </div>
+      <PageHeader
+        title={spec ? 'Edit loop spec' : 'New loop spec'}
+        actions={
+          <div className="row tight">
+            {spec?.id ? <Button type="button" variant="ghost" size="sm" onClick={runNow} busy={busy}>▶ Run now</Button> : null}
+            <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+            <Button type="submit" variant="primary" busy={busy}>Save spec</Button>
+          </div>
+        }
+      />
 
       <ErrorNote error={error} onClose={() => setError(null)} />
 
-      <div className="stack-lg">
-        {/* Basic info */}
-        <section className="ls-section">
-          <h3 className="ls-section-title">Name and description</h3>
-          <Field label="Spec name" error={!form.name.trim() && busy ? 'Name is required' : undefined}>
-            {(id) => (
-              <input
-                id={id}
-                className="input"
-                placeholder="Feature branch loop"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                required
-              />
-            )}
-          </Field>
-          <Field label="Description (optional)">
-            {(id) => (
-              <input
-                id={id}
-                className="input"
-                placeholder="What does this spec do?"
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              />
-            )}
-          </Field>
-        </section>
-
-        {/* Goal template */}
-        <section className="ls-section">
-          <h3 className="ls-section-title">Goal template</h3>
-          <Field label="Goal template" hint="Use {{variable}} placeholders. The agent sees the filled template as its goal.">
-            {(id) => (
-              <textarea
-                id={id}
-                ref={goalRef}
-                className="input ls-goal-textarea"
-                rows={6}
-                placeholder="Implement {{ticket.summary}} ({{ticket.key}}) in {{repo.name}}."
-                value={form.goal_template}
-                onChange={(e) => setForm((f) => ({ ...f, goal_template: e.target.value }))}
-              />
-            )}
-          </Field>
-          <TemplateVarHints onInsert={insertVar} />
-        </section>
-
-        {/* Trigger */}
-        <section className="ls-section">
-          <h3 className="ls-section-title">Trigger</h3>
-          <TriggerBuilder
-            kind={form.trigger_kind}
-            config={form.trigger_config}
-            onKind={(k) => setForm((f) => ({ ...f, trigger_kind: k }))}
-            onConfig={(c) => setForm((f) => ({ ...f, trigger_config: c }))}
-            baseUrl={baseUrl}
-          />
-        </section>
-
-        {/* Verification pipeline */}
-        <section className="ls-section">
-          <h3 className="ls-section-title">Verification pipeline</h3>
-          <p className="field-hint">Run after each iteration. Pass/fail determines whether the agent carries on.</p>
-          <VerifPipelineBuilder
-            steps={form.verification}
-            onChange={(v) => setForm((f) => ({ ...f, verification: v }))}
-          />
-        </section>
-
-        {/* Stop rules */}
-        <section className="ls-section">
-          <h3 className="ls-section-title">Stop rules</h3>
-          <StopRulesEditor
-            rules={form.stop_rules}
-            onChange={(r) => setForm((f) => ({ ...f, stop_rules: r }))}
-          />
-        </section>
-
-        {/* Advanced (collapsed by default) */}
-        <section className="ls-section">
-          <button
-            type="button"
-            className="ls-adv-toggle"
-            aria-expanded={advOpen}
-            onClick={() => setAdvOpen((v) => !v)}
-          >
-            <Icon name={advOpen ? 'chevronDown' : 'chevronRight'} size={14} />
-            {advOpen ? 'Hide' : 'Show'} advanced settings
-          </button>
-
-          {advOpen ? (
-            <div className="stack-lg ls-advanced">
-              {/* Planning gate */}
-              <div className="field">
-                <Toggle
-                  checked={form.planning_gate}
-                  onChange={(v) => setForm((f) => ({ ...f, planning_gate: v }))}
-                  label="Require plan approval — pause after the first planning iteration and wait for a human to approve before continuing"
+      <div className="ls-editor-body">
+        <div className="stack-lg">
+          {/* Basic info */}
+          <section className="panel ls-section">
+            <h3 className="ls-section-title">Name and description</h3>
+            <Field label="Spec name" error={!form.name.trim() && busy ? 'Name is required' : undefined}>
+              {(id) => (
+                <input
+                  id={id}
+                  className="input"
+                  placeholder="Feature branch loop"
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  required
                 />
-              </div>
+              )}
+            </Field>
+            <Field label="Description (optional)">
+              {(id) => (
+                <input
+                  id={id}
+                  className="input"
+                  placeholder="What does this spec do?"
+                  value={form.description}
+                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                />
+              )}
+            </Field>
+          </section>
 
-              {/* Push mode */}
-              <Field label="Agent push mode">
-                {(id) => (
-                  <select
-                    id={id}
-                    className="input"
-                    value={form.push_mode ?? ''}
-                    onChange={(e) => setForm((f) => ({ ...f, push_mode: e.target.value }))}
-                  >
-                    {PUSH_MODES.map((m) => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
-                    ))}
-                  </select>
-                )}
-              </Field>
+          {/* Goal template */}
+          <section className="panel ls-section">
+            <h3 className="ls-section-title">Goal template</h3>
+            <Field label="Goal template" hint="Use {{variable}} placeholders. The agent sees the filled template as its goal.">
+              {(id) => (
+                <textarea
+                  id={id}
+                  ref={goalRef}
+                  className="input ls-goal-textarea"
+                  rows={6}
+                  placeholder="Implement {{ticket.summary}} ({{ticket.key}}) in {{repo.name}}."
+                  value={form.goal_template}
+                  onChange={(e) => setForm((f) => ({ ...f, goal_template: e.target.value }))}
+                />
+              )}
+            </Field>
+            <TemplateVarHints onInsert={insertVar} />
+          </section>
 
-              {/* Memory config */}
-              <div className="stack-sm">
-                <label className="field-label">Memory</label>
-                <Toggle
-                  checked={form.memory_config.progressFile !== false}
-                  onChange={(v) => setForm((f) => ({ ...f, memory_config: { ...f.memory_config, progressFile: v } }))}
-                  label="Write per-iteration summaries to a progress file"
-                />
-                <Toggle
-                  checked={Boolean(form.memory_config.appendDecisions)}
-                  onChange={(v) => setForm((f) => ({ ...f, memory_config: { ...f.memory_config, appendDecisions: v } }))}
-                  label="Append agent answers to the project decisions log"
-                />
-              </div>
+          {/* Trigger */}
+          <section className="panel ls-section">
+            <h3 className="ls-section-title">Trigger</h3>
+            <TriggerBuilder
+              kind={form.trigger_kind}
+              config={form.trigger_config}
+              onKind={(k) => setForm((f) => ({ ...f, trigger_kind: k }))}
+              onConfig={(c) => setForm((f) => ({ ...f, trigger_config: c }))}
+              baseUrl={baseUrl}
+            />
+          </section>
 
-              {/* Escalation */}
-              <div className="stack-sm">
-                <label className="field-label">Escalation</label>
-                <Toggle
-                  checked={form.escalation.onBlocked !== false}
-                  onChange={(v) => setForm((f) => ({ ...f, escalation: { ...f.escalation, onBlocked: v } }))}
-                  label="Create an Inbox item when the session is blocked"
-                />
-                <Toggle
-                  checked={form.escalation.onFail !== false}
-                  onChange={(v) => setForm((f) => ({ ...f, escalation: { ...f.escalation, onFail: v } }))}
-                  label="Create an Inbox item when the session fails"
-                />
-                <Toggle
-                  checked={Boolean(form.escalation.webhook)}
-                  onChange={(v) => setForm((f) => ({ ...f, escalation: { ...f.escalation, webhook: v } }))}
-                  label="Fire outbound webhook on escalation"
-                />
-              </div>
+          {/* Verification pipeline */}
+          <section className="panel ls-section">
+            <h3 className="ls-section-title">Verification pipeline</h3>
+            <p className="field-hint">Run after each iteration. Pass/fail determines whether the agent carries on.</p>
+            <VerifPipelineBuilder
+              steps={form.verification}
+              onChange={(v) => setForm((f) => ({ ...f, verification: v }))}
+            />
+          </section>
 
-              {/* Budget override */}
-              <Field label="Monthly budget (USD, overrides project default)">
-                {(id) => (
-                  <input
-                    id={id}
-                    type="number"
-                    className="input input-sm"
-                    min={0}
-                    step={1}
-                    value={form.monthly_budget_usd ?? ''}
-                    placeholder="Leave empty to use project default"
-                    onChange={(e) => setForm((f) => ({ ...f, monthly_budget_usd: e.target.value }))}
+          {/* Stop rules */}
+          <section className="panel ls-section">
+            <h3 className="ls-section-title">Stop rules</h3>
+            <StopRulesEditor
+              rules={form.stop_rules}
+              onChange={(r) => setForm((f) => ({ ...f, stop_rules: r }))}
+            />
+          </section>
+
+          {/* Advanced (collapsed by default) */}
+          <section className="panel ls-section">
+            <button
+              type="button"
+              className="ls-adv-toggle"
+              aria-expanded={advOpen}
+              onClick={() => setAdvOpen((v) => !v)}
+            >
+              <Icon name={advOpen ? 'chevronDown' : 'chevronRight'} size={14} />
+              {advOpen ? 'Hide' : 'Show'} advanced settings
+            </button>
+
+            {advOpen ? (
+              <div className="stack-lg ls-advanced">
+                {/* Planning gate */}
+                <div className="field">
+                  <Toggle
+                    checked={form.planning_gate}
+                    onChange={(v) => setForm((f) => ({ ...f, planning_gate: v }))}
+                    label="Require plan approval — pause after the first planning iteration and wait for a human to approve before continuing"
                   />
-                )}
-              </Field>
-            </div>
-          ) : null}
-        </section>
+                </div>
 
-        {/* Trigger history */}
-        {spec?.id && history ? (
-          <section className="ls-section">
-            <h3 className="ls-section-title">Trigger history</h3>
-            {history.length === 0 ? (
-              <p className="muted small">No triggers fired yet.</p>
-            ) : (
-              <table className="table" aria-label="Trigger history">
-                <thead>
-                  <tr>
-                    <th>Fired</th>
-                    <th>Kind</th>
-                    <th>Session</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.slice(0, 20).map((h, i) => (
-                    <tr key={i}>
-                      <td className="small muted">{timeAgo(h.fired_at)}</td>
-                      <td><Badge status={h.kind}>{h.kind}</Badge></td>
-                      <td>
-                        {h.workflow_id ? (
-                          <a href={`#/p/${projectId}/sessions/${h.workflow_id}`} className="small">
-                            {h.workflow_id.slice(0, 8)}…
-                          </a>
-                        ) : <span className="muted small">—</span>}
-                      </td>
+                {/* Push mode */}
+                <Field label="Agent push mode">
+                  {(id) => (
+                    <select
+                      id={id}
+                      className="input"
+                      value={form.push_mode ?? ''}
+                      onChange={(e) => setForm((f) => ({ ...f, push_mode: e.target.value }))}
+                    >
+                      {PUSH_MODES.map((m) => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+
+                {/* Memory config */}
+                <div className="stack-sm">
+                  <label className="field-label">Memory</label>
+                  <Toggle
+                    checked={form.memory_config.progressFile !== false}
+                    onChange={(v) => setForm((f) => ({ ...f, memory_config: { ...f.memory_config, progressFile: v } }))}
+                    label="Write per-iteration summaries to a progress file"
+                  />
+                  <Toggle
+                    checked={Boolean(form.memory_config.appendDecisions)}
+                    onChange={(v) => setForm((f) => ({ ...f, memory_config: { ...f.memory_config, appendDecisions: v } }))}
+                    label="Append agent answers to the project decisions log"
+                  />
+                </div>
+
+                {/* Escalation */}
+                <div className="stack-sm">
+                  <label className="field-label">Escalation</label>
+                  <Toggle
+                    checked={form.escalation.onBlocked !== false}
+                    onChange={(v) => setForm((f) => ({ ...f, escalation: { ...f.escalation, onBlocked: v } }))}
+                    label="Create an Inbox item when the session is blocked"
+                  />
+                  <Toggle
+                    checked={form.escalation.onFail !== false}
+                    onChange={(v) => setForm((f) => ({ ...f, escalation: { ...f.escalation, onFail: v } }))}
+                    label="Create an Inbox item when the session fails"
+                  />
+                  <Toggle
+                    checked={Boolean(form.escalation.webhook)}
+                    onChange={(v) => setForm((f) => ({ ...f, escalation: { ...f.escalation, webhook: v } }))}
+                    label="Fire outbound webhook on escalation"
+                  />
+                </div>
+
+                {/* Budget override */}
+                <Field label="Monthly budget (USD, overrides project default)">
+                  {(id) => (
+                    <input
+                      id={id}
+                      type="number"
+                      className="input input-sm"
+                      min={0}
+                      step={1}
+                      value={form.monthly_budget_usd ?? ''}
+                      placeholder="Leave empty to use project default"
+                      onChange={(e) => setForm((f) => ({ ...f, monthly_budget_usd: e.target.value }))}
+                    />
+                  )}
+                </Field>
+              </div>
+            ) : null}
+          </section>
+
+          {/* Trigger history */}
+          {spec?.id && history ? (
+            <section className="panel ls-section">
+              <h3 className="ls-section-title">Trigger history</h3>
+              {history.length === 0 ? (
+                <p className="muted small">No triggers fired yet.</p>
+              ) : (
+                <table className="table" aria-label="Trigger history">
+                  <thead>
+                    <tr>
+                      <th>Fired</th>
+                      <th>Kind</th>
+                      <th>Session</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </section>
-        ) : null}
+                  </thead>
+                  <tbody>
+                    {history.slice(0, 20).map((h, i) => (
+                      <tr key={i}>
+                        <td className="small muted">{timeAgo(h.fired_at)}</td>
+                        <td><Badge status={h.kind}>{h.kind}</Badge></td>
+                        <td>
+                          {h.workflow_id ? (
+                            <a href={`#/p/${projectId}/sessions/${h.workflow_id}`} className="small">
+                              {h.workflow_id.slice(0, 8)}…
+                            </a>
+                          ) : <span className="muted small">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          ) : null}
 
-        {/* Per-spec metrics */}
-        {spec?.id && metrics ? (
-          <section className="ls-section">
-            <h3 className="ls-section-title">Metrics (last 30 days)</h3>
-            <div className="row tight wrap ls-metrics">
-              <div className="ls-metric">
-                <span className="ls-metric-val">{metrics.total ?? 0}</span>
-                <span className="ls-metric-label">runs</span>
+          {/* Per-spec metrics */}
+          {spec?.id && metrics ? (
+            <section className="panel ls-section">
+              <h3 className="ls-section-title">Metrics (last 30 days)</h3>
+              <div className="row tight wrap ls-metrics">
+                <div className="ls-metric">
+                  <span className="ls-metric-val">{metrics.total ?? 0}</span>
+                  <span className="ls-metric-label">runs</span>
+                </div>
+                <div className="ls-metric">
+                  <span className="ls-metric-val">{fmtPct(metrics.success_rate)}</span>
+                  <span className="ls-metric-label">success rate</span>
+                </div>
+                <div className="ls-metric">
+                  <span className="ls-metric-val">{fmtPct(metrics.autonomy_rate)}</span>
+                  <span className="ls-metric-label">autonomy rate</span>
+                </div>
+                <div className="ls-metric">
+                  <span className="ls-metric-val">{fmtAvgCost(metrics.avg_cost_usd)}</span>
+                  <span className="ls-metric-label">avg cost / done</span>
+                </div>
+                <div className="ls-metric">
+                  <span className="ls-metric-val">{metrics.avg_iterations ? metrics.avg_iterations.toFixed(1) : '—'}</span>
+                  <span className="ls-metric-label">avg iterations</span>
+                </div>
               </div>
-              <div className="ls-metric">
-                <span className="ls-metric-val">{fmtPct(metrics.success_rate)}</span>
-                <span className="ls-metric-label">success rate</span>
-              </div>
-              <div className="ls-metric">
-                <span className="ls-metric-val">{fmtPct(metrics.autonomy_rate)}</span>
-                <span className="ls-metric-label">autonomy rate</span>
-              </div>
-              <div className="ls-metric">
-                <span className="ls-metric-val">{fmtAvgCost(metrics.avg_cost_usd)}</span>
-                <span className="ls-metric-label">avg cost / done</span>
-              </div>
-              <div className="ls-metric">
-                <span className="ls-metric-val">{metrics.avg_iterations ? metrics.avg_iterations.toFixed(1) : '—'}</span>
-                <span className="ls-metric-label">avg iterations</span>
-              </div>
-            </div>
-          </section>
-        ) : null}
+            </section>
+          ) : null}
+
+          {/* Save/Cancel at the bottom for long forms */}
+          <div className="row ls-editor-foot-actions">
+            <Button type="submit" variant="primary" busy={busy}>Save spec</Button>
+            <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+          </div>
+        </div>
       </div>
     </form>
   );
@@ -1023,7 +1033,7 @@ export function LoopSpecs() {
 
   if (editing !== null) {
     return (
-      <div className="page-wrap">
+      <div className="page">
         <SpecEditor
           spec={editing || null}
           projectId={project.id}
@@ -1035,7 +1045,7 @@ export function LoopSpecs() {
   }
 
   return (
-    <div className="page-wrap">
+    <div className="page">
       <PageHeader
         title="Loop specs"
         sub="Reusable configurations that run sessions automatically"

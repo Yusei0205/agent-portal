@@ -552,7 +552,7 @@ export function Inbox() {
         : items ?? [];
 
   return (
-    <div className="page-wrap">
+    <div className="page">
       <PageHeader
         title="Inbox"
         sub={needsYou > 0 ? `${needsYou} item${needsYou === 1 ? '' : 's'} need${needsYou === 1 ? 's' : ''} you` : 'Nothing waiting for you right now'}
@@ -564,13 +564,15 @@ export function Inbox() {
           ) : null
         }
       />
-      <FilterBar
-        filter={filter}
-        project={project}
-        projects={projects}
-        onFilter={setFilter}
-        onProject={setProject}
-      />
+      <div className="toolbar">
+        <FilterBar
+          filter={filter}
+          project={project}
+          projects={projects}
+          onFilter={setFilter}
+          onProject={setProject}
+        />
+      </div>
       {loading ? (
         <div className="pad"><Spinner /></div>
       ) : error ? (
