@@ -438,6 +438,12 @@ export function registerProjectRoutes(): void {
       if (lead && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(lead)) throw badRequest('Default lead agent is not a valid agent name');
       p.default_lead_agent = lead;
     }
+    if (body.monthly_budget_usd !== undefined) {
+      // Monthly spending cap for the project in USD; null or empty removes it.
+      const v = body.monthly_budget_usd;
+      if (v !== null && v !== '' && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw badRequest('Budget must be a positive number, or empty for no cap');
+      p.monthly_budget_usd = v === '' ? null : v;
+    }
     if (body.defaultModel !== undefined) {
       const model = str(body.defaultModel ?? '', 'Default model', { max: 200, optional: true }).trim();
       if (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(model)) throw badRequest('Default model is not a valid model ID');

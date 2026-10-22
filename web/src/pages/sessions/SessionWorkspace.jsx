@@ -134,7 +134,7 @@ function PendingBanner({ w, canEdit, onDone }) {
     const decline = async () => {
       setBusy('decline');
       try {
-        await api.post(`/api/workflows/${w.id}/push/decline`, {});
+        await api.post(`/api/workflows/${w.id}/push/deny`, {});
         toast('Push declined', 'ok');
         onDone();
       } catch (e) { toast(e.message, 'danger'); } finally { setBusy(''); }

@@ -365,16 +365,22 @@ function RepositoryFix({ projectId, onSaved, onClose }) {
 // ─── Fix: Lead agent ─────────────────────────────────────────────────────────
 function LeadAgentFix({ projectId, onSaved, onClose }) {
   const { toast } = useUi();
-  const agents = useLoad(() => api.get(`/api/projects/${projectId}/agents`), [projectId]);
-  const defaults = useLoad(() => api.get(`/api/projects/${projectId}/defaults`), [projectId]);
+  // The agents that can lead on the project's engine: its Kiro agents on Kiro, otherwise its Claude Code agents.
+  const conn = useLoad(() => api.get(`/api/projects/${projectId}/connection`), [projectId]);
+  const kiro = conn.data?.provider === 'kiro';
+  const agents = useLoad(
+    () => (conn.data ? api.get(`/api/projects/${projectId}/leads?engine=${kiro ? 'kiro' : 'claude'}`) : Promise.resolve(null)),
+    [projectId, conn.data, kiro],
+  );
+  const defaults = useLoad(() => api.get(`/api/projects/${projectId}`), [projectId]);
   const [leadAgent, setLeadAgent] = useState('');
   const act = useAction();
   useEffect(() => {
-    if (defaults.data) setLeadAgent(defaults.data.default_lead_agent || '');
+    if (defaults.data) setLeadAgent(defaults.data.project?.default_lead_agent || '');
   }, [defaults.data]);
-  const agentList = agents.data?.agents || [];
+  const agentList = agents.data?.leads || [];
   const save = () => act.run(async () => {
-    await api.put(`/api/projects/${projectId}/defaults`, { default_lead_agent: leadAgent || null });
+    await api.patch(`/api/projects/${projectId}`, { defaultLeadAgent: leadAgent || '' });
     toast('Lead agent saved');
     onSaved();
     onClose();

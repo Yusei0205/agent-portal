@@ -120,7 +120,7 @@ function WaitingCard({ item, onDone }) {
     setBusy(true);
     try {
       // Post answer as a workflow instruction
-      await api.post(`/api/workflows/${item.workflowId}/continue`, { message: answer });
+      await api.post(`/api/workflows/${item.workflowId}/messages`, { body: answer });
       toast('Answer sent', 'ok');
       setOpen(false);
       setAnswer('');
@@ -195,7 +195,7 @@ function PushCard({ item, onDone }) {
         const r = await api.post(`/api/workflows/${item.workflowId}/push/allow`, {});
         toast(r.push?.ok ? 'Pushed successfully' : 'Push completed with warnings', r.push?.ok ? 'ok' : 'warn');
       } else {
-        await api.post(`/api/workflows/${item.workflowId}/push/decline`, {});
+        await api.post(`/api/workflows/${item.workflowId}/push/deny`, {});
         toast('Push declined', 'ok');
       }
       onDone();
@@ -311,7 +311,7 @@ function EscalationCard({ item, onDone }) {
     if (!reply.trim()) return;
     setBusy(true);
     try {
-      await api.post(`/api/workflows/${item.workflowId}/continue`, { message: reply });
+      await api.post(`/api/workflows/${item.workflowId}/messages`, { body: reply });
       toast('Instruction sent — the session will resume', 'ok');
       setOpen(false);
       setReply('');

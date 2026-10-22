@@ -640,7 +640,7 @@ function SpecEditor({ spec, projectId, onSaved, onCancel }) {
       delete payload.triggerConfig._specId;
 
       if (spec?.id) {
-        await api.patch(`/api/projects/${projectId}/loop-specs/${spec.id}`, payload);
+        await api.put(`/api/projects/${projectId}/loop-specs/${spec.id}`, payload);
         toast('Spec saved', 'ok');
       } else {
         await api.post(`/api/projects/${projectId}/loop-specs`, payload);
