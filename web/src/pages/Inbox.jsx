@@ -11,7 +11,7 @@
  * Live updates via GET /api/inbox/events SSE stream.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, stream } from '../lib/api.js';
+import { api, onInboxCount } from '../lib/api.js';
 import { go, href, sessionHref } from '../lib/router.js';
 import { cx, timeAgo } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
@@ -510,8 +510,8 @@ export function Inbox() {
 
   // SSE badge updates + browser notifications
   useEffect(() => {
-    const close = stream('/api/inbox/events', {
-      'inbox.count': (data) => {
+    // The count comes from the app's one shared inbox stream; no second connection here.
+    const close = onInboxCount((data) => {
         const newCount = data.needs_you ?? 0;
         const prev = prevNeedsYou.current;
         prevNeedsYou.current = newCount;
@@ -525,9 +525,10 @@ export function Inbox() {
         }
         // Refresh list silently when count changes
         load();
-      },
     });
-    return close;
+    return () => {
+      close();
+    };
   }, [load]);
 
   // In-app toast when new items arrive (even without notification permission)

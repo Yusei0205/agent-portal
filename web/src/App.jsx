@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react';
 import { AppContext, ProjectContext, useApp } from './lib/context.js';
-import { api, setUnauthorizedHandler, stream } from './lib/api.js';
+import { api, emitInboxCount, setUnauthorizedHandler, sharedStream, stream } from './lib/api.js';
 import { emitProjectEvent, useProjectEvents } from './lib/events.js';
 import { getTheme, setTheme } from './lib/theme.js';
 import { go, href, useRoute } from './lib/router.js';
@@ -408,8 +408,11 @@ function Shell({ user, onSignOut }) {
   useEffect(() => {
     // Get initial count
     api.get('/api/inbox?filter=needs_you').then((r) => setInboxCount(r.needs_you ?? 0)).catch(() => {});
-    const close = stream('/api/inbox/events', {
-      'inbox.count': (data) => setInboxCount(data.needs_you ?? 0),
+    const close = sharedStream('/api/inbox/events', {
+      'inbox.count': (data) => {
+        setInboxCount(data.needs_you ?? 0);
+        emitInboxCount(data);
+      },
     });
     return close;
   }, []);
@@ -672,7 +675,7 @@ function ProjectScope({ projectId, route }) {
         if (['input.created', 'input.resolved', 'members.updated', 'project.updated', 'document.updated'].includes(ev)) refreshSoon();
       };
     }
-    const close = stream(`/api/projects/${projectId}/stream`, handlers);
+    const close = sharedStream(`/api/projects/${projectId}/stream`, handlers);
     return () => {
       close();
       clearTimeout(timer.current);

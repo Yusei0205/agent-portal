@@ -73,3 +73,65 @@ export function stream(url, handlers) {
     es?.close();
   };
 }
+
+/**
+ * Like stream(), but every tab of the browser shares one connection per URL: one tab holds it (navigator.locks) and
+ * passes each event to the others over a BroadcastChannel. When that tab closes, another takes over.
+ *
+ * Browsers allow only 6 open connections to the same server across all tabs over HTTP/1.1. Each open stream holds one
+ * for as long as the page is open, so a few portal tabs with a stream each used them all up and every other request
+ * waited forever (pages kept loading). Falls back to a plain stream where the browser lacks locks or channels.
+ */
+export function sharedStream(url, handlers) {
+  if (typeof navigator === 'undefined' || !navigator.locks || typeof BroadcastChannel === 'undefined') return stream(url, handlers);
+  const key = `portal-sse:${url}`;
+  const channel = new BroadcastChannel(key);
+  const deliver = (event, data) => {
+    const fn = handlers[event];
+    if (!fn) return;
+    try {
+      fn(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+  channel.onmessage = (m) => deliver(m.data?.event, m.data?.data);
+  const abort = new AbortController();
+  let closeOwn = null;
+  let release = null;
+  navigator.locks
+    .request(key, { signal: abort.signal }, () => {
+      // This tab holds the connection for every tab until it closes the stream.
+      const relay = Object.fromEntries(
+        Object.keys(handlers).map((event) => [
+          event,
+          (data) => {
+            deliver(event, data);
+            channel.postMessage({ event, data });
+          },
+        ]),
+      );
+      closeOwn = stream(url, relay);
+      return new Promise((resolve) => (release = resolve));
+    })
+    .catch(() => {
+      /* aborted before this tab got the lock */
+    });
+  return () => {
+    abort.abort();
+    closeOwn?.();
+    release?.();
+    channel.close();
+  };
+}
+
+// The signed-in person's Inbox count, from the one shared inbox stream that App opens.
+const inboxListeners = new Set();
+export function emitInboxCount(data) {
+  for (const fn of [...inboxListeners]) fn(data);
+}
+/** Call `fn` with { needs_you } whenever the Inbox count changes. Returns an unsubscribe function. */
+export function onInboxCount(fn) {
+  inboxListeners.add(fn);
+  return () => inboxListeners.delete(fn);
+}
