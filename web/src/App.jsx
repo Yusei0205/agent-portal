@@ -50,8 +50,15 @@ export function App() {
     setUnauthorizedHandler(() => setAuth((a) => ({ ...a, user: null })));
   }, [load]);
 
+  // Track the hash reactively so invite/reset links work even when the user is already signed in.
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
   // Handle accept-invite and reset-password hash routes before auth check
-  const hash = window.location.hash;
   const inviteMatch = hash.match(/^#\/?accept-invite\/([A-Za-z0-9_-]+)/);
   const resetMatch = hash.match(/^#\/?reset-password\/([A-Za-z0-9_-]+)/);
   // OIDC callback lands as a query param on the root (the server redirects to #/oidc-done on success)

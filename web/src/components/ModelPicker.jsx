@@ -102,39 +102,45 @@ export function ModelPicker({ id, value, onChange, className = 'input', projectI
         {reloadAnnouncement}
       </span>
 
-      <select
-        id={id}
-        className={className}
-        value={showText ? OTHER : value}
-        onChange={(e) => {
-          if (e.target.value === OTHER) {
-            setCustom(true);
-          } else {
-            setCustom(false);
-            onChange(e.target.value);
-          }
-        }}
-      >
-        {/* While the list loads, keep a saved exact ID selectable so the select does not fall back to the first tier. */}
-        {!known && value && list.loading ? <option value={value}>{value}</option> : null}
-        <optgroup label="Standard">
-          {TIERS.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </optgroup>
-        {models.length ? (
-          <optgroup label="Available models">
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id}
+      {/* Select + Reload list button sit side-by-side so the modal footer stays visible */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <select
+          id={id}
+          className={className}
+          style={{ flex: '1 1 0', minWidth: 0 }}
+          value={showText ? OTHER : value}
+          onChange={(e) => {
+            if (e.target.value === OTHER) {
+              setCustom(true);
+            } else {
+              setCustom(false);
+              onChange(e.target.value);
+            }
+          }}
+        >
+          {/* While the list loads, keep a saved exact ID selectable so the select does not fall back to the first tier. */}
+          {!known && value && list.loading ? <option value={value}>{value}</option> : null}
+          <optgroup label="Standard">
+            {TIERS.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
               </option>
             ))}
           </optgroup>
-        ) : null}
-        <option value={OTHER}>Another model ID…</option>
-      </select>
+          {models.length ? (
+            <optgroup label="Available models">
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+          <option value={OTHER}>Another model ID…</option>
+        </select>
+        {/* Reload list button inline next to the model picker */}
+        {!list.loading ? reloadButton : null}
+      </div>
 
       {showText ? (
         <input
@@ -146,28 +152,22 @@ export function ModelPicker({ id, value, onChange, className = 'input', projectI
         />
       ) : null}
 
-      {/* Error state: show error message + Reload list button */}
+      {/* Error state: show error message */}
       {currentError ? (
         <div className="stack" style={{ gap: 4 }}>
           <p className="muted small" role="alert">
             {currentError}
             {showText ? ' Paste a model ID above.' : ''}
           </p>
-          <div>{reloadButton}</div>
         </div>
-      ) : (
-        /* No error: show Reload list button (and inline announcement) always */
-        !list.loading ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {reloadButton}
-            {reloadAnnouncement ? (
-              <span className="muted small" aria-hidden="true">
-                {reloadAnnouncement}
-              </span>
-            ) : null}
-          </div>
-        ) : null
-      )}
+      ) : null}
+
+      {/* Inline announcement text */}
+      {reloadAnnouncement && !list.loading ? (
+        <span className="muted small" aria-hidden="true">
+          {reloadAnnouncement}
+        </span>
+      ) : null}
     </div>
   );
 }

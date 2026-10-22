@@ -865,11 +865,12 @@ function ProjectCards({ projects }) {
 // ─── Run lists (slowest / priciest / failures) ────────────────────────────────
 
 function RunBriefRow({ run }) {
+  const title = run.title || run.id;
   return (
     <tr>
-      <td>
-        <a href={href(run.projectId, 'runs', run.id)} className="strong-link">
-          {run.title || run.id}
+      <td style={{ maxWidth: 260, overflow: 'hidden' }}>
+        <a href={href(run.projectId, 'runs', run.id)} className="strong-link" title={title} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {title}
         </a>
       </td>
       <td><Badge status={run.status} /></td>

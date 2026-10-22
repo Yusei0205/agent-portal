@@ -1051,7 +1051,7 @@ export function LoopSpecs() {
         sub="Reusable configurations that run sessions automatically"
         actions={
           <div className="row tight">
-            <Button variant="ghost" size="sm" onClick={seed}>Add built-in templates</Button>
+            <Button variant="default" size="sm" onClick={seed}>Add built-in templates</Button>
             <Button variant="primary" size="sm" onClick={() => setEditing(false)}>New spec</Button>
           </div>
         }
@@ -1066,7 +1066,7 @@ export function LoopSpecs() {
           <p>Loop specs let sessions run automatically from a schedule, webhook, or Jira status change.</p>
           <div className="row tight">
             <Button variant="primary" onClick={() => setEditing(false)}>Create a spec</Button>
-            <Button variant="ghost" onClick={seed}>Add built-in templates</Button>
+            <Button variant="default" onClick={seed}>Add built-in templates</Button>
           </div>
         </Empty>
       ) : (

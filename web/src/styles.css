@@ -5964,3 +5964,186 @@ html[data-theme='hud'] .ins-hbar-fill {
 .ins-page-header {
   margin-bottom: 1.5rem;
 }
+
+/* ─── Polish2 fixes ──────────────────────────────────────────────────────────── */
+
+/* HIGH-1: Readiness table mobile reflow ≤600px */
+@media (max-width: 600px) {
+  .readiness-table tbody tr {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 2px 6px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-2);
+  }
+  .readiness-icon {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: center;
+  }
+  .readiness-label {
+    grid-row: 1;
+    grid-column: 2;
+    white-space: normal;
+  }
+  .readiness-action {
+    grid-row: 1;
+    grid-column: 3;
+  }
+  .readiness-msg {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    padding: 0 0 2px 2px;
+  }
+  .readiness-table td {
+    padding: 2px 4px;
+  }
+}
+
+/* HIGH-1: Tab bar horizontal scroll with fade affordance */
+.tabs {
+  position: relative;
+}
+.tabs::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 1px; /* sits above the border-bottom */
+  width: 32px;
+  background: linear-gradient(to right, transparent, var(--canvas));
+  pointer-events: none;
+  /* only show when scrollable — JS-free approach: always show, minimal visual noise */
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+/* Show the fade when there is horizontal overflow */
+@media (max-width: 760px) {
+  .tabs {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .tabs::after {
+    opacity: 1;
+  }
+}
+
+/* MEDIUM-1: Enable notifications button visible affordance in HUD theme */
+.hud .btn-ghost.notif-btn,
+.hud .page-actions .btn-ghost {
+  border-color: var(--line);
+  color: var(--accent-ink);
+}
+.hud .page-actions .btn-ghost:hover {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+/* MEDIUM-2/3: Remove blank gap above headings on mobile for all pages */
+@media (max-width: 760px) {
+  /* On mobile the rail is position:fixed (out of flow) but may still be
+     occupying a grid row. Explicitly control the grid areas to prevent gaps. */
+  .shell {
+    display: flex;
+    flex-direction: column;
+  }
+  .topbar {
+    flex: none;
+    order: 0;
+  }
+  .main {
+    flex: 1 1 auto;
+    order: 1;
+  }
+  .page {
+    padding-top: 14px;
+  }
+}
+
+/* MEDIUM-4: Session launcher modal body scrolls internally */
+.modal-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* Make modal-body flex to control scroll */
+.modal {
+  overflow: hidden;
+}
+/* Reload list button sits inline with model picker row */
+.model-reload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* MEDIUM-5: Sheet backdrop stacks above modal, proper pointer isolation */
+.sheet-backdrop {
+  z-index: 200; /* above modal-backdrop z-index:50 */
+}
+html[data-theme='hud'] .sheet-backdrop {
+  /* In HUD the canvas is near-black; use an accent-tinted semi-opaque overlay
+     so the dimming is visible against the dark background */
+  background: rgba(2, 10, 20, 0.72);
+  border-left: 1px solid rgba(34, 211, 238, 0.3);
+}
+
+/* LOW-1: Insights Slowest runs name truncation */
+.ins-run-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* LOW-2: Loop specs empty state button */
+.ls-seed-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 580;
+  cursor: pointer;
+  text-decoration: none;
+}
+.ls-seed-btn:hover {
+  border-color: var(--ink-3);
+}
+
+/* LOW-3: Inspector text contained in its box, no free wrapping */
+.ws-inspector {
+  min-width: 0;
+}
+.ws-inspector .tl-item {
+  min-width: 0;
+  overflow: hidden;
+}
+.ws-inspector .tool-sum {
+  max-width: 100%;
+}
+.ws-inspector .tool-detail pre {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* LOW-5: Profile usage table project name on mobile */
+@media (max-width: 600px) {
+  .profile-usage-table td:first-child {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

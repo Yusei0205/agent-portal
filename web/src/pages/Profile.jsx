@@ -55,12 +55,12 @@ export function Profile() {
           <>
             <p className="lead-num">{money(u.month_usd ?? 0, 2)} <span className="muted">this month</span></p>
             {u.by_project?.length ? (
-              <table className="table compact">
+              <table className="table compact profile-usage-table">
                 <thead><tr><th>Project</th><th className="num">Runs</th><th className="num">Spend</th></tr></thead>
                 <tbody>
                   {u.by_project.map((p) => (
                     <tr key={p.project_id}>
-                      <td>{p.project_name}</td>
+                      <td title={p.project_name}>{p.project_name}</td>
                       <td className="num">{p.runs}</td>
                       <td className="num">{money(p.usd, 2)}</td>
                     </tr>

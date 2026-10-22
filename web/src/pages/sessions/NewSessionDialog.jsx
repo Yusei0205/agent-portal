@@ -59,7 +59,19 @@ function AddRepositorySheet({ projectId, onClose, onAdded }) {
   };
 
   return (
-    <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Add repository" ref={sheetRef}>
+    <div
+      className="sheet-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add repository"
+      ref={sheetRef}
+      onMouseDown={(e) => {
+        // Clicking on the dimming backdrop (not the sheet panel) closes the sheet.
+        if (e.target === e.currentTarget) onClose();
+        // Always stop propagation so the launcher modal's backdrop handler doesn't fire.
+        e.stopPropagation();
+      }}
+    >
       <div className="sheet">
         <header className="sheet-head">
           <h2>Add repository</h2>

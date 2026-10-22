@@ -558,7 +558,7 @@ export function Inbox() {
         sub={needsYou > 0 ? `${needsYou} item${needsYou === 1 ? '' : 's'} need${needsYou === 1 ? 's' : ''} you` : 'Nothing waiting for you right now'}
         actions={
           notifSupported && !notifEnabled ? (
-            <Button variant="ghost" size="sm" onClick={requestPermission} title="Get browser notifications when items arrive">
+            <Button variant="default" size="sm" onClick={requestPermission} title="Get browser notifications when items arrive">
               Enable notifications
             </Button>
           ) : null
