@@ -33,6 +33,7 @@ import { registerControlPlaneRoutes, startDrain, checkApprovalSla, cleanupWorktr
 import { registerLoopSpecRoutes } from './loop-specs.ts';
 import { registerTriggerRoutes, startTriggerEngine, stopTriggerEngine } from './loop-triggers.ts';
 import { registerLoopEngineRoutes } from './loop-engine.ts';
+import { registerGovernanceRoutes } from './governance.ts';
 
 let routesRegistered = false;
 
@@ -70,6 +71,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerLoopSpecRoutes();
     registerTriggerRoutes();
     registerLoopEngineRoutes();
+    registerGovernanceRoutes();
     routesRegistered = true;
   }
   recoverRuns();

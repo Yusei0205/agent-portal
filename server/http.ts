@@ -232,7 +232,7 @@ export function createHandler(authenticate: Authenticator) {
     };
 
     try {
-      if (!ctx.path.startsWith('/api/')) {
+      if (!ctx.path.startsWith('/api/') && !ctx.path.startsWith('/scim/')) {
         if (serveStatic(ctx)) return;
         sendJson(res, 404, { error: 'Not found' });
         return;
@@ -262,7 +262,7 @@ export function createHandler(authenticate: Authenticator) {
       }
       if (!matched) throw new HttpError(methodMismatch ? 405 : 404, methodMismatch ? 'Method not allowed' : 'Not found');
       ctx.user = authenticate(ctx);
-      if (bearer) {
+      if (bearer && matched.auth !== 'public') {
         if (!ctx.user || !ctx.apiToken) throw new HttpError(401, 'The token is not valid, has expired or was revoked');
         tokenPolicy(ctx, { method: matched.method, pattern: matched.pattern, auth: matched.auth });
       }
@@ -270,7 +270,14 @@ export function createHandler(authenticate: Authenticator) {
       if (matched.auth === 'admin' && !ctx.user?.is_admin) throw new HttpError(403, 'Only admins can do this');
       const out = await matched.handler(ctx);
       if (out === HANDLED || res.headersSent || res.writableEnded) return;
-      sendJson(res, 200, out === undefined ? { ok: true } : out);
+      // If handler set ctx.res.statusCode (e.g. 201, 204), honour it; otherwise default to 200.
+      const outStatus = res.statusCode && res.statusCode !== 200 ? res.statusCode : 200;
+      if (out === undefined && outStatus === 204) {
+        res.writeHead(204, { 'Cache-Control': 'no-store', 'Content-Length': '0' });
+        res.end();
+        return;
+      }
+      sendJson(res, outStatus, out === undefined ? { ok: true } : out);
     } catch (e: any) {
       const status = e instanceof HttpError ? e.status : 500;
       if (status === 500) console.error(`[${new Date().toISOString()}] ${ctx.method} ${ctx.path}`, e);

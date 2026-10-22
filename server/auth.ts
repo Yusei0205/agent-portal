@@ -22,10 +22,15 @@ export function verifyPassword(password: string, stored: string): boolean {
   return timingSafeEqual(expected, actual);
 }
 
-function checkPassword(p: unknown): string {
+function checkPasswordInternal(p: unknown): string {
   const pw = str(p, 'Password', { max: 200 });
   if (pw.length < 10) throw badRequest('Password must be at least 10 characters');
   return pw;
+}
+
+/** Exported for governance.ts (invitation and reset flows). */
+export function checkPassword(p: unknown): string {
+  return checkPasswordInternal(p);
 }
 
 function checkEmail(e: unknown): string {
@@ -59,6 +64,11 @@ function startSession(ctx: Ctx, userId: string): void {
   const expires = new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString();
   insert('sessions', { token_hash: sha256(token), user_id: userId, created_at: now(), expires_at: expires });
   setCookie(ctx.res, COOKIE, token, { maxAge: SESSION_DAYS * 86400, secure: ctx.secure });
+}
+
+/** Start a session for a user by ID — used by OIDC callback and invitation accept flows. */
+export async function startSessionFor(ctx: Ctx, userId: string): Promise<void> {
+  startSession(ctx, userId);
 }
 
 export function authenticate(ctx: Ctx): User | null {

@@ -567,6 +567,72 @@ const MIGRATIONS: string[] = [
   );`,
   // Stage 2: Add loop_run_states.burst_start column (added in loop_triggers).
   `ALTER TABLE loop_run_states ADD COLUMN burst_start INTEGER NOT NULL DEFAULT 0;`,
+  // Stage 3: OIDC / Google sign-in columns on users.
+  `ALTER TABLE users ADD COLUMN google_sub TEXT;
+  ALTER TABLE users ADD COLUMN google_email TEXT;
+  ALTER TABLE users ADD COLUMN google_name TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL;`,
+  // Stage 3: Invitations — copy-paste one-time links.
+  `CREATE TABLE IF NOT EXISTS invitations (
+    token_hash TEXT PRIMARY KEY,
+    email      TEXT,
+    is_admin   INTEGER NOT NULL DEFAULT 0,
+    portal_role TEXT NOT NULL DEFAULT 'member',
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    project_access TEXT,
+    team_id    TEXT,
+    expires_at TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    used_at    TEXT,
+    used_by    TEXT REFERENCES users(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS invitations_created ON invitations(created_by, created_at);`,
+  // Stage 3: Teams — lightweight org-level grouping.
+  `CREATE TABLE IF NOT EXISTS teams (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    monthly_budget_usd REAL,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS team_members (
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role    TEXT NOT NULL DEFAULT 'member',
+    PRIMARY KEY (team_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS team_members_user ON team_members(user_id);
+  CREATE TABLE IF NOT EXISTS team_projects (
+    team_id    TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    access     TEXT NOT NULL DEFAULT 'viewer',
+    PRIMARY KEY (team_id, project_id)
+  );
+  CREATE INDEX IF NOT EXISTS team_projects_project ON team_projects(project_id);
+  ALTER TABLE projects ADD COLUMN team_id TEXT REFERENCES teams(id) ON DELETE SET NULL;`,
+  // Stage 3: API tokens — optional project scope.
+  `ALTER TABLE api_tokens ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;`,
+  // Stage 3: SCIM bearer token for provisioning (one token per portal).
+  `CREATE TABLE IF NOT EXISTS scim_tokens (
+    id         TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    hint       TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT
+  );`,
+  // Stage 3: Admin-generated password reset links (single-use, expiring).
+  `CREATE TABLE IF NOT EXISTS password_resets (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    used_at    TEXT
+  );`,
 ];
 
 let db: DatabaseSync | null = null;

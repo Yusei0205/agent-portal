@@ -33,7 +33,15 @@ export type AuditAction =
   | 'push.allowed' | 'push.denied' | 'push.auto'
   | 'approval.allowed' | 'approval.denied'
   // api tokens
-  | 'api_token.create' | 'api_token.revoke';
+  | 'api_token.create' | 'api_token.revoke'
+  // Stage 3: governance
+  | 'invitation.create' | 'invitation.revoke' | 'invitation.accept'
+  | 'user.deactivate' | 'user.reactivate' | 'user.password_reset_link'
+  | 'team.create' | 'team.update' | 'team.delete'
+  | 'team.member_add' | 'team.member_remove'
+  | 'team.project_add' | 'team.project_remove'
+  | 'scim_token.create' | 'scim_token.revoke'
+  | 'oidc.login';
 
 /**
  * Write an audit row from a request context.

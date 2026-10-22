@@ -38,8 +38,22 @@ export function getProject(id: string): Project {
 
 export function accessOf(user: User, projectId: string): Access | null {
   if (user.is_admin) return 'owner';
-  const m = one<{ access: Access }>('SELECT access FROM project_members WHERE project_id = ? AND user_id = ?', projectId, user.id);
-  return m?.access ?? null;
+  const RRANK: Record<number, Access> = { 1: 'viewer', 2: 'editor', 3: 'owner' };
+  let best = 0;
+  // Direct project membership
+  const direct = one<{ access: Access }>('SELECT access FROM project_members WHERE project_id = ? AND user_id = ?', projectId, user.id);
+  if (direct) best = Math.max(best, RANK[direct.access] ?? 0);
+  // Team-based access (Stage 3: team_projects + team_members)
+  try {
+    const teamGrants = all<{ access: Access }>(
+      `SELECT tp.access FROM team_projects tp
+         JOIN team_members tm ON tm.team_id = tp.team_id
+        WHERE tp.project_id = ? AND tm.user_id = ?`,
+      projectId, user.id,
+    );
+    for (const tg of teamGrants) best = Math.max(best, RANK[tg.access] ?? 0);
+  } catch { /* team_projects table may not exist yet during migration */ }
+  return best > 0 ? RRANK[best] : null;
 }
 
 /** Load a project and check the signed-in user has at least `min` access. */
