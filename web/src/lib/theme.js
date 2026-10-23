@@ -13,7 +13,15 @@ function read(key, allowed, fallback) {
 }
 
 export const getTheme = () => read('portal-theme', THEMES, 'hud');
-export const getFx = () => read('portal-fx', FX, 'full');
+// Reduced is the default: the full effects (live blur, moving grid and scan line) cost a lot of GPU on many PCs.
+export const getFx = () => read('portal-fx', FX, 'reduced');
+
+// Pause all animation while the tab is in the background.
+if (typeof document !== 'undefined') {
+  const mark = () => (document.hidden ? document.documentElement.setAttribute('data-hidden', '') : document.documentElement.removeAttribute('data-hidden'));
+  document.addEventListener('visibilitychange', mark);
+  mark();
+}
 
 function apply() {
   document.documentElement.setAttribute('data-theme', getTheme());

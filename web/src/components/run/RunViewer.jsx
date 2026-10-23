@@ -38,7 +38,8 @@ export function RunView({ runId }) {
   const active = run && ['queued', 'running', 'waiting'].includes(run.status);
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(() => tick((x) => x + 1), 1000);
+    // The once-a-second tick only updates elapsed times; a hidden tab skips it.
+    const t = setInterval(() => !document.hidden && tick((x) => x + 1), 1000);
     return () => clearInterval(t);
   }, [active]);
 

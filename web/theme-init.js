@@ -3,7 +3,7 @@
 (function () {
   var root = document.documentElement;
   var theme = 'hud';
-  var fx = 'full';
+  var fx = 'reduced';
   try {
     theme = localStorage.getItem('portal-theme') || theme;
     fx = localStorage.getItem('portal-fx') || fx;
@@ -11,5 +11,5 @@
     /* storage can be blocked; the defaults are fine */
   }
   root.setAttribute('data-theme', theme === 'standard' ? 'standard' : 'hud');
-  root.setAttribute('data-fx', fx === 'reduced' ? 'reduced' : 'full');
+  root.setAttribute('data-fx', fx === 'full' ? 'full' : 'reduced');
 })();

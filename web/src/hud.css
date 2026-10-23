@@ -704,3 +704,43 @@ html[data-theme='hud'] .ac-label {
 html[data-theme='hud'] .ac-orb {
   color: hsl(var(--role-h, 186) 80% 76%);
 }
+
+
+/* ---------- Performance ----------
+ * The costly parts of this look are the live background blur on panels (backdrop-filter, repainted whenever
+ * anything behind it moves), the two full-screen animations (grid and scan line), and glow drop-shadows.
+ * "Reduced" effects drops all of them; the look keeps its colours, borders and corner brackets.
+ * A hidden tab pauses every animation (data-hidden is set from the page's visibility).
+ */
+html[data-theme='hud'][data-fx='reduced'] .panel,
+html[data-theme='hud'][data-fx='reduced'] .composer,
+html[data-theme='hud'][data-fx='reduced'] .tree,
+html[data-theme='hud'][data-fx='reduced'] .modal,
+html[data-theme='hud'][data-fx='reduced'] .rail,
+html[data-theme='hud'][data-fx='reduced'] .modal-backdrop,
+html[data-theme='hud'][data-fx='reduced'] .sheet-backdrop {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+/* Without the blur, panels need a solid background to stay readable. */
+html[data-theme='hud'][data-fx='reduced'] {
+  --panel: #081524;
+  --rail: #040c16;
+}
+html[data-theme='hud'][data-fx='reduced'] body::after,
+html[data-theme='hud'][data-fx='reduced'] .shell::before {
+  animation: none !important;
+}
+html[data-theme='hud'][data-fx='reduced'] .shell::before {
+  display: none;
+}
+html[data-theme='hud'][data-fx='reduced'] *,
+html[data-theme='hud'][data-fx='reduced'] *::before,
+html[data-theme='hud'][data-fx='reduced'] *::after {
+  filter: none !important;
+}
+html[data-hidden] *,
+html[data-hidden] *::before,
+html[data-hidden] *::after {
+  animation-play-state: paused !important;
+}
