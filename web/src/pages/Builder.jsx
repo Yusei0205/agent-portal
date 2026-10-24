@@ -1124,8 +1124,8 @@ function KiroTestRun({ agent }) {
     setBusy(true);
     setError(null);
     try {
-      const { run } = await api.post(`/api/projects/${project.id}/runs`, { prompt, engine: 'kiro', leadAgent: agent.name });
-      location.hash = runHref(project.id, run.id);
+      const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, { singleRun: true, prompt, engine: 'kiro', leadAgent: agent.name });
+      go(project.id, 'sessions', workflow.id);
     } catch (e) {
       setError(e);
       setBusy(false);

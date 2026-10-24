@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { bootServer, Client, type TestServer } from './client.ts';
+import { bootServer, Client, type TestServer, startSingleRun } from './client.ts';
 import { FSD_MD, makeDocx } from './fixtures.ts';
 import JSZip from 'jszip';
 
@@ -112,7 +112,7 @@ let runId = '';
 let runWorkDir = '';
 
 test('downloads: start a demo run that produces files', async () => {
-  const { run } = await editor.post(`/api/projects/${pid}/runs`, {
+  const { run } = await startSingleRun(editor, pid, {
     prompt: 'Write a short summary of the refund policy',
     permissionMode: 'acceptEdits',
   });
@@ -216,7 +216,7 @@ test('downloads: requesting a directory path is rejected with 404', async () => 
 test('downloads: non-member gets 404 for run file download', async () => {
   // Create a second project — our viewer is not a member.
   const { project: p2 } = await admin.post('/api/projects', { name: 'Other', description: 'x' });
-  const { run } = await admin.post(`/api/projects/${p2.id}/runs`, {
+  const { run } = await startSingleRun(admin, p2.id, {
     prompt: 'write a plan',
     permissionMode: 'acceptEdits',
   });

@@ -208,7 +208,7 @@ export async function cleanupWorktrees(
     `SELECT w.id AS wid, w.project_id,
             r.id AS run_id, r.worktree, r.meta, r.finished_at
        FROM workflows w
-       LEFT JOIN runs r ON r.id = w.last_run_id
+       LEFT JOIN agent_runs r ON r.id = w.last_run_id
       WHERE w.status IN ('done','stopped','failed')
         AND w.updated_at < ?`,
     cutoff,
@@ -439,7 +439,7 @@ export function userMonthSpend(userId: string): number {
   const d = new Date();
   const since = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
   const r = one<{ s: number }>(
-    'SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_by = ? AND created_at >= ?',
+    'SELECT COALESCE(SUM(cost_usd), 0) AS s FROM agent_runs WHERE created_by = ? AND created_at >= ?',
     userId, since,
   );
   return r?.s ?? 0;

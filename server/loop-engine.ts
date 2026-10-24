@@ -186,18 +186,20 @@ export function buildInbox(userId: string, projectFilter: string | null): InboxI
   // Use a JOIN on a subquery to avoid SQL injection.
   const pendingInputs = projectFilter
     ? all<Row>(
-        `SELECT i.*, w.title AS wf_title, w.project_id, p.name AS project_name
+        `SELECT i.*, w.id AS workflow_id, w.title AS wf_title, w.project_id, p.name AS project_name
            FROM inputs i
-           JOIN workflows w ON (w.id = i.run_id)
+           JOIN agent_runs ar ON ar.id = i.run_id
+           JOIN workflows w ON w.id = ar.workflow_id
            JOIN projects p ON p.id = w.project_id
           WHERE i.status = 'pending' AND w.project_id = ?
           ORDER BY i.created_at DESC LIMIT 200`,
         projectFilter,
       )
     : all<Row>(
-        `SELECT i.*, w.title AS wf_title, w.project_id, p.name AS project_name
+        `SELECT i.*, w.id AS workflow_id, w.title AS wf_title, w.project_id, p.name AS project_name
            FROM inputs i
-           JOIN workflows w ON (w.id = i.run_id)
+           JOIN agent_runs ar ON ar.id = i.run_id
+           JOIN workflows w ON w.id = ar.workflow_id
            JOIN projects p ON p.id = w.project_id
           WHERE i.status = 'pending'
           ORDER BY i.created_at DESC LIMIT 200`,
@@ -206,7 +208,7 @@ export function buildInbox(userId: string, projectFilter: string | null): InboxI
     const age = new Date(now_).getTime() - new Date(String(inp.created_at)).getTime();
     items.push({
       kind: 'waiting',
-      workflowId: String(inp.run_id ?? ''),
+      workflowId: String(inp.workflow_id ?? ''),
       projectId: String(inp.project_id),
       projectName: String(inp.project_name ?? ''),
       sessionTitle: String(inp.wf_title ?? ''),

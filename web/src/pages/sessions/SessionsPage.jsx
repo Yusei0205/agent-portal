@@ -85,6 +85,6 @@ export function Sessions({ route }) {
 export function legacyRunTarget(projectId, rest, query, run) {
   if (!rest[0]) return href(projectId, 'sessions');
   if (rest[0] === 'new') return `${href(projectId, 'sessions', 'new')}${query.toString() ? `?${query}` : ''}`;
-  if (run?.meta?.workflowId) return sessionHref(projectId, run.meta.workflowId, { run: run.id });
+  if (run?.workflow_id) return sessionHref(projectId, run.workflow_id, { run: run.id });
   return href(projectId, 'sessions', 'run', rest[0]);
 }

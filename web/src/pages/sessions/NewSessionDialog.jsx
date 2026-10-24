@@ -3,7 +3,7 @@ import { api } from '../../lib/api.js';
 import { useApp } from '../../lib/context.js';
 import { useProject } from '../../lib/context.js';
 import { useLoad } from '../../lib/useAsync.js';
-import { go, href, runHref } from '../../lib/router.js';
+import { go, href } from '../../lib/router.js';
 import { cx } from '../../lib/util.js';
 import { MODES } from '../../components/run/RunViewer.jsx';
 import { ModelPicker } from '../../components/ModelPicker.jsx';
@@ -797,9 +797,11 @@ export function NewSessionDialog({ prefill, onClose }) {
         }
         go(project.id, 'sessions', workflow.id);
       } else {
+        // A single run is a session with one iteration (the server limits it to that).
         const body = isDoc
-          ? { document: { repoId: f.repoId, scope: f.docScope, output: f.docOutput }, model: f.model, permissionMode: 'acceptEdits' }
+          ? { singleRun: true, document: { repoId: f.repoId, scope: f.docScope, output: f.docOutput }, model: f.model, permissionMode: 'acceptEdits' }
           : {
+              singleRun: true,
               prompt: fillGoalVars(f.goal, ticket, jira.data?.site?.url).trim() || undefined,
               jiraKey: ticket?.key || undefined,
               repos: chosen,
@@ -808,8 +810,8 @@ export function NewSessionDialog({ prefill, onClose }) {
               model: f.model,
               permissionMode: f.permissionMode,
             };
-        const { run } = await api.post(`/api/projects/${project.id}/runs`, body);
-        window.location.hash = runHref(project.id, run.id);
+        const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, body);
+        go(project.id, 'sessions', workflow.id);
       }
     } catch (e) {
       setError(e);

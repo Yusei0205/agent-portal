@@ -507,7 +507,7 @@ export function registerJiraRoutes(): void {
   get('/api/projects/:pid/jira/issues/:key/runs', (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid);
     const key = checkKey(mustMapping(project.id), ctx.params.key);
-    const rows = all<Row>('SELECT id, title, status, created_at, finished_at, cost_usd, meta FROM runs WHERE project_id = ? AND meta LIKE ? ORDER BY created_at DESC LIMIT 20', project.id, `%"jiraKey":"${key}"%`);
+    const rows = all<Row>('SELECT id, title, status, created_at, finished_at, cost_usd, meta FROM agent_runs WHERE project_id = ? AND meta LIKE ? ORDER BY created_at DESC LIMIT 20', project.id, `%"jiraKey":"${key}"%`);
     return { runs: rows.map((r) => ({ id: r.id, title: r.title, status: r.status, created_at: r.created_at, finished_at: r.finished_at, cost_usd: r.cost_usd, comment: parseJson<any>(r.meta, {}).jiraComment ?? null })) };
   });
 
@@ -563,7 +563,7 @@ export function registerJiraRoutes(): void {
     const posted = await jira(project.id, `/issue/${meta.jiraKey}/comment`, { method: 'POST', body: { body: adfComment(header + clip(text, 28_000) + footer) } });
     const c = await connection(project.id);
     const comment = { id: posted.id, url: `${c.site.url}/browse/${meta.jiraKey}?focusedCommentId=${posted.id}`, at: now(), by: ctx.user!.name };
-    exec('UPDATE runs SET meta = ? WHERE id = ?', JSON.stringify({ ...meta, jiraComment: comment }), r.id);
+    exec('UPDATE agent_runs SET meta = ? WHERE id = ?', JSON.stringify({ ...meta, jiraComment: comment }), r.id);
     return { comment };
   });
 }

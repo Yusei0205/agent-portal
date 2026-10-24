@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun, startSingleRunReq } from './client.ts';
 import { composeDocumentPrompt } from '../server/docrun.ts';
 
 let srv: TestServer;
@@ -56,7 +56,7 @@ test('both documentation skills are installed in the project', () => {
 });
 
 test('a documentation run reads the repo in place: no working copy, right title and prompt', async () => {
-  const { run } = await admin.post(`/api/projects/${pid}/runs`, {
+  const { run } = await startSingleRun(admin, pid, {
     document: { repoId, scope: 'the Lambda handler', output: 'word' },
     model: 'sonnet',
     permissionMode: 'acceptEdits',
@@ -76,7 +76,7 @@ test('a documentation run reads the repo in place: no working copy, right title 
 
 test('bad requests are refused with a clear reason', async () => {
   const bad = async (document: any, status: number, re: RegExp) => {
-    const r = await admin.req('POST', `/api/projects/${pid}/runs`, { document });
+    const r = await startSingleRunReq(admin, pid, { document });
     assert.equal(r.status, status, JSON.stringify(r.data));
     assert.match(r.data.error, re);
   };

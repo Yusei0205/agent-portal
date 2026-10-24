@@ -1,11 +1,10 @@
-import { cleanModel, clearModelListCache } from './models.ts';
+import { clearModelListCache } from './models.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { all, one, run as exec, type Row, isDbOpen } from './db.ts';
 import { del, get, post, openSse, HANDLED, sendFile } from './http.ts';
 import { getProject, projectDir, requireProject } from './projects.ts';
-import { ensureFresh, getRepo, openPullRequest, pushWorktree, removeWorktree, checkBranch, repoDir } from './repos.ts';
-import { checkDocOutput, composeDocumentPrompt } from './docrun.ts';
+import { getRepo, openPullRequest, pushWorktree, removeWorktree, checkBranch, repoDir } from './repos.ts';
 import { HttpError, badRequest, notFound, parseJson, safeJoin, str } from './util.ts';
 import { runChannel, subscribe } from './events.ts';
 import { git } from './git.ts';
@@ -13,11 +12,6 @@ import { answerInput, getRun, inputView, isActive, oneshot, runRepos, runSummary
 import { PRICES } from './agent/pricing.ts';
 import { providerMode } from './settings.ts';
 import JSZip from 'jszip';
-import { readIntegrationIds } from './integrations.ts';
-import { engineProvider } from './project-aws.ts';
-import { downloadAttachments, issueDetail, mustMapping, checkKey } from './jira.ts';
-import { composeRunPrompt, ticketMarkdown } from './jira-text.ts';
-import { resolveLead } from './kiro-agents.ts';
 
 const MODEL_CHOICES = ['haiku', 'sonnet', 'opus'];
 
@@ -28,7 +22,7 @@ function runAccess(ctx: any, runId: string, min: 'viewer' | 'editor' = 'viewer')
 }
 
 function events(runId: string, after = 0) {
-  return all<Row>('SELECT seq, ts, type, parent_tool_use_id AS parent, data FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq', runId, after).map((e) => ({
+  return all<Row>('SELECT seq, ts, type, parent_tool_use_id AS parent, data FROM agent_run_events WHERE run_id = ? AND seq > ? ORDER BY seq', runId, after).map((e) => ({
     ...e,
     data: parseJson(e.data, {}),
   }));
@@ -196,10 +190,10 @@ export function registerRunRoutes(): void {
   get('/api/projects/:pid/runs', (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid);
     const kinds = (ctx.query.get('kind') || 'chat,test,review').split(',').filter(Boolean);
-    // standalone=1 leaves out the runs a session started for its iterations; the session shows those itself.
-    const standalone = ctx.query.get('standalone') === '1' ? `AND r.meta NOT LIKE '%"workflowId"%'` : '';
+    // standalone=1 leaves out the runs that are iterations of a session; the session shows those itself.
+    const standalone = ctx.query.get('standalone') === '1' ? 'AND r.workflow_id IS NULL' : '';
     const rows = all<Row>(
-      `SELECT r.*, u.name AS created_by_name FROM runs r LEFT JOIN users u ON u.id = r.created_by
+      `SELECT r.*, u.name AS created_by_name FROM agent_runs r LEFT JOIN users u ON u.id = r.created_by
         WHERE r.project_id = ? AND r.kind IN (${kinds.map(() => '?').join(',')}) ${standalone}
         ORDER BY r.created_at DESC LIMIT ?`,
       project.id,
@@ -209,72 +203,6 @@ export function registerRunRoutes(): void {
     return { runs: rows.map((r) => ({ ...runSummary(r), created_by_name: r.created_by_name, repo_id: r.repo_id, branch: r.branch })) };
   });
 
-  post('/api/projects/:pid/runs', async (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'editor');
-    const body = await ctx.json();
-    let prompt: string;
-    let docTitle = '';
-    if (body.document) {
-      // "Document a repository": read the repo's reference clone (refreshed first) and write only to the run folder.
-      const repo = getRepo(String(body.document.repoId ?? ''));
-      if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
-      await ensureFresh(repo);
-      const scope = str(body.document.scope, 'Focus', { max: 1000, optional: true });
-      prompt = composeDocumentPrompt(getRepo(repo.id), { scope, output: checkDocOutput(body.document.output ?? 'markdown') });
-      docTitle = `Document ${repo.name}`;
-      body.repoId = undefined; // the reference clone is read in place; a working copy would limit writes to the repo
-    } else if (body.jiraKey) {
-      // Free task started from a Jira ticket in the Composer.
-      const rawKey = str(body.jiraKey, 'Jira key', { max: 30 }).trim().toUpperCase();
-      const mapping = mustMapping(project.id);
-      checkKey(mapping, rawKey);
-      const ticket = await downloadAttachments(project.id, await issueDetail(project.id, mapping, rawKey));
-      const instruction = str(body.prompt ?? '', 'Instruction', { max: 50_000, optional: true }).trim();
-      const repoName: string | null = body.repoId ? (getRepo(String(body.repoId)).name ?? null) : null;
-      prompt = composeRunPrompt({ instruction, repoName, ticket: ticketMarkdown(ticket), key: ticket.key });
-      body._jiraMeta = { jiraKey: ticket.key, jiraUrl: ticket.url, jiraSummary: ticket.summary };
-    } else {
-      prompt = str(body.prompt, 'Prompt', { max: 50_000 }).trim();
-      if (!prompt) throw badRequest('Describe what the agent should do');
-    }
-    const model = cleanModel(body.model);
-    const mode = ['default', 'acceptEdits', 'plan'].includes(body.permissionMode) ? body.permissionMode : undefined;
-    let repoId: string | null = null;
-    let branch: string | null = null;
-    const repos = readRepoChoices(project.id, body);
-    if (repos.length) {
-      repoId = repos[0].repoId;
-      branch = repos[0].branch ?? null;
-    }
-    const meta: Record<string, unknown> = body._jiraMeta
-      ? { ...body._jiraMeta, repoName: repoId ? getRepo(repoId).name : null }
-      : {};
-    const engine = body.engine ? (engineProvider(project.id, String(body.engine)), String(body.engine)) : null;
-    // An optional lead, as in sessions: on Kiro a project Kiro agent leads with its own profile.
-    const leadName = typeof body.leadAgent === 'string' ? body.leadAgent.trim() : '';
-    const lead = leadName ? resolveLead(project, leadName, engineProvider(project.id, engine) === 'kiro') : null;
-    if (leadName && !lead) throw badRequest(`"${leadName}" cannot lead a run on this engine: it is not an enabled agent of this project.`);
-    const { run, done } = await startRun({
-      projectId: project.id,
-      userId: ctx.user!.id,
-      kind: 'chat',
-      title: docTitle || str(body.title, 'Title', { max: 200, optional: true }).trim() || (body._jiraMeta ? `${body._jiraMeta.jiraKey}: ${body._jiraMeta.jiraSummary}`.slice(0, 200) : prompt.split('\n')[0].slice(0, 100)),
-      prompt,
-      repoId,
-      branch,
-      repos: repos.length > 1 ? repos : null,
-      integrations: readIntegrationIds(body.integrations, ctx.user!.id),
-      engine,
-      permissionMode: mode,
-      model,
-      lead: lead ?? undefined,
-      meta: Object.keys(meta).length ? meta : undefined,
-    });
-    // done is fire-and-forget; guard against DB-closed errors on shutdown.
-    done.catch((e) => { if (isDbOpen()) console.error(`[run ${run.id}]`, e); });
-    return { run: runSummary(run) };
-  });
-
   get('/api/runs/:id', (ctx) => {
     const r = runAccess(ctx, ctx.params.id);
     return {
@@ -282,7 +210,7 @@ export function registerRunRoutes(): void {
       events: events(r.id),
       inputs: all('SELECT * FROM inputs WHERE run_id = ? ORDER BY created_at', r.id).map(inputView),
       active: isActive(r.id),
-      continuations: all('SELECT id, title, status, created_at FROM runs WHERE resume_of = ? ORDER BY created_at', r.id),
+      continuations: all('SELECT id, title, status, created_at FROM agent_runs WHERE resume_of = ? ORDER BY created_at', r.id),
     };
   });
 
@@ -299,9 +227,10 @@ export function registerRunRoutes(): void {
 
   post('/api/runs/:id/stop', (ctx) => {
     const r = runAccess(ctx, ctx.params.id, 'editor');
+    if (r.workflow_id) throw badRequest('This run is an iteration of a session: stop the session instead');
     if (!stopRun(r.id)) {
       if (['queued', 'running', 'waiting'].includes(r.status)) {
-        exec("UPDATE runs SET status = 'stopped', error = 'Stopped by a user' WHERE id = ?", r.id);
+        exec("UPDATE agent_runs SET status = 'stopped', error = 'Stopped by a user' WHERE id = ?", r.id);
       }
     }
     return { ok: true };
@@ -309,6 +238,7 @@ export function registerRunRoutes(): void {
 
   post('/api/runs/:id/continue', async (ctx) => {
     const prev = runAccess(ctx, ctx.params.id, 'editor');
+    if (prev.workflow_id) throw badRequest('This run is an iteration of a session: send the session an instruction instead');
     if (isActive(prev.id)) throw badRequest('Wait for this run to finish before continuing it');
     if (!['chat', 'test'].includes(prev.kind)) throw badRequest('Only agent runs can be continued');
     const body = await ctx.json();
@@ -438,7 +368,7 @@ export function registerRunRoutes(): void {
     for (const x of repos) await removeWorktree(getRepo(x.repoId), path.join(projectDir(getProject(r.project_id)), x.worktree));
     const meta = parseJson<any>(r.meta, {});
     delete meta.repos;
-    exec('UPDATE runs SET worktree = NULL, meta = ? WHERE id = ?', JSON.stringify(meta), r.id);
+    exec('UPDATE agent_runs SET worktree = NULL, meta = ? WHERE id = ?', JSON.stringify(meta), r.id);
     return { ok: true };
   });
 
@@ -468,7 +398,7 @@ export function registerRunRoutes(): void {
         model: 'haiku',
         demoOutput: () => 'OK',
       });
-      const r = one<Row>('SELECT model, provider FROM runs WHERE id = ?', runId);
+      const r = one<Row>('SELECT model, provider FROM agent_runs WHERE id = ?', runId);
       return { ok: /\bOK\b/.test(text), reply: text.slice(0, 200), provider: r?.provider, model: r?.model, ms: Date.now() - started };
     } catch (e: any) {
       throw new HttpError(502, `Connection failed: ${e?.message ?? e}`);

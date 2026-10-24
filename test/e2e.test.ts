@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun } from './client.ts';
 import { FSD_MD, FSD_MD_V2, makeDocx, makePdf, makeRepo, makeXlsx } from './fixtures.ts';
 
 let srv: TestServer;
@@ -237,7 +237,7 @@ test('repositories: connect, clone and list branches', async () => {
 let firstRunId = '';
 
 test('agent run: questions, approvals, subagents, live stream, push', async () => {
-  const { run } = await editor.post(`/api/projects/${pid}/runs`, {
+  const { run } = await startSingleRun(editor, pid, {
     prompt: 'Design and build the refund approval flow for Finance Managers',
     repoId,
     branch: 'main',
@@ -309,20 +309,27 @@ test('agent run: questions, approvals, subagents, live stream, push', async () =
 });
 
 test('decisions are not asked twice; follow-ups resume; stop works', async () => {
-  const { run } = await editor.post(`/api/projects/${pid}/runs`, { prompt: 'Design and build the refund approval flow for Finance Managers', permissionMode: 'acceptEdits' });
+  const { run } = await startSingleRun(editor, pid, { prompt: 'Design and build the refund approval flow for Finance Managers', permissionMode: 'acceptEdits' });
   const done = await runDone(editor, run.id);
   assert.equal(done.run.status, 'completed');
   assert.equal(done.inputs.length, 0, 'no question and no approval in acceptEdits mode with a recorded decision');
   assert.ok(done.events.some((e: any) => e.type === 'assistant' && JSON.stringify(e.data).includes("so I won't ask again")));
 
-  const follow = await editor.post(`/api/runs/${firstRunId}/continue`, { prompt: 'Summarise the notification requirements', permissionMode: 'plan' });
-  const fdone = await runDone(editor, follow.run.id);
+  // A follow-up is an instruction to the (finished) session: it re-opens and its next iteration resumes the run.
+  const firstWorkflowId = (await editor.get(`/api/runs/${firstRunId}`)).run.workflow_id;
+  assert.ok(firstWorkflowId, 'a single run belongs to a session');
+  await editor.post(`/api/workflows/${firstWorkflowId}/messages`, { body: 'Summarise the notification requirements', permissionMode: 'plan' });
+  const followId = await waitFor(async () => {
+    const w = (await editor.get(`/api/workflows/${firstWorkflowId}`)).workflow;
+    return w.last_run_id && w.last_run_id !== firstRunId ? w.last_run_id : null;
+  }, 'the follow-up run');
+  const fdone = await runDone(editor, followId);
   assert.equal(fdone.run.status, 'completed');
   assert.equal(fdone.run.resume_of, firstRunId);
 
-  const { run: r3 } = await editor.post(`/api/projects/${pid}/runs`, { prompt: 'Implement partial refunds' });
+  const { run: r3, workflow: w3 } = await startSingleRun(editor, pid, { prompt: 'Implement partial refunds' });
   await pendingInput(editor, r3.id, 'question');
-  await editor.post(`/api/runs/${r3.id}/stop`);
+  await editor.post(`/api/workflows/${w3.id}/stop`);
   const stopped = await runDone(editor, r3.id);
   assert.equal(stopped.run.status, 'stopped');
   const leftovers = (await editor.get(`/api/projects/${pid}/inputs`)).inputs.filter((i: any) => i.run_id === r3.id);

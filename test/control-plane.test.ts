@@ -564,7 +564,7 @@ describe('worktree cleanup', () => {
     // Insert a run with a non-existent workDir
     const rid = `r_ttl_${Date.now()}`;
     dbRun(
-      "INSERT INTO runs (id, project_id, kind, title, prompt, status, model, permission_mode, provider, meta, created_by, created_at) VALUES (?, ?, 'chat', 'ttl run', 'p', 'completed', 'sonnet', 'default', 'demo', ?, ?, datetime('2020-01-01'))",
+      "INSERT INTO agent_runs (id, project_id, kind, title, prompt, status, model, permission_mode, provider, meta, created_by, created_at) VALUES (?, ?, 'chat', 'ttl run', 'p', 'completed', 'sonnet', 'default', 'demo', ?, ?, datetime('2020-01-01'))",
       rid, pid, JSON.stringify({ workDir: 'work/nonexistent_path_that_does_not_exist' }), adminUser.id,
     );
     dbRun('UPDATE workflows SET last_run_id = ? WHERE id = ?', rid, wid);
@@ -575,7 +575,7 @@ describe('worktree cleanup', () => {
       assert.ok(result.deleted >= 0, 'deleted count is non-negative');
       assert.ok(result.skipped >= 0, 'skipped count is non-negative');
     } finally {
-      dbRun('DELETE FROM runs WHERE id = ?', rid);
+      dbRun('DELETE FROM agent_runs WHERE id = ?', rid);
       dbRun('DELETE FROM workflows WHERE id = ?', wid);
     }
   });

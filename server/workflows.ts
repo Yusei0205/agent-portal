@@ -6,6 +6,10 @@
  * and repeats until the agent reports done or blocked, or a limit is hit. People review the changes and give new
  * instructions at any time; those are picked up by the next iteration and re-open a finished session.
  *
+ * A single run is a session whose max_iterations is 1: one iteration, then it is done (or failed), with the agent's reply
+ * as the result. It may be attended (permission_mode set): a person answers its questions and approves its tools. A
+ * finished session re-opens when a person sends a message, which is how a single run is continued.
+ *
  * Limits that keep an unattended loop safe: a spending budget, a cap on iterations per burst, a stop when the agent
  * keeps reporting the same thing, two failed runs in a row, and blocked commands (see guardrails.ts).
  */
@@ -15,21 +19,23 @@ import { spawn } from 'node:child_process';
 import { all, insert, one, run as exec, update, type Row, isDbOpen, dbGeneration } from './db.ts';
 import { del, get, post, put } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
-import { getRepo, repoGitEnv, pushWorktree, checkBranch, openPullRequest, repoDir } from './repos.ts';
+import { ensureFresh, getRepo, repoGitEnv, pushWorktree, checkBranch, openPullRequest, repoDir } from './repos.ts';
 import { checkKey, downloadAttachments, issueDetail, mustMapping } from './jira.ts';
 import { requireModel } from './models.ts';
 import { ticketMarkdown } from './jira-text.ts';
 import { getRun, isActive, startRun, stopRun } from './agent/runner.ts';
+import type { PermissionMode } from './agent/types.ts';
 import { badRequest, HttpError, newId, notFound, now, parseJson, str } from './util.ts';
 import { composeIterationPrompt, parseTrustedPush, parseStatus, safeBranchName, stagnated } from './guardrails.ts';
 import { leadChoices, resolveLead, type RunLead } from './kiro-agents.ts';
 import { claudeProvider, effectiveProvider, engineProvider } from './project-aws.ts';
 import { addContext, contextForIteration, registerContextRoutes, removeContextFiles } from './session-context.ts';
 import { pushRun, readRepoChoices, isSharedBranch } from './runs.ts';
+import { checkDocOutput, composeDocumentPrompt } from './docrun.ts';
 import { runRepos } from './agent/runner.ts';
 import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
 import { readIntegrationIds } from './integrations.ts';
-import { getSettings } from './settings.ts';
+import { assertBudget, getSettings } from './settings.ts';
 import { getToolPacks } from './tool-packs.ts';
 import { git, redact } from './git.ts';
 import { checkConcurrency, isDraining, concurrencyReason, queueReasonLabel, drainQueue } from './control-plane.ts';
@@ -40,6 +46,9 @@ import { escalateSession, fireWebhooks } from './loop-engine.ts';
 import { recordLoopMetrics } from './loop-specs.ts';
 
 const OPEN = ['running'];
+
+/** Budget of a single run, whose follow-ups are held to it (a session's own default is $5). */
+const SINGLE_RUN_BUDGET_USD = 25;
 const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
 
 /** Workflow ids with a driver loop in this process, and the run each is waiting on. */
@@ -51,11 +60,23 @@ function getWorkflow(id: string): Row {
   return w;
 }
 
+/** A single run is a session limited to one iteration. */
+function isSingleRun(w: Row): boolean {
+  return Number(w.max_iterations) === 1;
+}
+
+/** '' (autonomous: tools are allowed except the blocked commands) or a mode in which a person approves tools. */
+function readPermissionMode(raw: unknown): string {
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (!['default', 'acceptEdits', 'plan'].includes(String(raw))) throw badRequest('Permission mode must be default, acceptEdits or plan');
+  return String(raw);
+}
+
 /** Live facts for the session list: the latest run's state and how many of its questions or approvals wait. */
 function liveFacts(w: Row) {
   if (!w.last_run_id) return { last_run_status: null, pending_inputs: 0 };
   const r = one<Row>(
-    "SELECT status, (SELECT COUNT(*) FROM inputs WHERE run_id = runs.id AND status = 'pending') AS pending FROM runs WHERE id = ?",
+    "SELECT status, (SELECT COUNT(*) FROM inputs WHERE run_id = agent_runs.id AND status = 'pending') AS pending FROM agent_runs WHERE id = ?",
     w.last_run_id,
   );
   return { last_run_status: r?.status ?? null, pending_inputs: Number(r?.pending ?? 0) };
@@ -113,6 +134,8 @@ export function view(w: Row) {
       }
     })(),
     max_iterations: w.max_iterations,
+    single_run: Number(w.max_iterations) === 1,
+    permission_mode: w.permission_mode || '',
     verify_command: w.verify_command,
     rules: w.rules,
     iteration: w.iteration,
@@ -479,6 +502,8 @@ async function drive(id: string, gen: number): Promise<void> {
       context: contextForIteration(id),
       pushMode: (w.push_mode || 'never') as 'never' | 'ask' | 'auto',
       trustTools: Boolean(w.trust_tools),
+      attended: Boolean(w.permission_mode),
+      single: isSingleRun(w),
       delegation: (() => {
         const kids = childrenOf(id);
         const d = getSettings().delegation;
@@ -524,25 +549,28 @@ async function drive(id: string, gen: number): Promise<void> {
         projectId: w.project_id,
         userId: w.created_by,
         kind: 'chat',
-        title: `${w.title} · iteration ${iteration}`,
+        title: isSingleRun(w) && iteration === 1 ? w.title : `${w.title} · iteration ${iteration}`,
         prompt,
         repoId: w.repo_id || null,
         branch: w.branch || null,
         repos: sessionRepos(w).length > 1 ? sessionRepos(w) : null,
         integrations: parseJson<string[]>(w.integrations, []),
         engine: w.engine || null,
-        permissionMode: 'acceptEdits',
-        autoApprove: true,
+        workflowId: id,
+        permissionMode: (w.permission_mode || 'acceptEdits') as PermissionMode,
+        autoApprove: !w.permission_mode,
         trustTools: Boolean(w.trust_tools),
         trustedPushHandler: w.trust_tools ? (branch) => performTrustedPush(id, branch) : undefined,
         model: w.model,
         resumeOf: prev && prev.session_id && sameRepos ? prev.id : null,
         lead,
-        meta: { workflowId: id, iteration, leadAgent: lead ? w.lead_agent : '' },
+        meta: { iteration, leadAgent: lead ? w.lead_agent : '', ...(w.jira_key ? { jiraKey: w.jira_key, jiraUrl: w.jira_url, jiraSummary: w.jira_summary } : {}) },
       });
     } catch (e: any) {
       return stopWith(id, 'paused', String(e?.message ?? e).slice(0, 300));
     }
+    // If the bookkeeping below throws (the database closed on shutdown), the run's own promise must not go unhandled.
+    started.done.catch(() => undefined);
     const slot = driving.get(id);
     if (slot) slot.runId = started.run.id;
     patch(id, { iteration, last_run_id: started.run.id });
@@ -559,6 +587,7 @@ async function drive(id: string, gen: number): Promise<void> {
     }
 
     if (finished.status !== 'completed') {
+      if (isSingleRun(w)) return stopWith(id, 'failed', String(finished.error || finished.status).slice(0, 300));
       failures++;
       log(id, 'iteration', `Iteration ${iteration} did not complete: ${finished.error || finished.status}`, { runId: finished.id, data: { failed: true } });
       if (failures >= 2) return stopWith(id, 'failed', `Two runs in a row failed: ${String(finished.error || finished.status).slice(0, 200)}`);
@@ -587,7 +616,7 @@ async function drive(id: string, gen: number): Promise<void> {
       const cur = getWorkflow(id);
       const run = getRun(finished.id);
       const meta = parseJson<any>(run.meta, {});
-      if (cur.work_branch && meta.workBranch !== cur.work_branch) exec('UPDATE runs SET meta = ? WHERE id = ?', JSON.stringify({ ...meta, workBranch: cur.work_branch }), run.id);
+      if (cur.work_branch && meta.workBranch !== cur.work_branch) exec('UPDATE agent_runs SET meta = ? WHERE id = ?', JSON.stringify({ ...meta, workBranch: cur.work_branch }), run.id);
     }
     summaries.push(summary);
 
@@ -698,6 +727,7 @@ async function drive(id: string, gen: number): Promise<void> {
         return stopWith(id, 'done', 'The agent reports the goal is met. Review the changes.');
       }
     }
+    if (isSingleRun(w) && (!lastCheck || lastCheck.ok)) return stopWith(id, 'done', 'The run finished. Review the changes.');
     if (stagnated(summaries)) return stopWith(id, 'blocked', 'The last iterations all reported the same thing, so it is not making progress. Give it a new instruction.');
   }
 }
@@ -811,6 +841,7 @@ function readSettings(body: any, current?: Row, ctx?: { hasRepos?: boolean; isPl
     rules: body.rules === undefined ? current?.rules ?? '' : str(body.rules, 'Rules', { max: 4000, optional: true }).trim(),
     push_mode: effectivePushMode(body.pushMode, current?.push_mode, ctx?.hasRepos ?? false, ctx?.isPlayground ?? false),
     trust_tools: body.trustTools === undefined ? (current?.trust_tools ?? 0) : body.trustTools ? 1 : 0,
+    permission_mode: body.permissionMode === undefined ? current?.permission_mode ?? '' : readPermissionMode(body.permissionMode),
   };
 }
 
@@ -1053,6 +1084,30 @@ export function registerWorkflowRoutes(): void {
   post('/api/projects/:pid/workflows', async (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid, 'editor');
     const body = await ctx.json();
+    // A single run is a session with one iteration. Its text arrives as "prompt" (or "goal"); "Document a repository" is
+    // a single run whose prompt is built here and which reads the repository's reference clone in place.
+    const singleRun = Boolean(body.singleRun);
+    let docTitle = '';
+    if (singleRun) {
+      if (body.document) {
+        const docRepo = getRepo(String(body.document.repoId ?? ''));
+        if (docRepo.project_id !== project.id) throw badRequest('That repository belongs to another project');
+        await ensureFresh(docRepo);
+        const scope = str(body.document.scope, 'Focus', { max: 1000, optional: true });
+        body.goal = composeDocumentPrompt(getRepo(docRepo.id), { scope, output: checkDocOutput(body.document.output ?? 'markdown') });
+        docTitle = `Document ${docRepo.name}`;
+        body.repoId = undefined;
+        body.repos = undefined;
+        body.workspaceId = undefined;
+      } else if (body.goal === undefined) {
+        body.goal = body.prompt;
+      }
+      body.playground = !body.workspaceId && !readRepoChoices(project.id, body).length;
+      body.maxIterations = 1;
+      if (body.pushMode === undefined) body.pushMode = 'never';
+      if (body.budgetUsd === undefined) body.budgetUsd = SINGLE_RUN_BUDGET_USD;
+      if (body.permissionMode === undefined || body.permissionMode === '') body.permissionMode = getSettings().agents.defaultPermissionMode;
+    }
     let jira = { key: '', summary: '', url: '' };
     if (body.jiraKey) {
       const key = str(body.jiraKey, 'Jira key', { max: 30 }).trim().toUpperCase();
@@ -1061,9 +1116,10 @@ export function registerWorkflowRoutes(): void {
       const t = await issueDetail(project.id, mapping, key);
       jira = { key: t.key, summary: t.summary, url: t.url };
     }
-    let goal = str(body.goal, 'Goal', { max: 6000, optional: Boolean(jira.key) }).trim();
+    let goal = str(body.goal, singleRun ? 'Prompt' : 'Goal', { max: singleRun ? 50_000 : 6000, optional: Boolean(jira.key) }).trim();
     if (!goal && jira.key) goal = `Implement or fix what ticket ${jira.key} describes (${jira.summary}), following the project documents and decisions.`;
-    const title = str(body.title, 'Title', { max: 120, optional: true }).trim() || (jira.key ? `${jira.key}: ${jira.summary}`.slice(0, 120) : goal.split('\n')[0].slice(0, 80));
+    if (!goal) throw badRequest(singleRun ? 'Describe what the agent should do' : 'Goal is required');
+    const title = str(body.title, 'Title', { max: 120, optional: true }).trim() || docTitle || (jira.key ? `${jira.key}: ${jira.summary}`.slice(0, 120) : goal.split('\n')[0].slice(0, singleRun ? 100 : 80));
     // A workspace fills in the repositories (and integrations) unless the request lists its own.
     let workspace: Row | null = null;
     if (body.workspaceId) {
@@ -1097,6 +1153,8 @@ export function registerWorkflowRoutes(): void {
         queueReason = reason;
       }
     }
+    // A single run is refused up front when the monthly budget is used up (a session is created and pauses instead).
+    if (singleRun && !queued && body.start !== false) assertBudget(engineProvider(project.id, engine || null));
     const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
     const leadAgent = checkLead(project, body.leadAgent, engine);
     const contextItems = readContextItems(body.context);
@@ -1150,7 +1208,7 @@ export function registerWorkflowRoutes(): void {
       exec('DELETE FROM workflows WHERE id = ?', id);
       throw e;
     }
-    audit(ctx, 'session.start', `workflow:${id}`, { projectId: project.id, title, start: body.start !== false });
+    audit(ctx, 'session.start', `workflow:${id}`, { projectId: project.id, title, start: body.start !== false, ...(singleRun ? { singleRun: true } : {}) });
     if (!queued && body.start !== false) {
       kick(id);
     }
@@ -1163,7 +1221,7 @@ export function registerWorkflowRoutes(): void {
     const events = all<Row>('SELECT * FROM workflow_events WHERE workflow_id = ? ORDER BY id DESC LIMIT 300', w.id)
       .reverse()
       .map((e) => ({ id: e.id, kind: e.kind, run_id: e.run_id, body: e.body, data: parseJson(e.data, {}), consumed: Boolean(e.consumed), created_at: e.created_at }));
-    const runs = all<Row>('SELECT id, title, status, cost_usd, created_at, finished_at FROM runs WHERE project_id = ? AND meta LIKE ? ORDER BY created_at DESC LIMIT 100', w.project_id, `%"workflowId":"${w.id}"%`);
+    const runs = all<Row>('SELECT id, title, status, cost_usd, created_at, finished_at FROM agent_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 100', w.id);
     return { workflow: view(w), events, runs, driving: driving.has(w.id) };
   });
 
@@ -1248,7 +1306,9 @@ export function registerWorkflowRoutes(): void {
     const body = await ctx.json();
     const text = str(body.body, 'Instruction', { max: 4000 }).trim();
     if (REOPENABLE.includes(w.status) && overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first, then send the instruction.');
+    const permissionMode = body.permissionMode === undefined ? undefined : readPermissionMode(body.permissionMode);
     addContextItems(w.id, { id: ctx.user!.id, name: ctx.user!.name }, readContextItems(body.context));
+    if (permissionMode !== undefined && permissionMode !== (w.permission_mode || '')) patch(w.id, { permission_mode: permissionMode });
     log(w.id, 'human', text, { data: { by: ctx.user!.name } });
     if (REOPENABLE.includes(w.status)) {
       patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0, pending_push: '' });
@@ -1339,11 +1399,7 @@ export function registerWorkflowRoutes(): void {
     const project = getProject(w.project_id);
     const pdir = projectDir(project);
     // Collect the last 10 runs belonging to this session, newest first.
-    const runs = all<Row>(
-      "SELECT id, meta FROM runs WHERE project_id = ? AND meta LIKE ? ORDER BY created_at DESC LIMIT 10",
-      w.project_id,
-      `%"workflowId":"${w.id}"%`,
-    );
+    const runs = all<Row>('SELECT id, worktree, meta FROM agent_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 10', w.id);
     // Build a set of root-commit -> repoId mappings for all project repos.
     const projectRepos = all<Row>('SELECT id, name FROM repos WHERE project_id = ?', w.project_id);
     const repoRootMap = new Map<string, { repoId: string; repoName: string }>();
@@ -1479,11 +1535,7 @@ export function registerWorkflowRoutes(): void {
     if (!realAbs.startsWith(pdir + path.sep) && realAbs !== pdir) throw badRequest('Path resolves outside the project directory');
 
     // Must be inside a run folder that belongs to this session.
-    const runs = all<Row>(
-      "SELECT id, meta FROM runs WHERE project_id = ? AND meta LIKE ? ORDER BY created_at DESC LIMIT 50",
-      w.project_id,
-      `%"workflowId":"${w.id}"%`,
-    );
+    const runs = all<Row>('SELECT id, worktree, meta FROM agent_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 50', w.id);
     const isInsideRunFolder = runs.some((r) => {
       const meta = parseJson<any>(r.meta, {});
       const candidates: string[] = [];

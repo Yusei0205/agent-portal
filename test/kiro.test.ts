@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun, startSingleRunReq } from './client.ts';
 
 // The Kiro CLI provider against a fake `kiro-cli acp` that logs what it receives.
 const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-fake-')), 'log.jsonl');
@@ -63,7 +63,7 @@ test('Kiro connection test: tool-less profile, API key passed, no portal secrets
 
 test('Kiro run: guard, approvals, tool events, credits, profile cleanup', async () => {
   clearLog();
-  const { run } = await c.post(`/api/projects/${pid}/runs`, { prompt: 'Write some notes' });
+  const { run } = await startSingleRun(c, pid, { prompt: 'Write some notes' });
 
   // The write outside the run folder is refused without asking anyone; the one inside asks.
   const write = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.type === 'approval' && i.status === 'pending'), 'write approval');
@@ -112,7 +112,13 @@ test('Kiro run: guard, approvals, tool events, credits, profile cleanup', async 
 test('Kiro follow-up resumes the same session and ignores the replayed history', async () => {
   const prev = (await c.get(`/api/projects/${pid}/runs`)).runs.find((r: any) => r.kind === 'chat' && r.status === 'completed');
   clearLog();
-  const { run } = await c.post(`/api/runs/${prev.id}/continue`, { prompt: 'And one more thing', permissionMode: 'acceptEdits' });
+  // A follow-up is an instruction to the single run's session; its next iteration resumes the earlier run.
+  await c.post(`/api/workflows/${prev.workflow_id}/messages`, { body: 'And one more thing', permissionMode: 'acceptEdits' });
+  const runId = await waitFor(async () => {
+    const w = (await c.get(`/api/workflows/${prev.workflow_id}`)).workflow;
+    return w.last_run_id && w.last_run_id !== prev.id ? w.last_run_id : null;
+  }, 'the follow-up run');
+  const run = { id: runId };
   // acceptEdits: the inside write needs nobody; the shell command still asks.
   const shell = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Bash' && i.status === 'pending'), 'shell approval');
   await c.post(`/api/inputs/${shell.id}/answer`, { decision: 'allow' });
@@ -141,7 +147,7 @@ test('Kiro model list and an unavailable pinned model', async () => {
   const r = await c.req('POST', '/api/settings/test');
   // The connection test uses haiku, so it still works; an opus run fails with a clear message.
   assert.equal(r.status, 200);
-  const { run } = await c.post(`/api/projects/${pid}/runs`, { prompt: 'Plan it', model: 'opus' });
+  const { run } = await startSingleRun(c, pid, { prompt: 'Plan it', model: 'opus' });
   const failed = await waitFor(async () => {
     const x = await c.get(`/api/runs/${run.id}`);
     return ['completed', 'failed'].includes(x.run.status) ? x : null;
@@ -155,7 +161,7 @@ test('Kiro subagents: the project roles become the team, each subagent is its ow
   clearLog();
   fs.mkdirSync(path.join(projectPath, '.claude', 'agents'), { recursive: true });
   fs.writeFileSync(path.join(projectPath, '.claude', 'agents', 'backend-agent.md'), '---\nname: backend-agent\ndescription: Builds the API\ntools: Read, Grep, Write, Bash\n---\nYou build backend code.\n');
-  const { run } = await c.post(`/api/projects/${pid}/runs`, { prompt: 'Split the work [delegate]', permissionMode: 'acceptEdits' });
+  const { run } = await startSingleRun(c, pid, { prompt: 'Split the work [delegate]', permissionMode: 'acceptEdits' });
 
   // Starting subagents asks first, like any tool that is not a plain edit.
   const spawn = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Subagents' && i.status === 'pending'), 'subagent approval');
@@ -199,7 +205,7 @@ test('Kiro subagents: the project roles become the team, each subagent is its ow
 test('Kiro integrations: MCP servers in the profile, and read-only ones refuse changing tools', async () => {
   clearLog();
   const { integration } = await c.post('/api/integrations', { kind: 'http', name: 'Tickets', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer t-123' } });
-  const { run } = await c.post(`/api/projects/${pid}/runs`, { prompt: 'Use the tickets [mcp]', integrations: [integration.id] });
+  const { run } = await startSingleRun(c, pid, { prompt: 'Use the tickets [mcp]', integrations: [integration.id] });
   const done = await waitFor(async () => {
     const r = await c.get(`/api/runs/${run.id}`);
     return ['completed', 'failed'].includes(r.run.status) ? r : null;
@@ -221,7 +227,7 @@ test('engine per run: Kiro can be picked; Claude is refused clearly while no Cla
   const refused = await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'claude', playground: true });
   assert.equal(refused.status, 400);
   assert.match(refused.data.error, /Claude is not set up/);
-  assert.equal((await c.req('POST', `/api/projects/${pid}/runs`, { prompt: 'x', engine: 'claude' })).status, 400);
+  assert.equal((await startSingleRunReq(c, pid, { prompt: 'x', engine: 'claude' })).status, 400);
   assert.equal((await c.req('POST', `/api/projects/${pid}/workflows`, { goal: 'x', start: false, engine: 'gpt', playground: true })).status, 400);
   const { workflow } = await c.post(`/api/projects/${pid}/workflows`, { goal: 'On Kiro', start: false, engine: 'kiro', playground: true });
   assert.equal(workflow.engine, 'kiro');

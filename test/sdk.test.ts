@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun, startSingleRunReq } from './client.ts';
 
 // Exercise the real-provider path against a recording fake of the Agent SDK.
 process.env.PORTAL_SDK_MODULE = pathToFileURL(path.join(import.meta.dirname, 'fake-sdk.mjs')).href;
@@ -24,16 +24,18 @@ after(() => srv.close());
 
 test('Anthropic provider: options, environment, guard, questions, approvals and stream close', async () => {
   await c.put('/api/settings', { provider: { mode: 'anthropic' } });
-  const noKey = await c.req('POST', `/api/projects/${pid}/runs`, { prompt: 'Build it' });
+  const noKey = await startSingleRunReq(c, pid, { prompt: 'Build it' });
   // The run starts, then fails because no key is stored.
   const failed = await waitFor(async () => {
-    const r = await c.get(`/api/runs/${noKey.data.run.id}`);
+    const w = (await c.get(`/api/workflows/${noKey.data.workflow.id}`)).workflow;
+    if (!w.last_run_id) return null;
+    const r = await c.get(`/api/runs/${w.last_run_id}`);
     return r.run.status === 'failed' ? r : null;
   }, 'missing-key failure');
   assert.match(failed.run.error, /Anthropic API key/);
 
   await c.post('/api/settings/secrets/anthropic.api_key', { value: 'sk-ant-real-looking-key-1234' });
-  const { run } = await c.post(`/api/projects/${pid}/runs`, { prompt: 'Pick a database for refunds' });
+  const { run } = await startSingleRun(c, pid, { prompt: 'Pick a database for refunds' });
   const q = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.type === 'question' && i.status === 'pending'), 'question');
   await c.post(`/api/inputs/${q.id}/answer`, { answers: { 'Which database?': 'Postgres' } });
   const ap = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.type === 'approval' && i.status === 'pending'), 'approval');
@@ -97,7 +99,7 @@ test('Bedrock provider: AWS keys from secrets, single-shot options', async () =>
 
 test('budget cap blocks new runs once used up', async () => {
   await c.put('/api/settings', { budget: { monthlyUsd: 0.01 } });
-  const r = await c.req('POST', `/api/projects/${pid}/runs`, { prompt: 'One more' });
+  const r = await startSingleRunReq(c, pid, { prompt: 'One more' });
   assert.equal(r.status, 400);
   assert.match(r.data.error, /budget/);
 });

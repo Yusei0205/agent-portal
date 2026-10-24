@@ -49,7 +49,6 @@ const WRITE_ROUTES = new Set([
   'DELETE /api/workflows/:id',
   'POST /api/workflows/:id/context',
   'DELETE /api/workflows/:id/context/:cid',
-  'POST /api/projects/:pid/runs',
   'POST /api/runs/:id/stop',
   'POST /api/runs/:id/continue',
   'POST /api/inputs/:id/answer',

@@ -29,6 +29,8 @@ export interface StartRunInput {
   prompt: string;
   repoId?: string | null;
   branch?: string | null;
+  /** The session this run is an iteration of; empty for background tasks (agent tests, analyses, reviews, model calls). */
+  workflowId?: string | null;
   /** 'claude' or 'kiro' to pick the engine for this run; empty follows the project's connection. */
   engine?: string | null;
   /** Integration ids (MCP tools) the run's agents may use; checked against the person the run acts for. */
@@ -110,6 +112,7 @@ function runSummary(r: Row) {
   return {
     id: r.id,
     project_id: r.project_id,
+    workflow_id: r.workflow_id ?? null,
     kind: r.kind,
     title: r.title,
     status: r.status,
@@ -126,13 +129,13 @@ function runSummary(r: Row) {
 }
 
 export function getRun(id: string): Row {
-  const r = one('SELECT * FROM runs WHERE id = ?', id);
+  const r = one('SELECT * FROM agent_runs WHERE id = ?', id);
   if (!r) throw new HttpError(404, 'Run not found');
   return r;
 }
 
 function setStatus(runId: string, status: string, extra: Record<string, unknown> = {}): void {
-  update('runs', runId, { status, ...(extra as any) });
+  update('agent_runs', runId, { status, ...(extra as any) });
   const r = getRun(runId);
   publish(runChannel(runId), 'run', runSummary(r));
   notifyProject(r.project_id, 'run.updated', runSummary(r));
@@ -154,7 +157,7 @@ function recordEvent(runId: string, a: Active, type: string, parent: string | nu
   const seq = ++a.seq;
   const ts = now();
   const small = shrink(data);
-  insert('run_events', { run_id: runId, seq, ts, type, parent_tool_use_id: parent, data: JSON.stringify(small) });
+  insert('agent_run_events', { run_id: runId, seq, ts, type, parent_tool_use_id: parent, data: JSON.stringify(small) });
   publish(runChannel(runId), 'event', { seq, ts, type, parent, data: small });
   if (type === 'assistant') announceActivity(runId, a, parent, data);
 }
@@ -273,7 +276,7 @@ export async function answerInput(inputId: string, user: { id: string; name: str
     const free = typeof body.response === 'string' ? body.response.trim().slice(0, 4000) : '';
     if (!Object.keys(answers).length && !free) throw badRequest('Answer at least one question');
     response = { answers, ...(free ? { response: free } : {}) };
-    const r = row.run_id ? one('SELECT title FROM runs WHERE id = ?', row.run_id) : null;
+    const r = row.run_id ? one('SELECT title FROM agent_runs WHERE id = ?', row.run_id) : null;
     await appendDecisions(row.project_id, payload.questions, answers, user.name, r ? `run “${r.title}”` : payload.source === 'qa' ? 'a Knowledge question' : '');
   } else {
     if (body.decision !== 'allow' && body.decision !== 'deny') throw badRequest('Choose allow or deny');
@@ -358,9 +361,10 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     input.branch = choices[0].branch ?? input.branch ?? null;
   }
 
-  insert('runs', {
+  insert('agent_runs', {
     id: runId,
     project_id: project.id,
+    workflow_id: input.workflowId ?? null,
     kind: input.kind,
     title: input.title.slice(0, 200),
     prompt: input.prompt,
@@ -383,7 +387,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
     seq: 0,
     seenMessageIds: new Set(),
     projectId: project.id,
-    workflowId: typeof input.meta?.workflowId === 'string' ? input.meta.workflowId : undefined,
+    workflowId: input.workflowId ?? undefined,
   };
   active.set(runId, a);
   notifyProject(project.id, 'run.updated', runSummary(getRun(runId)));
@@ -405,14 +409,14 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
         }
         worktree = made[0].worktree;
         const meta = parseJson<any>(getRun(runId).meta, {});
-        update('runs', runId, { worktree, branch: made[0].branch, meta: JSON.stringify({ ...meta, repos: made }) });
+        update('agent_runs', runId, { worktree, branch: made[0].branch, meta: JSON.stringify({ ...meta, repos: made }) });
       } else if (input.repoId && !worktree) {
         const repo = getRepo(input.repoId);
         if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
         const dest = path.join(workDir, repo.slug);
         await createWorktree(repo, input.branch || repo.default_branch, dest);
         worktree = relToProject(project, dest);
-        update('runs', runId, { worktree, branch: input.branch || repo.default_branch });
+        update('agent_runs', runId, { worktree, branch: input.branch || repo.default_branch });
       }
       // Integrations become MCP servers. Demo runs only record them; real ones start them with their secrets.
       let integ: RunIntegrations | null = null;
@@ -420,7 +424,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
         integ = mode === 'demo' ? await resolveIntegrations(input.integrations, input.userId).catch(() => null) : await resolveIntegrations(input.integrations, input.userId);
         if (integ) {
           const meta = parseJson<any>(getRun(runId).meta, {});
-          update('runs', runId, { meta: JSON.stringify({ ...meta, integrations: integ.summary }) });
+          update('agent_runs', runId, { meta: JSON.stringify({ ...meta, integrations: integ.summary }) });
         }
       }
       // The team vault and the owner's vault, copied into the run folder for agents to read.
@@ -640,7 +644,7 @@ async function execute(
     const type = msg.subtype ? `${msg.type}:${msg.subtype}` : msg.type;
     recordEvent(runId, a, type, (msg.parent_tool_use_id as string) ?? null, msg);
     if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id) {
-      update('runs', runId, { session_id: msg.session_id });
+      update('agent_runs', runId, { session_id: msg.session_id });
     }
     if (msg.type === 'assistant' && msg.message?.usage) {
       const mid = msg.message.id || msg.uuid || '';
@@ -648,7 +652,7 @@ async function execute(
         a.seenMessageIds.add(mid);
         inTok += (msg.message.usage.input_tokens || 0) + (msg.message.usage.cache_read_input_tokens || 0) + (msg.message.usage.cache_creation_input_tokens || 0);
         outTok += msg.message.usage.output_tokens || 0;
-        update('runs', runId, { input_tokens: inTok, output_tokens: outTok });
+        update('agent_runs', runId, { input_tokens: inTok, output_tokens: outTok });
       }
     }
     if (msg.type === 'result') {
@@ -778,9 +782,9 @@ export function isActive(runId: string): boolean {
 
 /** After a restart, nothing is running any more. */
 export function recoverRuns(): void {
-  const stuck = all("SELECT id FROM runs WHERE status IN ('queued', 'running', 'waiting')");
+  const stuck = all("SELECT id FROM agent_runs WHERE status IN ('queued', 'running', 'waiting')");
   for (const r of stuck) {
-    exec("UPDATE runs SET status = 'failed', error = 'The server restarted while this run was active', finished_at = ? WHERE id = ?", now(), r.id);
+    exec("UPDATE agent_runs SET status = 'failed', error = 'The server restarted while this run was active', finished_at = ? WHERE id = ?", now(), r.id);
   }
   exec("UPDATE inputs SET status = 'cancelled' WHERE status = 'pending' AND run_id IS NOT NULL");
 }

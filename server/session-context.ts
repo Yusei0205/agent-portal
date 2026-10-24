@@ -123,7 +123,7 @@ export function addContext(workflowId: string, who: Who, body: any) {
     return save(w.id, who, { kind, ref: d.id, title: d.name, path: d.md_path });
   }
   if (kind === 'run') {
-    const r = one<Row>('SELECT id, project_id, title, result FROM runs WHERE id = ?', ref);
+    const r = one<Row>('SELECT id, project_id, title, result FROM agent_runs WHERE id = ?', ref);
     if (!r || r.project_id !== w.project_id) throw badRequest('That run is not in this project');
     if (!String(r.result ?? '').trim()) throw badRequest('That run has no result to share');
     return save(w.id, who, { kind, ref: r.id, title: r.title });
@@ -193,7 +193,7 @@ export function contextForIteration(workflowId: string): ContextForPrompt[] {
     else if (c.kind === 'note') out.push({ kind: 'note', title: c.title, text: c.body, isNew });
     else if (c.kind === 'url') out.push({ kind: 'link', title: c.title, text: `${c.ref}${c.body ? `\n${c.body}` : ''}`, isNew });
     else if (c.kind === 'run') {
-      const r = one<Row>('SELECT result FROM runs WHERE id = ?', c.ref);
+      const r = one<Row>('SELECT result FROM agent_runs WHERE id = ?', c.ref);
       if (r?.result) out.push({ kind: 'earlier run', title: c.title, text: String(r.result).slice(-6000), isNew });
     } else if (c.kind === 'session') {
       const s = one<Row>('SELECT summary, goal FROM workflows WHERE id = ?', c.ref);

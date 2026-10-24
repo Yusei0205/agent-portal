@@ -447,13 +447,15 @@ async function main() {
 
     // ── 8. Start a run, approve, push ───────────────────────────
     step('Starting agent run');
-    const { run } = await client.post(`/api/projects/${pid}/runs`, {
+    // A single run is a session with one iteration; its agent run exists once the session has started it.
+    const { workflow } = await client.post(`/api/projects/${pid}/workflows`, {
+      singleRun: true,
       prompt: 'Create a SMOKE_PLAN.md that lists the smoke test steps',
       repoId,
       branch: 'main',
       permissionMode: 'default',
     });
-    const runId = run.id;
+    const runId = await waitFor(async () => (await client.get(`/api/workflows/${workflow.id}`)).workflow.last_run_id, 'single run to start', 60_000);
     ok(`Run started: ${runId}`);
 
     // Approve any pending approval (Write, Bash, etc.).

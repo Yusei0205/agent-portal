@@ -194,7 +194,9 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
 
   async function* workScenario(): AsyncGenerator<SdkMessage, string> {
     const prompt = opts.prompt;
-    const userAsk = prompt.split('\n---\n').pop()!.trim();
+    // A single run is wrapped in the session prompt; what the person asked is its Goal section.
+    const goalOfSingleRun = prompt.includes('You are doing a single run (') ? prompt.match(/## Goal\r?\n([\s\S]*?)\r?\n\r?\n## /)?.[1] : undefined;
+    const userAsk = (goalOfSingleRun ?? prompt.split('\n---\n').pop()!).trim();
     const shortAsk = userAsk.replace(/\s+/g, ' ').slice(0, 80);
     const kw = keywords(userAsk, 4);
 

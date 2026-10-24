@@ -370,18 +370,18 @@ export async function githubToken(): Promise<string | null> {
 export function monthSpend(projectId?: string, userId?: string): number {
   const since = monthStart();
   if (projectId && userId) {
-    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ? AND project_id = ? AND created_by = ?', since, projectId, userId);
+    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM agent_runs WHERE created_at >= ? AND project_id = ? AND created_by = ?', since, projectId, userId);
     return r?.s ?? 0;
   }
   if (projectId) {
-    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ? AND project_id = ?', since, projectId);
+    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM agent_runs WHERE created_at >= ? AND project_id = ?', since, projectId);
     return r?.s ?? 0;
   }
   if (userId) {
-    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ? AND created_by = ?', since, userId);
+    const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM agent_runs WHERE created_at >= ? AND created_by = ?', since, userId);
     return r?.s ?? 0;
   }
-  const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ?', since);
+  const r = one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM agent_runs WHERE created_at >= ?', since);
   return r?.s ?? 0;
 }
 
@@ -467,11 +467,11 @@ export function registerSettingsRoutes(): void {
       totalUsd: monthSpend(),
       byProject: all(
         `SELECT p.id, p.name, COALESCE(SUM(r.cost_usd), 0) AS usd, COUNT(r.id) AS runs
-           FROM projects p LEFT JOIN runs r ON r.project_id = p.id AND r.created_at >= ?
+           FROM projects p LEFT JOIN agent_runs r ON r.project_id = p.id AND r.created_at >= ?
           GROUP BY p.id ORDER BY usd DESC`,
         since,
       ),
-      byKind: all('SELECT kind, COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS runs FROM runs WHERE created_at >= ? GROUP BY kind', since),
+      byKind: all('SELECT kind, COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS runs FROM agent_runs WHERE created_at >= ? GROUP BY kind', since),
     };
   }, { auth: 'admin' });
 }

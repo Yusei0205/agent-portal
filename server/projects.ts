@@ -414,7 +414,7 @@ export function registerProjectRoutes(): void {
         `SELECT
           (SELECT COUNT(*) FROM documents WHERE project_id = ?1 AND kind = 'upload') AS docs,
           (SELECT COUNT(*) FROM repos WHERE project_id = ?1) AS repos,
-          (SELECT COUNT(*) FROM runs WHERE project_id = ?1) AS runs,
+          (SELECT COUNT(*) FROM agent_runs WHERE project_id = ?1) AS runs,
           (SELECT COUNT(*) FROM inputs WHERE project_id = ?1 AND status = 'pending' AND type = 'question') AS open_questions,
           (SELECT COUNT(*) FROM inputs WHERE project_id = ?1 AND status = 'pending' AND type = 'approval') AS pending_approvals,
           (SELECT COUNT(*) FROM learn_docs WHERE project_id = ?1) AS learn_docs,

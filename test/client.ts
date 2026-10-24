@@ -86,3 +86,25 @@ export async function waitFor<T>(fn: () => Promise<T | null | undefined | false>
   }
   throw new Error(`Timed out waiting for ${what}${last ? `: ${last}` : ''}`);
 }
+
+/** POST a single run (a session with one iteration) and return the raw response. */
+export function startSingleRunReq(c: Client, pid: string, body: Record<string, unknown> = {}) {
+  return c.req('POST', `/api/projects/${pid}/workflows`, { ...body, singleRun: true });
+}
+
+/** Start a single run and wait until its agent run exists: { workflow, run } with the run as GET /api/runs/:id shows it. */
+export async function startSingleRun(c: Client, pid: string, body: Record<string, unknown> = {}): Promise<{ workflow: any; run: any }> {
+  const { workflow } = await c.post(`/api/projects/${pid}/workflows`, { ...body, singleRun: true });
+  const started = await waitFor(async () => {
+    const w = (await c.get(`/api/workflows/${workflow.id}`)).workflow;
+    return w.last_run_id ? w : null;
+  }, 'the single run to start');
+  const { run } = await c.get(`/api/runs/${started.last_run_id}`);
+  return { workflow: started, run };
+}
+
+/** Stop the session an agent run belongs to (a single run is stopped through its session). */
+export async function stopRunSession(c: Client, runId: string): Promise<void> {
+  const { run } = await c.get(`/api/runs/${runId}`);
+  await c.post(`/api/workflows/${run.workflow_id}/stop`);
+}

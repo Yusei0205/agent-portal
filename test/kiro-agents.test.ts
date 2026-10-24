@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun, startSingleRunReq } from './client.ts';
 
 process.env.PORTAL_KIRO_FAKE = path.join(import.meta.dirname, 'fake-kiro-acp.mjs');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-agents-test-'));
@@ -248,7 +248,7 @@ test('a Kiro run led by a project Kiro agent: its own profile and team, with eve
   write('.claude/agents/claude-only.md', '---\nname: claude-only\ndescription: A Claude Code agent\n---\nx\n');
 
   clearLog();
-  const { run } = await admin.post(`/api/projects/${pid}/runs`, { prompt: 'Build the API [delegate]', engine: 'kiro', leadAgent: 'kiro-lead', permissionMode: 'acceptEdits' });
+  const { run } = await startSingleRun(admin, pid, { prompt: 'Build the API [delegate]', engine: 'kiro', leadAgent: 'kiro-lead', permissionMode: 'acceptEdits' });
   const spawn = await waitFor(async () => (await admin.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Subagents' && i.status === 'pending'), 'subagent approval');
   await admin.post(`/api/inputs/${spawn.id}/answer`, { decision: 'allow' });
   const done = await waitFor(async () => {
@@ -286,7 +286,7 @@ test('a Kiro run led by a project Kiro agent: its own profile and team, with eve
 
   const agentCall = done.events.filter((e: any) => e.type === 'assistant').flatMap((e: any) => e.data.message.content).find((b: any) => b.type === 'tool_use' && b.name === 'Agent');
   assert.equal(agentCall.input.subagent_type, 'kiro-backend', 'runs show the project agent’s name');
-  assert.ok(!fs.readdirSync(path.join(dir, '.kiro/agents')).some((f) => f.startsWith('agent-portal-')), 'per-run profiles are removed afterwards');
+  await waitFor(async () => !fs.readdirSync(path.join(dir, '.kiro/agents')).some((f) => f.startsWith('agent-portal-')), 'per-run profiles are removed afterwards');
 });
 
 test('leads per engine: Kiro agents lead on Kiro when the project has them, Claude Code agents otherwise', async () => {
@@ -300,12 +300,12 @@ test('leads per engine: Kiro agents lead on Kiro when the project has them, Clau
   assert.equal(refused.status, 400);
   assert.match(refused.data.error, /not an enabled Kiro agent/);
   assert.equal((await admin.req('PUT', `/api/workflows/${ok.workflow.id}`, { leadAgent: 'nobody' })).status, 400);
-  assert.equal((await admin.req('POST', `/api/projects/${pid}/runs`, { prompt: 'x', engine: 'kiro', leadAgent: 'claude-only' })).status, 400);
+  assert.equal((await startSingleRunReq(admin, pid, { prompt: 'x', engine: 'kiro', leadAgent: 'claude-only' })).status, 400);
 
   // Without a lead, the portal's main agent leads and every enabled project Kiro agent is on its team.
   await admin.put(`/api/projects/${pid}/kiro-agents/kiro-other/enabled`, { enabled: false });
   clearLog();
-  const { run } = await admin.post(`/api/projects/${pid}/runs`, { prompt: 'Look around', engine: 'kiro', permissionMode: 'acceptEdits' });
+  const { run } = await startSingleRun(admin, pid, { prompt: 'Look around', engine: 'kiro', permissionMode: 'acceptEdits' });
   await finish(admin, run.id);
   const p = entries().find((e) => e.event === 'start').profile;
   assert.deepEqual(p.toolsSettings.subagent.availableAgents, [`${p.name}-kiro-backend`, `${p.name}-kiro-lead`], 'disabled agents are left out');
@@ -362,7 +362,7 @@ test('a project without Kiro agents keeps using its .claude agents on Kiro', asy
   fs.writeFileSync(path.join(other, '.claude', 'agents', 'backend-agent.md'), '---\nname: backend-agent\ndescription: Builds the API\n---\nYou build backend code.\n');
   assert.deepEqual((await admin.get(`/api/projects/${project.id}/leads?engine=kiro`)).leads, [{ name: 'backend-agent', description: 'Builds the API', kind: 'claude' }]);
   clearLog();
-  const { run } = await admin.post(`/api/projects/${project.id}/runs`, { prompt: 'Look around', leadAgent: 'backend-agent', permissionMode: 'acceptEdits' });
+  const { run } = await startSingleRun(admin, project.id, { prompt: 'Look around', leadAgent: 'backend-agent', permissionMode: 'acceptEdits' });
   await finish(admin, run.id);
   const p = entries().find((e) => e.event === 'start').profile;
   assert.deepEqual(p.toolsSettings.subagent.availableAgents, [`${p.name}-general`], 'the lead is not offered to itself');

@@ -61,8 +61,8 @@ export function RunView({ runId }) {
           <div className="row tight wrap">
             <Badge status={run.status} />
             <span className="muted small">{KIND_LABEL[run.kind] ?? run.kind}</span>
-            {run.meta?.workflowId ? (
-              <a className="small" href={sessionHref(project.id, run.meta.workflowId, { run: run.id })}>
+            {run.workflow_id ? (
+              <a className="small" href={sessionHref(project.id, run.workflow_id, { run: run.id })}>
                 Part of a session: open it
               </a>
             ) : null}

@@ -193,8 +193,9 @@ async function main() {
     await page.getByLabel('Repository 1', { exact: true }).selectOption({ label: 'refund-service' });
     await shot(page, 'composer');
     await page.getByRole('button', { name: 'Start run', exact: true }).click();
-    await page.waitForURL(/\/sessions\/run\//);
-    const [, , singleRunId] = /\/p\/([^/]+)\/sessions\/run\/([^/?]+)/.exec(page.url())!;
+    // A single run is a session with one iteration: it opens in the session workspace.
+    await page.waitForURL(/\/sessions\/w_/);
+    const [, , singleSessionId] = /\/p\/([^/]+)\/sessions\/(w_[^/?]+)/.exec(page.url())!;
     await page.locator('.pending .input-card').waitFor({ timeout: 20000 });
     await shot(page, 'run-question');
     await page.locator('.pending .choice', { hasText: 'New module' }).click();
@@ -202,15 +203,15 @@ async function main() {
     await page.locator('.pending .choice', { hasText: 'qa-engineer' }).click();
     await page.getByRole('button', { name: 'Send answer', exact: true }).click();
     await page.getByRole('button', { name: 'Allow once', exact: true }).waitFor({ timeout: 20000 });
-    check((await page.locator('.tnode-child').count()) >= 2, 'tree shows subagents');
+    check((await page.locator('.ac-bubble:not(.ac-main)').count()) >= 2, 'the canvas shows subagents');
     await shot(page, 'run-approval');
     await page.getByRole('button', { name: 'Allow once', exact: true }).click();
-    await page.locator('.run-head .badge', { hasText: 'Completed' }).waitFor({ timeout: 20000 });
+    await page.locator('.ws-head .badge', { hasText: 'Ready for review' }).waitFor({ timeout: 30000 });
     await shot(page, 'run-done');
-    await page.locator('.tnode-child .tnode-btn').first().click();
-    await page.locator('.tl-brief').waitFor();
+    await page.locator('.ac-bubble:not(.ac-main)').first().click();
+    await page.locator('.ws-inspector .tl-brief').waitFor();
     await shot(page, 'run-subagent');
-    await page.getByRole('button', { name: 'Files and changes', exact: true }).click();
+    await page.getByRole('link', { name: 'Changes', exact: true }).click();
     await page.locator('.diff-file').first().waitFor();
     await shot(page, 'run-changes');
     await page.getByRole('button', { name: 'Push changes', exact: true }).click();
@@ -218,8 +219,7 @@ async function main() {
     await page.getByText(/Pushed commit/).waitFor();
     check(/agent\//.test(execFileSync('git', ['branch'], { cwd: bare }).toString()), 'push created a branch in the remote');
     await page.getByRole('button', { name: 'Close', exact: true }).last().click();
-    await page.getByRole('tab', { name: 'Single runs', exact: true }).click();
-    check((await page.locator('.ws-item.is-active').count()) === 1, 'the single run is listed and selected');
+    check((await page.locator('.ws-item.is-active').count()) === 1, 'the single run is listed and selected among the sessions');
 
     console.log('session');
     await page.getByRole('link', { name: 'New', exact: true }).click();
@@ -304,9 +304,10 @@ async function main() {
     check(execFileSync('git', ['branch'], { cwd: bare }).toString().includes('feature/ui-agent-push'), 'allowing pushes the branch to the remote');
 
     console.log('old links');
+    const singleRunId = await page.evaluate(async (id): Promise<string> => ((await (await fetch(`/api/workflows/${id}`)).json()) as any).workflow.last_run_id, singleSessionId);
     await page.goto(`${base}/#/p/${pid}/runs/${singleRunId}`);
-    await page.waitForURL(new RegExp(`/sessions/run/${singleRunId}`));
-    check(true, 'an old Agent runs link opens the run under Sessions');
+    await page.waitForURL(new RegExp(`/sessions/${singleSessionId}`));
+    check(true, 'an old Agent runs link opens the run in its session');
 
     console.log('code review');
     await page.getByRole('link', { name: 'Code review', exact: true }).click();

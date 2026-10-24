@@ -3,8 +3,8 @@
  *
  * GET /api/insights?days=30&projectId=&provider=&kind=&tz=<minutes, Date#getTimezoneOffset()>
  *
- * Everything is computed from data the portal already records: the runs table (cost, tokens, provider, status,
- * timings, Kiro credits in meta), run_events (the model a run really used, tool calls, subagent launches and their
+ * Everything is computed from data the portal already records: the agent_runs table (cost, tokens, provider, status,
+ * timings, Kiro credits in meta), agent_run_events (the model a run really used, tool calls, subagent launches and their
  * results) and inputs (approvals). Non-admins only see projects they are a member of.
  *
  * Kiro CLI reports credits per run, not tokens, and does not split them by agent: Kiro runs count towards runs,
@@ -75,7 +75,7 @@ export function computeInsights(opts: { projectIds: string[]; days: number; prov
   const rows = all<Row>(
     `SELECT r.id, r.project_id, r.kind, r.title, r.status, r.model, r.provider, r.cost_usd, r.input_tokens, r.output_tokens,
             r.meta, r.created_at, r.started_at, r.finished_at, r.error
-       FROM runs r WHERE ${where.join(' AND ')} ORDER BY r.created_at`,
+       FROM agent_runs r WHERE ${where.join(' AND ')} ORDER BY r.created_at`,
     ...args,
   );
   const cur = rows.filter((r) => r.created_at >= since);
@@ -85,7 +85,7 @@ export function computeInsights(opts: { projectIds: string[]; days: number; prov
   const realModel = new Map<string, string>();
   if (cur.length) {
     const inits = all<Row>(
-      `SELECT e.run_id, e.data FROM run_events e JOIN runs r ON r.id = e.run_id
+      `SELECT e.run_id, e.data FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
         WHERE e.type = 'system:init' AND ${where.join(' AND ')} AND r.created_at >= ?`,
       ...args,
       since,
@@ -176,7 +176,7 @@ export function computeInsights(opts: { projectIds: string[]; days: number; prov
   const projRows = all<Row>(`SELECT id, name, slug, archived FROM projects WHERE id IN (${ph}) ORDER BY name COLLATE NOCASE`, ...opts.projectIds);
   const pending = new Map(all<Row>(`SELECT project_id, COUNT(*) AS n FROM inputs WHERE status = 'pending' AND project_id IN (${ph}) GROUP BY project_id`, ...opts.projectIds).map((x) => [x.project_id, x.n]));
   const sessions = new Map(all<Row>(`SELECT project_id, COUNT(*) AS n FROM workflows WHERE status = 'running' AND project_id IN (${ph}) GROUP BY project_id`, ...opts.projectIds).map((x) => [x.project_id, x.n]));
-  const lastActivity = new Map(all<Row>(`SELECT project_id, MAX(created_at) AS at FROM runs WHERE project_id IN (${ph}) GROUP BY project_id`, ...opts.projectIds).map((x) => [x.project_id, x.at]));
+  const lastActivity = new Map(all<Row>(`SELECT project_id, MAX(created_at) AS at FROM agent_runs WHERE project_id IN (${ph}) GROUP BY project_id`, ...opts.projectIds).map((x) => [x.project_id, x.at]));
   const byProjectAgg = new Map(group((r) => r.project_id).map(({ key, ...g }) => [key, g]));
   const projects = projRows.map((p) => {
     const g = byProjectAgg.get(p.id);
@@ -225,7 +225,7 @@ export function computeInsights(opts: { projectIds: string[]; days: number; prov
       const chunk = ids.slice(i, i + 400);
       events.push(
         ...all<Row>(
-          `SELECT run_id, seq, ts, type, parent_tool_use_id AS parent, data FROM run_events
+          `SELECT run_id, seq, ts, type, parent_tool_use_id AS parent, data FROM agent_run_events
             WHERE run_id IN (${chunk.map(() => '?').join(',')}) AND type IN ('assistant', 'user', 'system:portal_blocked')
             ORDER BY run_id, seq`,
           ...chunk,
@@ -353,9 +353,9 @@ export function computeInsights(opts: { projectIds: string[]; days: number; prov
   /* ---------------- Health ---------------- */
   const sso = ssoStatus();
   const tests = all<Row>(
-    `SELECT r.project_id, r.status, r.created_at, r.error FROM runs r
+    `SELECT r.project_id, r.status, r.created_at, r.error FROM agent_runs r
       WHERE r.kind = 'connection' AND r.project_id IN (${ph})
-        AND r.created_at = (SELECT MAX(x.created_at) FROM runs x WHERE x.kind = 'connection' AND x.project_id = r.project_id)`,
+        AND r.created_at = (SELECT MAX(x.created_at) FROM agent_runs x WHERE x.kind = 'connection' AND x.project_id = r.project_id)`,
     ...opts.projectIds,
   );
   const s = getSettings();

@@ -221,6 +221,10 @@ export interface IterationInput {
   /** Trust all tools ON: the agent may run file edits and shell commands without asking for approval, and may
    *  `git push` to its own session branch — the portal performs the push with stored credentials. */
   trustTools?: boolean;
+  /** A person is at the screen to answer questions and approve tools (the session has a permission mode). */
+  attended?: boolean;
+  /** A single run (a session with one iteration): no status line is asked for, the run's reply is the result. */
+  single?: boolean;
   /** Separate sessions this one handed tasks to, and whether it may hand out more. */
   delegation?: {
     /** How many more it may start now (0: none). */
@@ -283,7 +287,9 @@ export function composeIterationPrompt(i: IterationInput): string {
       ? 'Do not commit and never run git push yourself: the portal commits and pushes when you ask it to (see below).'
       : 'Commit nothing and push nothing; a person reviews the diff.';
   const parts: string[] = [
-    `You are running as an unattended workflow ("${i.title}") inside Agent Portal. Nobody answers questions while you work; a person reviews the result when you report done or blocked.`,
+    i.single
+      ? `You are doing a single run ("${i.title}") inside Agent Portal. ${i.attended ? 'A person can answer your questions and approve tools while you work; they review the result when you finish.' : 'Nobody answers questions while you work; a person reviews the result when you finish.'}`
+      : `You are running as an unattended workflow ("${i.title}") inside Agent Portal. Nobody answers questions while you work; a person reviews the result when you report done or blocked.`,
     '',
     '## Goal',
     i.goal.trim(),
@@ -314,32 +320,40 @@ export function composeIterationPrompt(i: IterationInput): string {
   }
   parts.push(
     '',
-    `## This iteration (${i.iteration} of at most ${i.maxIterations}, about $${Math.max(0, i.budgetLeftUsd).toFixed(2)} of budget left)`,
+    i.single
+      ? `## This run (about $${Math.max(0, i.budgetLeftUsd).toFixed(2)} of budget left)`
+      : `## This iteration (${i.iteration} of at most ${i.maxIterations}, about $${Math.max(0, i.budgetLeftUsd).toFixed(2)} of budget left)`,
     'Work in small verified steps: plan, change, check, fix. Delegate to the project\'s role subagents when a task fits one.',
     i.hasRepo
       ? i.repos && i.repos.length > 1
         ? `This session spans ${i.repos.length} repositories (${i.repos.map((r) => `${r.name} from ${r.branch}`).join(', ')}). Change code only inside their working copies, each change in the repository it belongs to. ${pushRule}`
         : `Change code only inside the repository working copy. ${pushRule}`
       : 'This session has no repository attached, so put any files you create in the run folder. Do not clone repositories yourself: the portal cannot review or push a copy you made. If the goal needs changes in a repository, report blocked and say which repository is needed so a person can attach it in the session settings.',
-    ...(i.hasRepo
+    ...(i.hasRepo && !i.single
       ? [
           i.workBranch
             ? `Your changes will be pushed to the new branch "${i.workBranch}". Keep using that name in your status line.`
             : `Choose a short, descriptive name for the NEW branch your changes go to (for example fix/RLP-101-refund-limit or feature/audit-trail) and put it in the "branch" field of your status line${i.repos && i.repos.length > 1 ? '; the same name is used in every repository' : ''}. A person pushes it after review${i.baseBranch ? `; "${i.baseBranch}" and the other shared branches are never pushed to` : ''}.`,
         ]
       : []),
-    'Do not ask questions. When something is unclear, pick the most reasonable option and list it under "assumptions" in your summary.',
+    ...(i.attended
+      ? []
+      : ['Do not ask questions. When something is unclear, pick the most reasonable option and list it under "assumptions" in your summary.']),
     i.trustTools
       ? 'Commands that are always blocked even here: deploys (cdk deploy, sam deploy, serverless deploy, kubectl apply, helm install, docker push), AWS writes (cloudformation deploy, lambda update-function-code, s3 sync/cp/rm to s3://), terraform/tofu apply/destroy/import. Deleting files outside your working copy is also blocked. If you need one of these, report blocked and say what you need.'
       : 'Commands that change the outside world (push, deploy, delete, AWS writes) are blocked. If you need one, report blocked and say what you need.',
-    '',
-    'Finish your reply with exactly one line, on its own, in this form:',
-    'WORKFLOW_STATUS {"state":"continue|done|blocked","summary":"what is done and what you verified","next":"what you will do next","needs":"what you need from a person, if blocked","branch":"the new branch name for your changes"}',
-    '- continue: more work remains and you can do it without a person.',
-    '- done: the goal is met and you verified it.',
-    '- blocked: you cannot go on without a person.',
+    ...(i.single
+      ? []
+      : [
+          '',
+          'Finish your reply with exactly one line, on its own, in this form:',
+          'WORKFLOW_STATUS {"state":"continue|done|blocked","summary":"what is done and what you verified","next":"what you will do next","needs":"what you need from a person, if blocked","branch":"the new branch name for your changes"}',
+          '- continue: more work remains and you can do it without a person.',
+          '- done: the goal is met and you verified it.',
+          '- blocked: you cannot go on without a person.',
+        ]),
   );
-  if (pushing) {
+  if (pushing && !i.single) {
     parts.push(
       `When your changes are ready and verified, ask the portal to push them to your new branch by adding "push":{"message":"the commit message","pr":true} to your status line ("pr": true also opens a pull request on GitHub or CodeCommit, into the branch the work started from; add "base":"<branch>" when the person asked for the pull request to go into a different branch). Asking again for a pull request that is already open returns the open one. ${i.pushMode === 'ask' ? 'A person approves each push first; the session waits for that.' : 'The portal pushes them right away.'} It never pushes to the branch the work started from or to shared branches like main or develop.`,
     );

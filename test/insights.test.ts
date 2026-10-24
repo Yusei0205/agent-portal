@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun } from './client.ts';
 
 // Insights aggregates: known runs and events are inserted, then every figure is checked.
 let srv: TestServer;
@@ -15,7 +15,7 @@ const D = 24 * H;
 
 function run(id: string, project: string, o: Partial<Record<string, any>>) {
   const created = o.created ?? iso(H);
-  insert('runs', {
+  insert('agent_runs', {
     id,
     project_id: project,
     kind: o.kind ?? 'chat',
@@ -36,7 +36,7 @@ function run(id: string, project: string, o: Partial<Record<string, any>>) {
 }
 let seq = 0;
 function ev(runId: string, type: string, data: unknown, parent: string | null = null, tsMs = now - H) {
-  insert('run_events', { run_id: runId, seq: ++seq, ts: new Date(tsMs).toISOString(), type, parent_tool_use_id: parent, data: JSON.stringify(data) });
+  insert('agent_run_events', { run_id: runId, seq: ++seq, ts: new Date(tsMs).toISOString(), type, parent_tool_use_id: parent, data: JSON.stringify(data) });
 }
 
 before(async () => {
@@ -154,7 +154,7 @@ test('projects, filters and access', async () => {
 test('a real Demo run shows up with its subagents', async () => {
   const pid = (await admin.post('/api/projects', { name: 'Gamma', description: 'd' })).project.id;
   await admin.post(`/api/projects/${pid}/roles`, { role: 'qa-engineer' }).catch(() => undefined);
-  const { run } = await admin.post(`/api/projects/${pid}/runs`, { prompt: 'Design and build the refund approval flow', permissionMode: 'acceptEdits' });
+  const { run } = await startSingleRun(admin, pid, { prompt: 'Design and build the refund approval flow', permissionMode: 'acceptEdits' });
   await waitFor(async () => {
     const r = await admin.get(`/api/runs/${run.id}`);
     for (const i of r.inputs.filter((x: any) => x.status === 'pending')) {

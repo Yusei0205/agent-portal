@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun } from './client.ts';
 
 let srv: TestServer;
 let ann: Client;
@@ -43,7 +43,7 @@ test('your vault is yours; the team vault is everyone’s; paths stay inside', a
 
 test('a run gets copies of the team vault and of its owner’s vault in its folder', async () => {
   await up(ann, 'mine', 'notes/mine.txt', 'only Ann');
-  const { run } = await ann.post(`/api/projects/${pid}/runs`, { prompt: 'Read the vault', permissionMode: 'plan' });
+  const { run } = await startSingleRun(ann, pid, { prompt: 'Read the vault', permissionMode: 'plan' });
   await waitFor(async () => {
     const r = await ann.get(`/api/runs/${run.id}`);
     return ['completed', 'failed', 'waiting'].includes(r.run.status) ? r : null;
@@ -53,7 +53,7 @@ test('a run gets copies of the team vault and of its owner’s vault in its fold
   assert.equal(fs.readFileSync(path.join(work, 'team', 'glossary.md'), 'utf8'), 'Refund: money back');
   // A run of Bob's gets the team vault but not Ann's.
   await ann.post(`/api/projects/${pid}/members`, { email: 'b@example.com', access: 'editor', role: 'Dev' });
-  const { run: bobRun } = await bob.post(`/api/projects/${pid}/runs`, { prompt: 'Read', permissionMode: 'plan' });
+  const { run: bobRun } = await startSingleRun(bob, pid, { prompt: 'Read', permissionMode: 'plan' });
   await waitFor(async () => {
     const r = await bob.get(`/api/runs/${bobRun.id}`);
     return ['completed', 'failed', 'waiting'].includes(r.run.status) ? r : null;
@@ -79,13 +79,13 @@ test('a project vault is for that project’s members, and its runs get a copy',
   assert.equal((await upP(bob, pid, 'y.md', 'y')).status, 403, 'viewers cannot change it');
   assert.equal((await ann.req('GET', '/api/vault?scope=project')).status, 404, 'a project is needed');
   // Runs of the project get it; runs of another project do not.
-  const { run } = await ann.post(`/api/projects/${pid}/runs`, { prompt: 'Read the vault', permissionMode: 'plan' });
+  const { run } = await startSingleRun(ann, pid, { prompt: 'Read the vault', permissionMode: 'plan' });
   await waitFor(async () => {
     const r = await ann.get(`/api/runs/${run.id}`);
     return ['completed', 'failed', 'waiting'].includes(r.run.status) ? r : null;
   }, 'run');
   assert.equal(fs.readFileSync(path.join(projectRoot, 'work', run.id, 'vault', 'project', 'docs', 'fsd.md'), 'utf8'), 'Vaulted FSD');
-  const { run: otherRun } = await ann.post(`/api/projects/${other.id}/runs`, { prompt: 'Read', permissionMode: 'plan' });
+  const { run: otherRun } = await startSingleRun(ann, other.id, { prompt: 'Read', permissionMode: 'plan' });
   await waitFor(async () => {
     const r = await ann.get(`/api/runs/${otherRun.id}`);
     return ['completed', 'failed', 'waiting'].includes(r.run.status) ? r : null;

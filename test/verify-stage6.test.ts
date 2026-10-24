@@ -150,11 +150,11 @@ describe('budget stop: assertBudget', () => {
   test('assertBudget throws when user spend exceeds user monthly budget', async () => {
     const { run: dbRun } = await import('../server/db.ts');
     const { assertBudget } = await import('../server/settings.ts');
-    // assertBudget checks the runs table for spend, not workflows
+    // assertBudget checks the agent_runs table for spend, not workflows
     dbRun('UPDATE users SET monthly_budget_usd = ? WHERE id = ?', 0.01, editorId);
     const rid = `r_budget6_${Date.now()}`;
     dbRun(
-      "INSERT INTO runs (id, project_id, kind, title, prompt, status, cost_usd, created_by, created_at) VALUES (?, ?, 'session', 'budget test', 'x', 'completed', 1.0, ?, datetime('now'))",
+      "INSERT INTO agent_runs (id, project_id, kind, title, prompt, status, cost_usd, created_by, created_at) VALUES (?, ?, 'session', 'budget test', 'x', 'completed', 1.0, ?, datetime('now'))",
       rid, pid, editorId,
     );
     try {
@@ -164,7 +164,7 @@ describe('budget stop: assertBudget', () => {
         'assertBudget should throw when user exceeds monthly budget',
       );
     } finally {
-      dbRun('DELETE FROM runs WHERE id = ?', rid);
+      dbRun('DELETE FROM agent_runs WHERE id = ?', rid);
       dbRun('UPDATE users SET monthly_budget_usd = NULL WHERE id = ?', editorId);
     }
   });
@@ -530,10 +530,16 @@ describe('inbox aggregation', () => {
       "INSERT INTO workflows (id, project_id, title, goal, status, stop_reason, model, budget_usd, max_iterations, verify_command, rules, iteration, burst_start, spent_usd, work_branch, lead_agent, jira_key, jira_summary, jira_url, summary, depth, push_mode, budget_credits, spent_credits, playground, trust_tools, created_by, created_at, updated_at) VALUES (?, ?, 'Inbox test', 'blocked work', 'paused', 'Needs human decision', 'sonnet', 5, 8, '', '', 1, 0, 0, '', '', '', '', '', '', 0, 'never', 20, 0, 0, 0, ?, datetime('now'), datetime('now'))",
       wid, pid, adminUser.id,
     );
+    // A question or approval belongs to an agent run, which belongs to the session.
+    const rid = `r_inbox6_${Date.now()}`;
+    dbRun(
+      "INSERT INTO agent_runs (id, project_id, workflow_id, kind, title, prompt, status, created_by, created_at) VALUES (?, ?, ?, 'chat', 'Inbox test', 'p', 'waiting', ?, datetime('now'))",
+      rid, pid, wid, adminUser.id,
+    );
     const inputId = `i_inbox6_${Date.now()}`;
     dbRun(
       "INSERT INTO inputs (id, project_id, run_id, type, tool_name, payload, status, created_by, created_at) VALUES (?, ?, ?, 'approval', 'Ask', ?, 'pending', ?, datetime('now'))",
-      inputId, pid, wid, JSON.stringify({ question: 'Should I proceed?' }), adminUser.id,
+      inputId, pid, rid, JSON.stringify({ question: 'Should I proceed?' }), adminUser.id,
     );
 
     try {
@@ -544,6 +550,7 @@ describe('inbox aggregation', () => {
       assert.ok(header !== null && Number(header) >= 1, 'X-Inbox-Needs-You header reflects count');
     } finally {
       dbRun('DELETE FROM inputs WHERE id = ?', inputId);
+      dbRun('DELETE FROM agent_runs WHERE id = ?', rid);
       dbRun('DELETE FROM workflows WHERE id = ?', wid);
     }
   });

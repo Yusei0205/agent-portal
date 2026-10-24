@@ -1274,7 +1274,7 @@ export function registerGovernanceRoutes(): void {
               COUNT(r.id) AS month_runs,
               u.monthly_budget_usd
          FROM users u
-         LEFT JOIN runs r ON r.created_by = u.id AND r.created_at >= ?
+         LEFT JOIN agent_runs r ON r.created_by = u.id AND r.created_at >= ?
         GROUP BY u.id ORDER BY month_usd DESC`,
       since,
     );
@@ -1310,7 +1310,7 @@ function buildUserUsage(userId: string) {
   const byProject = all<Row>(
     `SELECT p.id, p.name, COALESCE(SUM(r.cost_usd), 0) AS usd, COUNT(r.id) AS runs
        FROM projects p
-       LEFT JOIN runs r ON r.project_id = p.id AND r.created_by = ? AND r.created_at >= ?
+       LEFT JOIN agent_runs r ON r.project_id = p.id AND r.created_by = ? AND r.created_at >= ?
       WHERE r.id IS NOT NULL
       GROUP BY p.id ORDER BY usd DESC`,
     userId, since,
@@ -1320,7 +1320,7 @@ function buildUserUsage(userId: string) {
     `SELECT strftime('%Y-%m', r.created_at) AS month,
             COALESCE(SUM(r.cost_usd), 0) AS usd,
             COUNT(r.id) AS runs
-       FROM runs r
+       FROM agent_runs r
       WHERE r.created_by = ? AND r.created_at >= date('now', '-12 months')
       GROUP BY month ORDER BY month DESC`,
     userId,

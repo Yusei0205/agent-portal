@@ -650,7 +650,7 @@ export function registerKnowledgeRoutes(): void {
     const { project } = requireProject(ctx, ctx.params.pid);
     return {
       history: all(
-        `SELECT r.id, r.title, r.status, r.created_at, r.meta, u.name AS asked_by FROM runs r LEFT JOIN users u ON u.id = r.created_by
+        `SELECT r.id, r.title, r.status, r.created_at, r.meta, u.name AS asked_by FROM agent_runs r LEFT JOIN users u ON u.id = r.created_by
           WHERE r.project_id = ? AND r.kind = 'qa' ORDER BY r.created_at DESC LIMIT 30`,
         project.id,
       ).map((r) => ({ ...r, meta: parseJson(r.meta, {}) })),
@@ -665,7 +665,7 @@ export function registerKnowledgeRoutes(): void {
     const type = ['question', 'approval'].includes(ctx.query.get('type') ?? '') ? ctx.query.get('type')! : '';
     const rows = all(
       `SELECT i.*, r.title AS run_title, u.name AS created_by_name, a.name AS answered_by_name
-         FROM inputs i LEFT JOIN runs r ON r.id = i.run_id LEFT JOIN users u ON u.id = i.created_by LEFT JOIN users a ON a.id = i.answered_by
+         FROM inputs i LEFT JOIN agent_runs r ON r.id = i.run_id LEFT JOIN users u ON u.id = i.created_by LEFT JOIN users a ON a.id = i.answered_by
         WHERE i.project_id = ? ${status === 'all' ? '' : 'AND i.status = ?'} ${type ? 'AND i.type = ?' : ''}
         ORDER BY i.created_at DESC LIMIT 100`,
       project.id,

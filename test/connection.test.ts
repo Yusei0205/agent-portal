@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bootServer, Client, waitFor, type TestServer } from './client.ts';
+import { bootServer, Client, waitFor, type TestServer, startSingleRun } from './client.ts';
 
 // One connection per project: each project picks its model provider and AWS account, and runs follow it.
 const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'conn-')), 'kiro.jsonl');
@@ -61,7 +61,7 @@ test('a project on Kiro CLI runs through kiro-cli while Settings stays on Bedroc
   assert.equal(t.provider, 'kiro');
   assert.equal(kiroStarts().length, 1, 'the test went through kiro-cli');
 
-  const { run } = await admin.post(`/api/projects/${pid}/runs`, { prompt: 'Write some notes' });
+  const { run } = await startSingleRun(admin, pid, { prompt: 'Write some notes' });
   const done = await finish(admin, run.id);
   assert.equal(done.run.provider, 'kiro');
   assert.equal(done.run.status, 'completed', done.run.error);
