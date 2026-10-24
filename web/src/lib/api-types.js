@@ -225,4 +225,83 @@
  * @property {number} is_admin 1 for an administrator, else 0
  */
 
+/** @typedef {'system_context' | 'components' | 'data_flow'} DiagramKind */
+
+/**
+ * A repository and commit a diagram version was drawn from.
+ * @typedef {object} DiagramSource
+ * @property {string} repoId
+ * @property {string} name
+ * @property {string} slug
+ * @property {string} branch
+ * @property {string} sha
+ */
+
+/**
+ * A diagram, as the list shows it (GET /api/projects/:pid/diagrams) and the detail extends it with `mermaid`.
+ * @typedef {object} DiagramSummary
+ * @property {string} id
+ * @property {string} project_id
+ * @property {DiagramKind} kind
+ * @property {string} kind_label
+ * @property {string} title
+ * @property {string} slug
+ * @property {string} focus
+ * @property {{ id: string, name: string, slug: string, removed: boolean }[]} repos
+ * @property {'generating' | 'ready' | 'error'} status
+ * @property {string | null} error With status "ready": the last refresh failed and the previous version was kept
+ * @property {number} version Latest version, 0 before the first one
+ * @property {number} stale 1 when a repository moved on since the latest version
+ * @property {boolean} generating
+ * @property {string | null} workflow_id The session drawing it, while generating
+ * @property {string} path Where the latest version is kept in the project repository
+ * @property {string} description
+ * @property {string[]} citations Source files the description cites
+ * @property {DiagramSource[]} sources
+ * @property {string | null} generated_at
+ * @property {string | null} created_by_name
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {string} [mermaid] Only in the detail response
+ */
+
+/**
+ * One stored version of a diagram (the version list leaves `mermaid` out).
+ * @typedef {object} DiagramVersion
+ * @property {number} version
+ * @property {string} description
+ * @property {string[]} citations
+ * @property {DiagramSource[]} sources
+ * @property {string | null} workflow_id
+ * @property {string | null} run_id
+ * @property {string | null} created_by_name
+ * @property {string} created_at
+ * @property {number} chars
+ * @property {string} [mermaid]
+ */
+
+/**
+ * Whether PNG export works on this server, and why not.
+ * @typedef {object} DiagramExportCapability
+ * @property {boolean} png
+ * @property {string | null} pngReason
+ */
+
+/**
+ * GET /api/projects/:pid/diagrams. Live updates arrive as the `diagrams.updated` project event.
+ * @typedef {object} DiagramListResponse
+ * @property {DiagramSummary[]} diagrams
+ * @property {{ id: DiagramKind, label: string }[]} kinds
+ * @property {DiagramExportCapability} export
+ * @property {{ mermaidChars: number, repos: number, focusChars: number, perProject: number }} limits
+ */
+
+/**
+ * GET /api/projects/:pid/diagrams/:id.
+ * @typedef {object} DiagramDetailResponse
+ * @property {DiagramSummary} diagram
+ * @property {DiagramVersion[]} versions Newest first
+ * @property {DiagramExportCapability} export
+ */
+
 export {};

@@ -1,0 +1,22 @@
+/* ---------- Diagrams ---------- */
+.diagram-cites,
+.diagram-versions {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.diagram-versions li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.diagram-versions li.is-shown {
+  border-color: var(--accent);
+}

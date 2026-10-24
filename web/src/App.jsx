@@ -11,6 +11,7 @@ import { Login, Setup, AcceptInvite, ResetPassword } from './pages/Auth.jsx';
 import { Projects } from './pages/Projects.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
 import { Learn } from './pages/Learn.jsx';
+import { Diagrams } from './pages/Diagrams.jsx';
 import { Sessions, legacyRunTarget } from './pages/Sessions.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
@@ -82,6 +83,7 @@ const PROJECT_MAIN_ITEMS = [
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
   { tab: 'learn', label: 'Learn', icon: 'learn' },
+  { tab: 'diagrams', label: 'Diagrams', icon: 'builder' },
   { tab: 'vault', label: 'Vault', icon: 'inbox', scoped: true },
   { tab: 'insights', label: 'Insights', icon: 'chart', scoped: true },
   { tab: 'setup', label: 'Setup', icon: 'settings' },
@@ -546,6 +548,7 @@ function ProjectScope({ projectId, route }) {
       'review.updated',
       'learn.updated',
       'learn.progress',
+      'diagrams.updated',
       'builder.updated',
       'members.updated',
       'project.updated',
@@ -578,6 +581,9 @@ function ProjectScope({ projectId, route }) {
   switch (route.tab) {
     case 'learn':
       page = <Learn route={route} />;
+      break;
+    case 'diagrams':
+      page = <Diagrams route={route} />;
       break;
     case 'vault':
       page = <Vault projectId={projectId} />;

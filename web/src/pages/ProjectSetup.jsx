@@ -157,7 +157,9 @@ function embeddedRoute(route) {
 
 /** What each tab is for. The tabs above are the way in, so this lists them without repeating the links. */
 function SetupOverview() {
+  const { project } = useProject();
   return (
+    <>
     <dl className="kv setup-overview">
       {SETUP_TABS.filter((t) => t.value !== 'overview').map((t) => (
         <div key={t.value}>
@@ -166,6 +168,10 @@ function SetupOverview() {
         </div>
       ))}
     </dl>
+    <p className="muted small">
+      Architecture diagrams of your repositories are on the <a href={href(project.id, 'diagrams')}>Diagrams</a> page.
+    </p>
+    </>
   );
 }
 
