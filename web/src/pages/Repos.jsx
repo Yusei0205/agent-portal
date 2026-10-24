@@ -20,7 +20,7 @@ const PROVIDERS = {
   codecommit: {
     label: 'AWS CodeCommit',
     placeholder: 'https://git-codecommit.ap-southeast-1.amazonaws.com/v1/repos/refund-service',
-    help: 'Uses this project’s AWS account (Project and team › AWS account), or the AWS credentials from Settings when the project has none. The server needs the AWS CLI for https:// addresses, or git-remote-codecommit for codecommit:: addresses.',
+    help: 'Uses this project’s AWS account (Project setup › Connection & provider), or the AWS credentials from Settings when the project has none. The server needs the AWS CLI for https:// addresses, or git-remote-codecommit for codecommit:: addresses.',
     token: false,
   },
   git: {
@@ -469,7 +469,7 @@ function CodeCommitPicker({ projectId, settingsRegion, onSelect, manualMode, set
               <Icon name="alert" size={16} />
               <span>
                 AWS sign-in is not configured.{' '}
-                <a href={href(projectId, 'team')}>Add this project’s AWS account</a> (or set the Settings credentials), then come
+                <a href={href(projectId, 'setup', 'connection')}>Add this project’s AWS account</a> (or set the Settings credentials), then come
                 back here. <a href="#/aws">See all AWS accounts</a>.
               </span>
             </div>

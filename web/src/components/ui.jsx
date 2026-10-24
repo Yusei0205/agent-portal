@@ -268,11 +268,16 @@ export function Tabs({ tabs, value, onChange }) {
   );
 }
 
+/** True inside a hub tab (for example Project setup): a page there shows a section heading, not a second page title. */
+export const EmbeddedContext = createContext(false);
+
 export function PageHeader({ title, sub, actions, children }) {
+  const embedded = useContext(EmbeddedContext);
+  const Heading = embedded ? 'h2' : 'h1';
   return (
-    <header className="page-head">
+    <header className={cx('page-head', embedded && 'page-head-embedded')}>
       <div className="page-head-main">
-        <h1>{title}</h1>
+        <Heading>{title}</Heading>
         {sub ? <p className="page-sub">{sub}</p> : null}
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}

@@ -1,24 +1,53 @@
 # Agent Portal
 
-A self-hosted web portal for running Claude agents on your projects. Built on the official
-[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/typescript).
+A self-hosted web portal for running AI coding agents on your projects, to speed up delivery, QA and
+code review. It runs agents through the official
+[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/typescript) (Anthropic API or Amazon
+Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of what it does is in
+[docs/requirements-spec.md](docs/requirements-spec.md).
 
-- **Projects** keep their own documents, repositories, agents, skills, runs and members.
+- **Projects** hold documents, repositories, agents, skills, sessions and members. **Setup** is one
+  page per project: a readiness checklist plus tabs for connection and provider, repositories,
+  agents and skills, team and members, Jira, configuration files and budget.
+- **Sessions** are the core feature. A session is a saved goal that the portal drives through
+  repeated agent runs until it is done, blocked or hits a limit (budget, iterations, stagnation).
+  A single run is a session with one iteration. Each session has a live agent tree, every tool
+  call with its cost, changes and diffs, follow-up messages, an optional plan-first approval,
+  delegation to child sessions, slash commands, and push to a new branch or a pull request.
+- **Loop specs** are reusable session recipes: a trigger (manual, cron, interval, webhook, GitHub
+  event, Jira event), a goal template, rules, a verification pipeline (shell checks and an
+  advisory judge), stop rules, memory between iterations and escalation. Four are seeded: feature
+  from a Jira ticket, bug fix, nightly test fixer, dependency update.
+- **Inbox** is one list across projects of everything that needs a person: approvals, questions,
+  pending pushes and blocked sessions, with a live count and answers right in the list.
+- **Workspaces** are named sets of repositories (and integrations) that a session can use as a
+  group.
+- **Vault** holds files you upload once (documents, templates, test data). Every run gets a copy.
+  It has a personal, a team-wide and a per-project scope on one page.
+- **Integrations and connections**: Git connections (GitHub, Bitbucket, CodeCommit, other Git
+  servers), AWS accounts (keys, profiles, SSO), MCP integrations, Jira, and API tokens.
+- **Insights**: cost, tokens, latency, failures and agent activity, for one project or all of
+  them, plus loop metrics and spend per user.
 - **Knowledge**: upload FSD, TSD, specs and notes (Word, PDF, Excel, PowerPoint, Markdown, HTML).
-  They are converted to Markdown, indexed, searchable, and answerable with cited sources.
-- **Asking when unsure**: agents ask clarifying questions instead of guessing. Answers go to a
-  decisions log that every agent reads first, so nobody is asked twice.
-- **Agent runs**: a live tree of the main agent and its subagents, with every tool call,
-  approvals for edits and commands, cost per agent, follow-ups, and push to a new branch.
-- **Code review** of two branches or a GitHub pull request, with findings next to the changed
-  lines, a cheap Haiku pass and an optional Sonnet deep look, and posting back to GitHub.
-- **Agents and skills**: seven role templates (business analyst, solution architect, backend and
-  frontend developer, QA engineer, reviewer, technical writer), your own agents and skills, a
-  shared library, a one-click test run, **import from any `.claude` folder or zip**, and
-  **draft a new agent or skill from a plain-language description**.
-- **Learn**: documentation in a plain-language version and an engineering version, glossaries,
-  FAQs, quizzes checked against their sources, onboarding paths and team progress.
-- **Demo mode**: a simulated agent so every feature works without an API key.
+  They are converted to Markdown, indexed, searchable and answerable with cited sources. When the
+  documents do not answer, the question goes to the project's team questions and the answer lands
+  in a decisions log that every agent reads first.
+- **Learn**: generated documentation in a plain-language and an engineering version, glossaries,
+  FAQs, quizzes checked against their sources, onboarding paths and team progress. Documents are
+  flagged when their sources change.
+- **Code review** of two branches or a GitHub pull request: findings next to the changed lines,
+  a cheap Haiku pass with a rule-based scan, an optional Sonnet deep look, and posting back to
+  GitHub.
+- **Claude Code and Kiro engines**: each engine has its own agents and skills (`.claude` and
+  `.kiro` in the project). Claude agents come from role templates, a shared library, import from
+  a folder or zip, or a plain-language description. A Kiro session never silently falls back to
+  Claude Code.
+- **Documents and decks**: agents can write Word, Excel, CSV and PowerPoint files, and the
+  "Document a repository" mode writes cited documentation.
+- **Administration**: users and invitations, an audit log, and a control plane (concurrency caps,
+  queueing, graceful drain, approval deadlines). Teams, SCIM provisioning, Google sign-in setup
+  and outbound webhooks are built but parked: turn on **Settings › Advanced** to show them in
+  the Admin panel.
 
 Everything runs in one Node.js process with a built-in SQLite database. No other services.
 
@@ -194,19 +223,19 @@ role with Bedrock invoke and CodeCommit access and choose "Server's own AWS iden
 Settings, so no AWS keys are stored at all.
 ## How to test it (about 15 minutes, Demo mode)
 
-1. **Project**: create “Refund service”. Under *Project and team*, add a colleague
+1. **Project**: create “Refund service”. Under *Setup › Team & members*, add a colleague
    (create their account first in *Settings › Users*).
 2. **Knowledge**: drop in an FSD and a TSD. Open a document, try the search box, then *Ask*
    something the documents answer and something they don’t. Send the second one to the team
-   and answer it under *Open questions*. It appears in the *Decisions log*.
-3. **Agents and skills**: add the *Business analyst*, *QA engineer* and *Technical writer* roles.
+   and answer it under *Team questions*. It appears in the *Decisions log*.
+3. **Agents and skills** (*Setup › Agents & skills*): add the *Business analyst*, *QA engineer* and *Technical writer* roles.
    Open an agent, change its instructions, and press *Run test*.
    - **Import**: click *Import* on the Agents or Skills tab, choose a `.zip`, a folder from your
      computer, or (admins) a server path. Preview shows conflicts, invalid items and missing skills;
      choose Overwrite / Skip / Rename per item, then confirm.
    - **Describe**: click *Describe…* on the Agents or Skills tab, type a plain-language description
      and optionally toggle "Based on project documents", then review and save the AI-drafted form.
-4. **Repositories**: connect a GitHub, CodeCommit or other Git repository. Wait for *Ready*.
+4. **Repositories** (*Setup › Repositories*): connect a GitHub, CodeCommit or other Git repository. Wait for *Ready*.
 5. **Single run**: start “Design and build the refund approval flow” as a *Single run* (a session with
    one iteration) on that repository with *Ask before changes*. Answer the agent’s questions,
    approve the file write, click the subagents, open *Changes*, and *Push changes* to a new branch.
@@ -214,8 +243,8 @@ Settings, so no AWS keys are stored at all.
    - **Tools**: the “Tools for this session” row lets you enable the web browser, AWS
      integration, or Kiro engine per run. Packs not yet installed show a hint to install
      them under *Settings › Tools*.
-   - **Jira ticket selector**: if the project has Jira connected and mapped (under *Project and
-     team › Jira*), the *Free task* composer shows an optional *Jira ticket* field. Search or
+   - **Jira ticket selector**: if the project has Jira connected and mapped (under *Setup ›
+     Jira*), the *Free task* composer shows an optional *Jira ticket* field. Search or
      type a key (e.g. `PAY-123`), select a ticket, and the agent receives its full details as
      context. The instruction becomes optional when a ticket is selected. Branch name, commit
      message and draft pull-request title all include the ticket key automatically.

@@ -474,7 +474,7 @@ function ConnectionCard({ conn, canManage, onEdit, onDelete, onCheck }) {
           </p>
           <p className="aws-chips">
             {conn.projects.map((p) => (
-              <a key={p.id} className="aws-chip" href={href(p.id, 'team')}>
+              <a key={p.id} className="aws-chip" href={href(p.id, 'setup', 'connection')}>
                 {p.name}
               </a>
             ))}
@@ -551,7 +551,7 @@ function GroupedView() {
               {g.projects.length ? (
                 <p className="aws-chips">
                   {g.projects.map((p) => (
-                    <a key={p.id} className="aws-chip" href={href(p.id, 'team')}>
+                    <a key={p.id} className="aws-chip" href={href(p.id, 'setup', 'connection')}>
                       {p.name}
                       {p.own ? <span className="muted small"> · own account</span> : null}
                     </a>

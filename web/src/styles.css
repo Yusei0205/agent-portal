@@ -401,6 +401,14 @@ code {
   flex-wrap: wrap;
   align-items: center;
 }
+/* A page shown inside a Project setup tab sits in the hub's own page. */
+.hub-body .page {
+  max-width: none;
+  padding: 0;
+}
+.page-head-embedded h2 {
+  font-size: 1.1rem;
+}
 .back {
   font-size: 0.88rem;
   text-decoration: none;

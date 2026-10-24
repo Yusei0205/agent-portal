@@ -61,10 +61,10 @@ export function Tickets() {
       <Empty icon="inbox" title="Jira is not set up for this project">
         {canConnect ? (
           <>
-            Each project has its own Jira. <a href={href(project.id, 'team')}>Open Project and team › Jira</a> to add this project’s Atlassian app and connect.
+            Each project has its own Jira. <a href={href(project.id, 'setup', 'jira')}>Open Project setup › Jira</a> to add this project’s Atlassian app and connect.
           </>
         ) : (
-          'A project owner needs to set up and connect Jira for this project, under Project and team.'
+          'A project owner needs to set up and connect Jira for this project, under Project setup › Jira.'
         )}
       </Empty>
     );
@@ -654,7 +654,7 @@ export function JiraRunBar({ run }) {
   );
 }
 
-/* ---------------- The project's Jira app and connection, shown under "Project and team" ---------------- */
+/* ---------------- The project's Jira app and connection, shown under Project setup › Jira ---------------- */
 
 export function JiraConnection() {
   const { project } = useProject();

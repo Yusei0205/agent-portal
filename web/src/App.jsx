@@ -9,16 +9,12 @@ import { Icon } from './components/Icon.jsx';
 import { Badge, Button, Modal, Spinner, UiProvider } from './components/ui.jsx';
 import { Login, Setup, AcceptInvite, ResetPassword } from './pages/Auth.jsx';
 import { Projects } from './pages/Projects.jsx';
-import { ProjectSettings } from './pages/ProjectSettings.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
 import { Learn } from './pages/Learn.jsx';
 import { Sessions, legacyRunTarget } from './pages/Sessions.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
-import { Repos } from './pages/Repos.jsx';
 import { Workspaces } from './pages/Workspaces.jsx';
-import { Configuration } from './pages/Configuration.jsx';
-import { Builder } from './pages/Builder.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { Account } from './pages/Account.jsx';
 import { AwsAccounts } from './pages/AwsAccounts.jsx';
@@ -86,27 +82,24 @@ const PROJECT_MAIN_ITEMS = [
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
   { tab: 'learn', label: 'Learn', icon: 'learn' },
-  { tab: 'vault', label: 'Vault', icon: 'inbox' },
+  { tab: 'vault', label: 'Vault', icon: 'inbox', scoped: true },
+  { tab: 'insights', label: 'Insights', icon: 'chart', scoped: true },
   { tab: 'setup', label: 'Setup', icon: 'settings' },
   { group: 'portal', label: 'Portal', icon: 'lock' },
 ];
 
-const PROJECT_SETUP_ITEMS = [
-  { tab: 'repos', label: 'Repositories', icon: 'repos' },
-  { tab: 'builder', label: 'Agents and skills', icon: 'builder' },
-  { tab: 'config', label: 'Configuration', icon: 'settings' },
-  { tab: 'team', label: 'Project and team', icon: 'user' },
-  { tab: 'insights', label: 'Project insights', icon: 'chart', projectScoped: true },
-];
+/**
+ * Vault and Insights each appear once, in the main list. They open for the project in the menu, or for the whole
+ * portal when no project is picked; the page itself has the switch between the two.
+ */
+const SCOPED_ITEMS = PROJECT_MAIN_ITEMS.filter((i) => i.scoped);
 
 const PORTAL_ITEMS = [
   { tab: 'inbox', label: 'Inbox', icon: 'inbox', global: true },
   { tab: 'connections', label: 'Git connections', icon: 'branch', global: true },
   { tab: 'integrations', label: 'Integrations', icon: 'builder', global: true },
   { tab: 'aws', label: 'AWS accounts', icon: 'lock', global: true },
-  { tab: 'vault', label: 'Vault', icon: 'inbox', global: true },
   { tab: 'api', label: 'API access', icon: 'lock', global: true },
-  { tab: 'insights', label: 'All insights', icon: 'chart', global: true },
   { tab: 'admin', label: 'Admin', icon: 'user', global: true, adminOnly: true },
   { tab: 'settings', label: 'Settings', icon: 'settings', global: true, adminOnly: true },
 ];
@@ -187,6 +180,7 @@ function NavMenu({ route, projectId, current, user, inboxCount, onNavigate }) {
       <div className="rail-nav-wrap">
         <nav className="rail-nav" aria-label="Pages">
           {link('projects', '#/projects', 'projects', 'Projects', route.tab === 'projects')}
+          {SCOPED_ITEMS.map((item) => link(item.tab, `#/${item.tab}`, item.icon, item.label, route.tab === item.tab))}
           {portalGroup}
         </nav>
       </div>
@@ -201,11 +195,13 @@ function NavMenu({ route, projectId, current, user, inboxCount, onNavigate }) {
           if (item.group) return portalGroup;
           const badge =
             item.tab === 'knowledge' && current.open_questions ? (
-              <span className="rail-count" title="Open questions">{current.open_questions}</span>
+              <span className="rail-count" title="Team questions waiting">{current.open_questions}</span>
             ) : item.tab === 'sessions' && current.pending_approvals ? (
               <span className="rail-count" title="Waiting for your permission">{current.pending_approvals}</span>
             ) : null;
-          return link(item.tab, href(projectId, item.tab), item.icon, item.label, Boolean(route.projectId) && route.tab === item.tab, badge);
+          // Vault and Insights stay highlighted on their portal-wide page too: it is the same page, with the scope switched.
+          const active = item.scoped ? route.tab === item.tab : Boolean(route.projectId) && route.tab === item.tab;
+          return link(item.tab, href(projectId, item.tab), item.icon, item.label, active, badge);
         })}
       </nav>
     </div>
@@ -599,21 +595,10 @@ function ProjectScope({ projectId, route }) {
     case 'review':
       page = <Review route={route} />;
       break;
-    case 'repos':
-      page = <Repos />;
-      break;
     case 'workspaces':
       page = <Workspaces />;
       break;
-    case 'config':
-      page = <Configuration route={route} />;
-      break;
-    case 'builder':
-      page = <Builder route={route} />;
-      break;
-    case 'team':
-      page = <ProjectSettings />;
-      break;
+    // Repositories, Agents and skills, Configuration and Team are tabs of the setup hub; old links redirect there.
     case 'setup':
       page = <ProjectSetup route={route} />;
       break;

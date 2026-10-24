@@ -103,12 +103,12 @@ async function main() {
     await page.getByLabel('Ask anything about this project').fill('Which bank holiday calendar applies?');
     await page.getByRole('button', { name: 'Ask', exact: true }).click();
     await page.getByRole('button', { name: 'Ask the team', exact: true }).click();
-    await page.getByRole('link', { name: /Open questions/ }).click();
+    await page.getByRole('link', { name: /Team questions/ }).click();
     await page.locator('.input-card').first().waitFor();
     await page.getByLabel(/Your answer to/).fill('Use the Malaysian federal holiday calendar.');
     await shot(page, 'open-question');
     await page.getByRole('button', { name: 'Send answer', exact: true }).click();
-    await page.getByText('No open questions').waitFor();
+    await page.getByText('No team questions waiting').waitFor();
     await page.getByRole('link', { name: 'Decisions log', exact: true }).click();
     await page.getByText('Malaysian federal holiday calendar').waitFor();
     check(true, 'answers land in the decisions log');
@@ -411,6 +411,30 @@ async function main() {
     await page.getByRole('region', { name: 'Project readiness' }).waitFor();
     check((await page.locator('.readiness-table tr').count()) >= 2, 'readiness panel shows items');
     await shot(page, 'setup-hub');
+    // One setup hub: its tabs are the only place for these pages, and the menu lists Setup once.
+    for (const tab of ['Connection & provider', 'Repositories', 'Agents & skills', 'Team & members', 'Jira', 'Configuration', 'Budget']) {
+      check((await page.getByRole('link', { name: tab, exact: true }).count()) === 1, `Setup has a ${tab} tab`);
+    }
+    for (const gone of ['Repositories', 'Agents and skills', 'Configuration', 'Project and team', 'Project insights', 'All insights']) {
+      check((await page.locator('.rail-link', { hasText: gone }).count()) === 0, `"${gone}" is not a separate menu item`);
+    }
+    check((await page.locator('.rail-link', { hasText: /^Vault$/ }).count()) === 1, 'Vault appears once in the menu');
+    check((await page.locator('.rail-link', { hasText: /^Insights$/ }).count()) === 1, 'Insights appears once in the menu');
+    await page.getByRole('link', { name: 'Budget', exact: true }).click();
+    await page.getByLabel('Monthly cap for this project (USD)').waitFor();
+    check(/\/setup\/budget/.test(page.url()), 'a Setup tab has its own address');
+    // Old addresses redirect into the hub.
+    for (const [old, section] of [['repos', 'repos'], ['builder', 'agents'], ['config', 'config'], ['team', 'team']] as const) {
+      await page.goto(`${base}/#/p/${pid}/${old}`);
+      await page.waitForURL(new RegExp(`/setup/${section}$`));
+      check(true, `#/p/<id>/${old} redirects to Setup › ${section}`);
+    }
+    // Insights has a scope switch instead of a second menu item.
+    await page.goto(`${base}/#/p/${pid}/insights`);
+    await page.getByRole('tab', { name: 'All projects', exact: true }).click();
+    await page.waitForURL(/#\/insights$/);
+    await page.getByRole('tab', { name: 'This project', exact: true }).waitFor();
+    check(true, 'Insights switches between this project and all projects');
 
     console.log('admin panel');
     await page.goto(`${base}/#/admin`);
@@ -422,6 +446,23 @@ async function main() {
     await page.getByRole('button', { name: 'Audit log', exact: true }).click();
     await page.getByRole('heading', { name: 'Audit log', exact: true }).waitFor();
     await shot(page, 'admin-audit');
+    // The parked multi-user features stay out of the Admin panel until Settings › Advanced is on.
+    for (const parked of ['Teams', 'Google sign-in', 'SCIM']) {
+      check((await page.getByRole('button', { name: parked, exact: true }).count()) === 0, `Admin hides ${parked} by default`);
+    }
+    check((await page.getByRole('button', { name: 'Control plane', exact: true }).count()) === 1, 'Admin shows Control plane');
+    await page.goto(`${base}/#/settings`);
+    await page.getByRole('heading', { name: 'Advanced', exact: true }).waitFor();
+    await page.getByText('Show advanced multi-user features', { exact: true }).click();
+    await page.getByText('Advanced features shown').waitFor();
+    await page.goto(`${base}/#/admin`);
+    for (const parked of ['Teams', 'Google sign-in', 'SCIM']) {
+      await page.getByRole('button', { name: parked, exact: true }).waitFor();
+    }
+    check(true, 'Settings › Advanced shows Teams, Google sign-in and SCIM in Admin');
+    await page.goto(`${base}/#/settings`);
+    await page.getByText('Show advanced multi-user features', { exact: true }).click();
+    await page.getByText('Advanced features hidden').waitFor();
 
     console.log('inbox');
     await page.goto(`${base}/#/inbox`);

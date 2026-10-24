@@ -281,7 +281,7 @@ A **session** is a saved goal that the portal drives through repeated agent runs
 
 | ID | Requirement | Evidence | Decision |
 |---|---|---|---|
-| FR-ADMIN-1 | Admin panel tabs: Users, Teams, Google sign-in, SCIM, Audit log, Control plane. | code | |
+| FR-ADMIN-1 | Admin panel tabs: Users, Audit log, Control plane. With the off-by-default **Advanced** setting (`ui.advanced`, Settings › Advanced) also Teams, Google sign-in and SCIM. The switch only changes the UI; the routes work either way (D-6). | code | |
 | FR-ADMIN-2 | **Audit log**: append-only record of auth, user, member, settings, secret, project, repo, git connection, session, push, approval, token, tool install, invitation, team, SCIM and OIDC actions with actor, target, IP. | code (`audit.ts`) | |
 | FR-ADMIN-3 | **Control plane**: global / per-user (default 5) / per-project concurrency caps; excess sessions queue with a reason and position. | code (`control-plane.ts`) | |
 | FR-ADMIN-4 | Graceful **drain** on SIGTERM/SIGINT (default 60 s) and via `/api/admin/drain`: stop accepting new work, wait for running iterations. | code | |
@@ -313,8 +313,12 @@ Limits seen in the code (these are the gaps behind NEW-6 to NEW-8):
 
 ## 3. Navigation map (current)
 
-Project items: Sessions, Workspaces, Tickets, Code review, Knowledge, Learn, Vault, Setup (Repositories, Agents and skills, Configuration, Project and team, Project insights).
-Portal group: Inbox, Git connections, Integrations, AWS accounts, Vault, API access, All insights, Admin (admin only), Settings (admin only).
+Menu (Phase 3): Sessions, Workspaces, Tickets, Code review, Knowledge, Learn, Vault, Insights, Setup, then the Portal group. Without a project picked, the menu is Projects, Vault, Insights and the Portal group.
+- Vault and Insights each appear once. They open for the project in the menu (or portal-wide with no project) and switch scope on the page: Vault between project, personal and team; Insights between this project and all projects.
+- Setup is one hub, `#/p/<id>/setup/<section>`, with tabs Overview, Connection & provider, Repositories, Agents & skills, Team & members, Jira, Configuration, Budget. The old `#/p/<id>/repos`, `builder`, `config` and `team` addresses redirect into it.
+- Knowledge tabs: Documents, Ask, Team questions (the old "Open questions" / `inbox`), Decisions log. "Inbox" now means only the cross-project Inbox.
+- Portal group: Inbox, Git connections, Integrations, AWS accounts, API access, Admin (admin only), Settings (admin only).
+- Admin shows Users, Audit log and Control plane. Teams, Google sign-in and SCIM show only with Settings › Advanced on (off by default, D-6). Outbound webhooks have no screen in the current UI; the routes remain.
 
 ## 4. Data model (SQLite, from migrations in `db.ts`)
 
@@ -359,15 +363,15 @@ These come from file sizes and structure. Measure before acting on any of them.
 | O-1 | **Two execution models.** Single runs (`runs.ts`, `/api/runs/*`) and sessions (`workflows.ts`, `/api/workflows/*`) overlap. The launcher already offers "Single run" as a mode inside sessions, and a legacy redirect exists. | code | Merge into one model; a single run is a session with `maxIterations = 1`. **Done in Phase 1.** |
 | O-2 | **Two agent systems with some coupling.** Claude (`builder.ts`) and Kiro (`kiro-agents.ts`) are genuinely different (D-9) and stay separate. What remains: Kiro runs fall back to `.claude` agents when a project has no Kiro agents (FR-LEAD-1), and Kiro has no role templates, library, Describe or test run (FR-LEAD-2). | code | Fallback replaced by an ask-the-user switch (D-12). Which Claude-side tools Kiro should get is still open. |
 | O-3 | **Very large modules.** `roles-library.ts` 115 KB, `roles-delivery.ts` 97 KB, `workflows.ts` 83 KB, `governance.ts` 63 KB (eight concerns in one file). Pages: `SessionWorkspace.jsx` 62 KB, `Knowledge.jsx` 61 KB, `Insights.jsx` 61 KB, `NewSessionDialog.jsx` 60 KB, `Builder.jsx` 60 KB, `Settings.jsx` 52 KB. CSS: `styles.css` 127 KB plus `hud.css`. | file listing | Split by concern; move role templates to data files. |
-| O-4 | **Duplicated navigation.** Vault appears in project items and in Portal items. Insights appears twice (project / all). "Inbox" means two things: the cross-project Inbox (`/api/inbox`) and the Knowledge "Open questions" (`/api/projects/:pid/inbox`). | code (`App.jsx`, routes) | One name per concept; decide whether project vault and portal vault are one page. |
-| O-5 | **Two overlapping setup surfaces.** Both are live in `App.jsx`: `ProjectSetup.jsx` (tabbed hub) lazy-imports components from `ProjectSettings.jsx`, and `Repos.jsx` imports from it too. The nav also lists Repositories / Agents / Configuration / Team as separate Setup items that duplicate the hub's tabs. | code | One setup hub; nav shows it once. |
+| O-4 | **Duplicated navigation.** Vault appears in project items and in Portal items. Insights appears twice (project / all). "Inbox" means two things: the cross-project Inbox (`/api/inbox`) and the Knowledge "Open questions" (`/api/projects/:pid/inbox`). | code (`App.jsx`, routes) | One name per concept; decide whether project vault and portal vault are one page. **Done in Phase 3:** one Vault and one Insights item, scope switched on the page; Knowledge's list is "Team questions". |
+| O-5 | **Two overlapping setup surfaces.** Both are live in `App.jsx`: `ProjectSetup.jsx` (tabbed hub) lazy-imports components from `ProjectSettings.jsx`, and `Repos.jsx` imports from it too. The nav also lists Repositories / Agents / Configuration / Team as separate Setup items that duplicate the hub's tabs. | code | One setup hub; nav shows it once. **Done in Phase 3:** `ProjectSetup.jsx` tabs are the only setup surface; old URLs redirect. |
 | O-6 | **Settings spread over four levels** (portal, AWS account, project, session) with provider, push mode, budget and lead agent each configurable in several places. | plan, code | Single owner per setting, shown with precedence. |
 | O-7 | **Frontend is untyped JSX** with a hand-written router and no shared API types, while the backend is TypeScript. | code | Type the web app, or generate API types. |
 | O-8 | **Hand-rolled infrastructure.** HTTP router, mini cron parser, SSE, FTS indexing, markdown conversion and a 275-route API without a schema or OpenAPI description. | code | Decide which to keep; add an API schema. |
 | O-9 | **Inconsistent naming in verification.** Code comments refer to both `failStop` and `required` for the same flag. The plan document used `failStop`; the type uses `required`. | code | One field name; migration for stored specs. **Done in Phase 1:** `required` everywhere; `failStop` is refused by the API. |
 | O-10 | **Single process drives everything** (session drivers, trigger polling, SLA checks, webhook retries). | code (`index.ts`) | **Dropped by D-2**: acceptable at 1–3 users. |
-| O-11 | **README is behind the code.** It does not mention sessions, loop specs, Inbox, workspaces, teams/SCIM/OIDC, vault, integrations, insights or outbound webhooks. | readme vs code | Replace README feature list with this spec's summary. |
-| O-12 | **Repo hygiene.** `server.out.log` and `server.err.log` sit in the repo root; test files over 40 KB (`workflows.test.ts` 82 KB) are hard to maintain. | file listing | Ignore logs; split tests with modules. |
+| O-11 | **README is behind the code.** It does not mention sessions, loop specs, Inbox, workspaces, teams/SCIM/OIDC, vault, integrations, insights or outbound webhooks. | readme vs code | Replace README feature list with this spec's summary. **Done in Phase 3.** |
+| O-12 | **Repo hygiene.** `server.out.log` and `server.err.log` sit in the repo root; test files over 40 KB (`workflows.test.ts` 82 KB) are hard to maintain. | file listing | Ignore logs; split tests with modules. **Logs ignored in Phase 3; test split still open.** |
 | O-13 | **Security gap candidates** found in passing: no general login/API rate limit (NFR-5); first-admin setup race noted in the optimisation plan; check whether it was fixed. | plan, code (partial) | Verify, then specify. |
 
 ---

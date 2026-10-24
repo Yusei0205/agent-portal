@@ -20,10 +20,10 @@ import {
 } from 'recharts';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
-import { href } from '../lib/router.js';
+import { go, href } from '../lib/router.js';
 import { cx, money, timeAgo, tokens } from '../lib/util.js';
 import { useSortable } from '../lib/useSortable.js';
-import { Badge, Button, Empty, ErrorNote, PageHeader, Spinner } from '../components/ui.jsx';
+import { Badge, Button, Empty, ErrorNote, PageHeader, Segmented, Spinner } from '../components/ui.jsx';
 import { Icon } from '../components/Icon.jsx';
 import { SortHeader } from '../components/SortHeader.jsx';
 import { useApp } from '../lib/context.js';
@@ -638,7 +638,7 @@ function ConnectionMap({ projects }) {
           const aws = c.aws?.account ? `AWS ${c.aws.account}` : c.aws?.how ? `AWS ${c.aws.how}` : 'AWS (Settings)';
           return (
             <li key={p.id} className="ins-connrow">
-              <a href={href(p.id, 'team')} className="ins-connmap-node ins-connmap-project" title={`${p.name}: open the connection settings`}>
+              <a href={href(p.id, 'setup', 'connection')} className="ins-connmap-node ins-connmap-project" title={`${p.name}: open the connection settings`}>
                 {p.name}
               </a>
               <span className="ins-connrow-link" aria-hidden="true">
@@ -1339,6 +1339,37 @@ function UserSpendTable({ users, isAdmin }) {
   );
 }
 
+/** The project the scope switch jumps to from the all-projects view: the last one you were in. */
+function lastProjectId(projects) {
+  let id = '';
+  try {
+    id = localStorage.getItem('rail-last-project') || '';
+  } catch {
+    /* private mode */
+  }
+  return (projects || []).some((p) => p.id === id && !p.archived) ? id : '';
+}
+
+/**
+ * Insights is one page with a scope switch: this project, or all projects. It has one place in the menu.
+ */
+function ScopeSwitch({ projectId }) {
+  const projects = useApp()?.projects;
+  const jumpTo = projectId || lastProjectId(projects);
+  if (!jumpTo) return null;
+  return (
+    <Segmented
+      value={projectId ? 'project' : 'all'}
+      onChange={(v) => (v === 'project' ? go(jumpTo, 'insights') : go(null, 'insights'))}
+      label="Insights scope"
+      options={[
+        { value: 'project', label: 'This project' },
+        { value: 'all', label: 'All projects' },
+      ]}
+    />
+  );
+}
+
 export function Insights({ projectId }) {
   const [filters, setFilters] = useState({
     days: '30',
@@ -1398,6 +1429,8 @@ export function Insights({ projectId }) {
           </Button>
         }
       />
+
+      <ScopeSwitch projectId={projectId} />
 
       <FilterBar
         filters={filters}

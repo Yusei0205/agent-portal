@@ -12,7 +12,7 @@ const PROVIDER_LABEL = {
 
 /**
  * Shows the effective provider and AWS account for a project as a compact clickable badge.
- * Clicking navigates to the project's "Project and team" tab (Connection section).
+ * Clicking navigates to the project's Project setup, Connection & provider tab.
  *
  * Usage: <ConnectionBadge projectId="my-project" />
  */
@@ -55,7 +55,7 @@ export function ConnectionBadge({ projectId }) {
 
   return (
     <a
-      href={href(projectId, 'team')}
+      href={href(projectId, 'setup', 'connection')}
       className="connection-badge"
       title={`Connection: ${providerLabel}${account ? `, AWS ${account}` : ''}${region ? `, ${region}` : ''} — click to configure`}
       aria-label={`Connection: ${label}. Click to configure.`}

@@ -116,6 +116,7 @@ export function Settings() {
         <SecretsSection s={s.data} reload={reload} />
         <ToolsSection />
         <Users />
+        <AdvancedSection s={s.data} reload={reload} />
       </div>
     </div>
   );
@@ -254,7 +255,7 @@ function AwsSection({ s, reload }) {
   return (
     <section className="panel">
       <h2>AWS credentials for Bedrock</h2>
-      <p className="muted small">Used only for the Amazon Bedrock model. A project can connect to its own AWS account under Project and team › AWS account.</p>
+      <p className="muted small">Used only for the Amazon Bedrock model. A project can connect to its own AWS account under Project setup › Connection & provider.</p>
       <div className="stack">
         <Field label="Region">{(id) => <RegionSelect id={id} value={aws.region} onChange={(v) => setAws({ ...aws, region: v })} />}</Field>
         <Field label="How the server signs in" hint={AWS_AUTH.find((a) => a.value === aws.auth)?.hint}>
@@ -846,6 +847,26 @@ function DelegationSection({ s, reload }) {
       <Button variant="primary" busy={busy} onClick={() => save({ delegation: d })} disabled={JSON.stringify(d) === JSON.stringify(s.delegation)}>
         Save limits
       </Button>
+    </section>
+  );
+}
+
+/**
+ * Off by default. The multi-user features (teams, SCIM provisioning, Google sign-in setup) stay in the code and the
+ * API; this switch only decides whether the Admin panel offers them.
+ */
+function AdvancedSection({ s, reload }) {
+  const { busy, error, save } = useSave(reload);
+  const advanced = Boolean(s.ui?.advanced);
+  return (
+    <section className="panel stack">
+      <h2>Advanced</h2>
+      <p className="muted small">
+        Shows the multi-user features in the Admin panel: teams, SCIM provisioning and Google sign-in. Leave this off for a
+        small group. Turning it off hides them without removing anything that is already set up.
+      </p>
+      <Toggle checked={advanced} disabled={busy} onChange={(on) => save({ ui: { advanced: on } }, on ? 'Advanced features shown' : 'Advanced features hidden')} label="Show advanced multi-user features" />
+      <ErrorNote error={error} />
     </section>
   );
 }

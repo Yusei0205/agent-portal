@@ -5,7 +5,6 @@ import { go } from '../lib/router.js';
 import { money } from '../lib/util.js';
 import { Badge, Button, ErrorNote, Field, IconButton, Note, PageHeader, Spinner, useUi } from '../components/ui.jsx';
 import { useAction, useLoad } from '../lib/useAsync.js';
-import { JiraConnection } from './Tickets.jsx';
 import { ModelPicker } from '../components/ModelPicker.jsx';
 
 const ROLE_SUGGESTIONS = ['Business analyst', 'Solution architect', 'Backend developer', 'Frontend developer', 'QA engineer', 'Reviewer', 'Technical writer', 'Product owner', 'Stakeholder'];
@@ -326,7 +325,7 @@ export function Connection() {
 
 /**
  * Backward-compatible alias so Repos.jsx (which imports AwsAccount) keeps working.
- * Repos uses it to let users configure AWS quickly without going to Project and team.
+ * Repos uses it to let users configure AWS quickly without leaving the repositories tab.
  */
 export { Connection as AwsAccount };
 
@@ -410,7 +409,7 @@ export function ProjectSettings() {
 
   return (
     <div className="page">
-      <PageHeader title="Project and team" sub="Details agents read in CLAUDE.md, and who can do what." />
+      <PageHeader title="Team & members" sub="Details agents read in CLAUDE.md, defaults for new work, and who can do what." />
       <div className="two-col">
         <section className="panel">
           <h2>Details</h2>
@@ -559,9 +558,6 @@ export function ProjectSettings() {
           ) : null}
         </section>
       </div>
-
-      <Connection />
-      <JiraConnection />
 
       {isOwner ? (
         <section className="panel danger-zone">

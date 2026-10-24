@@ -3,9 +3,10 @@
  *
  * Full admin UI for:
  *   - Users: list, invite (copy-paste), roles, deactivate/reactivate, reset-password link
- *   - Teams: create, members, project access, budgets
- *   - Google sign-in (OIDC): settings, redirect URI copy, Test button, password login toggle
- *   - SCIM tokens
+ *   - Advanced only (Settings › Advanced, off by default; parked per D-6):
+ *       Teams: create, members, project access, budgets
+ *       Google sign-in (OIDC): settings, redirect URI copy, Test button, password login toggle
+ *       SCIM tokens
  *   - Audit log (filters, table)
  *   - Control plane: drain mode, queue / running counts, caps, budget ceilings
  */
@@ -19,11 +20,12 @@ import { SortHeader } from '../components/SortHeader.jsx';
 import { Badge, Button, ErrorNote, Field, Modal, Note, PageHeader, Spinner, Toggle, useUi } from '../components/ui.jsx';
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
+// `advanced` tabs are the parked multi-user features (D-6): shown only when Settings › Advanced is on.
 const ADMIN_TABS = [
   { value: 'users',    label: 'Users' },
-  { value: 'teams',    label: 'Teams' },
-  { value: 'google',   label: 'Google sign-in' },
-  { value: 'scim',     label: 'SCIM' },
+  { value: 'teams',    label: 'Teams', advanced: true },
+  { value: 'google',   label: 'Google sign-in', advanced: true },
+  { value: 'scim',     label: 'SCIM', advanced: true },
   { value: 'audit',    label: 'Audit log' },
   { value: 'control',  label: 'Control plane' },
 ];
@@ -31,6 +33,11 @@ const ADMIN_TABS = [
 export function AdminPanel({ initialTab }) {
   const { user } = useApp();
   const [tab, setTab] = useState(initialTab || 'users');
+  const settings = useLoad(() => api.get('/api/settings'), []);
+  const advanced = Boolean(settings.data?.ui?.advanced);
+  const tabs = ADMIN_TABS.filter((t) => advanced || !t.advanced);
+  // The tab bar and the page agree: a hidden tab is never the open one.
+  const shown = tabs.some((t) => t.value === tab) ? tab : 'users';
   if (!user?.is_admin) {
     return (
       <div className="page">
@@ -41,20 +48,20 @@ export function AdminPanel({ initialTab }) {
   }
   return (
     <div className="page">
-      <PageHeader title="Admin" sub="Users, teams, sign-in, audit, and control plane." />
+      <PageHeader title="Admin" sub={advanced ? 'Users, teams, sign-in, SCIM, audit, and control plane.' : 'Users, audit log, and control plane.'} />
       <nav className="tabs" aria-label="Admin sections">
-        {ADMIN_TABS.map((t) => (
-          <button key={t.value} type="button" className={cx('tab', tab === t.value && 'is-active')} aria-pressed={tab === t.value} onClick={() => setTab(t.value)}>
+        {tabs.map((t) => (
+          <button key={t.value} type="button" className={cx('tab', shown === t.value && 'is-active')} aria-pressed={shown === t.value} onClick={() => setTab(t.value)}>
             {t.label}
           </button>
         ))}
       </nav>
-      {tab === 'users'   && <AdminUsers />}
-      {tab === 'teams'   && <AdminTeams />}
-      {tab === 'google'  && <AdminOidc />}
-      {tab === 'scim'    && <AdminScim />}
-      {tab === 'audit'   && <AdminAuditLog />}
-      {tab === 'control' && <AdminControlPlane />}
+      {shown === 'users'   && <AdminUsers />}
+      {shown === 'teams'   && <AdminTeams />}
+      {shown === 'google'  && <AdminOidc />}
+      {shown === 'scim'    && <AdminScim />}
+      {shown === 'audit'   && <AdminAuditLog />}
+      {shown === 'control' && <AdminControlPlane />}
     </div>
   );
 }

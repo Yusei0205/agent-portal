@@ -31,7 +31,7 @@ export function Projects() {
                 <div className="project-card-head">
                   <h2>{p.name}</h2>
                   {p.archived ? <Badge tone="muted">Archived</Badge> : null}
-                  {p.open_questions ? <Badge tone="warn">{plural(p.open_questions, 'open question')}</Badge> : null}
+                  {p.open_questions ? <Badge tone="warn">{plural(p.open_questions, 'team question')}</Badge> : null}
                 </div>
                 <p className="muted clamp-2">{p.description || 'No description'}</p>
                 <dl className="project-stats">

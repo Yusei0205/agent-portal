@@ -16,20 +16,21 @@ export function Knowledge({ route }) {
   const { project, counts } = useProject();
   const [sub, a, b] = route.rest;
   if (sub === 'doc' && a) return <DocView docId={a} anchor={b} />;
-  const tab = ['ask', 'inbox', 'decisions'].includes(sub) ? sub : 'docs';
+  // The questions tab was called "inbox"; that word now belongs to the cross-project Inbox, but old links still work.
+  const tab = sub === 'inbox' || sub === 'questions' ? 'questions' : ['ask', 'decisions'].includes(sub) ? sub : 'docs';
   return (
     <div className="page">
-      <PageHeader title="Knowledge" sub="Project documents agents search before they answer, and the questions they raise." />
+      <PageHeader title="Knowledge" sub="Project documents agents search before they answer, and the questions the team still has to answer." />
       <Tabs
         value={tab}
         tabs={[
           { value: 'docs', label: 'Documents', href: href(project.id, 'knowledge') },
           { value: 'ask', label: 'Ask', href: href(project.id, 'knowledge', 'ask') },
-          { value: 'inbox', label: 'Open questions', href: href(project.id, 'knowledge', 'inbox'), count: counts.open_questions },
+          { value: 'questions', label: 'Team questions', href: href(project.id, 'knowledge', 'questions'), count: counts.open_questions },
           { value: 'decisions', label: 'Decisions log', href: href(project.id, 'knowledge', 'decisions') },
         ]}
       />
-      {tab === 'docs' ? <Documents /> : tab === 'ask' ? <Ask /> : tab === 'inbox' ? <Inbox /> : <Decisions />}
+      {tab === 'docs' ? <Documents /> : tab === 'ask' ? <Ask /> : tab === 'questions' ? <TeamQuestions /> : <Decisions />}
     </div>
   );
 }
@@ -1348,14 +1349,14 @@ function Ask() {
             ) : null}
             {answer.missing ? (
               <Note tone="warn" icon="question">
-                <p><strong>The documents don't answer this yet.</strong> Send it to the team as an open question; the answer goes into the decisions log, so agents and future answers can use it.</p>
+                <p><strong>The documents don't answer this yet.</strong> Send it to the team as a question; the answer goes into the decisions log, so agents and future answers can use it.</p>
                 <div className="row">
                   <input className="input" value={inboxQ} onChange={(e) => setInboxQ(e.target.value)} aria-label="Question for the team" />
                   <Button disabled={sent || !inboxQ.trim()} onClick={async () => {
                     try {
                       await api.post(`/api/projects/${project.id}/inbox`, { question: inboxQ });
                       setSent(true);
-                      toast('Sent to open questions');
+                      toast('Sent to team questions');
                     } catch (e) {
                       toast(e.message, 'danger');
                     }
@@ -1387,9 +1388,9 @@ function Ask() {
   );
 }
 
-/* ---------------- Open questions ---------------- */
+/* ---------------- Team questions ---------------- */
 
-export function Inbox() {
+export function TeamQuestions() {
   const { project, canEdit } = useProject();
   const [filter, setFilter] = useState('pending');
   const inputs = useLoad(() => api.get(`/api/projects/${project.id}/inputs?type=question&status=${filter === 'pending' ? 'pending' : 'all'}`), [project.id, filter]);
@@ -1405,7 +1406,7 @@ export function Inbox() {
       {inputs.loading && !inputs.data ? (
         <Spinner />
       ) : list.length === 0 ? (
-        <Empty icon="inbox" title={filter === 'pending' ? 'No open questions' : 'Nothing here yet'}>
+        <Empty icon="inbox" title={filter === 'pending' ? 'No team questions waiting' : 'Nothing here yet'}>
           When an agent is unsure, it asks here instead of guessing.
         </Empty>
       ) : (

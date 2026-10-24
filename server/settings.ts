@@ -40,6 +40,11 @@ export interface Settings {
   modelList: { extra: string };
   /** Sessions handing tasks to separate sessions: limits for everyone. */
   delegation: { enabled: boolean; maxPerParent: number; maxPerUser: number; allowNested: boolean; nudgeThreshold: number };
+  /**
+   * Interface switches. `advanced` shows the parked multi-user features (teams, SCIM, Google sign-in setup) in the
+   * Admin panel. It only changes what the UI offers: the routes and the code behind them stay on.
+   */
+  ui: { advanced: boolean };
   /** Session control plane: concurrency caps, drain, SLA, TTL. */
   controlPlane: {
     /** Max top-level running sessions globally (0 = no cap). */
@@ -66,6 +71,7 @@ const DEFAULTS: Settings = {
   agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask' },
   delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
   modelList: { extra: '' },
+  ui: { advanced: false },
   controlPlane: {
     globalMax: 0,
     perUserMax: 5,
@@ -214,6 +220,9 @@ export function updateSettings(patch: any): Settings {
       allowNested: d.allowNested === true,
       nudgeThreshold: n(d.nudgeThreshold, 0, 20, 'Subagent advice threshold'),
     });
+  }
+  if (patch.ui) {
+    saveSection('ui', { advanced: patch.ui.advanced === true });
   }
   if (patch.controlPlane) {
     const cp = { ...cur.controlPlane, ...patch.controlPlane };

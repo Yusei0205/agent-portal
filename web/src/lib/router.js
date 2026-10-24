@@ -3,9 +3,22 @@ import { useEffect, useState } from 'react';
 /** Pages that belong to no project: #/<tab>. */
 const GLOBAL_TABS = ['settings', 'aws', 'account', 'insights', 'connections', 'integrations', 'api', 'vault', 'admin', 'inbox'];
 
+/**
+ * Pages that used to be their own project tab and now live in the Project setup hub: #/p/<id>/<old tab> opens
+ * #/p/<id>/setup/<section>. Old links keep working, and so does everything that still builds them with href().
+ */
+const SETUP_SECTIONS = { repos: 'repos', builder: 'agents', config: 'config', team: 'team' };
+
+/** The hash an old project link should be replaced with, or null when the hash is already current. */
+export function legacyRedirect(hash = window.location.hash) {
+  const m = hash.replace(/^#\/?/, '').match(/^p\/([^/?]+)\/(repos|builder|config|team)(\/[^?]*)?(\?.*)?$/);
+  if (!m) return null;
+  return `#/p/${m[1]}/setup/${SETUP_SECTIONS[m[2]]}${m[3] || ''}${m[4] || ''}`;
+}
+
 /** Hash routes: #/projects, #/p/<projectId>/<tab>/<rest…>, optionally followed by ?key=value inside the hash. */
 export function parseHash(hash = window.location.hash) {
-  const raw = hash.replace(/^#\/?/, '');
+  const raw = (legacyRedirect(hash) || hash).replace(/^#\/?/, '');
   const qi = raw.indexOf('?');
   const query = new URLSearchParams(qi >= 0 ? raw.slice(qi + 1) : '');
   const parts = (qi >= 0 ? raw.slice(0, qi) : raw).split('/').filter(Boolean).map(decodeURIComponent);
@@ -17,7 +30,13 @@ export function parseHash(hash = window.location.hash) {
 export function useRoute() {
   const [route, setRoute] = useState(() => parseHash());
   useEffect(() => {
-    const on = () => setRoute(parseHash());
+    const on = () => {
+      // Replace an old link in the address bar so a reload or a shared link uses the current address.
+      const current = legacyRedirect();
+      if (current) window.history.replaceState(null, '', current);
+      setRoute(parseHash());
+    };
+    on();
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
   }, []);
@@ -25,6 +44,7 @@ export function useRoute() {
 }
 
 export function href(projectId, tab, ...rest) {
+  if (projectId && SETUP_SECTIONS[tab]) return href(projectId, 'setup', SETUP_SECTIONS[tab], ...rest);
   if (!projectId) return GLOBAL_TABS.includes(tab) ? `#/${tab}` : '#/projects';
   return `#/p/${encodeURIComponent(projectId)}/${tab}${rest.filter((x) => x !== undefined && x !== null && x !== '').map((x) => '/' + encodeURIComponent(x)).join('')}`;
 }
