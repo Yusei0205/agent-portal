@@ -30,6 +30,11 @@ export function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'pa
     });
   }
 
+  // A session that was drawing an architecture diagram hands its result over (NEW-1).
+  if (w && terminal.includes(status)) {
+    void import('../diagrams.ts').then((m) => m.onSessionStopped(id)).catch(() => undefined);
+  }
+
   // Record loop metrics when a session terminates (not just pauses).
   if (w && terminal.includes(status)) {
     const specId = w.loop_spec_id ? String(w.loop_spec_id) : null;

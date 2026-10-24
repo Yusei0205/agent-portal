@@ -93,6 +93,11 @@ export interface TriggerConfig {
   maxPerHour?: number;
   /** Variables injected from the trigger payload (e.g. ticket key, PR number). */
   payloadVars?: Record<string, string>;
+  /**
+   * Do something other than start a goal session when the trigger fires. "refresh_diagrams" redraws the project's stale
+   * architecture diagrams (NEW-1); the goal template is then not used.
+   */
+  action?: 'refresh_diagrams';
 }
 
 export interface LoopSpec {
@@ -312,6 +317,16 @@ const TRIGGER_KINDS = ['manual', 'cron', 'webhook', 'github_event', 'jira_event'
 function validateTriggerKind(k: unknown): LoopSpec['trigger_kind'] {
   if (!TRIGGER_KINDS.includes(String(k))) throw badRequest(`Trigger kind must be one of: ${TRIGGER_KINDS.join(', ')}`);
   return String(k) as LoopSpec['trigger_kind'];
+}
+
+/** A trigger may do something other than start a goal session; today that is "refresh_diagrams". */
+function checkTriggerAction(tc: TriggerConfig): void {
+  const a = (tc as { action?: unknown }).action;
+  if (a === undefined || a === null || a === '') {
+    delete tc.action;
+    return;
+  }
+  if (a !== 'refresh_diagrams') throw badRequest('Action must be refresh_diagrams');
 }
 
 function validateVerification(raw: unknown): VerificationStep[] {
@@ -707,6 +722,7 @@ export function registerLoopSpecRoutes(): void {
     const body = await ctx.json();
     const triggerKind = validateTriggerKind(body.triggerKind ?? body.trigger_kind ?? 'manual');
     const triggerConfig: TriggerConfig = body.triggerConfig ?? body.trigger_config ?? {};
+    checkTriggerAction(triggerConfig);
     if (triggerKind === 'webhook' || triggerKind === 'github_event') {
       if (!triggerConfig.secret) {
         triggerConfig.secret = crypto.randomBytes(24).toString('hex');
@@ -757,6 +773,7 @@ export function registerLoopSpecRoutes(): void {
     }
     if (body.triggerConfig !== undefined || body.trigger_config !== undefined) {
       const tc = body.triggerConfig ?? body.trigger_config;
+      checkTriggerAction(tc);
       if ((p.trigger_kind ?? spec.trigger_kind) === 'webhook' || (p.trigger_kind ?? spec.trigger_kind) === 'github_event') {
         if (!tc.secret) tc.secret = spec.trigger_config.secret ?? crypto.randomBytes(24).toString('hex');
       }
@@ -808,8 +825,8 @@ export function registerLoopSpecRoutes(): void {
     if (rateErr) throw badRequest(rateErr);
     const { createWorkflowFromSpec } = await import('./loop-triggers.ts');
     const workflow = await createWorkflowFromSpec(spec, ctx.user!.id, body.vars ?? {});
-    recordTriggerFire(spec.id, 'manual', { triggeredBy: ctx.user!.id }, String(workflow.id));
-    audit(ctx, 'session.start' as AuditAction, `workflow:${workflow.id}`, { projectId: project.id, specId: spec.id });
+    recordTriggerFire(spec.id, 'manual', { triggeredBy: ctx.user!.id }, workflow.id ? String(workflow.id) : null);
+    if (workflow.id) audit(ctx, 'session.start' as AuditAction, `workflow:${workflow.id}`, { projectId: project.id, specId: spec.id });
     return { workflow };
   });
 

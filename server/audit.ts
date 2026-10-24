@@ -43,7 +43,9 @@ export type AuditAction =
   | 'team.member_add' | 'team.member_remove'
   | 'team.project_add' | 'team.project_remove'
   | 'scim_token.create' | 'scim_token.revoke'
-  | 'oidc.login';
+  | 'oidc.login'
+  // architecture diagrams (NEW-1)
+  | 'diagram.create' | 'diagram.refresh' | 'diagram.version' | 'diagram.delete' | 'diagram.export';
 
 /**
  * Write an audit row from a request context.

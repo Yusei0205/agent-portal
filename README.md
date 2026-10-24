@@ -35,6 +35,11 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
 - **Learn**: generated documentation in a plain-language and an engineering version, glossaries,
   FAQs, quizzes checked against their sources, onboarding paths and team progress. Documents are
   flagged when their sources change.
+- **Architecture diagrams**: an agent session draws Mermaid system-context, component and
+  data-flow diagrams from a project's repositories. Each redraw is a new, validated version kept
+  in the project's git repository (`docs/diagrams/`); a diagram is flagged stale when a repository
+  moves on and can be refreshed on demand or by a loop spec. Export as PNG (needs the optional
+  headless browser) or raw Mermaid.
 - **Code review** of two branches or a GitHub pull request: findings next to the changed lines,
   a cheap Haiku pass with a rule-based scan, an optional Sonnet deep look, and posting back to
   GitHub.
@@ -280,6 +285,7 @@ data/
     docs/md/                uploaded documents as Markdown
     docs/decisions.md       answers to agent questions
     docs/generated/         approved learning documents
+    docs/diagrams/          architecture diagrams (Mermaid source, one file per diagram)
     repos/<name>/           reference clones (read-only for agents)
     work/<run id>/          each run's own folder or git worktree
 ```

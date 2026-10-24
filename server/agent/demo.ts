@@ -200,6 +200,8 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     const shortAsk = userAsk.replace(/\s+/g, ' ').slice(0, 80);
     const kw = keywords(userAsk, 4);
 
+    if (userAsk.startsWith('Architecture diagram request')) return yield* diagramScenario(userAsk);
+
     yield assistant(null, [{ type: 'text', text: 'I’ll start with the decisions log and the project documents before doing anything else.' }]);
     await pause(300);
 
@@ -322,6 +324,48 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     return w.ok
       ? `Done. I wrote the plan to \`${target}\`.${decisionNote}\n- Roles consulted: ${calls.map((c) => c.a.name).join(', ')}.\n\n${plan}`
       : `I did not write the file because the write was not approved. Here is the plan instead:${decisionNote}\n\n${plan}`;
+  }
+
+  /** An architecture diagram request (NEW-1): list the repository folders, then reply with Mermaid and a cited description. */
+  async function* diagramScenario(ask: string): AsyncGenerator<SdkMessage, string> {
+    const kind = ask.match(/^Architecture diagram request: (\w+)/)?.[1] ?? 'components';
+    const title = (ask.match(/Draw the architecture diagram "([^"]*)"/)?.[1] ?? 'Architecture').replace(/[^\w .:,/-]/g, '');
+    const slugs = [...ask.matchAll(/in repos\/([\w.-]+)\//g)].map((m) => m[1]).slice(0, 3);
+    yield assistant(null, [{ type: 'text', text: 'I will look at the layout of the repository, then draw the diagram.' }]);
+    const found: { repo: string; file: string }[] = [];
+    for (const slug of slugs) {
+      yield* tool(
+        null,
+        'Glob',
+        { pattern: `repos/${slug}/*` },
+        () => {
+          const dir = path.resolve(d.projectDir, 'repos', slug);
+          const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n !== '.git' && n !== 'node_modules').sort().slice(0, 6) : [];
+          for (const n of names) found.push({ repo: slug, file: n });
+          return names.map((n) => `repos/${slug}/${n}`).join('\n') || '(empty)';
+        },
+        false,
+      );
+    }
+    const clean = (t: string) => t.replace(/[^\w .-]/g, '');
+    const cite = found.slice(0, 3).map((f) => `\`${f.repo}/${f.file}:1\``).join(', ') || 'the repository root';
+    const description = `Description: Demo ${kind.replace('_', ' ')} diagram of ${found.length} top-level item(s), based on ${cite}.`;
+    if (ask.includes('[demo-no-diagram]')) return 'I looked at the repository but I am not able to draw a diagram for it.';
+    if (ask.includes('[demo-invalid-mermaid]')) return '```mermaid\nflowchart LR\n  A[Request] -->\n```\n\n' + description;
+    if (ask.includes('[demo-huge-mermaid]')) {
+      const lines = Array.from({ length: 1500 }, (_, i) => `  n${i}["Node number ${i} with a long label to fill the space"] --> n${i + 1}`);
+      return '```mermaid\nflowchart LR\n' + lines.join('\n') + '\n```\n\n' + description;
+    }
+    let body: string;
+    if (kind === 'data_flow') {
+      body = ['sequenceDiagram', '  actor U as User', ...slugs.map((s, i) => `  participant R${i} as ${clean(s)}`), ...slugs.map((s, i) => `  U->>R${i}: request`), ...found.slice(0, 4).map((f) => `  Note over R${Math.max(0, slugs.indexOf(f.repo))}: reads ${clean(f.file)}`)].join('\n');
+    } else if (kind === 'system_context') {
+      body = ['flowchart LR', '  users(["Users"])', `  system["${clean(title)}"]`, '  users --> system', ...found.slice(0, 6).map((f, i) => `  system --> dep${i}["${clean(f.repo)}/${clean(f.file)}"]`)].join('\n');
+    } else {
+      body = ['flowchart TB', ...slugs.flatMap((s, si) => [`  subgraph g${si}["${clean(s)}"]`, ...found.filter((f) => f.repo === s).map((f, i) => `    c${si}_${i}["${clean(f.file)}"]`), '  end'])].join('\n');
+      if (slugs.length === 0) body = 'flowchart TB\n  empty["No repository"]';
+    }
+    return '```mermaid\n' + body + '\n```\n\n' + description;
   }
 
   async function* subagentSteps(

@@ -22,6 +22,7 @@ import { registerKiroAgentRoutes } from './kiro-agents.ts';
 import { registerRunRoutes } from './runs.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLearnRoutes } from './learn.ts';
+import { registerDiagramRoutes } from './diagrams.ts';
 import { registerJiraRoutes } from './jira.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
@@ -63,6 +64,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerRunRoutes();
     registerReviewRoutes();
     registerLearnRoutes();
+    registerDiagramRoutes();
     registerJiraRoutes();
     registerProjectAwsRoutes();
     registerAwsAccountRoutes();

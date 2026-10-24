@@ -233,6 +233,7 @@ A **session** is a saved goal that the portal drives through repeated agent runs
 | FR-LOOP-7 | Save a finished session as a loop spec. | route | |
 | FR-LOOP-8 | Loop metrics per spec, per project and global (done rate, autonomy, cost per done session, stagnation, intervention). | route (`/api/.../loop-metrics`, `/api/metrics`) | |
 | FR-LOOP-9 | Escalation: Inbox item and outbound webhook when blocked/failed/over budget; optional GitHub issue on blocked (GitHub repos). Dismissable. | code | |
+| FR-LOOP-10 | **Trigger action** `refresh_diagrams` (`trigger_config.action`): when the spec fires (manual, cron, webhook, GitHub or Jira event) it redraws the project's stale architecture diagrams (FR-DIAG-5) instead of starting a goal session; the goal template is not used. Up to 5 diagrams per firing; rate limit and dedup apply as for any spec. The run response is the first session started plus `refreshed` (`stale`, `started`, `skipped`); with nothing stale it has `id: null`. Any other action value is refused. NEW-2 builds its "keep docs current" spec on this. | code (`loop-triggers.ts`, `loop-specs.ts`, `diagrams.ts`) | Built (NEW-1) |
 
 ### 2.11 Inbox and notifications (INBOX)
 
@@ -312,6 +313,25 @@ Limits seen in the code (these are the gaps behind NEW-6 to NEW-8):
 - The PPTX team depends on Python packages and an internet image service, which contradicts the "no installs, no network" design of `make-doc`.
 - Generated documents are not tied to their sources, so they do not go stale when the code changes (Learn documents do).
 
+### 2.18 Architecture diagrams (DIAG, NEW-1)
+
+Mermaid architecture diagrams drawn from a project's repositories by an agent session. The server side is built; the screens are the frontend's next step.
+
+| ID | Requirement | Evidence | Decision |
+|---|---|---|---|
+| FR-DIAG-1 | A project holds diagrams of a `kind`: `system_context`, `components` or `data_flow`, each drawn from 1 to 8 of the project's repositories, with a title and an optional focus (max 1,000 characters). At most 100 per project. | code (`diagrams.ts`, `diagram-text.ts`) | Built (NEW-1) |
+| FR-DIAG-2 | Generation is an ordinary session, not custom model code: a single unattended run (one iteration, $5 budget, no push) in the "Document a repository" style. It reads the repositories' reference clones in place (`repos/<slug>/`, read-only by instruction) and must reply with one fenced `mermaid` block and a `Description:` of 2 to 5 sentences citing source files. Concurrency caps, the queue, drain and the monthly budget checks apply as for any session; the session shows in the session list titled "Diagram: <title>". | code (`diagrams.ts`, `diagram-text.ts`) | Built (NEW-1) |
+| FR-DIAG-3 | The reply is checked before it is stored: Mermaid source at most 20,000 characters (the NEW-8 limit) and 600 lines; a supported diagram type (flowchart, graph, sequenceDiagram, classDiagram, stateDiagram, erDiagram, C4*, architecture-beta, block-beta); no script or HTML objects, `click` directives, `init` directives or security settings; and a real parse by Mermaid's own parser, so syntax errors are caught without a browser. A failed check keeps the previous version and sets `error` ("... The previous version (vN) was kept."); a diagram with no version yet ends as `error`. | code (`diagram-text.ts`), test | Built (NEW-1) |
+| FR-DIAG-4 | Versioning: every successful generation appends a version (Mermaid, description, cited files, the repositories and commit SHAs used, session and run, author, time); older versions stay retrievable. The latest version is committed to the project's git repository as `docs/diagrams/<slug>.mmd` plus `<slug>.json` (FR-PROJ-5), one commit per version, and removed with a commit when the diagram is deleted. | code, test | Built (NEW-1) |
+| FR-DIAG-5 | Stale tracking mirrors Learn (FR-LEARN-2): each version stores a hash of its repositories' commits; a diagram is flagged `stale` when the HEAD of any of those repositories differs (or a repository is gone). Recomputed whenever the list or a diagram is read and after every repository sync; the UI is told with a `diagrams.updated` event. Refresh redraws a diagram (a new version) on demand (`POST .../refresh`), for all stale ones (`POST .../refresh-stale`) or from a loop spec (FR-LOOP-10). | code, test | Built (NEW-1) |
+| FR-DIAG-6 | Export: raw Mermaid (`.mmd`, any version) always; PNG through the NEW-8 renderer. With no headless browser PNG answers 501 with the reason and a pointer to `.mmd`; a diagram the renderer rejects answers 422. The list tells the UI whether PNG is available. | code (`diagrams.ts`, `docimage.ts`), test | Built (NEW-1) |
+| FR-DIAG-7 | Access and audit: viewers read, list and export; editors generate, refresh, rename and delete. Actions are audited (`diagram.create`, `diagram.refresh`, `diagram.version` including failed attempts, `diagram.export`, `diagram.delete`). | code, test | Built (NEW-1) |
+| FR-DIAG-8 | Reuse by NEW-6 and NEW-7: `diagramSource(projectId, idOrSlug, version?)` returns a stored diagram's Mermaid, description, kind, stale flag and sources; `diagramMarkdown(...)` returns it as a Markdown `mermaid` fence (optional heading and description) that `make-doc` draws as a picture (NEW-8). Agents can also read `docs/diagrams/<slug>.mmd` in the project folder. | code (`diagrams.ts`), test | Built (NEW-1) |
+
+API (all under `/api/projects/:pid/diagrams`): `GET` list; `POST` create and generate `{ kind, repoIds | repoId, title?, focus? }` returns `{ diagram, workflow }`; `GET /:id` (id or slug) returns `{ diagram (with mermaid), versions }`; `GET /:id/versions/:n`; `PATCH /:id` `{ title?, focus? }`; `POST /:id/refresh` `{ focus? }`; `POST /refresh-stale`; `GET /:id/export?format=png|mmd&version=n`; `DELETE /:id`.
+
+Not built: restoring an old version as the current one (git history and the version list have it), a reply that asks the person a question, and the screens.
+
 ## 3. Navigation map (current)
 
 Menu (Phase 3): Sessions, Workspaces, Tickets, Code review, Knowledge, Learn, Vault, Insights, Setup, then the Portal group. Without a project picked, the menu is Projects, Vault, Insights and the Portal group.
@@ -325,6 +345,8 @@ Menu (Phase 3): Sessions, Workspaces, Tickets, Code review, Knowledge, Learn, Va
 
 Core tables: `users`, `sessions` (login), `settings`, `secrets`, `projects`, `project_members`, `repos`, `agent_runs`, `agent_run_events`, `inputs`, `documents`, `sections` (+ `sections_fts`), `project_folders`, `reviews`, `findings`, `project_roles`, `learn_docs`, `quizzes`, `quiz_attempts`, `paths`, `doc_reads`, `project_jira`, `project_aws`, `aws_identities`, `workflows`, `workflow_events`.
 Added later (seen in code, schema not re-read): `workflow_context`, `loop_specs`, `loop_run_states`, trigger history, `outbound_webhooks`, teams / team members / team projects, invitations, SCIM tokens, audit log, API tokens, workspaces, integrations, git/AWS connections, vault.
+
+Architecture diagrams (NEW-1) are two tables, `diagrams` and `diagram_versions`, added as migration 2: a later change is a new entry appended to the list in `db.ts`, never an edit of the baseline.
 
 Execution model (after Phase 1): `workflows` (+ `workflow_events`) are the sessions; each iteration is one row of `agent_runs` (+ `agent_run_events`) linked by `agent_runs.workflow_id`. Rows with no `workflow_id` are background tasks. The schema is one clean baseline in `server/db.ts` (D-4); an older database is refused, not migrated.
 
@@ -381,7 +403,7 @@ These come from file sizes and structure. Measure before acting on any of them.
 
 | ID | Candidate | Builds on |
 |---|---|---|
-| NEW-1 | Architecture diagram generator: produce Mermaid diagrams (system context, components, data flow) from a repository, store them versioned in the project, refresh on demand or on a trigger. | Document-a-repository mode, Markdown/Mermaid rendering, loop triggers |
+| NEW-1 | Architecture diagram generator: produce Mermaid diagrams (system context, components, data flow) from a repository, store them versioned in the project, refresh on demand or on a trigger. **Built (server):** see 2.18 (FR-DIAG-1 to 8) and FR-LOOP-10. An agent session draws the diagram; the reply is validated (Mermaid parse, 20,000 characters) before it becomes a new version committed under `docs/diagrams/`; a diagram is flagged stale when a repository's HEAD moves; PNG export uses the NEW-8 renderer. Tests: `test/diagrams.test.ts`. The screens are still to build. | Document-a-repository mode, Markdown/Mermaid rendering, loop triggers |
 | NEW-2 | "Keep docs current" loop spec: on PR merge or nightly, update affected docs and diagrams and open a PR. | `github_event`/cron triggers, technical-writer role |
 | NEW-3 | Auto code review on new PR with comments posted back. | Review module, GitHub trigger |
 | NEW-4 | QA pack: generate test cases from FSD/TSD and a ticket, trace each case to its source section. | Knowledge base, QA role |

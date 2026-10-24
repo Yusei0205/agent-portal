@@ -142,6 +142,18 @@ export async function createWorkflowFromSpec(
     throw badRequest(e.message);
   }
 
+  // "Refresh diagrams" redraws stale architecture diagrams instead of starting a goal session (NEW-1). It returns the
+  // first session it started, or a row without an id when nothing was stale; `refreshed` lists everything it did.
+  if (spec.trigger_config.action === 'refresh_diagrams') {
+    const { refreshStaleDiagrams } = await import('./diagrams.ts');
+    const refreshed = await refreshStaleDiagrams(project.id, userId, { specId: spec.id });
+    const first = refreshed.started[0] ? one<Row>('SELECT * FROM workflows WHERE id = ?', refreshed.started[0].workflowId) : null;
+    return {
+      ...(first ?? { id: null, project_id: project.id, title: 'Refresh diagrams', status: 'done', stop_reason: refreshed.stale ? 'No diagram could be refreshed' : 'No diagram is stale' }),
+      refreshed,
+    };
+  }
+
   const goal = buildGoal(spec, vars);
   const title = (goal.split('\n')[0] || spec.name).slice(0, 80);
 

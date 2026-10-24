@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { openDb, closeDb, all, one } from '../server/db.ts';
+import { openDb, closeDb, all, one, SCHEMA_VERSION } from '../server/db.ts';
 
 const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'portal-db-')), 'portal.db');
 
@@ -19,12 +19,13 @@ test('a fresh database has the unified execution tables and none of the old ones
     for (const t of ['workflows', 'workflow_events', 'agent_runs', 'agent_run_events', 'inputs', 'loop_run_states']) assert.ok(tables.includes(t), `${t} exists`);
     assert.ok(!tables.includes('runs'), 'no runs table');
     assert.ok(!tables.includes('run_events'), 'no run_events table');
+    for (const t of ['diagrams', 'diagram_versions']) assert.ok(tables.includes(t), `${t} exists (appended migration)`);
     const runCols = all<{ name: string }>('PRAGMA table_info(agent_runs)').map((c) => c.name);
     assert.ok(runCols.includes('workflow_id'), 'an agent run names its session');
     const wfCols = all<{ name: string }>('PRAGMA table_info(workflows)').map((c) => c.name);
     assert.ok(wfCols.includes('permission_mode'));
     for (const dead of ['locked_by', 'locked_until', 'heartbeat_at']) assert.ok(!wfCols.includes(dead), `${dead} is gone`);
-    assert.equal(one<{ version: number }>('SELECT version FROM schema_version')?.version, 1);
+    assert.equal(one<{ version: number }>('SELECT version FROM schema_version')?.version, SCHEMA_VERSION);
   } finally {
     closeDb();
   }
