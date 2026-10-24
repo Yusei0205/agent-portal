@@ -13,6 +13,7 @@ import { Knowledge } from './pages/Knowledge.jsx';
 import { Learn } from './pages/Learn.jsx';
 import { Diagrams } from './pages/Diagrams.jsx';
 import { Presentations } from './pages/Presentations.jsx';
+import { GeneratedDocs } from './pages/GeneratedDocs.jsx';
 import { Sessions, legacyRunTarget } from './pages/Sessions.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
@@ -85,6 +86,8 @@ const PROJECT_MAIN_ITEMS = [
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
   { tab: 'learn', label: 'Learn', icon: 'learn' },
   { tab: 'diagrams', label: 'Diagrams', icon: 'builder' },
+  // Not called "Documents": Knowledge already has a Documents tab for uploaded files.
+  { tab: 'documents', label: 'Generated docs', icon: 'file' },
   { tab: 'presentations', label: 'Presentations', icon: 'file' },
   { tab: 'vault', label: 'Vault', icon: 'inbox', scoped: true },
   { tab: 'insights', label: 'Insights', icon: 'chart', scoped: true },
@@ -552,6 +555,7 @@ function ProjectScope({ projectId, route }) {
       'learn.progress',
       'diagrams.updated',
       'presentations.updated',
+      'generated-docs.updated',
       'builder.updated',
       'members.updated',
       'project.updated',
@@ -587,6 +591,9 @@ function ProjectScope({ projectId, route }) {
       break;
     case 'diagrams':
       page = <Diagrams route={route} />;
+      break;
+    case 'documents':
+      page = <GeneratedDocs route={route} />;
       break;
     case 'presentations':
       page = <Presentations route={route} />;

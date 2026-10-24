@@ -427,4 +427,113 @@
  * @property {{ index: number, title: string, layout: string, notes: string, url: string, svg_url: string, png_url?: string }[]} slides
  */
 
+/** @typedef {'overview' | 'architecture' | 'api' | 'runbook' | 'user-guide'} GeneratedDocType */
+
+/**
+ * A checked citation of one document version (detail responses only).
+ * @typedef {object} DocCitation
+ * @property {string} text As written in the document
+ * @property {string} path
+ * @property {number | null} line
+ * @property {string | null} repo
+ * @property {boolean} ok Whether the file (and line) exists in the snapshot the document was written from
+ * @property {string | null} reason Why it does not resolve
+ */
+
+/**
+ * What one version was written from.
+ * @typedef {object} DocSources
+ * @property {{ id: string, name: string, slug: string, branch: string, commit: string | null }[]} repos
+ * @property {{ documents: number, names: string[] } | null} knowledge null when knowledge was not used
+ * @property {boolean} decisions
+ * @property {{ id: string, slug: string, title: string, version: number | null }[]} diagrams
+ */
+
+/**
+ * One version of a generated document. The detail form adds `markdown` and `citations.items`.
+ * @typedef {object} GeneratedDocVersion
+ * @property {number} version
+ * @property {string} title
+ * @property {number} bytes
+ * @property {boolean} has_word False when the Word file could not be built
+ * @property {string | null} template_used
+ * @property {string[]} warnings
+ * @property {{ total: number, unresolved: number, items?: DocCitation[] }} citations
+ * @property {DocSources} sources
+ * @property {string | null} workflow_id
+ * @property {string | null} created_by_name
+ * @property {string} created_at
+ * @property {{ markdown: string, word?: string }} links
+ * @property {string} [markdown]
+ */
+
+/**
+ * A generated document (GET /api/projects/:pid/generated-docs). Live updates arrive as the `generated-docs.updated` project event.
+ * @typedef {object} GeneratedDocSummary
+ * @property {string} id
+ * @property {string} project_id
+ * @property {GeneratedDocType} type
+ * @property {string} type_label
+ * @property {string} title
+ * @property {string} audience
+ * @property {{ id: string, name: string, slug: string, removed: boolean }[]} repos
+ * @property {boolean} include_knowledge
+ * @property {boolean} include_decisions
+ * @property {{ id: string, title: string, slug: string, removed: boolean, used_version: number | null, current_version: number | null }[]} diagrams
+ * @property {{ requested_id: string | null, requested_name: string | null, used: string | null }} template
+ * @property {'generating' | 'ready' | 'error'} status A failed rewrite keeps `ready` and sets `error`
+ * @property {string | null} error
+ * @property {boolean} generating
+ * @property {boolean} queued
+ * @property {string | null} workflow_id The session writing it
+ * @property {number} version 0 until the first version exists
+ * @property {boolean} stale
+ * @property {string[]} stale_reasons Plain-language reasons
+ * @property {string[]} warnings Of the current version
+ * @property {{ total: number, unresolved: number }} citations
+ * @property {number} bytes
+ * @property {boolean} has_word
+ * @property {string | null} generated_at
+ * @property {{ markdown: string, word?: string } | null} links
+ * @property {string | null} created_by_name
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {string} [markdown] Only in the detail response
+ * @property {GeneratedDocVersion | null} [current] Only in the detail response
+ * @property {GeneratedDocVersion[]} [versions] Only in the detail response, newest first
+ */
+
+/**
+ * Whether diagrams can be drawn into the Word file on this server.
+ * @typedef {object} WordCapability
+ * @property {boolean} diagrams
+ * @property {string | null} diagramsReason Why diagrams stay code blocks in Word
+ */
+
+/**
+ * GET /api/projects/:pid/generated-docs.
+ * @typedef {object} GeneratedDocListResponse
+ * @property {GeneratedDocSummary[]} documents Newest first
+ * @property {{ id: GeneratedDocType, label: string }[]} types
+ * @property {{ id: string, name: string, scope: TemplateScope } | null} template The Word template that applies when none is chosen
+ * @property {WordCapability} word
+ * @property {{ titleChars: number, audienceChars: number, repos: number, diagrams: number, perProject: number }} limits
+ */
+
+/**
+ * GET /api/projects/:pid/generated-docs/:id.
+ * @typedef {object} GeneratedDocDetailResponse
+ * @property {GeneratedDocSummary} document
+ * @property {WorkflowView | null} workflow
+ * @property {WordCapability} word
+ */
+
+/**
+ * POST /api/projects/:pid/generated-docs/refresh-stale.
+ * @typedef {object} GeneratedDocRefreshResponse
+ * @property {number} stale
+ * @property {{ docId: string, title: string, workflowId: string }[]} started
+ * @property {{ docId: string, title: string, reason: string }[]} skipped
+ */
+
 export {};

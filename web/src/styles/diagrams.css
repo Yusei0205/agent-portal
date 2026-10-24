@@ -20,3 +20,26 @@
 .diagram-versions li.is-shown {
   border-color: var(--accent);
 }
+
+/* ---------- Generated documents ---------- */
+.gdoc-reasons {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--warn);
+}
+.gdoc-cites {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.gdoc-cites li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.gdoc-body {
+  overflow-x: auto;
+}

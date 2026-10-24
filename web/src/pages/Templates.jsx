@@ -33,7 +33,7 @@ function Winner({ kind, eff }) {
   );
 }
 
-/** Layout details of a PowerPoint template; Word templates are only stored for now. */
+/** Layout details of a PowerPoint template; Word templates have no layout details to show. */
 function TemplateDetails({ t }) {
   const info = t.info || {};
   const who = (
@@ -45,7 +45,7 @@ function TemplateDetails({ t }) {
   if (t.kind === 'docx') {
     return (
       <p className="muted small">
-        A Word template. It is stored here and used when documents are generated from a template. {who}
+        A Word template. Generated documents follow its fonts, colours, header and footer; styles it lacks are filled in from the built-in look. {who}
       </p>
     );
   }
@@ -164,7 +164,7 @@ export function Templates({ portal = false }) {
           {!templates.length ? (
             <Empty icon="file" title="No templates yet" action={canEdit ? uploadButton : null}>
               {canEdit
-                ? `Upload a PowerPoint (.pptx, .potx) or Word (.docx, .dotx) file with your brand's fonts, colours and logo. The first one of each kind becomes the default, and new decks follow it. Files up to ${bytes(list.data.limits.bytes)}; files with macros are refused.`
+                ? `Upload a PowerPoint (.pptx, .potx) or Word (.docx, .dotx) file with your brand's fonts, colours and logo. The first one of each kind becomes the default, and new decks and documents follow it. Files up to ${bytes(list.data.limits.bytes)}; files with macros are refused.`
                 : portal
                   ? 'No portal template has been uploaded yet.'
                   : 'No template has been uploaded yet. Editors can upload one for this project.'}

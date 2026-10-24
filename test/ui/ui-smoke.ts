@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { chromium, type Page } from 'playwright';
 import { FSD_MD, makeDocx, makeRepo } from '../fixtures.ts';
 import { makeTemplate } from '../pptx-fixtures.ts';
+import { makeWordTemplate } from '../docx-fixtures.ts';
 
 /** The Settings page source: Settings.jsx plus the modules it was split into (pages/settings/). */
 function readSettingsSource(): string {
@@ -500,6 +501,133 @@ async function main() {
     await page.locator('tr', { hasText: 'Brand template' }).waitFor({ state: 'detached' });
     await page.locator('tr', { hasText: 'Portal look' }).locator('.badge', { hasText: 'In use' }).waitFor();
     check(true, 'without a project template the portal default applies');
+
+    console.log('generated documents');
+    const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    // The menu entry is "Generated docs" because Knowledge already has a Documents tab for uploaded files.
+    await page.getByRole('link', { name: 'Generated docs', exact: true }).click();
+    await page.getByRole('heading', { name: 'Generated docs', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'No generated documents yet', exact: true }).waitFor();
+    check(await page.getByText('cites the files and lines it used').count(), 'generated docs page explains itself when empty');
+    check(/\/documents$/.test(page.url()), 'generated docs live at #/p/<id>/documents');
+    await shot(page, 'gdocs-empty');
+    // A Word template, so the dialog can show which one applies by default.
+    await page.goto(`${base}/#/p/${pid}/setup/templates`);
+    await page.getByRole('button', { name: 'Upload template', exact: true }).first().click();
+    await page.getByLabel('Template file').setInputFiles({ name: 'Report.docx', mimeType: DOCX, buffer: await makeWordTemplate() });
+    await page.getByLabel('Name (optional)').fill('Report look');
+    await page.getByRole('button', { name: 'Upload', exact: true }).click();
+    await page.locator('tr', { hasText: 'Report look' }).waitFor();
+    await page.getByRole('link', { name: 'Generated docs', exact: true }).click();
+    await page.getByRole('button', { name: 'New document', exact: true }).first().click();
+    check(await page.getByRole('button', { name: 'Write it', exact: true }).isEnabled(), 'knowledge and decisions are on by default, so a document can be started');
+    await page.locator('.modal .toggle', { hasText: 'Project knowledge' }).click();
+    await page.locator('.modal .toggle', { hasText: 'Decisions log' }).click();
+    check(await page.getByRole('button', { name: 'Write it', exact: true }).isDisabled(), 'at least one source is required');
+    await page.locator('.modal .toggle', { hasText: 'Project knowledge' }).click();
+    check(await page.getByLabel('Word template').locator('option', { hasText: 'Default: Report look' }).count(), 'the template choice defaults to the effective Word template');
+    check((await page.getByLabel('Word template').locator('option').count()) === 2, 'only Word templates are offered');
+    check((await page.locator('.modal input[name="gdoc-type"]').count()) === 5, 'all five document types are offered');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+
+    const docTypes = [
+      ['System overview', 'overview'],
+      ['Architecture', 'architecture'],
+      ['API reference', 'api'],
+      ['Runbook', 'runbook'],
+      ['User guide', 'user-guide'],
+    ] as const;
+    for (const [label, key] of docTypes) {
+      await page.getByRole('button', { name: 'New document', exact: true }).first().click();
+      await page.locator('.modal .choice', { hasText: label }).first().click();
+      await page.locator('.modal .choice', { hasText: 'refund-service' }).click();
+      await page.getByLabel('Title (optional)').fill(`Refunds ${key}`);
+      await page.getByLabel('Audience (optional)').fill('new support staff');
+      await page.getByRole('button', { name: 'Write it', exact: true }).click();
+      await page.getByRole('heading', { name: `Refunds ${key}`, exact: true }).waitFor();
+      if (await page.locator('.gdoc-page .badge', { hasText: /^(Generating|Queued)$/ }).count()) {
+        check(await page.getByRole('button', { name: 'Delete', exact: true }).isDisabled(), 'a document being written cannot be deleted');
+      }
+      await page.locator('.gdoc-page .badge', { hasText: /^Ready$/ }).waitFor({ timeout: 60000 });
+      check((await page.locator('.gdoc-body .md h2').count()) >= 2, `a ${label} document is rendered from its Markdown`);
+      check((await page.locator('.gdoc-cites li .badge', { hasText: 'Resolved' }).count()) > 0, `the ${label} document lists resolved citations`);
+      check(await page.getByText('Template: Report look').count(), `the ${label} document shows the Word template it followed`);
+      if (key === 'overview') {
+        check(await page.getByText('Version 1').count(), 'the first document is version 1');
+        await shot(page, 'gdoc-view');
+        await page.getByRole('link', { name: '← Generated docs' }).click();
+        continue;
+      }
+      await page.getByRole('button', { name: 'Delete', exact: true }).click();
+      await page.getByRole('button', { name: 'Delete document', exact: true }).click();
+      await page.getByRole('heading', { name: 'Generated docs', exact: true }).waitFor();
+      await page.locator('table[aria-label="Generated documents"] tr', { hasText: `Refunds ${key}` }).waitFor({ state: 'detached' });
+    }
+
+    // Unresolved citations are warnings, shown next to the reason.
+    await page.getByRole('button', { name: 'New document', exact: true }).first().click();
+    await page.locator('.modal .choice', { hasText: 'refund-service' }).click();
+    await page.getByLabel('Title (optional)').fill('Bad cites [demo-bad-citation]');
+    await page.getByRole('button', { name: 'Write it', exact: true }).click();
+    await page.locator('.gdoc-page .badge', { hasText: /^Ready$/ }).waitFor({ timeout: 60000 });
+    check((await page.locator('.gdoc-cites li .badge', { hasText: 'Unresolved' }).count()) === 2, 'unresolved citations are marked');
+    check(await page.getByText(/2 of \d+ cited locations do not resolve/).count(), 'the bad-citation warning is shown');
+    await shot(page, 'gdoc-bad-citation');
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete document', exact: true }).click();
+    await page.getByRole('heading', { name: 'Generated docs', exact: true }).waitFor();
+
+    // The overview is listed; adding a knowledge document makes it stale, and regenerating appends version 2.
+    const docRow = page.locator('table[aria-label="Generated documents"] tr', { hasText: 'Refunds overview' });
+    await docRow.waitFor();
+    check(await docRow.locator('.badge', { hasText: 'Ready' }).count(), 'the list shows the document as ready');
+    check(await docRow.getByText('System overview').count(), 'the list shows the type');
+    check(await docRow.getByText('v1').count(), 'the list shows the version');
+    check(await docRow.getByText('Report look').count(), 'the list shows the template used');
+    check((await page.getByRole('button', { name: /Refresh all stale/ }).count()) === 0, 'nothing is stale yet');
+    const extra = path.join(tmp, 'Refund holidays.md');
+    fs.writeFileSync(extra, '# Refund holidays\n\nRefunds are not paid out on public holidays. The finance manager keeps the calendar.\n');
+    await page.getByRole('link', { name: 'Knowledge', exact: true }).click();
+    await page.locator('input[type=file]').first().setInputFiles(extra);
+    await page.getByRole('link', { name: 'Refund holidays', exact: true }).waitFor();
+    await page.getByRole('link', { name: 'Generated docs', exact: true }).click();
+    await page.locator('table[aria-label="Generated documents"] tr', { hasText: 'Refunds overview' }).locator('.badge', { hasText: 'Stale: sources changed' }).waitFor({ timeout: 20000 });
+    check(await page.getByText(/Knowledge document added/).count(), 'the stale reason is given in words');
+    check(await page.getByRole('button', { name: 'Refresh all stale (1)', exact: true }).count(), 'Refresh all stale shows how many documents are stale');
+    await shot(page, 'gdocs-stale');
+    await page.getByRole('link', { name: 'Refunds overview' }).click();
+    await page.locator('.gdoc-page .badge', { hasText: 'Stale: sources changed' }).waitFor();
+    await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
+    check(await page.getByRole('dialog', { name: 'Regenerate document' }).count(), 'regenerate asks for audience, title and template');
+    await page.getByLabel('Audience (optional)').fill('the operations team');
+    await page.getByRole('button', { name: 'Rewrite it', exact: true }).click();
+    await page.getByText('Version 2').waitFor({ timeout: 60000 });
+    await page.locator('.gdoc-page .badge', { hasText: /^Ready$/ }).waitFor();
+    check((await page.locator('.gdoc-page .badge', { hasText: 'Stale' }).count()) === 0, 'a regenerated document is no longer stale');
+    check((await page.locator('.diagram-versions li').count()) === 2, 'version history lists both versions');
+
+    // Downloads go through fetch; the file names carry the right extension.
+    const word = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download Word', exact: true }).click();
+    check((await (await word).suggestedFilename()).endsWith('.docx'), 'Download Word saves a .docx file');
+    const md = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download Markdown', exact: true }).click();
+    check((await (await md).suggestedFilename()).endsWith('.md'), 'Download Markdown saves a .md file');
+
+    await page.locator('.diagram-versions li', { hasText: 'v1' }).getByRole('link', { name: 'View', exact: true }).click();
+    await page.getByText('Older versions are read-only').waitFor();
+    check(await page.getByRole('button', { name: 'Regenerate', exact: true }).count(), 'an older version is shown with the actions of the document');
+    await page.getByRole('link', { name: /Back to the latest/ }).click();
+
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    check(await page.getByRole('dialog', { name: 'Delete this document?' }).count(), 'deleting a document asks for confirmation in the page');
+    await page.getByRole('button', { name: 'Delete document', exact: true }).click();
+    await page.getByRole('heading', { name: 'No generated documents yet', exact: true }).waitFor();
+    // Remove the Word template again so later steps are unaffected.
+    await page.goto(`${base}/#/p/${pid}/setup/templates`);
+    await page.locator('tr', { hasText: 'Report look' }).getByRole('button', { name: 'Delete Report look' }).click();
+    await page.getByRole('button', { name: 'Delete template', exact: true }).click();
+    await page.locator('tr', { hasText: 'Report look' }).waitFor({ state: 'detached' });
 
     console.log('connections');
     await page.goto(`${base}/#/connections`);
