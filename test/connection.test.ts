@@ -43,6 +43,9 @@ before(async () => {
   for (const name of ['Kiro project', 'Own Bedrock', 'Split', 'Inherit all', 'Owned']) {
     pids[name] = (await admin.post('/api/projects', { name, description: 'd' })).project.id;
   }
+  const kiroAgents = path.join(srv.dataDir, 'projects', 'kiro-project', '.kiro', 'agents');
+  fs.mkdirSync(kiroAgents, { recursive: true });
+  fs.writeFileSync(path.join(kiroAgents, 'builder.json'), JSON.stringify({ name: 'builder', description: 'A Kiro agent so the project can run on Kiro', prompt: 'You build things.' }));
   await admin.post(`/api/projects/${pids.Owned}/members`, { email: 'owner@example.com', access: 'owner', role: 'Lead' });
 });
 

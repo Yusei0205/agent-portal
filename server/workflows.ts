@@ -547,6 +547,9 @@ async function drive(id: string, gen: number): Promise<void> {
     // On Kiro a project Kiro agent leads with its own profile; a .claude agent's instructions become the system text,
     // which the runner words for the run's engine (Claude's Agent tool or Kiro's subagent tool).
     let lead: RunLead | undefined;
+    if (!w.lead_agent && isKiro(w.project_id, w.engine) && !leadChoices(getProject(w.project_id), true).length) {
+      return askEngineSwitch(id, 'this project has no usable Kiro agent.');
+    }
     if (w.lead_agent) {
       const onKiro = isKiro(w.project_id, w.engine);
       lead = resolveLead(getProject(w.project_id), w.lead_agent, onKiro) ?? undefined;

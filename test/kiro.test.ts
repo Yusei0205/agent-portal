@@ -26,6 +26,8 @@ before(async () => {
   await c.post('/api/auth/setup', { email: 'admin@example.com', name: 'Admin', password: 'a-long-password-1' });
   pid = (await c.post('/api/projects', { name: 'Kiro check' })).project.id;
   projectPath = path.join(srv.dataDir, 'projects', 'kiro-check');
+  fs.mkdirSync(path.join(projectPath, '.kiro', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(projectPath, '.kiro', 'agents', 'builder.json'), JSON.stringify({ name: 'builder', description: 'A Kiro agent so the project can run on Kiro', prompt: 'You build things.' }));
 });
 
 after(() => srv.close());
@@ -98,14 +100,14 @@ test('Kiro run: guard, approvals, tool events, credits, profile cleanup', async 
   const start = entries().find((e) => e.event === 'start');
   assert.deepEqual(start.profile.tools, ['read', 'write', 'shell', 'grep', 'glob', 'subagent']);
   assert.deepEqual(start.profile.allowedTools, ['read', 'grep', 'glob']);
-  assert.deepEqual(start.profile.toolsSettings.subagent.availableAgents, [`${start.profile.name}-general`], 'only the run’s own subagents, never the user’s global Kiro agents');
+  assert.deepEqual(start.profile.toolsSettings.subagent.availableAgents, [`${start.profile.name}-builder`], 'only the run’s own subagents, never the user’s global Kiro agents');
   assert.equal(start.profile.toolsSettings.subagent.trustedAgents, undefined, 'subagents are never trusted to skip the portal’s checks');
   assert.equal(start.cwd, projectPath);
   assert.match(start.profile.prompt, /Agent Portal/);
   assert.equal(rpc('session/set_model')[0].params.modelId, 'claude-sonnet-5.5', 'sonnet alias resolves to the newest sonnet');
 
   const agentsDir = path.join(projectPath, '.kiro', 'agents');
-  await waitFor(async () => !fs.existsSync(agentsDir) || fs.readdirSync(agentsDir).length === 0, 'per-run profile removed');
+  await waitFor(async () => !fs.existsSync(agentsDir) || fs.readdirSync(agentsDir).every((f) => !f.startsWith('agent-portal-')), 'per-run profile removed');
   assert.match(fs.readFileSync(path.join(projectPath, '.git', 'info', 'exclude'), 'utf8'), /\.kiro\/agents\/agent-portal-\*/);
 });
 
@@ -159,8 +161,7 @@ test('Kiro model list and an unavailable pinned model', async () => {
 
 test('Kiro subagents: the project roles become the team, each subagent is its own agent, and its writes are checked', async () => {
   clearLog();
-  fs.mkdirSync(path.join(projectPath, '.claude', 'agents'), { recursive: true });
-  fs.writeFileSync(path.join(projectPath, '.claude', 'agents', 'backend-agent.md'), '---\nname: backend-agent\ndescription: Builds the API\ntools: Read, Grep, Write, Bash\n---\nYou build backend code.\n');
+  fs.writeFileSync(path.join(projectPath, '.kiro', 'agents', 'backend-agent.json'), JSON.stringify({ name: 'backend-agent', description: 'Builds the API', prompt: 'You build backend code.', tools: ['read', 'grep', 'write', 'shell'], allowedTools: ['read', 'grep'] }));
   const { run } = await startSingleRun(c, pid, { prompt: 'Split the work [delegate]', permissionMode: 'acceptEdits' });
 
   // Starting subagents asks first, like any tool that is not a plain edit.
@@ -176,7 +177,7 @@ test('Kiro subagents: the project roles become the team, each subagent is its ow
 
   const start = entries().find((e) => e.event === 'start');
   const names = start.profile.toolsSettings.subagent.availableAgents;
-  assert.deepEqual(names, [`${start.profile.name}-backend-agent`, `${start.profile.name}-general`]);
+  assert.deepEqual([...names].sort(), [`${start.profile.name}-backend-agent`, `${start.profile.name}-builder`]);
   assert.match(start.profile.prompt, new RegExp(`- ${start.profile.name}-backend-agent — backend-agent: Builds the API`));
   const role = entries().find((e) => e.event === 'role-profile').roleProfile;
   assert.deepEqual(role.tools, ['read', 'grep', 'write', 'shell']);
@@ -199,7 +200,7 @@ test('Kiro subagents: the project roles become the team, each subagent is its ow
   assert.equal(closed.data.message.content[0].content, 'Wrote notes.md.', 'the subagent’s summary is its report');
 
   const agentsDir = path.join(projectPath, '.kiro', 'agents');
-  await waitFor(async () => !fs.existsSync(agentsDir) || fs.readdirSync(agentsDir).length === 0, 'all generated profiles removed');
+  await waitFor(async () => !fs.existsSync(agentsDir) || fs.readdirSync(agentsDir).every((f) => !f.startsWith('agent-portal-')), 'all generated profiles removed');
 });
 
 test('Kiro integrations: MCP servers in the profile, and read-only ones refuse changing tools', async () => {

@@ -45,9 +45,25 @@ async function kiroSession(extra: Record<string, unknown> = {}) {
   return workflow.id as string;
 }
 
+function addKiroAgent(): void {
+  const dir = path.join(srv.dataDir, 'projects', 'engine-switch', '.kiro', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'builder.json'), JSON.stringify({ name: 'builder', description: 'A Kiro agent', prompt: 'You build things.' }));
+}
+
 async function resume(id: string) {
   await c.post(`/api/workflows/${id}/resume`);
 }
+
+test('no Kiro agent and no lead agent: the session still asks instead of running on Kiro', async () => {
+  const id = await kiroSession();
+  await resume(id);
+  const w = await settled(id);
+  assert.equal(w.engine, 'kiro');
+  assert.equal(w.last_run_id, null, 'nothing ran');
+  assert.match(w.engine_switch.reason, /no usable Kiro agent/);
+  await c.post(`/api/workflows/${id}/engine-switch`, { accept: false });
+});
 
 test('no Kiro agent: the session asks, never falls back to the .claude agents, and never runs', async () => {
   const leads = await c.get(`/api/projects/${pid}/leads?engine=kiro`);
@@ -101,6 +117,7 @@ test('the answer needs a yes or no', async () => {
 });
 
 test('Kiro CLI missing: the session asks instead of just pausing', async () => {
+  addKiroAgent();
   await c.put('/api/settings', { kiro: { command: path.join(srv.dataDir, 'nowhere', 'kiro-cli') } });
   clearPackCache();
   try {
