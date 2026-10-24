@@ -6,7 +6,7 @@ import { useLoad } from '../lib/useAsync.js';
 import { href } from '../lib/router.js';
 import { timeAgo } from '../lib/util.js';
 import { Badge, Button, Empty, ErrorNote, Field, Modal, PageHeader, Spinner, useUi } from '../components/ui.jsx';
-import { RepoRows } from './sessions/NewSessionDialog.jsx';
+import { RepoRows } from './sessions/NewSessionRepos.jsx';
 import { IntegrationPicker } from './Integrations.jsx';
 
 /** Workspaces: named sets of this project's repositories to start sessions over. */
