@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { Marked } from 'marked';
-import { all, insert, one, run, update, type Row } from './db.ts';
+import { all, insert, isDbOpen, one, run, update, type Row } from './db.ts';
 import { del, get, patch, post, sendFile } from './http.ts';
 import { commitProject, getProject, notifyProject, projectDir, requireProject, type Access, type Project } from './projects.ts';
 import { resolveRefs, sectionsByIds, sectionsFor, sourceHash } from './knowledge.ts';
@@ -269,6 +269,8 @@ async function generateQuiz(quizId: string, userId: string): Promise<void> {
       updated_at: now(),
     });
   } catch (e: any) {
+    // The generation runs on after the request; a database closed on shutdown has nothing left to record.
+    if (!isDbOpen()) return;
     update('quizzes', q.id, { status: 'error', error: String(e?.message ?? e), updated_at: now(), questions: '[]' });
   }
   notifyProject(q.project_id, 'learn.updated', { id: q.id });
