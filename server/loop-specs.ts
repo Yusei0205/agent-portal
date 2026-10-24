@@ -98,7 +98,30 @@ export interface TriggerConfig {
    * architecture diagrams (NEW-1); "refresh_docs" rewrites its stale generated documents (NEW-6). The goal template is
    * then not used.
    */
-  action?: 'refresh_diagrams' | 'refresh_docs';
+  action?: TriggerAction;
+  /**
+   * Several actions in one firing (NEW-2), e.g. ["refresh_diagrams", "refresh_docs"]. `action` stays valid for a single
+   * one; a list of one is stored as `action`. Diagrams are always refreshed before documents, because documents embed them.
+   */
+  actions?: TriggerAction[];
+  /**
+   * With actions: collect what the refresh produced as files in a work branch of one repository (docs/diagrams/*.mmd and
+   * docs/generated/*.md) and push it as a single pull request, following the spec's push mode (docs-sync.ts).
+   */
+  publishPr?: boolean;
+  /** For publishPr: the repository that receives the pull request. Default: the one named by the event, else the first source. */
+  repoId?: string;
+  /** For github_event with pull_request: fire only when the pull request was merged into the repository's default branch. */
+  mergedOnly?: boolean;
+}
+
+export const TRIGGER_ACTIONS = ['refresh_diagrams', 'refresh_docs'] as const;
+export type TriggerAction = (typeof TRIGGER_ACTIONS)[number];
+
+/** The actions of a spec in the order they run (diagrams first), whether it uses `action` or `actions`. */
+export function specActions(tc: TriggerConfig): TriggerAction[] {
+  const list: unknown[] = Array.isArray(tc.actions) && tc.actions.length ? tc.actions : tc.action ? [tc.action] : [];
+  return TRIGGER_ACTIONS.filter((a) => list.includes(a));
 }
 
 export interface LoopSpec {
@@ -263,6 +286,23 @@ export const BUILT_IN_TEMPLATES: Omit<LoopSpec, 'id' | 'project_id' | 'created_b
     monthly_budget_usd: null,
     planning_gate: 0,
     is_template: 1,
+  },  {
+    name: 'Keep docs current',
+    description: 'When a pull request is merged into the default branch, and every night, bring stale generated documents and architecture diagrams up to date and open one pull request with the changes. Nothing stale: no session, no pull request.',
+    trigger_kind: 'github_event',
+    trigger_config: { events: ['pull_request'], mergedOnly: true, cron: '0 1 * * *', actions: ['refresh_diagrams', 'refresh_docs'], publishPr: true, maxPerHour: 2 },
+    goal_template: 'Refresh the stale generated documents and architecture diagrams of {{repo.name}} and propose the changes in one pull request.',
+    verification: [],
+    stop_rules: { maxIterations: 1, budgetUsd: 5 },
+    memory_config: { progressFile: false },
+    escalation: { onBlocked: true, onFail: true, webhook: true },
+    push_mode: 'ask',
+    trust_tools: 0,
+    lead_agent: null,
+    engine: null,
+    monthly_budget_usd: null,
+    planning_gate: 0,
+    is_template: 1,
   },
 ];
 
@@ -320,14 +360,53 @@ function validateTriggerKind(k: unknown): LoopSpec['trigger_kind'] {
   return String(k) as LoopSpec['trigger_kind'];
 }
 
-/** A trigger may do something other than start a goal session: "refresh_diagrams" or "refresh_docs". */
-function checkTriggerAction(tc: TriggerConfig): void {
-  const a = (tc as { action?: unknown }).action;
-  if (a === undefined || a === null || a === '') {
-    delete tc.action;
-    return;
+/**
+ * A trigger may do something other than start a goal session: refresh_diagrams / refresh_docs, alone (`action`) or
+ * together (`actions`, NEW-2). Normalises the config in place: a list of one becomes `action`, several stay `actions`.
+ */
+function checkTriggerAction(tc: TriggerConfig, projectId: string, kind: string): void {
+  if (!tc || typeof tc !== 'object' || Array.isArray(tc)) throw badRequest('Trigger config must be an object');
+  const bad = () => badRequest('Action must be refresh_diagrams or refresh_docs');
+  const empty = (v: unknown) => v === undefined || v === null || v === '';
+  const one_ = (tc as { action?: unknown }).action;
+  const many = (tc as { actions?: unknown }).actions;
+  if (empty(one_)) delete tc.action;
+  else if (!TRIGGER_ACTIONS.includes(one_ as TriggerAction)) throw bad();
+  if (many === undefined || many === null) delete tc.actions;
+  else {
+    if (!Array.isArray(many)) throw badRequest('Actions must be a list');
+    if (many.length > TRIGGER_ACTIONS.length) throw badRequest('Actions can name each action once');
+    for (const a of many) if (!TRIGGER_ACTIONS.includes(a as TriggerAction)) throw bad();
+    if (new Set(many).size !== many.length) throw badRequest('Actions can name each action once');
+    if (!many.length) delete tc.actions;
   }
-  if (a !== 'refresh_diagrams' && a !== 'refresh_docs') throw badRequest('Action must be refresh_diagrams or refresh_docs');
+  if (tc.action && tc.actions && !(tc.actions.length === 1 && tc.actions[0] === tc.action)) throw badRequest('Use either action or actions, not both');
+  if (tc.actions?.length === 1) {
+    tc.action = tc.actions[0];
+    delete tc.actions;
+  } else if (tc.actions) delete tc.action;
+  const flag = (k: 'publishPr' | 'mergedOnly') => {
+    if (tc[k] === undefined || tc[k] === null) delete tc[k];
+    else if (typeof tc[k] !== 'boolean') throw badRequest(`${k} must be true or false`);
+    else if (!tc[k]) delete tc[k];
+  };
+  flag('publishPr');
+  flag('mergedOnly');
+  if (tc.publishPr && !specActions(tc).length) throw badRequest('publishPr needs an action (refresh_diagrams or refresh_docs)');
+  if (tc.mergedOnly && kind !== 'github_event') throw badRequest('mergedOnly is for github_event specs');
+  if (empty(tc.repoId)) delete tc.repoId;
+  else {
+    const r = one<Row>('SELECT project_id FROM repos WHERE id = ?', String(tc.repoId));
+    if (!r || r.project_id !== projectId) throw badRequest('repoId must be a repository of this project');
+  }
+  if (kind === 'github_event' && !empty(tc.cron) && String(tc.cron).trim().split(/\s+/).length !== 5) throw badRequest('Cron must have 5 fields');
+}
+
+/** Dollars the sessions of a spec have spent since the start of this month (UTC). */
+export function specMonthSpend(specId: string): number {
+  const d = new Date();
+  const since = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+  return Number(one<{ n: number }>('SELECT COALESCE(SUM(spent_usd), 0) AS n FROM workflows WHERE loop_spec_id = ? AND created_at >= ?', specId, since)?.n ?? 0);
 }
 
 function validateVerification(raw: unknown): VerificationStep[] {
@@ -687,7 +766,7 @@ export function registerLoopSpecRoutes(): void {
         name: tmpl.name,
         description: tmpl.description,
         trigger_kind: tmpl.trigger_kind,
-        trigger_config: JSON.stringify(tmpl.trigger_config),
+        trigger_config: JSON.stringify(tmpl.trigger_kind === 'github_event' || tmpl.trigger_kind === 'webhook' ? { ...tmpl.trigger_config, secret: crypto.randomBytes(24).toString('hex') } : tmpl.trigger_config),
         goal_template: tmpl.goal_template,
         verification: JSON.stringify(tmpl.verification),
         stop_rules: JSON.stringify(tmpl.stop_rules),
@@ -723,7 +802,7 @@ export function registerLoopSpecRoutes(): void {
     const body = await ctx.json();
     const triggerKind = validateTriggerKind(body.triggerKind ?? body.trigger_kind ?? 'manual');
     const triggerConfig: TriggerConfig = body.triggerConfig ?? body.trigger_config ?? {};
-    checkTriggerAction(triggerConfig);
+    checkTriggerAction(triggerConfig, project.id, triggerKind);
     if (triggerKind === 'webhook' || triggerKind === 'github_event') {
       if (!triggerConfig.secret) {
         triggerConfig.secret = crypto.randomBytes(24).toString('hex');
@@ -774,7 +853,7 @@ export function registerLoopSpecRoutes(): void {
     }
     if (body.triggerConfig !== undefined || body.trigger_config !== undefined) {
       const tc = body.triggerConfig ?? body.trigger_config;
-      checkTriggerAction(tc);
+      checkTriggerAction(tc, project.id, String(p.trigger_kind ?? spec.trigger_kind));
       if ((p.trigger_kind ?? spec.trigger_kind) === 'webhook' || (p.trigger_kind ?? spec.trigger_kind) === 'github_event') {
         if (!tc.secret) tc.secret = spec.trigger_config.secret ?? crypto.randomBytes(24).toString('hex');
       }

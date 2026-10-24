@@ -23,7 +23,7 @@ import { badRequest, notFound, newId, now, str, parseJson, HttpError } from './u
 import { audit } from './audit.ts';
 import { checkConcurrency, isDraining, concurrencyReason, queueReasonLabel, drainQueue } from './control-plane.ts';
 import { assertBudget } from './settings.ts';
-import { getLoopSpec, getLoopSpecsByProject, fillTemplate, checkTriggerRateLimit, isDuplicateTrigger, recordTriggerFire, rowToSpecFromRow, type LoopSpec } from './loop-specs.ts';
+import { getLoopSpec, getLoopSpecsByProject, specActions, specMonthSpend, fillTemplate, checkTriggerRateLimit, isDuplicateTrigger, recordTriggerFire, rowToSpecFromRow, type LoopSpec } from './loop-specs.ts';
 import type { AuditAction } from './audit.ts';
 
 /* ------------------------------------------------------------------ */
@@ -140,6 +140,16 @@ export async function createWorkflowFromSpec(
     assertBudget(undefined, userId, project.id);
   } catch (e: any) {
     throw badRequest(e.message);
+  }
+
+  // Several actions, or a pull request for the result (NEW-2 "Keep docs current"): one coordinated firing.
+  if (specActions(spec.trigger_config).length > 1 || (spec.trigger_config.publishPr && specActions(spec.trigger_config).length)) {
+    const { runRefreshActions } = await import('./docs-sync.ts');
+    return runRefreshActions(spec, userId, vars);
+  }
+
+  if (spec.trigger_config.action && spec.monthly_budget_usd !== null && specMonthSpend(spec.id) >= spec.monthly_budget_usd) {
+    throw badRequest(`This loop spec's monthly budget of $${spec.monthly_budget_usd} is used up.`);
   }
 
   // "Refresh diagrams" redraws stale architecture diagrams instead of starting a goal session (NEW-1). It returns the
@@ -285,7 +295,9 @@ async function runCronTick(): Promise<void> {
   if (!isDbOpen()) return;
   const d = new Date(nowMs());
   const mk = minuteKey(d);
-  const specs = all<Row>("SELECT * FROM loop_specs WHERE trigger_kind = 'cron'");
+  try { (await import('./docs-sync.ts')).reconcileDocsSync(); } catch { /* best-effort */ }
+  // A github_event spec may also carry a schedule (trigger_config.cron), e.g. the nightly pass of "Keep docs current".
+  const specs = all<Row>("SELECT * FROM loop_specs WHERE trigger_kind = 'cron' OR (trigger_kind = 'github_event' AND trigger_config LIKE '%\"cron\"%')");
   for (const r of specs) {
     const spec = rowToSpecFromRow(r);
     if (!spec) continue;
@@ -553,6 +565,15 @@ export function registerTriggerRoutes(): void {
       return { ok: true, ignored: true, reason: `Event "${event}" not in spec's event filter` };
     }
 
+    // mergedOnly: a pull request counts only once it is merged into the repository's default branch.
+    const mergedOnly = event === 'pull_request' && Boolean(spec.trigger_config.mergedOnly);
+    if (mergedOnly) {
+      const pr = payload.pull_request;
+      if (payload.action !== 'closed' || pr?.merged !== true) return { ok: true, ignored: true, reason: 'pull_request was not merged' };
+      const def = payload.repository?.default_branch;
+      if (!def || pr?.base?.ref !== def) return { ok: true, ignored: true, reason: 'pull_request was not merged into the default branch' };
+    }
+
     // For workflow_run and check_suite, only fire on failures.
     if (event === 'workflow_run' && payload.workflow_run?.conclusion !== 'failure') {
       return { ok: true, ignored: true, reason: 'workflow_run was not a failure' };
@@ -561,7 +582,7 @@ export function registerTriggerRoutes(): void {
       return { ok: true, ignored: true, reason: 'check_suite was not a failure' };
     }
 
-    const dedupKey = githubDedupKey(event, payload) + `:${deliveryId}`;
+    const dedupKey = mergedOnly ? `github:pr-merged:${payload.pull_request?.node_id ?? payload.number ?? '?'}` : githubDedupKey(event, payload) + `:${deliveryId}`;
     if (isDuplicateTrigger(spec.id, dedupKey)) {
       return { ok: true, duplicate: true };
     }

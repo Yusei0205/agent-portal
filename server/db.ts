@@ -750,7 +750,26 @@ const GENERATED_DOCS = `
   );
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS];
+const DOCS_SYNC = `
+  -- "Keep docs current" (NEW-2): the coordinating session of one firing that refreshes diagrams and documents, then
+  -- publishes them as files in a work branch (docs-sync.ts). One row per firing; the session row carries the push.
+  CREATE TABLE docs_sync_jobs (
+    workflow_id TEXT PRIMARY KEY REFERENCES workflows(id) ON DELETE CASCADE,
+    spec_id TEXT,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    repo_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    remaining TEXT NOT NULL DEFAULT '[]',
+    items TEXT NOT NULL DEFAULT '[]',
+    results TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX docs_sync_spec ON docs_sync_jobs(spec_id, status);
+`;
+
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

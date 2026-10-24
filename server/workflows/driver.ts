@@ -380,6 +380,11 @@ async function drive(id: string, gen: number): Promise<void> {
 /** Start the loop for a session unless one is already running in this process. Exported for loop-triggers.ts. */
 export function kick(id: string): void {
   if (driving.has(id)) return;
+  // The coordinating session of a "Keep docs current" firing never runs an agent (NEW-2).
+  if (one<Row>('SELECT 1 AS x FROM docs_sync_jobs WHERE workflow_id = ?', id)) {
+    void import('../docs-sync.ts').then((m) => m.resumeSync(id)).catch(() => undefined);
+    return;
+  }
   // Don't start new iterations in drain mode.
   if (isDraining()) {
     const w = one<Row>('SELECT status FROM workflows WHERE id = ?', id);

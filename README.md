@@ -16,8 +16,13 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   delegation to child sessions, slash commands, and push to a new branch or a pull request.
 - **Loop specs** are reusable session recipes: a trigger (manual, cron, interval, webhook, GitHub
   event, Jira event), a goal template, rules, a verification pipeline (shell checks and an
-  advisory judge), stop rules, memory between iterations and escalation. Four are seeded: feature
-  from a Jira ticket, bug fix, nightly test fixer, dependency update.
+  advisory judge), stop rules, memory between iterations and escalation. Seeded: investigate and
+  fix a ticket, feature from a Jira ticket, bug fix, nightly test fixer, dependency update and
+  **Keep docs current**. That last one runs when a pull request is merged into the default branch
+  and every night: it refreshes stale architecture diagrams, then stale generated documents,
+  writes them into a work branch (`docs/diagrams/*.mmd`, `docs/generated/*.md`) and proposes one
+  pull request (you allow the push by default). Nothing stale means no session and no pull request.
+  A spec names its actions in `trigger_config.action` or, for several, `trigger_config.actions`.
 - **Inbox** is one list across projects of everything that needs a person: approvals, questions,
   pending pushes and blocked sessions, with a live count and answers right in the list.
 - **Workspaces** are named sets of repositories (and integrations) that a session can use as a
