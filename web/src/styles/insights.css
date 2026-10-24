@@ -1,0 +1,411 @@
+/* ========================================================================
+   Insights dashboard
+   ======================================================================== */
+
+/* Filter bar */
+.ins-filter-bar {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.ins-filter-group {
+  display: grid;
+  gap: 4px;
+}
+.ins-filter-label {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+/* Top tiles */
+.ins-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+@media (max-width: 900px) {
+  .ins-tiles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 520px) {
+  .ins-tiles {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ins-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 140px;
+}
+.ins-tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.ins-tile-label {
+  font-size: 0.78rem;
+  font-weight: 640;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ins-tile-big {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.ins-tile-sub {
+  font-size: 0.84rem;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Spend gauge inside tile */
+.ins-tile-gauge {
+  display: grid;
+  gap: 4px;
+  margin-top: auto;
+}
+.ins-gauge-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--line-2);
+  overflow: hidden;
+}
+.ins-gauge-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.ins-gauge-warn {
+  background: var(--warn);
+}
+.ins-gauge-danger {
+  background: var(--danger);
+}
+
+/* Delta chip */
+.ins-delta {
+  font-size: 0.76rem;
+  font-weight: 660;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.ins-delta-up {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+.ins-delta-down {
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+
+/* Success ring */
+.ins-ring {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.ins-ring-label {
+  position: absolute;
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Health chips */
+.ins-health-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ins-chip {
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.ins-chip-ok {
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+.ins-chip-warn {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+.ins-chip-danger {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+/* Big chart containers */
+.ins-charts-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 860px) {
+  .ins-charts-2col {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ins-charts-3col {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 1100px) {
+  .ins-charts-3col {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .ins-charts-3col {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ins-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.ins-chart-title {
+  font-size: 0.88rem;
+  font-weight: 640;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+/* Model legend */
+.ins-model-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.ins-model-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ins-model-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* Horizontal bar chart */
+.ins-hbar-list {
+  display: grid;
+  gap: 6px;
+}
+.ins-hbar-row {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.ins-hbar-label {
+  font-size: 0.84rem;
+  color: var(--ink);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ins-hbar-label:hover {
+  color: var(--accent-ink);
+}
+.ins-hbar-track {
+  height: 8px;
+  background: var(--line-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.ins-hbar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.ins-hbar-val {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Connection map */
+.ins-connmap {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+.ins-connmap-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 100px;
+}
+.ins-connmap-col-head {
+  padding: 2px 0;
+}
+.ins-connmap-arrow {
+  color: var(--ink-3);
+  align-self: center;
+  padding: 0 2px;
+  margin-top: 22px; /* align with first node */
+}
+.ins-connmap-node {
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.ins-connmap-project {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.ins-connmap-project:hover {
+  background: var(--accent-wash);
+}
+.ins-connmap-prov {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.ins-connmap-aws {
+  border-color: var(--warn);
+  color: var(--warn);
+  display: grid;
+  gap: 1px;
+}
+
+/* Run lists row */
+.ins-lists-3col {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 1100px) {
+  .ins-lists-3col {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .ins-lists-3col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Selected agent row */
+.ins-row-selected {
+  background: var(--accent-wash);
+}
+
+/* Project cards in insights */
+.ins-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.ins-project-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  text-decoration: none;
+  color: var(--ink);
+  transition: border-color 0.15s;
+}
+.ins-project-card:hover {
+  border-color: var(--accent);
+}
+.ins-project-card-head {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+/* Data table toggle */
+.ins-table-toggle {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+.ins-data-table {
+  overflow-x: auto;
+}
+
+/* HUD theme overrides */
+html[data-theme='hud'] .ins-tile {
+  background: rgba(8, 21, 36, 0.65);
+}
+html[data-theme='hud'] .ins-tile-big {
+  font-family: var(--display);
+  font-weight: 700;
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.4);
+}
+html[data-theme='hud'] .ins-tile-label {
+  font-family: var(--display);
+  font-size: 0.7rem;
+}
+html[data-theme='hud'] .ins-chart-title {
+  font-family: var(--display);
+}
+html[data-theme='hud'] .ins-gauge-fill {
+  box-shadow: 0 0 8px var(--accent);
+}
+html[data-theme='hud'] .ins-hbar-fill {
+  box-shadow: 0 0 6px var(--accent);
+}
+
+
+/* Insights › Connection map: one row per project → provider → AWS account */
+.ins-connrows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.ins-connrow { display: grid; grid-template-columns: minmax(0, 1.2fr) 4.5rem minmax(0, 1fr) 1.25rem minmax(0, 1.2fr); align-items: center; gap: 0.25rem; }
+.ins-connrow .ins-connmap-node { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-connrow-link { position: relative; height: 1px; background: linear-gradient(90deg, var(--accent, #22d3ee), var(--violet, #a78bfa)); opacity: 0.7; }
+.ins-connrow-count { position: absolute; left: 50%; top: -0.95rem; transform: translateX(-50%); font-size: 0.68rem; color: var(--muted, #8aa); white-space: nowrap; }
+@media (max-width: 720px) {
+  .ins-connrow { grid-template-columns: 1fr; }
+  .ins-connrow-link { display: none; }
+}
+
+/* Insights › Spend by project: a violet bar for Kiro credits under the cyan dollar bar */
+.ins-hbar-track { display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.ins-hbar-fill.ins-hbar-credits { background: var(--violet, #a78bfa); }
+

@@ -1,0 +1,242 @@
+/* ─── Polish: readiness ok row ─────────────────────────────────────────── */
+.readiness-ok-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: .5rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--line);
+}
+
+/* ─── Polish: toolbar (filter bars) ────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+  padding: .75rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* ─── Polish: loop spec editor wider layout ────────────────────────────── */
+.ls-editor-body {
+  margin-top: 0;
+}
+/* Two-column grid for stop rules on wider screens */
+.ls-stop-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .75rem;
+}
+@media (max-width: 600px) {
+  .ls-stop-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Polish: remove duplicate setup quicklinks ─────────────────────────── */
+.setup-quicklinks { display: none; }
+
+/* ─── Polish: Insights page spacing ─────────────────────────────────────── */
+.ins-page-header {
+  margin-bottom: 1.5rem;
+}
+
+/* ─── Polish2 fixes ──────────────────────────────────────────────────────────── */
+
+/* HIGH-1: Readiness table mobile reflow ≤600px */
+@media (max-width: 600px) {
+  .readiness-table tbody tr {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 2px 6px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-2);
+  }
+  .readiness-icon {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: center;
+  }
+  .readiness-label {
+    grid-row: 1;
+    grid-column: 2;
+    white-space: normal;
+  }
+  .readiness-action {
+    grid-row: 1;
+    grid-column: 3;
+  }
+  .readiness-msg {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    padding: 0 0 2px 2px;
+  }
+  .readiness-table td {
+    padding: 2px 4px;
+  }
+}
+
+/* HIGH-1: Tab bar scrolls horizontally on narrow screens, with a thin visible scrollbar so the hidden tabs are discoverable. */
+@media (max-width: 760px) {
+  .tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent, #3ad1e6) transparent;
+    padding-bottom: 4px;
+  }
+  .tabs::-webkit-scrollbar {
+    height: 4px;
+  }
+  .tabs::-webkit-scrollbar-thumb {
+    background: var(--accent, #3ad1e6);
+    border-radius: 2px;
+  }
+}
+
+/* MEDIUM-1: Enable notifications button visible affordance in HUD theme */
+.hud .btn-ghost.notif-btn,
+.hud .page-actions .btn-ghost {
+  border-color: var(--line);
+  color: var(--accent-ink);
+}
+.hud .page-actions .btn-ghost:hover {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+/* MEDIUM-2/3: Remove blank gap above headings on mobile for all pages */
+@media (max-width: 760px) {
+  /* On mobile the rail is position:fixed (out of flow) but may still be
+     occupying a grid row. Explicitly control the grid areas to prevent gaps. */
+  .shell {
+    display: flex;
+    flex-direction: column;
+  }
+  .topbar {
+    flex: none;
+    order: 0;
+  }
+  .main {
+    flex: 1 1 auto;
+    order: 1;
+  }
+  .page {
+    padding-top: 14px;
+  }
+}
+
+/* MEDIUM-4: Session launcher modal body scrolls internally */
+.modal-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* Make modal-body flex to control scroll */
+.modal {
+  overflow: hidden;
+}
+/* Reload list button sits inline with model picker row */
+.model-reload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* MEDIUM-5: Sheet backdrop stacks above modal, proper pointer isolation */
+.sheet-backdrop {
+  z-index: 200; /* above modal-backdrop z-index:50 */
+}
+html[data-theme='hud'] .sheet-backdrop {
+  /* In HUD the canvas is near-black; use an accent-tinted semi-opaque overlay
+     so the dimming is visible against the dark background */
+  background: rgba(2, 10, 20, 0.72);
+  border-left: 1px solid rgba(34, 211, 238, 0.3);
+}
+
+/* LOW-1: Insights Slowest runs name truncation */
+.ins-run-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* LOW-2: Loop specs empty state button */
+.ls-seed-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 580;
+  cursor: pointer;
+  text-decoration: none;
+}
+.ls-seed-btn:hover {
+  border-color: var(--ink-3);
+}
+
+/* LOW-3: Inspector text contained in its box, no free wrapping */
+.ws-inspector {
+  min-width: 0;
+}
+.ws-inspector .tl-item {
+  min-width: 0;
+  overflow: hidden;
+}
+.ws-inspector .tool-sum {
+  max-width: 100%;
+}
+.ws-inspector .tool-detail pre {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* LOW-5: Profile usage table project name on mobile */
+@media (max-width: 600px) {
+  .profile-usage-table td:first-child {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* Rail: the Portal group expands in place under its heading. */
+.rail-group-chevron {
+  transition: transform 0.15s ease;
+}
+.rail-group-chevron.is-rotated {
+  transform: rotate(90deg);
+}
+.rail-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px;
+  border-left: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+  margin-left: 18px;
+}
+.rail-link.rail-link-nested {
+  padding-left: 12px;
+  font-size: 0.95em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-group-chevron {
+    transition: none;
+  }
+}
+

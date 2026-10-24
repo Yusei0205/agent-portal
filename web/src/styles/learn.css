@@ -1,0 +1,185 @@
+/* ---------- Learn ---------- */
+.learn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.learn-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  text-decoration: none;
+  color: var(--ink);
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.learn-card:hover {
+  border-color: var(--accent);
+}
+.learn-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.learn-head > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+.learn-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.view-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--canvas);
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+.reading {
+  max-width: 820px;
+  font-size: 1.02rem;
+}
+.glossary,
+.doc-sources {
+  max-width: 820px;
+  display: grid;
+  gap: 10px;
+}
+.kind-pick .choice {
+  margin-bottom: 6px;
+}
+.q-review,
+.take {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+.q-text {
+  font-weight: 600;
+  font-size: 1.02rem;
+}
+.q-n {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+  font-size: 0.8rem;
+  margin-right: 6px;
+}
+.q-options {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+.q-options li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.q-options li.is-correct {
+  color: var(--ok);
+  font-weight: 600;
+}
+.q-options .bullet {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+}
+.take .panel.is-right {
+  border-color: var(--ok);
+}
+.take .panel.is-wrong {
+  border-color: var(--danger);
+}
+.take legend {
+  margin-bottom: 10px;
+}
+.q-feedback {
+  font-size: 0.92rem;
+}
+.score {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 20px;
+  border-radius: var(--radius-lg);
+  flex-wrap: wrap;
+}
+.score.is-pass {
+  background: var(--ok-wash);
+}
+.score.is-fail {
+  background: var(--warn-wash);
+}
+.score-n {
+  font-size: 2rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.path-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+.path-card {
+  text-decoration: none;
+  color: var(--ink);
+}
+.path-card:hover {
+  border-color: var(--accent);
+}
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0;
+}
+.step {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.step-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--line);
+  font-weight: 700;
+  font-size: 0.84rem;
+  flex: none;
+}
+.step.is-done .step-mark {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+.step-main {
+  display: grid;
+  flex: 1;
+}
+.progress-cell {
+  min-width: 120px;
+}
+

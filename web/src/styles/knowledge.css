@@ -1,0 +1,276 @@
+/* ---------- Knowledge ---------- */
+.searchbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.searchbar svg {
+  position: absolute;
+  left: 12px;
+  color: var(--ink-3);
+}
+.searchbar .input {
+  padding-left: 38px;
+  min-height: 42px;
+  font-size: 1rem;
+}
+.dropzone {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  background: var(--panel);
+}
+.dropzone {
+  flex-wrap: wrap;
+}
+.dropzone > div {
+  flex: 1 1 300px;
+}
+/* The repository picker and the two buttons keep their own size and wrap under the text when narrow. */
+.dropzone > .row {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+.dropzone > .row .input {
+  width: 190px;
+}
+@media (max-width: 760px) {
+  .dropzone > .row {
+    flex-wrap: wrap;
+  }
+}
+.dropzone.is-drag {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.upload-batch {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.table .group-row td {
+  padding: 0;
+  background: color-mix(in srgb, var(--canvas) 50%, var(--panel));
+  border-bottom: 1px solid var(--line);
+}
+/* Document rows keep one height whether or not they have download / delete buttons. */
+.table tr.doc-row td {
+  height: 51px;
+}
+/* A dropdown inside a table row must not make that row taller than the rest. */
+.table td select.input {
+  min-height: 0;
+  height: 30px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 0.88rem;
+}
+.table .subgroup-row td {
+  padding: 6px 14px 6px 36px;
+  border-bottom: 1px solid var(--line-2);
+}
+.table .more-row td {
+  padding: 8px 14px;
+  text-align: center;
+}
+.group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.branch-list {
+  display: grid;
+  gap: 2px;
+}
+.plain-list.branch-list .branch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+}
+.branch-main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.pager-size,
+.pager-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pager-size select {
+  width: auto;
+}
+.upload-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.upload-list li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.results {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+.results li {
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+}
+.results a {
+  display: grid;
+  text-decoration: none;
+  color: var(--ink);
+}
+mark {
+  background: color-mix(in srgb, var(--warn) 28%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.doc-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 28px;
+  align-items: start;
+}
+.doc-outline {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  font-size: 0.88rem;
+}
+.doc-outline ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+.doc-outline a {
+  display: block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.doc-outline a:hover {
+  background: var(--line-2);
+}
+.doc-outline .lvl-2 a {
+  padding-left: 18px;
+}
+.doc-outline .lvl-3 a {
+  padding-left: 28px;
+}
+.doc-outline .is-active a {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.doc-body {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 24px 32px;
+  min-width: 0;
+}
+.narrow-doc {
+  max-width: 820px;
+}
+.ask-layout {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 24px;
+  align-items: start;
+}
+.ask-box {
+  display: grid;
+  gap: 8px;
+}
+.answer {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  display: grid;
+  gap: 14px;
+}
+.sources {
+  list-style: none;
+  margin: 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--line-2);
+  display: grid;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+.sources li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  opacity: 0.7;
+}
+.sources li.is-cited {
+  opacity: 1;
+}
+.sources li.is-focus {
+  background: var(--accent-wash);
+  border-radius: 6px;
+}
+.src-n {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent-ink);
+  min-width: 1.4em;
+}
+.cite a {
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.75em;
+  padding: 0 2px;
+}
+.side-title {
+  font-size: 0.92rem;
+  margin-bottom: 10px;
+}
+.inbox-item {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+.inbox-item > .input-card {
+  width: 100%;
+}
+

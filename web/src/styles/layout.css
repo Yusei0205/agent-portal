@@ -1,0 +1,315 @@
+/* ---------- Layout ---------- */
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  min-height: 100vh;
+}
+.rail {
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 12px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 680;
+  font-size: 1.02rem;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 2px 6px;
+}
+.switcher {
+  display: grid;
+  gap: 4px;
+  padding: 0 4px;
+}
+.switcher-label {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.switcher-select {
+  font-weight: 600;
+}
+.rail-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--ink-2);
+  text-decoration: none;
+  font-weight: 520;
+}
+.rail-link:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.rail-link.is-active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.rail-count {
+  margin-left: auto;
+  background: var(--warn-wash);
+  color: var(--warn);
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0 7px;
+}
+
+/* ---------- Drill-down rail nav ---------- */
+.rail-nav-wrap {
+  flex: 1;
+  min-height: 0;
+  /* The menu scrolls when an expanded group makes it taller than the screen. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Two panels sit side-by-side; the wrap clips them so only one is visible.
+   Under prefers-reduced-motion we skip the slide. */
+.rail-panels {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  transition: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rail-panels {
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+.rail-panels.show-sub {
+  transform: translateX(-50%);
+}
+.rail-panel {
+  width: 50%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.rail-nav {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+/* Group entry — a button that looks like a rail-link */
+.rail-group-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-weight: 520;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-group-btn:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+/* Highlight the group button when any of its children is active */
+.rail-group-btn.has-active-child {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.rail-group-chevron {
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+/* Flip icon for the Back button chevron */
+.icon-flip-h {
+  transform: rotate(180deg);
+}
+
+/* Submenu back button */
+.rail-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.rail-back-btn:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.rail-sub-label {
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-3);
+  padding: 2px 10px 6px;
+}
+.rail-foot {
+  margin-top: auto;
+  display: grid;
+  gap: 10px;
+}
+.rail-status {
+  display: grid;
+  gap: 4px;
+  padding: 0 10px;
+}
+.rail-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--line);
+  padding: 10px 4px 0;
+}
+.rail-user-name {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink-2);
+  text-decoration: none;
+  font-weight: 560;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.topbar {
+  display: none;
+}
+.main {
+  min-width: 0;
+  outline: none;
+}
+.page {
+  max-width: 1120px;
+  padding: 28px 36px 64px;
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+.page.wide {
+  max-width: 1440px;
+}
+.page.narrow {
+  max-width: 760px;
+}
+.page-head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.page-head-main {
+  display: grid;
+  gap: 4px;
+  max-width: 72ch;
+}
+.page-sub {
+  color: var(--ink-2);
+}
+.page-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+/* A page shown inside a Project setup tab sits in the hub's own page. */
+.hub-body .page {
+  max-width: none;
+  padding: 0;
+}
+.page-head-embedded h2 {
+  font-size: 1.1rem;
+}
+.back {
+  font-size: 0.88rem;
+  text-decoration: none;
+  width: max-content;
+}
+.stack {
+  display: grid;
+  gap: 12px;
+}
+.stack-lg {
+  display: grid;
+  gap: 18px;
+}
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.row > .field {
+  flex: 1;
+}
+.row.tight {
+  gap: 6px;
+}
+.row.wrap {
+  flex-wrap: wrap;
+}
+.row.between {
+  justify-content: space-between;
+}
+.push {
+  margin-left: auto;
+}
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.panel > h2 {
+  margin-bottom: 2px;
+}
+.span-2 {
+  grid-column: 1 / -1;
+}
+.choice-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+@media (max-width: 720px) {
+  .choice-row {
+    grid-template-columns: 1fr;
+  }
+}
+

@@ -1,0 +1,272 @@
+/* ---------- Several repositories: picker rows, push results ---------- */
+.repo-rows {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.repo-rows-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.repo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.changes-repos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.push-repos {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.push-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.push-results li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+@media (max-width: 560px) {
+  .repo-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .repo-row select.mono {
+    grid-column: 1;
+  }
+}
+
+/* ---------- Repository connections ---------- */
+.conn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: 12px;
+}
+.conn-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.conn-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.conn-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.conn-kv {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+.conn-repo-list {
+  max-height: 260px;
+}
+
+.ws-repo-list {
+  display: grid;
+  gap: 6px;
+}
+
+/* ---------- Integrations ---------- */
+.integ-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: 10px;
+}
+.integ-kind {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.integ-kind:hover:not(:disabled),
+.integ-kind:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.integ-kind:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.integ-kind-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.integ-pick {
+  display: grid;
+  gap: 6px;
+}
+.chip-warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
+}
+
+/* ---------- Configuration editor ---------- */
+.cfg-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.cfg-tree {
+  display: grid;
+  gap: 10px;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  position: sticky;
+  top: 12px;
+}
+.cfg-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+  font-size: 0.86rem;
+}
+.cfg-file {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  border-radius: 6px;
+  padding-right: 4px;
+}
+.cfg-file:hover,
+.cfg-file.is-open {
+  background: var(--line-2);
+}
+.cfg-name {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  color: var(--ink);
+}
+.cfg-file.is-dir .cfg-name {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.cfg-del {
+  opacity: 0;
+  width: 22px;
+  height: 22px;
+}
+.cfg-file:hover .cfg-del,
+.cfg-del:focus-visible {
+  opacity: 1;
+}
+.cfg-text {
+  min-height: 60vh;
+  resize: vertical;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+@media (max-width: 900px) {
+  .cfg-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cfg-tree {
+    position: static;
+    max-height: 40vh;
+  }
+}
+
+/* ---------- API access ---------- */
+.table-wrap {
+  overflow-x: auto;
+}
+.api-base,
+.api-token {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  word-break: break-all;
+}
+.api-code {
+  white-space: pre;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.api-table td {
+  vertical-align: top;
+}
+
+.engine-pick {
+  align-items: center;
+}
+
+/* ---------- Vault ---------- */
+.vault-drop.is-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
+.vault-usage {
+  display: grid;
+  gap: 4px;
+  max-width: 420px;
+}
+.vault-meta {
+  white-space: nowrap;
+}
+
+/* ---------- Delegated sessions ---------- */
+.ws-family {
+  align-items: center;
+}
+.ws-child {
+  gap: 6px;
+}
+.ws-child .dot {
+  margin-top: 0;
+}
+
+/* ---------- Agent push requests ---------- */
+.push-request {
+  display: block;
+}
+.push-pr {
+  align-self: end;
+  padding-bottom: 8px;
+}
+.push-reason {
+  flex: 1;
+  min-width: 200px;
+}
+.wf-push .wf-body strong {
+  color: var(--ok);
+}
+
+

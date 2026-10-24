@@ -1,0 +1,78 @@
+/* ─── Settings › Tools section ─────────────────────────────────────────────── */
+.tools-pack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.tools-pack-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: .875rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.tools-install-log {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: .625rem .75rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+.tools-log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.45;
+}
+
+/* ─── NewSessionDialog › Tools row ─────────────────────────────────────────── */
+.session-tools-row {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.session-tools-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem 1.5rem;
+  align-items: flex-start;
+}
+.session-tool-item {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+}
+.session-tool-check {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+.session-tool-hint {
+  font-size: .8125rem;
+  color: var(--muted);
+  margin-left: 1.3rem;
+}
+.session-tool-hint code {
+  font-size: .8125rem;
+}
+.session-tool-hint .btn-link {
+  font-size: .8125rem;
+}
+
+
+/* ─── Disabled states ────────────────────────────────────────────────────────── */
+.choice.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.choice.is-disabled input {
+  cursor: not-allowed;
+}
+.segmented button.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -1,0 +1,158 @@
+/* ========== Stage 4: Setup Hub, Admin Panel, Auth ========== */
+
+/* ----- Side sheet ----- */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: flex-end;
+}
+.sheet {
+  width: min(480px, 100%);
+  height: 100%;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.18);
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--line);
+  gap: 12px;
+}
+.sheet-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 660;
+}
+.sheet-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+/* ----- Readiness panel ----- */
+.readiness-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.readiness-table {
+  width: 100%;
+  margin-top: 8px;
+}
+.readiness-table td {
+  padding: 8px 10px;
+}
+.readiness-icon {
+  width: 28px;
+  font-size: 1.1em;
+}
+.readiness-label {
+  font-weight: 580;
+  white-space: nowrap;
+}
+.readiness-msg {
+  width: 100%;
+}
+.readiness-action {
+  white-space: nowrap;
+  text-align: right;
+}
+.readiness-ok .readiness-label { color: var(--ok); }
+.readiness-warn .readiness-label { color: var(--warn); }
+.readiness-missing .readiness-label { color: var(--danger); }
+
+/* ----- Precedence table ----- */
+.precedence-wrap {
+  margin-top: 4px;
+}
+.precedence-hint {
+  margin-bottom: 6px;
+}
+.precedence-table th,
+.precedence-table td {
+  font-size: 0.8rem;
+  padding: 5px 8px;
+}
+.precedence-reminder {
+  margin-bottom: 8px;
+}
+.precedence-reminder h3 {
+  font-size: 0.875rem;
+  margin-bottom: 4px;
+}
+
+/* ----- Setup hub quick links ----- */
+.setup-quicklinks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+.setup-quicklink {
+  padding: 14px;
+  cursor: default;
+}
+
+/* ----- Auth: Google button + divider ----- */
+.btn-google {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+  font-weight: 580;
+  background: #4285f4;
+  color: #fff;
+  border: none;
+}
+.btn-google:hover {
+  background: #3367d6;
+}
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-3);
+  font-size: 0.8rem;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* ----- Admin panel layout ----- */
+.kv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+.kv-item dt {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kv-item dd {
+  margin: 0;
+}
+
+/* ----- HUD theme overrides for new components ----- */
+.hud .sheet {
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+.hud .readiness-table tr:hover td {
+  background: var(--line-2);
+}
+
+

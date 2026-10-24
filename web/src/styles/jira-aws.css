@@ -1,0 +1,247 @@
+/* ---------- Jira tickets ---------- */
+.tickets-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.tickets-layout.has-detail {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+}
+@media (max-width: 1000px) {
+  .tickets-layout.has-detail {
+    grid-template-columns: 1fr;
+  }
+}
+.ticket-row {
+  cursor: pointer;
+}
+.ticket-row.is-selected td {
+  background: var(--accent-wash);
+}
+.ticket-pick {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.ticket-pick span {
+  color: var(--ink-2);
+}
+.changed-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.ticket-detail {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+.ticket-body {
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.ticket-comment {
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+.jira-bar {
+  margin: 4px 0;
+}
+hr.rule {
+  border: 0;
+  border-top: 1px solid var(--line-2);
+  margin: 4px 0;
+  width: 100%;
+}
+
+/* ---------- Jira picker (Composer) ---------- */
+.jira-picker {
+  width: 100%;
+}
+.jira-picker-dropdown {
+  position: absolute;
+  z-index: 200;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  /* opaque: the panel colour is see-through in the HUD look */
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.jira-picker-option {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line-2);
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.jira-picker-option:last-child { border-bottom: 0; }
+.jira-picker-option:hover,
+.jira-picker-option:focus {
+  background: var(--accent-wash);
+  outline: none;
+}
+.jira-picker-option-key {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.jira-picker-option-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.jira-picker-option-date {
+  white-space: nowrap;
+  font-size: 12px;
+}
+.jira-picker-state {
+  padding: 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.jira-picker-state.danger { color: var(--danger); }
+.jira-picker-more {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  text-align: center;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.jira-picker-more:hover { background: var(--accent-wash); }
+
+/* Compact selected-ticket card */
+.jira-ticket-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-light, var(--line));
+  border-radius: var(--radius);
+  background: var(--accent-wash);
+  flex-wrap: wrap;
+}
+.jira-ticket-card-key {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.jira-ticket-card-summary {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ---------- AWS accounts ---------- */
+.aws-groups {
+  display: grid;
+  gap: 14px;
+}
+.aws-group-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.aws-group-head h2 {
+  margin: 0;
+}
+.aws-sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.aws-sources li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.aws-source-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.aws-sub {
+  font-size: 0.85rem;
+  margin: 0 0 6px;
+  color: var(--muted);
+}
+.aws-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.aws-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 12px;
+  text-decoration: none;
+}
+.aws-repos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.aws-repos li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.aws-strip {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.aws-strip > span {
+  flex: 1 1 260px;
+}
+

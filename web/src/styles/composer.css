@@ -1,0 +1,226 @@
+/* ---------- Slash-command composer enhancements ---------- */
+
+/* Wrapper that stacks the result view above the form */
+.ws-composer-wrap {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  /* Inherit the composer's background so results look attached */
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(6px);
+  border-top: 1px solid var(--line);
+}
+
+/* Move the border + background from the form to the wrapper */
+.ws-composer-wrap > .ws-composer {
+  position: static;
+  background: transparent;
+  border-top: none;
+  backdrop-filter: none;
+  z-index: auto;
+}
+
+/* Relative container for the menu so it can float above the textarea */
+.cmd-menu-wrap {
+  position: relative;
+}
+
+/* Autocomplete dropdown */
+.cmd-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  z-index: 20;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.cmd-menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  line-height: 1.35;
+}
+
+.cmd-menu-item:hover,
+.cmd-menu-item.is-active {
+  background: var(--accent-wash);
+}
+
+.cmd-menu-item[aria-selected="true"] {
+  background: var(--accent-wash);
+}
+
+.cmd-menu-name {
+  flex-shrink: 0;
+  color: var(--accent-ink);
+  font-weight: 580;
+}
+
+.cmd-menu-desc {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Command result banner shown above the composer */
+.cmd-result {
+  display: grid;
+  gap: 6px;
+  padding: 10px 32px 10px;
+  border-top: 1px solid var(--accent-wash);
+  background: var(--accent-wash);
+  font-size: 0.88rem;
+}
+
+.cmd-result-error {
+  border-top-color: var(--danger-wash);
+  background: var(--danger-wash);
+}
+
+.cmd-result-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-ink);
+}
+
+.cmd-result-error .cmd-result-head {
+  color: var(--danger);
+}
+
+.cmd-result-label {
+  font-weight: 580;
+}
+
+.cmd-result-close {
+  margin-left: auto;
+}
+
+.cmd-result-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 0.84em;
+  margin: 0;
+  max-height: 18rem;
+  overflow-y: auto;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--ink);
+}
+
+.cmd-result-deferred {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+}
+
+.cmd-result-ctx {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.cmd-result-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Command picker modal */
+.cmd-picker-list {
+  display: grid;
+  gap: 6px;
+}
+
+.cmd-picker-option {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.cmd-picker-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.cmd-picker-option.is-current {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.cmd-picker-option:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.cmd-picker-option-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cmd-picker-label {
+  font-weight: 580;
+  color: var(--ink);
+}
+
+.cmd-picker-current-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px 1px 4px;
+}
+
+.cmd-picker-desc {
+  display: block;
+}
+
+/* Visually hidden (screen reader only) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  .cmd-result {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+
