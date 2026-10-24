@@ -1,7 +1,7 @@
 /**
  * Role templates. Applying one writes its agent (and any team of further agents) and skills into the project's
  * .claude folder. The starter roles are written here; the library roles are generated from Claude Code agents by
- * scripts/build-role-library.mjs (server/roles-library.ts).
+ * scripts/build-role-library.mjs (server/role-data/roles-library.json).
  */
 import { LIBRARY_ROLES } from './roles-library.ts';
 import { DELIVERY_ROLES } from './roles-delivery.ts';
