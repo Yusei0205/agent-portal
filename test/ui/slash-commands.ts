@@ -289,7 +289,7 @@ async function main() {
     await page.waitForTimeout(200);
     const menuAfterEsc = await cmdMenu.isVisible().catch(() => false);
     check(!menuAfterEsc, 'menu is hidden after pressing Escape');
-    const activeEl = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+    const activeEl = await page.evaluate(() => (globalThis as any).document.activeElement?.getAttribute('aria-label'));
     check(activeEl === 'Instruction for the agents, or a slash command', 'focus stays in composer after Escape');
     await shot(page, 'menu-escaped');
 
@@ -352,7 +352,7 @@ async function main() {
       check((await currentBadge.count()) > 0, 'picker marks one option as "current"');
 
       const currentOption = pickerModal.locator('.cmd-picker-option.is-current');
-      const currentLabel = (await currentOption.locator('.cmd-picker-label').textContent().catch(() => '')).toLowerCase();
+      const currentLabel = (await currentOption.locator('.cmd-picker-label').textContent().catch(() => '') ?? '').toLowerCase();
       check(currentLabel.includes('sonnet') || currentLabel !== '', 'current model is marked as Sonnet');
 
       // ── Mouse selection: click Haiku ──────────────────────────────────────
@@ -369,7 +369,7 @@ async function main() {
 
       // The session header chip for model should now say "haiku"
       const wsHead = page.locator('.ws-head');
-      const headText = (await wsHead.textContent()).toLowerCase();
+      const headText = (await wsHead.textContent() ?? '').toLowerCase();
       check(headText.includes('haiku'), 'session header chip reflects the new model (haiku) after mouse pick');
       await shot(page, 'model-haiku-header-updated');
 
@@ -394,7 +394,7 @@ async function main() {
         // Find which one is Sonnet
         let sonnetIdx = -1;
         for (let i = 0; i < optCount; i++) {
-          const txt = (await opts.nth(i).textContent()).toLowerCase();
+          const txt = (await opts.nth(i).textContent() ?? '').toLowerCase();
           if (txt.includes('sonnet')) { sonnetIdx = i; break; }
         }
         check(sonnetIdx >= 0, 'found Sonnet option in the picker list');
@@ -427,7 +427,7 @@ async function main() {
         check(!modal2Gone, 'picker modal closes after keyboard selection of Sonnet');
 
         // Header chip should now say "sonnet"
-        const headText2 = (await page.locator('.ws-head').textContent()).toLowerCase();
+        const headText2 = (await page.locator('.ws-head').textContent() ?? '').toLowerCase();
         check(headText2.includes('sonnet'), 'session header chip reflects the new model (sonnet) after keyboard pick');
         await shot(page, 'model-sonnet-header-updated');
 
@@ -495,12 +495,12 @@ async function main() {
 
         // The header chip should show 'led by <name>' if a named agent was chosen,
         // or omit the chip entirely if "(default / none)" was selected.
-        const wsHeadText = (await page.locator('.ws-head').textContent()).toLowerCase();
-        const isDefault = optLabel.toLowerCase().includes('default') || optLabel.toLowerCase().includes('none');
+        const wsHeadText = (await page.locator('.ws-head').textContent() ?? '').toLowerCase();
+        const isDefault = (optLabel ?? '').toLowerCase().includes('default') || (optLabel ?? '').toLowerCase().includes('none');
         if (!isDefault) {
           check(
-            wsHeadText.includes('led by') && wsHeadText.includes(optLabel.toLowerCase()),
-            `header shows "led by ${optLabel}" chip after agent pick`,
+            wsHeadText.includes('led by') && wsHeadText.includes((optLabel ?? '').toLowerCase()),
+            `header shows "led by ${optLabel ?? ''}" chip after agent pick`,
           );
         } else {
           // After clearing the lead agent, the "led by" chip should disappear
@@ -585,7 +585,7 @@ async function main() {
       await enginePickerModal.waitFor({ state: 'detached', timeout: 5000 });
       await page.waitForTimeout(200);
 
-      const activeElAfterClose = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+      const activeElAfterClose = await page.evaluate(() => (globalThis as any).document.activeElement?.getAttribute('aria-label'));
       check(
         activeElAfterClose === 'Instruction for the agents, or a slash command',
         'focus returns to the composer textarea after /engine picker modal closes',
@@ -619,7 +619,7 @@ async function main() {
       check(true, 'CommandResultView confirms "/model haiku" applied');
 
       // The header model chip should now show haiku
-      const headText = (await page.locator('.ws-head').textContent()).toLowerCase();
+      const headText = (await page.locator('.ws-head').textContent() ?? '').toLowerCase();
       check(headText.includes('haiku'), 'header model chip updated to haiku after inline /model haiku');
       await shot(page, 'inline-model-applied');
 

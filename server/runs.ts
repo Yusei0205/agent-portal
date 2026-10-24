@@ -1,7 +1,7 @@
 import { cleanModel, clearModelListCache } from './models.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import { all, one, run as exec, type Row } from './db.ts';
+import { all, one, run as exec, type Row, isDbOpen } from './db.ts';
 import { del, get, post, openSse, HANDLED, sendFile } from './http.ts';
 import { getProject, projectDir, requireProject } from './projects.ts';
 import { ensureFresh, getRepo, openPullRequest, pushWorktree, removeWorktree, checkBranch, repoDir } from './repos.ts';
@@ -254,7 +254,7 @@ export function registerRunRoutes(): void {
     const leadName = typeof body.leadAgent === 'string' ? body.leadAgent.trim() : '';
     const lead = leadName ? resolveLead(project, leadName, engineProvider(project.id, engine) === 'kiro') : null;
     if (leadName && !lead) throw badRequest(`"${leadName}" cannot lead a run on this engine: it is not an enabled agent of this project.`);
-    const { run } = await startRun({
+    const { run, done } = await startRun({
       projectId: project.id,
       userId: ctx.user!.id,
       kind: 'chat',
@@ -270,6 +270,8 @@ export function registerRunRoutes(): void {
       lead: lead ?? undefined,
       meta: Object.keys(meta).length ? meta : undefined,
     });
+    // done is fire-and-forget; guard against DB-closed errors on shutdown.
+    done.catch((e) => { if (isDbOpen()) console.error(`[run ${run.id}]`, e); });
     return { run: runSummary(run) };
   });
 
@@ -311,7 +313,7 @@ export function registerRunRoutes(): void {
     if (!['chat', 'test'].includes(prev.kind)) throw badRequest('Only agent runs can be continued');
     const body = await ctx.json();
     const prompt = str(body.prompt, 'Follow-up', { max: 50_000 }).trim();
-    const { run } = await startRun({
+    const { run, done } = await startRun({
       projectId: prev.project_id,
       userId: ctx.user!.id,
       kind: prev.kind,
@@ -321,6 +323,8 @@ export function registerRunRoutes(): void {
       permissionMode: body.permissionMode ?? prev.permission_mode,
       model: prev.model,
     });
+    // done is fire-and-forget; guard against DB-closed errors on shutdown.
+    done.catch((e) => { if (isDbOpen()) console.error(`[run ${run.id}]`, e); });
     return { run: runSummary(run) };
   });
 

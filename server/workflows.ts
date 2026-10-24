@@ -12,7 +12,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { all, insert, one, run as exec, update, type Row } from './db.ts';
+import { all, insert, one, run as exec, update, type Row, isDbOpen, dbGeneration } from './db.ts';
 import { del, get, post, put } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
 import { getRepo, repoGitEnv, pushWorktree, checkBranch, openPullRequest, repoDir } from './repos.ts';
@@ -372,7 +372,7 @@ function overBudget(w: Row): string {
   return '';
 }
 
-async function drive(id: string): Promise<void> {
+async function drive(id: string, gen: number): Promise<void> {
   // --- Restore durable loop state from the database ---
   const savedState = one<Row>('SELECT * FROM loop_run_states WHERE workflow_id = ?', id);
   let failures = savedState ? Number(savedState.failures) : 0;
@@ -422,6 +422,10 @@ async function drive(id: string): Promise<void> {
   }
 
   for (;;) {
+    // If the database was swapped (another server started in the same process), exit silently.
+    if (dbGeneration() !== gen) return;
+    // If the database was closed (server shutting down), exit silently. The session will be recovered on the next start.
+    if (!isDbOpen()) return;
     let w = getWorkflow(id);
     if (w.status !== 'running') return;
     if (w.iteration - w.burst_start >= w.max_iterations) return stopWith(id, 'paused', `Reached ${w.max_iterations} iterations without finishing. Review it, then send an instruction or resume to go on.`);
@@ -709,9 +713,13 @@ export function kick(id: string): void {
     }
     return;
   }
+  const gen = dbGeneration();
   driving.set(id, { runId: null });
-  drive(id)
+  drive(id, gen)
     .catch((e) => {
+      // Suppress DB-closed errors: they happen when the server is shut down while a session is still running.
+      // The session will be recovered on the next startup via recoverWorkflows().
+      if (!isDbOpen() || dbGeneration() !== gen) return;
       console.error(`[workflow ${id}]`, e);
       try {
         stopWith(id, 'failed', String(e?.message ?? e).slice(0, 300));

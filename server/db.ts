@@ -641,8 +641,17 @@ const MIGRATIONS: string[] = [
 
 let db: DatabaseSync | null = null;
 
+/** Incremented each time openDb() is called. Used by long-running async loops to detect a DB swap. */
+let _dbGeneration = 0;
+
+/** Returns the current DB generation (incremented on every openDb call). */
+export function dbGeneration(): number {
+  return _dbGeneration;
+}
+
 export function openDb(file = dataPath('portal.db')): DatabaseSync {
   db = new DatabaseSync(file);
+  _dbGeneration++;
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const cur = (db.prepare('SELECT version FROM schema_version').get() as Row | undefined)?.version ?? 0;
@@ -664,6 +673,11 @@ export function openDb(file = dataPath('portal.db')): DatabaseSync {
 export function getDb(): DatabaseSync {
   if (!db) throw new Error('Database not opened');
   return db;
+}
+
+/** True while the database connection is open (between openDb and closeDb). */
+export function isDbOpen(): boolean {
+  return db !== null;
 }
 
 export function closeDb(): void {

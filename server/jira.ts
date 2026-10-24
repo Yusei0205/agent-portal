@@ -16,7 +16,7 @@ import { cleanModel } from './models.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { all, one, run as exec, type Row } from './db.ts';
+import { all, one, run as exec, type Row, isDbOpen } from './db.ts';
 import { del, get, post, put, HANDLED } from './http.ts';
 import { getProject, projectDir, requireProject } from './projects.ts';
 import { deleteSecret, getSecret, setSecret } from './secrets.ts';
@@ -523,7 +523,7 @@ export function registerJiraRoutes(): void {
     await ensureFresh(repo);
     const notes = str(body.notes, 'Notes', { max: 2000, optional: true });
     const model = cleanModel(body.model);
-    const { run } = await startRun({
+    const { run, done } = await startRun({
       projectId: project.id,
       userId: ctx.user!.id,
       kind: 'chat',
@@ -533,6 +533,7 @@ export function registerJiraRoutes(): void {
       model,
       meta: { jiraKey: ticket.key, jiraUrl: ticket.url, jiraSummary: ticket.summary, repoName: repo.name },
     });
+    done.catch((e) => { if (isDbOpen()) console.error(`[run ${run.id}]`, e); });
     return { run };
   });
 

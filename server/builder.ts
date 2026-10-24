@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { all, one, run } from './db.ts';
+import { all, one, run, isDbOpen } from './db.ts';
 import { del, get, post, put } from './http.ts';
 import { dataPath } from './config.ts';
 import { commitProject, notifyProject, projectDir, requireProject, type Project } from './projects.ts';
@@ -576,7 +576,7 @@ export function registerBuilderRoutes(): void {
     if (type === 'agent' && !findAgent(project, name)?.enabled) throw badRequest('Enable the agent before testing it');
     if (type === 'skill' && !findSkill(project, name)?.enabled) throw badRequest('Enable the skill before testing it');
     const { startRun } = await import('./agent/runner.ts');
-    const { run: r } = await startRun({
+    const { run: r, done } = await startRun({
       projectId: project.id,
       userId: ctx.user!.id,
       kind: 'test',
@@ -586,6 +586,7 @@ export function registerBuilderRoutes(): void {
       model: 'haiku',
       meta: { testOf: { type, name } },
     });
+    done.catch((e) => { if (isDbOpen()) console.error(`[run ${r.id}]`, e); });
     return { run: r };
   });
 

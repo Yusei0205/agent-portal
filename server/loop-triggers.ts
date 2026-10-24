@@ -16,14 +16,14 @@
  * Tests inject an overridable clock and Jira fetcher via the injectable seams at the bottom.
  */
 import crypto from 'node:crypto';
-import { all, one, insert, run as exec, type Row } from './db.ts';
+import { all, one, insert, run as exec, type Row, isDbOpen } from './db.ts';
 import { post, get } from './http.ts';
 import { requireProject, getProject, notifyProject } from './projects.ts';
 import { badRequest, notFound, newId, now, str, parseJson, HttpError } from './util.ts';
 import { audit } from './audit.ts';
 import { checkConcurrency, isDraining, concurrencyReason, queueReasonLabel, drainQueue } from './control-plane.ts';
 import { assertBudget } from './settings.ts';
-import { getLoopSpec, getLoopSpecsByProject, fillTemplate, checkTriggerRateLimit, isDuplicateTrigger, recordTriggerFire, type LoopSpec } from './loop-specs.ts';
+import { getLoopSpec, getLoopSpecsByProject, fillTemplate, checkTriggerRateLimit, isDuplicateTrigger, recordTriggerFire, rowToSpecFromRow, type LoopSpec } from './loop-specs.ts';
 import type { AuditAction } from './audit.ts';
 
 /* ------------------------------------------------------------------ */
@@ -248,6 +248,7 @@ function githubDedupKey(event: string, payload: any): string {
 /* ------------------------------------------------------------------ */
 
 let _cronTimer: ReturnType<typeof setInterval> | null = null;
+let _cronAlignTimer: ReturnType<typeof setTimeout> | null = null;
 let _jiraTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Track last-fired minute per spec so we don't fire twice in the same minute. */
@@ -258,9 +259,9 @@ function minuteKey(d: Date): string {
 }
 
 async function runCronTick(): Promise<void> {
+  if (!isDbOpen()) return;
   const d = new Date(nowMs());
   const mk = minuteKey(d);
-  const { rowToSpecFromRow } = await import('./loop-specs.ts');
   const specs = all<Row>("SELECT * FROM loop_specs WHERE trigger_kind = 'cron'");
   for (const r of specs) {
     const spec = rowToSpecFromRow(r);
@@ -292,10 +293,12 @@ async function runCronTick(): Promise<void> {
     if (isDraining()) continue;
 
     // Find a valid user (the spec's creator; fall back to any admin).
+    if (!isDbOpen()) return;
     const userId = await resolveTriggerUser(spec.project_id, spec.created_by);
     if (!userId) continue;
 
     try {
+      if (!isDbOpen()) return;
       const wf = await createWorkflowFromSpec(spec, userId, {});
       recordTriggerFire(spec.id, 'cron', { cron, minute: mk }, wf.id);
       exec(
@@ -310,6 +313,7 @@ async function runCronTick(): Promise<void> {
 }
 
 async function runJiraPollTick(): Promise<void> {
+  if (!isDbOpen()) return;
   if (isDraining()) return;
   const specs = all<Row>("SELECT * FROM loop_specs WHERE trigger_kind = 'jira_event'");
   for (const r of specs) {
@@ -323,7 +327,6 @@ async function runJiraPollTick(): Promise<void> {
 }
 
 async function pollJiraForSpec(r: Row): Promise<void> {
-  const { rowToSpecFromRow } = await import('./loop-specs.ts');
   const spec = rowToSpecFromRow(r);
   if (!spec) return;
   const tc = spec.trigger_config;
@@ -405,26 +408,31 @@ async function resolveTriggerUser(projectId: string, preferredUserId: string | n
 /* ------------------------------------------------------------------ */
 
 export function startTriggerEngine(): void {
-  if (_cronTimer) return; // already running
+  if (_cronTimer || _cronAlignTimer) return; // already running
 
   // Run cron every minute (align to 30s after the minute start to account for system jitter).
   const msUntilNextMinute = 60_000 - (nowMs() % 60_000) + 100;
-  setTimeout(() => {
+  _cronAlignTimer = setTimeout(() => {
+    _cronAlignTimer = null;
+    // Do not start the cron engine if the DB was closed (server is shutting down).
+    if (!isDbOpen()) return;
     runCronTick().catch(console.error);
     _cronTimer = setInterval(() => {
-      runCronTick().catch(console.error);
+      if (isDbOpen()) runCronTick().catch(console.error);
     }, 60_000);
     _cronTimer.unref();
-  }, msUntilNextMinute).unref();
+  }, msUntilNextMinute);
+  _cronAlignTimer.unref();
 
   // Poll Jira every 5 minutes.
   _jiraTimer = setInterval(() => {
-    runJiraPollTick().catch(console.error);
+    if (isDbOpen()) runJiraPollTick().catch(console.error);
   }, 5 * 60_000);
   _jiraTimer.unref();
 }
 
 export function stopTriggerEngine(): void {
+  if (_cronAlignTimer) { clearTimeout(_cronAlignTimer); _cronAlignTimer = null; }
   if (_cronTimer) { clearInterval(_cronTimer); _cronTimer = null; }
   if (_jiraTimer) { clearInterval(_jiraTimer); _jiraTimer = null; }
 }

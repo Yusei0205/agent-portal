@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { extractJson, parseFrontmatter, safeJoin, slugify, stringifyFrontmatter } from '../server/util.ts';
 import { htmlToMarkdown, sectionize } from '../server/convert.ts';
 import { parseUnifiedDiff, reviewDiff } from '../server/agent/heuristics.ts';
@@ -79,7 +80,7 @@ test('helpers: json extraction, safe paths, slugs, redaction', () => {
   assert.deepEqual(extractJson('noise {"b":[1,2]} trailing'), { b: [1, 2] });
   assert.equal(extractJson('nothing'), null);
   assert.throws(() => safeJoin('/data/x', '../y'));
-  assert.equal(safeJoin('/data/x', 'a/b'), '/data/x/a/b');
+  assert.equal(safeJoin('/data/x', 'a/b'), path.resolve('/data/x', 'a/b'));
   assert.equal(slugify('Refunds FSD v2 (final).pdf'), 'refunds-fsd-v2-final-pdf');
   assert.equal(redact('fatal: https://user:ghp_abcdefghijklmnopqrstuvwxyz123456@github.com/a'), 'fatal: https://***@github.com/a');
 });

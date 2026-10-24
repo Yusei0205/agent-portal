@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { config, ensureDataDirs } from './config.ts';
-import { openDb, closeDb } from './db.ts';
+import { openDb, closeDb, isDbOpen } from './db.ts';
 import { createHandler } from './http.ts';
 import { authenticate, cleanupSessions, createUser, registerAuthRoutes, userCount } from './auth.ts';
 import { registerSettingsRoutes, getSettings } from './settings.ts';
@@ -42,8 +42,7 @@ let routesRegistered = false;
 
 export async function startServer(opts: { port?: number; host?: string } = {}): Promise<http.Server> {
   ensureDataDirs();
-  openDb();
-  if (!routesRegistered) {
+  openDb();  if (!routesRegistered) {
     registerAuthRoutes();
     registerSettingsRoutes();
     registerModelRoutes();
@@ -102,11 +101,14 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   const host = opts.host ?? config.host;
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
   // Sessions the restart interrupted carry on once the server is up (unless an admin turned that off).
+  let resumeTimer: ReturnType<typeof setTimeout> | undefined;
   if (restarted.length && getSettings().agents.resumeAfterRestart !== false) {
-    setTimeout(() => {
+    resumeTimer = setTimeout(() => {
+      resumeTimer = undefined;
       const n = resumeAfterRestart(restarted);
       if (n) console.log(`[sessions] ${n} session(s) carried on after the restart`);
-    }, 2000).unref();
+    }, 2000);
+    resumeTimer.unref();
   }
   const addr = server.address();
   const shown = typeof addr === 'object' && addr ? `http://${host === '0.0.0.0' ? 'localhost' : host}:${addr.port}` : String(addr);
@@ -115,7 +117,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   if (userCount() === 0) console.log('Open the address above to create the first admin account.');
 
   // Periodic jobs
-  const sessionCleanupTimer = setInterval(cleanupSessions, 6 * 3600_000);
+  const sessionCleanupTimer = setInterval(() => { if (isDbOpen()) cleanupSessions(); }, 6 * 3600_000);
   sessionCleanupTimer.unref();
 
   // Loop trigger engine (cron + Jira polling)
@@ -123,6 +125,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
 
   // Approval SLA checker: runs every minute
   const slaTimer = setInterval(() => {
+    if (!isDbOpen()) return;
     const slaMinutes = getSettings().controlPlane?.approvalSlaMinutes ?? 30;
     checkApprovalSla(slaMinutes);
   }, 60_000);
@@ -130,6 +133,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
 
   // Worktree TTL cleanup: runs once a day
   const cleanupTimer = setInterval(async () => {
+    if (!isDbOpen()) return;
     const ttlDays = getSettings().controlPlane?.worktreeTtlDays ?? 30;
     const getDir = (pid: string) => {
       try {
@@ -147,6 +151,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     clearInterval(sessionCleanupTimer);
     clearInterval(slaTimer);
     clearInterval(cleanupTimer);
+    if (resumeTimer) clearTimeout(resumeTimer);
     stopTriggerEngine();
     closeDb();
   });
