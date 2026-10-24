@@ -188,7 +188,7 @@ Stored in `<project>/.kiro/` and committed to the project's git repository. Used
 
 ### 2.8 Sessions (SESS), the core feature
 
-A **session** is a saved goal that the portal drives through repeated agent runs ("iterations") until done, blocked, or a limit is hit (`workflows.ts`). A **run** is a single agent execution (`runs.ts`); the older single-run flow still exists.
+A **session** is a saved goal that the portal drives through repeated agent runs ("iterations") until done, blocked, or a limit is hit (`workflows.ts`). An **agent run** is one model execution (`agent_runs`): an iteration of a session, or a background task such as an agent test, a ticket analysis or a review. A **single run** is a session with `maxIterations = 1` (Phase 1 of the refactor merged the two models; there is no separate single-run flow any more).
 
 | ID | Requirement | Evidence | Decision |
 |---|---|---|---|
@@ -207,8 +207,8 @@ A **session** is a saved goal that the portal drives through repeated agent runs
 | FR-SESS-13 | **Push**: push mode `never | ask | auto`. `ask` creates a pending push card to Allow/Deny. A push goes to a new work branch; a pull request can be opened (GitHub/CodeCommit). Shared branches (e.g. main) are refused. | code | |
 | FR-SESS-14 | **Plan-first gate**: with the gate on, the session pauses for a human to approve the plan before it acts. | code (`approve-plan`, `shouldPlanFirst`) | |
 | FR-SESS-15 | Sessions interrupted by a server restart resume automatically (admin setting, default on). Loop state is persisted so counters survive. | code (`index.ts`, `loop_run_states`) | |
-| FR-SESS-16 | Sessions list with status filter, sort, and live facts (latest run state, pending approvals). A legacy run URL redirects into the sessions UI. | code (`SessionList.jsx`, `legacyRunTarget`) | |
-| FR-SESS-17 | Single runs: stream, stop, continue (follow-up), changes, file view/download, zip, push, remove worktree, answer approval/question. | route | |
+| FR-SESS-16 | Sessions list with status filter, sort, and live facts (latest run state, pending approvals). A legacy run URL redirects into the sessions UI (a session's run opens in its session). | code (`SessionList.jsx`, `legacyRunTarget`) | |
+| FR-SESS-17 | Single runs (`POST /api/projects/:pid/workflows` with `singleRun: true`): stream, stop (the session), continue (send the session an instruction, which re-opens it), changes, file view/download, zip, push, remove worktree, answer approval/question. The approval choice is the session's `permission_mode`. | route | |
 
 ### 2.9 Guardrails (GUARD)
 
@@ -318,10 +318,10 @@ Portal group: Inbox, Git connections, Integrations, AWS accounts, Vault, API acc
 
 ## 4. Data model (SQLite, from migrations in `db.ts`)
 
-Core tables: `users`, `sessions` (login), `settings`, `secrets`, `projects`, `project_members`, `repos`, `runs`, `run_events`, `inputs`, `documents`, `sections` (+ `sections_fts`), `project_folders`, `reviews`, `findings`, `project_roles`, `learn_docs`, `quizzes`, `quiz_attempts`, `paths`, `doc_reads`, `project_jira`, `project_aws`, `aws_identities`, `workflows`, `workflow_events`.
+Core tables: `users`, `sessions` (login), `settings`, `secrets`, `projects`, `project_members`, `repos`, `agent_runs`, `agent_run_events`, `inputs`, `documents`, `sections` (+ `sections_fts`), `project_folders`, `reviews`, `findings`, `project_roles`, `learn_docs`, `quizzes`, `quiz_attempts`, `paths`, `doc_reads`, `project_jira`, `project_aws`, `aws_identities`, `workflows`, `workflow_events`.
 Added later (seen in code, schema not re-read): `workflow_context`, `loop_specs`, `loop_run_states`, trigger history, `outbound_webhooks`, teams / team members / team projects, invitations, SCIM tokens, audit log, API tokens, workspaces, integrations, git/AWS connections, vault.
 
-Note the two parallel execution tables: `runs` (+ `run_events`) and `workflows` (+ `workflow_events`).
+Execution model (after Phase 1): `workflows` (+ `workflow_events`) are the sessions; each iteration is one row of `agent_runs` (+ `agent_run_events`) linked by `agent_runs.workflow_id`. Rows with no `workflow_id` are background tasks. The schema is one clean baseline in `server/db.ts` (D-4); an older database is refused, not migrated.
 
 ## 5. External interfaces
 
@@ -356,7 +356,7 @@ These come from file sizes and structure. Measure before acting on any of them.
 
 | # | Observation | Evidence | Candidate requirement |
 |---|---|---|---|
-| O-1 | **Two execution models.** Single runs (`runs.ts`, `/api/runs/*`) and sessions (`workflows.ts`, `/api/workflows/*`) overlap. The launcher already offers "Single run" as a mode inside sessions, and a legacy redirect exists. | code | Merge into one model; a single run is a session with `maxIterations = 1`. |
+| O-1 | **Two execution models.** Single runs (`runs.ts`, `/api/runs/*`) and sessions (`workflows.ts`, `/api/workflows/*`) overlap. The launcher already offers "Single run" as a mode inside sessions, and a legacy redirect exists. | code | Merge into one model; a single run is a session with `maxIterations = 1`. **Done in Phase 1.** |
 | O-2 | **Two agent systems with some coupling.** Claude (`builder.ts`) and Kiro (`kiro-agents.ts`) are genuinely different (D-9) and stay separate. What remains: Kiro runs fall back to `.claude` agents when a project has no Kiro agents (FR-LEAD-1), and Kiro has no role templates, library, Describe or test run (FR-LEAD-2). | code | Fallback replaced by an ask-the-user switch (D-12). Which Claude-side tools Kiro should get is still open. |
 | O-3 | **Very large modules.** `roles-library.ts` 115 KB, `roles-delivery.ts` 97 KB, `workflows.ts` 83 KB, `governance.ts` 63 KB (eight concerns in one file). Pages: `SessionWorkspace.jsx` 62 KB, `Knowledge.jsx` 61 KB, `Insights.jsx` 61 KB, `NewSessionDialog.jsx` 60 KB, `Builder.jsx` 60 KB, `Settings.jsx` 52 KB. CSS: `styles.css` 127 KB plus `hud.css`. | file listing | Split by concern; move role templates to data files. |
 | O-4 | **Duplicated navigation.** Vault appears in project items and in Portal items. Insights appears twice (project / all). "Inbox" means two things: the cross-project Inbox (`/api/inbox`) and the Knowledge "Open questions" (`/api/projects/:pid/inbox`). | code (`App.jsx`, routes) | One name per concept; decide whether project vault and portal vault are one page. |
@@ -364,7 +364,7 @@ These come from file sizes and structure. Measure before acting on any of them.
 | O-6 | **Settings spread over four levels** (portal, AWS account, project, session) with provider, push mode, budget and lead agent each configurable in several places. | plan, code | Single owner per setting, shown with precedence. |
 | O-7 | **Frontend is untyped JSX** with a hand-written router and no shared API types, while the backend is TypeScript. | code | Type the web app, or generate API types. |
 | O-8 | **Hand-rolled infrastructure.** HTTP router, mini cron parser, SSE, FTS indexing, markdown conversion and a 275-route API without a schema or OpenAPI description. | code | Decide which to keep; add an API schema. |
-| O-9 | **Inconsistent naming in verification.** Code comments refer to both `failStop` and `required` for the same flag. The plan document used `failStop`; the type uses `required`. | code | One field name; migration for stored specs. |
+| O-9 | **Inconsistent naming in verification.** Code comments refer to both `failStop` and `required` for the same flag. The plan document used `failStop`; the type uses `required`. | code | One field name; migration for stored specs. **Done in Phase 1:** `required` everywhere; `failStop` is refused by the API. |
 | O-10 | **Single process drives everything** (session drivers, trigger polling, SLA checks, webhook retries). | code (`index.ts`) | **Dropped by D-2**: acceptable at 1–3 users. |
 | O-11 | **README is behind the code.** It does not mention sessions, loop specs, Inbox, workspaces, teams/SCIM/OIDC, vault, integrations, insights or outbound webhooks. | readme vs code | Replace README feature list with this spec's summary. |
 | O-12 | **Repo hygiene.** `server.out.log` and `server.err.log` sit in the repo root; test files over 40 KB (`workflows.test.ts` 82 KB) are hard to maintain. | file listing | Ignore logs; split tests with modules. |

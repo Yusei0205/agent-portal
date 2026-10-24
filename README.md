@@ -160,8 +160,10 @@ docker compose build --pull          # rebuild with latest base image
 docker compose up -d                 # restart; data volume is untouched
 ```
 
-The portal runs DB migrations on start, so the volume from the previous version is always
-compatible.
+Later changes to the database are applied automatically on start. The schema was rebuilt from a
+clean baseline (one execution model: a single run is a session with one iteration), so a data
+volume made by an earlier build is refused with a clear message instead of being upgraded: move
+`portal.db` aside to start with an empty database.
 
 #### Troubleshooting
 
@@ -205,9 +207,9 @@ Settings, so no AWS keys are stored at all.
    - **Describe**: click *Describe…* on the Agents or Skills tab, type a plain-language description
      and optionally toggle "Based on project documents", then review and save the AI-drafted form.
 4. **Repositories**: connect a GitHub, CodeCommit or other Git repository. Wait for *Ready*.
-5. **Agent runs**: start “Design and build the refund approval flow” on that repository with
-   *Ask before changes*. Answer the agent’s questions, approve the file write, click the
-   subagents in the tree, open *Files and changes*, and *Push changes* to a new branch.
+5. **Single run**: start “Design and build the refund approval flow” as a *Single run* (a session with
+   one iteration) on that repository with *Ask before changes*. Answer the agent’s questions,
+   approve the file write, click the subagents, open *Changes*, and *Push changes* to a new branch.
    Start the same task again: it uses the recorded decision and doesn’t ask.
    - **Tools**: the “Tools for this session” row lets you enable the web browser, AWS
      integration, or Kiro engine per run. Packs not yet installed show a hint to install
@@ -238,7 +240,7 @@ npm run test:container # end-to-end container smoke test (needs Docker)
 
 ```
 data/
-  portal.db                 users, runs, events, search index, settings
+  portal.db                 users, sessions, agent runs, events, search index, settings
   master.key                only if PORTAL_SECRET_KEY is not set
   claude-home/              Claude Code config and session transcripts for agent runs
   library/                  shared agents and skills
