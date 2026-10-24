@@ -139,7 +139,8 @@ process.stdin.on('data', async (d) => {
     else if (m.method === 'session/set_model') send({ id: m.id, result: {} });
     else if (m.method === 'session/prompt') {
       const text = m.params.prompt.map((p) => p.text).join('\n');
-      runPrompt(m.params.sessionId, text).then((result) => send({ id: m.id, result }));
+      if (text.includes('[fail]')) send({ id: m.id, error: { code: -32000, message: 'fake kiro failure' } });
+      else runPrompt(m.params.sessionId, text).then((result) => send({ id: m.id, result }));
     } else if (m.method === 'session/cancel') {
       /* notification */
     } else if (m.id !== undefined) send({ id: m.id, error: { code: -32601, message: 'not supported' } });

@@ -27,7 +27,7 @@ export type AuditAction =
   | 'repo.add' | 'repo.remove' | 'repo.update'
   | 'git_connection.add' | 'git_connection.remove' | 'git_connection.update'
   // sessions
-  | 'session.start' | 'session.pause' | 'session.resume' | 'session.stop'
+  | 'session.start' | 'session.pause' | 'session.resume' | 'session.stop' | 'session.engine-switch'
   | 'session.settings_change' | 'session.delete'
   // pushes / approvals
   | 'push.allowed' | 'push.denied' | 'push.auto'

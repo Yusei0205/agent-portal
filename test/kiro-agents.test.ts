@@ -355,16 +355,14 @@ test('PUT /api/workflows/:id with engine switch validates lead against the new e
   await admin.del(`/api/workflows/${workflow.id}`);
 });
 
-test('a project without Kiro agents keeps using its .claude agents on Kiro', async () => {
+test('a project without Kiro agents does not borrow its .claude agents on Kiro (D-12)', async () => {
   const { project } = await admin.post('/api/projects', { name: 'Claude only', description: 'd' });
   const other = path.join(srv.dataDir, 'projects', project.slug);
   fs.mkdirSync(path.join(other, '.claude', 'agents'), { recursive: true });
   fs.writeFileSync(path.join(other, '.claude', 'agents', 'backend-agent.md'), '---\nname: backend-agent\ndescription: Builds the API\n---\nYou build backend code.\n');
-  assert.deepEqual((await admin.get(`/api/projects/${project.id}/leads?engine=kiro`)).leads, [{ name: 'backend-agent', description: 'Builds the API', kind: 'claude' }]);
-  clearLog();
-  const { run } = await startSingleRun(admin, project.id, { prompt: 'Look around', leadAgent: 'backend-agent', permissionMode: 'acceptEdits' });
-  await finish(admin, run.id);
-  const p = entries().find((e) => e.event === 'start').profile;
-  assert.deepEqual(p.toolsSettings.subagent.availableAgents, [`${p.name}-general`], 'the lead is not offered to itself');
-  assert.match(p.prompt, /act as the lead agent "backend-agent"/);
+  assert.deepEqual((await admin.get(`/api/projects/${project.id}/leads?engine=kiro`)).leads, [], 'Kiro offers no .claude agent');
+  assert.equal((await admin.get(`/api/projects/${project.id}/leads?engine=claude`)).leads.length, 1, 'Claude still does');
+  const refused = await startSingleRunReq(admin, project.id, { prompt: 'Look around', leadAgent: 'backend-agent', permissionMode: 'acceptEdits' });
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /not an enabled Kiro agent/);
 });

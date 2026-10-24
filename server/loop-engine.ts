@@ -152,7 +152,7 @@ export function escalateSession(workflowId: string, reason: 'blocked' | 'failed'
 /* ------------------------------------------------------------------ */
 
 export interface InboxItem {
-  kind: 'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'done' | 'running' | 'queued';
+  kind: 'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'engine_switch' | 'done' | 'running' | 'queued';
   workflowId: string;
   projectId: string;
   projectName: string;
@@ -327,6 +327,32 @@ export function buildInbox(userId: string, projectFilter: string | null): InboxI
     });
   }
 
+  // -- Kiro could not run: ask whether to switch to Claude Code --
+  const engineAsks = all<Row>(
+    `SELECT we.body, we.created_at, w.id AS workflow_id, w.title AS wf_title, w.project_id, p.name AS project_name
+       FROM workflow_events we
+       JOIN workflows w ON w.id = we.workflow_id
+       JOIN projects p ON p.id = w.project_id
+      WHERE we.kind = 'engine_switch' AND we.consumed = 0 AND w.status = 'paused'
+        AND (? IS NULL OR w.project_id = ?)
+        AND (w.created_by = ? OR EXISTS (SELECT 1 FROM project_members WHERE project_id = w.project_id AND user_id = ?))
+      ORDER BY we.created_at DESC LIMIT 50`,
+    projectFilter, projectFilter, userId, userId,
+  );
+  for (const e of engineAsks) {
+    items.push({
+      kind: 'engine_switch',
+      workflowId: String(e.workflow_id),
+      projectId: String(e.project_id),
+      projectName: String(e.project_name ?? ''),
+      sessionTitle: String(e.wf_title ?? ''),
+      detail: String(e.body ?? '').slice(0, 300),
+      prUrl: null,
+      createdAt: String(e.created_at),
+      isOverdue: false,
+    });
+  }
+
   // -- Recently done sessions with PR links (last 24h) --
   const doneCutoff = new Date(Date.now() - 86_400_000).toISOString();
   const doneRows = projectFilter
@@ -439,7 +465,13 @@ export function inboxNeedsYouCount(userId: string): number {
         AND EXISTS (SELECT 1 FROM workflows w WHERE w.id = we.workflow_id AND w.created_by = ?)`,
     userId,
   )?.n ?? 0);
-  return inputs + pushes + plans + esc;
+  const engineAsks = Number(one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM workflow_events we
+      WHERE we.kind = 'engine_switch' AND we.consumed = 0
+        AND EXISTS (SELECT 1 FROM workflows w WHERE w.id = we.workflow_id AND w.status = 'paused' AND w.created_by = ?)`,
+    userId,
+  )?.n ?? 0);
+  return inputs + pushes + plans + esc + engineAsks;
 }
 
 /* ------------------------------------------------------------------ */
@@ -578,13 +610,13 @@ export function registerLoopEngineRoutes(): void {
     // Filter by mode
     let filtered = items;
     if (filterMode === 'needs_you') {
-      filtered = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation'].includes(i.kind));
+      filtered = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch'].includes(i.kind));
     } else if (filterMode === 'running') {
       filtered = items.filter((i) => i.kind === 'running' || i.kind === 'queued');
     } else if (filterMode === 'done') {
       filtered = items.filter((i) => i.kind === 'done');
     }
-    const needsYouCount = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation'].includes(i.kind)).length;
+    const needsYouCount = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch'].includes(i.kind)).length;
     ctx.res.setHeader('X-Inbox-Needs-You', String(needsYouCount));
     return { items: filtered, needs_you: needsYouCount };
   });

@@ -215,7 +215,7 @@ function cmdAgent(w: Row, arg: string, ctx: { userId: string; userName: string }
   if (name) {
     // Validate: must be in the project's own agent choices for this engine.
     if (!choices.some((c) => c.name === name)) {
-      const kind = choices[0]?.kind === 'kiro' ? 'Kiro agent' : 'agent';
+      const kind = kiro ? 'Kiro agent' : 'agent';
       throw badRequest(
         `"${name}" is not an enabled ${kind} in this project. ` +
         `Available: ${choices.map((c) => c.name).join(', ') || '(none)'}. ` +
@@ -299,6 +299,7 @@ function cmdEngine(w: Row, arg: string, ctx: { userId: string; userName: string 
 
   const running = isDriving(w.id);
   patchWorkflow(w.id, { engine });
+  exec("UPDATE workflow_events SET consumed = 1 WHERE workflow_id = ? AND kind = 'engine_switch' AND consumed = 0", w.id);
   const label = engine || '(project default)';
   logEvent(w.id, 'system', `Settings changed by command: engine set to "${label}"`);
 

@@ -132,6 +132,31 @@ function PendingBanner({ w, canEdit, onDone }) {
 
   if (!canEdit) return null;
 
+  // Kiro could not run: the person decides whether the session continues on Claude Code
+  if (w.engine_switch) {
+    const answer = async (accept) => {
+      setBusy(accept ? 'switch' : 'keep');
+      try {
+        await api.post(`/api/workflows/${w.id}/engine-switch`, { accept });
+        toast(accept ? 'Switched to Claude Code; the session carries on' : 'Kept on Kiro; the session stays stopped', 'ok');
+        onDone();
+      } catch (e) { toast(e.message, 'danger'); } finally { setBusy(''); }
+    };
+    return (
+      <div className="ws-pending-banner ws-blocked-banner" role="alert">
+        <Icon name="alert" size={14} aria-hidden="true" />
+        <span>
+          Kiro cannot run this session: {w.engine_switch.reason} Switch this session to Claude Code mode?
+          {w.engine_switch.claudeReady ? '' : ' Claude is not set up yet (Settings › Model provider).'}
+        </span>
+        <div className="row tight">
+          <Button variant="primary" size="sm" busy={busy === 'switch'} disabled={!w.engine_switch.claudeReady} onClick={() => answer(true)}>Switch to Claude Code</Button>
+          <Button variant="danger" size="sm" busy={busy === 'keep'} onClick={() => answer(false)}>No, keep stopped</Button>
+        </div>
+      </div>
+    );
+  }
+
   // Push pending
   if (w.pending_push && typeof w.pending_push === 'object' && w.pending_push.branch) {
     const req = w.pending_push;

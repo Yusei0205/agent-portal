@@ -101,6 +101,7 @@ const KIND_BADGE = {
   push_ready: { label: 'Push ready', tone: 'accent' },
   plan_pending: { label: 'Plan ready', tone: 'accent' },
   escalation: { label: 'Blocked', tone: 'danger' },
+  engine_switch: { label: 'Kiro cannot run', tone: 'danger' },
   done: { label: 'Done', tone: 'ok' },
 };
 
@@ -461,12 +462,53 @@ function DoneCard({ item }) {
   );
 }
 
+/**
+ * Kiro could not run the session: ask whether to continue it on Claude Code. Nothing switches without this answer.
+ */
+function EngineSwitchCard({ item, onDone }) {
+  const { toast } = useUi();
+  const [busy, setBusy] = useState('');
+
+  const answer = async (accept) => {
+    setBusy(accept ? 'switch' : 'keep');
+    try {
+      await api.post(`/api/workflows/${item.workflowId}/engine-switch`, { accept });
+      toast(accept ? 'Switched to Claude Code; the session carries on' : 'Kept on Kiro; the session stays stopped', 'ok');
+      onDone();
+    } catch (e) {
+      toast(e.message, 'danger');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <div className="inbox-card inbox-escalation" role="article" aria-label={`Kiro cannot run: ${item.sessionTitle}`}>
+      <div className="inbox-card-head">
+        <Badge tone={KIND_BADGE.engine_switch.tone}>{KIND_BADGE.engine_switch.label}</Badge>
+        <span className="inbox-project">{item.projectName}</span>
+        <span className="muted small">{timeAgo(item.createdAt)}</span>
+      </div>
+      <div className="inbox-card-title">
+        <a href={sessionHref(item.projectId, item.workflowId)}>{item.sessionTitle}</a>
+      </div>
+      <p className="inbox-detail">{item.detail} Switch this session to Claude Code mode?</p>
+      <div className="inbox-card-actions">
+        <Button variant="primary" size="sm" busy={busy === 'switch'} onClick={() => answer(true)}>Switch to Claude Code</Button>
+        <Button variant="ghost" size="sm" busy={busy === 'keep'} onClick={() => answer(false)}>No, keep stopped</Button>
+        <a className="btn btn-ghost btn-sm" href={sessionHref(item.projectId, item.workflowId)}>Open session</a>
+      </div>
+    </div>
+  );
+}
+
 function InboxCard({ item, onDone }) {
   switch (item.kind) {
     case 'waiting': return <WaitingCard item={item} onDone={onDone} />;
     case 'push_ready': return <PushCard item={item} onDone={onDone} />;
     case 'plan_pending': return <PlanCard item={item} onDone={onDone} />;
     case 'escalation': return <EscalationCard item={item} onDone={onDone} />;
+    case 'engine_switch': return <EngineSwitchCard item={item} onDone={onDone} />;
     case 'done': return <DoneCard item={item} />;
     case 'queued': return <RunningCard item={item} />;
     default: return <RunningCard item={item} />;
@@ -538,7 +580,7 @@ export function Inbox() {
 
   const grouped = items
     ? {
-        needs_you: items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation'].includes(i.kind)),
+        needs_you: items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch'].includes(i.kind)),
         running: items.filter((i) => i.kind === 'running' || i.kind === 'queued'),
         done: items.filter((i) => i.kind === 'done'),
       }

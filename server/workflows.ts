@@ -17,7 +17,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { all, insert, one, run as exec, update, type Row, isDbOpen, dbGeneration } from './db.ts';
-import { del, get, post, put } from './http.ts';
+import { del, get, post, put, type Ctx } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
 import { ensureFresh, getRepo, repoGitEnv, pushWorktree, checkBranch, openPullRequest, repoDir } from './repos.ts';
 import { checkKey, downloadAttachments, issueDetail, mustMapping } from './jira.ts';
@@ -119,6 +119,10 @@ export function view(w: Row) {
     waiting_children: Boolean(w.waiting_children),
     push_mode: w.push_mode || 'never',
     pending_push: w.pending_push ? parseJson<any>(w.pending_push, null) : null,
+    engine_switch: (() => {
+      const e = w.status === 'paused' ? pendingEngineSwitch(w.id) : null;
+      return e ? { reason: String(e.body), since: String(e.created_at), claudeReady: Boolean(claudeProvider(w.project_id)) } : null;
+    })(),
     integrations: parseJson<string[]>(w.integrations, []),
     integration_list: parseJson<string[]>(w.integrations, []).map((id) => one<Row>('SELECT id, name, kind, allow_writes FROM integrations WHERE id = ?', id) ?? { id, name: '(removed integration)', kind: '', allow_writes: 0 }),
     model: w.model,
@@ -215,6 +219,27 @@ function runCheck(command: string, cwd: string): Promise<{ ok: boolean; output: 
 /* ------------------------------------------------------------------ */
 /* The loop                                                            */
 /* ------------------------------------------------------------------ */
+
+/**
+ * A Kiro session that cannot run never switches engine by itself (D-12): it pauses with the reason and an
+ * "engine_switch" event stays open until a person accepts (the session continues on Claude Code) or declines (it stays
+ * stopped). The event shows in the session workspace and in the Inbox.
+ */
+function askEngineSwitch(id: string, reason: string): void {
+  const text = reason.slice(0, 400);
+  stopWith(id, 'paused', `Kiro cannot run this session: ${text}`);
+  if (!one<Row>("SELECT id FROM workflow_events WHERE workflow_id = ? AND kind = 'engine_switch' AND consumed = 0", id)) {
+    log(id, 'engine_switch', text);
+  }
+}
+
+function pendingEngineSwitch(workflowId: string): Row | null {
+  return one<Row>("SELECT id, body, created_at FROM workflow_events WHERE workflow_id = ? AND kind = 'engine_switch' AND consumed = 0 ORDER BY id DESC", workflowId) ?? null;
+}
+
+export function closeEngineSwitch(workflowId: string): void {
+  exec("UPDATE workflow_events SET consumed = 1 WHERE workflow_id = ? AND kind = 'engine_switch' AND consumed = 0", workflowId);
+}
 
 function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'paused' | 'stopped', reason: string): void {
   const w = one<Row>('SELECT * FROM workflows WHERE id = ?', id);
@@ -523,7 +548,14 @@ async function drive(id: string, gen: number): Promise<void> {
     // which the runner words for the run's engine (Claude's Agent tool or Kiro's subagent tool).
     let lead: RunLead | undefined;
     if (w.lead_agent) {
-      lead = resolveLead(getProject(w.project_id), w.lead_agent, isKiro(w.project_id, w.engine)) ?? undefined;
+      const onKiro = isKiro(w.project_id, w.engine);
+      lead = resolveLead(getProject(w.project_id), w.lead_agent, onKiro) ?? undefined;
+      if (!lead && onKiro) {
+        const anyKiro = leadChoices(getProject(w.project_id), true).length > 0;
+        return askEngineSwitch(id, anyKiro
+          ? `the lead agent "${w.lead_agent}" is not an enabled Kiro agent in this project.`
+          : `this project has no usable Kiro agent, and the lead agent "${w.lead_agent}" cannot run on Kiro.`);
+      }
       if (!lead && !leadWarned) {
         log(id, 'status', `The lead agent "${w.lead_agent}" is not enabled in this project any more, so the default agent leads.`);
         leadWarned = true;
@@ -538,8 +570,7 @@ async function drive(id: string, gen: number): Promise<void> {
         const packs = await getToolPacks();
         const kiroPack = packs.find((p) => p.id === 'kiro');
         if (kiroPack && kiroPack.status !== 'available') {
-          // Pause (not fail) — a transient timeout should not permanently kill the session.
-          return stopWith(w.id, 'paused', kiroPack.hint);
+          return askEngineSwitch(w.id, `the Kiro CLI is not available (${kiroPack.reason}).`);
         }
       }
       // Continue the last run's conversation and working copies, unless the session's repositories changed since.
@@ -567,8 +598,10 @@ async function drive(id: string, gen: number): Promise<void> {
         meta: { iteration, leadAgent: lead ? w.lead_agent : '', ...(w.jira_key ? { jiraKey: w.jira_key, jiraUrl: w.jira_url, jiraSummary: w.jira_summary } : {}) },
       });
     } catch (e: any) {
+      if (isKiro(w.project_id, w.engine)) return askEngineSwitch(id, `the Kiro run could not start: ${String(e?.message ?? e)}`);
       return stopWith(id, 'paused', String(e?.message ?? e).slice(0, 300));
     }
+    closeEngineSwitch(id);
     // If the bookkeeping below throws (the database closed on shutdown), the run's own promise must not go unhandled.
     started.done.catch(() => undefined);
     const slot = driving.get(id);
@@ -587,6 +620,10 @@ async function drive(id: string, gen: number): Promise<void> {
     }
 
     if (finished.status !== 'completed') {
+      if (isKiro(w.project_id, w.engine)) {
+        log(id, 'iteration', `Iteration ${iteration} did not complete: ${finished.error || finished.status}`, { runId: finished.id, data: { failed: true } });
+        return askEngineSwitch(id, `the Kiro run failed: ${String(finished.error || finished.status)}`);
+      }
       if (isSingleRun(w)) return stopWith(id, 'failed', String(finished.error || finished.status).slice(0, 300));
       failures++;
       log(id, 'iteration', `Iteration ${iteration} did not complete: ${finished.error || finished.status}`, { runId: finished.id, data: { failed: true } });
@@ -1025,7 +1062,7 @@ function isKiro(projectId: string, engine: string | null | undefined): boolean {
 
 /**
  * The lead agent named in a request must be able to lead on the session's engine: one of the project's enabled Kiro
- * agents on Kiro (when it has any), otherwise one of its enabled .claude agents. Empty means the default.
+ * agents on Kiro, one of its enabled .claude agents on Claude. Empty means the default.
  */
 function checkLead(project: ReturnType<typeof getProject>, raw: unknown, engine?: string | null): string {
   const name = typeof raw === 'string' ? raw.trim() : '';
@@ -1034,7 +1071,7 @@ function checkLead(project: ReturnType<typeof getProject>, raw: unknown, engine?
   const choices = leadChoices(project, kiro);
   if (!choices.some((c) => c.name === name)) {
     throw badRequest(
-      choices[0]?.kind === 'kiro'
+      kiro
         ? `"${name}" is not an enabled Kiro agent in this project. Add or enable it under Agents and skills › Kiro.`
         : `"${name}" is not an enabled agent in this project. Add or enable it under Agents and skills.`,
     );
@@ -1065,6 +1102,24 @@ export function readEngine(projectId: string, raw: unknown): string {
   const engine = raw === undefined || raw === null || raw === '' ? '' : String(raw);
   if (engine) engineProvider(projectId, engine);
   return engine;
+}
+
+/** Start a stopped session again: queued when the concurrency cap or a server drain says so, running otherwise. */
+function resumeSession(w: Row, ctx: Ctx): void {
+  if (!w.parent_id) {
+    const reason = concurrencyReason(ctx.user!.id, w.project_id);
+    if (reason) {
+      const label = queueReasonLabel(reason);
+      patch(w.id, { status: 'queued', queue_reason: reason, queued_at: now(), stop_reason: label });
+      log(w.id, 'status', reason === 'drain' ? 'Queued during server drain.' : `Queued: ${label}`);
+      audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id, queued: true });
+      return;
+    }
+  }
+  patch(w.id, { status: 'running', stop_reason: '', queue_reason: '', queued_at: null, burst_start: w.iteration, waiting_children: 0, pending_push: '' });
+  log(w.id, 'status', 'Resumed');
+  audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id });
+  kick(w.id);
 }
 
 export function registerWorkflowRoutes(): void {
@@ -1322,27 +1377,31 @@ export function registerWorkflowRoutes(): void {
     requireProject(ctx, w.project_id, 'editor');
     if (OPEN.includes(w.status) && driving.has(w.id)) return { workflow: view(w) };
     if (overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first.');
-    // Concurrency cap applies when resuming a paused top-level session.
-    if (!w.parent_id) {
-      const reason = concurrencyReason(ctx.user!.id, w.project_id);
-      if (reason && reason !== 'drain') {
-        // Queue the session instead of rejecting.
-        const label = queueReasonLabel(reason);
-        patch(w.id, { status: 'queued', queue_reason: reason, queued_at: now(), stop_reason: label });
-        log(w.id, 'status', `Queued: ${label}`);
-        audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id, queued: true });
-        return { workflow: view(getWorkflow(w.id)) };
-      } else if (reason === 'drain') {
-        patch(w.id, { status: 'queued', queue_reason: 'drain', queued_at: now(), stop_reason: queueReasonLabel('drain') });
-        log(w.id, 'status', 'Queued during server drain.');
-        audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id, queued: true });
-        return { workflow: view(getWorkflow(w.id)) };
-      }
+    resumeSession(w, ctx);
+    return { workflow: view(getWorkflow(w.id)) };
+  });
+
+  // Kiro could not run this session: the person decides whether it continues on Claude Code. Nothing switches by itself.
+  post('/api/workflows/:id/engine-switch', async (ctx) => {
+    const w = getWorkflow(ctx.params.id);
+    requireProject(ctx, w.project_id, 'editor');
+    const body = await ctx.json();
+    if (typeof body.accept !== 'boolean') throw badRequest('Say whether to switch: {"accept": true} or {"accept": false}');
+    if (!pendingEngineSwitch(w.id)) throw badRequest('This session is not waiting for an engine decision');
+    if (body.accept) {
+      engineProvider(w.project_id, 'claude');
+      if (overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first.');
+      closeEngineSwitch(w.id);
+      patch(w.id, { engine: 'claude' });
+      log(w.id, 'system', `${ctx.user!.name} switched this session to Claude Code because Kiro could not run it.`);
+      audit(ctx, 'session.engine-switch', `workflow:${w.id}`, { projectId: w.project_id, accept: true });
+      resumeSession(getWorkflow(w.id), ctx);
+    } else {
+      closeEngineSwitch(w.id);
+      log(w.id, 'system', `${ctx.user!.name} kept this session on Kiro; it stays stopped.`);
+      audit(ctx, 'session.engine-switch', `workflow:${w.id}`, { projectId: w.project_id, accept: false });
+      stopWith(w.id, 'stopped', 'Kiro could not run this session and you chose not to switch to Claude Code.');
     }
-    patch(w.id, { status: 'running', stop_reason: '', queue_reason: '', queued_at: null, burst_start: w.iteration, waiting_children: 0, pending_push: '' });
-    log(w.id, 'status', 'Resumed');
-    audit(ctx, 'session.resume', `workflow:${w.id}`, { projectId: w.project_id });
-    kick(w.id);
     return { workflow: view(getWorkflow(w.id)) };
   });
 

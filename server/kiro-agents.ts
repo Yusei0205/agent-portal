@@ -59,14 +59,12 @@ export interface LeadChoice {
 }
 
 /**
- * The agents that may lead a session or run on an engine: on Kiro the project's enabled Kiro agents when it has any,
- * otherwise (and on Claude) its enabled .claude agents.
+ * The agents that may lead a session on an engine: on Kiro only the project's enabled Kiro agents, on Claude only its
+ * enabled .claude agents. The two systems stay separate (D-9): a Kiro session never borrows .claude agents. When Kiro
+ * has no usable agent the session asks the user to switch to Claude Code (D-12); it never switches by itself.
  */
 export function leadChoices(p: Project, kiro: boolean): LeadChoice[] {
-  if (kiro) {
-    const own = listKiroAgents(p, { includeDisabled: false });
-    if (own.length) return own.map((a) => ({ name: a.name, description: a.description, kind: 'kiro' }));
-  }
+  if (kiro) return listKiroAgents(p, { includeDisabled: false }).map((a) => ({ name: a.name, description: a.description, kind: 'kiro' }));
   return listAgentFiles(p)
     .filter((a) => a.enabled)
     .map((a) => ({ name: a.name, description: a.description, kind: 'claude' }));
