@@ -157,6 +157,15 @@ Numbers must be numbers, not text. A \`{ "formula": "..." }\` cell is a live for
 
 Layouts: \`title\`, \`section\`, \`bullets\` (default), \`text\`, \`table\`, \`image\`. Keep bullets short, about 3 to 6 per slide. \`notes\` become speaker notes.
 
+### Templates
+
+When the project (or the portal) has a PowerPoint template, \`make-doc\` applies it by itself: the deck uses the template's fonts, colours, slide size, logo and background, and each slide is written into one of the template's own layouts (title, section, bullets and text, table and picture slides map to the layouts named like them). Do not set colours or fonts, and do not leave \`template\` in the spec unless you need to choose. Options:
+
+- \`"template": ".portal/templates/<file>.pptx"\` follows another template in the project folder (a .pptx or .potx); the task tells you the path when a particular template was chosen;
+- \`"template": false\` (or \`--no-template\` on the command line) uses the built-in look.
+
+If the template cannot be used (damaged, no usable layout) the deck is still made with the built-in look and the output has a \`"warnings"\` entry that starts with the template name. Report it to the user; do not hide it. The output also has a \`"template"\` field with the name of the template that was applied. A table with more than 12 rows continues on extra slides in template mode. No Python, no python-pptx and no downloaded pictures: pictures come from files in the project or from diagrams.
+
 A slide can carry one picture or diagram: \`"image": {"path": "work/r_1/chart.png", "caption": "..."}\` or \`"mermaid": {"source": "flowchart LR\\n A --> B"}\` (same options and rules as in Word). Alone it fills the slide (layout \`image\`); with \`bullets\` or \`text\` it sits on the right half. Check \`"warnings"\` in the output as for Word.
 
 \`\`\`json

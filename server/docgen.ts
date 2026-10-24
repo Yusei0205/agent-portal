@@ -26,7 +26,8 @@ import {
 } from 'docx';
 import ExcelJS from 'exceljs';
 import PptxGenJS from 'pptxgenjs';
-import { checkMermaidSource, IMAGE_LIMITS, ImageError, loadImageFile, renderToPng, type Raster, type RenderItem } from './docimage.ts';
+import { checkMermaidSource, IMAGE_LIMITS, ImageError, loadImageFile, renderToPng, safeInputPath, type Raster, type RenderItem } from './docimage.ts';
+import { buildFromTemplate, type PreparedSlide, type PreparedVisual } from './pptx-template.ts';
 
 export type Cell = string | number | boolean | null | { formula: string };
 
@@ -68,7 +69,7 @@ export type DocSpec =
   | { type: 'docx'; output: string; title?: string; markdown?: string; blocks?: Block[] }
   | { type: 'xlsx'; output: string; sheets: { name?: string; header?: string[]; rows: Cell[][]; widths?: number[] }[] }
   | { type: 'csv'; output: string; header?: string[]; rows: Cell[][]; bom?: boolean }
-  | { type: 'pptx'; output: string; title?: string; author?: string; slides: Slide[] };
+  | { type: 'pptx'; output: string; title?: string; author?: string; slides: Slide[]; template?: string | false };
 
 export interface DocResult {
   type: string;
@@ -77,7 +78,14 @@ export interface DocResult {
   summary: string;
   /** Things that did not go to plan, for example a diagram that could not be drawn and was written as a code block. */
   warnings?: string[];
+  /** PowerPoint only: the template the deck follows (its name or file), or absent when the built-in look was used. */
+  template?: string;
 }
+
+/** Where the portal leaves the templates a run should follow (written by doc-templates.ts, read here). */
+export const TEMPLATE_DIR = '.portal/templates';
+export const TEMPLATE_DEFAULTS = `${TEMPLATE_DIR}/defaults.json`;
+export const TEMPLATE_MAX_BYTES = 25 * 1024 * 1024;
 
 const LIMITS = { rows: 100_000, cols: 200, slides: 200, blocks: 5000, text: 200_000 };
 
@@ -510,15 +518,66 @@ function placeVisual(_pptx: any, slide: any, req: VisualReq, res: Resolved, area
 
 const THEME = { ink: '1F2937', muted: '6B7280', accent: '0F766E', wash: 'E6F0EF', font: 'Calibri' };
 
-async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string, warnings: string[]): Promise<Buffer> {
+type PptxResult = { buffer: Buffer; template?: string };
+
+interface PlannedSlide {
+  s: Slide;
+  req: VisualReq | null;
+  visual: Resolved | null;
+  layout: NonNullable<Slide['layout']>;
+}
+
+/** The template a deck should follow: the spec's `template` path, or the portal's default for this project. */
+function pickTemplate(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string, warnings: string[]): { buf: Buffer; label: string } | null {
+  const t = (spec as any).template;
+  if (t === false || t === 'none') return null;
+  if (t !== undefined && t !== null && typeof t !== 'string') fail('"template" must be a file path inside the project folder, or false for the built-in look');
+  let rel: string | undefined = typeof t === 'string' ? t : undefined;
+  let label = rel ?? '';
+  const defFile = path.join(baseDir, TEMPLATE_DEFAULTS);
+  let defaults: any = null;
+  if (fs.existsSync(defFile)) {
+    try {
+      defaults = JSON.parse(fs.readFileSync(defFile, 'utf8'));
+    } catch {
+      if (rel === undefined) warnings.push('The default template list could not be read; the built-in look was used.');
+    }
+  }
+  if (rel === undefined) {
+    const entry = defaults?.pptx;
+    if (!entry || typeof entry.path !== 'string') return null;
+    rel = entry.path;
+    label = typeof entry.name === 'string' && entry.name ? entry.name : entry.path;
+  } else {
+    // A template chosen by path shows under the name it was uploaded with, when the portal knows it.
+    const named = defaults?.named?.[rel.replace(/^\.\//, '')];
+    if (typeof named === 'string' && named) label = named;
+  }
+  try {
+    if (!/\.(pptx|potx)$/i.test(rel!)) throw new ImageError('a template must be a .pptx or .potx file');
+    const abs = safeInputPath(baseDir, rel, 'template');
+    if (fs.statSync(abs).size > TEMPLATE_MAX_BYTES) throw new ImageError(`the template is larger than ${TEMPLATE_MAX_BYTES / 1024 / 1024} MB`);
+    return { buf: fs.readFileSync(abs), label };
+  } catch (e: any) {
+    warnings.push(`The template "${label}" could not be used (${e?.message ?? e}); the built-in look was used.`);
+    return null;
+  }
+}
+
+function preparedVisual(req: VisualReq, res: Resolved): PreparedVisual {
+  const caption = req.caption ? plain(req.caption) : undefined;
+  const label = req.alt || req.caption || (req.kind === 'image' ? req.path : 'Diagram');
+  if (res.ok) {
+    const img = res.image;
+    return { kind: 'picture', data: img.data, ext: img.type === 'png' ? 'png' : 'jpeg', alt: label, caption, align: req.align, fit: (maxW, maxH, fill) => fitSize(img, req, maxW, maxH, fill) };
+  }
+  if (req.kind === 'mermaid') return { kind: 'source', text: req.source, note: `Diagram not drawn (${res.reason}). The Mermaid source is shown instead.`, caption };
+  return { kind: 'missing', text: `[Image not embedded: ${req.path} (${res.reason})]`, caption };
+}
+
+async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string, warnings: string[]): Promise<PptxResult> {
   if (!Array.isArray(spec.slides) || !spec.slides.length) fail('A presentation needs at least one slide in "slides"');
   if (spec.slides.length > LIMITS.slides) fail(`Too many slides (max ${LIMITS.slides})`);
-  // pptxgenjs is CommonJS: depending on the loader the class is the default export or its .default.
-  const Pptx: any = (PptxGenJS as any).default ?? PptxGenJS;
-  const pptx: any = new Pptx();
-  pptx.layout = 'LAYOUT_WIDE'; // 13.33 x 7.5 in
-  pptx.title = spec.title ?? '';
-  pptx.author = spec.author ?? 'Agent Portal';
 
   const reqs: (VisualReq | null)[] = spec.slides.map((s, i) => {
     if (s?.image && s?.mermaid) fail(`slides[${i}] has both "image" and "mermaid"; use one`);
@@ -529,12 +588,46 @@ async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: stri
   const wanted = reqs.flatMap((r) => (r ? [r] : []));
   const resolvedList = await resolveVisuals(wanted, baseDir, warnings);
   let nextVisual = 0;
-
-  spec.slides.forEach((s, i) => {
+  const plan: PlannedSlide[] = spec.slides.map((s, i) => {
     const req = reqs[i];
     const visual = req ? resolvedList[nextVisual++] : null;
     const layout =
       s.layout ?? (req && !s.bullets && !s.text && !s.table ? 'image' : i === 0 && !s.bullets && !s.table && !s.text ? 'title' : s.table ? 'table' : s.text && !s.bullets ? 'text' : 'bullets');
+    if (!['title', 'section', 'bullets', 'text', 'table', 'image'].includes(layout)) fail(`slides[${i}].layout must be title, section, bullets, text, table or image`);
+    if (layout === 'table' && (!s.table || !Array.isArray(s.table.rows))) fail(`slides[${i}] has layout "table" but no "table" with rows`);
+    if (layout === 'image' && !req) fail(`slides[${i}] has layout "image" but no "image" or "mermaid"`);
+    return { s, req, visual, layout };
+  });
+
+  const tpl = pickTemplate(spec, baseDir, warnings);
+  if (tpl) {
+    try {
+      const prepared: PreparedSlide[] = plan.map(({ s, req, visual, layout }) => ({
+        layout,
+        title: plain(String(s.title ?? '')),
+        subtitle: s.subtitle ? plain(s.subtitle) : undefined,
+        bullets: (s.bullets ?? []).map((b) => plain(String(b))),
+        text: s.text !== undefined ? plain(String(s.text)) : undefined,
+        table: s.table ? { header: s.table.header?.map((c) => plain(String(c))), rows: s.table.rows.map((r) => r.map((c) => plain(String(c ?? '')))) } : undefined,
+        visual: req && visual ? preparedVisual(req, visual) : undefined,
+        notes: s.notes ? plain(String(s.notes)) : undefined,
+      }));
+      const built = await buildFromTemplate(tpl.buf, prepared, { title: spec.title, author: spec.author ?? 'Agent Portal' });
+      warnings.push(...built.warnings.map((w) => `Template "${tpl.label}": ${w}`));
+      return { buffer: built.buffer, template: tpl.label };
+    } catch (e: any) {
+      warnings.push(`The template "${tpl.label}" could not be applied (${String(e?.message ?? e).split('\n')[0].slice(0, 200)}); the built-in look was used.`);
+    }
+  }
+
+  // pptxgenjs is CommonJS: depending on the loader the class is the default export or its .default.
+  const Pptx: any = (PptxGenJS as any).default ?? PptxGenJS;
+  const pptx: any = new Pptx();
+  pptx.layout = 'LAYOUT_WIDE'; // 13.33 x 7.5 in
+  pptx.title = spec.title ?? '';
+  pptx.author = spec.author ?? 'Agent Portal';
+
+  for (const { s, req, visual, layout } of plan) {
     const slide = pptx.addSlide();
     slide.background = { color: 'FFFFFF' };
     const title = plain(String(s.title ?? ''));
@@ -558,20 +651,16 @@ async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: stri
       } else if (layout === 'text') {
         slide.addText(plain(String(s.text ?? '')), { x: 0.7, y: 1.5, w: textW, h: 5.4, fontFace: THEME.font, fontSize: 22, color: THEME.ink, valign: 'top', fit: 'shrink' });
       } else if (layout === 'table') {
-        const t = s.table;
-        if (!t || !Array.isArray(t.rows)) fail(`slides[${i}] has layout "table" but no "table" with rows`);
+        const t = s.table!;
         const body = t.rows.map((r) => r.map((c) => ({ text: plain(String(c ?? '')), options: { fontFace: THEME.font, fontSize: 14, color: THEME.ink } })));
         const head = t.header ? [t.header.map((c) => ({ text: plain(String(c)), options: { bold: true, fontFace: THEME.font, fontSize: 14, color: 'FFFFFF', fill: { color: THEME.accent } } }))] : [];
         slide.addTable([...head, ...body], { x: 0.7, y: 1.5, w: 12, border: { type: 'solid', pt: 0.75, color: 'D1D5DB' }, autoPage: true, autoPageRepeatHeader: Boolean(t.header) });
-      } else if (layout !== 'image') {
-        fail(`slides[${i}].layout must be title, section, bullets, text, table or image`);
       }
-      if (layout === 'image' && !req) fail(`slides[${i}] has layout "image" but no "image" or "mermaid"`);
       if (req && visual && layout !== 'table') placeVisual(pptx, slide, req, visual, side ? { x: 6.6, w: 6.1 } : { x: 0.7, w: 12 });
     }
     if (s.notes) slide.addNotes(plain(String(s.notes)));
-  });
-  return (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
+  }
+  return { buffer: (await pptx.write({ outputType: 'nodebuffer' })) as Buffer };
 }
 
 /* ------------------------------------------------------------------ */
@@ -597,6 +686,7 @@ export async function generate(spec: DocSpec, opts: { baseDir?: string } = {}): 
   const warnings: string[] = [];
   let buf: Buffer;
   let summary: string;
+  let template: string | undefined;
   switch (spec.type) {
     case 'docx':
       buf = await buildDocx(spec, baseDir, warnings);
@@ -610,12 +700,21 @@ export async function generate(spec: DocSpec, opts: { baseDir?: string } = {}): 
       buf = buildCsv(spec);
       summary = `CSV, ${spec.rows.length} row${spec.rows.length === 1 ? '' : 's'}`;
       break;
-    case 'pptx':
-      buf = await buildPptx(spec, baseDir, warnings);
-      summary = `PowerPoint, ${spec.slides.length} slide${spec.slides.length === 1 ? '' : 's'}`;
+    case 'pptx': {
+      const built = await buildPptx(spec, baseDir, warnings);
+      buf = built.buffer;
+      template = built.template;
+      summary = `PowerPoint, ${spec.slides.length} slide${spec.slides.length === 1 ? '' : 's'}${template ? ` (template: ${template})` : ''}`;
       break;
+    }
   }
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, buf);
-  return { type: spec.type, output: abs, bytes: buf.length, summary, ...(warnings.length ? { warnings } : {}) };
+  if (spec.type === 'pptx') {
+    // The portal reads this to tell the person which template a deck followed and what did not go to plan.
+    try {
+      fs.writeFileSync(`${abs}.report.json`, JSON.stringify({ template: template ?? null, slides: spec.slides.length, warnings, generatedAt: new Date().toISOString() }, null, 2));
+    } catch {}
+  }
+  return { type: spec.type, output: abs, bytes: buf.length, summary, ...(template ? { template } : {}), ...(warnings.length ? { warnings } : {}) };
 }

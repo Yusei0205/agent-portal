@@ -45,7 +45,10 @@ export type AuditAction =
   | 'scim_token.create' | 'scim_token.revoke'
   | 'oidc.login'
   // architecture diagrams (NEW-1)
-  | 'diagram.create' | 'diagram.refresh' | 'diagram.version' | 'diagram.delete' | 'diagram.export';
+  | 'diagram.create' | 'diagram.refresh' | 'diagram.version' | 'diagram.delete' | 'diagram.export'
+  // document templates and presentations (D-13, NEW-7)
+  | 'template.create' | 'template.update' | 'template.delete' | 'template.download'
+  | 'presentation.create' | 'presentation.ready' | 'presentation.delete' | 'presentation.download';
 
 /**
  * Write an audit row from a request context.

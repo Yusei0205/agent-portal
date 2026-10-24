@@ -35,6 +35,11 @@ export function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'pa
     void import('../diagrams.ts').then((m) => m.onSessionStopped(id)).catch(() => undefined);
   }
 
+  // A session that was making a presentation hands its deck over (NEW-7).
+  if (w && terminal.includes(status)) {
+    void import('../presentations.ts').then((m) => m.onSessionStopped(id)).catch(() => undefined);
+  }
+
   // Record loop metrics when a session terminates (not just pauses).
   if (w && terminal.includes(status)) {
     const specId = w.loop_spec_id ? String(w.loop_spec_id) : null;

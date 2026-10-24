@@ -201,6 +201,7 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     const kw = keywords(userAsk, 4);
 
     if (userAsk.startsWith('Architecture diagram request')) return yield* diagramScenario(userAsk);
+    if (userAsk.startsWith('Presentation request: ')) return yield* presentationScenario(userAsk);
 
     yield assistant(null, [{ type: 'text', text: 'I’ll start with the decisions log and the project documents before doing anything else.' }]);
     await pause(300);
@@ -324,6 +325,99 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     return w.ok
       ? `Done. I wrote the plan to \`${target}\`.${decisionNote}\n- Roles consulted: ${calls.map((c) => c.a.name).join(', ')}.\n\n${plan}`
       : `I did not write the file because the write was not approved. Here is the plan instead:${decisionNote}\n\n${plan}`;
+  }
+
+  /**
+   * A presentation request (NEW-7): read the source, write a make-doc spec with notes, build the deck, and report the file.
+   * Goal markers for tests: [demo-no-deck] saves nothing, [demo-bad-deck] saves a file that is not a deck.
+   */
+  async function* presentationScenario(ask: string): AsyncGenerator<SdkMessage, string> {
+    const kind = ask.match(/^Presentation request: (\w+)/)?.[1] ?? 'topic';
+    const title = ask.match(/titled "([^"]*)"/)?.[1] ?? 'Presentation';
+    const audience = ask.match(/ for ([^\n]*?)\.\nLength:/)?.[1] ?? '';
+    const target = Math.max(3, Math.min(12, Number(ask.match(/about (\d+) slides/)?.[1] ?? 8)));
+    const templatePath = ask.match(/"template": "([^"]+)"/)?.[1];
+    yield assistant(null, [{ type: 'text', text: 'I will read the source, plan the story, then build the deck with make-doc.' }]);
+    await pause(200);
+
+    let material = '';
+    let mermaid = '';
+    let mermaidCaption = '';
+    if (kind === 'document') {
+      const mdPath = ask.match(/at (docs\/md\/[^\s]+?\.md)/)?.[1];
+      if (mdPath) {
+        const r = yield* tool(null, 'Read', { file_path: mdPath, limit: 120 }, () => readRel(mdPath, 6000), false);
+        material = r.ok ? r.output : '';
+      }
+    } else if (kind === 'session') {
+      material = ask.match(/<<<RESULT\n([\s\S]*?)\nRESULT>>>/)?.[1] ?? '';
+    } else if (kind === 'diagram') {
+      const block = ask.match(/<<<DIAGRAM\n([\s\S]*?)DIAGRAM>>>/)?.[1] ?? '';
+      mermaid = block.match(/```mermaid\n([\s\S]*?)\n```/)?.[1] ?? '';
+      material = block.replace(/```mermaid[\s\S]*?```/, '').trim();
+      mermaidCaption = ask.match(/the architecture diagram "([^"]*)"/)?.[1] ?? 'Architecture';
+    } else {
+      material = ask.match(/<<<TOPIC\n([\s\S]*?)\nTOPIC>>>/)?.[1] ?? '';
+      yield* tool(null, 'Grep', { pattern: keywords(material, 3).join('|') || title, path: 'docs/md' }, () => grep(keywords(material, 3).join(' ') || title), false);
+    }
+
+    const sentences = material
+      .replace(/^#+\s*/gm, '')
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map((s) => s.replace(/[*_`#>|-]+/g, ' ').replace(/\s+/g, ' ').trim())
+      .filter((s) => s.length > 12)
+      .slice(0, 60);
+    const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+    const first = (s: string) => clip(s.split(' ').slice(0, 6).join(' '), 50);
+    const body = Math.max(1, target - 2 - (mermaid ? 1 : 0));
+    const slides: Record<string, unknown>[] = [{ layout: 'title', title, subtitle: audience ? `For ${audience}` : 'Prepared with Agent Portal', notes: `Welcome the audience and state the purpose: ${clip(title, 80)}.` }];
+    if (mermaid) slides.push({ title: mermaidCaption, mermaid: { source: mermaid, caption: mermaidCaption }, notes: 'Walk through the diagram from left to right, naming each part once.' });
+    for (let i = 0; i < body; i++) {
+      const group = sentences.slice(i * 3, i * 3 + 3);
+      if (!group.length) break;
+      slides.push({ title: first(group[0]), bullets: group.map((g) => clip(g, 90)), notes: `Say it in your own words. Source: ${kind === 'topic' ? 'the requester’s topic' : kind === 'document' ? 'the project document' : kind === 'session' ? 'the session result' : 'the diagram description'}.` });
+    }
+    if (slides.length < 3) slides.push({ title: 'Summary', bullets: [clip(title, 80), 'Details to be confirmed with the team'], notes: 'Summarise and ask for questions.' });
+    slides.push({ title: 'Next steps', bullets: ['Confirm the open points', 'Agree owners and dates', 'Review again after the first results'], notes: 'Close with the decision you need from the audience.' });
+
+    const outRel = `${d.writeDirRel}/presentation.pptx`;
+    const specRel = `${d.writeDirRel}/deck.spec.json`;
+    const spec = { type: 'pptx', output: outRel, title, ...(templatePath ? { template: templatePath } : {}), slides };
+    yield* tool(
+      null,
+      'Write',
+      { file_path: specRel, content: JSON.stringify(spec, null, 2) },
+      (input) => {
+        const abs = path.resolve(d.projectDir, String(input.file_path));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, String(input.content));
+        return `File created successfully at: ${input.file_path}`;
+      },
+      true,
+    );
+    if (ask.includes('[demo-no-deck]')) return 'I planned the deck but could not build it.';
+    let warnings: string[] = [];
+    const built = yield* tool(
+      null,
+      'Bash',
+      { command: `node dist/make-doc.mjs ${specRel}`, description: 'Build the deck with make-doc' },
+      async () => {
+        if (ask.includes('[demo-bad-deck]')) {
+          const abs = path.resolve(d.projectDir, outRel);
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, 'this is not a presentation');
+          return JSON.stringify({ ok: true, output: abs });
+        }
+        const { generate } = await import('../docgen.ts');
+        const r = await generate(JSON.parse(fs.readFileSync(path.resolve(d.projectDir, specRel), 'utf8')), { baseDir: d.projectDir });
+        warnings = r.warnings ?? [];
+        return JSON.stringify({ ok: true, ...r });
+      },
+      true,
+    );
+    if (!built.ok) return `I could not build the deck: ${built.output}`;
+    const titles = slides.map((s, i) => `${i + 1}. ${String(s.title)}`).join('\n');
+    return `Presentation: ${outRel}\n${titles}${warnings.length ? `\nWarnings: ${warnings.join(' | ')}` : ''}`;
   }
 
   /** An architecture diagram request (NEW-1): list the repository folders, then reply with Mermaid and a cited description. */

@@ -652,7 +652,56 @@ const DIAGRAMS = `
   );
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS];
+const TEMPLATES = `
+  -- Word and PowerPoint templates (D-13): per project, with a portal-wide default. Files live in DATA_DIR/templates.
+  CREATE TABLE doc_templates (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    ext TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    info TEXT NOT NULL DEFAULT '{}',
+    uploaded_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX doc_templates_scope ON doc_templates(scope, project_id, kind);
+  -- Presentation generator (NEW-7): one row per deck, produced by an agent session
+  CREATE TABLE presentations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL DEFAULT '',
+    source_label TEXT NOT NULL DEFAULT '',
+    audience TEXT NOT NULL DEFAULT '',
+    slide_target INTEGER NOT NULL DEFAULT 10,
+    template_id TEXT,
+    template_name TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    workflow_id TEXT,
+    run_id TEXT,
+    file TEXT,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    slide_count INTEGER NOT NULL DEFAULT 0,
+    outline TEXT NOT NULL DEFAULT '[]',
+    warnings TEXT NOT NULL DEFAULT '[]',
+    template_used TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX presentations_project ON presentations(project_id, created_at);
+  CREATE INDEX presentations_workflow ON presentations(workflow_id);
+`;
+
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

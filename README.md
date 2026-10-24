@@ -48,7 +48,10 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   a folder or zip, or a plain-language description. A Kiro session never silently falls back to
   Claude Code.
 - **Documents and decks**: agents can write Word, Excel, CSV and PowerPoint files, and the
-  "Document a repository" mode writes cited documentation.
+  "Document a repository" mode writes cited documentation. Upload a PowerPoint template once (per
+  project, with a portal-wide default) and decks follow it. The presentation generator turns a
+  topic, document, session result or architecture diagram into a deck with speaker notes,
+  diagrams and a slide preview. Diagrams and previews use an optional headless browser.
 - **Administration**: users and invitations, an audit log, and a control plane (concurrency caps,
   queueing, graceful drain, approval deadlines). Teams, SCIM provisioning, Google sign-in setup
   and outbound webhooks are built but parked: turn on **Settings › Advanced** to show them in

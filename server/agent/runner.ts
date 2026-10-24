@@ -18,6 +18,7 @@ import { createWorktree, getRepo } from '../repos.ts';
 import { engineProvider } from '../project-aws.ts';
 import { integrationGuard, resolveIntegrations, type RunIntegrations } from '../integrations.ts';
 import { copyVaultsInto } from '../vault.ts';
+import { syncProjectTemplates } from '../doc-templates.ts';
 
 export type RunKind = 'chat' | 'test' | 'review' | 'qa' | 'learn' | 'quiz' | 'verify' | 'connection';
 
@@ -395,7 +396,15 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
   const done = (async () => {
     try {
       fs.mkdirSync(workDir, { recursive: true });
-      if (!input.oneshot) ensureBuiltInSkills(project);
+      if (!input.oneshot) {
+        ensureBuiltInSkills(project);
+        // The Word and PowerPoint templates that apply to this project, for make-doc (D-13).
+        try {
+          syncProjectTemplates(project);
+        } catch {
+          /* a template problem must never stop a run */
+        }
+      }
       if (choices.length > 1 && !worktree) {
         // Several repositories: one working copy each, side by side in the run folder.
         const made: RunRepo[] = [];
