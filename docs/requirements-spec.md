@@ -44,7 +44,7 @@ Out of scope for this baseline: UI visual design (CSS), test content, and the th
 | Troubleshooting | Ticket analyze (FR-JIRA-2); AWS CLI read access for agents (FR-GUARD-1). | No incident/log-driven flow, no saved runbooks. |
 | QA | QA-engineer role; Jira tickets; quizzes. | No test-case generation from FSD/TSD wired to a workflow. |
 | Code review | Strong: two-pass review, PR posting (FR-REV-*). | Not triggered automatically on a new PR. |
-| Documentation and presentation prep | `make-doc` writes Word, Excel, CSV, PowerPoint (FR-DOC-1); "Document a repository" can output Word or slides (FR-DOC-3). | No UI entry, no templates, no diagrams or images, no link to sources (section 2.17). |
+| Documentation and presentation prep | `make-doc` writes Word, Excel, CSV, PowerPoint (FR-DOC-1); "Document a repository" can output Word or slides (FR-DOC-3). | No UI entry, no templates, no link to sources (section 2.17). Images and diagrams: built (NEW-8). |
 
 These gaps are candidate new requirements (section 7.2). They are not built.
 
@@ -297,15 +297,16 @@ What exists today. This is a basic capability, reachable only through agents.
 
 | ID | Requirement | Evidence | Decision |
 |---|---|---|---|
-| FR-DOC-1 | `make-doc` command creates Word (from Markdown or blocks: heading, paragraph, bullets, numbered, table, code, page break), Excel (with formulas), CSV and PowerPoint files (layouts: title, bullets, text, table, section; speaker notes) from a JSON description. Limits: 100,000 rows, 200 columns, 200 slides. Runs on the server with no network and no desktop app. | code (`docgen.ts`, `docgen-cli.ts`) | |
-| FR-DOC-2 | The built-in `make-documents` skill teaches agents the JSON format. | code (`projects.ts`) | |
+| FR-DOC-1 | `make-doc` command creates Word (from Markdown or blocks: heading, paragraph, bullets, numbered, table, code, page break), Excel (with formulas), CSV and PowerPoint files (layouts: title, bullets, text, table, section, image; speaker notes) from a JSON description. Limits: 100,000 rows, 200 columns, 200 slides. Runs on the server with no network and no desktop app. **NEW-8 adds** Word blocks `image` and `mermaid` (and fenced `mermaid` blocks / local images in Markdown) and slide elements `image` and `mermaid`: PNG, JPEG and SVG files from inside the run folder only (symlinks that leave it are refused, 15 MB and 8000 px limits, content checked, not just the extension), options `width`/`height` (inches), `alt`, `caption`, `align`; Mermaid source at most 20,000 characters, 40 diagrams and 200 images per file. SVG and Mermaid need the optional headless browser (below); everything else works without it. | code (`docgen.ts`, `docimage.ts`, `docgen-cli.ts`) | Built (NEW-8) |
+| FR-DOC-1a | Diagram rendering: Mermaid runs inside a headless Chromium, Chrome or Edge (found via `DOC_BROWSER`, a Playwright download, or a system install) from `node_modules/mermaid/dist/mermaid.min.js`, with `securityLevel: strict`, a page that allows no network, no host name resolution and a throw-away profile; one browser run draws all diagrams of a file (about 3 s). When no browser is found, or one diagram fails, the diagram is written as a styled code block with a note and the CLI prints `warnings`; the command never fails because of a diagram. Docker: build with `--build-arg WITH_BROWSER=1` to install Chromium (about 400 MB); the default image has none and degrades. | code (`docimage.ts`, `Dockerfile`) | Built (NEW-8) |
+| FR-DOC-2 | The built-in `make-documents` skill teaches agents the JSON format, including images, diagrams and the `warnings` output. | code (`projects.ts`) | |
 | FR-DOC-3 | The "Document a repository" session mode offers three outputs: one Word document; Markdown plus one combined Word document; a 6 to 10 slide PowerPoint plus its Markdown source. | code (`docrun.ts`) | |
 | FR-DOC-4 | The Claude role library includes a PPTX team (lead, content, design, image, render, review). It prefers `make-doc` but its scripts use `python-pptx`, and hero images need internet access to Pollinations.ai. | code (`roles-library.ts`) | |
 | FR-DOC-5 | The role library includes a documentation team that writes a `tech-doc/` folder; it delegates to specialists such as a backend documenter. The full member list is not verified. | code (partial) | |
 | FR-DOC-6 | Uploaded Word, Excel, PowerPoint and PDF files convert to Markdown for the knowledge base (the reverse direction). | code (`convert.ts`) | |
 
 Limits seen in the code (these are the gaps behind NEW-6 to NEW-8):
-- No image or diagram block in Word or PowerPoint output, and only five slide layouts.
+- Images and Mermaid diagrams are now supported in Word and PowerPoint (NEW-8, built); diagrams need the optional headless browser. Still only six slide layouts.
 - No brand template or theme; no preview before download.
 - No page in the UI to generate a document or deck; it needs an agent run.
 - The PPTX team depends on Python packages and an internet image service, which contradicts the "no installs, no network" design of `make-doc`.
@@ -387,7 +388,7 @@ These come from file sizes and structure. Measure before acting on any of them.
 | NEW-5 | Troubleshooting flow: paste an error/log or ticket, agent investigates with read-only access, writes findings to a runbook note. | Ticket analyze, guardrails |
 | NEW-6 | Documentation generator: from the UI, choose a project (repositories, knowledge, decisions) and a document type (overview, architecture, API, runbook, user guide); get Markdown and Word with citations to source files. Mark a document stale when its sources change. Users can upload a Word template that generated documents follow (D-13). | `make-doc`, Document-a-repository mode, Learn stale tracking |
 | NEW-7 | Presentation generator: from a topic, document, session result or diagram, produce a PowerPoint deck with an uploaded brand template, speaker notes, images and diagrams, and a preview before download. Users upload their own PowerPoint template once; later decks follow it (D-13). `make-doc` becomes the only renderer; the Python `python-pptx` path is retired. | `make-doc` (`docgen.ts`), PPTX role team |
-| NEW-8 | Diagrams inside documents and slides: render Mermaid to PNG/SVG on the server and embed it in Word and PowerPoint. Needed by NEW-1 and NEW-7. | Mermaid rendering in `Markdown.jsx` |
+| NEW-8 | Diagrams inside documents and slides: render Mermaid to PNG/SVG on the server and embed it in Word and PowerPoint. Needed by NEW-1 and NEW-7. **Built:** `make-doc` has an `image` block (Word) and an `image` or `mermaid` element on slides (PowerPoint), plus a `mermaid` block; a fenced `mermaid` block and a local `![alt](path)` line in Markdown input become the same. Mermaid and SVG are drawn to PNG (2x) by an optional headless Chromium-family browser running Mermaid's own bundle with `securityLevel: strict`, no network (`server/docimage.ts`). Without a browser, or when a diagram has an error, the file is still written: the diagram is a code block with a note, and the command output lists `warnings`. Tests: `test/docgen-images.test.ts`. | Mermaid rendering in `Markdown.jsx` |
 
 ## 8. Resolved questions
 

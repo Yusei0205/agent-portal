@@ -12,6 +12,7 @@ import {
   Document,
   ExternalHyperlink,
   HeadingLevel,
+  ImageRun,
   LevelFormat,
   Packer,
   PageBreak,
@@ -25,10 +26,22 @@ import {
 } from 'docx';
 import ExcelJS from 'exceljs';
 import PptxGenJS from 'pptxgenjs';
+import { checkMermaidSource, IMAGE_LIMITS, ImageError, loadImageFile, renderToPng, type Raster, type RenderItem } from './docimage.ts';
 
 export type Cell = string | number | boolean | null | { formula: string };
 
+/** Size and caption options shared by images and diagrams. Width and height are in inches. */
+export interface VisualOptions {
+  width?: number;
+  height?: number;
+  alt?: string;
+  caption?: string;
+  align?: 'left' | 'center' | 'right';
+}
+
 export type Block =
+  | ({ type: 'image'; path: string } & VisualOptions)
+  | ({ type: 'mermaid'; source: string } & VisualOptions)
   | { type: 'heading'; level?: number; text: string }
   | { type: 'paragraph'; text: string }
   | { type: 'bullets'; items: string[] }
@@ -38,12 +51,16 @@ export type Block =
   | { type: 'pagebreak' };
 
 export interface Slide {
-  layout?: 'title' | 'bullets' | 'text' | 'table' | 'section';
+  layout?: 'title' | 'bullets' | 'text' | 'table' | 'section' | 'image';
   title?: string;
   subtitle?: string;
   bullets?: string[];
   text?: string;
   table?: { header?: string[]; rows: string[][] };
+  /** A picture from a file inside the run folder. With bullets or text it sits on the right. */
+  image?: { path: string } & VisualOptions;
+  /** A Mermaid diagram, drawn on the server. Use either "image" or "mermaid" on a slide, not both. */
+  mermaid?: { source: string } & VisualOptions;
   notes?: string;
 }
 
@@ -58,9 +75,106 @@ export interface DocResult {
   output: string;
   bytes: number;
   summary: string;
+  /** Things that did not go to plan, for example a diagram that could not be drawn and was written as a code block. */
+  warnings?: string[];
 }
 
 const LIMITS = { rows: 100_000, cols: 200, slides: 200, blocks: 5000, text: 200_000 };
+
+/* ------------------------------------------------------------------ */
+/* Images and diagrams                                                 */
+/* ------------------------------------------------------------------ */
+
+type VisualReq = ({ kind: 'image'; path: string } | { kind: 'mermaid'; source: string }) & VisualOptions;
+type Resolved = { ok: true; image: Raster } | { ok: false; reason: string };
+
+function visualOptions(o: any, at: string): VisualOptions {
+  const num = (v: unknown, name: string): number | undefined => {
+    if (v === undefined || v === null) return undefined;
+    const n = Number(v);
+    if (!(n >= 0.2 && n <= 20)) fail(`${at}.${name} must be a number of inches between 0.2 and 20`);
+    return n;
+  };
+  if (o.align !== undefined && !['left', 'center', 'right'].includes(o.align)) fail(`${at}.align must be left, center or right`);
+  return {
+    width: num(o.width, 'width'),
+    height: num(o.height, 'height'),
+    alt: o.alt === undefined ? undefined : str(o.alt, `${at}.alt`, 500),
+    caption: o.caption === undefined ? undefined : str(o.caption, `${at}.caption`, 500),
+    align: o.align,
+  };
+}
+
+function visualReq(o: any, kind: 'image' | 'mermaid', at: string): VisualReq {
+  try {
+    if (kind === 'image') {
+      if (typeof o?.path !== 'string' || !o.path.trim()) fail(`${at}.path must be a file path`);
+      return { kind, path: o.path, ...visualOptions(o, at) };
+    }
+    return { kind, source: checkMermaidSource(o?.source, `${at}.source`), ...visualOptions(o, at) };
+  } catch (e) {
+    if (e instanceof ImageError) throw new DocError(e.message);
+    throw e;
+  }
+}
+
+/** Validate and load every picture, then draw all SVG and Mermaid items in one browser run. Failures to draw come back as reasons, not errors. */
+async function resolveVisuals(reqs: VisualReq[], baseDir: string, warnings: string[]): Promise<Resolved[]> {
+  if (reqs.length > IMAGE_LIMITS.imagesPerDoc) fail(`Too many images and diagrams (max ${IMAGE_LIMITS.imagesPerDoc})`);
+  if (reqs.filter((r) => r.kind === 'mermaid').length > IMAGE_LIMITS.mermaidPerDoc) fail(`Too many Mermaid diagrams (max ${IMAGE_LIMITS.mermaidPerDoc})`);
+  const out: Resolved[] = new Array(reqs.length);
+  const toRender: { at: number; item: RenderItem }[] = [];
+  reqs.forEach((r, i) => {
+    try {
+      if (r.kind === 'mermaid') {
+        toRender.push({ at: i, item: { kind: 'mermaid', source: r.source } });
+        return;
+      }
+      const loaded = loadImageFile(baseDir, r.path, `image "${r.path}"`);
+      if (loaded.kind === 'raster') out[i] = { ok: true, image: loaded.image };
+      else toRender.push({ at: i, item: { kind: 'svg', source: loaded.text } });
+    } catch (e) {
+      if (e instanceof ImageError) throw new DocError(e.message);
+      throw e;
+    }
+  });
+  if (toRender.length) {
+    const rendered = await renderToPng(toRender.map((t) => t.item));
+    rendered.forEach((res, k) => {
+      const i = toRender[k].at;
+      out[i] = res;
+      if (!res.ok) {
+        const r = reqs[i];
+        warnings.push(`${r.kind === 'mermaid' ? 'Mermaid diagram' : `SVG image "${r.path}"`} not drawn: ${res.reason}`);
+      }
+    });
+  }
+  return out;
+}
+
+/** Display size in inches: given width/height, else natural size (up to 2x natural when asked to fill), scaled down to fit the box. */
+function fitSize(img: Raster, o: VisualOptions, maxW: number, maxH: number, fill: boolean): { w: number; h: number } {
+  const natW = img.pxW / img.density / 96;
+  const natH = img.pxH / img.density / 96;
+  let w = natW;
+  let h = natH;
+  if (o.width && o.height) {
+    w = o.width;
+    h = o.height;
+  } else if (o.width) {
+    w = o.width;
+    h = (o.width * natH) / natW;
+  } else if (o.height) {
+    h = o.height;
+    w = (o.height * natW) / natH;
+  } else if (fill) {
+    const k = Math.min(2, maxW / natW, maxH / natH);
+    w = natW * k;
+    h = natH * k;
+  }
+  const k = Math.min(1, maxW / w, maxH / h);
+  return { w: w * k, h: h * k };
+}
 
 export class DocError extends Error {}
 
@@ -88,6 +202,7 @@ type MdBlock =
   | { type: 'list'; ordered: boolean; items: ListItem[] }
   | { type: 'table'; header?: string[]; rows: string[][] }
   | { type: 'code'; text: string }
+  | { type: 'visual'; req: VisualReq }
   | { type: 'pagebreak' };
 
 function flattenList(token: any, level: number, out: ListItem[]): void {
@@ -103,7 +218,12 @@ export function markdownToBlocks(md: string): MdBlock[] {
   const out: MdBlock[] = [];
   for (const t of marked.lexer(md) as any[]) {
     if (t.type === 'heading') out.push({ type: 'heading', level: t.depth, text: t.text });
-    else if (t.type === 'paragraph') out.push({ type: 'paragraph', text: t.text });
+    else if (t.type === 'paragraph') {
+      const only = t.tokens?.length === 1 && t.tokens[0].type === 'image' ? t.tokens[0] : null;
+      if (only && !/^[a-z][a-z0-9+.-]*:/i.test(only.href)) {
+        out.push({ type: 'visual', req: { kind: 'image', path: decodeURI(only.href), alt: only.text || undefined, caption: only.title || undefined } });
+      } else out.push({ type: 'paragraph', text: t.text });
+    }
     else if (t.type === 'blockquote') out.push({ type: 'paragraph', text: String(t.text ?? '').replace(/^>\s?/gm, '') });
     else if (t.type === 'list') {
       const items: ListItem[] = [];
@@ -111,6 +231,8 @@ export function markdownToBlocks(md: string): MdBlock[] {
       out.push({ type: 'list', ordered: Boolean(t.ordered), items });
     } else if (t.type === 'table') {
       out.push({ type: 'table', header: t.header.map((c: any) => c.text), rows: t.rows.map((r: any[]) => r.map((c) => c.text)) });
+    } else if (t.type === 'code' && String(t.lang ?? '').trim().split(/\s/)[0] === 'mermaid') {
+      out.push({ type: 'visual', req: visualReq({ source: t.text }, 'mermaid', 'mermaid block') });
     } else if (t.type === 'code') out.push({ type: 'code', text: t.text });
     else if (t.type === 'hr') out.push({ type: 'pagebreak' });
   }
@@ -138,8 +260,12 @@ function blocksFromSpec(blocks: Block[]): MdBlock[] {
         return { type: 'code', text: str(b.text, `${at}.text`) };
       case 'pagebreak':
         return { type: 'pagebreak' };
+      case 'image':
+        return { type: 'visual', req: visualReq(b, 'image', at) };
+      case 'mermaid':
+        return { type: 'visual', req: visualReq(b, 'mermaid', at) };
       default:
-        return fail(`${at}.type must be heading, paragraph, bullets, numbered, table, code or pagebreak`);
+        return fail(`${at}.type must be heading, paragraph, bullets, numbered, table, code, image, mermaid or pagebreak`);
     }
   });
 }
@@ -186,9 +312,24 @@ function runs(text: string, base: { bold?: boolean; italics?: boolean; font?: st
 
 const HEADINGS = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6];
 
-async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>): Promise<Buffer> {
+const ALIGN = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
+
+function codeParagraphs(text: string): Paragraph[] {
+  return text.split('\n').map(
+    (line) =>
+      new Paragraph({
+        shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'F3F4F6' },
+        children: [new TextRun({ text: line, font: 'Consolas', size: 19 })],
+      }),
+  );
+}
+
+async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: string, warnings: string[]): Promise<Buffer> {
   if (spec.markdown === undefined && spec.blocks === undefined) fail('A Word document needs "markdown" or "blocks"');
   const blocks = spec.markdown !== undefined ? markdownToBlocks(str(spec.markdown, 'markdown')) : blocksFromSpec(spec.blocks!);
+  const visuals = blocks.flatMap((b) => (b.type === 'visual' ? [b] : []));
+  const resolved = await resolveVisuals(visuals.map((v) => v.req), baseDir, warnings);
+  const visualAt = new Map(visuals.map((v, i) => [v, resolved[i]]));
   const children: (Paragraph | Table)[] = [];
   const numberings: string[] = [];
   if (spec.title) children.push(new Paragraph({ heading: HeadingLevel.TITLE, children: runs(str(spec.title, 'title', 300)) }));
@@ -224,13 +365,37 @@ async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>): Promise<Buff
       children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows }));
       children.push(new Paragraph({ children: [] }));
     } else if (b.type === 'code') {
-      for (const line of b.text.split('\n')) {
+      children.push(...codeParagraphs(b.text));
+    } else if (b.type === 'visual') {
+      const r = visualAt.get(b)!;
+      const o = b.req;
+      const label = o.alt || o.caption || (o.kind === 'image' ? o.path : 'Diagram');
+      if (r.ok) {
+        // Page text width is 6.5 in (Letter, 1 in margins); keep the picture on one page.
+        const { w, h } = fitSize(r.image, o, 6.5, 8.5, false);
         children.push(
           new Paragraph({
-            shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'F3F4F6' },
-            children: [new TextRun({ text: line, font: 'Consolas', size: 19 })],
+            alignment: ALIGN[o.align ?? 'center'],
+            keepNext: Boolean(o.caption),
+            spacing: { before: 120, after: o.caption ? 40 : 160 },
+            children: [
+              new ImageRun({
+                type: r.image.type,
+                data: r.image.data,
+                transformation: { width: Math.round(w * 96), height: Math.round(h * 96) },
+                altText: { name: label.slice(0, 100), title: label.slice(0, 100), description: label },
+              }),
+            ],
           }),
         );
+      } else if (o.kind === 'mermaid') {
+        children.push(...codeParagraphs(o.source));
+        children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: `Diagram not drawn (${r.reason}). The Mermaid source is shown instead.`, italics: true, color: '6B7280', size: 18 })] }));
+      } else {
+        children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: `[Image not embedded: ${o.path} (${r.reason})]`, italics: true, color: '6B7280', size: 18 })] }));
+      }
+      if (o.caption) {
+        children.push(new Paragraph({ alignment: ALIGN[o.align ?? 'center'], spacing: { after: 160 }, children: [new TextRun({ text: plain(o.caption), italics: true, color: '4B5563', size: 20 })] }));
       }
     } else if (b.type === 'pagebreak') {
       children.push(new Paragraph({ children: [new PageBreak()] }));
@@ -324,9 +489,28 @@ function buildCsv(spec: Extract<DocSpec, { type: 'csv' }>): Buffer {
 /* PowerPoint                                                          */
 /* ------------------------------------------------------------------ */
 
+/** Put a picture, or the Mermaid source as a code box when it could not be drawn, in the content area of a slide. */
+function placeVisual(_pptx: any, slide: any, req: VisualReq, res: Resolved, area: { x: number; w: number }): void {
+  const top = 1.5;
+  const capH = req.caption ? 0.5 : 0;
+  const boxH = 5.4 - capH;
+  const label = req.alt || req.caption || (req.kind === 'image' ? req.path : 'Diagram');
+  if (res.ok) {
+    const { w, h } = fitSize(res.image, req, area.w, boxH, true);
+    const x = area.x + (req.align === 'left' ? 0 : req.align === 'right' ? area.w - w : (area.w - w) / 2);
+    slide.addImage({ data: `image/${res.image.type === 'png' ? 'png' : 'jpeg'};base64,${res.image.data.toString('base64')}`, x, y: top + (boxH - h) / 2, w, h, altText: label });
+  } else if (req.kind === 'mermaid') {
+    slide.addText(req.source, { x: area.x, y: top, w: area.w, h: boxH - 0.5, fontFace: 'Consolas', fontSize: 12, color: THEME.ink, fill: { color: 'F3F4F6' }, valign: 'top', fit: 'shrink' });
+    slide.addText(`Diagram not drawn (${res.reason}). The Mermaid source is shown instead.`, { x: area.x, y: top + boxH - 0.5, w: area.w, h: 0.5, fontFace: THEME.font, fontSize: 11, italic: true, color: THEME.muted, valign: 'middle', fit: 'shrink' });
+  } else {
+    slide.addText(`[Image not embedded: ${req.path} (${res.reason})]`, { x: area.x, y: top, w: area.w, h: 0.8, fontFace: THEME.font, fontSize: 14, italic: true, color: THEME.muted, valign: 'top', fit: 'shrink' });
+  }
+  if (req.caption) slide.addText(plain(req.caption), { x: area.x, y: top + boxH, w: area.w, h: capH, fontFace: THEME.font, fontSize: 14, italic: true, color: THEME.muted, align: 'center', valign: 'middle', fit: 'shrink' });
+}
+
 const THEME = { ink: '1F2937', muted: '6B7280', accent: '0F766E', wash: 'E6F0EF', font: 'Calibri' };
 
-async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>): Promise<Buffer> {
+async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string, warnings: string[]): Promise<Buffer> {
   if (!Array.isArray(spec.slides) || !spec.slides.length) fail('A presentation needs at least one slide in "slides"');
   if (spec.slides.length > LIMITS.slides) fail(`Too many slides (max ${LIMITS.slides})`);
   // pptxgenjs is CommonJS: depending on the loader the class is the default export or its .default.
@@ -336,8 +520,21 @@ async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>): Promise<Buff
   pptx.title = spec.title ?? '';
   pptx.author = spec.author ?? 'Agent Portal';
 
+  const reqs: (VisualReq | null)[] = spec.slides.map((s, i) => {
+    if (s?.image && s?.mermaid) fail(`slides[${i}] has both "image" and "mermaid"; use one`);
+    if (s?.image) return visualReq(s.image, 'image', `slides[${i}].image`);
+    if (s?.mermaid) return visualReq(s.mermaid, 'mermaid', `slides[${i}].mermaid`);
+    return null;
+  });
+  const wanted = reqs.flatMap((r) => (r ? [r] : []));
+  const resolvedList = await resolveVisuals(wanted, baseDir, warnings);
+  let nextVisual = 0;
+
   spec.slides.forEach((s, i) => {
-    const layout = s.layout ?? (i === 0 && !s.bullets && !s.table && !s.text ? 'title' : s.table ? 'table' : s.text && !s.bullets ? 'text' : 'bullets');
+    const req = reqs[i];
+    const visual = req ? resolvedList[nextVisual++] : null;
+    const layout =
+      s.layout ?? (req && !s.bullets && !s.text && !s.table ? 'image' : i === 0 && !s.bullets && !s.table && !s.text ? 'title' : s.table ? 'table' : s.text && !s.bullets ? 'text' : 'bullets');
     const slide = pptx.addSlide();
     slide.background = { color: 'FFFFFF' };
     const title = plain(String(s.title ?? ''));
@@ -349,24 +546,28 @@ async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>): Promise<Buff
     } else {
       slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.25, h: 7.5, fill: { color: THEME.accent }, line: { color: THEME.accent } });
       slide.addText(title, { x: 0.7, y: 0.4, w: 12, h: 0.9, fontFace: THEME.font, fontSize: 30, bold: true, color: THEME.ink, valign: 'middle' });
+      const side = Boolean(req) && (layout === 'bullets' || layout === 'text');
+      const textW = side ? 5.6 : 12;
       if (layout === 'bullets') {
         const items = (s.bullets ?? []).map((b) => plain(String(b)));
         const size = items.length > 9 ? 16 : items.length > 6 ? 20 : 24;
         slide.addText(
           items.map((text) => ({ text, options: { bullet: true, breakLine: true, paraSpaceAfter: 8 } })),
-          { x: 0.7, y: 1.5, w: 12, h: 5.4, fontFace: THEME.font, fontSize: size, color: THEME.ink, valign: 'top', fit: 'shrink' },
+          { x: 0.7, y: 1.5, w: textW, h: 5.4, fontFace: THEME.font, fontSize: size, color: THEME.ink, valign: 'top', fit: 'shrink' },
         );
       } else if (layout === 'text') {
-        slide.addText(plain(String(s.text ?? '')), { x: 0.7, y: 1.5, w: 12, h: 5.4, fontFace: THEME.font, fontSize: 22, color: THEME.ink, valign: 'top', fit: 'shrink' });
+        slide.addText(plain(String(s.text ?? '')), { x: 0.7, y: 1.5, w: textW, h: 5.4, fontFace: THEME.font, fontSize: 22, color: THEME.ink, valign: 'top', fit: 'shrink' });
       } else if (layout === 'table') {
         const t = s.table;
         if (!t || !Array.isArray(t.rows)) fail(`slides[${i}] has layout "table" but no "table" with rows`);
         const body = t.rows.map((r) => r.map((c) => ({ text: plain(String(c ?? '')), options: { fontFace: THEME.font, fontSize: 14, color: THEME.ink } })));
         const head = t.header ? [t.header.map((c) => ({ text: plain(String(c)), options: { bold: true, fontFace: THEME.font, fontSize: 14, color: 'FFFFFF', fill: { color: THEME.accent } } }))] : [];
         slide.addTable([...head, ...body], { x: 0.7, y: 1.5, w: 12, border: { type: 'solid', pt: 0.75, color: 'D1D5DB' }, autoPage: true, autoPageRepeatHeader: Boolean(t.header) });
-      } else {
-        fail(`slides[${i}].layout must be title, section, bullets, text or table`);
+      } else if (layout !== 'image') {
+        fail(`slides[${i}].layout must be title, section, bullets, text, table or image`);
       }
+      if (layout === 'image' && !req) fail(`slides[${i}] has layout "image" but no "image" or "mermaid"`);
+      if (req && visual && layout !== 'table') placeVisual(pptx, slide, req, visual, side ? { x: 6.6, w: 6.1 } : { x: 0.7, w: 12 });
     }
     if (s.notes) slide.addNotes(plain(String(s.notes)));
   });
@@ -391,12 +592,14 @@ export function safeOutput(baseDir: string, output: unknown, type: string): stri
 
 export async function generate(spec: DocSpec, opts: { baseDir?: string } = {}): Promise<DocResult> {
   if (!spec || typeof spec !== 'object' || !(spec.type in EXT)) fail('"type" must be docx, xlsx, csv or pptx');
-  const abs = safeOutput(opts.baseDir ?? process.cwd(), spec.output, spec.type);
+  const baseDir = opts.baseDir ?? process.cwd();
+  const abs = safeOutput(baseDir, spec.output, spec.type);
+  const warnings: string[] = [];
   let buf: Buffer;
   let summary: string;
   switch (spec.type) {
     case 'docx':
-      buf = await buildDocx(spec);
+      buf = await buildDocx(spec, baseDir, warnings);
       summary = 'Word document';
       break;
     case 'xlsx':
@@ -408,11 +611,11 @@ export async function generate(spec: DocSpec, opts: { baseDir?: string } = {}): 
       summary = `CSV, ${spec.rows.length} row${spec.rows.length === 1 ? '' : 's'}`;
       break;
     case 'pptx':
-      buf = await buildPptx(spec);
+      buf = await buildPptx(spec, baseDir, warnings);
       summary = `PowerPoint, ${spec.slides.length} slide${spec.slides.length === 1 ? '' : 's'}`;
       break;
   }
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, buf);
-  return { type: spec.type, output: abs, bytes: buf.length, summary };
+  return { type: spec.type, output: abs, bytes: buf.length, summary, ...(warnings.length ? { warnings } : {}) };
 }

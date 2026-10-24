@@ -130,7 +130,13 @@ Easiest: give Markdown. Headings, paragraphs, **bold**, *italic*, \`code\`, link
 { "type": "docx", "output": "work/r_1/policy.docx", "title": "Refund policy", "markdown": "# Scope\\n\\nText here.\\n\\n| Role | Limit |\\n|---|---|\\n| Agent | 100 |" }
 \`\`\`
 
-Or use \`"blocks"\`: \`{"type":"heading","level":1,"text":""}\`, \`{"type":"paragraph","text":""}\`, \`{"type":"bullets","items":[]}\`, \`{"type":"numbered","items":[]}\`, \`{"type":"table","header":[],"rows":[[]]}\`, \`{"type":"code","text":""}\`, \`{"type":"pagebreak"}\`.
+Or use \`"blocks"\`: \`{"type":"heading","level":1,"text":""}\`, \`{"type":"paragraph","text":""}\`, \`{"type":"bullets","items":[]}\`, \`{"type":"numbered","items":[]}\`, \`{"type":"table","header":[],"rows":[[]]}\`, \`{"type":"code","text":""}\`, \`{"type":"pagebreak"}\`, \`{"type":"image","path":"work/r_1/chart.png","width":5,"caption":"Figure 1"}\`, \`{"type":"mermaid","source":"flowchart LR\\n A --> B","caption":"Flow"}\`.
+
+### Pictures and diagrams
+
+Pictures: \`"image"\` takes a \`path\` to a .png, .jpg or .svg file inside the project folder (never outside it, max 15 MB). Options: \`width\` and \`height\` in inches (one is enough, the shape is kept; the page is 6.5 in wide), \`alt\`, \`caption\` and \`align\` (left, center, right). In Markdown a line \`![alt](work/r_1/chart.png "caption")\` does the same.
+
+Diagrams: \`"mermaid"\` takes Mermaid source (max 20,000 characters, at most 40 per file; Mermaid runs in strict security mode). In Markdown, a fenced \`mermaid\` block becomes a drawn diagram, so one Markdown text serves both the .md file and the Word file. Mermaid is drawn on the server by a headless browser, with no internet. If that browser is missing, or a diagram has a syntax error, the file is still made, the diagram appears as a code block with a note, and the command output has a \`"warnings"\` list. Check it: fix the Mermaid syntax and run again, or tell the user which diagram was not drawn. Do not draw pictures any other way and do not install anything.
 
 ## Excel (.xlsx)
 
@@ -149,14 +155,17 @@ Numbers must be numbers, not text. A \`{ "formula": "..." }\` cell is a live for
 
 ## PowerPoint (.pptx)
 
-Layouts: \`title\`, \`section\`, \`bullets\` (default), \`text\`, \`table\`. Keep bullets short, about 3 to 6 per slide. \`notes\` become speaker notes.
+Layouts: \`title\`, \`section\`, \`bullets\` (default), \`text\`, \`table\`, \`image\`. Keep bullets short, about 3 to 6 per slide. \`notes\` become speaker notes.
+
+A slide can carry one picture or diagram: \`"image": {"path": "work/r_1/chart.png", "caption": "..."}\` or \`"mermaid": {"source": "flowchart LR\\n A --> B"}\` (same options and rules as in Word). Alone it fills the slide (layout \`image\`); with \`bullets\` or \`text\` it sits on the right half. Check \`"warnings"\` in the output as for Word.
 
 \`\`\`json
 { "type": "pptx", "output": "work/r_1/deck.pptx", "title": "Refund programme",
   "slides": [
     { "layout": "title", "title": "Refund programme", "subtitle": "Q4 plan" },
     { "title": "Goals", "bullets": ["Cut handling time", "Fewer escalations"], "notes": "Say this slowly" },
-    { "layout": "table", "title": "Limits", "table": { "header": ["Role", "Limit"], "rows": [["Agent", "100"]] } }
+    { "layout": "table", "title": "Limits", "table": { "header": ["Role", "Limit"], "rows": [["Agent", "100"]] } },
+    { "title": "Approval flow", "bullets": ["Agent opens a case", "Manager approves"], "mermaid": { "source": "flowchart LR\\n A[Case] --> B{Approved?}\\n B -->|yes| C[Refund]", "caption": "Refund flow" } }
   ] }
 \`\`\`
 `;
@@ -203,7 +212,7 @@ Rules:
 ## 3. Deliver
 
 - Save the Markdown in \`work/<run id>/docs/\`.
-- If a Word or PowerPoint file is wanted, use the make-documents skill: a .docx built from the Markdown (diagrams stay as code blocks in Word), or a .pptx overview of 6 to 10 slides.
+- If a Word or PowerPoint file is wanted, use the make-documents skill: a .docx built from the Markdown (fenced \`mermaid\` blocks are drawn as diagrams in Word; check the \`warnings\` in the command output), or a .pptx overview of 6 to 10 slides.
 - Finish with a short summary: the files created, the coverage, and the open questions.
 `;
 

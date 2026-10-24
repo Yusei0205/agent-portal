@@ -14,6 +14,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates pandoc python3-pip openssh-client \
  && pip3 install --no-cache-dir --break-system-packages awscli git-remote-codecommit python-pptx python-docx docxtpl \
  && rm -rf /var/lib/apt/lists/*
+# Optional: a headless browser so make-doc can draw Mermaid diagrams into Word and PowerPoint files
+# (build with --build-arg WITH_BROWSER=1; adds about 400 MB). Without it, diagrams are written as code blocks with a note.
+ARG WITH_BROWSER=0
+RUN if [ "$WITH_BROWSER" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+ENV DOC_BROWSER_NO_SANDBOX=1
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

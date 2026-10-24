@@ -212,6 +212,8 @@ test('every JSON example in the make-documents skill is a valid spec', async () 
   assert.match(skill, /^---\nname: make-documents\ndescription: /);
   const examples = [...skill.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => JSON.parse(m[1]));
   assert.deepEqual(examples.map((e) => e.type), ['docx', 'xlsx', 'csv', 'pptx']);
+  assert.match(skill, /"type":"mermaid"/);
+  assert.match(skill, /"mermaid": \{ "source"/);
   for (const spec of examples) {
     const r = await generate(spec, { baseDir: dir });
     assert.ok(r.bytes > 0, `${spec.type} example produced a file`);
