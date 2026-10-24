@@ -202,6 +202,7 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
 
     if (userAsk.startsWith('Architecture diagram request')) return yield* diagramScenario(userAsk);
     if (userAsk.startsWith('Presentation request: ')) return yield* presentationScenario(userAsk);
+    if (userAsk.startsWith('Documentation request: ')) return yield* documentationScenario(userAsk);
 
     yield assistant(null, [{ type: 'text', text: 'I’ll start with the decisions log and the project documents before doing anything else.' }]);
     await pause(300);
@@ -418,6 +419,89 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     if (!built.ok) return `I could not build the deck: ${built.output}`;
     const titles = slides.map((s, i) => `${i + 1}. ${String(s.title)}`).join('\n');
     return `Presentation: ${outRel}\n${titles}${warnings.length ? `\nWarnings: ${warnings.join(' | ')}` : ''}`;
+  }
+
+  /**
+   * A documentation request (NEW-6): list the repositories, read the project documents, write Markdown that cites what it
+   * found, place the diagram markers, and report the file. Goal markers for tests (put them in the title):
+   * [demo-no-doc] saves nothing, [demo-empty-doc] saves a stub, [demo-bad-citation] cites a missing file and a line past
+   * the end, [demo-skip-diagram] leaves the diagram markers out, [demo-no-cite] cites nothing.
+   */
+  async function* documentationScenario(ask: string): AsyncGenerator<SdkMessage, string> {
+    const type = ask.match(/^Documentation request: ([\w-]+)/)?.[1] ?? 'overview';
+    const title = ask.match(/^Write the [^"\n]*"([^"\n]*)" for /m)?.[1] ?? 'Document';
+    const slugs = [...ask.matchAll(/in repos\/([\w.-]+)\//g)].map((m) => m[1]).slice(0, 4);
+    const markers = [...ask.matchAll(/\{\{diagram:([\w.-]+)\}\}/g)].map((m) => m[1]);
+    const useKnowledge = !ask.includes('do not use docs/md/');
+    yield assistant(null, [{ type: 'text', text: 'I will look at the repositories and the project documents, then write the document.' }]);
+    const found: { repo: string; file: string }[] = [];
+    for (const slug of slugs) {
+      yield* tool(
+        null,
+        'Glob',
+        { pattern: `repos/${slug}/*` },
+        () => {
+          const dir = path.resolve(d.projectDir, 'repos', slug);
+          const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n !== '.git' && n !== 'node_modules' && fs.statSync(path.join(dir, n)).isFile()).sort().slice(0, 6) : [];
+          for (const n of names) found.push({ repo: slug, file: n });
+          return names.map((n) => `repos/${slug}/${n}`).join('\n') || '(empty)';
+        },
+        false,
+      );
+    }
+    const knowledge: { file: string; heading: string }[] = [];
+    if (useKnowledge) {
+      const kw = keywords(title, 3);
+      const out = (yield* tool(null, 'Grep', { pattern: kw.join('|') || title, path: 'docs/md' }, () => grep(kw.join(' ') || title, 3), false)).output;
+      for (const m of out.matchAll(/^(docs\/md\/[^:]+):\d+: (.*)$/gm)) knowledge.push({ file: m[1], heading: m[2].replace(/[`|]/g, '').slice(0, 40).trim() || 'Overview' });
+    }
+
+    const cite = (i: number) => (found[i] ? `\`${found[i].repo}/${found[i].file}:1\`` : '');
+    const noCite = ask.includes('[demo-no-cite]');
+    const sections: Record<string, string[]> = {
+      overview: ['Purpose', 'Components', 'Key flows', 'Open questions'],
+      architecture: ['Context', 'Components', 'Interfaces and data flow', 'Risks'],
+      api: ['Overview', 'Endpoints', 'Errors'],
+      runbook: ['Service summary', 'Deploy and roll back', 'Troubleshooting'],
+      'user-guide': ['Introduction', 'Getting started', 'Troubleshooting'],
+    };
+    const lines: string[] = [`# ${title}`, '', `This ${type.replace('-', ' ')} was written from ${slugs.length ? `the repositories ${slugs.join(', ')}` : 'the project documents'}${noCite || !cite(0) ? '' : ` (see ${cite(0)})`}.`, ''];
+    (sections[type] ?? sections.overview).forEach((s, si) => {
+      lines.push(`## ${s}`, '');
+      if (type === 'api' && s === 'Endpoints') {
+        lines.push('| Item | Where |', '|---|---|', ...found.slice(0, 4).map((f, i) => `| ${f.file} | ${noCite ? f.repo : cite(i)} |`), '');
+      } else if (/Deploy|Getting started/.test(s)) {
+        lines.push(...found.slice(0, 3).map((f, i) => `${i + 1}. Check \`${f.file}\`${noCite ? '' : ` (${cite(i)})`}.`), '');
+      } else {
+        const f = found[si % Math.max(1, found.length)];
+        lines.push(f ? `${s} is described by the file ${noCite ? `\`${f.file}\`` : cite(si % found.length)}, which belongs to ${f.repo}.` : `No repository was included, so ${s.toLowerCase()} rests on the project documents.`, '');
+        if (!noCite && knowledge[si % Math.max(1, knowledge.length)]) {
+          const k = knowledge[si % knowledge.length];
+          lines.push(`Related project document: \`${k.file} › ${k.heading}\`.`, '');
+        }
+      }
+      if (si === 1 && markers.length && !ask.includes('[demo-skip-diagram]')) for (const m of markers) lines.push(`{{diagram:${m}}}`, '');
+    });
+    if (ask.includes('[demo-bad-citation]')) {
+      lines.push('## Notes', '', `The retry logic lives in \`${slugs[0] ?? 'repo'}/src/does/not/exist.py:10\`.`, '', found[0] ? `The first file also continues at \`${found[0].repo}/${found[0].file}:99999\`.` : '', '');
+    }
+    lines.push('Link: [project](https://example.com/docs).', '');
+    const md = ask.includes('[demo-empty-doc]') ? '# stub' : lines.join('\n');
+    const outRel = `${d.writeDirRel}/document.md`;
+    if (ask.includes('[demo-no-doc]')) return 'I looked around but could not write the document.';
+    yield* tool(
+      null,
+      'Write',
+      { file_path: outRel, content: md },
+      (input) => {
+        const abs = path.resolve(d.projectDir, String(input.file_path));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, String(input.content));
+        return `File created successfully at: ${input.file_path}`;
+      },
+      true,
+    );
+    return `Document: ${outRel}\n${(sections[type] ?? sections.overview).map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
   }
 
   /** An architecture diagram request (NEW-1): list the repository folders, then reply with Mermaid and a cited description. */

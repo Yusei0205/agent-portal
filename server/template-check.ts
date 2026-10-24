@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { CT, OoxmlPackage, PackageError } from './ooxml.ts';
 import { analyzeTemplate } from './pptx-template.ts';
+import { analyzeWordTemplate } from './docx-template.ts';
 import { TEMPLATE_MAX_BYTES } from './docgen.ts';
 
 export type TemplateKind = 'docx' | 'pptx';
@@ -26,8 +27,13 @@ export interface TemplateInfo {
   fonts?: { major: string; minor: string };
   colors?: Record<string, string>;
   layouts?: { name: string; type: string }[];
-  /** Which of the template's layouts plays each role (null when the template has none and a fallback is used). */
+  /** Which of the template's layouts (PowerPoint) or styles (Word) plays each role (null when the template has none and a fallback is used). */
   mapping?: Record<string, string | null>;
+  /** Word only. */
+  pageWidthIn?: number;
+  pageHeightIn?: number;
+  header?: boolean;
+  footer?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -93,7 +99,9 @@ export async function checkTemplateUpload(buf: Buffer, filename: string): Promis
     if (!pkg.has(main)) throw new TemplateError('The Word file has no document part');
     await pkg.xml(main);
     if (!pkg.has('word/styles.xml')) warnings.push('The template has no styles part; generated documents will use Word defaults for headings.');
-    return { kind, ext, info: { kind, warnings } };
+    const w = await analyzeWordTemplate(pkg);
+    warnings.push(...w.warnings);
+    return { kind, ext, info: { kind, warnings, pageWidthIn: w.pageWidthIn, pageHeightIn: w.pageHeightIn, fonts: w.fonts, mapping: w.mapping, header: w.header, footer: w.footer } };
   } catch (e) {
     if (e instanceof TemplateError) throw e;
     if (e instanceof PackageError) throw new TemplateError(e.message);

@@ -95,9 +95,10 @@ export interface TriggerConfig {
   payloadVars?: Record<string, string>;
   /**
    * Do something other than start a goal session when the trigger fires. "refresh_diagrams" redraws the project's stale
-   * architecture diagrams (NEW-1); the goal template is then not used.
+   * architecture diagrams (NEW-1); "refresh_docs" rewrites its stale generated documents (NEW-6). The goal template is
+   * then not used.
    */
-  action?: 'refresh_diagrams';
+  action?: 'refresh_diagrams' | 'refresh_docs';
 }
 
 export interface LoopSpec {
@@ -319,14 +320,14 @@ function validateTriggerKind(k: unknown): LoopSpec['trigger_kind'] {
   return String(k) as LoopSpec['trigger_kind'];
 }
 
-/** A trigger may do something other than start a goal session; today that is "refresh_diagrams". */
+/** A trigger may do something other than start a goal session: "refresh_diagrams" or "refresh_docs". */
 function checkTriggerAction(tc: TriggerConfig): void {
   const a = (tc as { action?: unknown }).action;
   if (a === undefined || a === null || a === '') {
     delete tc.action;
     return;
   }
-  if (a !== 'refresh_diagrams') throw badRequest('Action must be refresh_diagrams');
+  if (a !== 'refresh_diagrams' && a !== 'refresh_docs') throw badRequest('Action must be refresh_diagrams or refresh_docs');
 }
 
 function validateVerification(raw: unknown): VerificationStep[] {

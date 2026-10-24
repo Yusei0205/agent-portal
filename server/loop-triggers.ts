@@ -154,6 +154,17 @@ export async function createWorkflowFromSpec(
     };
   }
 
+  // "Refresh docs" rewrites stale generated documents (NEW-6) the same way: the first session started, plus `refreshed`.
+  if (spec.trigger_config.action === 'refresh_docs') {
+    const { refreshStaleDocs } = await import('./generated-docs.ts');
+    const refreshed = await refreshStaleDocs(project.id, userId, { specId: spec.id });
+    const first = refreshed.started[0] ? one<Row>('SELECT * FROM workflows WHERE id = ?', refreshed.started[0].workflowId) : null;
+    return {
+      ...(first ?? { id: null, project_id: project.id, title: 'Refresh documents', status: 'done', stop_reason: refreshed.stale ? 'No document could be refreshed' : 'No document is stale' }),
+      refreshed,
+    };
+  }
+
   const goal = buildGoal(spec, vars);
   const title = (goal.split('\n')[0] || spec.name).slice(0, 80);
 

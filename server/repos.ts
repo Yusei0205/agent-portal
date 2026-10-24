@@ -243,6 +243,8 @@ export async function syncRepo(r: Repo): Promise<void> {
       update('repos', r.id, { status: 'ready', last_sync: now() });
       // Architecture diagrams drawn from this repository are stale when its HEAD moved (NEW-1).
       void import('./diagrams.ts').then((m) => m.refreshDiagramStale(r.project_id)).catch(() => undefined);
+      // Generated documents written from this repository too (NEW-6).
+      void import('./generated-docs.ts').then((m) => m.refreshDocStale(r.project_id)).catch(() => undefined);
     } catch (e: any) {
       update('repos', r.id, { status: 'error', error: redact(String(e?.message ?? e)) });
     }

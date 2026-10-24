@@ -62,7 +62,7 @@ export interface DiagramSource {
 /* ------------------------------------------------------------------ */
 
 /** HEAD of a repository's reference clone, or null when it has none (never the project's own repository above it). */
-function headSha(repo: Repo): string | null {
+export function headSha(repo: Repo): string | null {
   const dir = repoDir(repo);
   if (!fs.existsSync(path.join(dir, '.git'))) return null;
   try {
@@ -395,6 +395,7 @@ export async function ingestSession(workflowId: string): Promise<void> {
       auditRaw(w.created_by, 'diagram.version', `diagram:${d.id}`, { projectId: d.project_id, ok: true, version, type: ok.type, parsed: ok.parsed });
       notifyProject(d.project_id, 'diagrams.updated', { id: d.id });
       refreshDiagramStale(d.project_id);
+      void import('./generated-docs.ts').then((m) => m.refreshDocStale(d.project_id)).catch(() => undefined);
     } catch (e: any) {
       if (!isDbOpen()) return;
       const message = e instanceof DiagramError ? e.message : `Could not store the diagram: ${String(e?.message ?? e)}`;
@@ -579,6 +580,7 @@ export function registerDiagramRoutes(): void {
       for (const ext of ['mmd', 'json']) fs.rmSync(path.join(dir, `${d.slug}.${ext}`), { force: true });
     });
     await commitProject(project.id, `Delete diagram ${d.title}`, [DIAGRAMS_DIR]).catch(() => undefined);
+    void import('./generated-docs.ts').then((m) => m.refreshDocStale(project.id)).catch(() => undefined);
     audit(ctx, 'diagram.delete', `diagram:${d.id}`, { projectId: project.id, title: d.title });
     notifyProject(project.id, 'diagrams.updated', { id: d.id });
     return { ok: true };

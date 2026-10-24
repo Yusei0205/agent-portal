@@ -1,8 +1,9 @@
 /**
- * `make-doc <spec.json | -> [--template <file.pptx|.potx>] [--no-template]`: create a Word, Excel, CSV or PowerPoint
+ * `make-doc <spec.json | -> [--template <file>] [--no-template]`: create a Word, Excel, CSV or PowerPoint
  * file from a JSON description. Prints one JSON line on success. Output paths must stay inside the current folder.
- * A PowerPoint deck follows the project's template automatically (the portal leaves it under .portal/templates);
- * --template names another one inside the folder and --no-template uses the built-in look.
+ * A Word document or PowerPoint deck follows the project's template automatically (the portal leaves it under
+ * .portal/templates); --template names another one inside the folder (.docx/.dotx for Word, .pptx/.potx for
+ * PowerPoint) and --no-template uses the built-in look.
  * See the make-documents skill (server/skills.ts) for the spec format.
  */
 import fs from 'node:fs';
@@ -16,11 +17,11 @@ async function main(): Promise<void> {
     if (args[i] === '--no-template') template = false;
     else if (args[i] === '--template') {
       template = args[++i];
-      if (!template) throw new DocError('--template needs the path of a .pptx or .potx file');
+      if (!template) throw new DocError('--template needs the path of a template file (.docx, .dotx, .pptx or .potx)');
     } else rest.push(args[i]);
   }
   const arg = rest[0];
-  if (!arg) throw new DocError('Usage: make-doc <spec.json | -> [--template <file.pptx|.potx>] [--no-template]   (use - to read the JSON from stdin)');
+  if (!arg) throw new DocError('Usage: make-doc <spec.json | -> [--template <file.docx|.dotx|.pptx|.potx>] [--no-template]   (use - to read the JSON from stdin)');
   const raw = arg === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(arg, 'utf8');
   let spec: DocSpec;
   try {
@@ -29,7 +30,7 @@ async function main(): Promise<void> {
     throw new DocError(`The spec is not valid JSON: ${e.message}`);
   }
   if (template !== undefined) {
-    if (spec?.type !== 'pptx') throw new DocError('--template and --no-template apply to PowerPoint files only');
+    if (spec?.type !== 'pptx' && spec?.type !== 'docx') throw new DocError('--template and --no-template apply to Word and PowerPoint files only');
     spec.template = template;
   }
   const r = await generate(spec);

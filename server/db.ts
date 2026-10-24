@@ -701,7 +701,56 @@ const TEMPLATES = `
   CREATE INDEX presentations_workflow ON presentations(workflow_id);
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES];
+const GENERATED_DOCS = `
+  -- Documentation generator (NEW-6): one row per document, one row per generated version (Markdown plus the Word file)
+  CREATE TABLE generated_docs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    audience TEXT NOT NULL DEFAULT '',
+    repo_ids TEXT NOT NULL DEFAULT '[]',
+    include_knowledge INTEGER NOT NULL DEFAULT 1,
+    include_decisions INTEGER NOT NULL DEFAULT 1,
+    diagram_ids TEXT NOT NULL DEFAULT '[]',
+    template_id TEXT,
+    template_name TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    version INTEGER NOT NULL DEFAULT 0,
+    source_hash TEXT,
+    stale INTEGER NOT NULL DEFAULT 0,
+    stale_reasons TEXT NOT NULL DEFAULT '[]',
+    pending_workflow_id TEXT,
+    pending_sources TEXT NOT NULL DEFAULT '{}',
+    workflow_id TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX generated_docs_project ON generated_docs(project_id, updated_at);
+  CREATE INDEX generated_docs_pending ON generated_docs(pending_workflow_id);
+  CREATE TABLE generated_doc_versions (
+    doc_id TEXT NOT NULL REFERENCES generated_docs(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    markdown TEXT NOT NULL,
+    file TEXT,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    template_used TEXT,
+    warnings TEXT NOT NULL DEFAULT '[]',
+    citations TEXT NOT NULL DEFAULT '[]',
+    sources TEXT NOT NULL DEFAULT '{}',
+    source_hash TEXT,
+    workflow_id TEXT,
+    run_id TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (doc_id, version)
+  );
+`;
+
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

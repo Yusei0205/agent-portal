@@ -25,6 +25,7 @@ import { registerLearnRoutes } from './learn.ts';
 import { registerDiagramRoutes } from './diagrams.ts';
 import { registerTemplateRoutes } from './doc-templates.ts';
 import { registerPresentationRoutes } from './presentations.ts';
+import { registerGeneratedDocRoutes } from './generated-docs.ts';
 import { registerJiraRoutes } from './jira.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
@@ -69,6 +70,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerDiagramRoutes();
     registerTemplateRoutes();
     registerPresentationRoutes();
+    registerGeneratedDocRoutes();
     registerJiraRoutes();
     registerProjectAwsRoutes();
     registerAwsAccountRoutes();

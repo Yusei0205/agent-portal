@@ -28,6 +28,7 @@ import ExcelJS from 'exceljs';
 import PptxGenJS from 'pptxgenjs';
 import { checkMermaidSource, IMAGE_LIMITS, ImageError, loadImageFile, renderToPng, safeInputPath, type Raster, type RenderItem } from './docimage.ts';
 import { buildFromTemplate, type PreparedSlide, type PreparedVisual } from './pptx-template.ts';
+import { openWordTemplate, type WordLook } from './docx-template.ts';
 
 export type Cell = string | number | boolean | null | { formula: string };
 
@@ -66,7 +67,17 @@ export interface Slide {
 }
 
 export type DocSpec =
-  | { type: 'docx'; output: string; title?: string; markdown?: string; blocks?: Block[] }
+  | {
+      type: 'docx';
+      output: string;
+      title?: string;
+      markdown?: string;
+      blocks?: Block[];
+      /** Path of a .docx or .dotx template inside the project folder, or false for the built-in look (NEW-6). */
+      template?: string | false;
+      /** Markdown only: when the text starts with a single `# Heading`, make it the document title and move the other headings up one level. */
+      titleFromHeading?: boolean;
+    }
   | { type: 'xlsx'; output: string; sheets: { name?: string; header?: string[]; rows: Cell[][]; widths?: number[] }[] }
   | { type: 'csv'; output: string; header?: string[]; rows: Cell[][]; bom?: boolean }
   | { type: 'pptx'; output: string; title?: string; author?: string; slides: Slide[]; template?: string | false };
@@ -78,7 +89,7 @@ export interface DocResult {
   summary: string;
   /** Things that did not go to plan, for example a diagram that could not be drawn and was written as a code block. */
   warnings?: string[];
-  /** PowerPoint only: the template the deck follows (its name or file), or absent when the built-in look was used. */
+  /** PowerPoint and Word: the template the file follows (its name or file), or absent when the built-in look was used. */
   template?: string;
 }
 
@@ -296,7 +307,7 @@ export function plain(text: string): string {
   return walk(inlineTokens(text));
 }
 
-function runs(text: string, base: { bold?: boolean; italics?: boolean; font?: string; size?: number; color?: string } = {}): (TextRun | ExternalHyperlink)[] {
+function runs(text: string, base: { bold?: boolean; italics?: boolean; font?: string; size?: number; color?: string } = {}, look?: WordLook): (TextRun | ExternalHyperlink)[] {
   const out: (TextRun | ExternalHyperlink)[] = [];
   const walk = (toks: any[], style: typeof base) => {
     for (const t of toks) {
@@ -305,7 +316,12 @@ function runs(text: string, base: { bold?: boolean; italics?: boolean; font?: st
       else if (t.type === 'codespan') out.push(new TextRun({ text: t.text, ...style, font: 'Consolas' }));
       else if (t.type === 'br') out.push(new TextRun({ text: '', break: 1 }));
       else if (t.type === 'link' && /^https?:\/\//i.test(t.href)) {
-        out.push(new ExternalHyperlink({ link: t.href, children: [new TextRun({ text: plain(t.text) || t.href, ...style, color: '1155CC', underline: {} })] }));
+        out.push(
+          new ExternalHyperlink({
+            link: t.href,
+            children: [new TextRun(look?.hyperlink ? { text: plain(t.text) || t.href, ...style, style: look.hyperlink } : { text: plain(t.text) || t.href, ...style, color: '1155CC', underline: {} })],
+          }),
+        );
       } else if (t.tokens) walk(t.tokens, style);
       else out.push(new TextRun({ text: t.type === 'escape' ? t.text : (t.text ?? t.raw ?? ''), ...style }));
     }
@@ -322,65 +338,81 @@ const HEADINGS = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.H
 
 const ALIGN = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
 
-function codeParagraphs(text: string): Paragraph[] {
-  return text.split('\n').map(
-    (line) =>
-      new Paragraph({
-        shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'F3F4F6' },
-        children: [new TextRun({ text: line, font: 'Consolas', size: 19 })],
-      }),
+function codeParagraphs(text: string, look?: WordLook): Paragraph[] {
+  return text.split('\n').map((line) =>
+    look?.code
+      ? new Paragraph({ style: look.code, children: [new TextRun({ text: line })] })
+      : new Paragraph({
+          shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'F3F4F6' },
+          children: [new TextRun({ text: line, font: 'Consolas', size: 19 })],
+        }),
   );
 }
 
-async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: string, warnings: string[]): Promise<Buffer> {
+async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: string, warnings: string[], look?: WordLook): Promise<Buffer> {
   if (spec.markdown === undefined && spec.blocks === undefined) fail('A Word document needs "markdown" or "blocks"');
-  const blocks = spec.markdown !== undefined ? markdownToBlocks(str(spec.markdown, 'markdown')) : blocksFromSpec(spec.blocks!);
+  let blocks = spec.markdown !== undefined ? markdownToBlocks(str(spec.markdown, 'markdown')) : blocksFromSpec(spec.blocks!);
+  let docTitle = spec.title;
+  if (spec.titleFromHeading && spec.markdown !== undefined && !docTitle) {
+    const first = blocks[0];
+    const h1s = blocks.filter((b) => b.type === 'heading' && b.level === 1).length;
+    if (first?.type === 'heading' && first.level === 1 && h1s === 1) {
+      docTitle = plain(first.text);
+      blocks = blocks.slice(1).map((b) => (b.type === 'heading' ? { ...b, level: Math.max(1, b.level - 1) } : b));
+    }
+  }
   const visuals = blocks.flatMap((b) => (b.type === 'visual' ? [b] : []));
   const resolved = await resolveVisuals(visuals.map((v) => v.req), baseDir, warnings);
   const visualAt = new Map(visuals.map((v, i) => [v, resolved[i]]));
   const children: (Paragraph | Table)[] = [];
   const numberings: string[] = [];
-  if (spec.title) children.push(new Paragraph({ heading: HeadingLevel.TITLE, children: runs(str(spec.title, 'title', 300)) }));
+  const pageW = look?.textWidthIn ?? 6.5;
+  const pageH = Math.min(8.5, look?.textHeightIn ?? 8.5);
+  if (docTitle) children.push(new Paragraph(look?.title ? { style: look.title, children: runs(str(docTitle, 'title', 300), {}, look) } : { heading: HeadingLevel.TITLE, children: runs(str(docTitle, 'title', 300)) }));
 
   for (const b of blocks) {
     if (b.type === 'heading') {
-      children.push(new Paragraph({ heading: HEADINGS[b.level - 1], children: runs(b.text) }));
+      const style = look?.heading[b.level - 1];
+      children.push(new Paragraph(style ? { style, children: runs(b.text, {}, look) } : { heading: HEADINGS[b.level - 1], children: runs(b.text, {}, look) }));
     } else if (b.type === 'paragraph') {
-      children.push(new Paragraph({ spacing: { after: 120 }, children: runs(b.text) }));
+      children.push(new Paragraph(look ? { children: runs(b.text, {}, look) } : { spacing: { after: 120 }, children: runs(b.text) }));
     } else if (b.type === 'list') {
       // A fresh numbering reference per numbered list so each list starts again at 1.
       const ref = b.ordered ? `num-${numberings.push('x')}` : '';
       for (const it of b.items) {
         const level = Math.min(it.level, 5);
-        children.push(
-          b.ordered
-            ? new Paragraph({ numbering: { reference: ref, level }, children: runs(it.text) })
-            : new Paragraph({ bullet: { level }, children: runs(it.text) }),
-        );
+        if (b.ordered) {
+          children.push(new Paragraph({ style: look?.number[level] ?? look?.number[0], numbering: { reference: ref, level }, children: runs(it.text, {}, look) }));
+        } else if (look?.bullet[level]) {
+          children.push(new Paragraph({ style: look.bullet[level], children: runs(it.text, {}, look) }));
+        } else {
+          children.push(new Paragraph({ bullet: { level }, children: runs(it.text, {}, look) }));
+        }
       }
     } else if (b.type === 'table') {
       const cols = Math.max(b.header?.length ?? 0, ...b.rows.map((r) => r.length), 1);
+      const styled = Boolean(look?.table);
       const cell = (text: string, header: boolean) =>
         new TableCell({
-          shading: header ? { type: ShadingType.CLEAR, color: 'auto', fill: 'E6F0EF' } : undefined,
+          shading: header && !styled ? { type: ShadingType.CLEAR, color: 'auto', fill: 'E6F0EF' } : undefined,
           margins: { top: 60, bottom: 60, left: 100, right: 100 },
-          children: [new Paragraph({ children: runs(text, header ? { bold: true } : {}) })],
+          children: [new Paragraph({ children: runs(text, header ? { bold: true } : {}, look) })],
         });
       const pad = (r: string[]) => Array.from({ length: cols }, (_, i) => r[i] ?? '');
       const rows: TableRow[] = [];
       if (b.header) rows.push(new TableRow({ tableHeader: true, children: pad(b.header).map((c) => cell(c, true)) }));
       for (const r of b.rows) rows.push(new TableRow({ children: pad(r).map((c) => cell(c, false)) }));
-      children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows }));
+      children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, ...(look?.table ? { style: look.table } : {}), rows }));
       children.push(new Paragraph({ children: [] }));
     } else if (b.type === 'code') {
-      children.push(...codeParagraphs(b.text));
+      children.push(...codeParagraphs(b.text, look));
     } else if (b.type === 'visual') {
       const r = visualAt.get(b)!;
       const o = b.req;
       const label = o.alt || o.caption || (o.kind === 'image' ? o.path : 'Diagram');
       if (r.ok) {
-        // Page text width is 6.5 in (Letter, 1 in margins); keep the picture on one page.
-        const { w, h } = fitSize(r.image, o, 6.5, 8.5, false);
+        // Keep the picture inside the text area (6.5 x 8.5 in on Letter with 1 in margins, or the template's own).
+        const { w, h } = fitSize(r.image, o, pageW, pageH, false);
         children.push(
           new Paragraph({
             alignment: ALIGN[o.align ?? 'center'],
@@ -397,13 +429,19 @@ async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: stri
           }),
         );
       } else if (o.kind === 'mermaid') {
-        children.push(...codeParagraphs(o.source));
+        children.push(...codeParagraphs(o.source, look));
         children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: `Diagram not drawn (${r.reason}). The Mermaid source is shown instead.`, italics: true, color: '6B7280', size: 18 })] }));
       } else {
         children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: `[Image not embedded: ${o.path} (${r.reason})]`, italics: true, color: '6B7280', size: 18 })] }));
       }
       if (o.caption) {
-        children.push(new Paragraph({ alignment: ALIGN[o.align ?? 'center'], spacing: { after: 160 }, children: [new TextRun({ text: plain(o.caption), italics: true, color: '4B5563', size: 20 })] }));
+        children.push(
+          new Paragraph(
+            look?.caption
+              ? { style: look.caption, alignment: ALIGN[o.align ?? 'center'], children: [new TextRun({ text: plain(o.caption) })] }
+              : { alignment: ALIGN[o.align ?? 'center'], spacing: { after: 160 }, children: [new TextRun({ text: plain(o.caption), italics: true, color: '4B5563', size: 20 })] },
+          ),
+        );
       }
     } else if (b.type === 'pagebreak') {
       children.push(new Paragraph({ children: [new PageBreak()] }));
@@ -419,12 +457,54 @@ async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: stri
       style: { paragraph: { indent: { left: 720 + level * 360, hanging: 360 } } },
     }));
   const doc = new Document({
-    title: spec.title,
+    title: docTitle,
     styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } },
     numbering: { config: numberings.map((_, i) => ({ reference: `num-${i + 1}`, levels: levelsFor() })) },
     sections: [{ children }],
   });
   return Packer.toBuffer(doc);
+}
+
+export interface WordResult {
+  buffer: Buffer;
+  /** The template the file follows (its name), when one was applied. */
+  template?: string;
+  warnings: string[];
+}
+
+/** The title Word shows for a document: the spec's, else the text of a leading single H1 when `titleFromHeading` is on. */
+function titleOfDocx(spec: Extract<DocSpec, { type: 'docx' }>): string {
+  if (spec.title) return spec.title;
+  if (spec.titleFromHeading && spec.markdown !== undefined) {
+    const first = markdownToBlocks(spec.markdown)[0];
+    if (first?.type === 'heading' && first.level === 1) return plain(first.text);
+  }
+  return '';
+}
+
+/**
+ * Build a Word document, following the template that applies (the spec's `template` path, else the project's default
+ * from .portal/templates). If a template cannot be applied the document is still built with the built-in look and the
+ * warnings say so.
+ */
+export async function renderDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: string): Promise<WordResult> {
+  const warnings: string[] = [];
+  const tpl = pickTemplate(spec, baseDir, warnings, 'docx');
+  if (tpl) {
+    const attempt: string[] = [];
+    try {
+      const opened = await openWordTemplate(tpl.buf);
+      const built = await buildDocx(spec, baseDir, attempt, opened.look);
+      const applied = await opened.apply(built, { title: titleOfDocx(spec) });
+      warnings.push(...attempt, ...applied.warnings.map((w) => `Template "${tpl.label}": ${w}`));
+      return { buffer: applied.buffer, template: tpl.label, warnings };
+    } catch (e: any) {
+      if (e instanceof DocError) throw e;
+      warnings.push(`The template "${tpl.label}" could not be applied (${String(e?.message ?? e).split('\n')[0].slice(0, 200)}); the built-in look was used.`);
+    }
+  }
+  const buffer = await buildDocx(spec, baseDir, warnings);
+  return { buffer, warnings };
 }
 
 /* ------------------------------------------------------------------ */
@@ -527,8 +607,8 @@ interface PlannedSlide {
   layout: NonNullable<Slide['layout']>;
 }
 
-/** The template a deck should follow: the spec's `template` path, or the portal's default for this project. */
-function pickTemplate(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string, warnings: string[]): { buf: Buffer; label: string } | null {
+/** The template a file should follow: the spec's `template` path, or the portal's default for this project. */
+function pickTemplate(spec: { template?: string | false }, baseDir: string, warnings: string[], kind: 'pptx' | 'docx' = 'pptx'): { buf: Buffer; label: string } | null {
   const t = (spec as any).template;
   if (t === false || t === 'none') return null;
   if (t !== undefined && t !== null && typeof t !== 'string') fail('"template" must be a file path inside the project folder, or false for the built-in look');
@@ -544,7 +624,7 @@ function pickTemplate(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string,
     }
   }
   if (rel === undefined) {
-    const entry = defaults?.pptx;
+    const entry = defaults?.[kind];
     if (!entry || typeof entry.path !== 'string') return null;
     rel = entry.path;
     label = typeof entry.name === 'string' && entry.name ? entry.name : entry.path;
@@ -554,7 +634,7 @@ function pickTemplate(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string,
     if (typeof named === 'string' && named) label = named;
   }
   try {
-    if (!/\.(pptx|potx)$/i.test(rel!)) throw new ImageError('a template must be a .pptx or .potx file');
+    if (!(kind === 'pptx' ? /\.(pptx|potx)$/i : /\.(docx|dotx)$/i).test(rel!)) throw new ImageError(kind === 'pptx' ? 'a template must be a .pptx or .potx file' : 'a Word template must be a .docx or .dotx file');
     const abs = safeInputPath(baseDir, rel, 'template');
     if (fs.statSync(abs).size > TEMPLATE_MAX_BYTES) throw new ImageError(`the template is larger than ${TEMPLATE_MAX_BYTES / 1024 / 1024} MB`);
     return { buf: fs.readFileSync(abs), label };
@@ -688,10 +768,14 @@ export async function generate(spec: DocSpec, opts: { baseDir?: string } = {}): 
   let summary: string;
   let template: string | undefined;
   switch (spec.type) {
-    case 'docx':
-      buf = await buildDocx(spec, baseDir, warnings);
-      summary = 'Word document';
+    case 'docx': {
+      const built = await renderDocx(spec, baseDir);
+      buf = built.buffer;
+      template = built.template;
+      warnings.push(...built.warnings);
+      summary = `Word document${template ? ` (template: ${template})` : ''}`;
       break;
+    }
     case 'xlsx':
       buf = await buildXlsx(spec);
       summary = `Excel workbook, ${spec.sheets.length} sheet${spec.sheets.length === 1 ? '' : 's'}`;
@@ -710,10 +794,10 @@ export async function generate(spec: DocSpec, opts: { baseDir?: string } = {}): 
   }
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, buf);
-  if (spec.type === 'pptx') {
-    // The portal reads this to tell the person which template a deck followed and what did not go to plan.
+  if (spec.type === 'pptx' || spec.type === 'docx') {
+    // The portal reads this to tell the person which template a file followed and what did not go to plan.
     try {
-      fs.writeFileSync(`${abs}.report.json`, JSON.stringify({ template: template ?? null, slides: spec.slides.length, warnings, generatedAt: new Date().toISOString() }, null, 2));
+      fs.writeFileSync(`${abs}.report.json`, JSON.stringify({ template: template ?? null, ...(spec.type === 'pptx' ? { slides: spec.slides.length } : {}), warnings, generatedAt: new Date().toISOString() }, null, 2));
     } catch {}
   }
   return { type: spec.type, output: abs, bytes: buf.length, summary, ...(template ? { template } : {}), ...(warnings.length ? { warnings } : {}) };

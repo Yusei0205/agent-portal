@@ -138,6 +138,16 @@ Pictures: \`"image"\` takes a \`path\` to a .png, .jpg or .svg file inside the p
 
 Diagrams: \`"mermaid"\` takes Mermaid source (max 20,000 characters, at most 40 per file; Mermaid runs in strict security mode). In Markdown, a fenced \`mermaid\` block becomes a drawn diagram, so one Markdown text serves both the .md file and the Word file. Mermaid is drawn on the server by a headless browser, with no internet. If that browser is missing, or a diagram has a syntax error, the file is still made, the diagram appears as a code block with a note, and the command output has a \`"warnings"\` list. Check it: fix the Mermaid syntax and run again, or tell the user which diagram was not drawn. Do not draw pictures any other way and do not install anything.
 
+### Word templates
+
+When the project (or the portal) has a Word template (.docx or .dotx), \`make-doc\` applies it by itself, just like a PowerPoint template: the document keeps the template's styles (fonts, colours, heading and list looks), page size and margins, header and footer (logo, page numbers) and replaces the template's sample text with your content. Headings, the title, bullet and numbered lists, tables, code, captions and links use the template's own styles when it has them (\`Title\`, \`Heading 1\` to \`Heading 6\`, \`List Bullet\`, \`List Number\`, \`Table Grid\`, \`Caption\`, \`Hyperlink\`) and the built-in look otherwise. Do not set colours or fonts, and do not leave \`template\` in the spec unless you need to choose. Options:
+
+- \`"template": ".portal/templates/<file>.docx"\` follows another template in the project folder (a .docx or .dotx); the task tells you the path when a particular template was chosen;
+- \`"template": false\` (or \`--no-template\` on the command line) uses the built-in look;
+- \`"titleFromHeading": true\` (Markdown only) turns a single leading \`# Heading\` into the document title and moves the other headings up one level, which is what a template's Title and Heading 1 styles expect.
+
+If the template cannot be used (damaged, unusual structure) the document is still made with the built-in look and the output has a \`"warnings"\` entry that starts with the template name. Report it to the user. The output also has a \`"template"\` field with the name of the template that was applied, and a \`<file>.docx.report.json\` file beside the document records the same. A template's own body text (a cover page, a table of contents) is not kept. \`{{title}}\` and \`{{date}}\` typed in the template's header or footer are filled in.
+
 ## Excel (.xlsx)
 
 \`\`\`json

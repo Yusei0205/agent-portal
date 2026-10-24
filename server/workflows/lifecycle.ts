@@ -40,6 +40,11 @@ export function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'pa
     void import('../presentations.ts').then((m) => m.onSessionStopped(id)).catch(() => undefined);
   }
 
+  // A session that was writing a document hands its Markdown over (NEW-6).
+  if (w && terminal.includes(status)) {
+    void import('../generated-docs.ts').then((m) => m.onSessionStopped(id)).catch(() => undefined);
+  }
+
   // Record loop metrics when a session terminates (not just pauses).
   if (w && terminal.includes(status)) {
     const specId = w.loop_spec_id ? String(w.loop_spec_id) : null;

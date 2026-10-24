@@ -73,6 +73,8 @@ export async function indexDocument(docId: string): Promise<void> {
   publishDoc(d);
   const { refreshStaleFlags } = await import('./learn.ts');
   refreshStaleFlags(d.project_id);
+  // Generated documents that used the knowledge base are stale when a document or the decisions log changed (NEW-6).
+  void import('./generated-docs.ts').then((m) => m.refreshDocStale(d.project_id)).catch(() => undefined);
 }
 
 export async function registerDecisionsDoc(projectId: string, userId: string | null): Promise<void> {
@@ -628,6 +630,7 @@ export function registerKnowledgeRoutes(): void {
     await commitProject(project.id, `Remove document ${d.name}`, ['docs/md']).catch(() => undefined);
     const { refreshStaleFlags } = await import('./learn.ts');
     refreshStaleFlags(project.id);
+    void import('./generated-docs.ts').then((m) => m.refreshDocStale(project.id)).catch(() => undefined);
     notifyProject(project.id, 'document.deleted', { id: d.id });
     return { ok: true };
   });

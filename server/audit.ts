@@ -48,7 +48,9 @@ export type AuditAction =
   | 'diagram.create' | 'diagram.refresh' | 'diagram.version' | 'diagram.delete' | 'diagram.export'
   // document templates and presentations (D-13, NEW-7)
   | 'template.create' | 'template.update' | 'template.delete' | 'template.download'
-  | 'presentation.create' | 'presentation.ready' | 'presentation.delete' | 'presentation.download';
+  | 'presentation.create' | 'presentation.ready' | 'presentation.delete' | 'presentation.download'
+  // documentation generator (NEW-6)
+  | 'gendoc.create' | 'gendoc.regenerate' | 'gendoc.version' | 'gendoc.delete' | 'gendoc.download';
 
 /**
  * Write an audit row from a request context.

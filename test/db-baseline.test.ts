@@ -19,7 +19,7 @@ test('a fresh database has the unified execution tables and none of the old ones
     for (const t of ['workflows', 'workflow_events', 'agent_runs', 'agent_run_events', 'inputs', 'loop_run_states']) assert.ok(tables.includes(t), `${t} exists`);
     assert.ok(!tables.includes('runs'), 'no runs table');
     assert.ok(!tables.includes('run_events'), 'no run_events table');
-    for (const t of ['diagrams', 'diagram_versions']) assert.ok(tables.includes(t), `${t} exists (appended migration)`);
+    for (const t of ['diagrams', 'diagram_versions', 'generated_docs', 'generated_doc_versions']) assert.ok(tables.includes(t), `${t} exists (appended migration)`);
     const runCols = all<{ name: string }>('PRAGMA table_info(agent_runs)').map((c) => c.name);
     assert.ok(runCols.includes('workflow_id'), 'an agent run names its session');
     const wfCols = all<{ name: string }>('PRAGMA table_info(workflows)').map((c) => c.name);
