@@ -31,7 +31,7 @@ export interface VerificationStep {
   cmd?: string;
   /** Timeout in seconds. Default: 300. */
   timeout?: number;
-  /** If true, a non-zero exit stops the pipeline and counts as a failure. */
+  /** Default true. A required step whose command exits non-zero fails the pipeline and stops it; an optional one is only reported. */
   required?: boolean;
   /** Repository slug to run the command in (blank = the session's primary repo work dir). */
   workRepo?: string;
@@ -321,6 +321,7 @@ function validateVerification(raw: unknown): VerificationStep[] {
   return raw.map((s: any, i) => {
     if (!s || typeof s !== 'object') throw badRequest(`Step ${i + 1} must be an object`);
     if (!s.step || typeof s.step !== 'string') throw badRequest(`Step ${i + 1} must have a name`);
+    if ('failStop' in s) throw badRequest(`Step "${String(s.step)}": use "required" instead of "failStop"`);
     const kind: VerificationStep['kind'] = s.kind === 'llm' ? 'llm' : 'cmd';
     const step: VerificationStep = {
       step: String(s.step).slice(0, 40),
@@ -613,7 +614,7 @@ export function prometheusMetrics(): string {
   const d = new Date();
   const since = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
   const month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-  const spent = Number(one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM runs WHERE created_at >= ?', since)?.s ?? 0);
+  const spent = Number(one<{ s: number }>('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM agent_runs WHERE created_at >= ?', since)?.s ?? 0);
   lines.push(`portal_budget_used_usd{month="${month}"} ${spent.toFixed(6)}`);
 
   lines.push(

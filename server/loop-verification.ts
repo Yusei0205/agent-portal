@@ -131,7 +131,8 @@ This verdict is ADVISORY ONLY and does not decide whether the session continues.
 
 /**
  * Run all verification steps in order.
- * A required step with `failStop: true` (or `required: true`) that fails stops the pipeline early.
+ * A step with `required: true` (the default) that fails stops the pipeline early and fails it. A step with
+ * `required: false` is reported but never fails the pipeline. (`required` is the only name for this flag.)
  * Returns the full result including per-step details.
  */
 export async function runPipeline(
@@ -183,7 +184,7 @@ export async function runPipeline(
 
     if (!result.ok && required) {
       overallOk = false;
-      // Stop the pipeline on first required failure (failStop semantics).
+      // Stop the pipeline on the first required failure.
       break;
     }
   }

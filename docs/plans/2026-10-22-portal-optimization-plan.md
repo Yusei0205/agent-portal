@@ -182,12 +182,12 @@ ALTER TABLE workflows ADD COLUMN loop_spec_id TEXT REFERENCES loop_specs(id);
 `verification` step schema (one element of the JSON array):
 
 ```json
-{"step": "lint", "cmd": "npm run lint", "fast": true, "failStop": false}
-{"step": "test", "cmd": "npm test",     "fast": false, "failStop": true}
-{"step": "llm_judge", "kind": "llm", "rubric": "...", "model": "haiku", "failStop": false}
+{"step": "lint", "cmd": "npm run lint", "fast": true, "required": false}
+{"step": "test", "cmd": "npm test",     "fast": false, "required": true}
+{"step": "llm_judge", "kind": "llm", "rubric": "...", "model": "haiku", "required": false}
 ```
 
-Migration: existing `workflows.verify_command` rows are migrated to a single-step pipeline `[{"step":"verify","cmd":"<old value>","fast":false,"failStop":true}]` and `loop_run_states` rows are back-filled with `failures=0`, `summaries=[]`.
+Migration: existing `workflows.verify_command` rows are migrated to a single-step pipeline `[{"step":"verify","cmd":"<old value>","fast":false,"required":true}]` and `loop_run_states` rows are back-filled with `failures=0`, `summaries=[]`.
 
 New server module `server/loop-triggers.ts`:
 - Reads `loop_specs` with `trigger_kind='cron'` on startup, registers with `node-cron`.
@@ -236,7 +236,7 @@ CREATE TABLE loop_metrics (
 
 - A loop spec with `trigger_kind='cron'` fires at the scheduled time without any user interaction.
 - After a server restart, `loop_run_states.failures` and `loop_run_states.summaries` are read back by `resumeAfterRestart()` — the stagnation window does not reset.
-- Verification pipeline steps run in order; a step with `failStop=true` and exit code ≠ 0 stops the pipeline and the result is written to `loop_run_states.last_check`.
+- Verification pipeline steps run in order; a step with `required=true` and exit code ≠ 0 stops the pipeline and the result is written to `loop_run_states.last_check`.
 - LLM-judge step uses the Haiku model and costs less than $0.01 per call for a 200-token rubric.
 - A webhook trigger with a wrong secret returns 401 and does not start a session.
 - `GET /api/projects/:pid/loop-specs/:sid/metrics` returns success rate, avg cost, avg iterations for the requested window.
