@@ -304,4 +304,127 @@
  * @property {DiagramExportCapability} export
  */
 
+/** @typedef {'pptx' | 'docx'} TemplateKind */
+/** @typedef {'project' | 'portal'} TemplateScope */
+
+/**
+ * What the server found out about an uploaded template. PowerPoint templates also carry layout details.
+ * @typedef {object} TemplateInfo
+ * @property {TemplateKind} kind
+ * @property {string[]} warnings Plain-language problems, for example a missing layout role
+ * @property {number} [slideWidthIn]
+ * @property {number} [slideHeightIn]
+ * @property {{ major: string, minor: string }} [fonts]
+ * @property {Record<string, string>} [colors]
+ * @property {{ name: string, type: string }[]} [layouts]
+ * @property {Record<string, string | null>} [mapping] Which layout plays each role (title, section, content, titleOnly, side)
+ */
+
+/**
+ * A template (GET /api/projects/:pid/templates and GET /api/templates). The API never shows a file path.
+ * @typedef {object} DocTemplate
+ * @property {string} id
+ * @property {TemplateKind} kind
+ * @property {string} name
+ * @property {TemplateScope} scope
+ * @property {string | null} project_id
+ * @property {string} filename
+ * @property {number} size Bytes
+ * @property {boolean} is_default The default of its scope and kind
+ * @property {boolean} effective The one that applies to the project (project default, else portal default)
+ * @property {TemplateInfo} info
+ * @property {string | null} uploaded_by_name
+ * @property {string} created_at
+ * @property {string} updated_at
+ */
+
+/**
+ * The template that applies for a kind, or null (the built-in look).
+ * @typedef {{ id: string, name: string, scope: TemplateScope, kind: TemplateKind } | null} EffectiveTemplate
+ */
+
+/**
+ * The template list; also the answer of every template change.
+ * @typedef {object} TemplateListResponse
+ * @property {DocTemplate[]} templates A project's own, then the portal ones
+ * @property {{ pptx: EffectiveTemplate, docx: EffectiveTemplate }} effective
+ * @property {{ bytes: number, perProject: number, portal: number, extensions: string[] }} limits
+ */
+
+/** @typedef {'topic' | 'document' | 'session' | 'diagram'} PresentationSourceKind */
+
+/**
+ * A presentation (GET /api/projects/:pid/presentations). Live updates arrive as the `presentations.updated` project event.
+ * @typedef {object} PresentationSummary
+ * @property {string} id
+ * @property {string} project_id
+ * @property {string} title
+ * @property {{ kind: PresentationSourceKind, ref: string, label: string }} source
+ * @property {string} audience
+ * @property {number} slide_target
+ * @property {{ requested_id: string | null, requested_name: string | null, used: string | null }} template
+ * @property {'generating' | 'ready' | 'error'} status
+ * @property {string | null} error
+ * @property {boolean} generating
+ * @property {boolean} queued
+ * @property {string | null} workflow_id The session making it
+ * @property {string | null} run_id
+ * @property {number | null} slide_count
+ * @property {number | null} bytes
+ * @property {string[]} warnings From make-doc, for example a template that could not be applied
+ * @property {{ download: string, preview: string } | null} links Only when ready
+ * @property {string | null} created_by_name
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {PresentationSlide[]} [outline] Only in the detail response
+ */
+
+/**
+ * One slide of the deck outline.
+ * @typedef {object} PresentationSlide
+ * @property {number} index 1-based
+ * @property {string} title
+ * @property {string} layout
+ * @property {string} notes
+ * @property {number} bullets
+ * @property {boolean} hasPicture
+ * @property {boolean} hasTable
+ */
+
+/**
+ * Whether slide previews can be PNG on this server, and why not.
+ * @typedef {object} PreviewCapability
+ * @property {boolean} png
+ * @property {string | null} pngReason
+ */
+
+/**
+ * GET /api/projects/:pid/presentations.
+ * @typedef {object} PresentationListResponse
+ * @property {PresentationSummary[]} presentations Newest first
+ * @property {PresentationSourceKind[]} sources
+ * @property {{ id: string, name: string, scope: TemplateScope } | null} template The default that applies when none is chosen
+ * @property {PreviewCapability} preview
+ * @property {{ topicChars: number, audienceChars: number, titleChars: number, slidesMin: number, slidesMax: number, slidesDefault: number, perProject: number }} limits
+ */
+
+/**
+ * GET /api/projects/:pid/presentations/:id.
+ * @typedef {object} PresentationDetailResponse
+ * @property {PresentationSummary} presentation
+ * @property {WorkflowView | null} workflow
+ * @property {PreviewCapability} preview
+ */
+
+/**
+ * GET /api/projects/:pid/presentations/:id/preview.
+ * @typedef {object} PresentationPreview
+ * @property {'png' | 'svg'} format
+ * @property {boolean} approximate Always true: the portal draws the slides itself
+ * @property {string} note
+ * @property {boolean} png_available
+ * @property {string | null} png_reason Why there is no PNG
+ * @property {{ index: number, title: string, layout: string, notes: string, url: string, svg_url: string, png_url?: string }[]} slides
+ */
+
 export {};

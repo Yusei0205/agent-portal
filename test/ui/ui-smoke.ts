@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { chromium, type Page } from 'playwright';
 import { FSD_MD, makeDocx, makeRepo } from '../fixtures.ts';
+import { makeTemplate } from '../pptx-fixtures.ts';
 
 /** The Settings page source: Settings.jsx plus the modules it was split into (pages/settings/). */
 function readSettingsSource(): string {
@@ -398,6 +399,108 @@ async function main() {
     await page.getByRole('button', { name: 'Delete diagram', exact: true }).click();
     await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
 
+    console.log('presentations and templates');
+    const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    await page.getByRole('link', { name: 'Presentations', exact: true }).click();
+    await page.getByRole('heading', { name: 'Presentations', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'No presentations yet', exact: true }).waitFor();
+    check(await page.getByText('An agent plans the story, writes speaker notes on every slide').count(), 'presentations page explains itself when empty');
+    await shot(page, 'presentations-empty');
+    // Templates live in the setup hub; with none uploaded the page says which look applies.
+    await page.goto(`${base}/#/p/${pid}/setup/templates`);
+    await page.getByRole('heading', { name: 'No templates yet', exact: true }).waitFor();
+    check(await page.getByText('Which template wins:').count(), 'templates page says which template wins');
+    check((await page.getByText('built-in look (no template uploaded yet)').count()) === 2, 'with no template, both kinds use the built-in look');
+    await shot(page, 'templates-empty');
+    await page.getByRole('button', { name: 'Upload template', exact: true }).first().click();
+    await page.getByLabel('Template file').setInputFiles({ name: 'Brand.pptx', mimeType: PPTX, buffer: await makeTemplate({ macro: true }) });
+    await page.getByRole('button', { name: 'Upload', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: 'macros or ActiveX controls' }).waitFor();
+    check(true, 'a template with macros is refused with the server message');
+    await shot(page, 'template-refused');
+    await page.getByLabel('Template file').setInputFiles({ name: 'Brand.pptx', mimeType: PPTX, buffer: await makeTemplate() });
+    await page.getByLabel('Name (optional)').fill('Brand deck');
+    await page.getByRole('button', { name: 'Upload', exact: true }).click();
+    const tplRow = page.locator('tr', { hasText: 'Brand deck' });
+    await tplRow.waitFor();
+    check(await tplRow.locator('.badge', { hasText: 'Default' }).count(), 'the first template of a kind becomes the default');
+    check(await tplRow.locator('.badge', { hasText: 'In use' }).count(), 'the default template is marked in use');
+    check(await page.locator('.tpl-winner', { hasText: 'Brand deck' }).count(), 'the winner line names the template');
+    await tplRow.getByRole('button', { name: 'Layout details' }).click();
+    check(await page.getByText('Title and Content').count(), 'layout details list the template layouts');
+    await shot(page, 'templates-list');
+    await tplRow.getByRole('button', { name: 'Rename Brand deck' }).click();
+    await page.getByLabel('Name', { exact: true }).fill('Brand template');
+    await page.getByRole('button', { name: 'Rename', exact: true }).last().click();
+    await page.locator('tr', { hasText: 'Brand template' }).waitFor();
+    await page.locator('tr', { hasText: 'Brand template' }).getByRole('button', { name: 'Unset Brand template as default', exact: true }).click();
+    await page.locator('tr', { hasText: 'Brand template' }).getByRole('button', { name: 'Set Brand template as default', exact: true }).waitFor();
+    check((await page.locator('tr', { hasText: 'Brand template' }).locator('.badge', { hasText: 'In use' }).count()) === 0, 'an unset default no longer applies');
+    await page.locator('tr', { hasText: 'Brand template' }).getByRole('button', { name: 'Set Brand template as default', exact: true }).click();
+    await page.locator('tr', { hasText: 'Brand template' }).locator('.badge', { hasText: 'In use' }).waitFor();
+
+    // The portal default is managed in Settings; the project's own default still wins over it.
+    await page.goto(`${base}/#/settings`);
+    await page.getByRole('heading', { name: 'Templates', exact: true }).waitFor();
+    await page.locator('section[aria-label="Templates"]').getByRole('button', { name: 'Upload template', exact: true }).first().click();
+    await page.getByLabel('Template file').setInputFiles({ name: 'Portal.pptx', mimeType: PPTX, buffer: await makeTemplate() });
+    await page.getByLabel('Name (optional)').fill('Portal look');
+    await page.getByRole('button', { name: 'Upload', exact: true }).click();
+    await page.locator('tr', { hasText: 'Portal look' }).waitFor();
+    await page.goto(`${base}/#/p/${pid}/setup/templates`);
+    const portalRow = page.locator('tr', { hasText: 'Portal look' });
+    await portalRow.waitFor();
+    check(await portalRow.getByText('Managed in Settings').count(), 'a portal template is read-only inside a project');
+    check((await portalRow.locator('.badge', { hasText: 'In use' }).count()) === 0, 'the project default beats the portal default');
+    check(await page.locator('.tpl-winners', { hasText: 'this project' }).count(), 'the winner line says it is the project default');
+
+    // A deck from a topic, made by the demo agent, following the project template.
+    await page.getByRole('link', { name: 'Presentations', exact: true }).click();
+    await page.getByRole('button', { name: 'New presentation', exact: true }).first().click();
+    check(await page.getByRole('button', { name: 'Make the deck', exact: true }).isDisabled(), 'Make the deck waits for a topic');
+    await page.getByLabel('Topic', { exact: true }).fill('How refunds are approved and paid out. Support raises a request. A second person approves large amounts. Money returns to the card within five days.');
+    await page.getByLabel('Title (optional)').fill('Refund overview');
+    await page.getByLabel('Audience (optional)').fill('new support staff');
+    await page.getByLabel(/Number of slides/).fill('1');
+    check(await page.getByRole('button', { name: 'Make the deck', exact: true }).isDisabled(), 'a slide count outside 3 to 40 is refused');
+    await page.getByLabel(/Number of slides/).fill('6');
+    check(await page.getByLabel('Template').locator('option', { hasText: 'Default: Brand template' }).count(), 'the template choice defaults to the effective template');
+    await shot(page, 'presentation-new');
+    await page.getByRole('button', { name: 'Make the deck', exact: true }).click();
+    await page.getByRole('heading', { name: 'Refund overview', exact: true }).waitFor();
+    await page.locator('.pres-page .badge', { hasText: 'Ready' }).waitFor({ timeout: 60000 });
+    check((await page.getByRole('link', { name: /^Open the session/ }).count()) === 0, 'a finished deck no longer points at a running session');
+    await page.locator('.pres-thumb img').first().waitFor();
+    check((await page.locator('.pres-thumb').count()) >= 3, 'every slide has a thumbnail');
+    await page.waitForFunction("[...document.querySelectorAll('.pres-thumb img')].every((i) => i.complete && i.naturalWidth > 0)", null, { timeout: 30000 });
+    check(true, 'the slide previews are drawn');
+    check(await page.getByText('Approximate preview.').count(), 'the preview says it is approximate');
+    check((await page.locator('table[aria-label="Slide outline"] tbody tr').count()) >= 3, 'the outline lists the slides');
+    check(await page.locator('table[aria-label="Slide outline"]').getByText('Title Slide').count(), 'the outline shows the template layout of each slide');
+    check(await page.getByText('Template: Brand').count(), 'the deck shows the template it followed');
+    await shot(page, 'presentation-view');
+    const pptx = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download .pptx', exact: true }).click();
+    check((await (await pptx).suggestedFilename()).endsWith('.pptx'), 'Download .pptx saves a .pptx file');
+    await page.getByRole('link', { name: '← Presentations' }).click();
+    const deckRow = page.locator('table[aria-label="Presentations"] tr', { hasText: 'Refund overview' });
+    await deckRow.waitFor();
+    check(await deckRow.locator('.badge', { hasText: 'Ready' }).count(), 'the list shows the deck as ready');
+    check(await deckRow.getByText('Brand').count(), 'the list shows the template used');
+    await deckRow.getByRole('link', { name: 'Refund overview' }).click();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    check(await page.getByRole('dialog', { name: 'Delete this presentation?' }).count(), 'deleting a presentation asks for confirmation in the page');
+    await page.getByRole('button', { name: 'Delete presentation', exact: true }).click();
+    await page.getByRole('heading', { name: 'No presentations yet', exact: true }).waitFor();
+    // Delete a template with the in-page confirmation too.
+    await page.goto(`${base}/#/p/${pid}/setup/templates`);
+    await page.locator('tr', { hasText: 'Brand template' }).getByRole('button', { name: 'Delete Brand template' }).click();
+    check(await page.getByRole('dialog', { name: 'Delete this template?' }).count(), 'deleting a template asks for confirmation in the page');
+    await page.getByRole('button', { name: 'Delete template', exact: true }).click();
+    await page.locator('tr', { hasText: 'Brand template' }).waitFor({ state: 'detached' });
+    await page.locator('tr', { hasText: 'Portal look' }).locator('.badge', { hasText: 'In use' }).waitFor();
+    check(true, 'without a project template the portal default applies');
+
     console.log('connections');
     await page.goto(`${base}/#/connections`);
     await page.getByRole('heading', { name: 'Repository connections', exact: true }).waitFor();
@@ -457,7 +560,7 @@ async function main() {
     check((await page.locator('.readiness-table tr').count()) >= 2, 'readiness panel shows items');
     await shot(page, 'setup-hub');
     // One setup hub: its tabs are the only place for these pages, and the menu lists Setup once.
-    for (const tab of ['Connection & provider', 'Repositories', 'Agents & skills', 'Team & members', 'Jira', 'Configuration', 'Budget']) {
+    for (const tab of ['Connection & provider', 'Repositories', 'Agents & skills', 'Team & members', 'Jira', 'Configuration', 'Templates', 'Budget']) {
       check((await page.getByRole('link', { name: tab, exact: true }).count()) === 1, `Setup has a ${tab} tab`);
     }
     for (const gone of ['Repositories', 'Agents and skills', 'Configuration', 'Project and team', 'Project insights', 'All insights']) {

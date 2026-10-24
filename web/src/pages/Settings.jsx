@@ -6,6 +6,7 @@ import { AwsSection, ProviderSection } from './settings/Providers.jsx';
 import { AdvancedSection, AgentsSection, BudgetSection, DelegationSection, ExtraModelsSection, ModelsSection } from './settings/Limits.jsx';
 import { SecretRow, SecretsSection, ToolsSection } from './settings/Secrets.jsx';
 import { Users } from './settings/Users.jsx';
+import { Templates } from './Templates.jsx';
 
 export { AWS_REGIONS, RegionSelect } from './settings/regions.jsx';
 
@@ -40,6 +41,9 @@ export function Settings() {
         <ExtraModelsSection s={s.data} reload={reload} />
         <SecretsSection s={s.data} reload={reload} />
         <ToolsSection />
+        <section className="panel" aria-label="Templates">
+          <Templates portal />
+        </section>
         <Users />
         <AdvancedSection s={s.data} reload={reload} />
       </div>

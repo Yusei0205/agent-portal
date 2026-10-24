@@ -1,0 +1,64 @@
+/* ---------- Presentations and templates ---------- */
+.pres-warnings,
+.tpl-winners,
+.tpl-warnings {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.tpl-winners {
+  list-style: none;
+  padding-left: 0;
+}
+.tpl-warnings {
+  color: var(--warn);
+}
+.tpl-winner {
+  font-weight: 600;
+}
+.tpl-details {
+  margin-top: 8px;
+}
+.pres-notes {
+  max-width: 36ch;
+}
+.pres-stage {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.pres-stage img {
+  width: 100%;
+  max-width: 760px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+.pres-thumbs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+.pres-thumb {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  cursor: pointer;
+  text-align: center;
+}
+.pres-thumb img {
+  width: 100%;
+  height: auto;
+  background: #fff;
+  display: block;
+}
+.pres-thumb.is-current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}

@@ -23,6 +23,7 @@ const ProjectSettings = lazy(() => import('./ProjectSettings.jsx').then((m) => (
 const Repos = lazy(() => import('./Repos.jsx').then((m) => ({ default: m.Repos })));
 const Builder = lazy(() => import('./Builder.jsx').then((m) => ({ default: m.Builder })));
 const Configuration = lazy(() => import('./Configuration.jsx').then((m) => ({ default: m.Configuration })));
+const Templates = lazy(() => import('./Templates.jsx').then((m) => ({ default: m.Templates })));
 const JiraConnection = lazy(() => import('./Tickets.jsx').then((m) => ({ default: m.JiraConnection })));
 
 // ─── Readiness panel ────────────────────────────────────────────────────────
@@ -137,6 +138,7 @@ const SETUP_TABS = [
   { value: 'team', label: 'Team & members' },
   { value: 'jira', label: 'Jira' },
   { value: 'config', label: 'Configuration' },
+  { value: 'templates', label: 'Templates' },
   { value: 'budget', label: 'Budget' },
 ];
 
@@ -147,6 +149,7 @@ const OVERVIEW_HINT = {
   team: 'project details, defaults for new work, members and access',
   jira: 'this project’s Jira site and ticket mapping',
   config: 'the project’s .claude and .kiro files, edited directly',
+  templates: 'Word and PowerPoint templates that generated files follow',
   budget: 'the monthly spend cap',
 };
 
@@ -169,7 +172,7 @@ function SetupOverview() {
       ))}
     </dl>
     <p className="muted small">
-      Architecture diagrams of your repositories are on the <a href={href(project.id, 'diagrams')}>Diagrams</a> page.
+      Architecture diagrams of your repositories are on the <a href={href(project.id, 'diagrams')}>Diagrams</a> page, and decks built from them on <a href={href(project.id, 'presentations')}>Presentations</a>.
     </p>
     </>
   );
@@ -189,6 +192,8 @@ function SetupTabContent({ tab, projectId, route }) {
       return <JiraConnection />;
     case 'config':
       return <Configuration route={embeddedRoute(route)} />;
+    case 'templates':
+      return <Templates />;
     case 'budget':
       return <BudgetTab projectId={projectId} />;
     default:
