@@ -36,7 +36,7 @@ export function dataPath(...parts: string[]): string {
 }
 
 export function ensureDataDirs(): void {
-  for (const d of ['', 'projects', 'library/agents', 'library/skills', 'claude-home', 'tmp']) {
+  for (const d of ['', 'projects', 'library/agents', 'library/skills', 'claude-home', 'tmp', 'home/.local/bin', 'tools/bin']) {
     fs.mkdirSync(dataPath(d), { recursive: true });
   }
 }

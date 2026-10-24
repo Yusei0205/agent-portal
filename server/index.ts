@@ -10,7 +10,7 @@ import { registerProjectRoutes, getProject, projectDir } from './projects.ts';
 import { registerRepoRoutes } from './repos.ts';
 import { registerGitConnectionRoutes } from './git-connections.ts';
 import { registerWorkspaceRoutes } from './workspaces.ts';
-import { registerIntegrationRoutes } from './integrations.ts';
+import { registerIntegrationRoutes, ensureBuiltInBrowserIntegration } from './integrations.ts';
 import { registerConfigRoutes } from './config-files.ts';
 import { registerApiTokenRoutes } from './api-tokens.ts';
 import { registerVaultRoutes } from './vault.ts';
@@ -26,10 +26,13 @@ import { registerJiraRoutes } from './jira.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
 import { recoverWorkflows, registerWorkflowRoutes, resumeAfterRestart, anyDriving } from './workflows.ts';
+import { registerSessionCommandRoutes } from './session-commands.ts';
 import { recoverRuns } from './agent/runner.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerAuditRoutes } from './audit.ts';
 import { registerControlPlaneRoutes, startDrain, checkApprovalSla, cleanupWorktrees } from './control-plane.ts';
+import { registerHealthRoutes } from './health.ts';
+import { registerToolRoutes } from './tool-packs.ts';
 import { registerLoopSpecRoutes } from './loop-specs.ts';
 import { registerTriggerRoutes, startTriggerEngine, stopTriggerEngine } from './loop-triggers.ts';
 import { registerLoopEngineRoutes } from './loop-engine.ts';
@@ -65,9 +68,12 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerProjectAwsRoutes();
     registerAwsAccountRoutes();
     registerWorkflowRoutes();
+    registerSessionCommandRoutes();
     registerInsightsRoutes();
     registerAuditRoutes();
     registerControlPlaneRoutes();
+    registerHealthRoutes();
+    registerToolRoutes();
     registerLoopSpecRoutes();
     registerTriggerRoutes();
     registerLoopEngineRoutes();
@@ -77,6 +83,8 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   recoverRuns();
   const restarted = recoverWorkflows();
   cleanupSessions();
+  // Create the shared "Web browser" integration when the browser pack is available (idempotent).
+  ensureBuiltInBrowserIntegration().catch((e) => console.error('[integrations] built-in browser integration error:', e));
   // Projects that kept their own AWS credentials move onto AWS accounts (AWS accounts page) once; they keep working the same.
   const { adoptProjectCredentials } = await import('./aws-connections.ts');
   const moved = await adoptProjectCredentials().catch((e) => (console.error('[aws] could not move project credentials:', e), 0));

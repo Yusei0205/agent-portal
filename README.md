@@ -51,21 +51,145 @@ Press **Test connection** after switching.
 
 ### Docker
 
+The recommended way to run the portal in Docker is with the included `compose.yml`.
+
+#### First run
+
 ```bash
-docker build -t agent-portal .
-docker run -d -p 8787:8787 -v portal-data:/data \
-  -e PORTAL_SECRET_KEY=$(openssl rand -hex 32) agent-portal
+cp .env.example .env          # set PORTAL_SECRET_KEY (openssl rand -hex 32)
+docker compose up -d
 ```
 
-Keep the same `PORTAL_SECRET_KEY` across restarts.
+Open http://127.0.0.1:8787, create the admin account, then create a project.
+
+> **Port binding:** `compose.yml` binds to `127.0.0.1:8787` only. The port is not
+> reachable from other machines. Put Caddy or nginx in front before exposing it.
+
+#### Creating the admin account on first start
+
+If you set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` before `docker compose up`, the
+portal creates the admin account automatically on start (no setup page needed).
+
+> **Security note:** `ADMIN_PASSWORD` remains in the container environment and is visible
+> via `docker inspect`. Remove it from `.env` (or unset it) after the first start and
+> restart the container: `docker compose up -d`. The admin account is not re-created on
+> subsequent starts so removing the variable is safe.
+
+#### Tool packs (off by default)
+
+Three optional packs extend what agents can do. They are **off by default** so a basic
+`docker compose up` works without them.
+
+| Pack | What it enables | How to turn it on |
+|------|-----------------|-------------------|
+| **uv / uvx** | AWS integration in agent runs, custom uvx-based MCP servers | Admin: click **Install** under **Settings › Tools** |
+| **Kiro CLI** | Kiro engine for agent runs | Admin: click **Install** under **Settings › Tools**, then log in (see below) |
+| **Browser MCP** | Web browser integration in agent runs | Start with `docker compose --profile browser up -d` |
+
+**Installing uv or kiro-cli:** open **Settings › Tools** (admin only). Each pack row shows
+its status, what it enables, and an Install button with a live log stream.
+
+**Browser isolation:** each agent run gets its own isolated browser context. Users and
+sessions never share cookies, history, or storage. Up to three browser sessions run at the
+same time (configurable in `compose.yml`). The browser container is never accessible from
+outside the compose network.
+
+**Slash commands in a session:**
+- `/tools` — show the status of all three tool packs.
+- `/browser on` / `/browser off` — enable or disable the web browser for the current session.
+- `/aws on` / `/aws off` — enable or disable the AWS integration for the current session.
+
+#### Kiro login
+
+After installing kiro-cli under Settings › Tools, log in from the host:
+
+```bash
+docker compose exec portal kiro-cli login --use-device-flow
+```
+
+Open the URL shown, approve, and the session is saved on the data volume.
+
+#### AWS credentials (named profiles and SSO)
+
+To use AWS named profiles or host SSO credentials, start the stack with both compose files:
+
+```bash
+docker compose -f compose.yml -f compose.aws.yml up -d
+```
+
+`compose.aws.yml` mounts your host's `~/.aws` directory read-only into the container so the
+portal can use profiles and ambient credentials. See the comments in `compose.aws.yml` for the
+writable-mount variant needed when the portal initiates `aws sso login` itself.
+
+See [docs/container-provider-checklist.md](docs/container-provider-checklist.md) for
+step-by-step verification of every provider (Anthropic, Bedrock, CodeCommit, GitHub, Kiro).
+
+#### Pre-flight check
+
+```bash
+docker compose run --rm portal node dist/preflight.mjs
+```
+
+Prints one line per dependency (`ok`, `missing`, or `optional-off`). Required items cause a
+non-zero exit.
+
+#### Backup
+
+**Linux / macOS:**
+```bash
+docker run --rm \
+  -v portal-data:/data:ro \
+  -v "$(pwd)":/backup \
+  busybox \
+  tar -czf /backup/portal-backup-$(date +%F).tar.gz -C /data .
+```
+
+**Windows (PowerShell):**
+```powershell
+docker run --rm `
+  -v portal-data:/data:ro `
+  -v "${PWD}:/backup" `
+  busybox `
+  tar -czf /backup/portal-backup.tar.gz -C /data .
+```
+
+#### Upgrade
+
+```bash
+docker compose build --pull          # rebuild with latest base image
+docker compose up -d                 # restart; data volume is untouched
+```
+
+The portal runs DB migrations on start, so the volume from the previous version is always
+compatible.
+
+#### Troubleshooting
+
+**Port already in use:**
+```
+Error response from daemon: Ports are not available: exposing port TCP 127.0.0.1:8787
+```
+Another process is using 8787. Change the port in `.env` (`PORT=8788`) and in
+`compose.yml` (`"127.0.0.1:8788:8787"`), then `docker compose up -d`.
+
+**Memory limit:**
+The portal container is capped at 3 GB in `compose.yml`. If agent runs are killed by
+the OOM killer, raise the limit (`deploy.resources.limits.memory: 4g`).
+
+**CRLF in `.env` on Windows:**
+If you edit `.env` with Windows Notepad or some editors, it may save `\r\n` line endings.
+Docker and Node handle this, but secret values with a trailing `\r` will fail validation.
+Save `.env` with LF line endings (most editors have a setting for this), or run:
+```
+(Get-Content .env) | Set-Content -NoNewline .env
+```
 
 ### On a server
 
 Run it behind HTTPS (Caddy is the least work: `reverse_proxy 127.0.0.1:8787`), and set
-`TRUST_PROXY=1`. Do not expose port 8787 directly. On EC2, give the instance a role with
-Bedrock invoke and CodeCommit access and choose “Server’s own AWS identity” in Settings, so no
-AWS keys are stored at all.
-
+`TRUST_PROXY=1` in `.env`. Do not expose port 8787 directly. On EC2, give the instance a
+role with Bedrock invoke and CodeCommit access and choose "Server's own AWS identity" in
+Settings, so no AWS keys are stored at all.
 ## How to test it (about 15 minutes, Demo mode)
 
 1. **Project**: create “Refund service”. Under *Project and team*, add a colleague
@@ -85,6 +209,9 @@ AWS keys are stored at all.
    *Ask before changes*. Answer the agent’s questions, approve the file write, click the
    subagents in the tree, open *Files and changes*, and *Push changes* to a new branch.
    Start the same task again: it uses the recorded decision and doesn’t ask.
+   - **Tools**: the “Tools for this session” row lets you enable the web browser, AWS
+     integration, or Kiro engine per run. Packs not yet installed show a hint to install
+     them under *Settings › Tools*.
    - **Jira ticket selector**: if the project has Jira connected and mapped (under *Project and
      team › Jira*), the *Free task* composer shows an optional *Jira ticket* field. Search or
      type a key (e.g. `PAY-123`), select a ticket, and the agent receives its full details as
@@ -102,8 +229,9 @@ AWS keys are stored at all.
 ## Automated tests
 
 ```bash
-npm test          # unit, end-to-end API, and real-SDK wiring tests (Demo mode, fake SDK)
-npm run test:ui   # browser walkthrough of every page (needs: npx playwright install chromium)
+npm test               # unit, end-to-end API, and real-SDK wiring tests (Demo mode, fake SDK)
+npm run test:ui        # browser walkthrough of every page (needs: npx playwright install chromium)
+npm run test:container # end-to-end container smoke test (needs Docker)
 ```
 
 ## Where things live

@@ -121,22 +121,27 @@ export function Empty({ icon = 'file', title, children, action }) {
   );
 }
 
-export function Segmented({ value, onChange, options, label, size }) {
+export function Segmented({ value, onChange, options, label, size, disabled: groupDisabled }) {
   return (
     <div className={cx('segmented', size && `segmented-${size}`)} role="tablist" aria-label={label}>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="tab"
-          aria-selected={value === o.value}
-          className={cx(value === o.value && 'is-active')}
-          onClick={() => onChange(o.value)}
-        >
-          {o.label}
-          {o.count ? <span className="seg-count">{o.count}</span> : null}
-        </button>
-      ))}
+      {options.map((o) => {
+        const isDisabled = groupDisabled || o.disabled;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="tab"
+            aria-selected={value === o.value}
+            className={cx(value === o.value && 'is-active', isDisabled && 'is-disabled')}
+            disabled={isDisabled}
+            onClick={() => !isDisabled && onChange(o.value)}
+            aria-disabled={isDisabled || undefined}
+          >
+            {o.label}
+            {o.count ? <span className="seg-count">{o.count}</span> : null}
+          </button>
+        );
+      })}
     </div>
   );
 }

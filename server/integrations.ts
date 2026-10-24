@@ -18,6 +18,7 @@ import { del, get, post, put, type Ctx } from './http.ts';
 import { deleteSecret, getSecret, secretInfo, setSecret } from './secrets.ts';
 import { HttpError, badRequest, newId, notFound, now, parseJson, slugify, str } from './util.ts';
 import { connectionEnv, getConnection as getAwsConnection } from './aws-connections.ts';
+import { getToolPacks, type ToolPack } from './tool-packs.ts';
 
 export type IntegrationKind = 'http' | 'stdio' | 'atlassian' | 'aws' | 'browser';
 const KINDS: IntegrationKind[] = ['http', 'stdio', 'atlassian', 'aws', 'browser'];
@@ -160,7 +161,76 @@ async function secretMap(id: string): Promise<Record<string, string>> {
   return parseJson<Record<string, string>>(await getSecret(secret(id)), {});
 }
 
-/** The MCP server for one integration, with its secrets filled in. */
+/** The well-known id for the shared "Web browser" integration. Stable across restarts. */
+export const BUILTIN_BROWSER_ID = 'in_browser_builtin__v1';
+export const BUILTIN_BROWSER_NAME = 'Web browser';
+
+/**
+ * Create the built-in shared "Web browser" integration exactly once, the first time the browser
+ * pack is available. Idempotent: safe to call on every startup or on-demand check.
+ * Now also called on demand when the browser pack is confirmed available so a browser
+ * container started after portal startup is picked up without a restart.
+ */
+export async function ensureBuiltInBrowserIntegration(): Promise<void> {
+  // Fast path: already exists.
+  if (one<Row>('SELECT id FROM integrations WHERE id = ?', BUILTIN_BROWSER_ID)) return;
+  // Only create it when the browser pack is available.
+  const packs = await getToolPacks();
+  const browser = packs.find((p) => p.id === 'browser');
+  if (!browser || browser.status !== 'available') return;
+  // Double-check under a de-facto guard: insert ... WHERE NOT EXISTS would be ideal but SQLite's
+  // INSERT OR IGNORE on a PRIMARY KEY conflict is the standard pattern here.
+  try {
+    exec('INSERT OR IGNORE INTO integrations (id, name, kind, scope, owner_id, config, allow_writes, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      BUILTIN_BROWSER_ID,
+      BUILTIN_BROWSER_NAME,
+      'browser',
+      'team',
+      null,
+      JSON.stringify({}),
+      0,
+      null,
+      null,
+      now(),
+      now(),
+    );
+  } catch {
+    /* insert may race with another process; ignore */
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Pack availability checks                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Return the first missing pack required by an integration kind, or null if all are available.
+ * Used by resolveIntegrations and session start checks.
+ */
+async function requiredPackFor(kind: IntegrationKind, cfg: IntegrationConfig): Promise<ToolPack | null> {
+  const packs = await getToolPacks();
+  const packMap = Object.fromEntries(packs.map((p) => [p.id, p]));
+  if (kind === 'browser') {
+    const b = packMap['browser'];
+    // Block only when the pack is confirmed missing (URL set but unreachable).
+    // 'not configured' means no URL was set — the stdio npx fallback is still usable.
+    if (b && b.status === 'missing') return b;
+  }
+  if (kind === 'aws') {
+    const u = packMap['uv'];
+    if (u && u.status === 'missing') return u;
+  }
+  if (kind === 'stdio') {
+    // A custom stdio integration that uses 'uvx' as its command needs uv.
+    if (cfg.command === 'uvx') {
+      const u = packMap['uv'];
+      if (u && u.status === 'missing') return u;
+    }
+  }
+  return null;
+}
+
+
 export async function mcpServerFor(i: Row): Promise<McpServer> {
   const cfg = parseJson<IntegrationConfig>(i.config, {});
   const s = await secretMap(i.id);
@@ -177,6 +247,11 @@ export async function mcpServerFor(i: Row): Promise<McpServer> {
       return { type: 'stdio', command: 'uvx', args: [PRESET_PACKAGES.aws], env: { ...aws, READ_OPERATIONS_ONLY: 'true', AWS_API_MCP_TELEMETRY: 'false' } };
     }
     case 'browser':
+      // If PORTAL_BROWSER_MCP_URL is set (the compose browser profile), use HTTP MCP transport.
+      // Otherwise fall back to the local npx stdio transport (dev / single-machine use).
+      if (process.env.PORTAL_BROWSER_MCP_URL) {
+        return { type: 'http', url: process.env.PORTAL_BROWSER_MCP_URL, headers: {} };
+      }
       return { type: 'stdio', command: 'npx', args: ['-y', PRESET_PACKAGES.browser, '--headless', '--isolated'], env: {} };
   }
   throw badRequest(`Unknown integration kind ${i.kind}`);
@@ -204,8 +279,17 @@ export async function resolveIntegrations(ids: string[], userId: string): Promis
   const out: RunIntegrations = { servers: {}, readOnly: new Set(), summary: [] };
   const taken = new Set<string>();
   for (const id of [...new Set(ids)].slice(0, 10)) {
+    // If the browser built-in is requested, ensure it exists (creates it on demand if the
+    // browser pack just became available after startup).
+    if (id === BUILTIN_BROWSER_ID) {
+      await ensureBuiltInBrowserIntegration();
+    }
     const i = getIntegration(id);
     if (!i || !canUseIntegration(i, userId)) throw badRequest('An integration of this run no longer exists or is not shared with you');
+    const cfg = parseJson<IntegrationConfig>(i.config, {});
+    // Pack availability check: refuse if a required pack is missing.
+    const missingPack = await requiredPackFor(i.kind as IntegrationKind, cfg);
+    if (missingPack) throw badRequest(missingPack.hint);
     const name = serverName(i, taken);
     out.servers[name] = await mcpServerFor(i);
     const ro = !i.allow_writes && i.kind !== 'browser';

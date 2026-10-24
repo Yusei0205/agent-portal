@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { useApp } from '../../lib/context.js';
 import { useProject } from '../../lib/context.js';
 import { useLoad } from '../../lib/useAsync.js';
 import { go, href, runHref } from '../../lib/router.js';
@@ -497,6 +498,122 @@ function LoopSpecPicker({ projectId, value, onChange }) {
   );
 }
 
+/**
+ * "Tools for this session" row shown in the New session dialog.
+ * - Web browser checkbox: attaches the built-in browser integration
+ * - AWS (read-only) checkbox: shown when an AWS integration exists (needs uv)
+ */
+function SessionToolsRow({ integrations, setIntegrations, packs, awsIntegrations, builtinBrowserId }) {
+  const { user } = useApp();
+  const isAdmin = Boolean(user?.is_admin);
+  const [uvInstallError, setUvInstallError] = useState(null);
+
+  const uvPack      = (packs || []).find((p) => p.id === 'uv');
+  const browserPack = (packs || []).find((p) => p.id === 'browser');
+
+  const browserAvailable = browserPack?.status === 'available';
+  const uvAvailable = uvPack?.status === 'available';
+
+  const browserId = builtinBrowserId || 'in_browser_builtin__v1';
+  const browserOn = integrations.includes(browserId);
+
+  const toggleBrowser = (on) => {
+    if (on) {
+      if (!integrations.includes(browserId)) setIntegrations([...integrations, browserId]);
+    } else {
+      setIntegrations(integrations.filter((id) => id !== browserId));
+    }
+  };
+
+  const toggleAws = (awsId, on) => {
+    if (on) {
+      if (!integrations.includes(awsId)) setIntegrations([...integrations, awsId]);
+    } else {
+      setIntegrations(integrations.filter((id) => id !== awsId));
+    }
+  };
+
+  const nonAdminHint = 'Ask an admin to install this under Settings \u203a Tools.';
+
+  return (
+    <div className="session-tools-row">
+      <span className="field-label">Tools for this session</span>
+      <div className="session-tools-checks">
+        {/* Web browser */}
+        <div className="session-tool-item">
+          <label className="session-tool-check">
+            <input
+              type="checkbox"
+              checked={browserOn}
+              onChange={(e) => toggleBrowser(e.target.checked)}
+              disabled={!browserAvailable}
+              aria-describedby="session-tool-browser-hint"
+            />
+            <span>Web browser</span>
+          </label>
+          <span id="session-tool-browser-hint" className="session-tool-hint">
+            {browserAvailable
+              ? 'A headless browser (Playwright MCP) the agents can drive.'
+              : isAdmin
+                ? <>Browser not running. Start it: <code>docker compose --profile browser up -d</code></>
+                : nonAdminHint}
+          </span>
+        </div>
+
+        {/* AWS (read-only) — only if AWS integrations exist */}
+        {(awsIntegrations || []).map((awsInt) => {
+          const awsOn = integrations.includes(awsInt.id);
+          const disabled = !uvAvailable;
+          return (
+            <div key={awsInt.id} className="session-tool-item">
+              <div className="row tight">
+                <label className="session-tool-check">
+                  <input
+                    type="checkbox"
+                    checked={awsOn}
+                    onChange={(e) => toggleAws(awsInt.id, e.target.checked)}
+                    disabled={disabled}
+                    aria-describedby={`session-tool-aws-hint-${awsInt.id}`}
+                  />
+                  <span>AWS (read-only)</span>
+                </label>
+                {disabled && isAdmin ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={async () => {
+                      setUvInstallError(null);
+                      try {
+                        await api.post('/api/tools/uv/install');
+                      } catch (e) {
+                        setUvInstallError(e?.message || String(e));
+                      }
+                    }}
+                  >
+                    Install uv
+                  </Button>
+                ) : null}
+              </div>
+              {uvInstallError ? (
+                <p className="session-tool-hint" role="alert" style={{ color: 'var(--color-danger, #c00)' }}>
+                  Install failed: {uvInstallError}
+                </p>
+              ) : null}
+              <span id={`session-tool-aws-hint-${awsInt.id}`} className="session-tool-hint">
+                {disabled
+                  ? isAdmin
+                    ? <><a href="#/settings">Install uv under Settings › Tools</a> to use AWS integrations.</>
+                    : nonAdminHint
+                  : `${awsInt.name}: CloudWatch, DynamoDB, Lambda and more (read-only).`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** Start a session, a single run or a documentation run. */
 /** A Jira key (RLP-2884) from what was typed: the key itself or any link to the ticket. */
 export function ticketKeyFrom(text) {
@@ -520,10 +637,21 @@ export function fillGoalVars(goal, ticket, jiraSite) {
 
 export function NewSessionDialog({ prefill, onClose }) {
   const { project } = useProject();
+  const { user } = useApp();
   const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
   const jira = useLoad(() => api.get(`/api/projects/${project.id}/jira`), [project.id]);
   const jiraReady = Boolean(jira.data?.connected && jira.data?.mapping);
   const kiro = useProjectProvider(project.id) === 'kiro';
+  // Tool packs: for the "Tools for this session" row and Kiro disabled hint
+  const packsLoad = useLoad(() => api.get('/api/tool-packs'), []);
+  const packs = packsLoad.data?.packs;
+  const builtinBrowserId = packsLoad.data?.builtinBrowserId;
+  const kiroPack = (packs || []).find((p) => p.id === 'kiro');
+  const kiroMissing = kiroPack && kiroPack.status !== 'available';
+  // AWS integrations (team-scoped, kind='aws'): shown when any exist; needs uv
+  const allIntegrations = useLoad(() => api.get('/api/integrations'), []);
+  const awsIntegrations = (allIntegrations.data?.integrations || []).filter((i) => i.kind === 'aws' && i.scope === 'team');
+  const isAdmin = Boolean(user?.is_admin);
   const ready = (repos.data?.repos || []).filter((r) => r.status === 'ready');
   // Loop spec: picked at the top, pre-fills form fields
   const [loopSpec, setLoopSpec] = useState(null);
@@ -737,23 +865,35 @@ export function NewSessionDialog({ prefill, onClose }) {
         </div>
         <p className="muted small">{kindInfo.hint}</p>
         {engines.data && engines.data.default !== 'demo' ? (
-          <div className="row tight wrap engine-pick">
-            <span className="field-label">Engine</span>
-            <Segmented
-              size="sm"
-              value={engine}
-              onChange={(e) => {
-                setEngine(e);
-                // The project's default model is meant for its default engine; another engine starts on Sonnet.
-                setF((cur) => ({ ...cur, model: (!e && project.default_model) || 'sonnet' }));
-              }}
-              label="Engine"
-              options={[
-                { value: '', label: `Project default (${ENGINE_LABEL[engines.data.default] ?? engines.data.default})` },
-                ...(engines.data.claude ? [{ value: 'claude', label: `Claude Code (${ENGINE_LABEL[engines.data.claude]})` }] : []),
-                { value: 'kiro', label: 'Kiro' },
-              ]}
-            />
+          <div className="stack tight">
+            <div className="row tight wrap engine-pick">
+              <span className="field-label">Engine</span>
+              <Segmented
+                size="sm"
+                value={engine}
+                onChange={(e) => {
+                  setEngine(e);
+                  // The project's default model is meant for its default engine; another engine starts on Sonnet.
+                  setF((cur) => ({ ...cur, model: (!e && project.default_model) || 'sonnet' }));
+                }}
+                label="Engine"
+                options={[
+                  { value: '', label: `Project default (${ENGINE_LABEL[engines.data.default] ?? engines.data.default})` },
+                  ...(engines.data.claude ? [{ value: 'claude', label: `Claude Code (${ENGINE_LABEL[engines.data.claude]})` }] : []),
+                  { value: 'kiro', label: 'Kiro', disabled: kiroMissing },
+                ]}
+              />
+            </div>
+            {kiroMissing && engine === 'kiro' ? (
+              <p className="muted small" role="alert">
+                Kiro CLI is not installed.{' '}
+                {isAdmin
+                  ? <><a href="#/settings">Install it under Settings › Tools.</a></>
+                  : 'Ask an admin to install it under Settings › Tools.'}
+              </p>
+            ) : kiroMissing ? (
+              <p className="muted small">Kiro is not installed — to use Kiro, <a href="#/settings">{isAdmin ? 'install it under Settings › Tools' : 'ask an admin'}</a>.</p>
+            ) : null}
           </div>
         ) : null}
         {/* Effective settings line — expands into precedence table */}
@@ -903,6 +1043,17 @@ export function NewSessionDialog({ prefill, onClose }) {
           </>
         )}
 
+        {/* Tools for this session — browser + AWS quick-attach, shown for session and single run */}
+        {!isDoc ? (
+          <SessionToolsRow
+            integrations={integrations}
+            setIntegrations={setIntegrations}
+            packs={packs}
+            awsIntegrations={awsIntegrations}
+            builtinBrowserId={builtinBrowserId}
+          />
+        ) : null}
+
         <details className="ws-more" open={more} onToggle={(e) => setMore(e.currentTarget.open)}>
           <summary>More options</summary>
           <div className="stack">
@@ -911,7 +1062,7 @@ export function NewSessionDialog({ prefill, onClose }) {
             </Field>
             {!isDoc ? (
               <Field label={`Integrations${integrations.length ? ` (${integrations.length})` : ''}`} hint="MCP tools the agents may use in this work: Jira, AWS, a browser… Read-only unless writes are allowed.">
-                {() => <IntegrationPicker value={integrations} onChange={setIntegrations} />}
+                {() => <IntegrationPicker value={integrations} onChange={setIntegrations} packs={packs} />}
               </Field>
             ) : null}
             {kind === 'session' ? (

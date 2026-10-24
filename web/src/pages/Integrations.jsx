@@ -322,9 +322,28 @@ function IntegForm({ integ, kind: newKind, atlassianUrl, onClose, onSaved }) {
 }
 
 /** Tick integrations for a workspace, a session or a run. */
-export function IntegrationPicker({ value, onChange, teamOnly }) {
+export function IntegrationPicker({ value, onChange, teamOnly, packs }) {
   const list = useLoad(() => api.get('/api/integrations'), []);
+  const packsLoad = useLoad(() => api.get('/api/tool-packs'), []);
+  const resolvedPacks = packs || packsLoad.data?.packs;
   const items = (list.data?.integrations || []).filter((i) => !teamOnly || i.scope === 'team');
+
+  // Determine which pack (if any) is required for an integration kind.
+  const requiredPackFor = (kind) => {
+    if (kind === 'browser') return 'browser';
+    if (kind === 'aws') return 'uv';
+    return null;
+  };
+
+  // Returns null if the pack is available (or not required), or the hint string if missing.
+  const packBlockedHint = (kind) => {
+    const packId = requiredPackFor(kind);
+    if (!packId || !resolvedPacks) return null;
+    const pack = resolvedPacks.find((p) => p.id === packId);
+    if (!pack || pack.status === 'available') return null;
+    return pack.hint || `${pack.label} is not available`;
+  };
+
   if (list.loading && !list.data) return <Spinner small />;
   if (!items.length) {
     return (
@@ -335,14 +354,32 @@ export function IntegrationPicker({ value, onChange, teamOnly }) {
   }
   return (
     <div className="integ-pick">
-      {items.map((i) => (
-        <label key={i.id} className={cx('choice', value.includes(i.id) && 'is-checked')}>
-          <input type="checkbox" checked={value.includes(i.id)} onChange={(e) => onChange(e.target.checked ? [...value, i.id] : value.filter((x) => x !== i.id))} />
-          <span>
-            <strong>{i.name}</strong> <span className="muted small">{INTEGRATION_KINDS[i.kind]?.label} · {i.kind === 'browser' ? 'browser' : i.allowWrites ? 'writes allowed' : 'read-only'}{i.scope === 'personal' ? ' · only you' : ''}</span>
-          </span>
-        </label>
-      ))}
+      {items.map((i) => {
+        const hint = packBlockedHint(i.kind);
+        const unavailable = Boolean(hint);
+        return (
+          <div key={i.id} className="stack" style={{ gap: '0.15rem' }}>
+            <label className={cx('choice', !unavailable && value.includes(i.id) && 'is-checked', unavailable && 'is-disabled')}>
+              <input
+                type="checkbox"
+                checked={!unavailable && value.includes(i.id)}
+                disabled={unavailable}
+                onChange={(e) => !unavailable && onChange(e.target.checked ? [...value, i.id] : value.filter((x) => x !== i.id))}
+                aria-describedby={unavailable ? `integ-pack-hint-${i.id}` : undefined}
+              />
+              <span>
+                <strong>{i.name}</strong>{' '}
+                <span className="muted small">{INTEGRATION_KINDS[i.kind]?.label} · {i.kind === 'browser' ? 'browser' : i.allowWrites ? 'writes allowed' : 'read-only'}{i.scope === 'personal' ? ' · only you' : ''}</span>
+              </span>
+            </label>
+            {unavailable ? (
+              <p id={`integ-pack-hint-${i.id}`} className="muted small" style={{ marginLeft: '1.5rem' }}>
+                Not available: {hint}
+              </p>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

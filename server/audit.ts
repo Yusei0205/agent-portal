@@ -34,6 +34,8 @@ export type AuditAction =
   | 'approval.allowed' | 'approval.denied'
   // api tokens
   | 'api_token.create' | 'api_token.revoke'
+  // tool pack installs
+  | 'tool.install' | 'tool.install.installer_sha256'
   // Stage 3: governance
   | 'invitation.create' | 'invitation.revoke' | 'invitation.accept'
   | 'user.deactivate' | 'user.reactivate' | 'user.password_reset_link'

@@ -3,3 +3,21 @@ dist
 data
 .env
 .git
+
+# Dev-only directories — not needed inside the image
+test
+coverage
+logs
+.claude
+.kiro
+
+# OS / editor noise
+.DS_Store
+*.log
+*.swp
+*.swo
+Thumbs.db
+
+# Docker artefacts
+compose.yml
+compose.aws.yml

@@ -222,13 +222,18 @@ export function updateSettings(patch: any): Settings {
       if (!Number.isInteger(x) || x < lo || x > hi) throw badRequest(`${name} must be a whole number from ${lo} to ${hi}`);
       return x;
     };
+    // PORTAL_DRAIN_MAX_SECONDS is set by compose.yml to (stop_grace_period - a safety buffer).
+    // It clamps drainTimeoutSeconds so the portal never waits longer than Docker will allow.
+    const drainMax = Number(process.env.PORTAL_DRAIN_MAX_SECONDS ?? 3600);
+    const drainLo = 5;
+    const drainHi = Math.max(drainLo, Math.min(3600, Number.isFinite(drainMax) ? drainMax : 3600));
     saveSection('controlPlane', {
       globalMax: n(cp.globalMax, 0, 1000, 'Global session cap'),
       perUserMax: n(cp.perUserMax, 0, 100, 'Per-user session cap'),
       perProjectMax: n(cp.perProjectMax, 0, 100, 'Per-project session cap'),
       approvalSlaMinutes: n(cp.approvalSlaMinutes, 0, 10080, 'Approval SLA minutes'),
       worktreeTtlDays: n(cp.worktreeTtlDays, 1, 3650, 'Worktree retention days'),
-      drainTimeoutSeconds: n(cp.drainTimeoutSeconds, 5, 3600, 'Drain timeout seconds'),
+      drainTimeoutSeconds: n(cp.drainTimeoutSeconds, drainLo, drainHi, 'Drain timeout seconds'),
     });
   }
   return getSettings();
@@ -284,6 +289,38 @@ export async function agentEnv(projectId?: string, modeOverride?: ProviderMode):
   const s = getSettings();
   const env = baseEnv();
   env.CLAUDE_CONFIG_DIR = dataPath('claude-home');
+
+  // Tools and CLI config live on the data volume.
+  // Inside the container, HOME is already set to /data/home (Dockerfile ENV), and DATA_DIR
+  // is set to /data.  In a managed bare-metal install a user may also set DATA_DIR.
+  // In both cases we override HOME to the data home so Claude Code and the AWS CLI use
+  // config that persists across restarts.
+  //
+  // On a bare `npm start` where DATA_DIR is not explicitly set, we leave HOME as-is so
+  // ~/.aws, ~/.ssh and the Kiro sign-in in the real home directory are used.
+  //
+  // Detection: DATA_DIR is set in the environment (container or managed install).
+  // When DATA_DIR is absent, dataPath() falls back to ./data — in that case we do not
+  // override HOME to avoid breaking local development.
+  const dataHome = dataPath('home');
+  const toolsBin = dataPath('tools', 'bin');
+  const localBin = path.join(dataHome, '.local', 'bin');
+  const insideContainer = Boolean(process.env.DATA_DIR);
+  if (insideContainer) {
+    env.HOME = dataHome;
+  }
+  // Normalise to uppercase PATH; on Windows the process key may be 'Path' — remove it and set 'PATH'.
+  const pathKeySrc = Object.keys(env).find((k) => k.toLowerCase() === 'path');
+  const existingPath: string = pathKeySrc ? env[pathKeySrc] : (process.env.PATH ?? '');
+  if (pathKeySrc && pathKeySrc !== 'PATH') delete env[pathKeySrc];
+  // Build the prefix, deduplicated so we never prepend the same path twice.
+  // Tool directories are only prepended when running in a managed install (DATA_DIR set);
+  // outside that context uvx/kiro-cli must already be on the user's own PATH.
+  const prefix = insideContainer
+    ? [toolsBin, localBin].filter((d) => !existingPath.split(path.delimiter).includes(d)).join(path.delimiter)
+    : '';
+  env.PATH = prefix ? prefix + path.delimiter + existingPath : existingPath;
+
   const pa = projectId ? await import('./project-aws.ts') : null;
   // A run that picked its engine says which provider to set up; otherwise the project's connection decides.
   const mode = modeOverride ?? (pa ? pa.effectiveProvider(projectId) : s.provider.mode);

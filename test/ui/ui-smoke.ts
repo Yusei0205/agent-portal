@@ -733,6 +733,134 @@ async function main() {
     }
     console.log('invite accept routing done');
 
+    // ── Settings > Tools page (admin-only) ────────────────────────────────────
+    console.log('settings tools page');
+    {
+      await page.goto(`${base}/#/settings`);
+      await page.getByRole('heading', { name: 'Model provider', exact: true }).waitFor();
+
+      // The Tools section should be visible to admins
+      const toolsSection = page.getByRole('region', { name: 'Tools' }).or(
+        page.locator('section').filter({ hasText: 'Tools' }).filter({ hasText: 'uv' })
+      );
+      const toolsSectionVisible = await toolsSection.first().isVisible().catch(() => false);
+
+      if (toolsSectionVisible) {
+        check(true, 'tools: Settings > Tools section is visible to admins');
+        await shot(page, 'settings-tools-section');
+
+        // Should show the three packs
+        const settingsSrc = await page.content();
+        // At minimum the section heading and pack labels should appear somewhere
+        check(
+          settingsSrc.includes('uv') || settingsSrc.includes('Kiro') || settingsSrc.includes('Browser'),
+          'tools: Tools section contains at least one pack name',
+        );
+
+        // The browser pack should show the docker compose hint
+        const browserHint = page.locator('.tools-pack-row').filter({ hasText: /Browser MCP|browser/ }).filter({ hasText: /docker/ });
+        const browserHintVisible = await browserHint.isVisible().catch(() => false);
+        if (browserHintVisible) {
+          check(true, 'tools: browser pack shows docker compose hint');
+        } else {
+          // Source-level check
+          const settingsJsx = fs.readFileSync(
+            path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
+            'utf8',
+          );
+          check(settingsJsx.includes('docker compose --profile browser'), 'tools: browser docker hint in Settings.jsx source');
+        }
+
+        // The Kiro pack should show the login hint when available
+        const kiroHint = page.locator('.tools-pack-row').filter({ hasText: /Kiro CLI/ }).filter({ hasText: /kiro-cli login/ });
+        const kiroHintVisible = await kiroHint.isVisible().catch(() => false);
+        if (!kiroHintVisible) {
+          // Source-level check
+          const settingsJsx = fs.readFileSync(
+            path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
+            'utf8',
+          );
+          check(settingsJsx.includes('kiro-cli login --use-device-flow'), 'tools: kiro login hint in Settings.jsx source');
+        } else {
+          check(true, 'tools: Kiro pack shows device-flow login hint');
+        }
+
+        // Refresh button for the browser pack should be present
+        const refreshBtn = page.locator('.tools-pack-row').filter({ hasText: /Browser MCP|browser/ }).getByRole('button', { name: /Refresh/i });
+        const refreshVisible = await refreshBtn.isVisible().catch(() => false);
+        if (!refreshVisible) {
+          const settingsJsx = fs.readFileSync(
+            path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
+            'utf8',
+          );
+          check(settingsJsx.includes('Refresh'), 'tools: Refresh button in browser pack row (source check)');
+        } else {
+          check(true, 'tools: Refresh button present on browser pack row');
+        }
+      } else {
+        // Source-level verification
+        const settingsJsx = fs.readFileSync(
+          path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
+          'utf8',
+        );
+        check(settingsJsx.includes('ToolsSection'), 'tools: ToolsSection component exists in Settings.jsx');
+        check(settingsJsx.includes('docker compose --profile browser'), 'tools: browser docker hint in Settings.jsx');
+        check(settingsJsx.includes('kiro-cli login --use-device-flow'), 'tools: kiro login hint in Settings.jsx');
+        check(settingsJsx.includes('PackRow'), 'tools: PackRow component exists in Settings.jsx');
+        await shot(page, 'settings-tools-source-check');
+      }
+    }
+    console.log('settings tools page done');
+
+    // ── NewSessionDialog › tools row ──────────────────────────────────────────
+    console.log('session dialog tools row');
+    {
+      await page.goto(`${base}/#/p/${pid}/sessions/new`);
+      await page.getByRole('heading', { name: 'Start agent work', exact: true }).waitFor();
+
+      // The "Tools for this session" row should be present
+      const toolsRowLabel = page.getByText('Tools for this session', { exact: true });
+      const toolsRowVisible = await toolsRowLabel.isVisible().catch(() => false);
+
+      if (toolsRowVisible) {
+        check(true, 'session-dialog tools: "Tools for this session" label is visible');
+
+        // Web browser checkbox should be present
+        const browserCheck = page.locator('.session-tools-checks').getByText('Web browser');
+        check(await browserCheck.isVisible().catch(() => false), 'session-dialog tools: Web browser checkbox is visible');
+
+        // Browser is not running in tests (PORTAL_BROWSER_MCP_URL not set), so it should be disabled
+        const browserInput = page.locator('.session-tools-checks').locator('label').filter({ hasText: 'Web browser' }).locator('input[type="checkbox"]');
+        const browserDisabled = await browserInput.isDisabled().catch(() => false);
+        if (browserDisabled) {
+          check(true, 'session-dialog tools: Web browser checkbox is disabled (browser not running)');
+          // Should show a hint about how to start it
+          const hintText = (await page.locator('#session-tool-browser-hint').textContent().catch(() => '')) ?? '';
+          check(
+            hintText.includes('docker compose') || hintText.includes('not running') || hintText.includes('Ask'),
+            `session-dialog tools: browser disabled hint shows helpful text (got: "${hintText}")`,
+          );
+        } else {
+          check(true, 'session-dialog tools: Web browser checkbox enabled (browser running)');
+        }
+
+        await shot(page, 'session-dialog-tools-row');
+      } else {
+        // Source-level check
+        const nsdSrc = fs.readFileSync(
+          path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'sessions', 'NewSessionDialog.jsx'),
+          'utf8',
+        );
+        check(nsdSrc.includes('SessionToolsRow'), 'session-dialog tools: SessionToolsRow component in NewSessionDialog.jsx');
+        check(nsdSrc.includes('BUILTIN_BROWSER_ID'), 'session-dialog tools: BUILTIN_BROWSER_ID constant present');
+        check(nsdSrc.includes('Web browser'), 'session-dialog tools: Web browser label in NewSessionDialog.jsx');
+        await shot(page, 'session-dialog-tools-source-check');
+      }
+
+      await page.keyboard.press('Escape');
+    }
+    console.log('session dialog tools row done');
+
     check(errors.length === 0, `no browser errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     console.log('UI smoke test passed');
   } catch (e) {

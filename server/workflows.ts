@@ -30,6 +30,7 @@ import { runRepos } from './agent/runner.ts';
 import { getWorkspace, workspaceIntegrations, workspaceRepos } from './workspaces.ts';
 import { readIntegrationIds } from './integrations.ts';
 import { getSettings } from './settings.ts';
+import { getToolPacks } from './tool-packs.ts';
 import { git, redact } from './git.ts';
 import { checkConcurrency, isDraining, concurrencyReason, queueReasonLabel, drainQueue } from './control-plane.ts';
 import { audit, auditRaw } from './audit.ts';
@@ -77,7 +78,7 @@ function reposView(w: Row) {
   });
 }
 
-function view(w: Row) {
+export function view(w: Row) {
   return {
     ...liveFacts(w),
     context_count: contextCount(w.id),
@@ -503,6 +504,15 @@ async function drive(id: string): Promise<void> {
     let started;
     try {
       const prev = w.last_run_id ? getRun(w.last_run_id) : null;
+      // If this session uses the Kiro engine, verify the kiro pack is available before starting.
+      if (isKiro(w.project_id, w.engine)) {
+        const packs = await getToolPacks();
+        const kiroPack = packs.find((p) => p.id === 'kiro');
+        if (kiroPack && kiroPack.status !== 'available') {
+          // Pause (not fail) — a transient timeout should not permanently kill the session.
+          return stopWith(w.id, 'paused', kiroPack.hint);
+        }
+      }
       // Continue the last run's conversation and working copies, unless the session's repositories changed since.
       const repoIds = (list: { repoId: string }[]) => list.map((r) => r.repoId).sort().join(',');
       const sameRepos = prev ? repoIds(runRepos(prev).length ? runRepos(prev) : prev.repo_id ? [{ repoId: String(prev.repo_id) }] : []) === repoIds(sessionRepos(w)) : false;
@@ -1082,6 +1092,14 @@ export function registerWorkflowRoutes(): void {
     const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
     const leadAgent = checkLead(project, body.leadAgent, engine);
     const contextItems = readContextItems(body.context);
+    // Check pack availability BEFORE writing anything: a missing required pack returns 400 cleanly.
+    if (!queued && body.start !== false && isKiro(project.id, engine)) {
+      const packs = await getToolPacks();
+      const kiroPack = packs.find((p) => p.id === 'kiro');
+      if (kiroPack && kiroPack.status !== 'available') {
+        throw badRequest(kiroPack.hint);
+      }
+    }
     const id = newId('w_');
     insert('workflows', {
       id,
@@ -1125,7 +1143,9 @@ export function registerWorkflowRoutes(): void {
       throw e;
     }
     audit(ctx, 'session.start', `workflow:${id}`, { projectId: project.id, title, start: body.start !== false });
-    if (!queued && body.start !== false) kick(id);
+    if (!queued && body.start !== false) {
+      kick(id);
+    }
     return { workflow: view(getWorkflow(id)) };
   });
 

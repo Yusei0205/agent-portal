@@ -83,4 +83,17 @@ if (!webOnly) {
     logLevel: 'warning',
   });
   console.log('server: dist/server.mjs');
+
+  // The pre-flight tool: checks git, pandoc, aws, python modules, Claude Code CLI, data dir and optional packs.
+  await esbuild.build({
+    entryPoints: [path.join(root, 'scripts/preflight.mjs')],
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node22',
+    outfile: path.join(out, 'preflight.mjs'),
+    packages: 'external',
+    logLevel: 'warning',
+  });
+  console.log('tool: dist/preflight.mjs');
 }

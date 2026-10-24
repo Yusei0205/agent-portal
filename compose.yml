@@ -1,0 +1,81 @@
+services:
+  portal:
+    build: .
+    image: agent-portal
+    # Bind only to localhost — put HTTPS in front (Caddy, nginx) before exposing to the network.
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - portal-data:/data
+    # The .env file is optional; docker compose up works without it.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Default to 0; set TRUST_PROXY=1 in .env when running behind a reverse proxy.
+      TRUST_PROXY: "${TRUST_PROXY:-0}"
+      # When the browser profile is active, point the portal at the browser container.
+      # The 'browser' compose profile sets COMPOSE_BROWSER_MCP_URL via the browser
+      # service's internal hostname; the env var below reads it so you can override
+      # with a custom URL in .env if needed.
+      # Default: empty (browser pack reports 'not configured') for a basic docker compose up.
+      # When the browser service is started (--profile browser), it is reachable at
+      # http://browser:8931/mcp on the internal compose network. Set explicitly so that
+      # `docker compose --profile browser up -d` works without any manual configuration.
+      PORTAL_BROWSER_MCP_URL: "${PORTAL_BROWSER_MCP_URL:-http://browser:8931/mcp}"
+      # Tells the portal the effective drain ceiling (stop_grace_period minus a safety
+      # buffer). The portal clamps drainTimeoutSeconds to this value so it never waits
+      # longer than Docker will allow before sending SIGKILL.
+      PORTAL_DRAIN_MAX_SECONDS: "${PORTAL_DRAIN_MAX_SECONDS:-60}"
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+    # The app drains for up to 60 s on SIGTERM; give it 75 s before Docker kills it.
+    # stop_grace_period must always be > PORTAL_DRAIN_MAX_SECONDS (here 75 > 60).
+    stop_grace_period: 75s
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  browser:
+    # Pinned Playwright MCP image. Update deliberately.
+    image: mcr.microsoft.com/playwright/mcp:1.52.0
+    # Only started when the 'browser' compose profile is active:
+    #   docker compose --profile browser up -d
+    profiles:
+      - browser
+    # Headless, isolated mode: each connection gets its own browser context with no
+    # shared state. Concurrency capped at 3 simultaneous browser sessions.
+    command: ["--headless", "--isolated", "--port", "8931", "--max-sessions", "3"]
+    # Reachable only on the internal compose network — never on the host.
+    # NO published ports: the portal reaches it via http://browser:8931/mcp.
+    expose:
+      - "8931"
+    networks:
+      - default
+    environment:
+      # Disable telemetry.
+      PLAYWRIGHT_TELEMETRY_DISABLED: "1"
+    deploy:
+      resources:
+        limits:
+          # Each headless browser session can use significant memory.
+          memory: 1g
+    restart: unless-stopped
+
+networks:
+  default:
+
+volumes:
+  portal-data:
