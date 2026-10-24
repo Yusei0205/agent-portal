@@ -191,7 +191,7 @@
  * @property {Record<string, unknown>} data
  */
 
-/** @typedef {'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'engine_switch' | 'done' | 'running' | 'queued'} InboxKind */
+/** @typedef {'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'engine_switch' | 'review_ready' | 'done' | 'running' | 'queued'} InboxKind */
 
 /**
  * One row of the Inbox (GET /api/inbox).

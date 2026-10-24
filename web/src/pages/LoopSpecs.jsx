@@ -278,6 +278,31 @@ function TriggerBuilder({ kind, config, onKind, onConfig, baseUrl }) {
           ) : (
             <Note tone="info">Save the spec first to get the GitHub webhook URL and secret.</Note>
           )}
+          {config.action === 'review_pr' ? (
+            <div className="panel stack-sm">
+              <p className="field-label">Pull request review</p>
+              <Field label="Comments on the pull request" hint="Draft keeps the findings and asks you to approve posting in the Inbox. Auto posts them straight away.">
+                {(id) => (
+                  <select id={id} className="input" value={config.postMode ?? 'draft'} onChange={(e) => onConfig({ ...config, postMode: e.target.value })}>
+                    <option value="draft">Draft: a person approves</option>
+                    <option value="auto">Auto: post straight away</option>
+                  </select>
+                )}
+              </Field>
+              <Field label="Lowest severity to post" hint="Findings you accept in Code review are always included.">
+                {(id) => (
+                  <select id={id} className="input" value={config.minSeverity ?? 'medium'} onChange={(e) => onConfig({ ...config, minSeverity: e.target.value })}>
+                    {['critical', 'high', 'medium', 'low', 'info'].map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                )}
+              </Field>
+              <Field label="Most comments per pull request" hint="Counts everything the portal has already posted there. Default: 20.">
+                {(id) => (
+                  <input id={id} type="number" className="input input-sm" min={1} max={100} value={config.maxComments ?? 20} onChange={(e) => onConfig({ ...config, maxComments: Number(e.target.value) })} />
+                )}
+              </Field>
+            </div>
+          ) : null}
         </div>
       ) : kind === 'jira_event' ? (
         <div className="stack-sm">
@@ -951,9 +976,22 @@ function SpecCard({ spec, projectId, onEdit, onDelete, onRunNow }) {
     }
   };
 
+  const isReview = spec.trigger_config?.action === 'review_pr';
+  const [pr, setPr] = useState('');
+
   const run = async () => {
     setBusy('run');
     try {
+      if (isReview) {
+        const out = await api.post(`/api/projects/${projectId}/loop-specs/${spec.id}/run`, { vars: { 'pr.number': Number(pr) } });
+        if (!out.workflow?.id) {
+          toast(out.workflow?.stop_reason || 'Nothing was started', 'warn');
+          return;
+        }
+        toast('Review started', 'ok');
+        go(projectId, 'review');
+        return;
+      }
       await api.post(`/api/projects/${projectId}/loop-specs/${spec.id}/run`, {});
       toast('Session started', 'ok');
       go(projectId, 'sessions');
@@ -982,7 +1020,8 @@ function SpecCard({ spec, projectId, onEdit, onDelete, onRunNow }) {
       {spec.description ? <p className="ls-card-desc muted small">{spec.description}</p> : null}
       <div className="ls-card-foot">
         <div className="row tight">
-          <Button size="sm" onClick={run} busy={busy === 'run'} icon="play">Run now</Button>
+          {isReview ? <input className="input input-sm" type="number" min={1} aria-label="Pull request number" placeholder="PR #" value={pr} onChange={(e) => setPr(e.target.value)} /> : null}
+          <Button size="sm" onClick={run} busy={busy === 'run'} disabled={isReview && !pr} icon="play">Run now</Button>
           {!spec.is_template ? (
             <>
               <Button size="sm" variant="ghost" onClick={() => onEdit(spec)}>Edit</Button>

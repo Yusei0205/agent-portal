@@ -10,7 +10,7 @@ import { getSettings, githubToken } from './settings.ts';
 import { projectAwsEnv } from './project-aws.ts';
 import { canUse, connectionGitEnv, connectionToken, getGitConnection, repoProviderFor } from './git-connections.ts';
 import { connectionEnv } from './aws-connections.ts';
-import { codeCommitPrUrl, codeCommitTarget, getCodeCommitPullRequest, listCodeCommitPullRequests, openCodeCommitPullRequest } from './codecommit.ts';
+import { codeCommitPrUrl, codeCommitTarget, getCodeCommitPullRequest, listCodeCommitPullRequests, openCodeCommitPullRequest, postCodeCommitPullComment } from './codecommit.ts';
 
 export type Provider = 'github' | 'codecommit' | 'git';
 
@@ -387,6 +387,13 @@ export async function getCodeCommitPull(r: Repo, n: number) {
   const cc = await codeCommitAccess(r);
   if (!cc) throw badRequest('This is not a CodeCommit repository');
   return getCodeCommitPullRequest(cc.region, cc.credentials, cc.repositoryName, n);
+}
+
+/** One summary comment on a CodeCommit pull request (a review's findings; CodeCommit gets no inline comments from the portal). */
+export async function postCodeCommitSummary(r: Repo, n: number, content: string): Promise<void> {
+  const cc = await codeCommitAccess(r);
+  if (!cc) throw badRequest('This is not a CodeCommit repository');
+  await postCodeCommitPullComment(cc.region, cc.credentials, cc.repositoryName, n, content);
 }
 
 /**

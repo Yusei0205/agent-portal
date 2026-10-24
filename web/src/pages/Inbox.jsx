@@ -6,6 +6,7 @@
  *  - push_ready : push requests (review changes link, allow/decline inline)
  *  - plan_pending: plan approvals (view/edit/approve inline)
  *  - escalation : blocked sessions (reply to unblock)
+ *  - review_ready: an automatic pull request review whose comments wait for approval (approve to post, or skip)
  *  - done       : recently done sessions with PR link and Code review hand-off
  *
  * Live updates via GET /api/inbox/events SSE stream.
@@ -102,6 +103,7 @@ const KIND_BADGE = {
   plan_pending: { label: 'Plan ready', tone: 'accent' },
   escalation: { label: 'Blocked', tone: 'danger' },
   engine_switch: { label: 'Kiro cannot run', tone: 'danger' },
+  review_ready: { label: 'Review ready', tone: 'accent' },
   done: { label: 'Done', tone: 'ok' },
 };
 
@@ -408,6 +410,53 @@ function RunningCard({ item }) {
 }
 
 /**
+ * An automatic pull request review in draft mode: the findings are stored, nothing is on the pull request until a person approves.
+ */
+function ReviewReadyCard({ item, onDone }) {
+  const { toast } = useUi();
+  const [busy, setBusy] = useState('');
+  const reviewLink = href(item.projectId, 'review', item.reviewId);
+
+  const act = async (what) => {
+    setBusy(what);
+    try {
+      if (what === 'post') {
+        const out = await api.post(`/api/reviews/${item.reviewId}/post-github`, {});
+        toast(out.message || 'Posted', 'ok');
+      } else {
+        await api.post(`/api/reviews/${item.reviewId}/skip-post`, {});
+        toast('Nothing will be posted for this review', 'ok');
+      }
+      onDone();
+    } catch (e) {
+      toast(e.message, 'danger');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <div className="inbox-card" role="article" aria-label={`Review ready: ${item.sessionTitle}`}>
+      <div className="inbox-card-head">
+        <Badge tone={KIND_BADGE.review_ready.tone}>{KIND_BADGE.review_ready.label}</Badge>
+        <span className="inbox-project">{item.projectName}</span>
+        <span className="muted small">{timeAgo(item.createdAt)}</span>
+      </div>
+      <div className="inbox-card-title">
+        <a href={reviewLink}>{item.sessionTitle}</a>
+      </div>
+      {item.detail ? <p className="inbox-detail">{item.detail}</p> : null}
+      <div className="inbox-card-actions">
+        <Button variant="primary" size="sm" busy={busy === 'post'} onClick={() => act('post')}>Approve and post</Button>
+        <Button variant="ghost" size="sm" busy={busy === 'skip'} onClick={() => act('skip')}>Do not post</Button>
+        <a className="btn btn-ghost btn-sm" href={reviewLink}>Open review</a>
+        {item.prUrl ? <a className="btn btn-ghost btn-sm" href={item.prUrl} target="_blank" rel="noopener noreferrer">Open PR ↗</a> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
  * A done card with PR link and Code review hand-off.
  */
 function DoneCard({ item }) {
@@ -509,6 +558,7 @@ function InboxCard({ item, onDone }) {
     case 'plan_pending': return <PlanCard item={item} onDone={onDone} />;
     case 'escalation': return <EscalationCard item={item} onDone={onDone} />;
     case 'engine_switch': return <EngineSwitchCard item={item} onDone={onDone} />;
+    case 'review_ready': return <ReviewReadyCard item={item} onDone={onDone} />;
     case 'done': return <DoneCard item={item} />;
     case 'queued': return <RunningCard item={item} />;
     default: return <RunningCard item={item} />;
@@ -580,7 +630,7 @@ export function Inbox() {
 
   const grouped = items
     ? {
-        needs_you: items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch'].includes(i.kind)),
+        needs_you: items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch', 'review_ready'].includes(i.kind)),
         running: items.filter((i) => i.kind === 'running' || i.kind === 'queued'),
         done: items.filter((i) => i.kind === 'done'),
       }

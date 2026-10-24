@@ -167,6 +167,50 @@ const RULES: Rule[] = [
   },
 ];
 
+/* ------------------------------------------------------------------ */
+/* Secret redaction (review comments must not repeat a secret)         */
+/* ------------------------------------------------------------------ */
+
+const REDACTED = '[redacted]';
+
+/** A secret that is assigned to a well-known name: the value is captured in group 3. */
+const ASSIGNED_SECRET = /((?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key)["']?\s*[:=]\s*)(['"])([^'"\s]{6,})\2/gi;
+
+/** Secrets that have a recognisable shape on their own. */
+const SHAPED_SECRETS: RegExp[] = [
+  /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----|$)/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  /\bsk-[A-Za-z0-9_-]{20,}\b/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g,
+  /\bAIza[0-9A-Za-z_-]{30,}\b/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{20,}/g,
+];
+
+/** The secret values that a line of code contains (the values of assigned secrets and anything with a secret's shape). */
+export function secretLiterals(line: string): string[] {
+  const out = new Set<string>();
+  for (const m of line.matchAll(ASSIGNED_SECRET)) out.add(m[3]);
+  for (const re of SHAPED_SECRETS) for (const m of line.matchAll(re)) out.add(m[0].replace(/^Bearer\s+/, ''));
+  return [...out].filter((s) => s.length >= 6);
+}
+
+/**
+ * Replace secret values in text that is about to leave the portal (a comment on a pull request). Catches values with a
+ * secret's shape and values assigned to secret-like names; `literals` adds the exact values found on the changed line
+ * the text is about, because a reviewer often quotes a secret without the name next to it.
+ */
+export function redactSecrets(text: string, literals: string[] = []): string {
+  let out = text.replace(ASSIGNED_SECRET, (_m, key, q) => `${key}${q}${REDACTED}${q}`);
+  for (const re of SHAPED_SECRETS) out = out.replace(re, (m, g1) => (typeof g1 === 'string' && /^Bearer\s+$/.test(g1) ? `${g1}${REDACTED}` : REDACTED));
+  for (const lit of [...new Set(literals)].sort((a, b) => b.length - a.length)) {
+    if (lit.length >= 6) out = out.split(lit).join(REDACTED);
+  }
+  return out;
+}
+
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|java|kt|cs|rb|php|rs|scala|swift)$/;
 const TEST_PATH = /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[a-z]+$|_test\.(go|py)$|Test\.java$/;
 

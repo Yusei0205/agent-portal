@@ -17,6 +17,7 @@ import {
   CreatePullRequestCommand,
   GetPullRequestCommand,
   ListPullRequestsCommand,
+  PostCommentForPullRequestCommand,
 } from '@aws-sdk/client-codecommit';
 import { fromIni } from '@aws-sdk/credential-providers';
 import { get } from './http.ts';
@@ -290,6 +291,36 @@ export async function openCodeCommitPullRequest(
   } catch (e) {
     if (e instanceof HttpError) throw e;
     prError(e, pr.source, pr.destination);
+  }
+}
+
+/**
+ * Put one comment on a pull request (NEW-3: the summary of a review). CodeCommit comments are anchored to the two
+ * commits the pull request compares, which are read first; the comment is not attached to a file or line.
+ */
+export async function postCodeCommitPullComment(region: string, credentials: AwsCredentials, repositoryName: string, id: number, content: string): Promise<void> {
+  const client = ccClient(region, credentials);
+  try {
+    const got = await client.send(new GetPullRequestCommand({ pullRequestId: String(id) }));
+    const t = got.pullRequest?.pullRequestTargets?.find((x) => x.repositoryName === repositoryName);
+    if (!t?.sourceCommit || !t.destinationCommit) throw new HttpError(502, `CodeCommit did not return the commits of pull request #${id}`);
+    await client.send(
+      new PostCommentForPullRequestCommand({
+        pullRequestId: String(id),
+        repositoryName,
+        beforeCommitId: t.destinationCommit,
+        afterCommitId: t.sourceCommit,
+        content: content.slice(0, 10_000),
+      }),
+    );
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    const name = (e as any)?.name ?? '';
+    if (name === 'AccessDeniedException' || name === 'AuthorizationException') {
+      throw badRequest('The AWS identity may not comment on pull requests in this CodeCommit repository (it needs codecommit:PostCommentForPullRequest).');
+    }
+    if (name === 'PullRequestDoesNotExistException') throw badRequest(`CodeCommit has no pull request #${id}`);
+    mapAwsError(e);
   }
 }
 

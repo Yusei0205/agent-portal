@@ -385,6 +385,11 @@ export function kick(id: string): void {
     void import('../docs-sync.ts').then((m) => m.resumeSync(id)).catch(() => undefined);
     return;
   }
+  // The coordinating session of an automatic pull request review never runs an agent either (NEW-3).
+  if (one<Row>('SELECT 1 AS x FROM reviews WHERE workflow_id = ?', id)) {
+    void import('../pr-review.ts').then((m) => m.resumePrReview(id)).catch(() => undefined);
+    return;
+  }
   // Don't start new iterations in drain mode.
   if (isDraining()) {
     const w = one<Row>('SELECT status FROM workflows WHERE id = ?', id);

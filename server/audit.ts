@@ -50,7 +50,9 @@ export type AuditAction =
   | 'template.create' | 'template.update' | 'template.delete' | 'template.download'
   | 'presentation.create' | 'presentation.ready' | 'presentation.delete' | 'presentation.download'
   // documentation generator (NEW-6)
-  | 'gendoc.create' | 'gendoc.regenerate' | 'gendoc.version' | 'gendoc.delete' | 'gendoc.download';
+  | 'gendoc.create' | 'gendoc.regenerate' | 'gendoc.version' | 'gendoc.delete' | 'gendoc.download'
+  // automatic code review of pull requests (NEW-3)
+  | 'review.auto' | 'review.auto_error' | 'review.post' | 'review.post_skip';
 
 /**
  * Write an audit row from a request context.

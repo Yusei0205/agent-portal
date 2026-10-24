@@ -142,6 +142,12 @@ export async function createWorkflowFromSpec(
     throw badRequest(e.message);
   }
 
+  // "Review pull request" reviews one pull request (from the event's variables or the person's) instead of starting a goal session (NEW-3).
+  if (specActions(spec.trigger_config).includes('review_pr')) {
+    const { startPrReview } = await import('./pr-review.ts');
+    return startPrReview(spec, userId, vars);
+  }
+
   // Several actions, or a pull request for the result (NEW-2 "Keep docs current"): one coordinated firing.
   if (specActions(spec.trigger_config).length > 1 || (spec.trigger_config.publishPr && specActions(spec.trigger_config).length)) {
     const { runRefreshActions } = await import('./docs-sync.ts');
@@ -296,6 +302,7 @@ async function runCronTick(): Promise<void> {
   const d = new Date(nowMs());
   const mk = minuteKey(d);
   try { (await import('./docs-sync.ts')).reconcileDocsSync(); } catch { /* best-effort */ }
+  try { (await import('./pr-review.ts')).reconcilePrReviews(); } catch { /* best-effort */ }
   // A github_event spec may also carry a schedule (trigger_config.cron), e.g. the nightly pass of "Keep docs current".
   const specs = all<Row>("SELECT * FROM loop_specs WHERE trigger_kind = 'cron' OR (trigger_kind = 'github_event' AND trigger_config LIKE '%\"cron\"%')");
   for (const r of specs) {
@@ -563,6 +570,27 @@ export function registerTriggerRoutes(): void {
     const wantedEvents = spec.trigger_config.events ?? ['pull_request', 'workflow_run', 'check_suite'];
     if (!wantedEvents.includes(event)) {
       return { ok: true, ignored: true, reason: `Event "${event}" not in spec's event filter` };
+    }
+
+    // review_pr (NEW-3): one review per pull request and commit, only for events that are a reason to review.
+    if (specActions(spec.trigger_config).includes('review_pr')) {
+      const { decideGithubEvent } = await import('./pr-review.ts');
+      const d = decideGithubEvent(spec, event, payload);
+      if (!d.fire) return { ok: true, ignored: true, reason: d.reason };
+      if (isDuplicateTrigger(spec.id, d.key)) return { ok: true, duplicate: true };
+      const rateErr = checkTriggerRateLimit(spec.id);
+      if (rateErr) throw new HttpError(429, rateErr);
+      if (isDraining()) throw new HttpError(503, 'The server is draining.');
+      const userId = await resolveTriggerUser(spec.project_id, spec.created_by);
+      if (!userId) throw new HttpError(503, 'No active user for trigger-fired session');
+      const wf = await createWorkflowFromSpec(spec, userId, d.vars);
+      if (!wf.id) return { ok: true, ignored: true, reason: String(wf.stop_reason) };
+      recordTriggerFire(spec.id, 'github_event', { event, deliveryId, pr: d.vars['pr.number'], sha: d.vars['pr.sha'] }, wf.id);
+      exec(
+        'UPDATE trigger_history SET dedup_key = ? WHERE id = (SELECT id FROM trigger_history WHERE spec_id = ? ORDER BY fired_at DESC LIMIT 1)',
+        d.key, spec.id,
+      );
+      return { ok: true, workflowId: wf.id, reviewId: (wf as any).review?.id ?? null };
     }
 
     // mergedOnly: a pull request counts only once it is merged into the repository's default branch.

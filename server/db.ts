@@ -769,7 +769,41 @@ const DOCS_SYNC = `
   CREATE INDEX docs_sync_spec ON docs_sync_jobs(spec_id, status);
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC];
+const PR_REVIEW = `
+  -- Automatic code review of pull requests (NEW-3, pr-review.ts): how a review was started, what to post, what was posted
+  ALTER TABLE reviews ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+  ALTER TABLE reviews ADD COLUMN loop_spec_id TEXT;
+  ALTER TABLE reviews ADD COLUMN workflow_id TEXT;
+  ALTER TABLE reviews ADD COLUMN pr_title TEXT;
+  ALTER TABLE reviews ADD COLUMN pr_url TEXT;
+  ALTER TABLE reviews ADD COLUMN post_mode TEXT NOT NULL DEFAULT '';
+  ALTER TABLE reviews ADD COLUMN post_state TEXT NOT NULL DEFAULT '';
+  ALTER TABLE reviews ADD COLUMN post_options TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE reviews ADD COLUMN post_result TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE reviews ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+  ALTER TABLE findings ADD COLUMN confidence REAL;
+  ALTER TABLE findings ADD COLUMN posted_at TEXT;
+  CREATE INDEX reviews_pr ON reviews(repo_id, pr_number, head_sha);
+  CREATE INDEX reviews_workflow ON reviews(workflow_id);
+  CREATE INDEX reviews_post_state ON reviews(post_state);
+  -- One row per finding the portal put on a pull request (inline or in the summary); the fingerprint recognises it later.
+  CREATE TABLE review_comments (
+    id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    review_id TEXT,
+    finding_id TEXT,
+    file TEXT NOT NULL,
+    line INTEGER,
+    head_sha TEXT,
+    inline INTEGER NOT NULL DEFAULT 0,
+    posted_at TEXT NOT NULL
+  );
+  CREATE INDEX review_comments_pr ON review_comments(repo_id, pr_number, fingerprint);
+`;
+
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

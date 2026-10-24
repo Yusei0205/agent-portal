@@ -181,10 +181,12 @@ function ReviewList({ route }) {
                     {r.pr_number ? `Pull request #${r.pr_number}` : <><code>{r.head}</code> into <code>{r.base}</code></>}
                   </a>
                   {r.deep ? <span className="muted small"> with deep look</span> : null}
+                  {r.source === 'auto' ? <span className="muted small"> · From PR #{r.pr_number} (auto)</span> : null}
                 </td>
                 <td>{r.repo_name}</td>
                 <td>
                   <Badge status={r.status} />
+                  {r.post_state === 'awaiting' ? <Badge tone="warn">Awaiting approval</Badge> : null}
                 </td>
                 <td className="num">
                   {r.open_findings}
@@ -435,6 +437,7 @@ function ReviewDetail({ id }) {
         {f.source === 'deep' ? <span className="muted small">deep look</span> : null}
         {f.line ? <span className="muted small">line {f.line}</span> : null}
         {f.status !== 'open' ? <Badge status={f.status} /> : null}
+        {f.posted_at ? <span className="muted small">posted</span> : null}
       </div>
       <p>{f.message}</p>
       {f.suggestion ? (
@@ -459,7 +462,7 @@ function ReviewDetail({ id }) {
       </a>
       <PageHeader
         title={review.pr_number ? `Pull request #${review.pr_number}` : `${review.head} into ${review.base}`}
-        sub={`${review.repo_name}, started ${timeAgo(review.created_at)}`}
+        sub={`${review.repo_name}, started ${timeAgo(review.created_at)}${review.source === 'auto' ? ` · From PR #${review.pr_number} (auto)` : ''}`}
         actions={
           <>
             {run ? (
@@ -468,15 +471,16 @@ function ReviewDetail({ id }) {
                 <span>Watch the reviewer</span>
               </a>
             ) : null}
-            {canEdit && review.pr_number && review.status === 'done' && review.provider === 'github' ? (
+            {canEdit && review.pr_number && review.status === 'done' && (review.provider === 'github' || review.provider === 'codecommit') ? (
               <Button
                 icon="external"
+                variant={review.post_state === 'awaiting' ? 'primary' : undefined}
                 busy={posting}
                 onClick={async () => {
                   setPosting(true);
                   try {
                     const out = await api.post(`/api/reviews/${review.id}/post-github`);
-                    toast(`Posted ${out.posted} findings to GitHub`);
+                    toast(out.message || `Posted ${out.posted} findings`);
                     r.reload(true);
                   } catch (e) {
                     toast(e.message, 'danger');
@@ -485,7 +489,23 @@ function ReviewDetail({ id }) {
                   }
                 }}
               >
-                {review.posted_at ? 'Post again to GitHub' : 'Post to GitHub'}
+                {review.post_state === 'awaiting' ? 'Approve and post' : review.posted_at ? `Post again to ${review.provider === 'github' ? 'GitHub' : 'CodeCommit'}` : `Post to ${review.provider === 'github' ? 'GitHub' : 'CodeCommit'}`}
+              </Button>
+            ) : null}
+            {canEdit && review.post_state === 'awaiting' ? (
+              <Button
+                variant="ghost"
+                onClick={async () => {
+                  try {
+                    await api.post(`/api/reviews/${review.id}/skip-post`);
+                    toast('Nothing will be posted for this review');
+                    r.reload(true);
+                  } catch (e) {
+                    toast(e.message, 'danger');
+                  }
+                }}
+              >
+                Do not post
               </Button>
             ) : null}
             {canEdit && review.status !== 'running' ? (
@@ -510,6 +530,13 @@ function ReviewDetail({ id }) {
         </div>
       ) : null}
       {review.error ? <ErrorNote error={new Error(review.error)} /> : null}
+      {review.post_state === 'awaiting' ? (
+        <div className="note note-info">
+          <span>
+            Draft: nothing is on the pull request yet. Approving posts the findings at {review.post_options?.minSeverity || 'medium'} severity or above that are not already there (at most {review.post_options?.maxComments || 20} per pull request). Findings you accept are always included; dismissed ones never are.
+          </span>
+        </div>
+      ) : null}
       {review.summary ? <p className="lead">{review.summary}</p> : null}
 
       {review.status !== 'running' ? (

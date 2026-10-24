@@ -27,9 +27,10 @@ import { publish, projectChannel, subscribe } from './events.ts';
 import { audit } from './audit.ts';
 import { getSettings, monthSpend } from './settings.ts';
 import type { AuditAction } from './audit.ts';
+import { awaitingReviewCount, awaitingReviews } from './pr-review.ts';
 
 /* ------------------------------------------------------------------ */
-/* Outbound webhook delivery                                           */
+/* Outbound webhook delivery                                        */
 /* ------------------------------------------------------------------ */
 
 export type WebhookEvent =
@@ -152,8 +153,11 @@ export function escalateSession(workflowId: string, reason: 'blocked' | 'failed'
 /* ------------------------------------------------------------------ */
 
 export interface InboxItem {
-  kind: 'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'engine_switch' | 'done' | 'running' | 'queued';
+  kind: 'waiting' | 'push_ready' | 'plan_pending' | 'escalation' | 'engine_switch' | 'review_ready' | 'done' | 'running' | 'queued';
   workflowId: string;
+  /** For review_ready: the review whose comments wait for approval, and its pull request number. */
+  reviewId?: string;
+  prNumber?: number;
   projectId: string;
   projectName: string;
   sessionTitle: string;
@@ -353,6 +357,24 @@ export function buildInbox(userId: string, projectFilter: string | null): InboxI
     });
   }
 
+  // -- Automatic pull request reviews in draft mode: the findings wait for a person to approve posting (NEW-3) --
+  for (const r of awaitingReviews(userId, projectFilter)) {
+    const pending = parseJson<{ pending?: number }>(r.post_result, {}).pending ?? 0;
+    items.push({
+      kind: 'review_ready',
+      workflowId: String(r.workflow_id ?? ''),
+      projectId: String(r.project_id),
+      projectName: String(r.project_name ?? ''),
+      sessionTitle: `Pull request #${r.pr_number}${r.pr_title ? `: ${r.pr_title}` : ''}`.slice(0, 160),
+      detail: `Review ready for ${r.repo_name ?? 'the repository'}: approve to post ${pending} comment${pending === 1 ? '' : 's'} to the pull request.`,
+      prUrl: r.pr_url ? String(r.pr_url) : null,
+      reviewId: String(r.id),
+      prNumber: Number(r.pr_number),
+      createdAt: String(r.created_at),
+      isOverdue: false,
+    });
+  }
+
   // -- Recently done sessions with PR links (last 24h) --
   const doneCutoff = new Date(Date.now() - 86_400_000).toISOString();
   const doneRows = projectFilter
@@ -442,6 +464,9 @@ export function buildInbox(userId: string, projectFilter: string | null): InboxI
   return items;
 }
 
+/** The Inbox item kinds that wait for a person. */
+const NEEDS_YOU: InboxItem['kind'][] = ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch', 'review_ready'];
+
 /** Count "needs you" items for the nav badge. */
 export function inboxNeedsYouCount(userId: string): number {
   // pending inputs + push-pending + plan-pending + escalations
@@ -471,7 +496,7 @@ export function inboxNeedsYouCount(userId: string): number {
         AND EXISTS (SELECT 1 FROM workflows w WHERE w.id = we.workflow_id AND w.status = 'paused' AND w.created_by = ?)`,
     userId,
   )?.n ?? 0);
-  return inputs + pushes + plans + esc + engineAsks;
+  return inputs + pushes + plans + esc + engineAsks + awaitingReviewCount(userId);
 }
 
 /* ------------------------------------------------------------------ */
@@ -610,13 +635,13 @@ export function registerLoopEngineRoutes(): void {
     // Filter by mode
     let filtered = items;
     if (filterMode === 'needs_you') {
-      filtered = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch'].includes(i.kind));
+      filtered = items.filter((i) => NEEDS_YOU.includes(i.kind));
     } else if (filterMode === 'running') {
       filtered = items.filter((i) => i.kind === 'running' || i.kind === 'queued');
     } else if (filterMode === 'done') {
       filtered = items.filter((i) => i.kind === 'done');
     }
-    const needsYouCount = items.filter((i) => ['waiting', 'push_ready', 'plan_pending', 'escalation', 'engine_switch'].includes(i.kind)).length;
+    const needsYouCount = items.filter((i) => NEEDS_YOU.includes(i.kind)).length;
     ctx.res.setHeader('X-Inbox-Needs-You', String(needsYouCount));
     return { items: filtered, needs_you: needsYouCount };
   });

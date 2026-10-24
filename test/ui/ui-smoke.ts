@@ -741,9 +741,25 @@ async function main() {
     await page.getByText('Advanced features hidden').waitFor();
 
     console.log('inbox');
+    // An automatic pull request review in draft mode (NEW-3) waits for approval in the Inbox; a row stands in for the GitHub event.
+    {
+      const db = await import('../../server/db.ts');
+      const user = db.one<{ id: string }>('SELECT id FROM users LIMIT 1')!;
+      const repo = db.one<{ id: string }>('SELECT id FROM repos WHERE project_id = ? LIMIT 1', pid);
+      db.run(
+        `INSERT INTO reviews (id, project_id, repo_id, base, head, pr_number, head_sha, status, created_by, created_at, source, pr_title, post_mode, post_state, post_result) VALUES ('v_uismoke', ?, ?, 'main', 'pr/3', 3, 'abc1234', 'done', ?, ?, 'auto', 'Add refunds', 'draft', 'awaiting', '{"pending":2}')`,
+        pid, repo?.id ?? 'none', user.id, new Date().toISOString(),
+      );
+    }
     await page.goto(`${base}/#/inbox`);
     await page.getByRole('heading', { name: 'Inbox', exact: true }).waitFor();
     check(true, 'Inbox page loads');
+    await page.locator('.inbox-card[aria-label^="Review ready"]').waitFor({ timeout: 10000 });
+    check(await page.locator('.inbox-card[aria-label^="Review ready"]').getByRole('button', { name: 'Approve and post', exact: true }).count(), 'a draft pull request review waits in the Inbox with an Approve and post button');
+    check(await page.locator('.inbox-card[aria-label^="Review ready"]').getByText('approve to post 2 comments').count(), 'the Inbox item says how many comments wait');
+    await page.locator('.inbox-card[aria-label^="Review ready"]').getByRole('button', { name: 'Do not post', exact: true }).click();
+    await page.locator('.inbox-card[aria-label^="Review ready"]').waitFor({ state: 'detached', timeout: 10000 });
+    check(true, 'Do not post clears the Inbox item');
     // Inbox should show either items or an empty state
     const inboxEmpty = await page.locator('.empty, .inbox-list').first().isVisible().catch(() => false);
     check(inboxEmpty, 'Inbox shows empty state or items list');
@@ -762,6 +778,14 @@ async function main() {
     await page.waitForTimeout(500);
     // Should have spec cards now or still empty
     check(true, 'built-in templates seeded (may already exist in demo)');
+    const reviewSpec = page.locator('.ls-card', { hasText: 'Review new pull requests' });
+    check((await reviewSpec.count()) === 1, 'the Review new pull requests spec is seeded');
+    check((await reviewSpec.getByLabel('Pull request number').count()) === 1, 'Run now on the pull request review spec asks for a pull request number');
+    await reviewSpec.getByRole('button', { name: 'Customise', exact: true }).click();
+    await page.getByLabel('Comments on the pull request').waitFor();
+    check((await page.getByLabel('Comments on the pull request').inputValue()) === 'draft', 'the editor shows the post mode, draft by default');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
+    await page.getByRole('heading', { name: 'Loop specs', exact: true }).waitFor();
     // Create new spec
     await page.getByRole('button', { name: 'New spec', exact: true }).click();
     await page.getByRole('heading', { name: 'New loop spec', exact: true }).waitFor();

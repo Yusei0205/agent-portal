@@ -23,6 +23,15 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   writes them into a work branch (`docs/diagrams/*.mmd`, `docs/generated/*.md`) and proposes one
   pull request (you allow the push by default). Nothing stale means no session and no pull request.
   A spec names its actions in `trigger_config.action` or, for several, `trigger_config.actions`.
+  **Review new pull requests** reviews a GitHub pull request when it is opened, reopened, gets
+  new commits or is marked ready for review (not drafts, not the portal's own `docs/keep-current-*`
+  branches). Point a repository webhook (Pull requests events) at the spec's URL, with its secret.
+  It keeps the findings and puts "Review ready: approve to post" in the Inbox (draft mode, the
+  default), or posts straight away (`postMode: auto`). Only findings at or above the lowest
+  severity (default medium) are posted, as inline comments plus one summary, never twice for the
+  same file, line and text on a pull request, at most 20 per pull request, with secret values
+  scrubbed. CodeCommit pull requests are reviewed by hand (*Run now* with the number) and get one
+  summary comment.
 - **Inbox** is one list across projects of everything that needs a person: approvals, questions,
   pending pushes and blocked sessions, with a live count and answers right in the list.
 - **Workspaces** are named sets of repositories (and integrations) that a session can use as a
@@ -47,7 +56,8 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   headless browser) or raw Mermaid.
 - **Code review** of two branches or a GitHub pull request: findings next to the changed lines,
   a cheap Haiku pass with a rule-based scan, an optional Sonnet deep look, and posting back to
-  GitHub.
+  GitHub. Reviews started by the *Review new pull requests* loop spec are marked "From PR #n
+  (auto)"; the ones in draft mode have an *Approve and post* button.
 - **Claude Code and Kiro engines**: each engine has its own agents and skills (`.claude` and
   `.kiro` in the project). Claude agents come from role templates, a shared library, import from
   a folder or zip, or a plain-language description. A Kiro session never silently falls back to
@@ -267,7 +277,9 @@ Settings, so no AWS keys are stored at all.
    - **From a ticket**: on the *Tickets* page, open any ticket and click *Start coding run* to
      open the composer with that ticket pre-selected.
 6. **Code review**: review a feature branch against `main` with *Deep look* on. Accept or
-   dismiss findings. For a GitHub pull request, use *Post to GitHub*.
+   dismiss findings. For a GitHub pull request, use *Post to GitHub*. To try the automatic review,
+   add the built-in spec *Review new pull requests* (Sessions › Loop specs), then *Run now* with a
+   pull request number; the result waits in the Inbox until you approve it.
 7. **Learn**: write a *System overview*, switch between *For everyone* and *For engineers*,
    publish it, make a quiz from it, publish and take the quiz, then create an onboarding path.
    Re-upload a source document with a change and see the document flagged as out of date.

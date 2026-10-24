@@ -113,10 +113,39 @@ export interface TriggerConfig {
   repoId?: string;
   /** For github_event with pull_request: fire only when the pull request was merged into the repository's default branch. */
   mergedOnly?: boolean;
+  /* ---- Options of the review_pr action (NEW-3, pr-review.ts) ---- */
+  /** draft (default): keep the findings and ask a person to approve posting; auto: post straight away. */
+  postMode?: ReviewPostMode;
+  /** Only findings at or above this severity are posted (default medium). A finding a person accepted is always eligible. */
+  minSeverity?: ReviewSeverity;
+  /** Findings that carry a confidence below this (0 to 1) are not posted (default 0.5). */
+  minConfidence?: number;
+  /** At most this many findings are posted on one pull request, over all its reviews (default 20). */
+  maxComments?: number;
+  /** Run the Sonnet "Deep look" pass after the triage. */
+  deepLook?: boolean;
+  /** Also review draft pull requests (default: wait until ready for review). */
+  includeDrafts?: boolean;
+  /** Also review the portal's own pull requests, e.g. docs/keep-current-* (default: skip them). */
+  includeBotPrs?: boolean;
+  /** Pull request event actions that start a review; default opened, reopened, synchronize, ready_for_review. */
+  prActions?: string[];
+  /** Repositories of the project this spec reviews; default all GitHub repositories of the project. */
+  repoIds?: string[];
+  /** Head branch prefixes that mark the portal's own pull requests (default docs/keep-current-). */
+  botBranchPrefixes?: string[];
 }
 
-export const TRIGGER_ACTIONS = ['refresh_diagrams', 'refresh_docs'] as const;
+export const TRIGGER_ACTIONS = ['refresh_diagrams', 'refresh_docs', 'review_pr'] as const;
 export type TriggerAction = (typeof TRIGGER_ACTIONS)[number];
+
+export const REVIEW_POST_MODES = ['draft', 'auto'] as const;
+export type ReviewPostMode = (typeof REVIEW_POST_MODES)[number];
+export const REVIEW_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const;
+export type ReviewSeverity = (typeof REVIEW_SEVERITIES)[number];
+/** The pull request event actions that start a review. */
+export const REVIEW_PR_ACTIONS = ['opened', 'reopened', 'synchronize', 'ready_for_review'] as const;
+export const DEFAULT_BOT_PREFIXES = ['docs/keep-current-'];
 
 /** The actions of a spec in the order they run (diagrams first), whether it uses `action` or `actions`. */
 export function specActions(tc: TriggerConfig): TriggerAction[] {
@@ -304,6 +333,24 @@ export const BUILT_IN_TEMPLATES: Omit<LoopSpec, 'id' | 'project_id' | 'created_b
     planning_gate: 0,
     is_template: 1,
   },
+  {
+    name: 'Review new pull requests',
+    description: 'When a pull request is opened, reopened, gets new commits or is marked ready for review, review it (triage plus checklist) and keep the findings. In draft mode a person approves posting from the Inbox; in auto mode the comments go to the pull request straight away. Drafts and the portal\'s own documentation pull requests are skipped.',
+    trigger_kind: 'github_event',
+    trigger_config: { events: ['pull_request'], action: 'review_pr', postMode: 'draft', minSeverity: 'medium', maxComments: 20, maxPerHour: 10 },
+    goal_template: 'Review pull request #{{pr.number}} ({{pr.title}}) in {{repo.name}}.',
+    verification: [],
+    stop_rules: { maxIterations: 1, budgetUsd: 2 },
+    memory_config: { progressFile: false },
+    escalation: { onBlocked: true, onFail: true, webhook: true },
+    push_mode: 'never',
+    trust_tools: 0,
+    lead_agent: null,
+    engine: null,
+    monthly_budget_usd: 20,
+    planning_gate: 0,
+    is_template: 1,
+  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -366,7 +413,7 @@ function validateTriggerKind(k: unknown): LoopSpec['trigger_kind'] {
  */
 function checkTriggerAction(tc: TriggerConfig, projectId: string, kind: string): void {
   if (!tc || typeof tc !== 'object' || Array.isArray(tc)) throw badRequest('Trigger config must be an object');
-  const bad = () => badRequest('Action must be refresh_diagrams or refresh_docs');
+  const bad = () => badRequest('Action must be refresh_diagrams or refresh_docs (or review_pr for a pull request review)');
   const empty = (v: unknown) => v === undefined || v === null || v === '';
   const one_ = (tc as { action?: unknown }).action;
   const many = (tc as { actions?: unknown }).actions;
@@ -385,6 +432,7 @@ function checkTriggerAction(tc: TriggerConfig, projectId: string, kind: string):
     tc.action = tc.actions[0];
     delete tc.actions;
   } else if (tc.actions) delete tc.action;
+  checkReviewOptions(tc, projectId, kind);
   const flag = (k: 'publishPr' | 'mergedOnly') => {
     if (tc[k] === undefined || tc[k] === null) delete tc[k];
     else if (typeof tc[k] !== 'boolean') throw badRequest(`${k} must be true or false`);
@@ -402,7 +450,66 @@ function checkTriggerAction(tc: TriggerConfig, projectId: string, kind: string):
   if (kind === 'github_event' && !empty(tc.cron) && String(tc.cron).trim().split(/\s+/).length !== 5) throw badRequest('Cron must have 5 fields');
 }
 
-/** Dollars the sessions of a spec have spent since the start of this month (UTC). */
+const REVIEW_KEYS = ['postMode', 'minSeverity', 'minConfidence', 'maxComments', 'deepLook', 'includeDrafts', 'includeBotPrs', 'prActions', 'repoIds', 'botBranchPrefixes'] as const;
+
+/**
+ * The review_pr action (NEW-3) reviews one pull request per firing instead of starting a goal session, so it does not
+ * mix with the refresh actions, has no schedule or merge condition, and needs a pull request from a GitHub event (or a
+ * person naming one). Normalises its options in place and fills in the defaults the editor shows.
+ */
+function checkReviewOptions(tc: TriggerConfig, projectId: string, kind: string): void {
+  const has = specActions(tc).includes('review_pr');
+  const given = REVIEW_KEYS.filter((k) => (tc as Record<string, unknown>)[k] !== undefined && (tc as Record<string, unknown>)[k] !== null);
+  if (!has) {
+    if (given.length) throw badRequest(`${given[0]} is for review_pr specs`);
+    return;
+  }
+  if (kind !== 'github_event' && kind !== 'manual') throw badRequest('review_pr runs from a github_event trigger, or by hand with a pull request number');
+  if (specActions(tc).length > 1) throw badRequest('review_pr cannot be combined with other actions');
+  for (const k of ['publishPr', 'mergedOnly', 'cron'] as const) if (tc[k] !== undefined && tc[k] !== null && tc[k] !== false && tc[k] !== '') throw badRequest(`${k} does not apply to review_pr`);
+  const pick = <T extends string>(v: unknown, allowed: readonly T[], name: string, def: T): T => {
+    if (v === undefined || v === null || v === '') return def;
+    if (!allowed.includes(v as T)) throw badRequest(`${name} must be one of: ${allowed.join(', ')}`);
+    return v as T;
+  };
+  tc.postMode = pick(tc.postMode, REVIEW_POST_MODES, 'postMode', 'draft');
+  tc.minSeverity = pick(tc.minSeverity, REVIEW_SEVERITIES, 'minSeverity', 'medium');
+  const num = (v: unknown, name: string, min: number, max: number, def: number): number => {
+    if (v === undefined || v === null || v === '') return def;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < min || n > max) throw badRequest(`${name} must be between ${min} and ${max}`);
+    return n;
+  };
+  tc.maxComments = Math.round(num(tc.maxComments, 'maxComments', 1, 100, 20));
+  if (tc.minConfidence === undefined || tc.minConfidence === null || (tc.minConfidence as unknown) === '') delete tc.minConfidence;
+  else tc.minConfidence = num(tc.minConfidence, 'minConfidence', 0, 1, 0.5);
+  for (const k of ['deepLook', 'includeDrafts', 'includeBotPrs'] as const) {
+    if (tc[k] === undefined || tc[k] === null) delete tc[k];
+    else if (typeof tc[k] !== 'boolean') throw badRequest(`${k} must be true or false`);
+  }
+  if (tc.prActions === undefined || tc.prActions === null) delete tc.prActions;
+  else {
+    if (!Array.isArray(tc.prActions) || !tc.prActions.length || tc.prActions.some((a) => !(REVIEW_PR_ACTIONS as readonly string[]).includes(a))) {
+      throw badRequest(`prActions must be a list of: ${REVIEW_PR_ACTIONS.join(', ')}`);
+    }
+    tc.prActions = [...new Set(tc.prActions)];
+  }
+  if (tc.botBranchPrefixes === undefined || tc.botBranchPrefixes === null) delete tc.botBranchPrefixes;
+  else if (!Array.isArray(tc.botBranchPrefixes) || tc.botBranchPrefixes.length > 20 || tc.botBranchPrefixes.some((p) => typeof p !== 'string' || !p || p.length > 100)) {
+    throw badRequest('botBranchPrefixes must be a list of branch prefixes');
+  }
+  if (tc.repoIds === undefined || tc.repoIds === null) delete tc.repoIds;
+  else {
+    if (!Array.isArray(tc.repoIds) || tc.repoIds.length > 50) throw badRequest('repoIds must be a list of repositories of this project');
+    for (const id of tc.repoIds) {
+      const r = one<Row>('SELECT project_id FROM repos WHERE id = ?', String(id));
+      if (!r || r.project_id !== projectId) throw badRequest('repoIds must be repositories of this project');
+    }
+    if (!tc.repoIds.length) delete tc.repoIds;
+  }
+}
+
+/** Dollars the sessions of a spec have spent since the start of this month (UTC). A pull request review is a session too. */
 export function specMonthSpend(specId: string): number {
   const d = new Date();
   const since = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();

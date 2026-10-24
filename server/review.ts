@@ -6,6 +6,8 @@ import { checkBranch, diffRefs, ensureFresh, fetchPullRef, getCodeCommitPull, ge
 import { HttpError, badRequest, extractJson, int, newId, notFound, now, parseJson } from './util.ts';
 import { git } from './git.ts';
 import { parseUnifiedDiff, type Finding, type Severity } from './agent/heuristics.ts';
+import { postReview } from './review-post.ts';
+import { auditRaw } from './audit.ts';
 import { startRun, READ_ONLY_TOOLS, getRun } from './agent/runner.ts';
 
 const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
@@ -23,7 +25,7 @@ Check, in this order:
 5. Readability and conventions of the surrounding code.
 
 Report only real issues; skip style nits that a formatter would fix.
-Each finding needs: "file" (path as shown in the diff), "line" (line number in the NEW file, or null for file-level), "severity" (critical, high, medium, low or info), "category", "message" (what is wrong, in plain language), "suggestion" (a concrete fix).
+Each finding needs: "file" (path as shown in the diff), "line" (line number in the NEW file, or null for file-level), "severity" (critical, high, medium, low or info), "category", "message" (what is wrong, in plain language), "suggestion" (a concrete fix) and "confidence" (a number from 0 to 1: how sure you are that this is a real problem). Never copy a secret value into a message; say where it is instead.
 
 End your reply with a JSON block:
 \`\`\`json
@@ -35,9 +37,12 @@ ${diff}
 </diff>`;
 }
 
-function cleanFindings(raw: unknown, files: Set<string>): Finding[] {
+/** A finding as the model reports it, before it is stored. */
+export type ReviewFinding = Finding & { confidence?: number | null; source?: string };
+
+function cleanFindings(raw: unknown, files: Set<string>): ReviewFinding[] {
   if (!Array.isArray(raw)) return [];
-  const out: Finding[] = [];
+  const out: ReviewFinding[] = [];
   for (const f of raw.slice(0, 200) as any[]) {
     const file = String(f?.file ?? '').replace(/^[ab]\//, '');
     if (!file || !files.has(file)) continue;
@@ -45,12 +50,14 @@ function cleanFindings(raw: unknown, files: Set<string>): Finding[] {
     const line = Number.isFinite(Number(f.line)) && Number(f.line) > 0 ? Math.round(Number(f.line)) : null;
     const message = String(f.message ?? '').slice(0, 2000);
     if (!message) continue;
-    out.push({ file, line, severity, category: String(f.category ?? 'general').slice(0, 40), message, suggestion: f.suggestion ? String(f.suggestion).slice(0, 2000) : undefined });
+    const conf = Number(f.confidence);
+    const confidence = f.confidence !== undefined && f.confidence !== null && f.confidence !== '' && Number.isFinite(conf) ? Math.min(1, Math.max(0, conf)) : null;
+    out.push({ file, line, severity, category: String(f.category ?? 'general').slice(0, 40), message, suggestion: f.suggestion ? String(f.suggestion).slice(0, 2000) : undefined, confidence });
   }
   return out;
 }
 
-function trimDiff(diff: string): { diff: string; truncated: boolean } {
+export function trimDiff(diff: string): { diff: string; truncated: boolean } {
   if (diff.length <= MAX_DIFF) return { diff, truncated: false };
   const parts = diff.split(/^(?=diff --git )/m);
   let out = '';
@@ -61,7 +68,7 @@ function trimDiff(diff: string): { diff: string; truncated: boolean } {
   return { diff: out, truncated: true };
 }
 
-async function runPass(review: Row, repo: Repo, userId: string, model: 'haiku' | 'sonnet', focusFiles?: string[]): Promise<{ findings: Finding[]; summary: string; runId: string }> {
+async function runPass(review: Row, repo: Repo, userId: string, model: 'haiku' | 'sonnet', focusFiles?: string[], onCost?: (usd: number) => void): Promise<{ findings: ReviewFinding[]; summary: string; runId: string }> {
   const files = new Set(parseUnifiedDiff(review.diff).map((f) => f.newPath));
   const { run: r, done } = await startRun({
     projectId: review.project_id,
@@ -84,41 +91,57 @@ async function runPass(review: Row, repo: Repo, userId: string, model: 'haiku' |
   if (final.worktree) {
     await removeWorktree(repo, path.join(projectDir(getProject(review.project_id)), final.worktree)).catch(() => undefined);
   }
+  const cost = Number(final.cost_usd ?? 0);
+  if (cost > 0) {
+    run('UPDATE reviews SET cost_usd = cost_usd + ? WHERE id = ?', cost, review.id);
+    onCost?.(cost);
+  }
   if (final.status !== 'completed') throw new HttpError(502, `The review run ${final.status}: ${final.error ?? ''}`);
   const parsed = extractJson<any>(final.result ?? '') ?? {};
   return { findings: cleanFindings(parsed.findings, files), summary: String(parsed.summary ?? '').slice(0, 2000), runId: r.id };
+}
+
+/** Both passes of a review: Haiku over the whole change and, with a deep look, Sonnet over the files that worried it. */
+export async function reviewPasses(review: Row, repo: Repo, userId: string, onCost?: (usd: number) => void): Promise<{ findings: ReviewFinding[]; summary: string }> {
+  const triage = await runPass(review, repo, userId, 'haiku', undefined, onCost);
+  let findings: ReviewFinding[] = triage.findings.map((f) => ({ ...f, source: 'triage' }));
+  let summary = triage.summary;
+  if (review.deep) {
+    const flagged = [...new Set(triage.findings.filter((f) => ['critical', 'high', 'medium'].includes(f.severity)).map((f) => f.file))].slice(0, 15);
+    if (flagged.length) {
+      const deep = await runPass(review, repo, userId, 'sonnet', flagged, onCost);
+      findings = [...findings.filter((f) => !flagged.includes(f.file)), ...deep.findings.map((f) => ({ ...f, source: 'deep' }))];
+      summary = deep.summary || summary;
+    }
+  }
+  return { findings, summary };
+}
+
+export function storeFindings(reviewId: string, findings: ReviewFinding[]): void {
+  for (const f of findings) {
+    insert('findings', {
+      id: newId('f_'),
+      review_id: reviewId,
+      file: f.file,
+      line: f.line,
+      end_line: null,
+      severity: f.severity,
+      category: f.category,
+      message: f.message,
+      suggestion: f.suggestion ?? null,
+      status: 'open',
+      source: f.source ?? 'triage',
+      confidence: f.confidence ?? null,
+    });
+  }
 }
 
 async function executeReview(reviewId: string, userId: string): Promise<void> {
   const review = one<Row>('SELECT * FROM reviews WHERE id = ?', reviewId)!;
   const repo = getRepo(review.repo_id);
   try {
-    const triage = await runPass(review, repo, userId, 'haiku');
-    let findings = triage.findings.map((f) => ({ ...f, source: 'triage' }));
-    let summary = triage.summary;
-    if (review.deep) {
-      const flagged = [...new Set(triage.findings.filter((f) => ['critical', 'high', 'medium'].includes(f.severity)).map((f) => f.file))].slice(0, 15);
-      if (flagged.length) {
-        const deep = await runPass(review, repo, userId, 'sonnet', flagged);
-        findings = [...findings.filter((f) => !flagged.includes(f.file)), ...deep.findings.map((f) => ({ ...f, source: 'deep' }))];
-        summary = deep.summary || summary;
-      }
-    }
-    for (const f of findings) {
-      insert('findings', {
-        id: newId('f_'),
-        review_id: review.id,
-        file: f.file,
-        line: f.line,
-        end_line: null,
-        severity: f.severity,
-        category: f.category,
-        message: f.message,
-        suggestion: f.suggestion ?? null,
-        status: 'open',
-        source: f.source,
-      });
-    }
+    const { findings, summary } = await reviewPasses(review, repo, userId);
+    storeFindings(review.id, findings);
     update('reviews', review.id, { status: 'done', summary, finished_at: now() });
   } catch (e: any) {
     update('reviews', review.id, { status: 'error', error: String(e?.message ?? e), finished_at: now() });
@@ -127,7 +150,7 @@ async function executeReview(reviewId: string, userId: string): Promise<void> {
 }
 
 function reviewView(r: Row) {
-  return { ...r, files: parseJson(r.files, []), diff: undefined };
+  return { ...r, files: parseJson(r.files, []), diff: undefined, post_options: parseJson(r.post_options, {}), post_result: parseJson(r.post_result, {}) };
 }
 
 export function registerReviewRoutes(): void {
@@ -230,27 +253,21 @@ export function registerReviewRoutes(): void {
     if (!r) throw notFound('Review not found');
     requireProject(ctx, r.project_id, 'editor');
     const repo = getRepo(r.repo_id);
-    if (repo.provider !== 'github' || !r.pr_number || !r.head_sha) throw badRequest('Posting works for GitHub pull request reviews only');
-    const findings = all<Row>("SELECT * FROM findings WHERE review_id = ? AND status != 'dismissed'", r.id);
-    const lineFindings = findings.filter((f) => f.line);
-    const fileFindings = findings.filter((f) => !f.line);
-    const body =
-      `**Agent Portal review** (${findings.length} finding${findings.length === 1 ? '' : 's'})\n\n${r.summary ?? ''}` +
-      (fileFindings.length ? `\n\n${fileFindings.map((f) => `- **${f.severity}** \`${f.file}\`: ${f.message}`).join('\n')}` : '');
-    await githubApi(repo, 'POST', `/pulls/${r.pr_number}/reviews`, {
-      commit_id: r.head_sha,
-      event: 'COMMENT',
-      body,
-      comments: lineFindings.slice(0, 50).map((f) => ({
-        path: f.file,
-        line: f.line,
-        side: 'RIGHT',
-        body: `**${f.severity}** · ${f.category}\n\n${f.message}${f.suggestion ? `\n\n_Suggestion:_ ${f.suggestion}` : ''}`,
-      })),
-    });
-    update('reviews', r.id, { posted_at: now() });
+    if (!['github', 'codecommit'].includes(repo.provider) || !r.pr_number || !r.head_sha) throw badRequest('Posting works for GitHub and CodeCommit pull request reviews only');
+    const out = await postReview(r.id, ctx.user!.id);
+    return { ...out, message: out.posted ? `Posted ${out.posted} finding${out.posted === 1 ? '' : 's'}` : 'Nothing new to post: every finding is below the threshold, dismissed, or already on the pull request' };
+  });
+
+  // Draft mode: a person decides not to post this review's findings. The Inbox item goes away; the findings stay.
+  post('/api/reviews/:id/skip-post', async (ctx) => {
+    const r = one<Row>('SELECT * FROM reviews WHERE id = ?', ctx.params.id);
+    if (!r) throw notFound('Review not found');
+    requireProject(ctx, r.project_id, 'editor');
+    if (r.post_state !== 'awaiting') throw badRequest('This review is not waiting for approval to post');
+    update('reviews', r.id, { post_state: 'skipped' });
+    auditRaw(ctx.user!.id, 'review.post_skip', `review:${r.id}`, { projectId: r.project_id, pr: r.pr_number });
     notifyProject(r.project_id, 'review.updated', { id: r.id });
-    return { ok: true, posted: findings.length };
+    return { ok: true };
   });
 
   del('/api/reviews/:id', (ctx) => {
