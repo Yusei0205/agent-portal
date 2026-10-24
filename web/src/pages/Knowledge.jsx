@@ -1,4 +1,5 @@
 import { useProject } from '../lib/context.js';
+import { href } from '../lib/router.js';
 import { PageHeader, Tabs } from '../components/ui.jsx';
 import { Documents } from './knowledge/Documents.jsx';
 import { DocView } from './knowledge/Search.jsx';

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useProject } from '../../lib/context.js';
 import { useProjectEvents } from '../../lib/events.js';
-import { go, href } from '../../lib/router.js';
+import { href } from '../../lib/router.js';
 import { useLoad } from '../../lib/useAsync.js';
 import { cx, timeAgo } from '../../lib/util.js';
 import { Markdown } from '../../components/Markdown.jsx';

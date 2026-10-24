@@ -6,16 +6,15 @@ import { useLoad } from '../../lib/useAsync.js';
 import { cx, plural } from '../../lib/util.js';
 import { useSortable } from '../../lib/useSortable.js';
 import { Icon } from '../../components/Icon.jsx';
-import { Markdown } from '../../components/Markdown.jsx';
 import { SortHeader } from '../../components/SortHeader.jsx';
-import { Badge, Button, Empty, ErrorNote, IconButton, Modal, Note, Spinner, useUi } from '../../components/ui.jsx';
+import { Badge, Button, Empty, ErrorNote, IconButton, Spinner, useUi } from '../../components/ui.jsx';
 import { Breadcrumb, FolderPickerModal, FolderTree, NewFolderModal, RenameFolderModal, buildFolderTree, cleanFolderPath, commonFolder } from './folders.jsx';
 import { SearchBar, SearchResults } from './Search.jsx';
 import { DocRow, RenameDocModal, SetRepoModal } from './DocRow.jsx';
 
 /* ---------------- Documents (file manager) ---------------- */
 
-const TYPE_LABEL = { '.md': 'Markdown', '.markdown': 'Markdown', '.txt': 'Text', '.pdf': 'PDF', '.docx': 'Word', '.xlsx': 'Excel', '.pptx': 'PowerPoint', '.html': 'HTML', '.htm': 'HTML', '.csv': 'CSV', '.json': 'JSON', '.yaml': 'YAML', '.yml': 'YAML', '.odt': 'OpenDocument', '.rtf': 'RTF', '.epub': 'EPUB' };
+export const TYPE_LABEL = { '.md': 'Markdown', '.markdown': 'Markdown', '.txt': 'Text', '.pdf': 'PDF', '.docx': 'Word', '.xlsx': 'Excel', '.pptx': 'PowerPoint', '.html': 'HTML', '.htm': 'HTML', '.csv': 'CSV', '.json': 'JSON', '.yaml': 'YAML', '.yml': 'YAML', '.odt': 'OpenDocument', '.rtf': 'RTF', '.epub': 'EPUB' };
 
 export function Documents() {
   const { project, canEdit } = useProject();

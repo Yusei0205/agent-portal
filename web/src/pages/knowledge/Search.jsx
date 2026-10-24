@@ -2,12 +2,12 @@ import { Fragment, useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useProject } from '../../lib/context.js';
 import { useProjectEvents } from '../../lib/events.js';
-import { go, href } from '../../lib/router.js';
+import { href } from '../../lib/router.js';
 import { useLoad } from '../../lib/useAsync.js';
 import { cx, plural, timeAgo } from '../../lib/util.js';
 import { Icon } from '../../components/Icon.jsx';
 import { Markdown } from '../../components/Markdown.jsx';
-import { Button, Empty, ErrorNote, Note, PageHeader, Spinner, useUi } from '../../components/ui.jsx';
+import { Button, Empty, ErrorNote, PageHeader, Spinner, useUi } from '../../components/ui.jsx';
 
 /* --- Search bar (always visible above the file manager) --- */
 export function SearchBar({ q, setQ, projectId: _pid }) {

@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { api } from '../../lib/api.js';
-import { go, href } from '../../lib/router.js';
-import { cx, timeAgo } from '../../lib/util.js';
+import { href } from '../../lib/router.js';
+import { bytes, cx, timeAgo } from '../../lib/util.js';
 import { Icon } from '../../components/Icon.jsx';
 import { Badge, Button, IconButton, Modal } from '../../components/ui.jsx';
+import { TYPE_LABEL } from './Documents.jsx';
 
 /* --- Single document row --- */
 export function DocRow({ doc: d, project, repoList, repoName, canEdit, showPath, currentFolder, selected, onToggleSelect, onDragStart, onMoveDoc, onRenameDoc, onSetRepo, onDelete }) {
