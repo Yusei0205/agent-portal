@@ -7,6 +7,14 @@ import { execFileSync } from 'node:child_process';
 import { chromium, type Page } from 'playwright';
 import { FSD_MD, makeDocx, makeRepo } from '../fixtures.ts';
 
+/** The Settings page source: Settings.jsx plus the modules it was split into (pages/settings/). */
+function readSettingsSource(): string {
+  const pages = path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages');
+  const parts = [fs.readFileSync(path.join(pages, 'Settings.jsx'), 'utf8')];
+  for (const f of fs.readdirSync(path.join(pages, 'settings'))) parts.push(fs.readFileSync(path.join(pages, 'settings', f), 'utf8'));
+  return parts.join('\n');
+}
+
 const shots = process.env.SCREENSHOT_DIR || '';
 let step = 0;
 
@@ -806,10 +814,7 @@ async function main() {
           check(true, 'tools: browser pack shows docker compose hint');
         } else {
           // Source-level check
-          const settingsJsx = fs.readFileSync(
-            path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
-            'utf8',
-          );
+          const settingsJsx = readSettingsSource();
           check(settingsJsx.includes('docker compose --profile browser'), 'tools: browser docker hint in Settings.jsx source');
         }
 
@@ -818,10 +823,7 @@ async function main() {
         const kiroHintVisible = await kiroHint.isVisible().catch(() => false);
         if (!kiroHintVisible) {
           // Source-level check
-          const settingsJsx = fs.readFileSync(
-            path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
-            'utf8',
-          );
+          const settingsJsx = readSettingsSource();
           check(settingsJsx.includes('kiro-cli login --use-device-flow'), 'tools: kiro login hint in Settings.jsx source');
         } else {
           check(true, 'tools: Kiro pack shows device-flow login hint');
@@ -831,20 +833,14 @@ async function main() {
         const refreshBtn = page.locator('.tools-pack-row').filter({ hasText: /Browser MCP|browser/ }).getByRole('button', { name: /Refresh/i });
         const refreshVisible = await refreshBtn.isVisible().catch(() => false);
         if (!refreshVisible) {
-          const settingsJsx = fs.readFileSync(
-            path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
-            'utf8',
-          );
+          const settingsJsx = readSettingsSource();
           check(settingsJsx.includes('Refresh'), 'tools: Refresh button in browser pack row (source check)');
         } else {
           check(true, 'tools: Refresh button present on browser pack row');
         }
       } else {
         // Source-level verification
-        const settingsJsx = fs.readFileSync(
-          path.join(import.meta.dirname, '..', '..', 'web', 'src', 'pages', 'Settings.jsx'),
-          'utf8',
-        );
+        const settingsJsx = readSettingsSource();
         check(settingsJsx.includes('ToolsSection'), 'tools: ToolsSection component exists in Settings.jsx');
         check(settingsJsx.includes('docker compose --profile browser'), 'tools: browser docker hint in Settings.jsx');
         check(settingsJsx.includes('kiro-cli login --use-device-flow'), 'tools: kiro login hint in Settings.jsx');

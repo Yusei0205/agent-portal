@@ -95,7 +95,7 @@ function clearStoredTokens(): void {
 // 1. Region-dropdown data (Settings.jsx — AWS_REGIONS constant & RegionSelect)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('Settings.jsx RegionSelect', () => {
+describe('Settings RegionSelect (pages/settings/regions.jsx)', () => {
   // We read the source file and extract the AWS_REGIONS constant without
   // executing any browser code. This is a structural test that verifies the
   // data contract the UI relies on.
@@ -104,7 +104,7 @@ describe('Settings.jsx RegionSelect', () => {
 
   before(() => {
     // Resolve path portably on Windows and POSIX
-    const url = new URL('../web/src/pages/Settings.jsx', import.meta.url);
+    const url = new URL('../web/src/pages/settings/regions.jsx', import.meta.url);
     const filePath = url.pathname.replace(/^\/([A-Z]:\/)/i, '$1');
     src = fs.readFileSync(filePath, 'utf8');
   });
@@ -145,16 +145,18 @@ describe('Settings.jsx RegionSelect', () => {
   });
 
   test('AwsSection uses RegionSelect for the Region field (not a bare <input>)', () => {
-    const startIdx = src.indexOf('function AwsSection(');
-    const endIdx = src.indexOf('\nfunction ', startIdx + 1);
-    const fn = src.slice(startIdx, endIdx);
+    const full = fs.readFileSync(new URL('../web/src/pages/settings/Providers.jsx', import.meta.url).pathname.replace(/^\/([A-Z]:\/)/i, '$1'), 'utf8');
+    const startIdx = full.indexOf('function AwsSection(');
+    const endIdx = full.indexOf('\nfunction ', startIdx + 1);
+    const fn = full.slice(startIdx, endIdx < 0 ? undefined : endIdx);
     assert.ok(fn.includes('RegionSelect'), 'AwsSection must use RegionSelect for the Region field');
   });
 
   test('SsoFlow uses RegionSelect for the SSO region field (not a bare <input>)', () => {
-    const startIdx = src.indexOf('function SsoFlow(');
-    const endIdx = src.indexOf('\nfunction ', startIdx + 1);
-    const fn = src.slice(startIdx, endIdx);
+    const full = fs.readFileSync(new URL('../web/src/pages/settings/SsoFlow.jsx', import.meta.url).pathname.replace(/^\/([A-Z]:\/)/i, '$1'), 'utf8');
+    const startIdx = full.indexOf('function SsoFlow(');
+    const endIdx = full.indexOf('\nfunction ', startIdx + 1);
+    const fn = full.slice(startIdx, endIdx < 0 ? undefined : endIdx);
     assert.ok(fn.includes('RegionSelect'), 'SsoFlow must use RegionSelect for the SSO region field');
   });
 });
