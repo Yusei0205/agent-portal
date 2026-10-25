@@ -392,7 +392,7 @@ async function main() {
     // Run options: the lead agent and the tools switch are in the dialog and reach the API.
     const leadSelect = page.getByLabel('Lead agent');
     check((await leadSelect.locator('option').first().textContent()) === 'Default agent', 'the lead agent list starts with "Default agent"');
-    const leadValues = await leadSelect.locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    const leadValues = await leadSelect.locator('option').evaluateAll((os) => os.map((o) => (o as { value: string }).value));
     check(leadValues.length > 1, 'the lead agent list offers the project agents');
     check(await page.locator('.modal .toggle', { hasText: 'Let the agent use tools freely' }).count(), 'the dialog has the "Let the agent use tools freely" switch');
     check(await page.getByText('Deploys, terraform apply and deleting files outside the working copy stay blocked').count(), 'the switch explains that dangerous commands stay blocked');
@@ -774,9 +774,9 @@ async function main() {
       check(true, `#/p/<id>/${old} redirects to Setup › ${section}`);
     }
     // Diagrams, documents and presentations moved into Create; Learn moved into Knowledge. Old addresses redirect.
-    const learnDocs = await page.evaluate(async (id) => (await (await fetch(`/api/projects/${id}/learn/docs`)).json()).docs ?? [], pid);
-    const learnQuizzes = await page.evaluate(async (id) => (await (await fetch(`/api/projects/${id}/learn/quizzes`)).json()).quizzes ?? [], pid);
-    const learnPaths = await page.evaluate(async (id) => (await (await fetch(`/api/projects/${id}/learn/paths`)).json()).paths ?? [], pid);
+    const learnDocs = await page.evaluate(async (id) => ((await (await fetch(`/api/projects/${id}/learn/docs`)).json()) as Record<string, { id: string; title?: string }[]>).docs ?? [], pid);
+    const learnQuizzes = await page.evaluate(async (id) => ((await (await fetch(`/api/projects/${id}/learn/quizzes`)).json()) as Record<string, { id: string; title?: string }[]>).quizzes ?? [], pid);
+    const learnPaths = await page.evaluate(async (id) => ((await (await fetch(`/api/projects/${id}/learn/paths`)).json()) as Record<string, { id: string; title?: string }[]>).paths ?? [], pid);
     const moved: [string, RegExp][] = [
       ['diagrams', /\/create\/diagrams$/],
       ['documents', /\/create\/documents$/],
