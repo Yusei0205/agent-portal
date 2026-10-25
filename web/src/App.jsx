@@ -10,10 +10,7 @@ import { Badge, Button, Modal, Spinner, UiProvider } from './components/ui.jsx';
 import { Login, Setup, AcceptInvite, ResetPassword } from './pages/Auth.jsx';
 import { Projects } from './pages/Projects.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
-import { Learn } from './pages/Learn.jsx';
-import { Diagrams } from './pages/Diagrams.jsx';
-import { Presentations } from './pages/Presentations.jsx';
-import { GeneratedDocs } from './pages/GeneratedDocs.jsx';
+import { Create } from './pages/Create.jsx';
 import { Sessions, legacyRunTarget } from './pages/Sessions.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 import { Review } from './pages/Review.jsx';
@@ -81,14 +78,12 @@ export function App() {
 const PROJECT_MAIN_ITEMS = [
   { tab: 'sessions', label: 'Sessions', icon: 'play' },
   { tab: 'workspaces', label: 'Workspaces', icon: 'projects' },
-  { tab: 'tickets', label: 'Tickets', icon: 'inbox' },
+  // Only listed when the project has Jira connected; the page stays reachable and explains how to connect.
+  { tab: 'tickets', label: 'Tickets', icon: 'inbox', needsJira: true },
   { tab: 'review', label: 'Code review', icon: 'review' },
   { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
-  { tab: 'learn', label: 'Learn', icon: 'learn' },
-  { tab: 'diagrams', label: 'Diagrams', icon: 'builder' },
-  // Not called "Documents": Knowledge already has a Documents tab for uploaded files.
-  { tab: 'documents', label: 'Generated docs', icon: 'file' },
-  { tab: 'presentations', label: 'Presentations', icon: 'file' },
+  // Diagrams, documents, decks and templates are its tabs; Learn is a tab of Knowledge.
+  { tab: 'create', label: 'Create', icon: 'builder' },
   { tab: 'vault', label: 'Vault', icon: 'inbox', scoped: true },
   { tab: 'insights', label: 'Insights', icon: 'chart', scoped: true },
   { tab: 'setup', label: 'Setup', icon: 'settings' },
@@ -111,6 +106,27 @@ const PORTAL_ITEMS = [
   { tab: 'settings', label: 'Settings', icon: 'settings', global: true, adminOnly: true },
 ];
 
+
+/**
+ * Whether the menu project has Jira connected (GET /api/projects/:pid/jira). Looked up again when the project changes
+ * and when you move between Setup, Tickets and the rest, which is where connecting or disconnecting happens.
+ */
+function useJiraConnected(projectId, route) {
+  const [state, setState] = useState({ projectId: null, connected: false });
+  const watch = route.tab === 'setup' || route.tab === 'tickets' ? `${route.tab}/${route.rest[0] || ''}` : '';
+  useEffect(() => {
+    if (!projectId) return undefined;
+    let alive = true;
+    api
+      .get(`/api/projects/${encodeURIComponent(projectId)}/jira`)
+      .then((r) => alive && setState({ projectId, connected: Boolean(r.connected) }))
+      .catch(() => alive && setState({ projectId, connected: false }));
+    return () => {
+      alive = false;
+    };
+  }, [projectId, watch]);
+  return state.projectId === projectId && state.connected;
+}
 
 /**
  * Navigation menu inside the rail. The Portal pages are a group that expands in place (no separate panel and no
@@ -139,6 +155,7 @@ function NavMenu({ route, projectId, current, user, inboxCount, onNavigate }) {
       return !o;
     });
   const handleLinkClick = () => onNavigate?.();
+  const jiraConnected = useJiraConnected(projectId, route);
   const portalItems = PORTAL_ITEMS.filter((i) => !i.adminOnly || user.is_admin);
 
   const link = (key, linkHref, icon, label, isActive, badge = null, nested = false) => (
@@ -200,6 +217,7 @@ function NavMenu({ route, projectId, current, user, inboxCount, onNavigate }) {
       <nav className="rail-nav" aria-label="Pages">
         {PROJECT_MAIN_ITEMS.map((item) => {
           if (item.group) return portalGroup;
+          if (item.needsJira && !jiraConnected) return null;
           const badge =
             item.tab === 'knowledge' && current.open_questions ? (
               <span className="rail-count" title="Team questions waiting">{current.open_questions}</span>
@@ -586,17 +604,8 @@ function ProjectScope({ projectId, route }) {
   const value = { ...state, canEdit: access === 'editor' || access === 'owner', isOwner: access === 'owner', reload: load };
   let page;
   switch (route.tab) {
-    case 'learn':
-      page = <Learn route={route} />;
-      break;
-    case 'diagrams':
-      page = <Diagrams route={route} />;
-      break;
-    case 'documents':
-      page = <GeneratedDocs route={route} />;
-      break;
-    case 'presentations':
-      page = <Presentations route={route} />;
+    case 'create':
+      page = <Create route={route} />;
       break;
     case 'vault':
       page = <Vault projectId={projectId} />;

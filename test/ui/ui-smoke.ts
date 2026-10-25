@@ -47,6 +47,15 @@ async function openRailGroup(page: Page, name: string | RegExp) {
 /** Nothing to close any more: groups expand in place and never hide the rest of the menu. */
 async function closeRailGroup(_page: Page) {}
 
+/**
+ * Open a tab of the Create page from anywhere: through the Create menu entry unless a Create page is already showing,
+ * then through the tab itself.
+ */
+async function openCreateTab(page: Page, tab: 'Diagrams' | 'Documents' | 'Decks' | 'Templates') {
+  if (!/\/create\//.test(page.url())) await page.locator('.rail-link', { hasText: /^Create$/ }).click();
+  await page.getByRole('link', { name: tab, exact: true }).click();
+}
+
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-ui-'));
   process.env.DATA_DIR = dataDir;
@@ -332,7 +341,12 @@ async function main() {
     await page.locator('.finding.is-dismissed').first().waitFor({ state: 'detached' }).catch(() => undefined);
 
     console.log('learn');
+    // Learn is a tab of Knowledge, not a menu entry of its own.
+    check((await page.locator('.rail-link', { hasText: /^Learn$/ }).count()) === 0, 'Learn is not a menu item');
+    await page.locator('.rail-link', { hasText: /^Knowledge$/ }).click();
     await page.getByRole('link', { name: 'Learn', exact: true }).click();
+    await page.waitForURL(/\/knowledge\/learn$/);
+    check(await page.getByRole('heading', { name: 'Knowledge', level: 1 }).count(), 'Learn opens under the Knowledge heading');
     await page.getByRole('button', { name: 'Write a document', exact: true }).click();
     await page.getByLabel('Title').fill('How refunds work');
     await page.getByRole('button', { name: 'Write it', exact: true }).click();
@@ -364,8 +378,10 @@ async function main() {
     await shot(page, 'path');
 
     console.log('diagrams');
-    await page.getByRole('link', { name: 'Diagrams', exact: true }).click();
+    await openCreateTab(page, 'Diagrams');
     await page.getByRole('heading', { name: 'Diagrams', exact: true }).waitFor();
+    check(/\/create\/diagrams$/.test(page.url()), 'diagrams live at #/p/<id>/create/diagrams');
+    check((await page.getByRole('heading', { level: 1 }).count()) === 1 && (await page.getByRole('heading', { name: 'Create', level: 1 }).count()) === 1, 'the Create page has one h1');
     await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
     check(await page.getByText('An agent reads the code and draws it').count(), 'diagrams page explains itself when empty');
     await shot(page, 'diagrams-empty');
@@ -373,8 +389,22 @@ async function main() {
     check(await page.getByRole('button', { name: 'Draw it', exact: true }).isDisabled(), 'Draw it waits for a repository');
     await page.getByLabel('Title (optional)').fill('Refund components');
     await page.locator('.modal .choice', { hasText: 'refund-service' }).click();
+    // Run options: the lead agent and the tools switch are in the dialog and reach the API.
+    const leadSelect = page.getByLabel('Lead agent');
+    check((await leadSelect.locator('option').first().textContent()) === 'Default agent', 'the lead agent list starts with "Default agent"');
+    const leadValues = await leadSelect.locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    check(leadValues.length > 1, 'the lead agent list offers the project agents');
+    check(await page.locator('.modal .toggle', { hasText: 'Let the agent use tools freely' }).count(), 'the dialog has the "Let the agent use tools freely" switch');
+    check(await page.getByText('Deploys, terraform apply and deleting files outside the working copy stay blocked').count(), 'the switch explains that dangerous commands stay blocked');
+    await leadSelect.selectOption(leadValues[1]);
+    await page.locator('.modal .toggle', { hasText: 'Let the agent use tools freely' }).click();
+    const drawReq = page.waitForRequest((r) => r.method() === 'POST' && /\/diagrams$/.test(r.url()));
     await page.getByRole('button', { name: 'Draw it', exact: true }).click();
+    const drawBody = (await drawReq).postDataJSON();
+    check(drawBody.leadAgent === leadValues[1] && drawBody.trustAllTools === true, 'the chosen lead agent and tools switch are sent when drawing');
     await page.getByRole('heading', { name: 'Refund components', exact: true }).waitFor();
+    check(await page.getByText(`Lead agent: ${leadValues[1]}`).count(), 'the diagram shows its lead agent');
+    check(await page.getByText('Tools: used freely').count(), 'the diagram shows that tools are used freely');
     await page.locator('.diagram-page .mermaid-ok').waitFor({ timeout: 30000 });
     check(await page.locator('.diagram-page .badge', { hasText: 'Ready' }).count(), 'a generated diagram is ready and drawn');
     check(await page.getByText('Version 1').count(), 'the diagram is version 1');
@@ -385,8 +415,25 @@ async function main() {
     await page.getByRole('button', { name: 'Export .mmd', exact: true }).click();
     check((await (await mmd).suggestedFilename()).endsWith('.mmd'), 'Export .mmd downloads a .mmd file');
     await shot(page, 'diagram-view');
+    // The plain Refresh stays one click and sends nothing: the server reuses what the diagram stored.
+    const plainReq = page.waitForRequest((r) => r.method() === 'POST' && /\/diagrams\/[^/]+\/refresh$/.test(r.url()));
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    const plainBody = (await plainReq).postDataJSON();
+    check(plainBody.leadAgent === undefined && plainBody.trustAllTools === undefined, 'a plain Refresh sends no run options');
     await page.getByText('Version 2').waitFor({ timeout: 30000 });
+    await page.locator('.diagram-page .badge', { hasText: 'Ready' }).waitFor();
+    // The agent and tools popover starts from the stored choice and sends the new one.
+    await page.getByRole('button', { name: 'Agent and tools for: Refresh', exact: true }).click();
+    const refreshDialog = page.getByRole('dialog', { name: 'Agent and tools' });
+    check((await refreshDialog.getByLabel('Lead agent').inputValue()) === leadValues[1], 'the refresh options start from the stored lead agent');
+    check(await refreshDialog.locator('input[type=checkbox]').isChecked(), 'the refresh options start from the stored tools switch');
+    await refreshDialog.locator('.toggle').click();
+    const optReq = page.waitForRequest((r) => r.method() === 'POST' && /\/diagrams\/[^/]+\/refresh$/.test(r.url()));
+    await refreshDialog.getByRole('button', { name: 'Refresh with these', exact: true }).click();
+    const optBody = (await optReq).postDataJSON();
+    check(optBody.leadAgent === leadValues[1] && optBody.trustAllTools === false, 'Refresh with these sends the chosen lead agent and tools switch');
+    await page.getByText('Version 3').waitFor({ timeout: 30000 });
+    check(await page.getByText('Tools: ask first').count(), 'the diagram shows the stored tools choice after the refresh');
     await page.locator('.diagram-versions li', { hasText: 'v1' }).getByRole('link', { name: 'View', exact: true }).click();
     await page.getByText('Older versions are read-only').waitFor();
     check(await page.getByRole('button', { name: 'Refresh', exact: true }).count(), 'an older version is shown with the actions of the diagram');
@@ -402,13 +449,15 @@ async function main() {
 
     console.log('presentations and templates');
     const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-    await page.getByRole('link', { name: 'Presentations', exact: true }).click();
+    await openCreateTab(page, 'Decks');
     await page.getByRole('heading', { name: 'Presentations', exact: true }).waitFor();
+    check(/\/create\/decks$/.test(page.url()), 'presentations live at #/p/<id>/create/decks');
     await page.getByRole('heading', { name: 'No presentations yet', exact: true }).waitFor();
     check(await page.getByText('An agent plans the story, writes speaker notes on every slide').count(), 'presentations page explains itself when empty');
     await shot(page, 'presentations-empty');
-    // Templates live in the setup hub; with none uploaded the page says which look applies.
+    // Templates are the last tab of Create; with none uploaded the page says which look applies. The old Setup address redirects.
     await page.goto(`${base}/#/p/${pid}/setup/templates`);
+    await page.waitForURL(/\/create\/templates$/);
     await page.getByRole('heading', { name: 'No templates yet', exact: true }).waitFor();
     check(await page.getByText('Which template wins:').count(), 'templates page says which template wins');
     check((await page.getByText('built-in look (no template uploaded yet)').count()) === 2, 'with no template, both kinds use the built-in look');
@@ -456,7 +505,7 @@ async function main() {
     check(await page.locator('.tpl-winners', { hasText: 'this project' }).count(), 'the winner line says it is the project default');
 
     // A deck from a topic, made by the demo agent, following the project template.
-    await page.getByRole('link', { name: 'Presentations', exact: true }).click();
+    await openCreateTab(page, 'Decks');
     await page.getByRole('button', { name: 'New presentation', exact: true }).first().click();
     check(await page.getByRole('button', { name: 'Make the deck', exact: true }).isDisabled(), 'Make the deck waits for a topic');
     await page.getByLabel('Topic', { exact: true }).fill('How refunds are approved and paid out. Support raises a request. A second person approves large amounts. Money returns to the card within five days.');
@@ -467,7 +516,12 @@ async function main() {
     await page.getByLabel(/Number of slides/).fill('6');
     check(await page.getByLabel('Template').locator('option', { hasText: 'Default: Brand template' }).count(), 'the template choice defaults to the effective template');
     await shot(page, 'presentation-new');
+    check(await page.getByLabel('Lead agent').count(), 'the presentation dialog has the lead agent choice');
+    check(await page.locator('.modal .toggle', { hasText: 'Let the agent use tools freely' }).count(), 'the presentation dialog has the tools switch');
+    const deckReq = page.waitForRequest((r) => r.method() === 'POST' && /\/presentations$/.test(r.url()));
     await page.getByRole('button', { name: 'Make the deck', exact: true }).click();
+    const deckBody = (await deckReq).postDataJSON();
+    check(typeof deckBody.leadAgent === 'string' && deckBody.trustAllTools === false, 'the presentation request carries the run options');
     await page.getByRole('heading', { name: 'Refund overview', exact: true }).waitFor();
     await page.locator('.pres-page .badge', { hasText: 'Ready' }).waitFor({ timeout: 60000 });
     check((await page.getByRole('link', { name: /^Open the session/ }).count()) === 0, 'a finished deck no longer points at a running session');
@@ -505,11 +559,11 @@ async function main() {
     console.log('generated documents');
     const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     // The menu entry is "Generated docs" because Knowledge already has a Documents tab for uploaded files.
-    await page.getByRole('link', { name: 'Generated docs', exact: true }).click();
+    await openCreateTab(page, 'Documents');
     await page.getByRole('heading', { name: 'Generated docs', exact: true }).waitFor();
     await page.getByRole('heading', { name: 'No generated documents yet', exact: true }).waitFor();
     check(await page.getByText('cites the files and lines it used').count(), 'generated docs page explains itself when empty');
-    check(/\/documents$/.test(page.url()), 'generated docs live at #/p/<id>/documents');
+    check(/\/create\/documents$/.test(page.url()), 'generated docs live at #/p/<id>/create/documents');
     await shot(page, 'gdocs-empty');
     // A Word template, so the dialog can show which one applies by default.
     await page.goto(`${base}/#/p/${pid}/setup/templates`);
@@ -518,8 +572,10 @@ async function main() {
     await page.getByLabel('Name (optional)').fill('Report look');
     await page.getByRole('button', { name: 'Upload', exact: true }).click();
     await page.locator('tr', { hasText: 'Report look' }).waitFor();
-    await page.getByRole('link', { name: 'Generated docs', exact: true }).click();
+    await openCreateTab(page, 'Documents');
     await page.getByRole('button', { name: 'New document', exact: true }).first().click();
+    check(await page.getByLabel('Lead agent').count(), 'the document dialog has the lead agent choice');
+    check(await page.locator('.modal .toggle', { hasText: 'Let the agent use tools freely' }).count(), 'the document dialog has the tools switch');
     check(await page.getByRole('button', { name: 'Write it', exact: true }).isEnabled(), 'knowledge and decisions are on by default, so a document can be started');
     await page.locator('.modal .toggle', { hasText: 'Project knowledge' }).click();
     await page.locator('.modal .toggle', { hasText: 'Decisions log' }).click();
@@ -590,7 +646,7 @@ async function main() {
     await page.getByRole('link', { name: 'Knowledge', exact: true }).click();
     await page.locator('input[type=file]').first().setInputFiles(extra);
     await page.getByRole('link', { name: 'Refund holidays', exact: true }).waitFor();
-    await page.getByRole('link', { name: 'Generated docs', exact: true }).click();
+    await openCreateTab(page, 'Documents');
     await page.locator('table[aria-label="Generated documents"] tr', { hasText: 'Refunds overview' }).locator('.badge', { hasText: 'Stale: sources changed' }).waitFor({ timeout: 20000 });
     check(await page.getByText(/Knowledge document added/).count(), 'the stale reason is given in words');
     check(await page.getByRole('button', { name: 'Refresh all stale (1)', exact: true }).count(), 'Refresh all stale shows how many documents are stale');
@@ -599,6 +655,7 @@ async function main() {
     await page.locator('.gdoc-page .badge', { hasText: 'Stale: sources changed' }).waitFor();
     await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
     check(await page.getByRole('dialog', { name: 'Regenerate document' }).count(), 'regenerate asks for audience, title and template');
+    check(await page.getByRole('dialog', { name: 'Regenerate document' }).getByLabel('Lead agent').count(), 'regenerate also asks for the lead agent and tools');
     await page.getByLabel('Audience (optional)').fill('the operations team');
     await page.getByRole('button', { name: 'Rewrite it', exact: true }).click();
     await page.getByText('Version 2').waitFor({ timeout: 60000 });
@@ -688,12 +745,23 @@ async function main() {
     check((await page.locator('.readiness-table tr').count()) >= 2, 'readiness panel shows items');
     await shot(page, 'setup-hub');
     // One setup hub: its tabs are the only place for these pages, and the menu lists Setup once.
-    for (const tab of ['Connection & provider', 'Repositories', 'Agents & skills', 'Team & members', 'Jira', 'Configuration', 'Templates', 'Budget']) {
+    for (const tab of ['Connection & provider', 'Repositories', 'Agents & skills', 'Team & members', 'Jira', 'Configuration', 'Budget']) {
       check((await page.getByRole('link', { name: tab, exact: true }).count()) === 1, `Setup has a ${tab} tab`);
     }
+    check((await page.getByRole('link', { name: 'Templates', exact: true }).count()) === 0, 'Templates is no longer a Setup tab');
+    check(await page.getByRole('link', { name: 'Create › Templates' }).count(), 'Setup links to Create › Templates so they are not lost');
+    check((await page.getByRole('link', { name: 'Create', exact: true }).last().getAttribute('href'))?.endsWith('/create/diagrams'), 'the Setup overview points at the Create page');
     for (const gone of ['Repositories', 'Agents and skills', 'Configuration', 'Project and team', 'Project insights', 'All insights']) {
       check((await page.locator('.rail-link', { hasText: gone }).count()) === 0, `"${gone}" is not a separate menu item`);
     }
+    // The project menu: eight entries (Tickets only with Jira connected) plus the Portal group.
+    const railLabels = (await page.locator('.rail-nav > .rail-link').allTextContents()).map((t) => t.trim());
+    check(JSON.stringify(railLabels) === JSON.stringify(['Sessions', 'Workspaces', 'Code review', 'Knowledge', 'Create', 'Vault', 'Insights', 'Setup']), `the project menu is ${railLabels.join(', ')} (and Portal)`);
+    check((await page.locator('.rail-nav > .rail-group').count()) === 1, 'the Portal group is in the menu');
+    for (const gone of ['Learn', 'Diagrams', 'Generated docs', 'Presentations', 'Tickets']) {
+      check((await page.locator('.rail-link', { hasText: new RegExp(`^${gone}$`) }).count()) === 0, `"${gone}" is not a menu item`);
+    }
+    check(await page.locator('.rail-link.is-active', { hasText: /^Setup$/ }).count(), 'Setup is highlighted on its tabs');
     check((await page.locator('.rail-link', { hasText: /^Vault$/ }).count()) === 1, 'Vault appears once in the menu');
     check((await page.locator('.rail-link', { hasText: /^Insights$/ }).count()) === 1, 'Insights appears once in the menu');
     await page.getByRole('link', { name: 'Budget', exact: true }).click();
@@ -705,6 +773,74 @@ async function main() {
       await page.waitForURL(new RegExp(`/setup/${section}$`));
       check(true, `#/p/<id>/${old} redirects to Setup › ${section}`);
     }
+    // Diagrams, documents and presentations moved into Create; Learn moved into Knowledge. Old addresses redirect.
+    const learnDocs = await page.evaluate(async (id) => (await (await fetch(`/api/projects/${id}/learn/docs`)).json()).docs ?? [], pid);
+    const learnQuizzes = await page.evaluate(async (id) => (await (await fetch(`/api/projects/${id}/learn/quizzes`)).json()).quizzes ?? [], pid);
+    const learnPaths = await page.evaluate(async (id) => (await (await fetch(`/api/projects/${id}/learn/paths`)).json()).paths ?? [], pid);
+    const moved: [string, RegExp][] = [
+      ['diagrams', /\/create\/diagrams$/],
+      ['documents', /\/create\/documents$/],
+      ['presentations', /\/create\/decks$/],
+      ['create/presentations', /\/create\/decks$/],
+      ['setup/templates', /\/create\/templates$/],
+      ['diagrams/abc123', /\/create\/diagrams\/abc123$/],
+      ['documents/abc123?v=2', /\/create\/documents\/abc123\?v=2$/],
+      ['presentations/abc123', /\/create\/decks\/abc123$/],
+      ['learn', /\/knowledge\/learn$/],
+      ['learn/quizzes', /\/knowledge\/learn\/quizzes$/],
+      ['learn/paths', /\/knowledge\/learn\/paths$/],
+      ['learn/progress', /\/knowledge\/learn\/progress$/],
+    ];
+    if (learnDocs[0]) moved.push([`learn/doc/${learnDocs[0].id}`, new RegExp(`/knowledge/learn/doc/${learnDocs[0].id}$`)]);
+    if (learnQuizzes[0]) moved.push([`learn/quiz/${learnQuizzes[0].id}/take`, new RegExp(`/knowledge/learn/quiz/${learnQuizzes[0].id}/take$`)]);
+    if (learnPaths[0]) moved.push([`learn/path/${learnPaths[0].id}`, new RegExp(`/knowledge/learn/path/${learnPaths[0].id}$`)]);
+    check(learnDocs.length > 0 && learnQuizzes.length > 0 && learnPaths.length > 0, 'the Learn deep links have a document, a quiz and a path to open');
+    for (const [old, want] of moved) {
+      await page.goto(`${base}/#/p/${pid}/${old}`);
+      await page.waitForURL(want);
+      check(true, `#/p/<id>/${old} redirects to ${page.url().split('#')[1]}`);
+    }
+    // Learn deep links keep working in their new place.
+    await page.goto(`${base}/#/p/${pid}/learn/doc/${learnDocs[0].id}`);
+    await page.getByRole('heading', { name: learnDocs[0].title, exact: true }).waitFor();
+    check(true, 'an old Learn document link opens the document');
+    await page.goto(`${base}/#/p/${pid}/learn/quiz/${learnQuizzes[0].id}/take`);
+    await page.locator('.take').waitFor();
+    check(true, 'an old Learn quiz link opens the quiz');
+    await page.goto(`${base}/#/p/${pid}/learn/path/${learnPaths[0].id}`);
+    await page.locator('.steps').waitFor();
+    check(true, 'an old Learn path link opens the path');
+    await page.goto(`${base}/#/p/${pid}/learn/quizzes`);
+    await page.getByRole('tab', { name: /Quizzes/ }).or(page.getByRole('link', { name: 'Quizzes', exact: true })).first().waitFor();
+    check(await page.locator('.rail-link.is-active', { hasText: /^Knowledge$/ }).count(), 'Knowledge is highlighted on the Learn tab');
+    await page.goto(`${base}/#/p/${pid}/diagrams`);
+    await page.getByRole('heading', { name: 'Diagrams', exact: true }).waitFor();
+    check(await page.locator('.rail-link.is-active', { hasText: /^Create$/ }).count(), 'Create is highlighted on its tabs');
+
+    // Tickets is in the menu only when the project has Jira connected; the page stays reachable and says how to connect.
+    check((await page.locator('.rail-link', { hasText: /^Tickets$/ }).count()) === 0, 'Tickets is hidden while Jira is not connected');
+    await page.goto(`${base}/#/p/${pid}/tickets`);
+    await page.getByRole('heading', { name: 'Jira is not set up for this project', exact: true }).waitFor();
+    check(await page.getByRole('link', { name: 'Connect Jira in Setup', exact: true }).count(), 'the Tickets page tells you to connect Jira in Setup');
+    check((await page.locator('.rail-link', { hasText: /^Tickets$/ }).count()) === 0, 'Tickets stays hidden on its own page without Jira');
+    await page.route(new RegExp(`/api/projects/${pid}/jira$`), (route) =>
+      route.fulfill({ json: { configured: true, mapping: null, connected: true, site: { name: 'Acme', url: 'https://acme.atlassian.net' }, sites: [], account: { name: 'Yusei', email: '' }, canConnect: true } }),
+    );
+    await page.goto(`${base}/#/p/${pid}/sessions`);
+    await page.reload();
+    await page.locator('.rail-link', { hasText: /^Tickets$/ }).waitFor();
+    const railWithJira = (await page.locator('.rail-nav > .rail-link').allTextContents()).map((t) => t.trim());
+    check(JSON.stringify(railWithJira) === JSON.stringify(['Sessions', 'Workspaces', 'Tickets', 'Code review', 'Knowledge', 'Create', 'Vault', 'Insights', 'Setup']), `with Jira connected the menu gains Tickets (${railWithJira.join(', ')})`);
+    await page.locator('.rail-link', { hasText: /^Tickets$/ }).click();
+    await page.waitForURL(/\/tickets$/);
+    await page.locator('.rail-link.is-active', { hasText: /^Tickets$/ }).waitFor();
+    check(true, 'Tickets is highlighted on its page');
+    await page.unroute(new RegExp(`/api/projects/${pid}/jira$`));
+    await page.goto(`${base}/#/p/${pid}/setup`);
+    await page.reload();
+    await page.getByRole('heading', { name: 'Project setup', exact: true }).waitFor();
+    check((await page.locator('.rail-link', { hasText: /^Tickets$/ }).count()) === 0, 'Tickets is hidden again when Jira is not connected');
+
     // Insights has a scope switch instead of a second menu item.
     await page.goto(`${base}/#/p/${pid}/insights`);
     await page.getByRole('tab', { name: 'All projects', exact: true }).click();

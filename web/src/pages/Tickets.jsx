@@ -61,10 +61,10 @@ export function Tickets() {
       <Empty icon="inbox" title="Jira is not set up for this project">
         {canConnect ? (
           <>
-            Each project has its own Jira. <a href={href(project.id, 'setup', 'jira')}>Open Project setup › Jira</a> to add this project’s Atlassian app and connect.
+            Each project has its own Jira. <a href={href(project.id, 'setup', 'jira')}>Connect Jira in Setup</a> to add this project’s Atlassian app and connect. Tickets shows in the menu once Jira is connected.
           </>
         ) : (
-          'A project owner needs to set up and connect Jira for this project, under Project setup › Jira.'
+          <>A project owner needs to set up and connect Jira for this project, under <a href={href(project.id, 'setup', 'jira')}>Setup › Jira</a>.</>
         )}
       </Empty>
     );
@@ -73,7 +73,8 @@ export function Tickets() {
       <Empty icon="inbox" title="Connect this project to Jira" action={canConnect ? <Button variant="primary" onClick={() => connectJira(project.id)}>Connect Jira</Button> : null}>
         {canConnect
           ? 'Sign in with the Atlassian account that can see this project’s Jira board. Everyone on this project then reads tickets through it, so use an account with the access you want to share. The portal never sees your password.'
-          : 'A project owner needs to connect this project to its Jira. Everyone on the project then shares that connection.'}
+          : 'A project owner needs to connect this project to its Jira. Everyone on the project then shares that connection.'}{' '}
+        You can also connect Jira in <a href={href(project.id, 'setup', 'jira')}>Setup › Jira</a>.
       </Empty>
     );
   } else if (mapping.loading && !mapping.data) body = <Spinner />;

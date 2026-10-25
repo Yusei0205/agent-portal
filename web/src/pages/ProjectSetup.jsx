@@ -3,7 +3,8 @@
  *
  * The one place to set a project up. Each section is a tab with its own address, #/p/<id>/setup/<section>:
  *   overview | connection | repos | agents | team | jira | config | budget
- * Older addresses such as #/p/<id>/repos and #/p/<id>/builder redirect here (see lib/router.js).
+ * Older addresses such as #/p/<id>/repos and #/p/<id>/builder redirect here (see lib/router.js). Templates moved to the
+ * Create page; #/p/<id>/setup/templates redirects there.
  *
  * The readiness panel (GET /api/projects/:pid/readiness, live via SSE) stays on top; its Add / Fix buttons open the
  * tab that fixes the item.
@@ -23,7 +24,6 @@ const ProjectSettings = lazy(() => import('./ProjectSettings.jsx').then((m) => (
 const Repos = lazy(() => import('./Repos.jsx').then((m) => ({ default: m.Repos })));
 const Builder = lazy(() => import('./Builder.jsx').then((m) => ({ default: m.Builder })));
 const Configuration = lazy(() => import('./Configuration.jsx').then((m) => ({ default: m.Configuration })));
-const Templates = lazy(() => import('./Templates.jsx').then((m) => ({ default: m.Templates })));
 const JiraConnection = lazy(() => import('./Tickets.jsx').then((m) => ({ default: m.JiraConnection })));
 
 // ─── Readiness panel ────────────────────────────────────────────────────────
@@ -138,7 +138,6 @@ const SETUP_TABS = [
   { value: 'team', label: 'Team & members' },
   { value: 'jira', label: 'Jira' },
   { value: 'config', label: 'Configuration' },
-  { value: 'templates', label: 'Templates' },
   { value: 'budget', label: 'Budget' },
 ];
 
@@ -149,7 +148,6 @@ const OVERVIEW_HINT = {
   team: 'project details, defaults for new work, members and access',
   jira: 'this project’s Jira site and ticket mapping',
   config: 'the project’s .claude and .kiro files, edited directly',
-  templates: 'Word and PowerPoint templates that generated files follow',
   budget: 'the monthly spend cap',
 };
 
@@ -172,7 +170,7 @@ function SetupOverview() {
       ))}
     </dl>
     <p className="muted small">
-      Architecture diagrams of your repositories are on the <a href={href(project.id, 'diagrams')}>Diagrams</a> page, and decks built from them on <a href={href(project.id, 'presentations')}>Presentations</a>.
+      Diagrams, documents and decks are on the <a href={href(project.id, 'create', 'diagrams')}>Create</a> page. The Word and PowerPoint templates they follow are under <a href={href(project.id, 'create', 'templates')}>Create › Templates</a>.
     </p>
     </>
   );
@@ -192,8 +190,6 @@ function SetupTabContent({ tab, projectId, route }) {
       return <JiraConnection />;
     case 'config':
       return <Configuration route={embeddedRoute(route)} />;
-    case 'templates':
-      return <Templates />;
     case 'budget':
       return <BudgetTab projectId={projectId} />;
     default:

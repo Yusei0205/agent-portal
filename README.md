@@ -9,6 +9,10 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
 - **Projects** hold documents, repositories, agents, skills, sessions and members. **Setup** is one
   page per project: a readiness checklist plus tabs for connection and provider, repositories,
   agents and skills, team and members, Jira, configuration files and budget.
+  The project menu is Sessions, Workspaces, Code review, Knowledge, Create, Vault, Insights, Setup
+  and the Portal group, plus Tickets once the project has Jira connected.
+- **Create** is one page with tabs for Diagrams, Documents (generated Word and Markdown), Decks
+  (PowerPoint) and this project's Templates. The portal-wide default templates stay in Settings.
 - **Sessions** are the core feature. A session is a saved goal that the portal drives through
   repeated agent runs until it is done, blocked or hits a limit (budget, iterations, stagnation).
   A single run is a session with one iteration. Each session has a live agent tree, every tool
@@ -46,7 +50,7 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   They are converted to Markdown, indexed, searchable and answerable with cited sources. When the
   documents do not answer, the question goes to the project's team questions and the answer lands
   in a decisions log that every agent reads first.
-- **Learn**: generated documentation in a plain-language and an engineering version, glossaries,
+- **Learn** (a tab of Knowledge): generated documentation in a plain-language and an engineering version, glossaries,
   FAQs, quizzes checked against their sources, onboarding paths and team progress. Documents are
   flagged when their sources change.
 - **Architecture diagrams**: an agent session draws Mermaid system-context, component and
@@ -70,7 +74,8 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   keeps versions and flags a document stale when a source changes. The presentation generator
   turns a topic, document, session result or architecture diagram into a deck with speaker notes,
   diagrams and a slide preview. Diagrams and previews use an optional headless browser.
-  Diagram, document and presentation requests accept an optional `leadAgent` and `trustAllTools`
+  The New and Regenerate dialogs and the Refresh actions have an *Agent and tools* choice: a lead
+  agent and a switch that lets the agent use tools freely. Diagram, document and presentation requests accept an optional `leadAgent` and `trustAllTools`
   (the session launcher's options; always-blocked commands stay blocked), remembered on the item
   and reused by refresh and regenerate.
 - **Administration**: users and invitations, an audit log, and a control plane (concurrency caps,
@@ -283,7 +288,7 @@ Settings, so no AWS keys are stored at all.
    dismiss findings. For a GitHub pull request, use *Post to GitHub*. To try the automatic review,
    add the built-in spec *Review new pull requests* (Sessions › Loop specs), then *Run now* with a
    pull request number; the result waits in the Inbox until you approve it.
-7. **Learn**: write a *System overview*, switch between *For everyone* and *For engineers*,
+7. **Learn** (*Knowledge › Learn*): write a *System overview*, switch between *For everyone* and *For engineers*,
    publish it, make a quiz from it, publish and take the quiz, then create an onboarding path.
    Re-upload a source document with a change and see the document flagged as out of date.
 8. **Settings**: set a monthly budget; switch to a real provider and repeat step 5.

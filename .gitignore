@@ -5,3 +5,5 @@ data/
 *.log
 server.out.log
 server.err.log
+data-v2/
+data-v2.log
