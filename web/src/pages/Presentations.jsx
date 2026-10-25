@@ -6,6 +6,7 @@ import { useProjectEvents } from '../lib/events.js';
 import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { bytes, cx, dateTime, plural, timeAgo } from '../lib/util.js';
+import { OutputLinks } from '../components/OutputLinks.jsx';
 import { RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
 import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Segmented, Spinner, useUi } from '../components/ui.jsx';
 
@@ -374,6 +375,7 @@ function DeckView({ id }) {
           ) : null}
         </div>
       </header>
+      <OutputLinks sessionId={p.workflow_id} vaultFiles={p.vault_files} />
 
       {p.generating ? (
         <Note tone="info" icon="play">
@@ -382,6 +384,11 @@ function DeckView({ id }) {
         </Note>
       ) : null}
       {p.status === 'error' ? <ErrorNote error={{ message: p.error || 'The deck could not be made.' }} /> : null}
+      {p.status === 'ready' && p.error ? (
+        <Note tone="warn" icon="alert">
+          <strong>The last attempt failed.</strong> {p.error}
+        </Note>
+      ) : null}
       {p.status === 'error' && p.workflow_id ? (
         <p className="small">
           <a href={sessionHref(project.id, p.workflow_id)}>Open the session</a> to see what the agent did.

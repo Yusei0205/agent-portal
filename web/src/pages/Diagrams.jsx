@@ -6,6 +6,7 @@ import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, dateTime, plural, timeAgo } from '../lib/util.js';
 import { Markdown } from '../components/Markdown.jsx';
+import { OutputLinks } from '../components/OutputLinks.jsx';
 import { RefreshControl, RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
 import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Spinner, useUi } from '../components/ui.jsx';
 
@@ -120,6 +121,12 @@ function DiagramList() {
                     <div className="muted small">{d.repos.map((r) => r.name).join(', ')}</div>
                     {failedRefresh(d) ? <div className="danger small">Last refresh failed, previous version kept</div> : null}
                     {d.status === 'error' && d.error ? <div className="danger small">{d.error}</div> : null}
+                    {d.density?.dense ? <div className="warn small">Very dense diagram (about {d.density.nodes} nodes): hard to read, consider splitting it</div> : null}
+                    {d.status === 'error' && d.session_id ? (
+                      <div className="small">
+                        <a href={sessionHref(project.id, d.session_id)}>Open the session</a>
+                      </div>
+                    ) : null}
                   </td>
                   <td>{d.kind_label}</td>
                   <td>
@@ -396,6 +403,7 @@ function DiagramView({ id, versionParam }) {
           </div>
         ) : null}
       </header>
+      <OutputLinks sessionId={diagram.session_id} vaultFiles={diagram.vault_files} />
 
       {generating ? (
         <Note tone="info" icon="play">
@@ -409,6 +417,11 @@ function DiagramView({ id, versionParam }) {
         </Note>
       ) : null}
       {diagram.status === 'error' ? <ErrorNote error={{ message: diagram.error || 'The diagram could not be drawn.' }} /> : null}
+      {diagram.density?.dense && !older ? (
+        <Note tone="warn" icon="alert">
+          <strong>Very dense diagram.</strong> About {diagram.density.nodes} nodes in {diagram.density.lines} lines is hard to read. Use Full size on the picture to zoom, or ask the agent in its session to group the parts into subgraphs or to draw a smaller diagram.
+        </Note>
+      ) : null}
       {diagram.stale && !generating ? (
         <Note tone="warn" icon="alert">
           The code in {diagram.repos.length === 1 ? 'the repository' : 'one of the repositories'} has changed since this was drawn.

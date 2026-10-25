@@ -6,6 +6,7 @@ import { useProjectEvents } from '../lib/events.js';
 import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { bytes, cx, dateTime, plural, timeAgo } from '../lib/util.js';
+import { OutputLinks } from '../components/OutputLinks.jsx';
 import { Markdown } from '../components/Markdown.jsx';
 import { RefreshControl, RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
 import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Spinner, Toggle, useUi } from '../components/ui.jsx';
@@ -583,6 +584,7 @@ function DocView({ id, versionParam }) {
           ) : null}
         </div>
       </header>
+      <OutputLinks sessionId={doc.workflow_id} vaultFiles={doc.vault_files} />
 
       {generating ? (
         <Note tone="info" icon="play">

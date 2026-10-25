@@ -14,6 +14,7 @@ import { ChangesTab } from './SessionChanges.jsx';
 import { History } from './SessionHistory.jsx';
 import { Composer } from './SessionComposer.jsx';
 import { ContextTab } from './SessionContext.jsx';
+import { OutputBanner } from './SessionOutput.jsx';
 
 const TABS = ['live', 'changes', 'history', 'context', 'settings'];
 
@@ -25,6 +26,11 @@ export function SessionWorkspace({ id, query }) {
   useProjectEvents(['workflow.updated', 'workflow.deleted'], (event, payload) => {
     if (payload?.id && payload.id !== id) return;
     if (event === 'workflow.deleted') return go(project.id, 'sessions');
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => data.reload(true), 250);
+  });
+  // The diagram, document or deck this session makes can change without the session changing (stored, failed, deleted).
+  useProjectEvents(['diagrams.updated', 'generated-docs.updated', 'presentations.updated'], () => {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => data.reload(true), 250);
   });
@@ -55,6 +61,7 @@ export function SessionWorkspace({ id, query }) {
   return (
     <div className="ws-detail">
       <SessionHeader w={w} canEdit={canEdit} reload={() => data.reload(true)} leads={leadsData.data?.leads} />
+      <OutputBanner output={data.data.output} />
       <Tabs
         value={tab}
         tabs={[
@@ -70,7 +77,7 @@ export function SessionWorkspace({ id, query }) {
       <div className="ws-body">
         {tab === 'live' ? (
           runId ? (
-            <LiveTab key={runId} runId={runId} isLatest={runId === w.last_run_id} runs={runs} link={link} asked={askedFor(w, data.data.events, runId)} />
+            <LiveTab key={runId} runId={runId} isLatest={runId === w.last_run_id} runs={runs} link={link} asked={askedFor(w, data.data.events, runId)} output={data.data.output} />
           ) : (
             <Empty icon="runs" title="Nothing has run yet">{w.status === 'running' ? 'The first iteration is starting…' : 'Resume the session or send it an instruction to start.'}</Empty>
           )

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { cx } from '../lib/util.js';
+import { MermaidViewer } from './MermaidViewer.jsx';
 
 export function slugify(s, max = 60) {
   const slug = String(s)
@@ -61,6 +62,7 @@ function loadMermaid() {
 
 export function Markdown({ text, className, onCite, transform }) {
   const ref = useRef(null);
+  const [full, setFull] = useState(null);
   const html = useMemo(() => {
     const src = transform ? transform(text || '') : text || '';
     const raw = makeMarked().parse(src);
@@ -81,6 +83,13 @@ export function Markdown({ text, className, onCite, transform }) {
             const { svg } = await mermaid.render(`mmd-${++mermaidCount}`, decodeURIComponent(b.dataset.src));
             b.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['foreignObject'] });
             b.classList.add('mermaid-ok');
+            // Big graphs are unreadable at the width of a message: offer them at full size, with zoom and panning.
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'mermaid-expand';
+            open.textContent = 'Full size';
+            open.title = 'Open this diagram at full size, with zoom and panning';
+            b.appendChild(open);
           } catch {
             b.classList.add('mermaid-failed');
           }
@@ -93,10 +102,18 @@ export function Markdown({ text, className, onCite, transform }) {
   }, [html]);
 
   return (
+    <>
     <div
       ref={ref}
       className={cx('md', className)}
       onClick={(e) => {
+        const expand = e.target.closest?.('.mermaid-expand');
+        if (expand) {
+          e.preventDefault();
+          const svg = expand.parentElement?.querySelector('svg');
+          if (svg) setFull(svg.outerHTML);
+          return;
+        }
         const cite = e.target.closest?.('.cite');
         if (cite && onCite) {
           e.preventDefault();
@@ -105,5 +122,7 @@ export function Markdown({ text, className, onCite, transform }) {
       }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
+    {full ? <MermaidViewer svg={full} onClose={() => setFull(null)} /> : null}
+    </>
   );
 }

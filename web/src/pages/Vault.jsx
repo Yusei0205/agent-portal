@@ -112,6 +112,11 @@ export function Vault({ projectId: fixedProject = null }) {
         ) : null}
       </div>
       <p className="muted small">{info.hint}</p>
+      {scope === 'project' ? (
+        <Note tone="info" icon="file">
+          <strong>The generated folder.</strong> Diagrams, documents and decks made on the Create page are also saved here, under <code>generated/diagrams</code>, <code>generated/docs</code> and <code>generated/decks</code> (latest version only; older versions stay on the Create page). It is not copied into runs, so it does not make them bigger. You can download these files from here. Project owners switch the saving on or off on the Create page.
+        </Note>
+      ) : null}
       <div
         className={cx('panel stack vault-drop', drag && 'is-over')}
         onDragOver={(e) => {
@@ -169,6 +174,11 @@ export function Vault({ projectId: fixedProject = null }) {
                 {!f.dir ? (
                   <span className="muted small vault-meta">
                     {size(f.size)} · {timeAgo(f.modified)}
+                  </span>
+                ) : null}
+                {f.noRunCopy && f.path === 'generated' ? (
+                  <span className="muted small vault-meta" title="Runs do not get a copy of this folder">
+                    not copied into runs
                   </span>
                 ) : null}
                 {!f.dir ? (

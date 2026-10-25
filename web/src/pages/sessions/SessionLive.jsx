@@ -7,6 +7,7 @@ import { AgentView } from '../../components/AgentCanvas.jsx';
 import { InputCard } from '../../components/InputCard.jsx';
 import { Timeline } from '../../components/run/Timeline.jsx';
 import { ErrorNote, Note, Spinner } from '../../components/ui.jsx';
+import { OutputCard } from './SessionOutput.jsx';
 
 /* ---------------- Live ---------------- */
 
@@ -61,7 +62,7 @@ function AskedCard({ asked }) {
   );
 }
 
-export function LiveTab({ runId, isLatest, runs, link, asked }) {
+export function LiveTab({ runId, isLatest, runs, link, asked, output }) {
   const { meta } = useApp();
   const { project, canEdit, reload: reloadProject } = useProject();
   const data = useRunStream(runId);
@@ -81,6 +82,7 @@ export function LiveTab({ runId, isLatest, runs, link, asked }) {
           ))}
         </section>
       ) : null}
+      <OutputCard output={output} />
       <IterationStrip runs={runs} current={runId} link={link} />
       {!isLatest ? <Note tone="info" icon="alert">You are looking at an earlier iteration. <a href={link({})}>Back to the latest</a></Note> : null}
       {asked ? <AskedCard asked={asked} /> : null}
