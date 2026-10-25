@@ -12,6 +12,7 @@
 import { all, one, type Row } from './db.ts';
 import { generatedEnabled, generatedFiles } from './vault-generated.ts';
 import { diagramDensity } from './diagram-text.ts';
+import { drawioDensity } from './drawio.ts';
 
 export type OutputKind = 'diagram' | 'doc' | 'deck';
 
@@ -34,14 +35,18 @@ export interface SessionOutput {
   vault_enabled: boolean;
   /** Diagrams only: size facts, and whether it is too big to read comfortably. */
   density: { nodes: number; lines: number; dense: boolean } | null;
+  /** Diagrams only: how it is drawn ("mermaid" or "icon" for a draw.io icon diagram), its file format and, for icons, the cloud. */
+  style?: 'mermaid' | 'icon' | null;
+  format?: 'mermaid' | 'drawio' | null;
+  cloud?: string | null;
 }
 
 /** The output the session is making or has made, or null for any other session. */
 export function sessionOutput(workflowId: string): SessionOutput | null {
   const d = one<Row>('SELECT * FROM diagrams WHERE workflow_id = ? OR pending_workflow_id = ?', workflowId, workflowId);
   if (d) {
-    const cur = d.version > 0 ? one<Row>('SELECT mermaid FROM diagram_versions WHERE diagram_id = ? AND version = ?', d.id, d.version) : undefined;
-    const density = cur ? diagramDensity(String(cur.mermaid)) : null;
+    const cur = d.version > 0 ? one<Row>('SELECT format, mermaid, drawio FROM diagram_versions WHERE diagram_id = ? AND version = ?', d.id, d.version) : undefined;
+    const density = cur ? (cur.format === 'drawio' ? drawioDensity(String(cur.drawio ?? '')) : diagramDensity(String(cur.mermaid))) : null;
     return {
       kind: 'diagram',
       label: 'Diagram',
@@ -55,6 +60,9 @@ export function sessionOutput(workflowId: string): SessionOutput | null {
       vault_files: generatedFiles(d.project_id, 'diagrams', d.slug),
       vault_enabled: generatedEnabled(d.project_id),
       density: density ? { nodes: density.nodes, lines: density.lines, dense: density.dense } : null,
+      style: d.style === 'icon' ? 'icon' : 'mermaid',
+      format: cur ? (cur.format === 'drawio' ? 'drawio' : 'mermaid') : d.format === 'drawio' ? 'drawio' : 'mermaid',
+      cloud: d.cloud || null,
     };
   }
   const g = one<Row>('SELECT * FROM generated_docs WHERE workflow_id = ? OR pending_workflow_id = ?', workflowId, workflowId);
@@ -111,9 +119,9 @@ export async function syncProjectGenerated(projectId: string, actor: string | nu
   let n = 0;
   const dg = await import('./diagrams.ts');
   for (const d of all<Row>('SELECT * FROM diagrams WHERE project_id = ? AND version > 0', projectId)) {
-    const v = one<Row>('SELECT mermaid FROM diagram_versions WHERE diagram_id = ? AND version = ?', d.id, d.version);
+    const v = one<Row>('SELECT * FROM diagram_versions WHERE diagram_id = ? AND version = ?', d.id, d.version);
     if (v) {
-      dg.vaultSaveDiagram(d, String(v.mermaid), actor);
+      dg.vaultSaveDiagram(d, v, actor);
       n++;
     }
   }

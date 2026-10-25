@@ -11,6 +11,7 @@ import type { ContentBlock, DemoContext, ProviderRunOptions, SdkMessage } from '
 import { keywords, reviewDiff } from './heuristics.ts';
 import { estimateCost, tierOf } from './pricing.ts';
 import { sleep } from '../util.ts';
+import { demoDrawio, demoVariant } from './demo-drawio.ts';
 
 const id = (p: string) => `${p}_${randomBytes(8).toString('hex')}`;
 
@@ -344,6 +345,7 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     let material = '';
     let mermaid = '';
     let mermaidCaption = '';
+    let iconImage = '';
     if (kind === 'document') {
       const mdPath = ask.match(/at (docs\/md\/[^\s]+?\.md)/)?.[1];
       if (mdPath) {
@@ -355,7 +357,9 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     } else if (kind === 'diagram') {
       const block = ask.match(/<<<DIAGRAM\n([\s\S]*?)DIAGRAM>>>/)?.[1] ?? '';
       mermaid = block.match(/```mermaid\n([\s\S]*?)\n```/)?.[1] ?? '';
+      iconImage = decodeURI(block.match(/!\[[^\]]*\]\(([^)\s]+)\)/)?.[1] ?? '');
       material = block.replace(/```mermaid[\s\S]*?```/, '').trim();
+      material = material.replace(/!\[[^\]]*\]\([^)]*\)/, '').trim();
       mermaidCaption = ask.match(/the architecture diagram "([^"]*)"/)?.[1] ?? 'Architecture';
     } else {
       material = ask.match(/<<<TOPIC\n([\s\S]*?)\nTOPIC>>>/)?.[1] ?? '';
@@ -370,9 +374,16 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
       .slice(0, 60);
     const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
     const first = (s: string) => clip(s.split(' ').slice(0, 6).join(' '), 50);
-    const body = Math.max(1, target - 2 - (mermaid ? 1 : 0));
+    let ownIcon = '';
+    if (ask.includes('you may draw up to 2 icon diagrams')) {
+      const cloud = ask.match(/official (AWS|Azure|Google Cloud|Kubernetes|Generic)/)?.[1]?.toLowerCase().replace('google cloud', 'gcp') ?? 'aws';
+      ownIcon = yield* writeDrawio('flow.drawio', demoDrawio({ cloud, title, items: ['intake', 'worker', 'store'], variant: demoVariant(ask) }));
+    }
+    const body = Math.max(1, target - 2 - (mermaid || iconImage ? 1 : 0) - (ownIcon ? 1 : 0));
     const slides: Record<string, unknown>[] = [{ layout: 'title', title, subtitle: audience ? `For ${audience}` : 'Prepared with Agent Portal', notes: `Welcome the audience and state the purpose: ${clip(title, 80)}.` }];
     if (mermaid) slides.push({ title: mermaidCaption, mermaid: { source: mermaid, caption: mermaidCaption }, notes: 'Walk through the diagram from left to right, naming each part once.' });
+    if (iconImage) slides.push({ title: mermaidCaption, image: { path: iconImage, caption: mermaidCaption }, notes: 'Walk through the diagram from left to right, naming each part once.' });
+    if (ownIcon) slides.push({ title: 'How it flows', image: { path: ownIcon, caption: 'How the work flows' }, notes: 'Walk through the numbered steps.' });
     for (let i = 0; i < body; i++) {
       const group = sentences.slice(i * 3, i * 3 + 3);
       if (!group.length) break;
@@ -457,6 +468,11 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     }
 
     const cite = (i: number) => (found[i] ? `\`${found[i].repo}/${found[i].file}:1\`` : '');
+    let ownIcon = '';
+    if (ask.includes('you may add up to 2 icon diagrams')) {
+      const cloud = ask.match(/official (AWS|Azure|Google Cloud|Kubernetes|Generic)/)?.[1]?.toLowerCase().replace('google cloud', 'gcp') ?? 'aws';
+      ownIcon = yield* writeDrawio('flow.drawio', demoDrawio({ cloud, title, items: found.slice(0, 4).map((f) => f.file.replace(/\.[^.]+$/, '')), variant: demoVariant(ask) }));
+    }
     const noCite = ask.includes('[demo-no-cite]');
     const sections: Record<string, string[]> = {
       overview: ['Purpose', 'Components', 'Key flows', 'Open questions'],
@@ -481,6 +497,7 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
         }
       }
       if (si === 1 && markers.length && !ask.includes('[demo-skip-diagram]')) for (const m of markers) lines.push(`{{diagram:${m}}}`, '');
+      if (si === 1 && ownIcon) lines.push('![How the parts fit together](' + ownIcon + ')', '');
     });
     if (ask.includes('[demo-bad-citation]')) {
       lines.push('## Notes', '', `The retry logic lives in \`${slugs[0] ?? 'repo'}/src/does/not/exist.py:10\`.`, '', found[0] ? `The first file also continues at \`${found[0].repo}/${found[0].file}:99999\`.` : '', '');
@@ -504,8 +521,65 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     return `Document: ${outRel}\n${(sections[type] ?? sections.overview).map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
   }
 
+  /** Write a demo .drawio file with the Write tool. Returns the path inside the project folder. */
+  async function* writeDrawio(name: string, xml: string): AsyncGenerator<SdkMessage, string> {
+    const rel = `${d.writeDirRel}/${name}`;
+    yield* tool(
+      null,
+      'Write',
+      { file_path: rel, content: xml },
+      (input) => {
+        const abs = path.resolve(d.projectDir, String(input.file_path));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, String(input.content));
+        return `File created successfully at: ${input.file_path}`;
+      },
+      true,
+    );
+    return rel;
+  }
+
+  /**
+   * An icon diagram request (FR-DIAG-9): look shapes up with the draw.io tool, list the repository folders, write
+   * diagram.drawio in the run folder and reply with its path and a cited description. Goal markers for tests:
+   * [demo-no-drawio] writes no file, [demo-invalid-drawio], [demo-oversized-drawio], [demo-toomany-drawio],
+   * [demo-external-drawio], [demo-script-drawio] and [demo-multipage-drawio] write a file the checks refuse,
+   * [demo-blocked-tool] also tries a draw.io tool the portal blocks.
+   */
+  async function* iconDiagramScenario(ask: string): AsyncGenerator<SdkMessage, string> {
+    const kind = ask.match(/^Architecture diagram request: (\w+)/)?.[1] ?? 'components';
+    const cloud = ask.match(/^Style: icon diagram \(draw\.io\), cloud: (\w+)/m)?.[1] ?? 'aws';
+    const title = (ask.match(/Draw the architecture diagram "([^"]*)"/)?.[1] ?? 'Architecture').replace(/[^\w .:,/-]/g, '');
+    const slugs = [...ask.matchAll(/in repos\/([\w.-]+)\//g)].map((m) => m[1]).slice(0, 3);
+    yield assistant(null, [{ type: 'text', text: 'I will read the infrastructure code, look the icons up with the draw.io tool, then draw the diagram.' }]);
+    const found: { repo: string; file: string }[] = [];
+    for (const slug of slugs) {
+      yield* tool(
+        null,
+        'Glob',
+        { pattern: `repos/${slug}/*` },
+        () => {
+          const dir = path.resolve(d.projectDir, 'repos', slug);
+          const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n !== '.git' && n !== 'node_modules').sort().slice(0, 6) : [];
+          for (const n of names) found.push({ repo: slug, file: n });
+          return names.map((n) => `repos/${slug}/${n}`).join('\n') || '(empty)';
+        },
+        false,
+      );
+    }
+    yield* tool(null, 'mcp__icon_diagrams__search_shapes', { query: `${cloud} function`, limit: 3 }, () => '[{"style":"(demo) a shape style","w":78,"h":78,"title":"Function"}]', false);
+    if (ask.includes('[demo-blocked-tool]')) yield* tool(null, 'mcp__icon_diagrams__open_drawio_xml', { content: '<mxfile/>' }, () => 'opened', false);
+    const cite = found.slice(0, 3).map((f) => `\`${f.repo}/${f.file}:1\``).join(', ') || 'the repository root';
+    const description = `Description: Demo ${kind.replace('_', ' ')} icon diagram (${cloud}) of ${found.length} top-level item(s), based on ${cite}.`;
+    if (ask.includes('[demo-no-drawio]')) return 'I looked at the repository but I am not able to draw a diagram for it.';
+    const xml = demoDrawio({ cloud, title, items: found.map((f) => f.file.replace(/\.[^.]+$/, '')), variant: demoVariant(ask) });
+    const rel = yield* writeDrawio('diagram.drawio', xml);
+    return `Diagram file: ${rel}\n\n${description}`;
+  }
+
   /** An architecture diagram request (NEW-1): list the repository folders, then reply with Mermaid and a cited description. */
   async function* diagramScenario(ask: string): AsyncGenerator<SdkMessage, string> {
+    if (ask.includes('Style: icon diagram (draw.io)')) return yield* iconDiagramScenario(ask);
     const kind = ask.match(/^Architecture diagram request: (\w+)/)?.[1] ?? 'components';
     const title = (ask.match(/Draw the architecture diagram "([^"]*)"/)?.[1] ?? 'Architecture').replace(/[^\w .:,/-]/g, '');
     const slugs = [...ask.matchAll(/in repos\/([\w.-]+)\//g)].map((m) => m[1]).slice(0, 3);

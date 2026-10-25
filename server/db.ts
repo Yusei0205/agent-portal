@@ -830,7 +830,26 @@ const GENERATED_OUTPUTS = `
   CREATE INDEX generated_docs_workflow ON generated_docs(workflow_id);
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS, GENERATED_OUTPUTS];
+const ICON_DIAGRAMS = `
+  -- Icon diagrams (draw.io, FR-DIAG-9): a diagram has a style (mermaid or icon), a format (mermaid text or draw.io XML) and, for
+  -- icon diagrams, a cloud (aws, azure, gcp, kubernetes, generic). Each version records the same, and keeps the draw.io XML in
+  -- "drawio" (the "mermaid" column stays empty for it). Documents and presentations remember the style and cloud of the
+  -- diagrams their agent draws itself.
+  ALTER TABLE diagrams ADD COLUMN format TEXT NOT NULL DEFAULT 'mermaid';
+  ALTER TABLE diagrams ADD COLUMN style TEXT NOT NULL DEFAULT 'mermaid';
+  ALTER TABLE diagrams ADD COLUMN cloud TEXT NOT NULL DEFAULT '';
+  ALTER TABLE diagram_versions ADD COLUMN format TEXT NOT NULL DEFAULT 'mermaid';
+  ALTER TABLE diagram_versions ADD COLUMN style TEXT NOT NULL DEFAULT 'mermaid';
+  ALTER TABLE diagram_versions ADD COLUMN cloud TEXT NOT NULL DEFAULT '';
+  ALTER TABLE diagram_versions ADD COLUMN drawio TEXT;
+  ALTER TABLE diagram_versions ADD COLUMN stats TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE generated_docs ADD COLUMN diagram_style TEXT NOT NULL DEFAULT 'mermaid';
+  ALTER TABLE generated_docs ADD COLUMN diagram_cloud TEXT NOT NULL DEFAULT '';
+  ALTER TABLE presentations ADD COLUMN diagram_style TEXT NOT NULL DEFAULT 'mermaid';
+  ALTER TABLE presentations ADD COLUMN diagram_cloud TEXT NOT NULL DEFAULT '';
+`;
+
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS, GENERATED_OUTPUTS, ICON_DIAGRAMS];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

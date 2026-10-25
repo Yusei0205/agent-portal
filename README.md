@@ -64,7 +64,12 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   data-flow diagrams from a project's repositories. Each redraw is a new, validated version kept
   in the project's git repository (`docs/diagrams/`); a diagram is flagged stale when a repository
   moves on and can be refreshed on demand or by a loop spec. Export as PNG (needs the optional
-  headless browser) or raw Mermaid.
+  headless browser) or raw Mermaid. A diagram can instead be drawn as an **icon diagram** (style
+  `icon`, with a `cloud`: AWS, Azure, Google Cloud, Kubernetes or generic): the agent looks the official
+  icons up with the draw.io shape search, reads the repository's CDK, CloudFormation, Terraform or
+  manifests, and writes a draw.io file that is checked and stored like any version, with exports as
+  `.drawio`, PNG and SVG. It needs the **Icon diagrams** tool pack (below); documents and decks can use stored
+  icon diagrams and draw their own (`diagramStyle`, `diagramCloud`).
 - **Code review** of two branches or a GitHub pull request: findings next to the changed lines,
   a cheap Haiku pass with a rule-based scan, an optional Sonnet deep look, and posting back to
   GitHub. Reviews started by the *Review new pull requests* loop spec are marked "From PR #n
@@ -147,7 +152,7 @@ portal creates the admin account automatically on start (no setup page needed).
 
 #### Tool packs (off by default)
 
-Three optional packs extend what agents can do. They are **off by default** so a basic
+Four optional packs extend what agents can do. They are **off by default** so a basic
 `docker compose up` works without them.
 
 | Pack | What it enables | How to turn it on |
@@ -155,8 +160,9 @@ Three optional packs extend what agents can do. They are **off by default** so a
 | **uv / uvx** | AWS integration in agent runs, custom uvx-based MCP servers | Admin: click **Install** under **Settings › Tools** |
 | **Kiro CLI** | Kiro engine for agent runs | Admin: click **Install** under **Settings › Tools**, then log in (see below) |
 | **Browser MCP** | Web browser integration in agent runs | Start with `docker compose --profile browser up -d` |
+| **Icon diagrams (draw.io)** | Architecture diagrams in the style of the official AWS, Azure, Google Cloud and Kubernetes reference architectures (official icons, nested boundary boxes, numbered steps), in diagrams, documents and decks | Admin: click **Install** under **Settings › Tools** (see below) |
 
-**Installing uv or kiro-cli:** open **Settings › Tools** (admin only). Each pack row shows
+**Installing uv, kiro-cli or Icon diagrams:** open **Settings › Tools** (admin only). Each pack row shows
 its status, what it enables, and an Install button with a live log stream.
 
 **Browser isolation:** each agent run gets its own isolated browser context. Users and
@@ -164,8 +170,23 @@ sessions never share cookies, history, or storage. Up to three browser sessions 
 same time (configurable in `compose.yml`). The browser container is never accessible from
 outside the compose network.
 
+**Icon diagrams (ops note).** The pack needs outbound HTTPS once, at install time, to the npm registry,
+`cdn.jsdelivr.net`, `raw.githubusercontent.com` and `api.github.com`; after that no agent run needs the network. It installs, under
+`/data/tools/icon-diagrams/`: the official `@drawio/mcp` server at an exact version (npm, install scripts off, integrity
+checked), its shape index (about 5 MB, SHA-256 checked), three draw.io viewer files from a pinned release (about 10 MB,
+SHA-256 checked) and the Azure icon images (best effort). The Docker image needs `npm` (the Node image has it). The **viewer
+files plus the optional headless browser** are what draw pictures: build the image with `--build-arg WITH_BROWSER=1` (or set
+`DOC_BROWSER` to a Chrome/Edge/Chromium on a Windows or Linux host). Without them diagrams are still drawn by the agent, stored,
+versioned and downloadable as `.drawio` (open in draw.io), but there is no PNG/SVG preview or export, and Word and PowerPoint
+files get a labelled placeholder and a warning instead of the picture. The pack never uses the hosted `mcp.draw.io`: the
+agent only gets the lookup tools `search_shapes` and `get_drawio_reference`, run locally from the installed package with
+no network and no secrets in its environment. The draw.io viewer files and icon libraries are Apache-2.0 / the draw.io icon
+terms, and the cloud vendors' icon terms apply to the pictures you publish (AWS, for example, publishes its own icon guidelines).
+`ICON_DIAGRAMS_DIR` moves the pack folder and `DRAWIO_RENDERER_DIR` only the viewer files. To remove the pack, delete the folder
+and the "Icon diagrams" integration.
+
 **Slash commands in a session:**
-- `/tools` — show the status of all three tool packs.
+- `/tools` — show the status of all four tool packs.
 - `/browser on` / `/browser off` — enable or disable the web browser for the current session.
 - `/aws on` / `/aws off` — enable or disable the AWS integration for the current session.
 

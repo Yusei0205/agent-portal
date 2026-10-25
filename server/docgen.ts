@@ -137,6 +137,11 @@ function visualReq(o: any, kind: 'image' | 'mermaid', at: string): VisualReq {
   }
 }
 
+/** The line that stands in for a picture that could not be put in the file. Icon diagrams (.drawio) are named as such. */
+function notEmbedded(p: string, reason: string): string {
+  return /\.drawio$/i.test(p) ? `[Icon diagram not drawn: ${p} (${reason}). Open the .drawio file in the portal or at draw.io to see it.]` : `[Image not embedded: ${p} (${reason})]`;
+}
+
 /** Validate and load every picture, then draw all SVG and Mermaid items in one browser run. Failures to draw come back as reasons, not errors. */
 async function resolveVisuals(reqs: VisualReq[], baseDir: string, warnings: string[]): Promise<Resolved[]> {
   if (reqs.length > IMAGE_LIMITS.imagesPerDoc) fail(`Too many images and diagrams (max ${IMAGE_LIMITS.imagesPerDoc})`);
@@ -151,6 +156,7 @@ async function resolveVisuals(reqs: VisualReq[], baseDir: string, warnings: stri
       }
       const loaded = loadImageFile(baseDir, r.path, `image "${r.path}"`);
       if (loaded.kind === 'raster') out[i] = { ok: true, image: loaded.image };
+      else if (loaded.kind === 'drawio') toRender.push({ at: i, item: { kind: 'drawio', source: loaded.text } });
       else toRender.push({ at: i, item: { kind: 'svg', source: loaded.text } });
     } catch (e) {
       if (e instanceof ImageError) throw new DocError(e.message);
@@ -164,7 +170,7 @@ async function resolveVisuals(reqs: VisualReq[], baseDir: string, warnings: stri
       out[i] = res;
       if (!res.ok) {
         const r = reqs[i];
-        warnings.push(`${r.kind === 'mermaid' ? 'Mermaid diagram' : `SVG image "${r.path}"`} not drawn: ${res.reason}`);
+        warnings.push(`${r.kind === 'mermaid' ? 'Mermaid diagram' : toRender[k].item.kind === 'drawio' ? `Icon diagram "${r.path}"` : `SVG image "${r.path}"`} not drawn: ${res.reason}`);
       }
     });
   }
@@ -432,7 +438,7 @@ async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: stri
         children.push(...codeParagraphs(o.source, look));
         children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: `Diagram not drawn (${r.reason}). The Mermaid source is shown instead.`, italics: true, color: '6B7280', size: 18 })] }));
       } else {
-        children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: `[Image not embedded: ${o.path} (${r.reason})]`, italics: true, color: '6B7280', size: 18 })] }));
+        children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: notEmbedded(o.path, r.reason), italics: true, color: '6B7280', size: 18 })] }));
       }
       if (o.caption) {
         children.push(
@@ -591,7 +597,7 @@ function placeVisual(_pptx: any, slide: any, req: VisualReq, res: Resolved, area
     slide.addText(req.source, { x: area.x, y: top, w: area.w, h: boxH - 0.5, fontFace: 'Consolas', fontSize: 12, color: THEME.ink, fill: { color: 'F3F4F6' }, valign: 'top', fit: 'shrink' });
     slide.addText(`Diagram not drawn (${res.reason}). The Mermaid source is shown instead.`, { x: area.x, y: top + boxH - 0.5, w: area.w, h: 0.5, fontFace: THEME.font, fontSize: 11, italic: true, color: THEME.muted, valign: 'middle', fit: 'shrink' });
   } else {
-    slide.addText(`[Image not embedded: ${req.path} (${res.reason})]`, { x: area.x, y: top, w: area.w, h: 0.8, fontFace: THEME.font, fontSize: 14, italic: true, color: THEME.muted, valign: 'top', fit: 'shrink' });
+    slide.addText(notEmbedded(req.path, res.reason), { x: area.x, y: top, w: area.w, h: 0.8, fontFace: THEME.font, fontSize: 14, italic: true, color: THEME.muted, valign: 'top', fit: 'shrink' });
   }
   if (req.caption) slide.addText(plain(req.caption), { x: area.x, y: top + boxH, w: area.w, h: capH, fontFace: THEME.font, fontSize: 14, italic: true, color: THEME.muted, align: 'center', valign: 'middle', fit: 'shrink' });
 }
@@ -652,7 +658,7 @@ function preparedVisual(req: VisualReq, res: Resolved): PreparedVisual {
     return { kind: 'picture', data: img.data, ext: img.type === 'png' ? 'png' : 'jpeg', alt: label, caption, align: req.align, fit: (maxW, maxH, fill) => fitSize(img, req, maxW, maxH, fill) };
   }
   if (req.kind === 'mermaid') return { kind: 'source', text: req.source, note: `Diagram not drawn (${res.reason}). The Mermaid source is shown instead.`, caption };
-  return { kind: 'missing', text: `[Image not embedded: ${req.path} (${res.reason})]`, caption };
+  return { kind: 'missing', text: notEmbedded(req.path, res.reason), caption };
 }
 
 async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string, warnings: string[]): Promise<PptxResult> {

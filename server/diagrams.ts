@@ -26,6 +26,7 @@ import { concurrencyReason, queueReasonLabel } from './control-plane.ts';
 import { engineProvider } from './project-aws.ts';
 import { getRun } from './agent/runner.ts';
 import { renderToPng, rendererProblem } from './docimage.ts';
+import { drawioRendererProblem } from './drawio-render.ts';
 import { generatedFiles, removeGenerated, saveGenerated } from './vault-generated.ts';
 import { log } from './workflows/store.ts';
 import { view as sessionView } from './workflows/views.ts';
@@ -40,10 +41,16 @@ import {
   composeDiagramPrompt,
   diagramDensity,
   diagramRules,
+  parseDescription,
   parseDiagramReply,
   validateMermaid,
   type DiagramKind,
 } from './diagram-text.ts';
+import { CLOUDS, CLOUD_LABELS, DEFAULT_CLOUD, DIAGRAM_STYLES, DRAWIO_LIMITS, DrawioError, STYLE_LABELS, drawioDensity, validateDrawio, type Cloud, type DiagramStyle } from './drawio.ts';
+import { composeIconDiagramPrompt, iconDiagramRules, iconImageMarkdown } from './drawio-text.ts';
+import { detectCloud } from './drawio-cloud.ts';
+import { clearIconPictures, iconPicture, readIconFile, stageIconFile, styleChoices } from './diagram-icons.ts';
+import { iconDiagramIntegrationIds } from './integrations.ts';
 
 export { DIAGRAM_KINDS, DIAGRAM_LIMITS, KIND_LABELS, type DiagramKind } from './diagram-text.ts';
 
@@ -145,14 +152,31 @@ function versionView(v: Row, withSource: boolean) {
     created_by: v.created_by,
     created_by_name: one<Row>('SELECT name FROM users WHERE id = ?', v.created_by)?.name ?? null,
     created_at: v.created_at,
-    chars: String(v.mermaid).length,
+    format: v.format as 'mermaid' | 'drawio',
+    style: v.style as DiagramStyle,
+    cloud: v.cloud ? (v.cloud as Cloud) : null,
+    chars: String(v.format === 'drawio' ? v.drawio ?? '' : v.mermaid).length,
   };
-  return withSource ? { ...base, mermaid: v.mermaid } : base;
+  return withSource ? { ...base, mermaid: v.mermaid, drawio: v.format === 'drawio' ? String(v.drawio ?? '') : null } : base;
 }
+
+/** Size facts of a stored version in either format, for the "very dense" note. */
+function densityOf(v: Row | undefined) {
+  if (!v) return null;
+  if (v.format === 'drawio') {
+    const x = drawioDensity(String(v.drawio ?? ''));
+    return { nodes: x.nodes, lines: x.lines, chars: String(v.drawio ?? '').length, dense: x.dense, icons: x.icons, edges: x.edges };
+  }
+  return diagramDensity(String(v.mermaid));
+}
+
+const sourceExt = (format: string) => (format === 'drawio' ? 'drawio' : 'mmd');
 
 function diagramView(d: Row, withSource = false) {
   const cur = d.version > 0 ? versionRow(d.id, d.version) : undefined;
   const repoIds = parseJson<string[]>(d.repo_ids, []);
+  const format = String(cur?.format ?? d.format ?? 'mermaid');
+  const exportBase = `/api/projects/${d.project_id}/diagrams/${d.id}/export`;
   return {
     id: d.id,
     project_id: d.project_id,
@@ -161,6 +185,12 @@ function diagramView(d: Row, withSource = false) {
     title: d.title,
     slug: d.slug,
     focus: d.focus,
+    style: (d.style ?? 'mermaid') as DiagramStyle,
+    style_label: STYLE_LABELS[(d.style ?? 'mermaid') as DiagramStyle],
+    format: format as 'mermaid' | 'drawio',
+    cloud: d.cloud ? (d.cloud as Cloud) : null,
+    cloud_label: d.cloud ? CLOUD_LABELS[d.cloud as Cloud] ?? d.cloud : null,
+    links: cur ? (format === 'drawio' ? { drawio: `${exportBase}?format=drawio`, png: `${exportBase}?format=png`, svg: `${exportBase}?format=svg` } : { mmd: `${exportBase}?format=mmd`, png: `${exportBase}?format=png` }) : null,
     repos: repoIds.map((id) => {
       const r = findRepo(id);
       return { id, name: r?.name ?? '(removed repository)', slug: r?.slug ?? '', removed: !r };
@@ -172,9 +202,9 @@ function diagramView(d: Row, withSource = false) {
     generating: d.status === 'generating',
     workflow_id: d.pending_workflow_id,
     session_id: d.workflow_id ?? null,
-    density: cur ? diagramDensity(String(cur.mermaid)) : null,
+    density: densityOf(cur),
     vault_files: generatedFiles(d.project_id, 'diagrams', d.slug),
-    path: `${DIAGRAMS_DIR}/${d.slug}.mmd`,
+    path: `${DIAGRAMS_DIR}/${d.slug}.${sourceExt(format)}`,
     description: cur?.description ?? '',
     citations: cur ? parseJson<string[]>(cur.citations, []) : [],
     sources: cur ? parseJson<DiagramSource[]>(cur.sources, []) : [],
@@ -184,7 +214,7 @@ function diagramView(d: Row, withSource = false) {
     created_by_name: one<Row>('SELECT name FROM users WHERE id = ?', d.created_by)?.name ?? null,
     created_at: d.created_at,
     updated_at: d.updated_at,
-    ...(withSource ? { mermaid: cur?.mermaid ?? '' } : {}),
+    ...(withSource ? { mermaid: cur?.mermaid ?? '', drawio: cur?.format === 'drawio' ? String(cur.drawio ?? '') : null } : {}),
   };
 }
 
@@ -200,7 +230,13 @@ export function diagramSource(projectId: string, ref: string, version?: number) 
     title: String(d.title),
     kind: d.kind as DiagramKind,
     version: Number(v.version),
+    /** 'mermaid' (the `mermaid` text) or 'drawio' (an icon diagram: the `drawio` XML, `mermaid` is empty). */
+    format: String(v.format ?? 'mermaid') as 'mermaid' | 'drawio',
+    style: String(v.style ?? 'mermaid') as DiagramStyle,
+    cloud: v.cloud ? (String(v.cloud) as Cloud) : null,
     mermaid: String(v.mermaid),
+    drawio: v.format === 'drawio' ? String(v.drawio ?? '') : null,
+    current: Number(v.version) === Number(d.version),
     description: String(v.description),
     stale: Boolean(d.stale),
     sources: parseJson<DiagramSource[]>(v.sources, []),
@@ -208,17 +244,35 @@ export function diagramSource(projectId: string, ref: string, version?: number) 
 }
 
 /**
- * Markdown ready for make-doc (NEW-8 renders the fence as a picture in Word and PowerPoint): the diagram in a mermaid
- * fence, followed by its description when asked. Null when the diagram does not exist or has no version yet.
+ * Markdown ready for make-doc (NEW-8 renders the fence as a picture in Word and PowerPoint): a Mermaid diagram in a mermaid
+ * fence, or an icon diagram as an image line that points at its .drawio file in the project folder (written there now), followed
+ * by its description when asked. Null when the diagram does not exist or has no version yet.
  */
 export function diagramMarkdown(projectId: string, ref: string, opts: { version?: number; description?: boolean; heading?: boolean } = {}): string | null {
   const s = diagramSource(projectId, ref, opts.version);
   if (!s) return null;
+  if (s.format === 'drawio') {
+    const img = diagramImageRef(projectId, ref, { version: opts.version });
+    return img ? iconImageMarkdown(s.title, img.path, opts.description && s.description ? s.description : null, Boolean(opts.heading)) : null;
+  }
   const parts = [];
   if (opts.heading) parts.push(`## ${s.title}`);
   parts.push('```mermaid\n' + s.mermaid + '\n```');
   if (opts.description && s.description) parts.push(s.description);
   return parts.join('\n\n') + '\n';
+}
+
+/**
+ * A stored icon diagram as something make-doc can embed: the path of its .drawio file inside the project folder (for an
+ * `image` element or a Markdown image; make-doc draws it as a picture, or puts a labelled placeholder with a warning when the
+ * Icon diagrams pack or a browser is missing). The file is written when this is called. Null for a Mermaid diagram, a diagram
+ * that does not exist, or one without that version.
+ */
+export function diagramImageRef(projectId: string, ref: string, opts: { version?: number } = {}): { path: string; title: string; slug: string; version: number; current: boolean; cloud: Cloud | null } | null {
+  const s = diagramSource(projectId, ref, opts.version);
+  if (!s || s.format !== 'drawio' || !s.drawio) return null;
+  const rel = stageIconFile(projectDir(getProject(projectId)), DIAGRAMS_DIR, s.slug, s.version, s.current, s.drawio);
+  return { path: rel, title: s.title, slug: s.slug, version: s.version, current: s.current, cloud: s.cloud };
 }
 
 /* ------------------------------------------------------------------ */
@@ -230,7 +284,10 @@ async function writeFiles(d: Row, v: Record<string, any>, message: string): Prom
   const dir = path.join(projectDir(project), DIAGRAMS_DIR);
   await withLock(`git:${projectDir(project)}`, async () => {
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${d.slug}.mmd`), String(v.mermaid).replace(/\s+$/, '') + '\n');
+    const icon = v.format === 'drawio';
+    fs.writeFileSync(path.join(dir, `${d.slug}.${icon ? 'drawio' : 'mmd'}`), String(icon ? v.drawio : v.mermaid).replace(/\s+$/, '') + '\n');
+    // A diagram that changed format leaves no file of the old one behind.
+    fs.rmSync(path.join(dir, `${d.slug}.${icon ? 'mmd' : 'drawio'}`), { force: true });
     fs.writeFileSync(
       path.join(dir, `${d.slug}.json`),
       JSON.stringify(
@@ -238,6 +295,9 @@ async function writeFiles(d: Row, v: Record<string, any>, message: string): Prom
           id: d.id,
           kind: d.kind,
           title: d.title,
+          format: v.format,
+          style: v.style,
+          cloud: v.cloud || null,
           version: v.version,
           generatedAt: v.created_at,
           sources: parseJson(v.sources, []),
@@ -277,7 +337,7 @@ function sessionIsActive(workflowId: string | null): boolean {
  * Start the session that draws (or redraws) a diagram. Refuses when the budget is used up or a repository is not ready,
  * before anything is written. Returns the session row.
  */
-export async function startGeneration(diagramId: string, userId: string, opts: { focus?: string; specId?: string | null; request?: RunOptionsRequest; audit?: (workflowId: string) => void; onOptions?: (o: RunOptions) => void } = {}): Promise<Row> {
+export async function startGeneration(diagramId: string, userId: string, opts: { focus?: string; style?: DiagramStyle; cloud?: Cloud; specId?: string | null; request?: RunOptionsRequest; audit?: (workflowId: string) => void; onOptions?: (o: RunOptions) => void } = {}): Promise<Row> {
   let d = one<Row>('SELECT * FROM diagrams WHERE id = ?', diagramId);
   if (!d) throw notFound('Diagram not found');
   const project = getProject(d.project_id);
@@ -288,6 +348,10 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
   } catch (e: any) {
     throw badRequest(e?.message ?? String(e));
   }
+  // The icon style needs the Icon diagrams pack (the draw.io lookups); without it the request is refused with its hint,
+  // before anything is written, and no other style is used instead.
+  const style: DiagramStyle = opts.style ?? (DIAGRAM_STYLES.includes(d.style) ? (d.style as DiagramStyle) : 'mermaid');
+  const integrationIds = style === 'icon' ? await iconDiagramIntegrationIds() : [];
   for (const r of repos) await ensureFresh(r);
   const sources: DiagramSource[] = repos.map((r) => ({ repoId: r.id, name: r.name, slug: r.slug, branch: r.default_branch, sha: headSha(r) ?? '' }));
   const missing = sources.find((s) => !s.sha);
@@ -296,7 +360,9 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
   if (d.status === 'generating' && sessionIsActive(d.pending_workflow_id)) throw badRequest('This diagram is already being drawn');
 
   const focus = (opts.focus ?? d.focus ?? '').trim().slice(0, DIAGRAM_LIMITS.focusChars);
-  const goal = composeDiagramPrompt(d.kind as DiagramKind, d.title, repos, focus);
+  let cloud: Cloud | '' = '';
+  if (style === 'icon') cloud = opts.cloud ?? (CLOUDS.includes(d.cloud) ? (d.cloud as Cloud) : detectCloud(repos.map((r) => repoDir(r))).cloud);
+  const goal = style === 'icon' ? composeIconDiagramPrompt(d.kind as DiagramKind, d.title, repos, cloud as Cloud, focus) : composeDiagramPrompt(d.kind as DiagramKind, d.title, repos, focus);
   const chosen = resolveRunOptions(project, { request: opts.request, specId: opts.specId, stored: d });
   const s = readSettings(
     { model: project.default_model || undefined, budgetUsd: DIAGRAM_BUDGET_USD, maxIterations: 1, pushMode: 'never', permissionMode: '', trustTools: chosen.trustTools },
@@ -321,10 +387,10 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
     repos: '[]',
     workspace_id: null,
     engine: '',
-    integrations: '[]',
+    integrations: JSON.stringify(integrationIds),
     playground: 1,
     ...s,
-    rules: diagramRules(d.title),
+    rules: style === 'icon' ? iconDiagramRules(d.title) : diagramRules(d.title),
     iteration: 0,
     burst_start: 0,
     spent_usd: 0,
@@ -341,9 +407,9 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
     created_at: ts,
     updated_at: ts,
   });
-  update('diagrams', d.id, { status: 'generating', error: null, pending_workflow_id: id, workflow_id: id, pending_sources: JSON.stringify(sources), focus, updated_at: ts });
+  update('diagrams', d.id, { status: 'generating', error: null, pending_workflow_id: id, workflow_id: id, pending_sources: JSON.stringify(sources), focus, style, cloud, updated_at: ts });
   storeRunOptions('diagrams', d.id, opts.request);
-  log(id, 'system', `Diagram session started for "${d.title}"`);
+  log(id, 'system', `Diagram session started for "${d.title}"${style === 'icon' ? ` (icon diagram, ${CLOUD_LABELS[cloud as Cloud]} icons, draw.io lookups attached)` : ''}`);
   for (const w of chosen.warnings) log(id, 'status', w);
   opts.onOptions?.(chosen);
   opts.audit?.(id);
@@ -395,18 +461,33 @@ export function followUpStarted(workflowId: string): void {
   notifyProject(d.project_id, 'diagrams.updated', { id: d.id });
 }
 
-/** Keep the latest version in the project Vault: the Mermaid source now, the picture when a renderer exists. Never throws. */
-export function vaultSaveDiagram(d: Row, mermaid: string, actor: string | null): void {
-  const saved = saveGenerated(d.project_id, 'diagrams', d.slug, [{ ext: 'mmd', data: String(mermaid).replace(/\s+$/, '') + '\n' }], actor);
-  if (!saved.saved.length || rendererProblem() !== null) return;
+/**
+ * Keep the latest version in the project Vault: the source now (.mmd for Mermaid, .drawio for an icon diagram), and the
+ * picture(s) when a renderer exists (.png; icon diagrams also .svg). Never throws. `v` is the version row.
+ */
+export function vaultSaveDiagram(d: Row, v: Row, actor: string | null): void {
+  const icon = v.format === 'drawio';
+  const source = String(icon ? v.drawio : v.mermaid);
+  const saved = saveGenerated(d.project_id, 'diagrams', d.slug, [{ ext: icon ? 'drawio' : 'mmd', data: source.replace(/\s+$/, '') + '\n' }], actor);
+  if (!saved.saved.length) return;
+  if (icon ? drawioRendererProblem() !== null : rendererProblem() !== null) return;
   void (async () => {
     try {
-      const [res] = await withLock('diagram-render', () => renderToPng([{ kind: 'mermaid', source: String(mermaid) }]));
-      // A newer version may have been stored while the picture was drawn: then this picture is out of date.
-      const latest = isDbOpen() ? one<Row>('SELECT v.mermaid FROM diagram_versions v JOIN diagrams g ON g.id = v.diagram_id AND g.version = v.version WHERE g.id = ?', d.id) : undefined;
-      if (res.ok && latest && String(latest.mermaid).trim() === String(mermaid).trim()) saveGenerated(d.project_id, 'diagrams', d.slug, [{ ext: 'png', data: res.image.data }], actor, false);
+      const col = icon ? 'drawio' : 'mermaid';
+      const stillLatest = () => {
+        // A newer version may have been stored while the picture was drawn: then this picture is out of date.
+        const latest = isDbOpen() ? one<Row>(`SELECT v.${col} AS src FROM diagram_versions v JOIN diagrams g ON g.id = v.diagram_id AND g.version = v.version WHERE g.id = ?`, d.id) : undefined;
+        return Boolean(latest && String(latest.src).trim() === source.trim());
+      };
+      if (icon) {
+        const pic = await iconPicture(d.project_id, d.id, Number(v.version), source);
+        if (pic.ok && stillLatest()) saveGenerated(d.project_id, 'diagrams', d.slug, [{ ext: 'png', data: pic.png }, { ext: 'svg', data: pic.svg }], actor, false);
+        return;
+      }
+      const [res] = await withLock('diagram-render', () => renderToPng([{ kind: 'mermaid', source }]));
+      if (res.ok && stillLatest()) saveGenerated(d.project_id, 'diagrams', d.slug, [{ ext: 'png', data: res.image.data }], actor, false);
     } catch {
-      /* the picture is a bonus; the .mmd is saved */
+      /* the picture is a bonus; the source file is saved */
     }
   })();
 }
@@ -435,10 +516,36 @@ export async function ingestSession(workflowId: string): Promise<void> {
     if (w.status !== 'done') return failGeneration(d, `The diagram session ended as ${w.status}${w.stop_reason ? `: ${w.stop_reason}` : ''}`, w.created_by);
     try {
       const run = w.last_run_id ? getRun(w.last_run_id) : null;
-      const parsed = parseDiagramReply(run?.result ?? '');
-      const ok = await validateMermaid(parsed.mermaid);
+      const icon = d.style === 'icon';
+      let produced: { format: 'mermaid' | 'drawio'; mermaid: string; drawio: string | null; description: string; citations: string[]; stats: Record<string, unknown>; audit: Record<string, unknown> };
+      if (icon) {
+        // An icon diagram is a file the session wrote in its run folder; its reply holds the description.
+        const meta = parseJson<any>(run?.meta, {});
+        const file = readIconFile(projectDir(getProject(d.project_id)), meta.workDir, String(run?.result ?? ''), Number(w.iteration) > 1, String(run?.started_at || run?.created_at || ''));
+        let info;
+        try {
+          info = validateDrawio(file.xml);
+        } catch (e: any) {
+          throw e instanceof DrawioError ? new DiagramError(`The draw.io file was refused: ${e.message}`) : e;
+        }
+        produced = {
+          format: 'drawio',
+          mermaid: '',
+          drawio: info.xml,
+          ...parseDescription(String(run?.result ?? '')),
+          stats: { cells: info.cells, vertices: info.vertices, edges: info.edges, icons: info.icons, groups: info.groups, images: info.images },
+          audit: { file: file.rel, cells: info.cells, icons: info.icons, groups: info.groups },
+        };
+      } else {
+        const parsed = parseDiagramReply(run?.result ?? '');
+        const ok = await validateMermaid(parsed.mermaid);
+        produced = { format: 'mermaid', mermaid: ok.source, drawio: null, description: parsed.description, citations: parsed.citations, stats: {}, audit: { type: ok.type, parsed: ok.parsed } };
+      }
       const cur = d.version > 0 ? versionRow(d.id, d.version) : undefined;
-      if (cur && Number(w.iteration) > 1 && String(cur.mermaid).trim() === ok.source.trim()) return settleUnchanged(d, w, 'The reply holds the diagram that is already stored, so no new version was made.', true);
+      const storedText = cur ? String(cur.format === 'drawio' ? cur.drawio ?? '' : cur.mermaid).trim() : null;
+      if (cur && Number(w.iteration) > 1 && cur.format === produced.format && storedText === String(produced.format === 'drawio' ? produced.drawio : produced.mermaid).trim()) {
+        return settleUnchanged(d, w, 'The reply holds the diagram that is already stored, so no new version was made.', true);
+      }
       const sources = parseJson<DiagramSource[]>(d.pending_sources, []);
       const hash = hashOfSources(sources.map((s) => ({ repoId: s.repoId, sha: s.sha || null })));
       const version = d.version + 1;
@@ -446,9 +553,14 @@ export async function ingestSession(workflowId: string): Promise<void> {
       const row = {
         diagram_id: d.id,
         version,
-        mermaid: ok.source,
-        description: parsed.description,
-        citations: JSON.stringify(parsed.citations),
+        format: produced.format,
+        style: d.style,
+        cloud: icon ? d.cloud : '',
+        mermaid: produced.mermaid,
+        drawio: produced.drawio,
+        stats: JSON.stringify(produced.stats),
+        description: produced.description,
+        citations: JSON.stringify(produced.citations),
         sources: JSON.stringify(sources),
         source_hash: hash,
         workflow_id: workflowId,
@@ -460,18 +572,19 @@ export async function ingestSession(workflowId: string): Promise<void> {
       await writeFiles(d, row, `${version === 1 ? 'Add' : 'Update'} diagram ${d.title} (v${version})`);
       tx(() => {
         insert('diagram_versions', row);
-        update('diagrams', d.id, { version, status: 'ready', error: null, source_hash: hash, stale: 0, pending_workflow_id: null, workflow_id: workflowId, ingested_run_id: run?.id ?? null, updated_at: ts });
+        update('diagrams', d.id, { version, format: produced.format, status: 'ready', error: null, source_hash: hash, stale: 0, pending_workflow_id: null, workflow_id: workflowId, ingested_run_id: run?.id ?? null, updated_at: ts });
       });
-      vaultSaveDiagram(d, ok.source, w.created_by);
+      vaultSaveDiagram(d, row as unknown as Row, w.created_by);
       if (d.version > 0) log(workflowId, 'status', `Diagram "${d.title}" is now version ${version} (Create > Diagrams).`);
-      auditRaw(w.created_by, 'diagram.version', `diagram:${d.id}`, { projectId: d.project_id, ok: true, version, type: ok.type, parsed: ok.parsed });
+      if (icon && drawioRendererProblem() !== null) log(workflowId, 'status', `The icon diagram is stored, but its picture cannot be drawn on this server: ${drawioRendererProblem()}. The .drawio file can be downloaded and opened in draw.io.`);
+      auditRaw(w.created_by, 'diagram.version', `diagram:${d.id}`, { projectId: d.project_id, ok: true, version, format: produced.format, style: d.style, cloud: icon ? d.cloud : null, ...produced.audit });
       notifyProject(d.project_id, 'diagrams.updated', { id: d.id });
       refreshDiagramStale(d.project_id);
       void import('./generated-docs.ts').then((m) => m.refreshDocStale(d.project_id)).catch(() => undefined);
     } catch (e: any) {
       if (!isDbOpen()) return;
       if (e instanceof NoDiagramError && Number(w.iteration) > 1) {
-        return settleUnchanged(d, w, 'The reply held no Mermaid diagram, so nothing was changed. Ask for a redraw to get a new version.');
+        return settleUnchanged(d, w, d.style === 'icon' ? `${e.message} Ask for a redraw to get a new version.` : 'The reply held no Mermaid diagram, so nothing was changed. Ask for a redraw to get a new version.');
       }
       const message = e instanceof DiagramError ? e.message : `Could not store the diagram: ${String(e?.message ?? e)}`;
       failGeneration(d, d.version > 0 ? `${message} The previous version (v${d.version}) was kept.` : message, w.created_by, w);
@@ -561,6 +674,31 @@ function pngCapability() {
   return { png: reason === null, pngReason: reason };
 }
 
+/** What the server can export for icon diagrams (the .drawio file always; PNG and SVG need the viewer files and a browser). */
+function iconExportCapability() {
+  const reason = drawioRendererProblem();
+  return { drawio: true, png: reason === null, svg: reason === null, previewReason: reason };
+}
+
+function readStyle(v: unknown): DiagramStyle | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  if (!DIAGRAM_STYLES.includes(v as DiagramStyle)) throw badRequest(`Style must be one of: ${DIAGRAM_STYLES.join(', ')} ("icon" is the draw.io icon style)`);
+  return v as DiagramStyle;
+}
+
+function readCloud(v: unknown): Cloud | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  if (!CLOUDS.includes(v as Cloud)) throw badRequest(`Cloud must be one of: ${CLOUDS.join(', ')}`);
+  return v as Cloud;
+}
+
+function listExtras() {
+  return {
+    clouds: CLOUDS.map((id) => ({ id, label: CLOUD_LABELS[id] })),
+    defaultCloud: DEFAULT_CLOUD,
+  };
+}
+
 export function registerDiagramRoutes(): void {
   get('/api/projects/:pid/diagrams', async (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid);
@@ -570,10 +708,27 @@ export function registerDiagramRoutes(): void {
     return {
       diagrams: rows.map((d) => diagramView(d)),
       kinds: DIAGRAM_KINDS.map((id) => ({ id, label: KIND_LABELS[id] })),
+      /** Drawing styles and whether each can be used now (icon needs the Icon diagrams pack), with the reason when not. */
+      styles: await styleChoices(),
+      ...listExtras(),
       export: pngCapability(),
+      exportIcon: iconExportCapability(),
       runOptions: runOptionChoices(project),
-      limits: { mermaidChars: DIAGRAM_LIMITS.mermaidChars, repos: DIAGRAM_LIMITS.repos, focusChars: DIAGRAM_LIMITS.focusChars, perProject: DIAGRAM_LIMITS.perProject },
+      limits: { mermaidChars: DIAGRAM_LIMITS.mermaidChars, repos: DIAGRAM_LIMITS.repos, focusChars: DIAGRAM_LIMITS.focusChars, perProject: DIAGRAM_LIMITS.perProject, drawioBytes: DRAWIO_LIMITS.bytes, drawioCells: DRAWIO_LIMITS.cells, drawioIcons: DRAWIO_LIMITS.icons },
     };
+  });
+
+  // Registered before the :id routes. The cloud a new icon diagram would use for these repositories (what the form preselects).
+  get('/api/projects/:pid/diagrams/detect-cloud', (ctx) => {
+    const { project } = requireProject(ctx, ctx.params.pid);
+    const ids = String(ctx.query.get('repoIds') ?? ctx.query.get('repoId') ?? '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .slice(0, DIAGRAM_LIMITS.repos);
+    const dirs = ids.map((id) => getRepo(id)).filter((r) => r.project_id === project.id).map((r) => repoDir(r));
+    const g = detectCloud(dirs);
+    return { cloud: g.cloud, label: CLOUD_LABELS[g.cloud], detected: g.detected, signals: g.signals };
   });
 
   post('/api/projects/:pid/diagrams', async (ctx) => {
@@ -588,12 +743,15 @@ export function registerDiagramRoutes(): void {
     const title = str(body.title, 'Title', { max: DIAGRAM_LIMITS.titleChars, optional: true }).trim() || `${KIND_LABELS[kind]}: ${names.join(', ')}`.slice(0, DIAGRAM_LIMITS.titleChars);
     const focus = str(body.focus, 'Focus', { max: DIAGRAM_LIMITS.focusChars, optional: true }).trim();
     const request = readRunOptionsRequest(project, body);
+    const style = readStyle(body.style) ?? 'mermaid';
+    const cloud = readCloud(body.cloud);
+    if (cloud && style !== 'icon') throw badRequest('A cloud only applies to the icon style');
     const id = newId('dg_');
     const ts = now();
-    insert('diagrams', { id, project_id: project.id, kind, title, slug: uniqueSlug(project.id, title), focus, repo_ids: JSON.stringify(repoIds), status: 'generating', created_by: ctx.user!.id, created_at: ts, updated_at: ts });
+    insert('diagrams', { id, project_id: project.id, kind, title, slug: uniqueSlug(project.id, title), focus, repo_ids: JSON.stringify(repoIds), style, format: style === 'icon' ? 'drawio' : 'mermaid', status: 'generating', created_by: ctx.user!.id, created_at: ts, updated_at: ts });
     try {
       let options: RunOptions | undefined;
-      const w = await startGeneration(id, ctx.user!.id, { focus, request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'diagram.create', `diagram:${id}`, { projectId: project.id, kind, workflowId: wid }) });
+      const w = await startGeneration(id, ctx.user!.id, { focus, style, cloud, request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'diagram.create', `diagram:${id}`, { projectId: project.id, kind, style, cloud: style === 'icon' ? one<Row>('SELECT cloud FROM diagrams WHERE id = ?', id)?.cloud : null, workflowId: wid }) });
       return { diagram: diagramView(one<Row>('SELECT * FROM diagrams WHERE id = ?', id)!), workflow: sessionView(w), warnings: options?.warnings ?? [] };
     } catch (e) {
       exec('DELETE FROM diagrams WHERE id = ?', id);
@@ -619,7 +777,7 @@ export function registerDiagramRoutes(): void {
     refreshDiagramStale(project.id);
     const d = getDiagramRow(project.id, ctx.params.id);
     const versions = all<Row>('SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC', d.id).map((v) => versionView(v, false));
-    return { diagram: diagramView(d, true), versions, export: pngCapability() };
+    return { diagram: diagramView(d, true), versions, export: pngCapability(), exportIcon: iconExportCapability() };
   });
 
   get('/api/projects/:pid/diagrams/:id/versions/:version', (ctx) => {
@@ -650,8 +808,11 @@ export function registerDiagramRoutes(): void {
     const body = await ctx.json().catch(() => ({}));
     const focus = body.focus === undefined ? undefined : str(body.focus, 'Focus', { max: DIAGRAM_LIMITS.focusChars, optional: true });
     const request = readRunOptionsRequest(project, body);
+    const style = readStyle(body.style);
+    const cloud = readCloud(body.cloud);
+    if (cloud && (style ?? d.style) !== 'icon') throw badRequest('A cloud only applies to the icon style');
     let options: RunOptions | undefined;
-    const w = await startGeneration(d.id, ctx.user!.id, { focus, request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'diagram.refresh', `diagram:${d.id}`, { projectId: project.id, workflowId: wid }) });
+    const w = await startGeneration(d.id, ctx.user!.id, { focus, style, cloud, request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'diagram.refresh', `diagram:${d.id}`, { projectId: project.id, style: style ?? d.style, workflowId: wid }) });
     return { diagram: diagramView(getDiagramRow(project.id, d.id)), workflow: sessionView(w), warnings: options?.warnings ?? [] };
   });
 
@@ -660,9 +821,10 @@ export function registerDiagramRoutes(): void {
     const d = getDiagramRow(project.id, ctx.params.id);
     exec('DELETE FROM diagrams WHERE id = ?', d.id);
     removeGenerated(project.id, 'diagrams', d.slug, ctx.user!.id);
+    clearIconPictures(project.id, d.id);
     const dir = path.join(projectDir(project), DIAGRAMS_DIR);
     await withLock(`git:${projectDir(project)}`, async () => {
-      for (const ext of ['mmd', 'json']) fs.rmSync(path.join(dir, `${d.slug}.${ext}`), { force: true });
+      for (const ext of ['mmd', 'drawio', 'json']) fs.rmSync(path.join(dir, `${d.slug}.${ext}`), { force: true });
     });
     await commitProject(project.id, `Delete diagram ${d.title}`, [DIAGRAMS_DIR]).catch(() => undefined);
     void import('./generated-docs.ts').then((m) => m.refreshDocStale(project.id)).catch(() => undefined);
@@ -680,11 +842,25 @@ export function registerDiagramRoutes(): void {
     if (!v) throw notFound('Version not found');
     const format = ctx.query.get('format') || 'png';
     const base = n === d.version ? d.slug : `${d.slug}-v${n}`;
+    if (v.format === 'drawio') {
+      // Icon diagram: the .drawio file always; PNG and SVG when the viewer files and a browser are there.
+      if (!['drawio', 'png', 'svg'].includes(format)) throw badRequest('This is an icon diagram: format must be drawio, png or svg (mmd is for Mermaid diagrams)');
+      if (format === 'drawio') {
+        audit(ctx, 'diagram.export', `diagram:${d.id}`, { projectId: project.id, format, version: n, style: 'icon' });
+        return sendFile(ctx.res, String(v.drawio).replace(/\s+$/, '') + '\n', 'application/vnd.jgraph.mxfile; charset=utf-8', `${base}.drawio`);
+      }
+      const problem = drawioRendererProblem();
+      if (problem) throw new HttpError(501, `${format.toUpperCase()} export is not available on this server: ${problem}. Download the .drawio file (format=drawio) and open it in draw.io instead.`);
+      const pic = await iconPicture(project.id, d.id, n, String(v.drawio));
+      if (!pic.ok) throw new HttpError(422, `The diagram could not be drawn as a picture: ${pic.reason}. Download the .drawio file (format=drawio) instead.`);
+      audit(ctx, 'diagram.export', `diagram:${d.id}`, { projectId: project.id, format, version: n, style: 'icon' });
+      return format === 'svg' ? sendFile(ctx.res, pic.svg, 'image/svg+xml; charset=utf-8', `${base}.svg`) : sendFile(ctx.res, pic.png, 'image/png', `${base}.png`);
+    }
     if (format === 'mmd') {
       audit(ctx, 'diagram.export', `diagram:${d.id}`, { projectId: project.id, format, version: n });
       return sendFile(ctx.res, String(v.mermaid).replace(/\s+$/, '') + '\n', 'text/plain; charset=utf-8', `${base}.mmd`);
     }
-    if (format !== 'png') throw badRequest('Format must be png or mmd');
+    if (format !== 'png') throw badRequest(format === 'drawio' || format === 'svg' ? 'This is a Mermaid diagram: format must be png or mmd (drawio and svg are for icon diagrams)' : 'Format must be png or mmd');
     const problem = rendererProblem();
     if (problem) {
       throw new HttpError(501, `PNG export is not available on this server: ${problem}. Download the Mermaid source (format=mmd) instead.`);

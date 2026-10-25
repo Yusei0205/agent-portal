@@ -32,6 +32,11 @@ import { rendererProblem } from './docimage.ts';
 import { renderDocx } from './docgen.ts';
 import { view as sessionView } from './workflows/views.ts';
 import { diagramMarkdown, diagramSource, headSha } from './diagrams.ts';
+import { CLOUDS, CLOUD_LABELS, DEFAULT_CLOUD, DIAGRAM_STYLES, type Cloud, type DiagramStyle } from './drawio.ts';
+import { docIconDiagramBlock } from './drawio-text.ts';
+import { cloudFor, styleChoices } from './diagram-icons.ts';
+import { iconDiagramIntegrationIds } from './integrations.ts';
+import { drawioRendererProblem } from './drawio-render.ts';
 import { placeTemplate, resolveTemplate, syncProjectTemplates, templateForProject } from './doc-templates.ts';
 import { checkRunBudget, startPlaygroundRun } from './playground-run.ts';
 import { readRunOptionsRequest, resolveRunOptions, runOptionChoices, runOptionsView, storeRunOptions, type RunOptions, type RunOptionsRequest } from './run-options.ts';
@@ -307,6 +312,8 @@ function docView(d: Row, detail = false) {
       return { id, title: s?.title ?? pinned?.title ?? '(removed diagram)', slug: s?.slug ?? pinned?.slug ?? '', removed: !s, used_version: pinned?.version ?? null, current_version: s?.version ?? null };
     }),
     template: { requested_id: d.template_id, requested_name: d.template_name, used: cur?.template_used ?? null },
+    diagram_style: (d.diagram_style ?? 'mermaid') as DiagramStyle,
+    diagram_cloud: d.diagram_cloud ? (d.diagram_cloud as Cloud) : null,
     status: d.status,
     error: d.error,
     generating: d.status === 'generating',
@@ -381,7 +388,13 @@ export async function startGeneration(docId: string, userId: string, opts: { spe
   const missing = snap.repos.find((r) => !r.sha);
   if (missing) throw badRequest(`Repository "${missing.name}" has no checkout yet. Sync it on the Repos tab.`);
 
+  // Diagrams the agent draws itself: Mermaid (default) or icon diagrams, which need the Icon diagrams pack.
+  const style: DiagramStyle = DIAGRAM_STYLES.includes(d.diagram_style) ? (d.diagram_style as DiagramStyle) : 'mermaid';
+  const integrations = style === 'icon' ? await iconDiagramIntegrationIds() : [];
+  let cloud: Cloud | '' = '';
+  if (style === 'icon') cloud = CLOUDS.includes(d.diagram_cloud) ? (d.diagram_cloud as Cloud) : cloudFor(project.id, repos.map((r) => r.id)).cloud;
   const goal = composeDocPrompt({
+    ...(style === 'icon' ? { iconBlock: docIconDiagramBlock(cloud as Cloud) } : {}),
     type: d.type as DocType,
     title: d.title,
     audience: d.audience,
@@ -396,6 +409,7 @@ export async function startGeneration(docId: string, userId: string, opts: { spe
     userId,
     leadAgent: chosen.leadAgent,
     trustTools: chosen.trustTools,
+    integrations,
     title: `Document: ${d.title}`.slice(0, 120),
     goal,
     rules: 'Write only inside your run folder. Do not change anything inside repos/. Never copy secrets into the document. The portal collects document.md from your run folder by itself and keeps the result on the Create page (Documents tab) and in the project Vault (generated/docs/). If you are asked to change the document, write the complete new document.md again in your run folder; a reply without a new document.md changes nothing.',
@@ -406,7 +420,7 @@ export async function startGeneration(docId: string, userId: string, opts: { spe
   storeRunOptions('generated_docs', d.id, opts.request);
   for (const x of chosen.warnings) log(w.id, 'status', x);
   opts.onOptions?.(chosen);
-  update('generated_docs', d.id, { status: 'generating', error: null, pending_workflow_id: w.id, workflow_id: w.id, pending_sources: JSON.stringify(snap), updated_at: now() });
+  update('generated_docs', d.id, { status: 'generating', error: null, pending_workflow_id: w.id, workflow_id: w.id, pending_sources: JSON.stringify(snap), diagram_cloud: cloud, updated_at: now() });
   opts.audit?.(w.id);
   notifyProject(project.id, 'generated-docs.updated', { id: d.id });
   return one<Row>('SELECT * FROM workflows WHERE id = ?', w.id)!;
@@ -716,7 +730,8 @@ function chosenTemplate(projectId: string, templateId: unknown): { id: string | 
 
 function wordCapability() {
   const reason = rendererProblem();
-  return { diagrams: reason === null, diagramsReason: reason };
+  const icon = drawioRendererProblem();
+  return { diagrams: reason === null, diagramsReason: reason, iconDiagrams: icon === null, iconDiagramsReason: icon };
 }
 
 export function registerGeneratedDocRoutes(): void {
@@ -731,6 +746,10 @@ export function registerGeneratedDocRoutes(): void {
       types: DOC_TYPES.map((id) => ({ id, label: DOC_TYPE_LABELS[id] })),
       template: t ? { id: t.id, name: t.name, scope: t.scope } : null,
       word: wordCapability(),
+      /** How diagrams the agent draws itself can be made: Mermaid, or icon diagrams when the Icon diagrams pack is installed. */
+      styles: await styleChoices(),
+      clouds: CLOUDS.map((id) => ({ id, label: CLOUD_LABELS[id] })),
+      defaultCloud: DEFAULT_CLOUD,
       runOptions: runOptionChoices(project),
       limits: { titleChars: DOC_LIMITS.titleChars, audienceChars: DOC_LIMITS.audienceChars, repos: DOC_LIMITS.repos, diagrams: DOC_LIMITS.diagrams, perProject: DOC_LIMITS.perProject },
     };
@@ -759,6 +778,17 @@ export function registerGeneratedDocRoutes(): void {
     const title = str(body.title, 'Title', { max: DOC_LIMITS.titleChars, optional: true }).trim() || `${DOC_TYPE_LABELS[type]}: ${names.length ? names.join(', ') : project.name}`.slice(0, DOC_LIMITS.titleChars);
     const tpl = chosenTemplate(project.id, body.templateId);
     const request = readRunOptionsRequest(project, body);
+    let diagramStyle: DiagramStyle = 'mermaid';
+    if (body.diagramStyle !== undefined && body.diagramStyle !== null && body.diagramStyle !== '') {
+      if (!DIAGRAM_STYLES.includes(body.diagramStyle)) throw badRequest(`diagramStyle must be one of: ${DIAGRAM_STYLES.join(', ')}`);
+      diagramStyle = body.diagramStyle;
+    }
+    let diagramCloud = '';
+    if (body.diagramCloud !== undefined && body.diagramCloud !== null && body.diagramCloud !== '') {
+      if (!CLOUDS.includes(body.diagramCloud)) throw badRequest(`diagramCloud must be one of: ${CLOUDS.join(', ')}`);
+      if (diagramStyle !== 'icon') throw badRequest('diagramCloud only applies to the icon diagram style');
+      diagramCloud = body.diagramCloud;
+    }
     const id = newId('gd_');
     const ts = now();
     insert('generated_docs', {
@@ -773,6 +803,8 @@ export function registerGeneratedDocRoutes(): void {
       diagram_ids: JSON.stringify(diagramIds),
       template_id: tpl.id,
       template_name: tpl.name,
+      diagram_style: diagramStyle,
+      diagram_cloud: diagramCloud,
       status: 'generating',
       created_by: ctx.user!.id,
       created_at: ts,
@@ -780,7 +812,7 @@ export function registerGeneratedDocRoutes(): void {
     });
     try {
       let options: RunOptions | undefined;
-      const w = await startGeneration(id, ctx.user!.id, { request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'gendoc.create', `gendoc:${id}`, { projectId: project.id, type, repos: repoIds.length, diagrams: diagramIds.length, workflowId: wid }) });
+      const w = await startGeneration(id, ctx.user!.id, { request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'gendoc.create', `gendoc:${id}`, { projectId: project.id, type, repos: repoIds.length, diagrams: diagramIds.length, diagramStyle, workflowId: wid }) });
       return { document: docView(one<Row>('SELECT * FROM generated_docs WHERE id = ?', id)!), workflow: sessionView(w), warnings: options?.warnings ?? [] };
     } catch (e) {
       exec('DELETE FROM generated_docs WHERE id = ?', id);
@@ -832,6 +864,14 @@ export function registerGeneratedDocRoutes(): void {
       const tpl = chosenTemplate(project.id, body.templateId);
       patch.template_id = tpl.id;
       patch.template_name = tpl.name;
+    }
+    if (body.diagramStyle !== undefined) {
+      if (!DIAGRAM_STYLES.includes(body.diagramStyle)) throw badRequest(`diagramStyle must be one of: ${DIAGRAM_STYLES.join(', ')}`);
+      patch.diagram_style = body.diagramStyle;
+    }
+    if (body.diagramCloud !== undefined) {
+      if (body.diagramCloud !== '' && !CLOUDS.includes(body.diagramCloud)) throw badRequest(`diagramCloud must be one of: ${CLOUDS.join(', ')}`);
+      patch.diagram_cloud = body.diagramCloud;
     }
     if (d.status === 'generating' && sessionIsActive(d.pending_workflow_id)) throw badRequest('This document is already being written');
     if (Object.keys(patch).length) update('generated_docs', d.id, { ...patch, updated_at: now() });

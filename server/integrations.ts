@@ -6,6 +6,8 @@
  *   atlassian   Jira and Confluence through Atlassian's Rovo MCP server, with an email and API token
  *   aws         read-only AWS (the AWS API MCP server with READ_OPERATIONS_ONLY) through one of the AWS accounts
  *   browser     a headless web browser (Playwright MCP) the agent can open pages and take screenshots with
+ *   drawio      the official draw.io MCP server, started from the "Icon diagrams" tool pack, for shape lookups only
+ *               (search_shapes, get_drawio_reference); created by the portal, never by a person
  *
  * Integrations are read-only unless writes are allowed: tools whose names say they change something are refused by
  * the run's guard before they are called. Secrets (headers, env, tokens) are write-only and reach a run only as the
@@ -19,14 +21,18 @@ import { deleteSecret, getSecret, secretInfo, setSecret } from './secrets.ts';
 import { HttpError, badRequest, newId, notFound, now, parseJson, slugify, str } from './util.ts';
 import { connectionEnv, getConnection as getAwsConnection } from './aws-connections.ts';
 import { getToolPacks, type ToolPack } from './tool-packs.ts';
+import { BUILTIN_DRAWIO_ID, DRAWIO_ALLOWED_TOOLS, DRAWIO_INTEGRATION_NAME, DRAWIO_PACK_HINT, DRAWIO_PACK_ID, DRAWIO_PIN, drawioPackState, mcpCacheDir, mcpEntry, shapeIndexFile } from './drawio-pack.ts';
 
-export type IntegrationKind = 'http' | 'stdio' | 'atlassian' | 'aws' | 'browser';
-const KINDS: IntegrationKind[] = ['http', 'stdio', 'atlassian', 'aws', 'browser'];
+export { BUILTIN_DRAWIO_ID } from './drawio-pack.ts';
+
+export type IntegrationKind = 'http' | 'stdio' | 'atlassian' | 'aws' | 'browser' | 'drawio';
+const KINDS: IntegrationKind[] = ['http', 'stdio', 'atlassian', 'aws', 'browser', 'drawio'];
 
 /** Pinned versions of the preset servers (changed deliberately, never "latest"). */
 export const PRESET_PACKAGES = {
   browser: '@playwright/mcp@0.0.83',
   aws: 'awslabs.aws-api-mcp-server@1.5.6',
+  drawio: `${DRAWIO_PIN.mcpPackage}@${DRAWIO_PIN.mcpVersion}`,
 };
 export const ATLASSIAN_MCP_URL = 'https://mcp.atlassian.com/v1/mcp';
 
@@ -90,6 +96,7 @@ const NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 function readBody(body: any, user: User, cur?: Row) {
   const kind: IntegrationKind = cur?.kind ?? body.kind;
   if (!KINDS.includes(kind)) throw badRequest('Choose Jira & Confluence, AWS, a web browser, or a custom MCP server');
+  if (kind === 'drawio') throw badRequest('The "Icon diagrams" integration is made by the portal when an admin installs the Icon diagrams pack; it cannot be created or edited by hand');
   if (kind === 'stdio' && !user.is_admin) throw badRequest('Only admins can add a command-line MCP server: it runs on the portal server');
   const name = str(body.name ?? cur?.name, 'Name', { max: 60 }).trim();
   if (!name) throw badRequest('Give the integration a name');
@@ -199,6 +206,32 @@ export async function ensureBuiltInBrowserIntegration(): Promise<void> {
   }
 }
 
+export const BUILTIN_DRAWIO_NAME = DRAWIO_INTEGRATION_NAME;
+
+/**
+ * Create the shared "Icon diagrams" integration once its pack is installed (the same pattern as the Web browser one).
+ * Idempotent; returns whether the integration exists afterwards. Sessions that choose the icon style attach it by id.
+ */
+export async function ensureBuiltInDrawioIntegration(): Promise<boolean> {
+  if (one<Row>('SELECT id FROM integrations WHERE id = ?', BUILTIN_DRAWIO_ID)) return true;
+  if (!drawioPackState().tool.ok) return false;
+  try {
+    exec('INSERT OR IGNORE INTO integrations (id, name, kind, scope, owner_id, config, allow_writes, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', BUILTIN_DRAWIO_ID, DRAWIO_INTEGRATION_NAME, 'drawio', 'team', null, JSON.stringify({}), 0, null, null, now(), now());
+  } catch {
+    /* may race with another process; the row is there either way */
+  }
+  return Boolean(one<Row>('SELECT id FROM integrations WHERE id = ?', BUILTIN_DRAWIO_ID));
+}
+
+/**
+ * The integrations a session needs to draw an icon diagram: just the "Icon diagrams" one, which is made on the spot when
+ * its pack is installed. Refuses with the pack's hint when the pack is missing, before anything is started.
+ */
+export async function iconDiagramIntegrationIds(): Promise<string[]> {
+  if (await ensureBuiltInDrawioIntegration()) return [BUILTIN_DRAWIO_ID];
+  throw badRequest(`Icon diagrams need the Icon diagrams tool pack: ${drawioPackState().tool.reason}. ${DRAWIO_PACK_HINT}.`);
+}
+
 /* ------------------------------------------------------------------ */
 /* Pack availability checks                                            */
 /* ------------------------------------------------------------------ */
@@ -219,6 +252,10 @@ async function requiredPackFor(kind: IntegrationKind, cfg: IntegrationConfig): P
   if (kind === 'aws') {
     const u = packMap['uv'];
     if (u && u.status === 'missing') return u;
+  }
+  if (kind === 'drawio') {
+    const st = drawioPackState().tool;
+    if (!st.ok) return { id: DRAWIO_PACK_ID, label: 'Icon diagrams (draw.io)', neededBy: 'Icon diagrams', status: 'missing', reason: st.reason, hint: DRAWIO_PACK_HINT };
   }
   if (kind === 'stdio') {
     // A custom stdio integration that uses 'uvx' as its command needs uv.
@@ -246,6 +283,10 @@ export async function mcpServerFor(i: Row): Promise<McpServer> {
       const aws = await connectionEnv(cfg.awsConnectionId!);
       return { type: 'stdio', command: 'uvx', args: [PRESET_PACKAGES.aws], env: { ...aws, READ_OPERATIONS_ONLY: 'true', AWS_API_MCP_TELEMETRY: 'false' } };
     }
+    case 'drawio':
+      // The installed server, run with the portal's own node: no npx, no network (the shape index is a local file, the
+      // icon service is off), a cache folder inside the pack, and nothing else in its environment.
+      return { type: 'stdio', command: process.execPath, args: [mcpEntry()], env: { DRAWIO_SHAPE_INDEX_URL: shapeIndexFile(), DRAWIO_ICON_SERVICE_URL: 'off', XDG_CACHE_HOME: mcpCacheDir() } };
     case 'browser':
       // If PORTAL_BROWSER_MCP_URL is set (the compose browser profile), use HTTP MCP transport.
       // Otherwise fall back to the local npx stdio transport (dev / single-machine use).
@@ -270,19 +311,24 @@ export interface RunIntegrations {
   servers: Record<string, McpServer>;
   /** Names of the servers whose changing tools are refused. */
   readOnly: Set<string>;
+  /** Servers that may only be asked for the tools listed here (the draw.io server: its lookups, not its browser and file tools). */
+  onlyTools: Map<string, Set<string>>;
   /** For the run record and the agent's prompt. */
   summary: { id: string; name: string; server: string; kind: string; readOnly: boolean }[];
 }
 
 /** Resolve the integrations a run asked for. Each must exist and be usable by the person the run acts for. */
 export async function resolveIntegrations(ids: string[], userId: string): Promise<RunIntegrations> {
-  const out: RunIntegrations = { servers: {}, readOnly: new Set(), summary: [] };
+  const out: RunIntegrations = { servers: {}, readOnly: new Set(), onlyTools: new Map(), summary: [] };
   const taken = new Set<string>();
   for (const id of [...new Set(ids)].slice(0, 10)) {
     // If the browser built-in is requested, ensure it exists (creates it on demand if the
     // browser pack just became available after startup).
     if (id === BUILTIN_BROWSER_ID) {
       await ensureBuiltInBrowserIntegration();
+    }
+    if (id === BUILTIN_DRAWIO_ID) {
+      await ensureBuiltInDrawioIntegration();
     }
     const i = getIntegration(id);
     if (!i || !canUseIntegration(i, userId)) throw badRequest('An integration of this run no longer exists or is not shared with you');
@@ -294,6 +340,7 @@ export async function resolveIntegrations(ids: string[], userId: string): Promis
     out.servers[name] = await mcpServerFor(i);
     const ro = !i.allow_writes && i.kind !== 'browser';
     if (ro) out.readOnly.add(name);
+    if (i.kind === 'drawio') out.onlyTools.set(name, new Set(DRAWIO_ALLOWED_TOOLS));
     out.summary.push({ id: i.id, name: i.name, server: name, kind: i.kind, readOnly: ro });
   }
   return out;
@@ -312,9 +359,14 @@ export function mcpToolOf(toolName: string): { server: string; tool: string } | 
 }
 
 /** Why a tool of a read-only integration may not run, or null. */
-export function integrationGuard(readOnly: Set<string>, toolName: string): string | null {
+export function integrationGuard(readOnly: Set<string>, toolName: string, onlyTools?: Map<string, Set<string>>): string | null {
   const t = mcpToolOf(toolName);
-  if (!t || !readOnly.has(t.server)) return null;
+  if (!t) return null;
+  const allowed = onlyTools?.get(t.server);
+  if (allowed && !allowed.has(t.tool)) {
+    return `Blocked by Agent Portal: the integration "${t.server}" only allows these tools: ${[...allowed].join(', ')}. ${t.tool} is not available in a session (it would open a browser or read files outside the diagram).`;
+  }
+  if (!readOnly.has(t.server)) return null;
   // camelCase names: split into words first, then compare in lower case (listRuns → list_runs, not "run").
   const words = t.tool.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
   if (!CHANGING.test(`_${words}_`)) return null;

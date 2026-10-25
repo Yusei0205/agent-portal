@@ -1,10 +1,12 @@
 /**
  * Optional tool-pack registry.
  *
- * Three packs are defined:
+ * Four packs are defined:
  *   'uv'      — Python / uvx runner, needed by the AWS integration and custom MCP servers.
  *   'kiro'    — Kiro CLI engine, needed by the Kiro provider.
  *   'browser' — Web browser MCP server, needed by the browser integration.
+ *   'drawio'  — Icon diagrams: the draw.io MCP server (shape lookup) and the draw.io viewer files that draw
+ *               diagrams offline; admin-installed with a live log (drawio-pack.ts). Off by default.
  *
  * Detection is injectable so tests need no real tools or network.
  *
@@ -22,6 +24,7 @@ import { dataPath } from './config.ts';
 import { HttpError, newId, now } from './util.ts';
 import { auditRaw } from './audit.ts';
 import { publish, subscribe, projectChannel } from './events.ts';
+import { DRAWIO_PACK_ID, DRAWIO_PIN, IMAGE_LIBS, RENDERER_FILES, drawioPackState, manifestFile, mcpPrefix, packDir, rendererDir, shapeIndexFile, type PackManifest } from './drawio-pack.ts';
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -36,6 +39,8 @@ export interface ToolPack {
   status: PackStatus;
   reason: string;
   hint: string;
+  /** Packs with several parts (the Icon diagrams pack) say which part is in place. */
+  parts?: { id: string; label: string; ok: boolean; reason: string }[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -91,7 +96,8 @@ const defaultShellRunner: ShellRunner = async (cmd, args, env) => {
   const { promisify } = await import('node:util');
   const exec = promisify(execFile);
   try {
-    const r = await exec(cmd, args, { env, timeout: 300_000, maxBuffer: 5 * 1024 * 1024 });
+    // npm is a .cmd file on Windows, which only runs through the shell.
+    const r = await exec(cmd, args, { env, timeout: 300_000, maxBuffer: 5 * 1024 * 1024, shell: /\.cmd$/i.test(cmd) });
     return { ok: true, output: r.stdout.toString() + r.stderr.toString() };
   } catch (e: any) {
     return { ok: false, output: String(e?.stderr ?? e?.stdout ?? e?.message ?? '') };
@@ -152,6 +158,16 @@ async function detectBrowser(probe: HttpProbe): Promise<{ status: PackStatus; re
   return { status: 'missing', reason: `browser MCP URL set but not reachable: ${url}` };
 }
 
+async function detectDrawio(): Promise<{ status: PackStatus; reason: string; parts: NonNullable<ToolPack['parts']> }> {
+  const st = drawioPackState();
+  const parts = [
+    { id: 'tool', label: 'draw.io MCP server and shape index', ok: st.tool.ok, reason: st.tool.reason },
+    { id: 'renderer', label: 'draw.io viewer files (pictures and exports)', ok: st.renderer.ok, reason: st.renderer.reason },
+  ];
+  if (!st.tool.ok) return { status: 'missing', reason: st.tool.reason, parts };
+  return { status: 'available', reason: st.renderer.ok ? `${st.tool.reason}; the viewer files are installed` : `${st.tool.reason}; ${st.renderer.reason}, so previews and exports need them`, parts };
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
@@ -171,10 +187,11 @@ export async function getToolPacks(
     }
   }
 
-  const [uv, kiro, browser] = await Promise.all([
+  const [uv, kiro, browser, drawio] = await Promise.all([
     detectUv(run),
     detectKiro(run),
     detectBrowser(probe),
+    detectDrawio(),
   ]);
 
   const packs: ToolPack[] = [
@@ -201,6 +218,15 @@ export async function getToolPacks(
       status: browser.status,
       reason: browser.reason,
       hint: 'Run: docker compose --profile browser up -d',
+    },
+    {
+      id: DRAWIO_PACK_ID,
+      label: 'Icon diagrams (draw.io)',
+      neededBy: 'Icon-style architecture diagrams (official AWS, Azure, Google Cloud and Kubernetes icons) in diagrams, documents and presentations',
+      status: drawio.status,
+      reason: drawio.reason,
+      hint: 'An admin can install the Icon diagrams pack under Settings › Tools',
+      parts: drawio.parts,
     },
   ];
 
@@ -409,6 +435,149 @@ async function installKiro(
   }
 }
 
+/** What the Icon diagrams install checks against. The real values are DRAWIO_PIN and RENDERER_FILES; tests pass their own. */
+export interface DrawioPins {
+  mcpPackage: string;
+  mcpVersion: string;
+  mcpIntegrity: string;
+  indexCommit: string;
+  indexSha256: string;
+  viewerTag: string;
+  files: { name: string; source: string; sha256: string }[];
+}
+
+/** The environment of the npm run: the program search path, a home and cache inside the data folder, and proxy settings. No secrets. */
+function npmEnv(cacheDir: string): Record<string, string> {
+  const env: Record<string, string> = { HOME: dataPath('home'), npm_config_cache: cacheDir, npm_config_update_notifier: 'false', npm_config_fund: 'false', npm_config_audit: 'false', CI: '1' };
+  for (const k of ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ComSpec', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy']) if (process.env[k]) env[k] = process.env[k]!;
+  return env;
+}
+
+function sha1Blob(buf: Buffer): string {
+  return createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
+}
+
+/**
+ * Install the Icon diagrams pack under packDir():
+ *   1. the draw.io MCP server, an exact npm version installed with --ignore-scripts, checked against its pinned integrity;
+ *   2. its shape index (the package downloads it from a CDN on first use; here it is fetched once and SHA-256 checked);
+ *   3. the draw.io viewer files the portal draws diagrams with (SHA-256 checked);
+ *   4. best effort, the Azure icon image folder (each file checked against its git blob hash).
+ * pack.json is written last. Steps 1 to 3 failing fails the install; step 4 failing only says so in the log.
+ */
+export async function installDrawioPack(job: InstallJob, downloader: Downloader, shellRunner: ShellRunner, pins: DrawioPins = { ...DRAWIO_PIN, files: RENDERER_FILES }): Promise<void> {
+  const dir = packDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.rmSync(manifestFile(), { force: true });
+  const tmp = fs.mkdtempSync(path.join(dir, '.install-'));
+  try {
+    const prefix = mcpPrefix();
+    fs.mkdirSync(prefix, { recursive: true });
+    fs.writeFileSync(path.join(prefix, 'package.json'), JSON.stringify({ name: 'icon-diagrams-host', private: true, version: '0.0.0' }));
+    const spec = `${pins.mcpPackage}@${pins.mcpVersion}`;
+    addLog(job, `Installing ${spec} with npm (install scripts off)…`);
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const r = await shellRunner(npm, ['install', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', spec], npmEnv(path.join(dir, '.npm-cache')));
+    if (r.output) addLog(job, r.output.slice(-1500));
+    if (!r.ok) throw new Error('npm install of the draw.io MCP server failed (is npm on the PATH and the npm registry reachable?)');
+    let integrity = '';
+    let version = '';
+    try {
+      const lock = JSON.parse(fs.readFileSync(path.join(prefix, 'node_modules', '.package-lock.json'), 'utf8'));
+      const entry = lock?.packages?.['node_modules/@drawio/mcp'];
+      integrity = String(entry?.integrity ?? '');
+      version = String(entry?.version ?? '');
+    } catch {
+      /* checked below */
+    }
+    if (version !== pins.mcpVersion || integrity !== pins.mcpIntegrity) {
+      throw new Error(`The installed ${spec} does not match the pinned version and integrity (got ${version || 'nothing'} ${integrity.slice(0, 20)}). Nothing was kept.`);
+    }
+    addLog(job, `Integrity verified: ${integrity.slice(0, 24)}…`);
+
+    addLog(job, 'Downloading the shape index (about 5 MB)…');
+    const idxTmp = path.join(tmp, 'search-index.json');
+    await downloader(`https://cdn.jsdelivr.net/gh/jgraph/drawio-mcp@${pins.indexCommit}/shape-search/search-index.json`, idxTmp);
+    const idxSha = sha256File(idxTmp);
+    if (idxSha !== pins.indexSha256) throw new Error(`SHA-256 mismatch for the shape index: expected ${pins.indexSha256}, got ${idxSha}`);
+    const parsed = JSON.parse(fs.readFileSync(idxTmp, 'utf8'));
+    if (!Array.isArray(parsed) || parsed.length < 1000) throw new Error('The shape index is not the expected list of shapes');
+    fs.renameSync(idxTmp, shapeIndexFile());
+    addLog(job, `Shape index installed (${parsed.length} shapes).`);
+
+    const rdir = rendererDir();
+    fs.mkdirSync(rdir, { recursive: true });
+    for (const f of pins.files) {
+      addLog(job, `Downloading the draw.io viewer file ${f.name} (${pins.viewerTag})…`);
+      const t = path.join(tmp, f.name);
+      await downloader(`https://raw.githubusercontent.com/jgraph/drawio/${pins.viewerTag}/src/main/webapp/${f.source}`, t);
+      const sha = sha256File(t);
+      if (sha !== f.sha256) throw new Error(`SHA-256 mismatch for ${f.name}: expected ${f.sha256}, got ${sha}`);
+      fs.renameSync(t, path.join(rdir, f.name));
+    }
+    addLog(job, 'Viewer files installed.');
+
+    const images: string[] = [];
+    for (const lib of IMAGE_LIBS) {
+      try {
+        const n = await installImageLib(job, downloader, tmp, lib, pins);
+        if (n) images.push(lib);
+      } catch (e: any) {
+        addLog(job, `The ${lib} icon images were not installed (${String(e?.message ?? e).slice(0, 200)}). Diagrams that use those icons still work, but the picture shows those icons blank. Run the install again later to retry.`);
+      }
+    }
+
+    const manifest: PackManifest = { mcp: spec, indexSha256: idxSha, viewerTag: pins.viewerTag, images, installedAt: now() };
+    fs.writeFileSync(manifestFile(), JSON.stringify(manifest, null, 2));
+    addLog(job, `Installed ${spec}. The "Icon diagrams" integration is ready for sessions that choose the icon style.`);
+  } finally {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Download one folder of draw.io's icon images from the pinned release, checking every file's git blob hash. Returns how many files. */
+async function installImageLib(job: InstallJob, downloader: Downloader, tmp: string, lib: string, pins: DrawioPins): Promise<number> {
+  addLog(job, `Listing the ${lib} icon images…`);
+  const listing = path.join(tmp, `${lib}-tree.json`);
+  await downloader(`https://api.github.com/repos/jgraph/drawio/git/trees/${pins.viewerTag}:src/main/webapp/img/lib/${lib}?recursive=1`, listing);
+  const tree = JSON.parse(fs.readFileSync(listing, 'utf8'));
+  if (tree?.truncated || !Array.isArray(tree?.tree)) throw new Error('the file list was not usable');
+  const files = (tree.tree as { path: string; type: string; sha: string; size: number }[]).filter((t) => t.type === 'blob' && /^[\w./-]+\.(?:svg|png)$/.test(t.path) && !t.path.includes('..') && t.size <= 200_000);
+  if (!files.length || files.length > 3000) throw new Error('the file list was not what was expected');
+  const root = path.join(rendererDir(), 'img', 'lib', lib);
+  const stage = path.join(tmp, `img-${lib}`);
+  fs.mkdirSync(stage, { recursive: true });
+  addLog(job, `Downloading ${files.length} ${lib} icon images…`);
+  let next = 0;
+  let done = 0;
+  const failed: string[] = [];
+  const worker = async () => {
+    while (next < files.length) {
+      const f = files[next++];
+      const dest = path.join(stage, f.path);
+      try {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        await downloader(`https://raw.githubusercontent.com/jgraph/drawio/${pins.viewerTag}/src/main/webapp/img/lib/${lib}/${f.path}`, dest);
+        if (sha1Blob(fs.readFileSync(dest)) !== f.sha) throw new Error('hash mismatch');
+        done++;
+      } catch {
+        failed.push(f.path);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  if (failed.length > files.length * 0.02) throw new Error(`${failed.length} of ${files.length} files could not be downloaded or did not match their checksum`);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(root), { recursive: true });
+  fs.renameSync(stage, root);
+  addLog(job, `${done} ${lib} icon images installed${failed.length ? ` (${failed.length} skipped)` : ''}.`);
+  return done;
+}
+
 function sha256File(filePath: string): string {
   const h = createHash('sha256');
   h.update(fs.readFileSync(filePath));
@@ -442,6 +611,15 @@ async function runInstallJob(
       await installUv(job, downloader);
     } else if (job.packId === 'kiro') {
       await installKiro(job, downloader, shellRunner);
+    } else if (job.packId === DRAWIO_PACK_ID) {
+      await installDrawioPack(job, downloader, shellRunner);
+      try {
+        const { ensureBuiltInDrawioIntegration } = await import('./integrations.ts');
+        clearPackCache();
+        await ensureBuiltInDrawioIntegration();
+      } catch (e: any) {
+        addLog(job, `The "Icon diagrams" integration could not be created yet (${String(e?.message ?? e).slice(0, 200)}); it is created the first time a session needs it.`);
+      }
     } else {
       throw new Error(`Unknown pack id: ${job.packId}`);
     }
@@ -467,6 +645,9 @@ async function runInstallJob(
 /* Route                                                               */
 /* ------------------------------------------------------------------ */
 
+/** Packs an admin can install from Settings (the browser pack runs as its own container). */
+const INSTALLABLE = ['uv', 'kiro', DRAWIO_PACK_ID];
+
 /** Admin-only message returned for non-admin users. */
 export const NON_ADMIN_INSTALL_MESSAGE = 'Ask an admin to install this under Settings \u203a Tools.';
 
@@ -484,14 +665,14 @@ export function registerToolRoutes(
 
   /**
    * POST /api/tools/:id/install
-   * Admin only. Starts a background install job for uv or kiro.
+   * Admin only. Starts a background install job for uv, kiro or drawio (Icon diagrams).
    * Returns 403 for non-admins with the exact message required by the spec.
    * Returns 409 if a job is already running for that pack.
    */
   post('/api/tools/:id/install', async (ctx) => {
     const packId = ctx.params.id;
-    if (packId !== 'uv' && packId !== 'kiro') {
-      throw new HttpError(404, `Unknown pack "${packId}". Valid ids: uv, kiro`);
+    if (!INSTALLABLE.includes(packId)) {
+      throw new HttpError(404, `Unknown pack "${packId}". Valid ids: ${INSTALLABLE.join(', ')}`);
     }
     if (!ctx.user?.is_admin) {
       throw new HttpError(403, NON_ADMIN_INSTALL_MESSAGE);
@@ -532,8 +713,8 @@ export function registerToolRoutes(
    */
   get('/api/tools/:id/install', (ctx) => {
     const packId = ctx.params.id;
-    if (packId !== 'uv' && packId !== 'kiro') {
-      throw new HttpError(404, `Unknown pack "${packId}". Valid ids: uv, kiro`);
+    if (!INSTALLABLE.includes(packId)) {
+      throw new HttpError(404, `Unknown pack "${packId}". Valid ids: ${INSTALLABLE.join(', ')}`);
     }
     const job = installJobs.get(packId);
     return { job: job ? jobView(job) : null };

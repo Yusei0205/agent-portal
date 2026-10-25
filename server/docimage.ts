@@ -6,6 +6,8 @@
  *   Edge) that runs Mermaid's own bundle from node_modules with securityLevel "strict", no network and a
  *   throw-away profile. When no browser is found or the render fails, callers get a `fallback` reason instead
  *   of an exception, so a document is still produced (the diagram becomes a code block with a note).
+ * - Icon diagrams (.drawio files, FR-DIAG-9) are drawn by the same kind of browser from the draw.io viewer files of the
+ *   "Icon diagrams" tool pack (drawio-render.ts); a missing pack or browser gives a reason in the same way.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -90,15 +92,19 @@ function checkPixels(w: number, h: number, what: string): void {
   if (w > IMAGE_LIMITS.pixels || h > IMAGE_LIMITS.pixels) throw new ImageError(`${what}: image is larger than ${IMAGE_LIMITS.pixels} pixels on a side`);
 }
 
-export type Loaded = { kind: 'raster'; image: Raster } | { kind: 'svg'; text: string };
+export type Loaded = { kind: 'raster'; image: Raster } | { kind: 'svg'; text: string } | { kind: 'drawio'; text: string };
 
-/** Read and validate an image file. PNG and JPEG come back as-is; SVG comes back as text to be rasterised. */
+/** Read and validate an image file. PNG and JPEG come back as-is; SVG and draw.io files come back as text to be rasterised. */
 export function loadImageFile(baseDir: string, p: unknown, what: string): Loaded {
   const abs = safeInputPath(baseDir, p, what);
   const ext = path.extname(abs).toLowerCase();
-  if (!['.png', '.jpg', '.jpeg', '.svg'].includes(ext)) throw new ImageError(`${what}: only .png, .jpg, .jpeg and .svg images are supported`);
+  if (!['.png', '.jpg', '.jpeg', '.svg', '.drawio'].includes(ext)) throw new ImageError(`${what}: only .png, .jpg, .jpeg, .svg and .drawio images are supported`);
   if (fs.statSync(abs).size > IMAGE_LIMITS.fileBytes) throw new ImageError(`${what}: image is larger than ${IMAGE_LIMITS.fileBytes / 1024 / 1024} MB`);
   const data = fs.readFileSync(abs);
+  if (ext === '.drawio') {
+    if (!/<mxfile[\s>]|<mxGraphModel[\s>]/.test(data.subarray(0, 4096).toString('utf8'))) throw new ImageError(`${what}: the file is not a draw.io diagram`);
+    return { kind: 'drawio', text: data.toString('utf8') };
+  }
   if (ext === '.svg') {
     if (!looksLikeSvg(data)) throw new ImageError(`${what}: the file is not an SVG image`);
     return { kind: 'svg', text: data.toString('utf8') };
@@ -166,7 +172,7 @@ export function findBrowser(): string | null {
 }
 
 export interface RenderItem {
-  kind: 'mermaid' | 'svg';
+  kind: 'mermaid' | 'svg' | 'drawio';
   source: string;
 }
 type RenderOut = { ok: true; image: Raster } | { ok: false; reason: string };
@@ -233,9 +239,46 @@ export function rendererProblem(): string | null {
   return null;
 }
 
+/** The command line of one throw-away headless browser run that loads `pageUrl` and prints its DOM (no network, no profile kept). */
+export function browserArgs(tmp: string, pageUrl: string, virtualMs: number): string[] {
+  const args = [
+    '--headless',
+    '--disable-gpu',
+    '--disable-extensions',
+    '--disable-dev-shm-usage',
+    '--no-first-run',
+    '--hide-scrollbars',
+    `--user-data-dir=${path.join(tmp, 'profile')}`,
+    '--host-resolver-rules=MAP * ~NOTFOUND',
+    '--allow-file-access-from-files',
+    `--virtual-time-budget=${virtualMs}`,
+    '--dump-dom',
+  ];
+  if (process.env.DOC_BROWSER_NO_SANDBOX === '1' || (typeof process.getuid === 'function' && process.getuid() === 0)) args.push('--no-sandbox');
+  args.push(pageUrl);
+  return args;
+}
+
 /** Render diagrams/SVGs to PNG in one browser run. Never throws: each item gets its own result. */
 export async function renderToPng(items: RenderItem[]): Promise<RenderOut[]> {
   if (!items.length) return [];
+  if (items.some((i) => i.kind === 'drawio')) {
+    // Icon diagrams go to their own renderer (own viewer files, own page); the rest renders as before.
+    const { renderDrawio } = await import('./drawio-render.ts');
+    const dIdx = items.map((i, k) => (i.kind === 'drawio' ? k : -1)).filter((k) => k >= 0);
+    const rest = items.filter((i) => i.kind !== 'drawio');
+    const [drawn, others] = await Promise.all([renderDrawio(dIdx.map((k) => ({ xml: items[k].source }))), renderToPng(rest)]);
+    const out: RenderOut[] = new Array(items.length);
+    dIdx.forEach((k, n) => {
+      const r = drawn[n];
+      out[k] = r.ok ? { ok: true, image: { type: 'png', data: r.png, pxW: r.pxW, pxH: r.pxH, density: r.density } } : { ok: false, reason: r.reason };
+    });
+    let o = 0;
+    items.forEach((_i, k) => {
+      if (!out[k]) out[k] = others[o++];
+    });
+    return out;
+  }
   const problem = rendererProblem();
   if (problem) return items.map(() => ({ ok: false as const, reason: problem }));
   const { exe, bundle } = probe();
@@ -243,21 +286,7 @@ export async function renderToPng(items: RenderItem[]): Promise<RenderOut[]> {
   try {
     const page = path.join(tmp, 'page.html');
     fs.writeFileSync(page, pageHtml(items, pathToFileURL(bundle!).href));
-    const args = [
-      '--headless',
-      '--disable-gpu',
-      '--disable-extensions',
-      '--disable-dev-shm-usage',
-      '--no-first-run',
-      '--hide-scrollbars',
-      `--user-data-dir=${path.join(tmp, 'profile')}`,
-      '--host-resolver-rules=MAP * ~NOTFOUND',
-      '--allow-file-access-from-files',
-      `--virtual-time-budget=${Math.min(50_000, 8000 + items.length * 4000)}`,
-      '--dump-dom',
-    ];
-    if (process.env.DOC_BROWSER_NO_SANDBOX === '1' || (typeof process.getuid === 'function' && process.getuid() === 0)) args.push('--no-sandbox');
-    args.push(pathToFileURL(page).href);
+    const args = browserArgs(tmp, pathToFileURL(page).href, Math.min(50_000, 8000 + items.length * 4000));
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(exe!, args, { timeout: IMAGE_LIMITS.renderMs, maxBuffer: 512 * 1024 * 1024, windowsHide: true }, (err, so) => (err && !so ? reject(err) : resolve(String(so))));
     });

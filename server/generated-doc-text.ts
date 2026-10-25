@@ -63,6 +63,8 @@ export interface DocPrompt {
   knowledge: boolean;
   decisions: boolean;
   diagrams: DocPromptDiagram[];
+  /** Text for diagrams the agent draws itself as icon diagrams (draw.io); without it the agent may add small Mermaid diagrams. */
+  iconBlock?: string;
 }
 
 /** The first line is a marker the demo provider recognises; the rest is what a real agent follows. */
@@ -84,7 +86,9 @@ export function composeDocPrompt(p: DocPrompt): string {
         'Stored diagrams: the portal inserts these for you. Where a diagram belongs, put its marker alone on a line, exactly as written, and explain it in the text around it. Do not redraw them or write your own Mermaid for the same thing.',
         ...p.diagrams.map((d) => `  - {{diagram:${d.slug}}}  "${d.title}" (${d.kind.replace('_', ' ')}): ${d.description.replace(/\s+/g, ' ').slice(0, 240) || 'no description'}`),
       ].join('\n')
-    : 'Stored diagrams: none were chosen. You may add up to 2 small Mermaid diagrams (a fenced mermaid block) where they clarify a flow.';
+    : p.iconBlock
+      ? 'Stored diagrams: none were chosen. ' + p.iconBlock
+      : 'Stored diagrams: none were chosen. You may add up to 2 small Mermaid diagrams (a fenced mermaid block) where they clarify a flow.';
   return [
     `Documentation request: ${p.type}`,
     `Write the ${DOC_TYPE_LABELS[p.type].toLowerCase()} "${p.title}" for ${p.audience.trim() || 'a general professional audience'}.`,
@@ -97,7 +101,7 @@ export function composeDocPrompt(p: DocPrompt): string {
     '',
     'How to work:',
     '1. Explore cheaply first: README, build and deploy files, entry points (use the document-code skill if it is available), then read only what you need. Skip generated code, build output and lockfiles.',
-    '2. Write the document as Markdown and save it as document.md in your run folder (the folder you were told to put files in). Start with one line "# <title>", use "##" for sections and "###" for subsections, and keep paragraphs short. Use tables for fields, endpoints and settings. No HTML, no images.',
+    '2. Write the document as Markdown and save it as document.md in your run folder (the folder you were told to put files in). Start with one line "# <title>", use "##" for sections and "###" for subsections, and keep paragraphs short. Use tables for fields, endpoints and settings. No HTML' + (p.iconBlock ? ', and no images except the icon diagrams described above.' : ', no images.'),
     '3. Cite your sources. Every statement about the code names where it comes from, as an inline code span: `<repository folder>/<path>:<line>` or `<repository folder>/<path>:<first line>-<last line>` (for example `payments/src/app.py:42` or `payments/src/app.py:10-30`), where the repository folder is the name after repos/. Cite project documents as `docs/md/<file>.md › <heading>`. Cite only files you actually opened or listed; never guess a path or a line number.',
     '4. Never invent names, figures, endpoints or dates. Where the sources do not say, write "Open question: ..." in the text and list it in the closing section. Never copy secrets, tokens, passwords or keys into the document; name the variable or secret store instead.',
     '5. Do not build a Word file; the portal does that from your Markdown with the project template.',

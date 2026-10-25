@@ -122,14 +122,11 @@ export interface ParsedReply {
   citations: string[];
 }
 
-/** Take the first mermaid fence of the agent's reply as the diagram and the rest as its description. */
-export function parseDiagramReply(text: string): ParsedReply {
-  const reply = String(text ?? '');
-  const m = /```mermaid[^\S\r\n]*\r?\n([\s\S]*?)```/i.exec(reply);
-  if (!m) throw new NoDiagramError('The agent did not return a Mermaid diagram (a fenced ```mermaid block). The previous version, if any, was kept.');
-  const mermaid = m[1].replace(/\s+$/, '');
-  const rest = (reply.slice(0, m.index) + '\n' + reply.slice(m.index + m[0].length))
+/** The description in an agent's reply (the text around its code blocks and file line) and the source files it cites. */
+export function parseDescription(text: string): { description: string; citations: string[] } {
+  const rest = String(text ?? '')
     .replace(/```[\s\S]*?```/g, '')
+    .replace(/^\s*\**diagram file\**\s*:[^\r\n]*$/gim, '')
     .replace(/^\s*(?:#+\s*)?\**description\**:?\**[^\S\r\n]*/im, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -138,7 +135,16 @@ export function parseDiagramReply(text: string): ParsedReply {
     cites.add(c[1] ?? c[2]);
     if (cites.size >= DIAGRAM_LIMITS.citations) break;
   }
-  return { mermaid, description: rest.slice(0, DIAGRAM_LIMITS.descriptionChars), citations: [...cites] };
+  return { description: rest.slice(0, DIAGRAM_LIMITS.descriptionChars), citations: [...cites] };
+}
+
+/** Take the first mermaid fence of the agent's reply as the diagram and the rest as its description. */
+export function parseDiagramReply(text: string): ParsedReply {
+  const reply = String(text ?? '');
+  const m = /```mermaid[^\S\r\n]*\r?\n([\s\S]*?)```/i.exec(reply);
+  if (!m) throw new NoDiagramError('The agent did not return a Mermaid diagram (a fenced ```mermaid block). The previous version, if any, was kept.');
+  const mermaid = m[1].replace(/\s+$/, '');
+  return { mermaid, ...parseDescription(reply.slice(0, m.index) + '\n' + reply.slice(m.index + m[0].length)) };
 }
 
 const TYPE_RE = /^(flowchart(?:-elk)?|graph|sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|architecture-beta|block-beta)\b/;

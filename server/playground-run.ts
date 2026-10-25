@@ -26,6 +26,8 @@ export interface PlaygroundRunInput {
   leadAgent?: string;
   /** Let the agent use tools freely (the launcher's "trust all tools"); always-blocked commands stay blocked. */
   trustTools?: boolean;
+  /** Integrations (ids) attached to the session, for example the Icon diagrams one for sessions that draw icon diagrams. */
+  integrations?: string[];
 }
 
 /** Refuse before anything is written when the monthly budget is used up. */
@@ -59,7 +61,7 @@ export async function startPlaygroundRun(i: PlaygroundRunInput): Promise<Row> {
     repos: '[]',
     workspace_id: null,
     engine: '',
-    integrations: '[]',
+    integrations: JSON.stringify(i.integrations ?? []),
     playground: 1,
     ...s,
     rules: i.rules,

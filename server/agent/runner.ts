@@ -567,8 +567,8 @@ async function execute(
           return 'Blocked by Agent Portal: no repository is attached to this session. Attach a repository in the session settings and try again.';
         }
         // Integration read-only check.
-        if (o.integ?.readOnly.size) {
-          const why = integrationGuard(o.integ.readOnly, toolName);
+        if (o.integ?.readOnly.size || o.integ?.onlyTools.size) {
+          const why = integrationGuard(o.integ.readOnly, toolName, o.integ.onlyTools);
           if (why) return why;
         }
         return null;
@@ -580,8 +580,8 @@ async function execute(
       // blockedCommand already covers the always-blocked list; call it here for untrusted sessions.
       // (The canUseTool for autoApprove also calls blockedCommand but guard is called first by SDK.)
     }
-    if (o.integ?.readOnly.size) {
-      const why = integrationGuard(o.integ.readOnly, toolName);
+    if (o.integ?.readOnly.size || o.integ?.onlyTools.size) {
+      const why = integrationGuard(o.integ.readOnly, toolName, o.integ.onlyTools);
       if (why) return why;
     }
     if (!WRITE_TOOLS.has(toolName)) return null;

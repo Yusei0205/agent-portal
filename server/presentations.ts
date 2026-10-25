@@ -25,7 +25,12 @@ import { renderToPng, rendererProblem } from './docimage.ts';
 import { view as sessionView } from './workflows/views.ts';
 import { log } from './workflows/store.ts';
 import { generatedFiles, removeGenerated, saveGenerated } from './vault-generated.ts';
-import { diagramMarkdown, diagramSource } from './diagrams.ts';
+import { diagramImageRef, diagramMarkdown, diagramSource } from './diagrams.ts';
+import { CLOUDS, CLOUD_LABELS, DEFAULT_CLOUD, DIAGRAM_STYLES, type Cloud, type DiagramStyle } from './drawio.ts';
+import { deckIconDiagramBlock } from './drawio-text.ts';
+import { cloudFor, styleChoices } from './diagram-icons.ts';
+import { iconDiagramIntegrationIds } from './integrations.ts';
+import { drawioRendererProblem } from './drawio-render.ts';
 import { placeTemplate, resolveTemplate, syncProjectTemplates, templateForProject } from './doc-templates.ts';
 import { checkRunBudget, startPlaygroundRun } from './playground-run.ts';
 import { readRunOptionsRequest, resolveRunOptions, runOptionChoices, runOptionsView } from './run-options.ts';
@@ -78,6 +83,8 @@ function presentationView(p: Row, withOutline = false) {
     audience: p.audience,
     slide_target: p.slide_target,
     template: { requested_id: p.template_id, requested_name: p.template_name, used: p.template_used },
+    diagram_style: (p.diagram_style ?? 'mermaid') as DiagramStyle,
+    diagram_cloud: p.diagram_cloud ? (p.diagram_cloud as Cloud) : null,
     status: p.status,
     error: p.error,
     generating: p.status === 'generating',
@@ -115,6 +122,8 @@ interface Source {
   /** The block of the prompt that describes the source. */
   block: string;
   defaultTitle: string;
+  /** For a stored icon diagram: its cloud, the default for diagrams the agent draws itself. */
+  cloud?: Cloud | null;
 }
 
 function readSource(projectId: string, body: any): Source {
@@ -164,6 +173,19 @@ function readSource(projectId: string, body: any): Source {
       const s = diagramSource(projectId, ref);
       if (!s) throw badRequest('That diagram was not found, or it has no version yet');
       const md = diagramMarkdown(projectId, ref, { description: true, heading: false }) ?? '';
+      const icon = s.format === 'drawio' ? diagramImageRef(projectId, ref) : null;
+      if (icon) {
+        return {
+          kind: 'diagram',
+          ref: s.id,
+          label: s.title,
+          defaultTitle: s.title,
+          cloud: s.cloud,
+          block: `Source: the icon architecture diagram "${s.title}" (${s.kind.replace('_', ' ')}${s.stale ? ', its repositories have changed since it was drawn' : ''}). Build the deck around it: put the diagram on a slide with the "image" element whose "path" is "${icon.path}" (make-doc draws .drawio files as pictures with the official cloud icons; if it cannot, it prints a warning and shows a labelled placeholder, so mention that in your reply), with a caption, then explain its parts, how they interact, and what the audience should decide or remember. The description cites the source files.
+<<<DIAGRAM
+${md}DIAGRAM>>>`,
+        };
+      }
       return {
         kind: 'diagram',
         ref: s.id,
@@ -216,7 +238,22 @@ export async function startPresentation(projectId: string, userId: string, body:
   checkRunBudget(project.id, userId);
   syncProjectTemplates(project);
 
-  const goal = composePresentationPrompt({ kind: source.kind, title, audience, slides, source: source.block, template: templateBlock(template) });
+  // Diagrams the agent draws itself: the Mermaid way (default) or as icon diagrams, which need the Icon diagrams pack.
+  let diagramStyle: DiagramStyle = 'mermaid';
+  if (body.diagramStyle !== undefined && body.diagramStyle !== null && body.diagramStyle !== '') {
+    if (!DIAGRAM_STYLES.includes(body.diagramStyle)) throw badRequest(`diagramStyle must be one of: ${DIAGRAM_STYLES.join(', ')}`);
+    diagramStyle = body.diagramStyle;
+  }
+  let diagramCloud: Cloud | '' = '';
+  if (body.diagramCloud !== undefined && body.diagramCloud !== null && body.diagramCloud !== '') {
+    if (!CLOUDS.includes(body.diagramCloud)) throw badRequest(`diagramCloud must be one of: ${CLOUDS.join(', ')}`);
+    if (diagramStyle !== 'icon') throw badRequest('diagramCloud only applies to the icon diagram style');
+    diagramCloud = body.diagramCloud;
+  }
+  const integrations = diagramStyle === 'icon' ? await iconDiagramIntegrationIds() : [];
+  if (diagramStyle === 'icon' && !diagramCloud) diagramCloud = source.cloud ?? cloudFor(project.id).cloud ?? DEFAULT_CLOUD;
+
+  const goal = composePresentationPrompt({ kind: source.kind, title, audience, slides, source: source.block, template: templateBlock(template), ...(diagramStyle === 'icon' ? { diagrams: deckIconDiagramBlock(diagramCloud as Cloud) } : {}) });
   const id = newId('pr_');
   const ts = now();
   insert('presentations', {
@@ -232,6 +269,8 @@ export async function startPresentation(projectId: string, userId: string, body:
     template_name: templateName,
     lead_agent: chosen.leadAgent,
     trust_tools: chosen.trustTools ? 1 : 0,
+    diagram_style: diagramStyle,
+    diagram_cloud: diagramCloud,
     status: 'generating',
     created_by: userId,
     created_at: ts,
@@ -245,6 +284,7 @@ export async function startPresentation(projectId: string, userId: string, body:
       goal,
       leadAgent: chosen.leadAgent,
       trustTools: chosen.trustTools,
+      integrations,
       rules: 'Write only inside your run folder. Do not change anything inside repos/. Build the deck with make-doc only. Never copy secrets into the deck. The portal collects presentation.pptx from your run folder by itself and keeps the result on the Create page (Decks tab) and in the project Vault (generated/decks/). If you are asked to change the deck, build the complete new presentation.pptx again; a reply without a new .pptx changes nothing.',
       budgetUsd: lim.budgetUsd,
       logLine: `Presentation session started for "${title}"`,
@@ -497,6 +537,11 @@ export function registerPresentationRoutes(): void {
       sources: PRESENTATION_SOURCES,
       template: t ? { id: t.id, name: t.name, scope: t.scope } : null,
       preview: pngCapability(),
+      /** How diagrams the agent draws itself can be made: Mermaid, or icon diagrams when the Icon diagrams pack is installed. */
+      styles: await styleChoices(),
+      clouds: CLOUDS.map((id) => ({ id, label: CLOUD_LABELS[id] })),
+      defaultCloud: DEFAULT_CLOUD,
+      iconPreview: { available: drawioRendererProblem() === null, reason: drawioRendererProblem() },
       runOptions: runOptionChoices(project),
       limits: {
         topicChars: PRESENTATION_LIMITS.topicChars,
