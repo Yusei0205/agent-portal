@@ -415,6 +415,46 @@ async function main() {
     await page.getByRole('button', { name: 'Export .mmd', exact: true }).click();
     check((await (await mmd).suggestedFilename()).endsWith('.mmd'), 'Export .mmd downloads a .mmd file');
     await shot(page, 'diagram-view');
+    // Generated files are copied to the project Vault; the Create page has the switch, the diagram links to both.
+    check(await page.getByLabel('Save generated files to the Vault').isChecked(), 'the Create page has the "Save generated files to the Vault" switch, on by default');
+    const vaultLink = page.getByTestId('output-vault-link');
+    await vaultLink.waitFor();
+    check(((await vaultLink.textContent()) || '').includes('generated/diagrams/refund-components.mmd'), 'the diagram page links to its copy in the Vault');
+    // Big graphs open at full size, with zoom.
+    await page.locator('.diagram-page .mermaid-expand').click();
+    const full = page.getByRole('dialog', { name: 'Diagram' });
+    await full.waitFor();
+    check(await full.locator('svg').count(), 'Full size shows the drawn diagram in a dialog');
+    const zoomBefore = await full.locator('.mermaid-viewer-zoom').textContent();
+    await full.getByRole('button', { name: 'Zoom in', exact: true }).click();
+    check((await full.locator('.mermaid-viewer-zoom').textContent()) !== zoomBefore, 'the full size view zooms');
+    await full.getByRole('button', { name: 'Close', exact: true }).last().click();
+    // From the diagram to its session and back through the output card.
+    await page.getByTestId('output-session-link').click();
+    const banner = page.getByRole('status', { name: 'Diagram made by this session' });
+    await banner.waitFor();
+    const bannerText = (await banner.textContent()) || '';
+    check(/This session is producing\s*Diagram: Refund components/.test(bannerText) && /ready/.test(bannerText), 'the session banner names the diagram and its status');
+    check(bannerText.includes('generated/diagrams/refund-components.mmd'), 'the session banner shows where the Vault copy is');
+    const card = page.getByRole('region', { name: 'Diagram from this session' });
+    await card.waitFor();
+    check(await card.getByRole('link', { name: 'Open in Vault', exact: true }).count(), 'the output card links to the Vault');
+    await shot(page, 'session-output');
+    await card.getByRole('link', { name: 'Open', exact: true }).click();
+    await page.getByRole('heading', { name: 'Refund components', exact: true }).waitFor();
+    check(/\/create\/diagrams\/[^/]+$/.test(page.url()), 'the output card opens the diagram on the Create page');
+    // The project Vault shows the generated folder, flagged as not copied into runs, with an explanation.
+    const diagramUrl = page.url();
+    await page.goto(`${base}/#/p/${pid}/vault`);
+    await page.getByRole('heading', { name: 'Vault', exact: true }).waitFor();
+    await page.getByText('The generated folder.').waitFor();
+    check(await page.getByText('It is not copied into runs').count(), 'the Vault explains the generated folder');
+    await page.locator('.vault-files .cfg-name', { hasText: 'refund-components.mmd' }).waitFor();
+    check(await page.locator('.vault-files .cfg-file', { hasText: 'generated' }).first().getByText('not copied into runs').count(), 'the generated folder is flagged as not copied into runs');
+    check(await page.getByRole('link', { name: 'Download generated/diagrams/refund-components.mmd', exact: true }).count(), 'the generated diagram can be downloaded from the Vault');
+    await shot(page, 'vault-generated');
+    await page.goto(diagramUrl);
+    await page.getByRole('heading', { name: 'Refund components', exact: true }).waitFor();
     // The plain Refresh stays one click and sends nothing: the server reuses what the diagram stored.
     const plainReq = page.waitForRequest((r) => r.method() === 'POST' && /\/diagrams\/[^/]+\/refresh$/.test(r.url()));
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -444,6 +484,50 @@ async function main() {
     await page.getByRole('heading', { name: 'Refund parts', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     check(await page.getByRole('dialog', { name: 'Delete this diagram?' }).count(), 'delete asks for confirmation in the page');
+    await page.getByRole('button', { name: 'Delete diagram', exact: true }).click();
+    await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
+    // A reply that cannot be stored is an error on the Create page, in the session banner and in the session history.
+    await page.getByRole('button', { name: 'New diagram', exact: true }).first().click();
+    await page.getByLabel('Title (optional)').fill('Too big');
+    await page.locator('.modal .choice', { hasText: 'refund-service' }).click();
+    await page.getByLabel('Focus (optional)').fill('[demo-huge-mermaid]');
+    await page.getByRole('button', { name: 'Draw it', exact: true }).click();
+    await page.getByRole('heading', { name: 'Too big', exact: true }).waitFor();
+    await page.getByText(/too long \(max 20000 characters\)/).first().waitFor({ timeout: 30000 });
+    await page.getByTestId('output-session-link').click();
+    const errBanner = page.getByRole('status', { name: 'Diagram made by this session' });
+    await errBanner.waitFor();
+    const errText = (await errBanner.textContent()) || '';
+    check(/Diagram: Too big/.test(errText) && /error/.test(errText) && /too long/.test(errText), 'the session banner shows the error and its reason');
+    check(await errBanner.getByRole('link', { name: 'Open the diagram', exact: true }).count(), 'the error banner links to the diagram');
+    await page.getByRole('link', { name: /Activity/ }).click();
+    await page.getByText(/"Too big" was not stored/).first().waitFor();
+    check(await page.getByText(/Reply in this session to ask the agent for a smaller or corrected diagram/).count(), 'the session history says what to do about it');
+    await openCreateTab(page, 'Diagrams');
+    const bigRow = page.locator('tr', { hasText: 'Too big' });
+    await bigRow.waitFor();
+    check(/too long/.test((await bigRow.textContent()) || '') && (await bigRow.getByText('Error', { exact: true }).count()) > 0, 'the Create list shows the error and its reason');
+    check(await bigRow.getByRole('link', { name: 'Open the session', exact: true }).count(), 'the Create list links the failed diagram to its session');
+    await bigRow.getByRole('link', { name: 'Too big', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete diagram', exact: true }).click();
+    await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
+    // A valid graph that is too big to read is stored, with a "very dense" note.
+    await page.getByRole('button', { name: 'New diagram', exact: true }).first().click();
+    await page.getByLabel('Title (optional)').fill('Dense picture');
+    await page.locator('.modal .choice', { hasText: 'refund-service' }).click();
+    await page.getByLabel('Focus (optional)').fill('[demo-dense-mermaid]');
+    await page.getByRole('button', { name: 'Draw it', exact: true }).click();
+    await page.getByRole('heading', { name: 'Dense picture', exact: true }).waitFor();
+    await page.locator('.diagram-page .badge', { hasText: 'Ready' }).waitFor({ timeout: 30000 });
+    check(await page.getByText('Very dense diagram.').count(), 'a very big graph gets a "very dense diagram" note');
+    await page.getByTestId('output-session-link').click();
+    await page.getByTestId('dense-note').waitFor();
+    check(await page.getByTestId('dense-note').getByText(/Very dense diagram \(about 61 nodes/).count(), 'the session banner carries the dense note too');
+    await openCreateTab(page, 'Diagrams');
+    check(await page.locator('tr', { hasText: 'Dense picture' }).getByText(/Very dense diagram \(about 61 nodes\)/).count(), 'the Create list flags the dense diagram');
+    await page.locator('tr', { hasText: 'Dense picture' }).getByRole('link', { name: 'Dense picture', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await page.getByRole('button', { name: 'Delete diagram', exact: true }).click();
     await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
 
@@ -524,7 +608,9 @@ async function main() {
     check(typeof deckBody.leadAgent === 'string' && deckBody.trustAllTools === false, 'the presentation request carries the run options');
     await page.getByRole('heading', { name: 'Refund overview', exact: true }).waitFor();
     await page.locator('.pres-page .badge', { hasText: 'Ready' }).waitFor({ timeout: 60000 });
-    check((await page.getByRole('link', { name: /^Open the session/ }).count()) === 0, 'a finished deck no longer points at a running session');
+    check((await page.getByRole('link', { name: /^Open the session “/ }).count()) === 0, 'a finished deck no longer points at a running session');
+    check(await page.getByTestId('output-session-link').count(), 'a finished deck still links to the session that made it');
+    check(((await page.getByTestId('output-vault-link').textContent()) || '').includes('generated/decks/refund-overview.pptx'), 'a finished deck links to its copy in the Vault');
     await page.locator('.pres-thumb img').first().waitFor();
     check((await page.locator('.pres-thumb').count()) >= 3, 'every slide has a thumbnail');
     await page.waitForFunction("[...document.querySelectorAll('.pres-thumb img')].every((i) => i.complete && i.naturalWidth > 0)", null, { timeout: 30000 });

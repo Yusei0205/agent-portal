@@ -13,6 +13,10 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   and the Portal group, plus Tickets once the project has Jira connected.
 - **Create** is one page with tabs for Diagrams, Documents (generated Word and Markdown), Decks
   (PowerPoint) and this project's Templates. The portal-wide default templates stay in Settings.
+  The session that makes a diagram, document or deck shows a banner and a card with its status, the
+  reason when it failed, and a link to the item; each item links back to its session and to its Vault
+  copy. A follow-up message in that session ("redraw it smaller") stores a new version, and drawn
+  diagrams open at full size with zoom.
 - **Sessions** are the core feature. A session is a saved goal that the portal drives through
   repeated agent runs until it is done, blocked or hits a limit (budget, iterations, stagnation).
   A single run is a session with one iteration. Each session has a live agent tree, every tool
@@ -41,7 +45,10 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
 - **Workspaces** are named sets of repositories (and integrations) that a session can use as a
   group.
 - **Vault** holds files you upload once (documents, templates, test data). Every run gets a copy.
-  It has a personal, a team-wide and a per-project scope on one page.
+  It has a personal, a team-wide and a per-project scope on one page. The project vault also holds
+  a `generated/` folder with a copy of every diagram (`.mmd`, `.png` when a renderer exists), document
+  (`.md`, `.docx`) and deck (`.pptx`) made on the Create page, latest version only. Runs do not get
+  that folder; project owners can turn the copies off on the Create page.
 - **Integrations and connections**: Git connections (GitHub, Bitbucket, CodeCommit, other Git
   servers), AWS accounts (keys, profiles, SSO), MCP integrations, Jira, and API tokens.
 - **Insights**: cost, tokens, latency, failures and agent activity, for one project or all of
