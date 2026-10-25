@@ -167,6 +167,7 @@ function PackRow({ pack, onInstalled }) {
     try {
       const r = await api.post(`/api/tools/${pack.id}/install`);
       setJob(r.job);
+      if (r.job?.log?.length) setLogLines(r.job.log);
     } catch (e) {
       setInstalling(false);
       toast(e.message, 'danger');
@@ -176,7 +177,9 @@ function PackRow({ pack, onInstalled }) {
   const statusTone = pack.status === 'available' ? 'ok' : pack.status === 'not configured' ? 'muted' : 'warn';
   const statusLabel = pack.status === 'available' ? 'Available' : pack.status === 'not configured' ? 'Not configured' : 'Missing';
 
-  const canInstall = pack.id !== 'browser' && pack.status !== 'available';
+  // The Icon diagrams pack has two halves; when only the viewer files are missing it can be installed again to add them.
+  const partsMissing = pack.id === 'drawio' && (pack.parts || []).some((p) => !p.ok);
+  const canInstall = pack.id !== 'browser' && (pack.status !== 'available' || partsMissing);
   const jobFailed = job?.status === 'failed';
   const jobDone = job?.status === 'done';
   const showLog = logLines.length > 0;
@@ -192,6 +195,28 @@ function PackRow({ pack, onInstalled }) {
           <p className="muted small">Needed by: {pack.neededBy}</p>
           {pack.status !== 'available' && pack.reason ? (
             <p className="muted small">{pack.reason}</p>
+          ) : null}
+          {pack.id === 'drawio' ? (
+            <div className="stack" data-testid="drawio-pack-info" style={{ gap: '0.25rem' }}>
+              <p className="field-hint">
+                Lets agents draw architecture diagrams with the official AWS, Azure, Google Cloud and Kubernetes icons, stored as .drawio files. About 71 MB, downloaded once; every download is pinned to an exact version and checked against its checksum. The diagrams are drawn offline on this server and nothing is sent to draw.io.
+              </p>
+              {(pack.parts || []).length ? (
+                <ul className="tools-parts small" aria-label="Parts of the Icon diagrams pack">
+                  {pack.parts.map((part) => (
+                    <li key={part.id}>
+                      <Badge tone={part.ok ? 'ok' : 'warn'}>{part.ok ? 'Installed' : 'Missing'}</Badge> {part.label}
+                      {part.ok ? null : <span className="muted"> : {part.reason}</span>}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <p className="field-hint" data-testid="drawio-preview-status">
+                {pack.parts?.find((p) => p.id === 'renderer')?.ok
+                  ? 'Previews, PNG and SVG exports are available (they also need the headless browser the portal uses for Word and PowerPoint pictures).'
+                  : 'Previews, PNG and SVG exports need the viewer files above and the optional headless browser. Without them diagrams are still drawn and can be downloaded as .drawio files.'}
+              </p>
+            </div>
           ) : null}
           {/* Kiro login hint */}
           {pack.id === 'kiro' && pack.status === 'available' ? (
@@ -220,7 +245,7 @@ function PackRow({ pack, onInstalled }) {
               onClick={startInstall}
               aria-label={`Install ${pack.label}`}
             >
-              Install
+              {pack.status === 'available' ? 'Install missing parts' : 'Install'}
             </Button>
           ) : null}
         </div>

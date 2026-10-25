@@ -14,6 +14,12 @@ const STATE = {
   error: { tone: 'danger', word: 'error' },
 };
 
+/** "Icon diagram, AWS, draw.io file" or "Mermaid": how a diagram session draws. */
+function styleWords(output) {
+  if (output.style !== 'icon') return 'Mermaid';
+  return `Icon diagram${output.cloud ? `, ${output.cloud === 'gcp' ? 'Google Cloud' : output.cloud === 'aws' ? 'AWS' : output.cloud[0].toUpperCase() + output.cloud.slice(1)}` : ''}, ${output.format === 'drawio' ? '.drawio file' : 'draw.io'}`;
+}
+
 /**
  * Shown at the top of the workspace of a session that makes a diagram, document or deck: what it is making, whether that
  * worked and why not, with a link to it. Without it a failed or finished output is invisible from the session.
@@ -38,9 +44,18 @@ export function OutputBanner({ output }) {
         <div>
           This session is producing <strong>{output.label}: {output.title}</strong> — status <Badge tone={st.tone}>{st.word}</Badge>
           {output.version ? <span className="muted small"> · version {output.version}</span> : null}
+          {output.kind === 'diagram' ? <span className="muted small" data-testid="output-style"> · {styleWords(output)}</span> : null}
           {output.status === 'error' && output.error ? <>: <span className="ws-output-reason">{output.error}</span></> : null}
         </div>
         {failedRefresh ? <div className="small">The last attempt was not stored ({output.error}) The earlier version is still the current one.</div> : null}
+        {output.kind === 'diagram' && output.format === 'drawio' && output.version ? (
+          <div className="small row tight wrap">
+            <a href={outputHref(project.id, output)}>Open</a>
+            <a href={`/api/projects/${encodeURIComponent(project.id)}/diagrams/${output.id}/export?format=drawio`} download data-testid="output-drawio">
+              Download .drawio
+            </a>
+          </div>
+        ) : null}
         {dense ? (
           <div className="small" data-testid="dense-note">
             Very dense diagram (about {output.density.nodes} nodes, {output.density.lines} lines): it may be hard to read. Ask the agent below to group it into subgraphs or to draw a smaller one; use Full size on the picture to zoom.
@@ -69,11 +84,17 @@ export function OutputCard({ output }) {
           {output.label}: {output.title}
         </strong>
         {output.version ? <span className="muted small">v{output.version}</span> : null}
+        {output.kind === 'diagram' ? <span className="muted small">{styleWords(output)}</span> : null}
         <Badge tone={(STATE[output.status] || STATE.ready).tone}>{(STATE[output.status] || STATE.ready).word}</Badge>
         <span className="ws-output-actions row tight">
           <a className="btn btn-primary btn-sm" href={outputHref(project.id, output)}>
             Open
           </a>
+          {output.kind === 'diagram' && output.format === 'drawio' && output.version ? (
+            <a className="btn btn-default btn-sm" href={`/api/projects/${encodeURIComponent(project.id)}/diagrams/${output.id}/export?format=drawio`} download>
+              Download .drawio
+            </a>
+          ) : null}
           {output.vault_files?.length ? (
             <a className="btn btn-default btn-sm" href={href(project.id, 'vault')}>
               Open in Vault

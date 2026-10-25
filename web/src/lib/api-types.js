@@ -226,6 +226,44 @@
  */
 
 /** @typedef {'system_context' | 'components' | 'data_flow'} DiagramKind */
+/** @typedef {'mermaid' | 'icon'} DiagramStyle */
+/** @typedef {'aws' | 'azure' | 'gcp' | 'kubernetes' | 'generic'} DiagramCloud */
+
+/**
+ * One drawing style as the list responses offer it. `icon` is unavailable until the Icon diagrams tool pack is installed.
+ * @typedef {object} StyleChoice
+ * @property {DiagramStyle} id
+ * @property {string} label
+ * @property {boolean} available
+ * @property {string | null} reason Why not, with the hint to install the pack
+ * @property {{ available: boolean, reason: string | null }} preview Whether pictures can be drawn now
+ */
+
+/**
+ * Added to the diagram, generated document and presentation list responses.
+ * @typedef {object} StyleLists
+ * @property {StyleChoice[]} styles
+ * @property {{ id: DiagramCloud, label: string }[]} clouds
+ * @property {DiagramCloud} defaultCloud
+ */
+
+/**
+ * GET /api/projects/:pid/diagrams/detect-cloud?repoIds=a,b
+ * @typedef {object} DetectedCloud
+ * @property {DiagramCloud} cloud
+ * @property {string} label
+ * @property {boolean} detected false when nothing was found and the default is suggested
+ * @property {string[]} signals
+ */
+
+/**
+ * Icon diagram export abilities. The .drawio file is always available; PNG and SVG need the viewer files and a browser.
+ * @typedef {object} IconExportCapability
+ * @property {boolean} drawio
+ * @property {boolean} png
+ * @property {boolean} svg
+ * @property {string | null} previewReason
+ */
 
 /**
  * A repository and commit a diagram version was drawn from.
@@ -284,6 +322,13 @@
  * @property {number} stale 1 when a repository moved on since the latest version
  * @property {boolean} generating
  * @property {string | null} workflow_id The session drawing it, while generating
+ * @property {DiagramStyle} style "mermaid" or "icon" (draw.io with official cloud icons)
+ * @property {string} style_label
+ * @property {'mermaid' | 'drawio'} format File format of the current version
+ * @property {DiagramCloud | null} cloud Icon diagrams only
+ * @property {string | null} cloud_label
+ * @property {{ drawio?: string, png: string, svg?: string, mmd?: string } | null} links Export addresses of the current version
+ * @property {{ nodes: number, lines: number, chars: number, dense: boolean, icons?: number, edges?: number } | null} density
  * @property {string} path Where the latest version is kept in the project repository
  * @property {string} description
  * @property {string[]} citations Source files the description cites
@@ -309,7 +354,11 @@
  * @property {string | null} created_by_name
  * @property {string} created_at
  * @property {number} chars
+ * @property {'mermaid' | 'drawio'} format
+ * @property {DiagramStyle} style
+ * @property {DiagramCloud | null} cloud
  * @property {string} [mermaid]
+ * @property {string | null} [drawio] The draw.io XML of an icon diagram version
  */
 
 /**
@@ -325,6 +374,10 @@
  * @property {DiagramSummary[]} diagrams
  * @property {{ id: DiagramKind, label: string }[]} kinds
  * @property {DiagramExportCapability} export
+ * @property {IconExportCapability} exportIcon
+ * @property {StyleChoice[]} styles
+ * @property {{ id: DiagramCloud, label: string }[]} clouds
+ * @property {DiagramCloud} defaultCloud
  * @property {{ mermaidChars: number, repos: number, focusChars: number, perProject: number }} limits
  * @property {RunOptions} runOptions
  */
@@ -335,6 +388,7 @@
  * @property {DiagramSummary} diagram
  * @property {DiagramVersion[]} versions Newest first
  * @property {DiagramExportCapability} export
+ * @property {IconExportCapability} exportIcon
  */
 
 /** @typedef {'pptx' | 'docx'} TemplateKind */

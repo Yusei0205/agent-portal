@@ -43,3 +43,35 @@
 .gdoc-body {
   overflow-x: auto;
 }
+
+/* ---------- Icon diagrams (draw.io) ---------- */
+.icon-picture {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px;
+}
+.icon-picture img {
+  max-width: 100%;
+  height: auto;
+}
+.icon-picture-full {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+.style-reason {
+  display: block;
+  margin-top: 2px;
+}
+.tools-parts {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}

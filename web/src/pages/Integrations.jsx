@@ -14,6 +14,9 @@ export const INTEGRATION_KINDS = {
   stdio: { label: 'Custom MCP (command)', icon: 'settings', hint: 'An MCP server the portal starts as a command on its own server. Admins only.' },
 };
 
+/** Kinds the portal creates itself (nobody picks them in the New integration list). */
+const BUILT_IN_KINDS = { drawio: { label: 'Icon diagrams (draw.io)', icon: 'builder' } };
+
 /** Integrations: services agents can use in a run as MCP tools. */
 export function Integrations() {
   const list = useLoad(() => api.get('/api/integrations'), []);
@@ -106,7 +109,7 @@ function IntegSection({ title, sub, items, onEdit, reload }) {
 function IntegCard({ i, onEdit, reload }) {
   const { toast, confirm } = useUi();
   const [busy, setBusy] = useState(false);
-  const k = INTEGRATION_KINDS[i.kind];
+  const k = INTEGRATION_KINDS[i.kind] || BUILT_IN_KINDS[i.kind];
   const test = async () => {
     setBusy(true);
     try {
