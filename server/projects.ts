@@ -7,6 +7,7 @@ import { HttpError, badRequest, forbidden, newId, notFound, now, slugify, str, w
 import { commitAll, git } from './git.ts';
 import { projectChannel, publish, subscribe } from './events.ts';
 import { monthSpend } from './settings.ts';
+import { auditRaw } from './audit.ts';
 
 export type Access = 'viewer' | 'editor' | 'owner';
 const RANK: Record<Access, number> = { viewer: 1, editor: 2, owner: 3 };
@@ -24,6 +25,8 @@ export interface Project {
   default_lead_agent: string;
   /** Model new sessions and runs start with ('' = sonnet): a tier or an exact model ID. */
   default_model: string;
+  /** 1 = a copy of every generated diagram, document and deck is kept in the project Vault under generated/ (vault-generated.ts). */
+  vault_generated: number;
 }
 
 export function projectDir(p: Pick<Project, 'slug'>): string {
@@ -414,6 +417,7 @@ export function registerProjectRoutes(): void {
       archived: 0,
       default_lead_agent: '',
       default_model: '',
+      vault_generated: 1,
     };
     insert('projects', { ...p });
     insert('project_members', { project_id: p.id, user_id: ctx.user!.id, access: 'owner', role: '' });
@@ -477,7 +481,12 @@ export function registerProjectRoutes(): void {
       if (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(model)) throw badRequest('Default model is not a valid model ID');
       p.default_model = model;
     }
+    if (body.vaultGenerated !== undefined) p.vault_generated = body.vaultGenerated ? 1 : 0;
     update('projects', project.id, p);
+    if (p.vault_generated !== undefined && p.vault_generated !== project.vault_generated) {
+      auditRaw(ctx.user!.id, 'vault.generated_setting', `project:${project.id}`, { projectId: project.id, enabled: Boolean(p.vault_generated) });
+      if (p.vault_generated) await (await import('./outputs.ts')).syncProjectGenerated(project.id, ctx.user!.id).catch(() => undefined);
+    }
     if (p.name !== undefined || p.description !== undefined || p.notes !== undefined) {
       await writeClaudeMd(project.id, 'Update project notes');
     }

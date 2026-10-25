@@ -30,6 +30,59 @@ export const DIAGRAM_LIMITS = {
 /** The reply could not be turned into a stored diagram; the message says why and goes to the person. */
 export class DiagramError extends Error {}
 
+/** The reply held no Mermaid diagram at all (as opposed to an invalid one). */
+export class NoDiagramError extends DiagramError {}
+
+/** Past this many nodes (about) a diagram stops being readable on a screen; the prompt asks for fewer, the UI warns. */
+export const READABLE_NODES = 40;
+
+/**
+ * What the session is told every time it runs, including follow-up messages. The portal stores the diagram itself, so the
+ * agent must not say that nothing was saved, and a request to fix or shrink it is answered with a whole new diagram.
+ */
+export function diagramRules(title: string): string {
+  return [
+    'This is a read-only task. Do not create, edit or delete any file.',
+    `The portal stores the diagram from your reply by itself: it appears as "${title}" on the Create page (Diagrams tab) and as a file in the project Vault (generated/diagrams/). Never say that no file was written or that the diagram was not saved.`,
+    'If you are asked to fix, shrink, split or redraw it, reply again in the same format with the complete new diagram (one mermaid block, then "Description:"); a reply without a diagram changes nothing. If you are asked where the diagram is, say where it is stored, and do not draw it again.',
+    `Keep every diagram readable: at most about ${READABLE_NODES} nodes. The portal refuses more than ${DIAGRAM_LIMITS.lines} lines or ${DIAGRAM_LIMITS.mermaidChars} characters.`,
+  ].join(' ');
+}
+
+export interface Density {
+  nodes: number;
+  lines: number;
+  chars: number;
+  /** Too big to read comfortably: the UI says so and suggests splitting it. */
+  dense: boolean;
+}
+
+const KEYWORDS = new Set(['flowchart', 'graph', 'subgraph', 'end', 'direction', 'style', 'class', 'classDef', 'linkStyle', 'click', 'TB', 'TD', 'BT', 'RL', 'LR', 'elk', 'default']);
+
+/** A rough size of a diagram: the number of distinct nodes (flowcharts) or lines (others). Good enough for a warning. */
+export function diagramDensity(src: string): Density {
+  const text = String(src ?? '').replace(/\r\n?/g, '\n');
+  const lines = text.split('\n').length;
+  let nodes = 0;
+  if (/^\s*(?:---[\s\S]*?---\s*)?(?:%%[^\n]*\n\s*)*(?:flowchart|graph)\b/.test(text)) {
+    const ids = new Set<string>();
+    for (const raw of text.split('\n').slice(1)) {
+      const l = raw
+        .replace(/%%.*$/, '')
+        .replace(/"[^"]*"/g, ' ')
+        .replace(/\|[^|]*\|/g, ' ')
+        .replace(/\[[^\]]*\]|\([^)]*\)|\{[^}]*\}/g, ' ')
+        .replace(/--\s*[^->=.]+?\s*(?:-->|---)/g, ' --> ');
+      if (/^\s*(?:subgraph|style|classDef|class|linkStyle|click|direction)\b/.test(l)) continue;
+      for (const m of l.matchAll(/[A-Za-z_]\w*/g)) if (!KEYWORDS.has(m[0])) ids.add(m[0]);
+    }
+    nodes = ids.size;
+  } else {
+    nodes = lines;
+  }
+  return { nodes, lines, chars: text.length, dense: nodes > READABLE_NODES || lines > 150 || text.length > 10_000 };
+}
+
 const KIND_GUIDE: Record<DiagramKind, string> = {
   system_context:
     'A system context diagram: the system as one box in the middle, the people and roles who use it, and the external systems, services, data stores and queues it talks to, with the direction and purpose of each connection. Prefer "flowchart LR" (or C4Context).',
@@ -54,9 +107,10 @@ export function composeDiagramPrompt(kind: DiagramKind, title: string, repos: Pr
     where,
     `Diagram type: ${KIND_GUIDE[kind]}`,
     focus.trim() ? `Focus on: ${focus.trim()}` : 'Cover the whole system, concentrating on what a new developer needs to understand first.',
+    `Keep the picture readable: at most about ${READABLE_NODES} nodes. If the system is bigger, group related things into subgraphs, show only the main path, and say in the Description which part to draw next as a separate diagram. One huge graph is not useful; a clear one is.`,
     'Use the document-code skill: explore selectively (manifests, entry points, route and handler registrations, configuration, infrastructure code) and base every box and arrow on code you read.',
     'Reply with exactly two parts and nothing else:',
-    `1. One fenced block that starts with \`\`\`mermaid and holds a single valid Mermaid diagram. Keep it readable: at most about 40 nodes, short plain-text labels (quote labels that contain punctuation), at most ${DIAGRAM_LIMITS.mermaidChars} characters. No HTML, no click or href directives, no %%{init} directives.`,
+    `1. One fenced block that starts with \`\`\`mermaid and holds a single valid Mermaid diagram. Keep it readable: at most about ${READABLE_NODES} nodes (never more than ${DIAGRAM_LIMITS.lines} lines), short plain-text labels (quote labels that contain punctuation), at most ${DIAGRAM_LIMITS.mermaidChars} characters. No HTML, no click or href directives, no %%{init} directives.`,
     '2. A line "Description:" followed by 2 to 5 sentences that say what the diagram shows and cite the source files it is based on as `repo-name/path/to/file.ext:line`.',
     'Do not create, edit or delete any file, and do not change anything inside repos/. Never copy secrets or credentials into the diagram or the description.',
   ].join('\n');
@@ -72,7 +126,7 @@ export interface ParsedReply {
 export function parseDiagramReply(text: string): ParsedReply {
   const reply = String(text ?? '');
   const m = /```mermaid[^\S\r\n]*\r?\n([\s\S]*?)```/i.exec(reply);
-  if (!m) throw new DiagramError('The agent did not return a Mermaid diagram (a fenced ```mermaid block). The previous version, if any, was kept.');
+  if (!m) throw new NoDiagramError('The agent did not return a Mermaid diagram (a fenced ```mermaid block). The previous version, if any, was kept.');
   const mermaid = m[1].replace(/\s+$/, '');
   const rest = (reply.slice(0, m.index) + '\n' + reply.slice(m.index + m[0].length))
     .replace(/```[\s\S]*?```/g, '')

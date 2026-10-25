@@ -15,6 +15,7 @@ import { assertBudget, getSettings } from '../settings.ts';
 import { getToolPacks } from '../tool-packs.ts';
 import { concurrencyReason, queueReasonLabel } from '../control-plane.ts';
 import { audit } from '../audit.ts';
+import { sessionOutput } from '../outputs.ts';
 import { SINGLE_RUN_BUDGET_USD, driving, getWorkflow, patch, log } from './store.ts';
 import { sessionRepos, view } from './views.ts';
 import { kick } from './driver.ts';
@@ -175,7 +176,7 @@ export function registerSessionRoutes(): void {
       .reverse()
       .map((e) => ({ id: e.id, kind: e.kind, run_id: e.run_id, body: e.body, data: parseJson(e.data, {}), consumed: Boolean(e.consumed), created_at: e.created_at }));
     const runs = all<Row>('SELECT id, title, status, cost_usd, created_at, finished_at FROM agent_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 100', w.id);
-    return { workflow: view(w), events, runs, driving: driving.has(w.id) };
+    return { workflow: view(w), events, runs, driving: driving.has(w.id), output: sessionOutput(w.id) };
   });
 
   put('/api/workflows/:id', async (ctx) => {

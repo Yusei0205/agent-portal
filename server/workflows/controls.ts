@@ -47,6 +47,8 @@ export function registerControlRoutes(): void {
     log(w.id, 'human', text, { data: { by: ctx.user!.name } });
     if (REOPENABLE.includes(w.status)) {
       patch(w.id, { status: 'running', stop_reason: '', burst_start: w.iteration, waiting_children: 0, pending_push: '' });
+      // A session that makes a diagram, document or deck shows it as being made again until this message is answered.
+      await (await import('../outputs.ts')).markFollowUp(w.id).catch(() => undefined);
       kick(w.id);
     }
     return { workflow: view(getWorkflow(w.id)) };

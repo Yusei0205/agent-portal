@@ -26,6 +26,7 @@ import { concurrencyReason, queueReasonLabel } from './control-plane.ts';
 import { engineProvider } from './project-aws.ts';
 import { getRun } from './agent/runner.ts';
 import { renderToPng, rendererProblem } from './docimage.ts';
+import { generatedFiles, removeGenerated, saveGenerated } from './vault-generated.ts';
 import { log } from './workflows/store.ts';
 import { view as sessionView } from './workflows/views.ts';
 import { readSettings } from './workflows/validation.ts';
@@ -35,7 +36,10 @@ import {
   DIAGRAM_LIMITS,
   DiagramError,
   KIND_LABELS,
+  NoDiagramError,
   composeDiagramPrompt,
+  diagramDensity,
+  diagramRules,
   parseDiagramReply,
   validateMermaid,
   type DiagramKind,
@@ -167,6 +171,9 @@ function diagramView(d: Row, withSource = false) {
     stale: d.stale,
     generating: d.status === 'generating',
     workflow_id: d.pending_workflow_id,
+    session_id: d.workflow_id ?? null,
+    density: cur ? diagramDensity(String(cur.mermaid)) : null,
+    vault_files: generatedFiles(d.project_id, 'diagrams', d.slug),
     path: `${DIAGRAMS_DIR}/${d.slug}.mmd`,
     description: cur?.description ?? '',
     citations: cur ? parseJson<string[]>(cur.citations, []) : [],
@@ -317,7 +324,7 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
     integrations: '[]',
     playground: 1,
     ...s,
-    rules: 'This is a read-only task. Do not create, edit or delete any file. Reply with the diagram and its description only.',
+    rules: diagramRules(d.title),
     iteration: 0,
     burst_start: 0,
     spent_usd: 0,
@@ -334,7 +341,7 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
     created_at: ts,
     updated_at: ts,
   });
-  update('diagrams', d.id, { status: 'generating', error: null, pending_workflow_id: id, pending_sources: JSON.stringify(sources), focus, updated_at: ts });
+  update('diagrams', d.id, { status: 'generating', error: null, pending_workflow_id: id, workflow_id: id, pending_sources: JSON.stringify(sources), focus, updated_at: ts });
   storeRunOptions('diagrams', d.id, opts.request);
   log(id, 'system', `Diagram session started for "${d.title}"`);
   for (const w of chosen.warnings) log(id, 'status', w);
@@ -350,31 +357,88 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
 }
 
 /** Record a failed attempt: the previous version, if any, stays current. */
-function failGeneration(d: Row, message: string, actor: string | null): void {
-  update('diagrams', d.id, { status: d.version > 0 ? 'ready' : 'error', error: message.slice(0, 600), pending_workflow_id: null, updated_at: now() });
+function failGeneration(d: Row, message: string, actor: string | null, w?: Row): void {
+  update('diagrams', d.id, {
+    status: d.version > 0 ? 'ready' : 'error',
+    error: message.slice(0, 600),
+    pending_workflow_id: null,
+    ...(w?.last_run_id ? { ingested_run_id: w.last_run_id } : {}),
+    updated_at: now(),
+  });
   auditRaw(actor, 'diagram.version', `diagram:${d.id}`, { projectId: d.project_id, ok: false, error: message.slice(0, 300) });
+  // The person is looking at the session, not the Create page: say it there too, and what to ask for.
+  if (w) log(w.id, 'status', `The diagram "${d.title}" was not stored: ${message.slice(0, 400)}${d.version > 0 ? '' : ' Reply in this session to ask the agent for a smaller or corrected diagram.'}`);
+  notifyProject(d.project_id, 'diagrams.updated', { id: d.id });
+}
+
+/** A follow-up reply that holds no new diagram: nothing changes, the diagram goes back to what it was. */
+function settleUnchanged(d: Row, w: Row, why: string, confirmed = false): void {
+  // `confirmed`: the reply repeated the stored diagram, so an earlier failed attempt no longer matters.
+  update('diagrams', d.id, { status: d.version > 0 ? 'ready' : 'error', pending_workflow_id: null, ingested_run_id: w.last_run_id ?? d.ingested_run_id, ...(confirmed && d.version > 0 ? { error: null } : {}), updated_at: now() });
+  log(w.id, 'status', `${why}${d.version > 0 ? ` The stored diagram is still version ${d.version}.` : ''}`);
   notifyProject(d.project_id, 'diagrams.updated', { id: d.id });
 }
 
 /**
- * Store the result of a finished diagram session as a new version. Safe to call more than once and for any session:
- * it does nothing unless the session belongs to a diagram that is still waiting for it.
+ * A message sent to the session of a diagram: the diagram shows as being drawn again until the reply is in, and the sources
+ * are read afresh. Does nothing for any other session.
+ */
+export function followUpStarted(workflowId: string): void {
+  const d = one<Row>('SELECT * FROM diagrams WHERE workflow_id = ?', workflowId);
+  if (!d || d.status === 'generating') return;
+  const sources: DiagramSource[] = [];
+  for (const id of parseJson<string[]>(d.repo_ids, [])) {
+    const r = findRepo(id);
+    if (r) sources.push({ repoId: r.id, name: r.name, slug: r.slug, branch: r.default_branch, sha: headSha(r) ?? '' });
+  }
+  update('diagrams', d.id, { status: 'generating', pending_workflow_id: workflowId, ...(sources.length ? { pending_sources: JSON.stringify(sources) } : {}), updated_at: now() });
+  notifyProject(d.project_id, 'diagrams.updated', { id: d.id });
+}
+
+/** Keep the latest version in the project Vault: the Mermaid source now, the picture when a renderer exists. Never throws. */
+export function vaultSaveDiagram(d: Row, mermaid: string, actor: string | null): void {
+  const saved = saveGenerated(d.project_id, 'diagrams', d.slug, [{ ext: 'mmd', data: String(mermaid).replace(/\s+$/, '') + '\n' }], actor);
+  if (!saved.saved.length || rendererProblem() !== null) return;
+  void (async () => {
+    try {
+      const [res] = await withLock('diagram-render', () => renderToPng([{ kind: 'mermaid', source: String(mermaid) }]));
+      // A newer version may have been stored while the picture was drawn: then this picture is out of date.
+      const latest = isDbOpen() ? one<Row>('SELECT v.mermaid FROM diagram_versions v JOIN diagrams g ON g.id = v.diagram_id AND g.version = v.version WHERE g.id = ?', d.id) : undefined;
+      if (res.ok && latest && String(latest.mermaid).trim() === String(mermaid).trim()) saveGenerated(d.project_id, 'diagrams', d.slug, [{ ext: 'png', data: res.image.data }], actor, false);
+    } catch {
+      /* the picture is a bonus; the .mmd is saved */
+    }
+  })();
+}
+
+/**
+ * Store the result of a finished diagram session as a new version. Safe to call more than once and for any session.
+ *
+ * The session stays tied to its diagram for good (`workflow_id`), so a follow-up message to it ("redraw it smaller") is
+ * stored too: every finished run of the session is read once (`ingested_run_id`). A reply that holds no diagram, or the
+ * very diagram already stored, changes nothing and says so in the session.
  */
 export async function ingestSession(workflowId: string): Promise<void> {
-  const first = one<Row>('SELECT id FROM diagrams WHERE pending_workflow_id = ?', workflowId);
+  const first = one<Row>('SELECT id FROM diagrams WHERE pending_workflow_id = ? OR workflow_id = ?', workflowId, workflowId);
   if (!first) return;
   await withLock(`diagram:${first.id}`, async () => {
     if (!isDbOpen()) return;
     const d = one<Row>('SELECT * FROM diagrams WHERE id = ?', first.id);
-    if (!d || d.pending_workflow_id !== workflowId) return;
+    if (!d || (d.pending_workflow_id !== workflowId && d.workflow_id !== workflowId)) return;
+    const waiting = d.pending_workflow_id === workflowId;
     const w = one<Row>('SELECT * FROM workflows WHERE id = ?', workflowId);
-    if (!w) return failGeneration(d, 'The diagram session was deleted before it finished.', null);
+    if (!w) return waiting ? failGeneration(d, 'The diagram session was deleted before it finished.', null) : undefined;
     if (!TERMINAL.includes(w.status)) return;
+    const sameRun = Boolean(w.last_run_id) && w.last_run_id === d.ingested_run_id;
+    if (!waiting && (w.status !== 'done' || !w.last_run_id || sameRun)) return;
+    if (waiting && sameRun && d.version > 0) return settleUnchanged(d, w, 'Nothing new was drawn in this session.');
     if (w.status !== 'done') return failGeneration(d, `The diagram session ended as ${w.status}${w.stop_reason ? `: ${w.stop_reason}` : ''}`, w.created_by);
     try {
       const run = w.last_run_id ? getRun(w.last_run_id) : null;
       const parsed = parseDiagramReply(run?.result ?? '');
       const ok = await validateMermaid(parsed.mermaid);
+      const cur = d.version > 0 ? versionRow(d.id, d.version) : undefined;
+      if (cur && Number(w.iteration) > 1 && String(cur.mermaid).trim() === ok.source.trim()) return settleUnchanged(d, w, 'The reply holds the diagram that is already stored, so no new version was made.', true);
       const sources = parseJson<DiagramSource[]>(d.pending_sources, []);
       const hash = hashOfSources(sources.map((s) => ({ repoId: s.repoId, sha: s.sha || null })));
       const version = d.version + 1;
@@ -396,16 +460,21 @@ export async function ingestSession(workflowId: string): Promise<void> {
       await writeFiles(d, row, `${version === 1 ? 'Add' : 'Update'} diagram ${d.title} (v${version})`);
       tx(() => {
         insert('diagram_versions', row);
-        update('diagrams', d.id, { version, status: 'ready', error: null, source_hash: hash, stale: 0, pending_workflow_id: null, updated_at: ts });
+        update('diagrams', d.id, { version, status: 'ready', error: null, source_hash: hash, stale: 0, pending_workflow_id: null, workflow_id: workflowId, ingested_run_id: run?.id ?? null, updated_at: ts });
       });
+      vaultSaveDiagram(d, ok.source, w.created_by);
+      if (d.version > 0) log(workflowId, 'status', `Diagram "${d.title}" is now version ${version} (Create > Diagrams).`);
       auditRaw(w.created_by, 'diagram.version', `diagram:${d.id}`, { projectId: d.project_id, ok: true, version, type: ok.type, parsed: ok.parsed });
       notifyProject(d.project_id, 'diagrams.updated', { id: d.id });
       refreshDiagramStale(d.project_id);
       void import('./generated-docs.ts').then((m) => m.refreshDocStale(d.project_id)).catch(() => undefined);
     } catch (e: any) {
       if (!isDbOpen()) return;
+      if (e instanceof NoDiagramError && Number(w.iteration) > 1) {
+        return settleUnchanged(d, w, 'The reply held no Mermaid diagram, so nothing was changed. Ask for a redraw to get a new version.');
+      }
       const message = e instanceof DiagramError ? e.message : `Could not store the diagram: ${String(e?.message ?? e)}`;
-      failGeneration(d, d.version > 0 ? `${message} The previous version (v${d.version}) was kept.` : message, w.created_by);
+      failGeneration(d, d.version > 0 ? `${message} The previous version (v${d.version}) was kept.` : message, w.created_by, w);
     }
   });
 }
@@ -590,6 +659,7 @@ export function registerDiagramRoutes(): void {
     const { project } = requireProject(ctx, ctx.params.pid, 'editor');
     const d = getDiagramRow(project.id, ctx.params.id);
     exec('DELETE FROM diagrams WHERE id = ?', d.id);
+    removeGenerated(project.id, 'diagrams', d.slug, ctx.user!.id);
     const dir = path.join(projectDir(project), DIAGRAMS_DIR);
     await withLock(`git:${projectDir(project)}`, async () => {
       for (const ext of ['mmd', 'json']) fs.rmSync(path.join(dir, `${d.slug}.${ext}`), { force: true });

@@ -25,7 +25,7 @@ import { del, get, post, sendFile } from './http.ts';
 import { dataPath } from './config.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
 import { ensureFresh, repoDir, type Repo } from './repos.ts';
-import { HttpError, badRequest, newId, notFound, now, parseJson, safeJoin, sha256, str, withLock } from './util.ts';
+import { HttpError, badRequest, newId, notFound, now, parseJson, safeJoin, sha256, slugify, str, withLock } from './util.ts';
 import { audit, auditRaw } from './audit.ts';
 import { getRun } from './agent/runner.ts';
 import { rendererProblem } from './docimage.ts';
@@ -36,6 +36,7 @@ import { placeTemplate, resolveTemplate, syncProjectTemplates, templateForProjec
 import { checkRunBudget, startPlaygroundRun } from './playground-run.ts';
 import { readRunOptionsRequest, resolveRunOptions, runOptionChoices, runOptionsView, storeRunOptions, type RunOptions, type RunOptionsRequest } from './run-options.ts';
 import { log } from './workflows/store.ts';
+import { generatedFiles, removeGenerated, saveGenerated } from './vault-generated.ts';
 import {
   DOC_LIMITS,
   DOC_TYPES,
@@ -311,6 +312,7 @@ function docView(d: Row, detail = false) {
     generating: d.status === 'generating',
     queued: d.status === 'generating' && wf?.status === 'queued',
     workflow_id: d.workflow_id,
+    vault_files: generatedFiles(d.project_id, 'docs', d.vault_name),
     version: d.version,
     stale: Boolean(d.stale),
     stale_reasons: parseJson<string[]>(d.stale_reasons, []),
@@ -396,7 +398,7 @@ export async function startGeneration(docId: string, userId: string, opts: { spe
     trustTools: chosen.trustTools,
     title: `Document: ${d.title}`.slice(0, 120),
     goal,
-    rules: 'Write only inside your run folder. Do not change anything inside repos/. Never copy secrets into the document.',
+    rules: 'Write only inside your run folder. Do not change anything inside repos/. Never copy secrets into the document. The portal collects document.md from your run folder by itself and keeps the result on the Create page (Documents tab) and in the project Vault (generated/docs/). If you are asked to change the document, write the complete new document.md again in your run folder; a reply without a new document.md changes nothing.',
     budgetUsd: DOC_LIMITS.budgetUsd,
     logLine: `Documentation session started for "${d.title}"`,
   });
@@ -429,10 +431,58 @@ function findMarkdown(base: string): { rel: string; mtime: number }[] {
   return out;
 }
 
-function failGeneration(d: Row, message: string, actor: string | null): void {
-  update('generated_docs', d.id, { status: d.version > 0 ? 'ready' : 'error', error: message.slice(0, 600), pending_workflow_id: null, updated_at: now() });
+function failGeneration(d: Row, message: string, actor: string | null, w?: Row): void {
+  update('generated_docs', d.id, {
+    status: d.version > 0 ? 'ready' : 'error',
+    error: message.slice(0, 600),
+    pending_workflow_id: null,
+    ...(w?.last_run_id ? { ingested_run_id: w.last_run_id } : {}),
+    updated_at: now(),
+  });
   auditRaw(actor, 'gendoc.version', `gendoc:${d.id}`, { projectId: d.project_id, ok: false, error: message.slice(0, 300) });
+  if (w) log(w.id, 'status', `The document "${d.title}" was not stored: ${message.slice(0, 400)}`);
   notifyProject(d.project_id, 'generated-docs.updated', { id: d.id });
+}
+
+/** The agent left no new document in a follow-up: nothing changes, the document goes back to what it was. */
+function settleUnchanged(d: Row, w: Row, why: string): void {
+  update('generated_docs', d.id, { status: d.version > 0 ? 'ready' : 'error', pending_workflow_id: null, ingested_run_id: w.last_run_id ?? d.ingested_run_id, updated_at: now() });
+  log(w.id, 'status', `${why}${d.version > 0 ? ` The stored document is still version ${d.version}.` : ''}`);
+  notifyProject(d.project_id, 'generated-docs.updated', { id: d.id });
+}
+
+class NoDocumentError extends Error {}
+
+/**
+ * A message sent to the session of a document: it shows as being written again until the session ends. Does nothing for
+ * any other session.
+ */
+export function followUpStarted(workflowId: string): void {
+  const d = one<Row>('SELECT * FROM generated_docs WHERE workflow_id = ?', workflowId);
+  if (!d || d.status === 'generating') return;
+  update('generated_docs', d.id, { status: 'generating', pending_workflow_id: workflowId, updated_at: now() });
+  notifyProject(d.project_id, 'generated-docs.updated', { id: d.id });
+}
+
+/** A file name for the document's copies in the Vault, fixed on first use so a rename never leaves copies behind. */
+function vaultNameOf(d: Row): string {
+  if (d.vault_name) return String(d.vault_name);
+  const base = slugify(String(d.title), 60) || 'document';
+  let name = base;
+  for (let n = 2; one('SELECT 1 FROM generated_docs WHERE project_id = ? AND vault_name = ? AND id != ?', d.project_id, name, d.id); n++) name = `${base}-${n}`;
+  exec('UPDATE generated_docs SET vault_name = ? WHERE id = ?', name, d.id);
+  return name;
+}
+
+/** Keep a version in the project Vault: the Markdown and, when it was built, the Word file. Never throws. */
+export function vaultSaveDoc(d: Row, v: Row, actor: string | null): void {
+  try {
+    const files: { ext: string; data: Buffer | string }[] = [{ ext: 'md', data: String(v.markdown) }];
+    if (v.file && fs.existsSync(docxFile(d.project_id, v))) files.push({ ext: 'docx', data: fs.readFileSync(docxFile(d.project_id, v)) });
+    saveGenerated(d.project_id, 'docs', vaultNameOf(d), files, actor);
+  } catch {
+    /* the copy is a convenience */
+  }
 }
 
 /** Build the Word file for a version. Never throws: a failure becomes a warning and the version keeps its Markdown. */
@@ -468,16 +518,21 @@ async function buildWord(d: Row, markdown: string, warnings: string[]): Promise<
  * nothing unless the session belongs to a document that is still waiting for it.
  */
 export async function ingestSession(workflowId: string): Promise<void> {
-  const first = one<Row>('SELECT id FROM generated_docs WHERE pending_workflow_id = ?', workflowId);
+  const first = one<Row>('SELECT id FROM generated_docs WHERE pending_workflow_id = ? OR workflow_id = ?', workflowId, workflowId);
   if (!first) return;
   await withLock(`gendoc:${first.id}`, async () => {
     if (!isDbOpen()) return;
     const d = one<Row>('SELECT * FROM generated_docs WHERE id = ?', first.id);
-    if (!d || d.pending_workflow_id !== workflowId) return;
+    if (!d || (d.pending_workflow_id !== workflowId && d.workflow_id !== workflowId)) return;
+    const waiting = d.pending_workflow_id === workflowId;
     const w = one<Row>('SELECT * FROM workflows WHERE id = ?', workflowId);
-    if (!w) return failGeneration(d, 'The documentation session was deleted before it finished.', null);
+    if (!w) return waiting ? failGeneration(d, 'The documentation session was deleted before it finished.', null) : undefined;
     if (!TERMINAL.includes(w.status)) return;
+    const sameRun = Boolean(w.last_run_id) && w.last_run_id === d.ingested_run_id;
+    if (!waiting && (w.status !== 'done' || !w.last_run_id || sameRun)) return;
+    if (waiting && sameRun && d.version > 0) return settleUnchanged(d, w, 'Nothing new was written in this session.');
     if (w.status !== 'done') return failGeneration(d, `The documentation session ended as ${w.status}${w.stop_reason ? `: ${w.stop_reason}` : ''}`, w.created_by);
+    const followUp = Number(w.iteration) > 1;
     try {
       const run = w.last_run_id ? getRun(w.last_run_id) : null;
       const meta = parseJson<any>(run?.meta, {});
@@ -487,17 +542,20 @@ export async function ingestSession(workflowId: string): Promise<void> {
       const warnings: string[] = [];
 
       // The Markdown: the file the agent named, else document.md, else the newest .md in its run folder, else (last resort) its reply.
-      const found = findMarkdown(base);
+      // A follow-up shares the first run's folder, so only files written since it began count as its work.
+      const since = followUp ? Date.parse(String(run.started_at || run.created_at)) - 1000 : 0;
+      const found = findMarkdown(base).filter((f) => f.mtime >= since);
       const said = parseDocReply(String(run.result ?? '')).path;
       let rel: string | null = null;
       if (said) {
         for (const cand of [path.resolve(projectDir(project), said), path.resolve(base, said)]) {
-          if (cand.startsWith(base + path.sep) && /\.(md|markdown)$/i.test(cand) && fs.existsSync(cand)) rel = path.relative(base, cand).replace(/\\/g, '/');
+          if (cand.startsWith(base + path.sep) && /\.(md|markdown)$/i.test(cand) && fs.existsSync(cand) && fs.statSync(cand).mtimeMs >= since) rel = path.relative(base, cand).replace(/\\/g, '/');
         }
       }
       rel = rel ?? found.find((f) => f.rel === 'document.md')?.rel ?? found.sort((a, b) => b.mtime - a.mtime)[0]?.rel ?? null;
       let raw: string;
       if (rel) raw = fs.readFileSync(path.join(base, rel), 'utf8');
+      else if (followUp) throw new NoDocumentError('The follow-up wrote no new document.md in its run folder, so nothing was changed. Ask the agent to rewrite the document to get a new version.');
       else {
         const reply = String(run.result ?? '').replace(/^\s*\**Document\**\s*:.*$/im, '').trim();
         if (reply.length < 500 || !/^#{1,3}\s+\S/m.test(reply)) throw new Error('The agent finished without saving a Markdown file (document.md) in its run folder.');
@@ -558,15 +616,17 @@ export async function ingestSession(workflowId: string): Promise<void> {
           created_by: w.created_by,
           created_at: ts,
         });
-        update('generated_docs', d.id, { version, status: 'ready', error: null, source_hash: hash, stale: 0, stale_reasons: '[]', pending_workflow_id: null, updated_at: ts });
+        update('generated_docs', d.id, { version, status: 'ready', error: null, source_hash: hash, stale: 0, stale_reasons: '[]', pending_workflow_id: null, workflow_id: workflowId, ingested_run_id: run.id, updated_at: ts });
       });
+      vaultSaveDoc(d, { markdown, file }, w.created_by);
       auditRaw(w.created_by, 'gendoc.version', `gendoc:${d.id}`, { projectId: d.project_id, ok: true, version, word: Boolean(file), template: word.template, citations: cites.length, unresolved: cites.filter((c) => !c.ok).length, warnings: warnings.length });
       notifyProject(d.project_id, 'generated-docs.updated', { id: d.id });
       refreshDocStale(d.project_id);
     } catch (e: any) {
       if (!isDbOpen()) return;
+      if (e instanceof NoDocumentError) return settleUnchanged(d, w, e.message);
       const message = String(e?.message ?? e);
-      failGeneration(d, d.version > 0 ? `${message} The previous version (v${d.version}) was kept.` : message, w.created_by);
+      failGeneration(d, d.version > 0 ? `${message} The previous version (v${d.version}) was kept.` : message, w.created_by, w);
     }
   });
 }
@@ -807,6 +867,7 @@ export function registerGeneratedDocRoutes(): void {
     if (d.status === 'generating' && sessionIsActive(d.pending_workflow_id)) throw badRequest('This document is still being written. Stop its session first.');
     const files = all<Row>('SELECT file FROM generated_doc_versions WHERE doc_id = ? AND file IS NOT NULL', d.id).map((v) => String(v.file));
     exec('DELETE FROM generated_docs WHERE id = ?', d.id);
+    removeGenerated(project.id, 'docs', d.vault_name, ctx.user!.id);
     for (const f of files) {
       try {
         fs.rmSync(path.join(storeDir(project.id), f), { force: true });

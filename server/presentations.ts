@@ -18,12 +18,13 @@ import { all, insert, isDbOpen, one, run as exec, update, type Row } from './db.
 import { del, get, post, sendFile } from './http.ts';
 import { dataPath } from './config.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
-import { HttpError, badRequest, newId, notFound, now, parseJson, safeJoin, str, withLock } from './util.ts';
+import { HttpError, badRequest, newId, notFound, now, parseJson, safeJoin, slugify, str, withLock } from './util.ts';
 import { audit, auditRaw } from './audit.ts';
 import { getRun } from './agent/runner.ts';
 import { renderToPng, rendererProblem } from './docimage.ts';
 import { view as sessionView } from './workflows/views.ts';
 import { log } from './workflows/store.ts';
+import { generatedFiles, removeGenerated, saveGenerated } from './vault-generated.ts';
 import { diagramMarkdown, diagramSource } from './diagrams.ts';
 import { placeTemplate, resolveTemplate, syncProjectTemplates, templateForProject } from './doc-templates.ts';
 import { checkRunBudget, startPlaygroundRun } from './playground-run.ts';
@@ -82,6 +83,7 @@ function presentationView(p: Row, withOutline = false) {
     generating: p.status === 'generating',
     queued: p.status === 'generating' && wf?.status === 'queued',
     workflow_id: p.workflow_id,
+    vault_files: generatedFiles(p.project_id, 'decks', p.vault_name),
     run_id: p.run_id,
     slide_count: p.slide_count,
     bytes: p.bytes,
@@ -243,7 +245,7 @@ export async function startPresentation(projectId: string, userId: string, body:
       goal,
       leadAgent: chosen.leadAgent,
       trustTools: chosen.trustTools,
-      rules: 'Write only inside your run folder. Do not change anything inside repos/. Build the deck with make-doc only. Never copy secrets into the deck.',
+      rules: 'Write only inside your run folder. Do not change anything inside repos/. Build the deck with make-doc only. Never copy secrets into the deck. The portal collects presentation.pptx from your run folder by itself and keeps the result on the Create page (Decks tab) and in the project Vault (generated/decks/). If you are asked to change the deck, build the complete new presentation.pptx again; a reply without a new .pptx changes nothing.',
       budgetUsd: lim.budgetUsd,
       logLine: `Presentation session started for "${title}"`,
     });
@@ -277,10 +279,67 @@ function findDecks(base: string): { rel: string; mtime: number }[] {
   return out;
 }
 
-function failPresentation(p: Row, message: string, actor: string | null): void {
-  update('presentations', p.id, { status: 'error', error: message.slice(0, 600), updated_at: now() });
+function failPresentation(p: Row, message: string, actor: string | null, w?: Row): void {
+  // A deck that was made before stays the current one; only a presentation with no deck yet ends as an error.
+  const kept = Boolean(p.file);
+  update('presentations', p.id, {
+    status: kept ? 'ready' : 'error',
+    error: (kept ? `${message} The previous deck was kept.` : message).slice(0, 600),
+    ...(w?.last_run_id ? { ingested_run_id: w.last_run_id } : {}),
+    updated_at: now(),
+  });
   auditRaw(actor, 'presentation.ready', `presentation:${p.id}`, { projectId: p.project_id, ok: false, error: message.slice(0, 300) });
+  if (w) log(w.id, 'status', `The deck "${p.title}" was not stored: ${message.slice(0, 400)}`);
   notifyProject(p.project_id, 'presentations.updated', { id: p.id });
+}
+
+/** The agent made no new deck in a follow-up: nothing changes, the presentation goes back to what it was. */
+function settleUnchanged(p: Row, w: Row, why: string): void {
+  update('presentations', p.id, { status: p.file ? 'ready' : 'error', ingested_run_id: w.last_run_id ?? p.ingested_run_id, updated_at: now() });
+  log(w.id, 'status', why);
+  notifyProject(p.project_id, 'presentations.updated', { id: p.id });
+}
+
+class NoDeckError extends Error {}
+
+/**
+ * A message sent to the session of a deck: it shows as being made again until the session ends. Does nothing for any
+ * other session.
+ */
+export function followUpStarted(workflowId: string): void {
+  const p = one<Row>('SELECT * FROM presentations WHERE workflow_id = ?', workflowId);
+  if (!p || p.status === 'generating') return;
+  update('presentations', p.id, { status: 'generating', updated_at: now() });
+  notifyProject(p.project_id, 'presentations.updated', { id: p.id });
+}
+
+function vaultNameOf(p: Row): string {
+  if (p.vault_name) return String(p.vault_name);
+  const base = slugify(String(p.title), 60) || 'deck';
+  let name = base;
+  for (let n = 2; one('SELECT 1 FROM presentations WHERE project_id = ? AND vault_name = ? AND id != ?', p.project_id, name, p.id); n++) name = `${base}-${n}`;
+  exec('UPDATE presentations SET vault_name = ? WHERE id = ?', name, p.id);
+  return name;
+}
+
+/** Copy a stored deck to the Vault (used when the setting is turned on later). False when there is no file. */
+export function vaultSaveDeckFromStore(p: Row, actor: string | null): boolean {
+  try {
+    if (!p.file || !fs.existsSync(deckFile(p))) return false;
+    vaultSaveDeck(p, fs.readFileSync(deckFile(p)), actor);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Keep the deck in the project Vault, replaced in place. Never throws. */
+export function vaultSaveDeck(p: Row, bytes: Buffer, actor: string | null): void {
+  try {
+    saveGenerated(p.project_id, 'decks', vaultNameOf(p), [{ ext: 'pptx', data: bytes }], actor);
+  } catch {
+    /* the copy is a convenience */
+  }
 }
 
 /**
@@ -288,23 +347,30 @@ function failPresentation(p: Row, message: string, actor: string | null): void {
  * unless the session belongs to a presentation that is still waiting for it.
  */
 export async function ingestSession(workflowId: string): Promise<void> {
-  const first = one<Row>("SELECT id FROM presentations WHERE workflow_id = ? AND status = 'generating'", workflowId);
+  const first = one<Row>('SELECT id FROM presentations WHERE workflow_id = ?', workflowId);
   if (!first) return;
   await withLock(`presentation:${first.id}`, async () => {
     if (!isDbOpen()) return;
     const p = one<Row>('SELECT * FROM presentations WHERE id = ?', first.id);
-    if (!p || p.status !== 'generating') return;
+    if (!p || p.workflow_id !== workflowId) return;
+    const waiting = p.status === 'generating';
     const w = one<Row>('SELECT * FROM workflows WHERE id = ?', workflowId);
-    if (!w) return failPresentation(p, 'The presentation session was deleted before it finished.', null);
+    if (!w) return waiting ? failPresentation(p, 'The presentation session was deleted before it finished.', null) : undefined;
     if (!TERMINAL.includes(w.status)) return;
+    const sameRun = Boolean(w.last_run_id) && w.last_run_id === p.ingested_run_id;
+    if (!waiting && (w.status !== 'done' || !w.last_run_id || sameRun)) return;
+    if (waiting && sameRun && p.file) return settleUnchanged(p, w, 'Nothing new was made in this session.');
     if (w.status !== 'done') return failPresentation(p, `The presentation session ended as ${w.status}${w.stop_reason ? `: ${w.stop_reason}` : ''}`, w.created_by);
+    const followUp = Number(w.iteration) > 1;
     try {
       const run = w.last_run_id ? getRun(w.last_run_id) : null;
       const meta = parseJson<any>(run?.meta, {});
       if (!run || !meta.workDir) throw new Error('the session left no run folder');
       const project = getProject(p.project_id);
       const base = safeJoin(projectDir(project), String(meta.workDir));
-      const decks = findDecks(base);
+      // A follow-up shares the first run's folder, so only decks written since it began count as its work.
+      const since = followUp ? Date.parse(String(run.started_at || run.created_at)) - 1000 : 0;
+      const decks = findDecks(base).filter((d) => d.mtime >= since);
       const said = parsePresentationReply(String(run.result ?? '')).path;
       let rel: string | null = null;
       if (said) {
@@ -314,6 +380,7 @@ export async function ingestSession(workflowId: string): Promise<void> {
         }
       }
       rel = rel ?? decks.find((d) => d.rel === 'presentation.pptx')?.rel ?? decks.sort((a, b) => b.mtime - a.mtime)[0]?.rel ?? null;
+      if (!rel && followUp && p.file) throw new NoDeckError('The follow-up saved no new .pptx file, so nothing was changed. Ask the agent to rebuild the deck to get a new one.');
       if (!rel) throw new Error('The agent finished without saving a .pptx file in its run folder.');
       const source = path.join(base, rel);
       const bytes = fs.readFileSync(source);
@@ -350,13 +417,16 @@ export async function ingestSession(workflowId: string): Promise<void> {
         warnings: JSON.stringify(warnings),
         template_used: templateUsed,
         run_id: run.id,
+        ingested_run_id: run.id,
         updated_at: now(),
       });
+      vaultSaveDeck(p, bytes, w.created_by);
       auditRaw(w.created_by, 'presentation.ready', `presentation:${p.id}`, { projectId: p.project_id, ok: true, slides: outline.length, bytes: bytes.length, template: templateUsed, warnings: warnings.length });
       notifyProject(p.project_id, 'presentations.updated', { id: p.id });
     } catch (e: any) {
       if (!isDbOpen()) return;
-      failPresentation(p, String(e?.message ?? e), w.created_by);
+      if (e instanceof NoDeckError) return settleUnchanged(p, w, e.message);
+      failPresentation(p, String(e?.message ?? e), w.created_by, w);
     }
   });
 }
@@ -525,6 +595,7 @@ export function registerPresentationRoutes(): void {
       throw badRequest('This presentation is still being made. Stop its session first.');
     }
     exec('DELETE FROM presentations WHERE id = ?', p.id);
+    removeGenerated(project.id, 'decks', p.vault_name, ctx.user!.id);
     try {
       fs.rmSync(path.join(storeDir(project.id), `${p.id}.pptx`), { force: true });
       fs.rmSync(previewDir(p), { recursive: true, force: true });

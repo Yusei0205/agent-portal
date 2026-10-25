@@ -530,6 +530,10 @@ export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessa
     const description = `Description: Demo ${kind.replace('_', ' ')} diagram of ${found.length} top-level item(s), based on ${cite}.`;
     if (ask.includes('[demo-no-diagram]')) return 'I looked at the repository but I am not able to draw a diagram for it.';
     if (ask.includes('[demo-invalid-mermaid]')) return '```mermaid\nflowchart LR\n  A[Request] -->\n```\n\n' + description;
+    if (ask.includes('[demo-dense-mermaid]')) {
+      const lines = Array.from({ length: 60 }, (_, i) => `  d${i}["Part ${i}"] --> d${i + 1}["Part ${i + 1}"]`);
+      return '```mermaid\nflowchart LR\n' + lines.join('\n') + '\n```\n\n' + description;
+    }
     if (ask.includes('[demo-huge-mermaid]')) {
       const lines = Array.from({ length: 1500 }, (_, i) => `  n${i}["Node number ${i} with a long label to fill the space"] --> n${i + 1}`);
       return '```mermaid\nflowchart LR\n' + lines.join('\n') + '\n```\n\n' + description;
