@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { trustToolsHint } from '../pages/sessions/NewSessionFields.jsx';
+import { DiagramStyleFields, diagramStyleBody, docStyleBody, initialStyle, rememberStyle } from './DiagramStyle.jsx';
 import { Button, Field, IconButton, Modal, Toggle } from './ui.jsx';
 
 /**
@@ -90,12 +91,16 @@ export function RunChoice({ item }) {
  * @param {object} [props.runOptions]
  * @param {{ lead_agent?: string, trust_all_tools?: boolean }} [props.stored]
  * @param {string} [props.note] What the chosen values apply to, shown in the dialog
+ * @param {{ projectId: string, data: object, stored: { style?: string, cloud?: string | null }, what: 'diagram' | 'doc' | 'deck' }} [props.styleOptions]
+ *   When given, the dialog also offers the drawing style and cloud (diagrams: `style`/`cloud` go with the refresh)
  */
-export function RefreshControl({ label = 'Refresh', busy, disabled, title, runOptions, stored, note, onRefresh }) {
+export function RefreshControl({ label = 'Refresh', busy, disabled, title, runOptions, stored, note, styleOptions, onRefresh }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(() => initialRunOptions(runOptions, stored));
+  const [look, setLook] = useState(() => (styleOptions ? initialStyle(styleOptions.projectId, styleOptions.data, styleOptions.stored) : null));
   const start = () => {
     setValue(initialRunOptions(runOptions, stored));
+    if (styleOptions) setLook(initialStyle(styleOptions.projectId, styleOptions.data, styleOptions.stored));
     setOpen(true);
   };
   return (
@@ -116,7 +121,10 @@ export function RefreshControl({ label = 'Refresh', busy, disabled, title, runOp
                 icon="refresh"
                 onClick={() => {
                   setOpen(false);
-                  onRefresh(runOptionsBody(value));
+                  if (styleOptions && look) {
+                    rememberStyle(styleOptions.projectId, look);
+                    onRefresh({ ...runOptionsBody(value), ...(styleOptions.what === 'diagram' ? diagramStyleBody(look) : docStyleBody(look)) });
+                  } else onRefresh(runOptionsBody(value));
                 }}
               >
                 {label} with these
@@ -126,6 +134,7 @@ export function RefreshControl({ label = 'Refresh', busy, disabled, title, runOp
         >
           <div className="stack">
             <p className="muted small">{note || 'The plain button reuses the choice saved with this item. Pick different ones here for this refresh; they are saved for the next one.'}</p>
+            {styleOptions && look ? <DiagramStyleFields data={styleOptions.data} value={look} onChange={setLook} what={styleOptions.what} name="refresh-diagram-style" /> : null}
             <RunOptionsFields runOptions={runOptions} value={value} onChange={setValue} />
           </div>
         </Modal>

@@ -6,6 +6,7 @@ import { useProjectEvents } from '../lib/events.js';
 import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { bytes, cx, dateTime, plural, timeAgo } from '../lib/util.js';
+import { DiagramStyleFields, docStyleBody, initialStyle, rememberStyle } from '../components/DiagramStyle.jsx';
 import { OutputLinks } from '../components/OutputLinks.jsx';
 import { RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
 import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Segmented, Spinner, useUi } from '../components/ui.jsx';
@@ -130,6 +131,7 @@ function NewPresentation({ data, onClose }) {
   const limits = data?.limits || { slidesMin: 3, slidesMax: 40, slidesDefault: 10, topicChars: 4000, audienceChars: 200, titleChars: 120 };
   const [form, setForm] = useState({ kind: 'topic', topic: '', ref: '', audience: '', slides: String(limits.slidesDefault), title: '', templateId: '' });
   const [run, setRun] = useState(() => initialRunOptions(data?.runOptions));
+  const [look, setLook] = useState(() => initialStyle(project.id, data));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const docs = useChoices(form.kind === 'document', 'documents', (r) => (r.documents || []).filter((d) => d.status === 'ready'));
@@ -153,13 +155,14 @@ function NewPresentation({ data, onClose }) {
     setBusy(true);
     setError(null);
     try {
-      const body = { slideCount: slidesNum, ...runOptionsBody(run) };
+      const body = { slideCount: slidesNum, ...docStyleBody(look), ...runOptionsBody(run) };
       if (form.kind === 'topic') body.topic = form.topic.trim();
       else body[{ document: 'documentId', session: 'sessionId', diagram: 'diagramId' }[form.kind]] = form.ref;
       if (form.audience.trim()) body.audience = form.audience.trim();
       if (form.title.trim()) body.title = form.title.trim();
       if (form.templateId) body.templateId = form.templateId;
       const r = await api.post(base(project.id), body);
+      rememberStyle(project.id, look);
       toast('Presentation started');
       showWarnings(toast, r.warnings);
       go(project.id, 'presentations', r.presentation.id);
@@ -263,6 +266,8 @@ function NewPresentation({ data, onClose }) {
             </select>
           )}
         </Field>
+        <DiagramStyleFields data={data} value={look} onChange={setLook} what="deck" name="new-deck-style" />
+        <p className="field-hint">The style applies to diagrams the agent draws itself for the slides. A diagram you choose as the source keeps the style it was drawn in.</p>
         <RunOptionsSection runOptions={data?.runOptions} value={run} onChange={setRun} />
         <ErrorNote error={error} />
       </form>
@@ -274,6 +279,7 @@ function DeckView({ id }) {
   const { project, canEdit } = useProject();
   const { toast, confirm } = useUi();
   const d = useLoad(() => api.get(`${base(project.id)}/${encodeURIComponent(id)}`), [project.id, id]);
+  const list = useLoad(() => api.get(base(project.id)), [project.id]);
   useProjectEvents(['presentations.updated'], (_e, x) => {
     if (x?.id && d.data && x.id !== d.data.presentation.id) return;
     d.reload(true);
@@ -348,6 +354,9 @@ function DeckView({ id }) {
               </span>
             ) : null}
             <span className="muted small">Template: {templateWords(p)}</span>
+            <span className="muted small" data-testid="deck-diagram-style">
+              Diagrams drawn by the agent: {p.diagram_style === 'icon' ? `icon style, ${p.diagram_cloud ? (list.data?.clouds?.find((c) => c.id === p.diagram_cloud)?.label || p.diagram_cloud) : 'cloud detected'}` : 'Mermaid'}
+            </span>
             <RunChoice item={p} />
             <span className="muted small" title={dateTime(p.created_at)}>
               Started {timeAgo(p.created_at)}

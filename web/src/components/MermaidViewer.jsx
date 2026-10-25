@@ -6,10 +6,11 @@ const MIN = 0.2;
 const MAX = 6;
 
 /**
- * A drawn Mermaid diagram at full size, in a dialog: zoom with the buttons, the mouse wheel (with Ctrl) or the keys + and -,
- * pan by dragging or with the scroll bars. `svg` is markup already sanitised by the Markdown component.
+ * A drawn diagram at full size, in a dialog: zoom with the buttons, the mouse wheel (with Ctrl) or the keys + and -,
+ * pan by dragging or with the scroll bars. `svg` is markup already sanitised by the Markdown component (a Mermaid diagram);
+ * `src` is the address of a picture instead (an icon diagram's SVG or PNG from the portal), shown as an image.
  */
-export function MermaidViewer({ svg, title = 'Diagram', onClose }) {
+export function MermaidViewer({ svg, src, title = 'Diagram', onClose }) {
   const host = useRef(null);
   const pane = useRef(null);
   const drag = useRef(null);
@@ -19,7 +20,29 @@ export function MermaidViewer({ svg, title = 'Diagram', onClose }) {
   // Put the drawing in, and remember the size it was drawn at; zoom 1 fits the dialog's width.
   useEffect(() => {
     const el = host.current;
-    if (!el) return;
+    if (!el) return undefined;
+    if (src) {
+      let alive = true;
+      el.textContent = '';
+      const img = new Image();
+      img.alt = title;
+      img.draggable = false;
+      img.onload = () => {
+        if (!alive) return;
+        el.appendChild(img);
+        img.style.maxWidth = 'none';
+        img.style.height = 'auto';
+        const w = img.naturalWidth || 800;
+        const h = img.naturalHeight || 600;
+        setNatural({ w, h });
+        const fit = pane.current ? Math.min(1, (pane.current.clientWidth - 24) / w) : 1;
+        setZoom(Math.max(MIN, Math.min(MAX, fit)));
+      };
+      img.src = src;
+      return () => {
+        alive = false;
+      };
+    }
     el.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['foreignObject'] });
     const s = el.querySelector('svg');
     if (!s) return;
@@ -32,10 +55,11 @@ export function MermaidViewer({ svg, title = 'Diagram', onClose }) {
     setNatural({ w, h });
     const fit = pane.current ? Math.min(1, (pane.current.clientWidth - 24) / w) : 1;
     setZoom(Math.max(MIN, Math.min(MAX, fit)));
-  }, [svg]);
+    return undefined;
+  }, [svg, src]);
 
   useEffect(() => {
-    const s = host.current?.querySelector('svg');
+    const s = host.current?.querySelector('svg, img');
     if (s && natural) s.style.width = `${Math.round(natural.w * zoom)}px`;
   }, [zoom, natural]);
 

@@ -1,11 +1,13 @@
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
 import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, dateTime, plural, timeAgo } from '../lib/util.js';
+import { DiagramStyleFields, diagramStyleBody, initialStyle, rememberStyle, useApplyDetectedCloud, useDetectedCloud } from '../components/DiagramStyle.jsx';
 import { Markdown } from '../components/Markdown.jsx';
+import { MermaidViewer } from '../components/MermaidViewer.jsx';
 import { OutputLinks } from '../components/OutputLinks.jsx';
 import { RefreshControl, RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
 import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Spinner, useUi } from '../components/ui.jsx';
@@ -26,6 +28,19 @@ function DiagramBadges({ d }) {
       {d.status === 'generating' ? <Badge tone="accent">Generating</Badge> : d.status === 'error' ? <Badge tone="danger">Error</Badge> : <Badge tone="ok">Ready</Badge>}
       {d.stale && d.status !== 'generating' ? <Badge tone="warn">Stale: code has changed</Badge> : null}
     </span>
+  );
+}
+
+/** "Icon · AWS" or "Mermaid": how a diagram is drawn. */
+export function styleBadgeText(d) {
+  return d.style === 'icon' ? `Icon · ${d.cloud_label || d.cloud || 'draw.io'}` : 'Mermaid';
+}
+
+function StyleBadge({ d }) {
+  return (
+    <Badge tone={d.style === 'icon' ? 'accent' : 'muted'}>
+      <span data-testid="style-badge">{styleBadgeText(d)}</span>
+    </Badge>
   );
 }
 
@@ -108,6 +123,7 @@ function DiagramList() {
               <tr>
                 <th>Title</th>
                 <th>Kind</th>
+                <th>Style</th>
                 <th>Status</th>
                 <th>Version</th>
                 <th>Last generated</th>
@@ -130,6 +146,9 @@ function DiagramList() {
                   </td>
                   <td>{d.kind_label}</td>
                   <td>
+                    <StyleBadge d={d} />
+                  </td>
+                  <td>
                     <DiagramBadges d={d} />
                   </td>
                   <td>{d.version ? `v${d.version}` : '-'}</td>
@@ -140,17 +159,20 @@ function DiagramList() {
           </table>
         </div>
       ) : null}
-      {creating ? <NewDiagram kinds={list.data?.kinds || []} limits={list.data?.limits} runOptions={list.data?.runOptions} onClose={() => setCreating(false)} /> : null}
+      {creating ? <NewDiagram data={list.data} kinds={list.data?.kinds || []} limits={list.data?.limits} runOptions={list.data?.runOptions} onClose={() => setCreating(false)} /> : null}
     </div>
   );
 }
 
-function NewDiagram({ kinds, limits, runOptions, onClose }) {
+function NewDiagram({ data, kinds, limits, runOptions, onClose }) {
   const { project } = useProject();
   const { toast } = useUi();
   const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
   const [form, setForm] = useState({ kind: kinds[0]?.id || 'system_context', repoIds: [], title: '', focus: '' });
   const [run, setRun] = useState(() => initialRunOptions(runOptions));
+  const [look, setLook] = useState(() => initialStyle(project.id, data));
+  const detect = useDetectedCloud(project.id, form.repoIds, look.style === 'icon');
+  const cloudPicked = useApplyDetectedCloud(detect, look, setLook);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const repoList = repos.data?.repos || [];
@@ -164,10 +186,11 @@ function NewDiagram({ kinds, limits, runOptions, onClose }) {
     setBusy(true);
     setError(null);
     try {
-      const body = { kind: form.kind, repoIds: form.repoIds, ...runOptionsBody(run) };
+      const body = { kind: form.kind, repoIds: form.repoIds, ...diagramStyleBody(look), ...runOptionsBody(run) };
       if (form.title.trim()) body.title = form.title.trim();
       if (form.focus.trim()) body.focus = form.focus.trim();
       const r = await api.post(base(project.id), body);
+      rememberStyle(project.id, look);
       toast('Drawing started');
       showWarnings(toast, r.warnings);
       go(project.id, 'diagrams', r.diagram.id);
@@ -226,6 +249,7 @@ function NewDiagram({ kinds, limits, runOptions, onClose }) {
             })
           )}
         </fieldset>
+        <DiagramStyleFields data={data} value={look} onChange={setLook} what="diagram" detect={detect} onCloudPicked={cloudPicked} name="new-diagram-style" />
         <Field label="Title (optional)" hint="Leave empty to name it after the kind and repositories.">
           {(id) => <input id={id} className="input" maxLength={120} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />}
         </Field>
@@ -279,6 +303,36 @@ function RenameDiagram({ diagram, onClose, onDone }) {
   );
 }
 
+/** The cloud's name for a code ("aws" -> "AWS"), from the list's `clouds`. */
+function cloudWord(code, clouds) {
+  if (!code) return '';
+  return clouds?.find((c) => c.id === code)?.label || code;
+}
+
+/** The picture of an icon diagram (SVG from the server's draw.io renderer). If it cannot be loaded, the server's reason is shown. */
+function IconPicture({ url, alt, onFull }) {
+  const [problem, setProblem] = useState(null);
+  useEffect(() => setProblem(null), [url]);
+  const failed = async () => {
+    try {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      const body = await res.json().catch(() => null);
+      setProblem(body?.error || `The picture could not be loaded (${res.status}).`);
+    } catch (e) {
+      setProblem(e.message);
+    }
+  };
+  if (problem) return <ErrorNote error={{ message: problem }} />;
+  return (
+    <div className="icon-picture">
+      <Button size="sm" className="icon-picture-full" onClick={onFull} title="Open this diagram at full size, with zoom and panning">
+        Full size
+      </Button>
+      <img src={url} alt={alt} onError={failed} data-testid="icon-picture" />
+    </div>
+  );
+}
+
 function DiagramView({ id, versionParam }) {
   const { project, canEdit } = useProject();
   const { toast, confirm } = useUi();
@@ -294,6 +348,7 @@ function DiagramView({ id, versionParam }) {
   const Heading = useContext(EmbeddedContext) ? 'h2' : 'h1';
   const [busy, setBusy] = useState(null);
   const [renaming, setRenaming] = useState(false);
+  const [fullSize, setFullSize] = useState(false);
   const back = (
     <a className="back" href={href(project.id, 'diagrams')}>
       ← Diagrams
@@ -316,11 +371,20 @@ function DiagramView({ id, versionParam }) {
     );
   }
 
-  const { diagram, versions, export: exp } = d.data;
+  const { diagram, versions, export: exp, exportIcon: expIcon } = d.data;
+  const clouds = list.data?.clouds;
   const showingOld = Boolean(older && old.data);
   const shown = showingOld ? old.data.version : diagram;
   const shownVersion = showingOld ? older : diagram.version;
   const mermaid = showingOld ? old.data.version.mermaid : older ? '' : diagram.mermaid;
+  const format = showingOld ? old.data.version.format : diagram.format;
+  const isIcon = format === 'drawio';
+  const drawio = showingOld ? old.data.version.drawio : older ? '' : diagram.drawio;
+  const hasBody = isIcon ? Boolean(drawio) : Boolean(mermaid);
+  const shownStyle = showingOld ? old.data.version.style : diagram.style;
+  const shownCloud = showingOld ? old.data.version.cloud : diagram.cloud;
+  const exportUrl = (fmt) => `${base(project.id)}/${diagram.id}/export?format=${fmt}&version=${shownVersion}`;
+  const canPicture = Boolean(expIcon?.svg);
   const generating = diagram.status === 'generating';
   const failed = failedRefresh(diagram);
 
@@ -383,6 +447,12 @@ function DiagramView({ id, versionParam }) {
           <div className="row tight wrap">
             <DiagramBadges d={diagram} />
             {diagram.version ? <span className="muted small">Version {diagram.version}</span> : null}
+            <StyleBadge d={diagram} />
+            {diagram.style === 'icon' ? (
+              <span className="muted small" data-testid="style-words">
+                Style: {diagram.style_label}; cloud: {diagram.cloud_label || cloudWord(diagram.cloud, clouds)}
+              </span>
+            ) : null}
             <RunChoice item={diagram} />
             {diagram.generated_at ? (
               <span className="muted small" title={dateTime(diagram.generated_at)}>
@@ -393,7 +463,14 @@ function DiagramView({ id, versionParam }) {
         </div>
         {canEdit ? (
           <div className="learn-actions">
-            <RefreshControl busy={busy === 'refresh'} disabled={generating} runOptions={list.data?.runOptions} stored={diagram} onRefresh={refresh} />
+            <RefreshControl
+              busy={busy === 'refresh'}
+              disabled={generating}
+              runOptions={list.data?.runOptions}
+              stored={diagram}
+              styleOptions={{ projectId: project.id, data: list.data, stored: { style: diagram.style, cloud: diagram.cloud }, what: 'diagram' }}
+              onRefresh={refresh}
+            />
             <Button icon="edit" onClick={() => setRenaming(true)}>
               Rename
             </Button>
@@ -419,7 +496,10 @@ function DiagramView({ id, versionParam }) {
       {diagram.status === 'error' ? <ErrorNote error={{ message: diagram.error || 'The diagram could not be drawn.' }} /> : null}
       {diagram.density?.dense && !older ? (
         <Note tone="warn" icon="alert">
-          <strong>Very dense diagram.</strong> About {diagram.density.nodes} nodes in {diagram.density.lines} lines is hard to read. Use Full size on the picture to zoom, or ask the agent in its session to group the parts into subgraphs or to draw a smaller diagram.
+          <strong>Very dense diagram.</strong>{' '}
+          {isIcon
+            ? `About ${diagram.density.icons} icons and ${diagram.density.edges} connections is hard to read. Use Full size on the picture to zoom, or ask the agent in its session to leave out the minor parts or to draw a smaller diagram.`
+            : `About ${diagram.density.nodes} nodes in ${diagram.density.lines} lines is hard to read. Use Full size on the picture to zoom, or ask the agent in its session to group the parts into subgraphs or to draw a smaller diagram.`}
         </Note>
       ) : null}
       {diagram.stale && !generating ? (
@@ -436,7 +516,34 @@ function DiagramView({ id, versionParam }) {
       {older && old.error ? <ErrorNote error={old.error} /> : null}
       {older && !old.data && !old.error ? <Spinner /> : null}
 
-      {mermaid ? (
+      {isIcon && hasBody ? (
+        <section className="panel stack" aria-label="Diagram">
+          {canPicture ? (
+            <IconPicture url={exportUrl('svg')} alt={`${diagram.title}, version ${shownVersion}: ${shown.description || 'icon diagram'}`} onFull={() => setFullSize(true)} />
+          ) : (
+            <Note tone="info" icon="eye">
+              <strong>No preview picture on this server.</strong> {expIcon?.previewReason || 'The picture renderer is not available'}. The diagram is stored and can be downloaded as a .drawio file; open it in draw.io to see it. Documents and decks that use it get a placeholder instead of the picture.
+            </Note>
+          )}
+          <div className="row wrap">
+            <Button size="sm" icon="download" busy={busy === 'drawio'} onClick={() => download('drawio')}>
+              Export .drawio
+            </Button>
+            <Button size="sm" icon="download" busy={busy === 'png'} disabled={!expIcon?.png} title={expIcon?.png ? undefined : expIcon?.previewReason || undefined} onClick={() => download('png')}>
+              Export PNG
+            </Button>
+            <Button size="sm" icon="download" busy={busy === 'svg'} disabled={!expIcon?.svg} title={expIcon?.svg ? undefined : expIcon?.previewReason || undefined} onClick={() => download('svg')}>
+              Export SVG
+            </Button>
+          </div>
+          <p className="muted small">The .drawio file opens in draw.io or diagrams.net (File, Open from device) where you can edit it.</p>
+          {canPicture ? null : (
+            <p className="muted small" data-testid="export-reason">
+              PNG and SVG export are not available on this server: {expIcon?.previewReason || 'no picture renderer'}.
+            </p>
+          )}
+        </section>
+      ) : mermaid ? (
         <section className="panel stack" aria-label="Diagram">
           <Markdown key={`${diagram.id}-${shownVersion}`} text={'```mermaid\n' + mermaid + '\n```'} />
           <div className="row wrap">
@@ -455,9 +562,16 @@ function DiagramView({ id, versionParam }) {
         </Empty>
       ) : null}
 
-      {mermaid ? (
+      {hasBody ? (
         <section className="stack" aria-label="Description">
           <h2>Description</h2>
+          {isIcon && diagram.density && !older ? (
+            <p className="muted small" data-testid="density-note">
+              {diagram.density.icons} {diagram.density.icons === 1 ? 'icon' : 'icons'}, {diagram.density.edges} {diagram.density.edges === 1 ? 'connection' : 'connections'}
+              {diagram.density.dense ? ' (very dense)' : ''}
+              {shownStyle === 'icon' && shownCloud ? `; drawn with the ${cloudWord(shownCloud, clouds)} icons` : ''}.
+            </p>
+          ) : null}
           <p className="reading">{shown.description || 'No description.'}</p>
           {shown.citations?.length ? (
             <div>
@@ -495,6 +609,7 @@ function DiagramView({ id, versionParam }) {
                 <li key={v.version} className={cx(isShown && 'is-shown')}>
                   <strong>v{v.version}</strong>
                   {v.version === diagram.version ? <Badge tone="ok">Latest</Badge> : null}
+                  <span className="muted small">{v.style === 'icon' ? `Icon · ${cloudWord(v.cloud, clouds)}` : 'Mermaid'}</span>
                   <span className="muted small" title={dateTime(v.created_at)}>
                     {timeAgo(v.created_at)}
                     {v.created_by_name ? ` by ${v.created_by_name}` : ''}
@@ -506,6 +621,7 @@ function DiagramView({ id, versionParam }) {
           </ul>
         </section>
       ) : null}
+      {fullSize ? <MermaidViewer src={exportUrl('svg')} title="Diagram" onClose={() => setFullSize(false)} /> : null}
       {renaming ? (
         <RenameDiagram
           diagram={diagram}

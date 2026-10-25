@@ -6,6 +6,7 @@ import { useProjectEvents } from '../lib/events.js';
 import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { bytes, cx, dateTime, plural, timeAgo } from '../lib/util.js';
+import { DiagramStyleFields, docStyleBody, initialStyle, rememberStyle } from '../components/DiagramStyle.jsx';
 import { OutputLinks } from '../components/OutputLinks.jsx';
 import { Markdown } from '../components/Markdown.jsx';
 import { RefreshControl, RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
@@ -27,6 +28,12 @@ const base = (projectId) => `/api/projects/${encodeURIComponent(projectId)}/gene
 function templateWords(d) {
   if (d.version > 0) return d.template.used || BUILT_IN;
   return d.template.requested_name || 'The default';
+}
+
+/** "AWS" for "aws", from the list's `clouds`; a document without a stored cloud lets the server detect it. */
+function cloudName(code, clouds) {
+  if (!code) return 'cloud detected from the repositories';
+  return clouds?.find((c) => c.id === code)?.label || code;
 }
 
 /** The error of a failed rewrite when an older version is still current, else null. */
@@ -146,6 +153,7 @@ function DocList() {
                       {d.created_by_name ? ` by ${d.created_by_name}` : ''}
                     </div>
                     {d.stale && d.status !== 'generating' ? <StaleReasons reasons={d.stale_reasons} /> : null}
+                    {d.diagram_style === 'icon' ? <div className="muted small">Icon diagrams · {cloudName(d.diagram_cloud, list.data?.clouds)}</div> : null}
                     {failedRewrite(d) ? <div className="danger small">Last rewrite failed, previous version kept</div> : null}
                     {d.status === 'error' && d.error ? <div className="danger small">{d.error}</div> : null}
                     {d.status === 'generating' && d.workflow_id ? (
@@ -212,6 +220,7 @@ function NewDocument({ data, runOptions, onClose }) {
   const diagrams = useLoad(() => api.get(`/api/projects/${encodeURIComponent(project.id)}/diagrams`), [project.id]);
   const tpl = useWordTemplates();
   const [run, setRun] = useState(() => initialRunOptions(runOptions));
+  const [look, setLook] = useState(() => initialStyle(project.id, data));
   const [form, setForm] = useState({ type: types[0]?.id || 'overview', repoIds: [], includeKnowledge: true, includeDecisions: true, diagramIds: [], audience: '', title: '', templateId: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -229,11 +238,12 @@ function NewDocument({ data, runOptions, onClose }) {
     setBusy(true);
     setError(null);
     try {
-      const body = { type: form.type, repoIds: form.repoIds, includeKnowledge: form.includeKnowledge, includeDecisions: form.includeDecisions, diagramIds: form.diagramIds, ...runOptionsBody(run) };
+      const body = { type: form.type, repoIds: form.repoIds, includeKnowledge: form.includeKnowledge, includeDecisions: form.includeDecisions, diagramIds: form.diagramIds, ...docStyleBody(look), ...runOptionsBody(run) };
       if (form.audience.trim()) body.audience = form.audience.trim();
       if (form.title.trim()) body.title = form.title.trim();
       if (form.templateId) body.templateId = form.templateId;
       const r = await api.post(base(project.id), body);
+      rememberStyle(project.id, look);
       toast('Document started');
       showWarnings(toast, r.warnings);
       go(project.id, 'documents', r.document.id);
@@ -324,6 +334,8 @@ function NewDocument({ data, runOptions, onClose }) {
             </Note>
           ) : null}
         </fieldset>
+        <DiagramStyleFields data={data} value={look} onChange={setLook} what="doc" name="new-gdoc-style" />
+        <p className="field-hint">The style applies to diagrams the agent draws itself (up to 2). Diagrams you pick above keep the style they were drawn in.</p>
         {!sourceOk ? <Note tone="warn">Choose at least one source: a repository, the knowledge, the decisions log or a diagram.</Note> : null}
         <div className="row wrap">
           <Field label="Audience (optional)" hint="For example: new engineers, or the operations team.">
@@ -341,10 +353,11 @@ function NewDocument({ data, runOptions, onClose }) {
   );
 }
 
-function RegenerateDialog({ doc, effective, runOptions, onClose, onDone }) {
+function RegenerateDialog({ doc, styleData, effective, runOptions, onClose, onDone }) {
   const { project } = useProject();
   const tpl = useWordTemplates();
   const [run, setRun] = useState(() => initialRunOptions(runOptions, doc));
+  const [look, setLook] = useState(() => initialStyle(project.id, styleData, { style: doc.diagram_style, cloud: doc.diagram_cloud }));
   const [form, setForm] = useState({ audience: doc.audience || '', title: doc.title, templateId: doc.template.requested_id || '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -354,7 +367,8 @@ function RegenerateDialog({ doc, effective, runOptions, onClose, onDone }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.post(`${base(project.id)}/${doc.id}/regenerate`, { audience: form.audience.trim(), title: form.title.trim(), templateId: form.templateId || null, ...runOptionsBody(run) });
+      const r = await api.post(`${base(project.id)}/${doc.id}/regenerate`, { audience: form.audience.trim(), title: form.title.trim(), templateId: form.templateId || null, ...docStyleBody(look), ...runOptionsBody(run) });
+      rememberStyle(project.id, look);
       onDone(r);
     } catch (err) {
       setError(err);
@@ -379,6 +393,7 @@ function RegenerateDialog({ doc, effective, runOptions, onClose, onDone }) {
         <Field label="Title">{(id) => <input id={id} className="input" maxLength={120} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />}</Field>
         <Field label="Audience (optional)">{(id) => <input id={id} className="input" maxLength={200} value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })} />}</Field>
         <TemplateSelect value={form.templateId} onChange={(templateId) => setForm({ ...form, templateId })} effective={effective} options={tpl.list} />
+        <DiagramStyleFields data={styleData} value={look} onChange={setLook} what="doc" name="regen-gdoc-style" />
         <RunOptionsSection runOptions={runOptions} value={run} onChange={setRun} />
         <ErrorNote error={error} />
       </form>
@@ -543,6 +558,9 @@ function DocView({ id, versionParam }) {
             <DocBadges d={doc} />
             {doc.version ? <span className="muted small">Version {doc.version}</span> : null}
             {doc.version ? <span className="muted small">Template: {templateWords(doc)}</span> : null}
+            <span className="muted small" data-testid="doc-diagram-style">
+              Diagrams drawn by the agent: {doc.diagram_style === 'icon' ? `icon style, ${cloudName(doc.diagram_cloud, list.data?.clouds)}` : 'Mermaid'}
+            </span>
             <RunChoice item={doc} />
             {doc.generated_at ? (
               <span className="muted small" title={dateTime(doc.generated_at)}>
@@ -612,6 +630,11 @@ function DocView({ id, versionParam }) {
       {showWordNote ? (
         <Note tone="info" icon="file">
           In the Word file, diagrams stay as code blocks: {word.diagramsReason}. They are drawn in the view below.
+        </Note>
+      ) : null}
+      {doc.diagram_style === 'icon' && word && word.iconDiagrams === false ? (
+        <Note tone="warn" icon="alert">
+          <strong>Icon diagrams are not drawn in the Word file on this server.</strong> {word.iconDiagramsReason}. The Word file gets a labelled placeholder line where each icon diagram goes; the .drawio file can still be opened in draw.io.
         </Note>
       ) : null}
       {older ? (
@@ -686,6 +709,7 @@ function DocView({ id, versionParam }) {
       {regenerating ? (
         <RegenerateDialog
           doc={doc}
+          styleData={list.data}
           effective={list.data?.template}
           runOptions={list.data?.runOptions}
           onClose={() => setRegenerating(false)}
