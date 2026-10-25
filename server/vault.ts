@@ -9,6 +9,7 @@
  * A run gets a copy of its project's vault, the team vault and its owner's vault in its own folder
  * (work/<run>/vault/project, .../vault/team and .../vault/mine), so agents can read them, and even change their
  * copies, without ever touching the originals. Agents can read everything in the vaults they get.
+ * Exception: the project vault's generated/ folder (copies of generated diagrams, documents and decks) is never copied into runs.
  * Vaults live under data/vault, outside the project's git repository, so nothing in them is committed.
  */
 import fs from 'node:fs';
@@ -25,6 +26,18 @@ export const MAX_VAULT = 1024 * 1024 * 1024;
 export const MAX_RUN_COPY = 200 * 1024 * 1024;
 
 export type VaultScope = 'mine' | 'team' | 'project';
+
+/**
+ * Folders of a vault that runs do NOT get a copy of: the project vault's generated/ folder holds the portal's own copies
+ * of generated diagrams, documents and decks (vault-generated.ts). They stay listed and downloadable here, but copying
+ * them into every run folder would only bloat the runs.
+ */
+export const NO_RUN_COPY: Partial<Record<VaultScope, string[]>> = { project: ['generated'] };
+
+/** True when the file "rel" of this vault is left out of the copy a run gets. */
+export function isLeftOutOfRuns(scope: VaultScope, rel: string): boolean {
+  return (NO_RUN_COPY[scope] ?? []).some((f) => rel === f || rel.startsWith(f + '/'));
+}
 
 export function vaultDir(scope: VaultScope, userId: string, projectId?: string): string {
   if (scope === 'project') {
@@ -93,7 +106,7 @@ export function copyVaultsInto(workDirAbs: string, workDirRel: string, userId: s
   ];
   for (const [scope, label] of scopes) {
     const src = vaultDir(scope, userId, projectId);
-    const files = listVault(src).filter((e) => !e.dir);
+    const files = listVault(src).filter((e) => !e.dir && !isLeftOutOfRuns(scope, e.path));
     if (!files.length) continue;
     const size = files.reduce((n, e) => n + e.size, 0);
     if (size > budget) {
@@ -115,8 +128,8 @@ export function copyVaultsInto(workDirAbs: string, workDirRel: string, userId: s
 export function registerVaultRoutes(): void {
   get('/api/vault', (ctx) => {
     const { scope, dir } = vaultOf(ctx);
-    const files = listVault(dir);
-    return { scope, files, used: files.reduce((n, e) => n + e.size, 0), limit: MAX_VAULT, maxFile: MAX_FILE };
+    const files = listVault(dir).map((e) => (isLeftOutOfRuns(scope, e.path) ? { ...e, noRunCopy: true } : e));
+    return { scope, files, used: files.reduce((n, e) => n + e.size, 0), limit: MAX_VAULT, maxFile: MAX_FILE, noRunCopy: NO_RUN_COPY[scope] ?? [] };
   });
 
   put('/api/vault/file', async (ctx) => {

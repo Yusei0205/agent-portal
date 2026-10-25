@@ -51,6 +51,8 @@ export type AuditAction =
   | 'presentation.create' | 'presentation.ready' | 'presentation.delete' | 'presentation.download'
   // documentation generator (NEW-6)
   | 'gendoc.create' | 'gendoc.regenerate' | 'gendoc.version' | 'gendoc.delete' | 'gendoc.download'
+  // copies of generated files in the project Vault
+  | 'vault.generated' | 'vault.generated_remove' | 'vault.generated_setting'
   // automatic code review of pull requests (NEW-3)
   | 'review.auto' | 'review.auto_error' | 'review.post' | 'review.post_skip';
 

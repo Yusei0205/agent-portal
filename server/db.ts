@@ -813,7 +813,24 @@ const RUN_OPTIONS = `
   ALTER TABLE presentations ADD COLUMN trust_tools INTEGER NOT NULL DEFAULT 0;
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS];
+const GENERATED_OUTPUTS = `
+  -- Generated outputs follow their session (a follow-up message can redraw or rewrite) and are copied to the project Vault
+  ALTER TABLE projects ADD COLUMN vault_generated INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE diagrams ADD COLUMN workflow_id TEXT;
+  ALTER TABLE diagrams ADD COLUMN ingested_run_id TEXT;
+  ALTER TABLE generated_docs ADD COLUMN ingested_run_id TEXT;
+  ALTER TABLE generated_docs ADD COLUMN vault_name TEXT;
+  ALTER TABLE presentations ADD COLUMN ingested_run_id TEXT;
+  ALTER TABLE presentations ADD COLUMN vault_name TEXT;
+  UPDATE diagrams SET workflow_id = COALESCE(pending_workflow_id, (SELECT workflow_id FROM diagram_versions v WHERE v.diagram_id = diagrams.id ORDER BY v.version DESC LIMIT 1));
+  UPDATE diagrams SET ingested_run_id = (SELECT run_id FROM diagram_versions v WHERE v.diagram_id = diagrams.id AND v.version = diagrams.version) WHERE version > 0;
+  UPDATE generated_docs SET ingested_run_id = (SELECT run_id FROM generated_doc_versions v WHERE v.doc_id = generated_docs.id AND v.version = generated_docs.version) WHERE version > 0;
+  UPDATE presentations SET ingested_run_id = run_id WHERE status = 'ready';
+  CREATE INDEX diagrams_workflow ON diagrams(workflow_id);
+  CREATE INDEX generated_docs_workflow ON generated_docs(workflow_id);
+`;
+
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS, GENERATED_OUTPUTS];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;
