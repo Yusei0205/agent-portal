@@ -34,6 +34,8 @@ import { view as sessionView } from './workflows/views.ts';
 import { diagramMarkdown, diagramSource, headSha } from './diagrams.ts';
 import { placeTemplate, resolveTemplate, syncProjectTemplates, templateForProject } from './doc-templates.ts';
 import { checkRunBudget, startPlaygroundRun } from './playground-run.ts';
+import { readRunOptionsRequest, resolveRunOptions, runOptionChoices, runOptionsView, storeRunOptions, type RunOptions, type RunOptionsRequest } from './run-options.ts';
+import { log } from './workflows/store.ts';
 import {
   DOC_LIMITS,
   DOC_TYPES,
@@ -317,6 +319,7 @@ function docView(d: Row, detail = false) {
     bytes: cur?.bytes ?? 0,
     has_word: Boolean(cur?.file),
     generated_at: cur?.created_at ?? null,
+    ...runOptionsView(d),
     links: cur ? { markdown: `${base}/download?format=md`, ...(cur.file ? { word: `${base}/download?format=docx` } : {}) } : null,
     created_by: d.created_by,
     created_by_name: userName(d.created_by),
@@ -352,7 +355,7 @@ function sessionIsActive(workflowId: string | null): boolean {
  * Start the session that writes (or rewrites) a document. Refuses before anything is written when the budget is used up,
  * a repository is not ready or a chosen diagram is gone. Returns the session row.
  */
-export async function startGeneration(docId: string, userId: string, opts: { specId?: string | null; audit?: (workflowId: string) => void } = {}): Promise<Row> {
+export async function startGeneration(docId: string, userId: string, opts: { specId?: string | null; request?: RunOptionsRequest; audit?: (workflowId: string) => void; onOptions?: (o: RunOptions) => void } = {}): Promise<Row> {
   let d = one<Row>('SELECT * FROM generated_docs WHERE id = ?', docId);
   if (!d) throw notFound('Document not found');
   const project = getProject(d.project_id);
@@ -385,9 +388,12 @@ export async function startGeneration(docId: string, userId: string, opts: { spe
     decisions: Boolean(d.include_decisions),
     diagrams: diagrams.map((g) => ({ slug: g.slug, title: g.title, kind: g.kind, description: g.description })),
   });
+  const chosen = resolveRunOptions(project, { request: opts.request, specId: opts.specId, stored: d });
   const w = await startPlaygroundRun({
     projectId: project.id,
     userId,
+    leadAgent: chosen.leadAgent,
+    trustTools: chosen.trustTools,
     title: `Document: ${d.title}`.slice(0, 120),
     goal,
     rules: 'Write only inside your run folder. Do not change anything inside repos/. Never copy secrets into the document.',
@@ -395,6 +401,9 @@ export async function startGeneration(docId: string, userId: string, opts: { spe
     logLine: `Documentation session started for "${d.title}"`,
   });
   if (opts.specId) exec('UPDATE workflows SET loop_spec_id = ? WHERE id = ?', opts.specId, w.id);
+  storeRunOptions('generated_docs', d.id, opts.request);
+  for (const x of chosen.warnings) log(w.id, 'status', x);
+  opts.onOptions?.(chosen);
   update('generated_docs', d.id, { status: 'generating', error: null, pending_workflow_id: w.id, workflow_id: w.id, pending_sources: JSON.stringify(snap), updated_at: now() });
   opts.audit?.(w.id);
   notifyProject(project.id, 'generated-docs.updated', { id: d.id });
@@ -578,6 +587,7 @@ export interface DocRefreshResult {
   stale: number;
   started: { docId: string; title: string; workflowId: string }[];
   skipped: { docId: string; title: string; reason: string }[];
+  warnings: string[];
 }
 
 /**
@@ -585,7 +595,7 @@ export interface DocRefreshResult {
  * First brings the reference clones of those documents' repositories up to date, then starts up to `max` sessions,
  * oldest first. Each success appends a version.
  */
-export async function refreshStaleDocs(projectId: string, userId: string, opts: { specId?: string | null; max?: number; ids?: string[]; audit?: (docId: string, workflowId: string) => void } = {}): Promise<DocRefreshResult> {
+export async function refreshStaleDocs(projectId: string, userId: string, opts: { specId?: string | null; max?: number; ids?: string[]; request?: RunOptionsRequest; audit?: (docId: string, workflowId: string) => void } = {}): Promise<DocRefreshResult> {
   const repoIds = new Set<string>();
   for (const d of all<Row>('SELECT repo_ids FROM generated_docs WHERE project_id = ? AND version > 0', projectId)) for (const id of parseJson<string[]>(d.repo_ids, [])) repoIds.add(id);
   for (const id of repoIds) {
@@ -595,7 +605,7 @@ export async function refreshStaleDocs(projectId: string, userId: string, opts: 
   refreshDocStale(projectId);
   const rows = all<Row>("SELECT * FROM generated_docs WHERE project_id = ? AND stale = 1 AND version > 0 ORDER BY updated_at", projectId).filter((d) => !opts.ids || opts.ids.includes(d.id));
   const max = Math.max(1, Math.min(opts.max ?? DOC_LIMITS.refreshBatch, DOC_LIMITS.refreshBatch));
-  const out: DocRefreshResult = { stale: rows.length, started: [], skipped: [] };
+  const out: DocRefreshResult = { stale: rows.length, started: [], skipped: [], warnings: [] };
   let stopReason = '';
   for (const d of rows) {
     if (d.status === 'generating' && sessionIsActive(d.pending_workflow_id)) {
@@ -607,7 +617,7 @@ export async function refreshStaleDocs(projectId: string, userId: string, opts: 
       continue;
     }
     try {
-      const w = await startGeneration(d.id, userId, { specId: opts.specId, audit: (wid) => opts.audit?.(d.id, wid) });
+      const w = await startGeneration(d.id, userId, { specId: opts.specId, request: opts.request, audit: (wid) => opts.audit?.(d.id, wid), onOptions: (o) => out.warnings.push(...o.warnings.filter((x) => !out.warnings.includes(x))) });
       out.started.push({ docId: d.id, title: d.title, workflowId: w.id });
     } catch (e: any) {
       const reason = String(e?.message ?? e);
@@ -661,6 +671,7 @@ export function registerGeneratedDocRoutes(): void {
       types: DOC_TYPES.map((id) => ({ id, label: DOC_TYPE_LABELS[id] })),
       template: t ? { id: t.id, name: t.name, scope: t.scope } : null,
       word: wordCapability(),
+      runOptions: runOptionChoices(project),
       limits: { titleChars: DOC_LIMITS.titleChars, audienceChars: DOC_LIMITS.audienceChars, repos: DOC_LIMITS.repos, diagrams: DOC_LIMITS.diagrams, perProject: DOC_LIMITS.perProject },
     };
   });
@@ -687,6 +698,7 @@ export function registerGeneratedDocRoutes(): void {
     const names = repoIds.map((id) => findRepo(id)!.name);
     const title = str(body.title, 'Title', { max: DOC_LIMITS.titleChars, optional: true }).trim() || `${DOC_TYPE_LABELS[type]}: ${names.length ? names.join(', ') : project.name}`.slice(0, DOC_LIMITS.titleChars);
     const tpl = chosenTemplate(project.id, body.templateId);
+    const request = readRunOptionsRequest(project, body);
     const id = newId('gd_');
     const ts = now();
     insert('generated_docs', {
@@ -707,8 +719,9 @@ export function registerGeneratedDocRoutes(): void {
       updated_at: ts,
     });
     try {
-      const w = await startGeneration(id, ctx.user!.id, { audit: (wid) => audit(ctx, 'gendoc.create', `gendoc:${id}`, { projectId: project.id, type, repos: repoIds.length, diagrams: diagramIds.length, workflowId: wid }) });
-      return { document: docView(one<Row>('SELECT * FROM generated_docs WHERE id = ?', id)!), workflow: sessionView(w) };
+      let options: RunOptions | undefined;
+      const w = await startGeneration(id, ctx.user!.id, { request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'gendoc.create', `gendoc:${id}`, { projectId: project.id, type, repos: repoIds.length, diagrams: diagramIds.length, workflowId: wid }) });
+      return { document: docView(one<Row>('SELECT * FROM generated_docs WHERE id = ?', id)!), workflow: sessionView(w), warnings: options?.warnings ?? [] };
     } catch (e) {
       exec('DELETE FROM generated_docs WHERE id = ?', id);
       throw e;
@@ -719,7 +732,10 @@ export function registerGeneratedDocRoutes(): void {
   post('/api/projects/:pid/generated-docs/refresh-stale', async (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid, 'editor');
     await reconcileDocs(project.id);
+    const body = await ctx.json().catch(() => ({}));
+    const request = readRunOptionsRequest(project, body);
     const res = await refreshStaleDocs(project.id, ctx.user!.id, {
+      request,
       audit: (docId, workflowId) => audit(ctx, 'gendoc.regenerate', `gendoc:${docId}`, { projectId: project.id, workflowId, reason: 'stale' }),
     });
     return { ...res, workflows: res.started.map((s) => sessionView(one<Row>('SELECT * FROM workflows WHERE id = ?', s.workflowId)!)) };
@@ -748,6 +764,7 @@ export function registerGeneratedDocRoutes(): void {
     await reconcileDocs(project.id);
     const d = getDoc(project.id, ctx.params.id);
     const body = await ctx.json().catch(() => ({}));
+    const request = readRunOptionsRequest(project, body);
     const patch: Record<string, string | null> = {};
     if (body.audience !== undefined) patch.audience = str(body.audience, 'Audience', { max: DOC_LIMITS.audienceChars, optional: true }).trim();
     if (body.title !== undefined) patch.title = str(body.title, 'Title', { max: DOC_LIMITS.titleChars }).trim() || d.title;
@@ -758,8 +775,9 @@ export function registerGeneratedDocRoutes(): void {
     }
     if (d.status === 'generating' && sessionIsActive(d.pending_workflow_id)) throw badRequest('This document is already being written');
     if (Object.keys(patch).length) update('generated_docs', d.id, { ...patch, updated_at: now() });
-    const w = await startGeneration(d.id, ctx.user!.id, { audit: (wid) => audit(ctx, 'gendoc.regenerate', `gendoc:${d.id}`, { projectId: project.id, workflowId: wid, version: d.version }) });
-    return { document: docView(getDoc(project.id, d.id)), workflow: sessionView(w) };
+    let options: RunOptions | undefined;
+    const w = await startGeneration(d.id, ctx.user!.id, { request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'gendoc.regenerate', `gendoc:${d.id}`, { projectId: project.id, workflowId: wid, version: d.version }) });
+    return { document: docView(getDoc(project.id, d.id)), workflow: sessionView(w), warnings: options?.warnings ?? [] };
   });
 
   get('/api/projects/:pid/generated-docs/:id/download', (ctx) => {

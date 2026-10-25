@@ -22,6 +22,10 @@ export interface PlaygroundRunInput {
   budgetUsd: number;
   /** A line for the session history ("Presentation session started ..."). */
   logLine: string;
+  /** A lead agent already checked with checkLead for the project's engine; '' is the default agent. */
+  leadAgent?: string;
+  /** Let the agent use tools freely (the launcher's "trust all tools"); always-blocked commands stay blocked. */
+  trustTools?: boolean;
 }
 
 /** Refuse before anything is written when the monthly budget is used up. */
@@ -36,7 +40,7 @@ export function checkRunBudget(projectId: string, userId: string): void {
 /** Create the session row and start it (or queue it when the caps are reached). Returns the row. */
 export async function startPlaygroundRun(i: PlaygroundRunInput): Promise<Row> {
   const project = getProject(i.projectId);
-  const s = readSettings({ model: project.default_model || undefined, budgetUsd: i.budgetUsd, maxIterations: 1, pushMode: 'never', permissionMode: '' }, undefined, { hasRepos: false, isPlayground: true });
+  const s = readSettings({ model: project.default_model || undefined, budgetUsd: i.budgetUsd, maxIterations: 1, pushMode: 'never', permissionMode: '', trustTools: Boolean(i.trustTools) }, undefined, { hasRepos: false, isPlayground: true });
   const reason = concurrencyReason(i.userId, project.id);
   const queued = reason !== null;
   const id = newId('w_');
@@ -64,7 +68,7 @@ export async function startPlaygroundRun(i: PlaygroundRunInput): Promise<Row> {
     spent_usd: 0,
     spent_credits: 0,
     work_branch: '',
-    lead_agent: '',
+    lead_agent: i.leadAgent ?? '',
     jira_key: '',
     jira_summary: '',
     jira_url: '',

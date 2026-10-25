@@ -23,9 +23,11 @@ import { audit, auditRaw } from './audit.ts';
 import { getRun } from './agent/runner.ts';
 import { renderToPng, rendererProblem } from './docimage.ts';
 import { view as sessionView } from './workflows/views.ts';
+import { log } from './workflows/store.ts';
 import { diagramMarkdown, diagramSource } from './diagrams.ts';
 import { placeTemplate, resolveTemplate, syncProjectTemplates, templateForProject } from './doc-templates.ts';
 import { checkRunBudget, startPlaygroundRun } from './playground-run.ts';
+import { readRunOptionsRequest, resolveRunOptions, runOptionChoices, runOptionsView } from './run-options.ts';
 import { OoxmlPackage } from './ooxml.ts';
 import { deckOutline, renderDeckSvgs, type SlideOutline } from './pptx-preview.ts';
 import {
@@ -84,6 +86,7 @@ function presentationView(p: Row, withOutline = false) {
     slide_count: p.slide_count,
     bytes: p.bytes,
     warnings: parseJson<string[]>(p.warnings, []),
+    ...runOptionsView(p),
     links: p.status === 'ready' ? { download: `${base}/download`, preview: `${base}/preview` } : null,
     created_by: p.created_by,
     created_by_name: one<Row>('SELECT name FROM users WHERE id = ?', p.created_by)?.name ?? null,
@@ -174,7 +177,7 @@ function sessionTitle(title: string): string {
   return `Presentation: ${title}`.slice(0, 120);
 }
 
-export async function startPresentation(projectId: string, userId: string, body: any, ctxAudit?: (id: string, workflowId: string, source: Source) => void): Promise<{ row: Row; workflow: Row }> {
+export async function startPresentation(projectId: string, userId: string, body: any, ctxAudit?: (id: string, workflowId: string, source: Source) => void): Promise<{ row: Row; workflow: Row; warnings: string[] }> {
   const project = getProject(projectId);
   const lim = PRESENTATION_LIMITS;
   if (Number(one<Row>('SELECT COUNT(*) AS n FROM presentations WHERE project_id = ?', project.id)?.n) >= lim.perProject) {
@@ -207,6 +210,7 @@ export async function startPresentation(projectId: string, userId: string, body:
       templateName = t.name;
     }
   }
+  const chosen = resolveRunOptions(project, { request: readRunOptionsRequest(project, body), stored: null });
   checkRunBudget(project.id, userId);
   syncProjectTemplates(project);
 
@@ -224,6 +228,8 @@ export async function startPresentation(projectId: string, userId: string, body:
     slide_target: slides,
     template_id: templateId,
     template_name: templateName,
+    lead_agent: chosen.leadAgent,
+    trust_tools: chosen.trustTools ? 1 : 0,
     status: 'generating',
     created_by: userId,
     created_at: ts,
@@ -235,6 +241,8 @@ export async function startPresentation(projectId: string, userId: string, body:
       userId,
       title: sessionTitle(title),
       goal,
+      leadAgent: chosen.leadAgent,
+      trustTools: chosen.trustTools,
       rules: 'Write only inside your run folder. Do not change anything inside repos/. Build the deck with make-doc only. Never copy secrets into the deck.',
       budgetUsd: lim.budgetUsd,
       logLine: `Presentation session started for "${title}"`,
@@ -242,7 +250,8 @@ export async function startPresentation(projectId: string, userId: string, body:
     update('presentations', id, { workflow_id: workflow.id, updated_at: now() });
     ctxAudit?.(id, workflow.id, source);
     notifyProject(project.id, 'presentations.updated', { id });
-    return { row: one<Row>('SELECT * FROM presentations WHERE id = ?', id)!, workflow };
+    for (const x of chosen.warnings) log(workflow.id, 'status', x);
+    return { row: one<Row>('SELECT * FROM presentations WHERE id = ?', id)!, workflow, warnings: chosen.warnings };
   } catch (e) {
     exec('DELETE FROM presentations WHERE id = ?', id);
     throw e;
@@ -418,6 +427,7 @@ export function registerPresentationRoutes(): void {
       sources: PRESENTATION_SOURCES,
       template: t ? { id: t.id, name: t.name, scope: t.scope } : null,
       preview: pngCapability(),
+      runOptions: runOptionChoices(project),
       limits: {
         topicChars: PRESENTATION_LIMITS.topicChars,
         audienceChars: PRESENTATION_LIMITS.audienceChars,
@@ -433,10 +443,10 @@ export function registerPresentationRoutes(): void {
   post('/api/projects/:pid/presentations', async (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid, 'editor');
     const body = await ctx.json();
-    const { row, workflow } = await startPresentation(project.id, ctx.user!.id, body, (id, workflowId, source) =>
+    const { row, workflow, warnings } = await startPresentation(project.id, ctx.user!.id, body, (id, workflowId, source) =>
       audit(ctx, 'presentation.create', `presentation:${id}`, { projectId: project.id, source: source.kind, workflowId }),
     );
-    return { presentation: presentationView(row), workflow: sessionView(workflow) };
+    return { presentation: presentationView(row), workflow: sessionView(workflow), warnings };
   });
 
   get('/api/projects/:pid/presentations/:id', async (ctx) => {

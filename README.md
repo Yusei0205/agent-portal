@@ -70,6 +70,9 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   keeps versions and flags a document stale when a source changes. The presentation generator
   turns a topic, document, session result or architecture diagram into a deck with speaker notes,
   diagrams and a slide preview. Diagrams and previews use an optional headless browser.
+  Diagram, document and presentation requests accept an optional `leadAgent` and `trustAllTools`
+  (the session launcher's options; always-blocked commands stay blocked), remembered on the item
+  and reused by refresh and regenerate.
 - **Administration**: users and invitations, an audit log, and a control plane (concurrency caps,
   queueing, graceful drain, approval deadlines). Teams, SCIM provisioning, Google sign-in setup
   and outbound webhooks are built but parked: turn on **Settings › Advanced** to show them in

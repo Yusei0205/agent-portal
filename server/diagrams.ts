@@ -29,6 +29,7 @@ import { renderToPng, rendererProblem } from './docimage.ts';
 import { log } from './workflows/store.ts';
 import { view as sessionView } from './workflows/views.ts';
 import { readSettings } from './workflows/validation.ts';
+import { readRunOptionsRequest, resolveRunOptions, runOptionChoices, runOptionsView, storeRunOptions, type RunOptions, type RunOptionsRequest } from './run-options.ts';
 import {
   DIAGRAM_KINDS,
   DIAGRAM_LIMITS,
@@ -171,6 +172,7 @@ function diagramView(d: Row, withSource = false) {
     citations: cur ? parseJson<string[]>(cur.citations, []) : [],
     sources: cur ? parseJson<DiagramSource[]>(cur.sources, []) : [],
     generated_at: cur?.created_at ?? null,
+    ...runOptionsView(d),
     created_by: d.created_by,
     created_by_name: one<Row>('SELECT name FROM users WHERE id = ?', d.created_by)?.name ?? null,
     created_at: d.created_at,
@@ -268,7 +270,7 @@ function sessionIsActive(workflowId: string | null): boolean {
  * Start the session that draws (or redraws) a diagram. Refuses when the budget is used up or a repository is not ready,
  * before anything is written. Returns the session row.
  */
-export async function startGeneration(diagramId: string, userId: string, opts: { focus?: string; specId?: string | null; audit?: (workflowId: string) => void } = {}): Promise<Row> {
+export async function startGeneration(diagramId: string, userId: string, opts: { focus?: string; specId?: string | null; request?: RunOptionsRequest; audit?: (workflowId: string) => void; onOptions?: (o: RunOptions) => void } = {}): Promise<Row> {
   let d = one<Row>('SELECT * FROM diagrams WHERE id = ?', diagramId);
   if (!d) throw notFound('Diagram not found');
   const project = getProject(d.project_id);
@@ -288,8 +290,9 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
 
   const focus = (opts.focus ?? d.focus ?? '').trim().slice(0, DIAGRAM_LIMITS.focusChars);
   const goal = composeDiagramPrompt(d.kind as DiagramKind, d.title, repos, focus);
+  const chosen = resolveRunOptions(project, { request: opts.request, specId: opts.specId, stored: d });
   const s = readSettings(
-    { model: project.default_model || undefined, budgetUsd: DIAGRAM_BUDGET_USD, maxIterations: 1, pushMode: 'never', permissionMode: '' },
+    { model: project.default_model || undefined, budgetUsd: DIAGRAM_BUDGET_USD, maxIterations: 1, pushMode: 'never', permissionMode: '', trustTools: chosen.trustTools },
     undefined,
     { hasRepos: false, isPlayground: true },
   );
@@ -320,7 +323,7 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
     spent_usd: 0,
     spent_credits: 0,
     work_branch: '',
-    lead_agent: '',
+    lead_agent: chosen.leadAgent,
     jira_key: '',
     jira_summary: '',
     jira_url: '',
@@ -332,7 +335,10 @@ export async function startGeneration(diagramId: string, userId: string, opts: {
     updated_at: ts,
   });
   update('diagrams', d.id, { status: 'generating', error: null, pending_workflow_id: id, pending_sources: JSON.stringify(sources), focus, updated_at: ts });
+  storeRunOptions('diagrams', d.id, opts.request);
   log(id, 'system', `Diagram session started for "${d.title}"`);
+  for (const w of chosen.warnings) log(id, 'status', w);
+  opts.onOptions?.(chosen);
   opts.audit?.(id);
   notifyProject(project.id, 'diagrams.updated', { id: d.id });
   notifyProject(project.id, 'workflow.created', { id });
@@ -420,13 +426,14 @@ export interface RefreshResult {
   stale: number;
   started: { diagramId: string; title: string; workflowId: string }[];
   skipped: { diagramId: string; title: string; reason: string }[];
+  warnings: string[];
 }
 
 /**
  * Redraw the diagrams whose repositories moved on (the "refresh diagrams" action of loop specs and the Refresh stale
  * button). First brings the repositories' reference clones up to date, then starts up to `max` sessions, oldest first.
  */
-export async function refreshStaleDiagrams(projectId: string, userId: string, opts: { specId?: string | null; max?: number; ids?: string[]; audit?: (diagramId: string, workflowId: string) => void } = {}): Promise<RefreshResult> {
+export async function refreshStaleDiagrams(projectId: string, userId: string, opts: { specId?: string | null; max?: number; ids?: string[]; request?: RunOptionsRequest; audit?: (diagramId: string, workflowId: string) => void } = {}): Promise<RefreshResult> {
   const repoIds = new Set<string>();
   for (const d of all<Row>('SELECT repo_ids FROM diagrams WHERE project_id = ? AND version > 0', projectId)) for (const id of parseJson<string[]>(d.repo_ids, [])) repoIds.add(id);
   for (const id of repoIds) {
@@ -436,7 +443,7 @@ export async function refreshStaleDiagrams(projectId: string, userId: string, op
   refreshDiagramStale(projectId);
   const rows = all<Row>("SELECT * FROM diagrams WHERE project_id = ? AND stale = 1 AND version > 0 AND status != 'generating' ORDER BY updated_at", projectId).filter((d) => !opts.ids || opts.ids.includes(d.id));
   const max = Math.max(1, Math.min(opts.max ?? DIAGRAM_LIMITS.refreshBatch, DIAGRAM_LIMITS.refreshBatch));
-  const out: RefreshResult = { stale: rows.length, started: [], skipped: [] };
+  const out: RefreshResult = { stale: rows.length, started: [], skipped: [], warnings: [] };
   let stopReason = '';
   for (const d of rows) {
     if (stopReason || out.started.length >= max) {
@@ -444,7 +451,7 @@ export async function refreshStaleDiagrams(projectId: string, userId: string, op
       continue;
     }
     try {
-      const w = await startGeneration(d.id, userId, { specId: opts.specId, audit: (wid) => opts.audit?.(d.id, wid) });
+      const w = await startGeneration(d.id, userId, { specId: opts.specId, request: opts.request, audit: (wid) => opts.audit?.(d.id, wid), onOptions: (o) => out.warnings.push(...o.warnings.filter((x) => !out.warnings.includes(x))) });
       out.started.push({ diagramId: d.id, title: d.title, workflowId: w.id });
     } catch (e: any) {
       const reason = String(e?.message ?? e);
@@ -495,6 +502,7 @@ export function registerDiagramRoutes(): void {
       diagrams: rows.map((d) => diagramView(d)),
       kinds: DIAGRAM_KINDS.map((id) => ({ id, label: KIND_LABELS[id] })),
       export: pngCapability(),
+      runOptions: runOptionChoices(project),
       limits: { mermaidChars: DIAGRAM_LIMITS.mermaidChars, repos: DIAGRAM_LIMITS.repos, focusChars: DIAGRAM_LIMITS.focusChars, perProject: DIAGRAM_LIMITS.perProject },
     };
   });
@@ -510,12 +518,14 @@ export function registerDiagramRoutes(): void {
     const names = repoIds.map((id) => getRepo(id).name);
     const title = str(body.title, 'Title', { max: DIAGRAM_LIMITS.titleChars, optional: true }).trim() || `${KIND_LABELS[kind]}: ${names.join(', ')}`.slice(0, DIAGRAM_LIMITS.titleChars);
     const focus = str(body.focus, 'Focus', { max: DIAGRAM_LIMITS.focusChars, optional: true }).trim();
+    const request = readRunOptionsRequest(project, body);
     const id = newId('dg_');
     const ts = now();
     insert('diagrams', { id, project_id: project.id, kind, title, slug: uniqueSlug(project.id, title), focus, repo_ids: JSON.stringify(repoIds), status: 'generating', created_by: ctx.user!.id, created_at: ts, updated_at: ts });
     try {
-      const w = await startGeneration(id, ctx.user!.id, { focus, audit: (wid) => audit(ctx, 'diagram.create', `diagram:${id}`, { projectId: project.id, kind, workflowId: wid }) });
-      return { diagram: diagramView(one<Row>('SELECT * FROM diagrams WHERE id = ?', id)!), workflow: sessionView(w) };
+      let options: RunOptions | undefined;
+      const w = await startGeneration(id, ctx.user!.id, { focus, request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'diagram.create', `diagram:${id}`, { projectId: project.id, kind, workflowId: wid }) });
+      return { diagram: diagramView(one<Row>('SELECT * FROM diagrams WHERE id = ?', id)!), workflow: sessionView(w), warnings: options?.warnings ?? [] };
     } catch (e) {
       exec('DELETE FROM diagrams WHERE id = ?', id);
       throw e;
@@ -525,7 +535,10 @@ export function registerDiagramRoutes(): void {
   // Registered before the :id routes so "refresh-stale" is never read as an id.
   post('/api/projects/:pid/diagrams/refresh-stale', async (ctx) => {
     const { project } = requireProject(ctx, ctx.params.pid, 'editor');
+    const body = await ctx.json().catch(() => ({}));
+    const request = readRunOptionsRequest(project, body);
     const res = await refreshStaleDiagrams(project.id, ctx.user!.id, {
+      request,
       audit: (diagramId, workflowId) => audit(ctx, 'diagram.refresh', `diagram:${diagramId}`, { projectId: project.id, workflowId }),
     });
     return { ...res, workflows: res.started.map((s) => sessionView(one<Row>('SELECT * FROM workflows WHERE id = ?', s.workflowId)!)) };
@@ -567,8 +580,10 @@ export function registerDiagramRoutes(): void {
     const d = getDiagramRow(project.id, ctx.params.id);
     const body = await ctx.json().catch(() => ({}));
     const focus = body.focus === undefined ? undefined : str(body.focus, 'Focus', { max: DIAGRAM_LIMITS.focusChars, optional: true });
-    const w = await startGeneration(d.id, ctx.user!.id, { focus, audit: (wid) => audit(ctx, 'diagram.refresh', `diagram:${d.id}`, { projectId: project.id, workflowId: wid }) });
-    return { diagram: diagramView(getDiagramRow(project.id, d.id)), workflow: sessionView(w) };
+    const request = readRunOptionsRequest(project, body);
+    let options: RunOptions | undefined;
+    const w = await startGeneration(d.id, ctx.user!.id, { focus, request, onOptions: (o) => (options = o), audit: (wid) => audit(ctx, 'diagram.refresh', `diagram:${d.id}`, { projectId: project.id, workflowId: wid }) });
+    return { diagram: diagramView(getDiagramRow(project.id, d.id)), workflow: sessionView(w), warnings: options?.warnings ?? [] };
   });
 
   del('/api/projects/:pid/diagrams/:id', async (ctx) => {

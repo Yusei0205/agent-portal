@@ -803,7 +803,17 @@ const PR_REVIEW = `
   CREATE INDEX review_comments_pr ON review_comments(repo_id, pr_number, fingerprint);
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW];
+const RUN_OPTIONS = `
+  -- Lead agent and "trust all tools" chosen for the sessions of diagrams, generated documents and presentations (run-options.ts)
+  ALTER TABLE diagrams ADD COLUMN lead_agent TEXT NOT NULL DEFAULT '';
+  ALTER TABLE diagrams ADD COLUMN trust_tools INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE generated_docs ADD COLUMN lead_agent TEXT NOT NULL DEFAULT '';
+  ALTER TABLE generated_docs ADD COLUMN trust_tools INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE presentations ADD COLUMN lead_agent TEXT NOT NULL DEFAULT '';
+  ALTER TABLE presentations ADD COLUMN trust_tools INTEGER NOT NULL DEFAULT 0;
+`;
+
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;
