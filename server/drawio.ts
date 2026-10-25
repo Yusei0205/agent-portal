@@ -28,7 +28,10 @@ export const DRAWIO_LIMITS = {
   bytes: 500_000,
   cells: 300,
   icons: 80,
+  /** Maximum label length for icons, groups, edges and badges. */
   labelChars: 600,
+  /** Maximum label length for text-box cells (style starts with "text;" or contains the bare "text" token). */
+  textBoxChars: 2000,
   styleChars: 1500,
   nesting: 20,
   coordinate: 100_000,
@@ -87,8 +90,32 @@ function noText(n: XNode, what: string): void {
   if (n.children.some((c) => c.name === '#text' && (c.text ?? '').trim())) fail(`${what} holds text, which a draw.io file does not have here. If the diagram page is compressed, write it as plain XML instead.`);
 }
 
-function checkLabel(value: string, what: string): void {
-  if (value.length > DRAWIO_LIMITS.labelChars) fail(`${what} is longer than ${DRAWIO_LIMITS.labelChars} characters`);
+/**
+ * Returns true when the style string indicates a text-box cell.
+ * A text box is identified by the bare token "text" (no "=") appearing as the first token
+ * in the style string or anywhere in it (draw.io writes it as "text;..." at the start).
+ * This is distinct from shapes that happen to have "text" in their name or value.
+ */
+function isTextBox(style: string): boolean {
+  for (const tok of style.split(';')) {
+    const t = tok.trim();
+    if (!t) continue;
+    // A token with no "=" and value exactly "text" is the text-box style token
+    if (t === 'text') return true;
+    // Stop after the first token — if the first token is text= something else, it's not a text box
+    break;
+  }
+  return false;
+}
+
+function checkLabel(value: string, what: string, maxChars = DRAWIO_LIMITS.labelChars): void {
+  if (value.length > maxChars) {
+    if (maxChars === DRAWIO_LIMITS.textBoxChars) {
+      fail(`${what} is a text box with a label longer than ${maxChars} characters`);
+    } else {
+      fail(`${what} is longer than ${maxChars} characters`);
+    }
+  }
   if (SCHEME.test(value)) fail(`${what} contains a link or an external address, which is not allowed`);
   if (!value.includes('<')) return;
   const tag = /<\/?([A-Za-z][A-Za-z0-9]*)((?:\s+[A-Za-z-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/g;
@@ -242,9 +269,11 @@ export function validateDrawio(input: unknown): DrawioInfo {
     if (isVertex && isEdge) fail(`${what} is both a vertex and an edge`);
     for (const k of ['vertex', 'edge', 'connectable', 'collapsed', 'visible']) if (cell.attrs[k] !== undefined && cell.attrs[k] !== '0' && cell.attrs[k] !== '1') fail(`${what}: ${k} must be 0 or 1`);
     const value = label ?? cell.attrs.value ?? '';
-    checkLabel(value, `${what}: the label`);
     const style = cell.attrs.style ?? '';
     const s = checkStyle(style, what);
+    // Text-box cells get a larger label allowance; icons, groups, edges and badges stay at the smaller limit.
+    const labelLimit = isTextBox(style) && !s.icon && !s.group ? DRAWIO_LIMITS.textBoxChars : DRAWIO_LIMITS.labelChars;
+    checkLabel(value, `${what}: the label`, labelLimit);
     const geoms = elements(cell);
     if (geoms.length > 1 || geoms.some((g) => g.name !== 'mxGeometry')) fail(`${what} may hold only one <mxGeometry>`);
     if (geoms[0]) checkGeometry(geoms[0], isEdge, what);

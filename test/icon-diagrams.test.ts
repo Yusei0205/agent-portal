@@ -226,6 +226,72 @@ for (const [name, xml, re] of REFUSED) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Text-box label limit (textBoxChars = 2000, labelChars = 600)        */
+/* ------------------------------------------------------------------ */
+
+const textBox = (value: string, id = 'legend_l') =>
+  wrap(`<mxCell id="${id}" value="${value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;" vertex="1" parent="1"><mxGeometry x="10" y="10" width="500" height="200" as="geometry"/></mxCell>`);
+const iconCell = (value: string, id = 'icon_x') =>
+  wrap(`<mxCell id="${id}" value="${value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}" style="sketch=0;points=[[0,0,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda_function;" vertex="1" parent="1"><mxGeometry x="10" y="10" width="64" height="64" as="geometry"/></mxCell>`);
+
+test('text box: a 1500-character legend is accepted and the stored XML preserves the label', async () => {
+  const legend = 'Step '.repeat(300); // 1500 chars: exactly at the middle of the allowance
+  const xml = textBox(legend);
+  const result = validateDrawio(xml);
+  // The stored XML must contain the legend text (encoded)
+  assert.ok(result.xml.includes('Step '), 'stored XML must include the legend text');
+  assert.ok(result.cells >= 3, 'cells should include root, layer and the text box');
+
+  // Also try rendering: follow the same path as the other rendering tests (stub viewer if installed, skip without browser)
+  if (!hasBrowser()) {
+    const { renderDrawio } = await import('../server/drawio-render.ts');
+    const [r] = await renderDrawio([{ xml: result.xml }]);
+    // The render should not fail due to label length ΓÇö only browser/viewer issues are acceptable
+    if (r.ok) {
+      assert.equal(r.png.subarray(1, 4).toString('ascii'), 'PNG', 'rendered output is a PNG');
+    } else {
+      // If not ok, it must be a renderer problem, not a label-length rejection
+      assert.doesNotMatch(r.reason, /longer than|too long|label.*600|label.*2000/, `unexpected render failure: ${r.reason}`);
+    }
+  }
+});
+
+test('text box: a 2001-character label is refused with the text-box message naming the cell id', () => {
+  const legend = 'x'.repeat(2001);
+  const xml = textBox(legend);
+  assert.throws(
+    () => validateDrawio(xml),
+    (e: unknown) =>
+      e instanceof DrawioError &&
+      /text box/.test(e.message) &&
+      /2000/.test(e.message) &&
+      /legend_l/.test(e.message),
+    'expected a DrawioError mentioning "text box", "2000" and the cell id "legend_l"',
+  );
+});
+
+test('refused: an icon label of 601 characters is still refused with the standard 600-character message', () => {
+  const xml = iconCell('a'.repeat(601));
+  assert.throws(
+    () => validateDrawio(xml),
+    (e: unknown) =>
+      e instanceof DrawioError &&
+      /longer than 600 characters/.test(e.message) &&
+      /icon_x/.test(e.message),
+    'expected a DrawioError mentioning 600 and the cell id',
+  );
+});
+
+test('refused: a 1500-character label on an icon cell is refused (text-box allowance does not apply to icons)', () => {
+  const xml = iconCell('a'.repeat(1500));
+  assert.throws(
+    () => validateDrawio(xml),
+    (e: unknown) => e instanceof DrawioError && /longer than 600 characters/.test(e.message),
+    'icon cells must be refused at 600 even when label is 1500 chars',
+  );
+});
+
+/* ------------------------------------------------------------------ */
 /* The text side                                                        */
 /* ------------------------------------------------------------------ */
 
