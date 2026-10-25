@@ -17,6 +17,25 @@ function readSettingsSource(): string {
   return parts.join('\n');
 }
 
+
+/** A stand-in for the draw.io viewer files (as in test/icon-diagrams.test.ts): just enough of the API the render page calls. */
+const STUB_VIEWER = `var mxUtils = { parseXml: function (x) { return new DOMParser().parseFromString(x, 'text/xml'); } };
+function mxCodec(doc) { this.doc = doc; }
+mxCodec.prototype.decode = function (node, model) { model.cells = node.getElementsByTagName('mxCell').length; };
+function Graph(div) { this.model = { cells: 0 }; }
+Graph.prototype.setEnabled = function () {};
+Graph.prototype.getModel = function () { return this.model; };
+Graph.prototype.destroy = function () {};
+Graph.prototype.getSvg = function () {
+  var ns = 'http://www.w3.org/2000/svg';
+  var s = document.createElementNS(ns, 'svg');
+  s.setAttribute('width', '300'); s.setAttribute('height', '120'); s.setAttribute('xmlns', ns);
+  var r = document.createElementNS(ns, 'rect'); r.setAttribute('width', '300'); r.setAttribute('height', '120'); r.setAttribute('fill', '#0a7');
+  s.appendChild(r);
+  return s;
+};
+`;
+
 const shots = process.env.SCREENSHOT_DIR || '';
 let step = 0;
 
@@ -62,6 +81,9 @@ async function main() {
   process.env.DEMO_SPEED = process.env.DEMO_SPEED ?? '0.15';
   process.env.PORTAL_NO_AUTOSTART = '1';
   process.env.PORTAL_SECRET_KEY = 'ui-test-key';
+  // The Icon diagrams pack lives in a throw-away folder so the test finds it missing, then installs its own copy.
+  process.env.ICON_DIAGRAMS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-ui-icons-'));
+  delete process.env.DRAWIO_RENDERER_DIR;
   const { startServer } = await import('../../server/index.ts');
   const server = await startServer({ port: 0, host: '127.0.0.1' });
   const base = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -531,6 +553,129 @@ async function main() {
     await page.getByRole('button', { name: 'Delete diagram', exact: true }).click();
     await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
 
+    console.log('icon diagrams (draw.io)');
+    // Without the Icon diagrams pack the icon style is listed but cannot be chosen, and says why.
+    await page.getByRole('button', { name: 'New diagram', exact: true }).first().click();
+    const styleBox = page.getByTestId('diagram-style');
+    check(await styleBox.getByText('Quick sketch (Mermaid)').count(), 'New diagram offers the Quick sketch (Mermaid) style');
+    check(await styleBox.getByText('Icon diagram (draw.io, official cloud icons)').count(), 'New diagram offers the Icon diagram style');
+    check(await styleBox.locator('input[value="icon"]').isDisabled(), 'the icon style is disabled while the pack is missing');
+    check(/Not available: .*(draw\.io|Icon diagrams)/is.test((await styleBox.getByTestId('style-reason').textContent()) || ''), 'the reason the icon style is unavailable is visible');
+    check(await styleBox.getByRole('link', { name: 'Install in Settings > Tools' }).count(), 'a link points to the pack in Settings > Tools');
+    check((await styleBox.getByLabel('Cloud', { exact: true }).count()) === 0, 'the cloud choice is only shown for the icon style');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await openCreateTab(page, 'Documents');
+    await page.getByRole('button', { name: 'New document', exact: true }).first().click();
+    check(await page.getByTestId('diagram-style').locator('input[value="icon"]').isDisabled(), 'New document has the style picker with the icon style disabled');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await openCreateTab(page, 'Decks');
+    await page.getByRole('button', { name: 'New presentation', exact: true }).first().click();
+    check(await page.getByTestId('diagram-style').locator('input[value="icon"]').isDisabled(), 'New presentation has the style picker with the icon style disabled');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+
+    // Settings > Tools: the pack row, its explanation and parts, and the live install log (the install request is answered by a stub here).
+    await page.goto(`${base}/#/settings`);
+    const packRow = page.locator('.tools-pack-row', { hasText: 'Icon diagrams (draw.io)' });
+    await packRow.waitFor();
+    check(await packRow.getByText('Missing').first().count(), 'the Icon diagrams pack is listed as missing');
+    check(await packRow.getByTestId('drawio-pack-info').getByText(/About 71 MB.*nothing is sent to draw\.io/s).count(), 'the pack explains its size, pinning and that nothing is sent to draw.io');
+    check((await packRow.locator('.tools-parts li').count()) === 2, 'the pack lists its parts (MCP server and shape index, viewer files)');
+    check(await packRow.getByTestId('drawio-preview-status').getByText(/headless browser/).count(), 'the pack row mentions the browser needed for previews');
+    await page.route('**/api/tools/drawio/install', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      await route.fulfill({ json: { job: { id: 'job_stub', packId: 'drawio', status: 'running', log: ['Installing @drawio/mcp 1.10.0 (scripts off)', 'Downloading the shape index'], startedAt: new Date().toISOString(), finishedAt: null, error: null } } });
+    });
+    await packRow.getByRole('button', { name: 'Install Icon diagrams (draw.io)' }).click();
+    const installLog = packRow.getByRole('log', { name: 'Install log for Icon diagrams (draw.io)' });
+    await installLog.waitFor();
+    check(((await installLog.textContent()) || '').includes('Downloading the shape index'), 'the install log area shows the install output');
+    await shot(page, 'settings-drawio-pack');
+    await page.unroute('**/api/tools/drawio/install');
+
+    // Install the pack in-process from fake downloads (no network), then draw an icon diagram with the demo agent.
+    {
+      const { installDrawioPack, clearPackCache } = await import('../../server/tool-packs.ts');
+      const { ensureBuiltInDrawioIntegration } = await import('../../server/integrations.ts');
+      const { createHash } = await import('node:crypto');
+      const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+      const files = [
+        { name: 'viewer-static.min.js', source: 'js/viewer-static.min.js', body: STUB_VIEWER },
+        { name: 'shapes.min.js', source: 'js/shapes-14-6-5.min.js', body: '/* stub */' },
+        { name: 'stencils.min.js', source: 'js/stencils.min.js', body: '/* stub */' },
+      ];
+      const index = JSON.stringify(Array.from({ length: 1200 }, (_, i) => ({ style: `shape=mxgraph.aws4.x${i};`, w: 10, h: 10, title: `Shape ${i}`, tags: 'aws', type: 'vertex' })));
+      const pins = { mcpPackage: '@drawio/mcp', mcpVersion: '1.10.0', mcpIntegrity: 'sha512-ui', indexCommit: 'abc123', indexSha256: sha(index), viewerTag: 'v0.0.1', files: files.map((f) => ({ name: f.name, source: f.source, sha256: sha(f.body) })) };
+      const downloader = async (url: string, dest: string) => {
+        if (url.includes('search-index.json')) return void fs.writeFileSync(dest, index);
+        if (url.includes('/git/trees/')) throw new Error('skipped in the UI test');
+        const f = files.find((x) => url.endsWith(x.source));
+        if (!f) throw new Error(`unexpected download ${url}`);
+        fs.writeFileSync(dest, f.body);
+      };
+      const shell = async (_cmd: string, args: string[]) => {
+        const prefix = args[args.indexOf('--prefix') + 1];
+        const entry = path.join(prefix, 'node_modules', '@drawio', 'mcp');
+        fs.mkdirSync(path.join(entry, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(entry, 'src', 'index.js'), '// fake draw.io MCP server\n');
+        fs.writeFileSync(path.join(prefix, 'node_modules', '.package-lock.json'), JSON.stringify({ packages: { 'node_modules/@drawio/mcp': { version: '1.10.0', integrity: 'sha512-ui' } } }));
+        return { ok: true, output: 'added 1 package' };
+      };
+      await installDrawioPack({ id: 'job_ui', packId: 'drawio', status: 'running', log: [], startedAt: new Date().toISOString(), finishedAt: null, error: null }, downloader, shell, pins);
+      clearPackCache();
+      await ensureBuiltInDrawioIntegration();
+    }
+    await page.goto(`${base}/#/p/${pid}/create/diagrams`);
+    await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'New diagram', exact: true }).first().click();
+    const styleBox2 = page.getByTestId('diagram-style');
+    check(!(await styleBox2.locator('input[value="icon"]').isDisabled()), 'the icon style can be chosen once the pack is installed');
+    await styleBox2.locator('input[value="icon"]').check();
+    const cloudSel = styleBox2.getByLabel('Cloud', { exact: true });
+    check((await cloudSel.inputValue()) === 'aws', 'the cloud starts at the default (AWS)');
+    check((await cloudSel.locator('option').count()) === 5, 'the cloud list offers AWS, Azure, Google Cloud, Kubernetes and generic');
+    await page.getByLabel('Title (optional)').fill('Refund icons');
+    await page.locator('.modal .choice', { hasText: 'refund-service' }).click();
+    await page.getByTestId('cloud-hint').waitFor();
+    check(((await page.getByTestId('cloud-hint').textContent()) || '').length > 10, 'the cloud hint explains what the repositories point to');
+    const iconReq = page.waitForRequest((r) => r.method() === 'POST' && /\/diagrams$/.test(r.url()));
+    await page.getByRole('button', { name: 'Draw it', exact: true }).click();
+    const iconBody = (await iconReq).postDataJSON();
+    check(iconBody.style === 'icon' && typeof iconBody.cloud === 'string', 'the chosen style and cloud are sent when drawing');
+    await page.locator('.diagram-page .badge', { hasText: 'Ready' }).waitFor({ timeout: 30000 });
+    check(((await page.getByTestId('style-badge').first().textContent()) || '').startsWith('Icon · '), 'the diagram shows its style badge');
+    check(await page.getByTestId('style-words').count(), 'the diagram names its style and cloud');
+    check(await page.getByTestId('density-note').getByText(/icons?, \d+ connections?/).count(), 'the density note counts icons and connections');
+    check(await page.getByRole('button', { name: 'Export .drawio' }).count(), 'icon diagrams export .drawio');
+    check(await page.getByText(/opens in draw\.io or diagrams\.net/i).count(), 'the .drawio export says to open it in draw.io to edit');
+    if (await page.getByTestId('icon-picture').count()) {
+      await page.getByTestId('icon-picture').waitFor();
+      await page.locator('.diagram-page').getByRole('button', { name: 'Full size' }).click();
+      await page.getByRole('dialog', { name: 'Diagram' }).locator('img').waitFor();
+      check(await page.getByRole('dialog', { name: 'Diagram' }).locator('img').count(), 'Full size shows the icon picture in the zoom and pan dialog');
+      await page.getByRole('dialog', { name: 'Diagram' }).locator('footer').getByRole('button', { name: 'Close' }).click();
+      check(!(await page.getByRole('button', { name: 'Export SVG' }).isDisabled()), 'SVG export is enabled when pictures can be drawn');
+    } else {
+      check(await page.getByText('No preview picture on this server.').count(), 'without a renderer the diagram says it is stored but not previewed');
+      check(await page.getByRole('button', { name: 'Export SVG' }).isDisabled(), 'SVG export is disabled without a renderer');
+      check(await page.getByTestId('export-reason').count(), 'the reason PNG and SVG are unavailable is visible');
+    }
+    const dl = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export .drawio' }).click();
+    check((await dl).suggestedFilename().endsWith('.drawio'), 'Export .drawio downloads a .drawio file');
+    await openCreateTab(page, 'Diagrams');
+    check(((await page.locator('tr', { hasText: 'Refund icons' }).getByTestId('style-badge').textContent()) || '').startsWith('Icon · '), 'the list shows the Icon style badge');
+    await page.locator('tr', { hasText: 'Refund icons' }).getByRole('link', { name: 'Refund icons' }).click();
+    // The session banner carries style, cloud and the .drawio download.
+    await page.getByRole('link', { name: /Open the session/ }).first().click({ timeout: 2000 }).catch(() => undefined);
+    // Refresh options offer the style too.
+    await page.goBack().catch(() => undefined);
+    await page.getByRole('button', { name: /Agent and tools for: Refresh/ }).click();
+    check(await page.getByRole('dialog', { name: 'Agent and tools' }).getByTestId('diagram-style').count(), 'the Refresh options dialog offers the style and cloud');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete diagram', exact: true }).click();
+    await page.getByRole('heading', { name: 'No diagrams yet', exact: true }).waitFor();
+
     console.log('presentations and templates');
     const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
     await openCreateTab(page, 'Decks');
@@ -789,13 +934,16 @@ async function main() {
     console.log('integrations');
     await page.goto(`${base}/#/integrations`);
     await page.getByRole('heading', { name: 'Integrations', exact: true }).waitFor();
+    // The portal's own "Icon diagrams" integration exists now (the pack was installed above), so the kinds sit behind New integration.
+    check(await page.locator('.conn-card', { hasText: 'Icon diagrams' }).getByText('Icon diagrams (draw.io)').count(), 'the built-in Icon diagrams integration is listed with a readable kind');
+    await page.getByRole('button', { name: 'New integration', exact: true }).click();
     await page.getByRole('button', { name: /Custom MCP \(command\)/ }).click();
     await page.getByLabel('Name', { exact: true }).fill('Local tools');
     await page.getByLabel('Command', { exact: true }).fill(process.execPath);
     await page.getByLabel('Arguments', { exact: true }).fill(path.join(import.meta.dirname, '..', 'fake-mcp.mjs'));
     await page.getByRole('button', { name: 'Save and test', exact: true }).click();
     await page.locator('.conn-card', { hasText: 'Local tools' }).locator('.badge', { hasText: 'Working' }).waitFor({ timeout: 30000 });
-    check((await page.locator('.conn-card', { hasText: 'Read-only' }).count()) === 1, 'a new integration is read-only and passes its MCP handshake');
+    check((await page.locator('.conn-card', { hasText: 'Local tools' }).filter({ hasText: 'Read-only' }).count()) === 1, 'a new integration is read-only and passes its MCP handshake');
     await shot(page, 'integrations');
 
     console.log('api access');
