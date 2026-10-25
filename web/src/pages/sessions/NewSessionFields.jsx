@@ -79,6 +79,13 @@ export function PushModeField({ value, onChange }) {
   );
 }
 
+/** The explanation next to the trust switch; the generated-work dialogs (diagrams, documents, decks) show the same words. */
+export function trustToolsHint(hasRepos) {
+  return hasRepos
+    ? "Commands and edits run without asking. The agent can push to this session's own new branch (never to dev-sg, main or other shared branches) using the repository's credentials, which it never sees. Deploys, terraform apply and deleting files outside the working copy stay blocked."
+    : "Commands and edits run without asking. The agent can push to this session's own new branch (never to dev-sg, main or other shared branches) using the repository's credentials, which it never sees. Deploys, terraform apply and deleting files outside the working copy stay blocked. This session has no repository, so it can't push.";
+}
+
 /**
  * "Trust all tools" toggle: commands and edits run without approval prompts.
  * Shown in New session dialog and session Settings.
@@ -86,9 +93,7 @@ export function PushModeField({ value, onChange }) {
 export function TrustToolsField({ value, onChange, hasRepos }) {
   const uid = useId();
   const id = `trust-tools-${uid}`;
-  const hint = hasRepos
-    ? "Commands and edits run without asking. The agent can push to this session's own new branch (never to dev-sg, main or other shared branches) using the repository's credentials, which it never sees. Deploys, terraform apply and deleting files outside the working copy stay blocked."
-    : "Commands and edits run without asking. The agent can push to this session's own new branch (never to dev-sg, main or other shared branches) using the repository's credentials, which it never sees. Deploys, terraform apply and deleting files outside the working copy stay blocked. This session has no repository, so it can't push.";
+  const hint = trustToolsHint(hasRepos);
   return (
     <div className="field">
       <div className="row tight">

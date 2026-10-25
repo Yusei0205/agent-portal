@@ -238,6 +238,36 @@
  */
 
 /**
+ * One agent that can lead a generated-work session on the project's engine.
+ * @typedef {object} LeadAgentChoice
+ * @property {string} name
+ * @property {string} description
+ * @property {'claude' | 'kiro'} kind
+ */
+
+/**
+ * What the pickers in the diagram, document and presentation dialogs offer. Every list response carries it.
+ * @typedef {object} RunOptions
+ * @property {'claude' | 'kiro'} engine
+ * @property {LeadAgentChoice[]} leadAgents
+ * @property {string} defaultLeadAgent The project's default lead when it can lead, else ''
+ * @property {boolean} trustAllTools Always false: tools are never trusted unless asked for
+ */
+
+/**
+ * Optional fields of every request that starts a generated-work session (create, refresh, regenerate, refresh-stale).
+ * @typedef {object} RunOptionsRequest
+ * @property {string} [leadAgent] '' = the default agent
+ * @property {boolean} [trustAllTools] Default false; `trustTools` is accepted as an alias
+ */
+
+/**
+ * Create, refresh and regenerate responses (and refresh-stale at the top level) list what could not be honoured.
+ * @typedef {object} RunWarnings
+ * @property {string[]} warnings
+ */
+
+/**
  * A diagram, as the list shows it (GET /api/projects/:pid/diagrams) and the detail extends it with `mermaid`.
  * @typedef {object} DiagramSummary
  * @property {string} id
@@ -259,6 +289,8 @@
  * @property {string[]} citations Source files the description cites
  * @property {DiagramSource[]} sources
  * @property {string | null} generated_at
+ * @property {string} lead_agent The stored lead agent, '' = default; reused by later refreshes
+ * @property {boolean} trust_all_tools The stored tools choice, reused by later refreshes
  * @property {string | null} created_by_name
  * @property {string} created_at
  * @property {string} updated_at
@@ -294,6 +326,7 @@
  * @property {{ id: DiagramKind, label: string }[]} kinds
  * @property {DiagramExportCapability} export
  * @property {{ mermaidChars: number, repos: number, focusChars: number, perProject: number }} limits
+ * @property {RunOptions} runOptions
  */
 
 /**
@@ -373,6 +406,8 @@
  * @property {number | null} bytes
  * @property {string[]} warnings From make-doc, for example a template that could not be applied
  * @property {{ download: string, preview: string } | null} links Only when ready
+ * @property {string} lead_agent The stored lead agent, '' = default
+ * @property {boolean} trust_all_tools The stored tools choice
  * @property {string | null} created_by_name
  * @property {string} created_at
  * @property {string} updated_at
@@ -405,6 +440,7 @@
  * @property {PresentationSourceKind[]} sources
  * @property {{ id: string, name: string, scope: TemplateScope } | null} template The default that applies when none is chosen
  * @property {PreviewCapability} preview
+ * @property {RunOptions} runOptions
  * @property {{ topicChars: number, audienceChars: number, titleChars: number, slidesMin: number, slidesMax: number, slidesDefault: number, perProject: number }} limits
  */
 
@@ -493,6 +529,8 @@
  * @property {{ total: number, unresolved: number }} citations
  * @property {number} bytes
  * @property {boolean} has_word
+ * @property {string} lead_agent The stored lead agent, '' = default; reused by later rewrites
+ * @property {boolean} trust_all_tools The stored tools choice, reused by later rewrites
  * @property {string | null} generated_at
  * @property {{ markdown: string, word?: string } | null} links
  * @property {string | null} created_by_name
@@ -518,6 +556,7 @@
  * @property {{ id: string, name: string, scope: TemplateScope } | null} template The Word template that applies when none is chosen
  * @property {WordCapability} word
  * @property {{ titleChars: number, audienceChars: number, repos: number, diagrams: number, perProject: number }} limits
+ * @property {RunOptions} runOptions
  */
 
 /**

@@ -183,4 +183,8 @@
   background: var(--danger);
   color: #fff;
 }
+.toast-warn {
+  background: var(--warn, #b45309);
+  color: #fff;
+}
 

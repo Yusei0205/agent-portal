@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useProject } from '../lib/context.js';
 import { saveFromApi } from '../lib/download.js';
@@ -6,7 +6,8 @@ import { useProjectEvents } from '../lib/events.js';
 import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { bytes, cx, dateTime, plural, timeAgo } from '../lib/util.js';
-import { Badge, Button, Empty, ErrorNote, Field, Modal, Note, PageHeader, Segmented, Spinner, useUi } from '../components/ui.jsx';
+import { RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
+import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Segmented, Spinner, useUi } from '../components/ui.jsx';
 
 const SOURCE_LABEL = { topic: 'Topic', document: 'Document', session: 'Session result', diagram: 'Diagram' };
 const SOURCE_OPTIONS = [
@@ -127,6 +128,7 @@ function NewPresentation({ data, onClose }) {
   const { toast } = useUi();
   const limits = data?.limits || { slidesMin: 3, slidesMax: 40, slidesDefault: 10, topicChars: 4000, audienceChars: 200, titleChars: 120 };
   const [form, setForm] = useState({ kind: 'topic', topic: '', ref: '', audience: '', slides: String(limits.slidesDefault), title: '', templateId: '' });
+  const [run, setRun] = useState(() => initialRunOptions(data?.runOptions));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const docs = useChoices(form.kind === 'document', 'documents', (r) => (r.documents || []).filter((d) => d.status === 'ready'));
@@ -150,7 +152,7 @@ function NewPresentation({ data, onClose }) {
     setBusy(true);
     setError(null);
     try {
-      const body = { slideCount: slidesNum };
+      const body = { slideCount: slidesNum, ...runOptionsBody(run) };
       if (form.kind === 'topic') body.topic = form.topic.trim();
       else body[{ document: 'documentId', session: 'sessionId', diagram: 'diagramId' }[form.kind]] = form.ref;
       if (form.audience.trim()) body.audience = form.audience.trim();
@@ -158,6 +160,7 @@ function NewPresentation({ data, onClose }) {
       if (form.templateId) body.templateId = form.templateId;
       const r = await api.post(base(project.id), body);
       toast('Presentation started');
+      showWarnings(toast, r.warnings);
       go(project.id, 'presentations', r.presentation.id);
     } catch (err) {
       setError(err);
@@ -245,7 +248,7 @@ function NewPresentation({ data, onClose }) {
           hint={
             effective
               ? `Without a choice the deck follows "${effective.name}" (${effective.scope === 'portal' ? 'portal default' : "this project's default"}).`
-              : 'No PowerPoint template applies yet, so the built-in look is used. Upload one in Setup, Templates.'
+              : 'No PowerPoint template applies yet, so the built-in look is used. Upload one under Create › Templates.'
           }
         >
           {(id) => (
@@ -259,6 +262,7 @@ function NewPresentation({ data, onClose }) {
             </select>
           )}
         </Field>
+        <RunOptionsSection runOptions={data?.runOptions} value={run} onChange={setRun} />
         <ErrorNote error={error} />
       </form>
     </Modal>
@@ -273,6 +277,7 @@ function DeckView({ id }) {
     if (x?.id && d.data && x.id !== d.data.presentation.id) return;
     d.reload(true);
   });
+  const Heading = useContext(EmbeddedContext) ? 'h2' : 'h1';
   const [busy, setBusy] = useState(null);
   const back = (
     <a className="back" href={href(project.id, 'presentations')}>
@@ -333,7 +338,7 @@ function DeckView({ id }) {
           <span className="muted small">
             {SOURCE_LABEL[p.source.kind]}: {p.source.label}
           </span>
-          <h1>{p.title}</h1>
+          <Heading>{p.title}</Heading>
           <div className="row tight wrap">
             <StatusBadge p={p} />
             {ready ? (
@@ -342,6 +347,7 @@ function DeckView({ id }) {
               </span>
             ) : null}
             <span className="muted small">Template: {templateWords(p)}</span>
+            <RunChoice item={p} />
             <span className="muted small" title={dateTime(p.created_at)}>
               Started {timeAgo(p.created_at)}
               {p.created_by_name ? ` by ${p.created_by_name}` : ''}

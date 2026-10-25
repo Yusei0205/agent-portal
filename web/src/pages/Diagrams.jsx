@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
@@ -6,7 +6,8 @@ import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { cx, dateTime, plural, timeAgo } from '../lib/util.js';
 import { Markdown } from '../components/Markdown.jsx';
-import { Badge, Button, Empty, ErrorNote, Field, Modal, Note, PageHeader, Spinner, useUi } from '../components/ui.jsx';
+import { RefreshControl, RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
+import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Spinner, useUi } from '../components/ui.jsx';
 
 const KIND_HINT = {
   system_context: 'The system as a box among the people and systems around it.',
@@ -47,10 +48,11 @@ function DiagramList() {
   const diagrams = list.data?.diagrams || [];
   const staleCount = diagrams.filter((d) => d.stale && d.status !== 'generating').length;
 
-  const refreshStale = async () => {
+  const refreshStale = async (body) => {
     setBusy(true);
     try {
-      const r = await api.post(`${base(project.id)}/refresh-stale`);
+      const r = await api.post(`${base(project.id)}/refresh-stale`, body);
+      showWarnings(toast, r.warnings);
       const parts = [`${plural(r.started.length, 'diagram')} started`];
       if (r.skipped.length) parts.push(`${r.skipped.length} skipped (${r.skipped[0].reason})`);
       toast(parts.join(', '), r.started.length ? 'ok' : 'danger');
@@ -76,9 +78,13 @@ function DiagramList() {
           canEdit ? (
             <>
               {staleCount ? (
-                <Button icon="refresh" busy={busy} onClick={refreshStale}>
-                  Refresh all stale ({staleCount})
-                </Button>
+                <RefreshControl
+                  label={`Refresh all stale (${staleCount})`}
+                  busy={busy}
+                  runOptions={list.data?.runOptions}
+                  note="The plain button reuses the choice saved with each diagram. Pick one here to use it for every stale diagram in this refresh; it replaces what each had saved."
+                  onRefresh={refreshStale}
+                />
               ) : null}
               {newButton}
             </>
@@ -127,16 +133,17 @@ function DiagramList() {
           </table>
         </div>
       ) : null}
-      {creating ? <NewDiagram kinds={list.data?.kinds || []} limits={list.data?.limits} onClose={() => setCreating(false)} /> : null}
+      {creating ? <NewDiagram kinds={list.data?.kinds || []} limits={list.data?.limits} runOptions={list.data?.runOptions} onClose={() => setCreating(false)} /> : null}
     </div>
   );
 }
 
-function NewDiagram({ kinds, limits, onClose }) {
+function NewDiagram({ kinds, limits, runOptions, onClose }) {
   const { project } = useProject();
   const { toast } = useUi();
   const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
   const [form, setForm] = useState({ kind: kinds[0]?.id || 'system_context', repoIds: [], title: '', focus: '' });
+  const [run, setRun] = useState(() => initialRunOptions(runOptions));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const repoList = repos.data?.repos || [];
@@ -150,11 +157,12 @@ function NewDiagram({ kinds, limits, onClose }) {
     setBusy(true);
     setError(null);
     try {
-      const body = { kind: form.kind, repoIds: form.repoIds };
+      const body = { kind: form.kind, repoIds: form.repoIds, ...runOptionsBody(run) };
       if (form.title.trim()) body.title = form.title.trim();
       if (form.focus.trim()) body.focus = form.focus.trim();
       const r = await api.post(base(project.id), body);
       toast('Drawing started');
+      showWarnings(toast, r.warnings);
       go(project.id, 'diagrams', r.diagram.id);
     } catch (err) {
       setError(err);
@@ -217,6 +225,7 @@ function NewDiagram({ kinds, limits, onClose }) {
         <Field label="Focus (optional)" hint="For example: only the payment flow, or leave out the admin screens.">
           {(id) => <textarea id={id} className="input" rows={3} maxLength={limits?.focusChars || 1000} value={form.focus} onChange={(e) => setForm({ ...form, focus: e.target.value })} />}
         </Field>
+        <RunOptionsSection runOptions={runOptions} value={run} onChange={setRun} />
         <ErrorNote error={error} />
       </form>
     </Modal>
@@ -274,6 +283,8 @@ function DiagramView({ id, versionParam }) {
     if (x?.id && d.data && x.id !== d.data.diagram.id) return;
     d.reload(true);
   });
+  const list = useLoad(() => api.get(base(project.id)), [project.id]);
+  const Heading = useContext(EmbeddedContext) ? 'h2' : 'h1';
   const [busy, setBusy] = useState(null);
   const [renaming, setRenaming] = useState(false);
   const back = (
@@ -316,10 +327,11 @@ function DiagramView({ id, versionParam }) {
       setBusy(null);
     }
   };
-  const refresh = () =>
+  const refresh = (body) =>
     act('refresh', async () => {
-      await api.post(`${base(project.id)}/${diagram.id}/refresh`);
+      const r = await api.post(`${base(project.id)}/${diagram.id}/refresh`, body);
       toast('Redrawing started');
+      showWarnings(toast, r.warnings);
       d.reload(true);
     });
   const remove = async () => {
@@ -360,10 +372,11 @@ function DiagramView({ id, versionParam }) {
       <header className="learn-head">
         <div>
           <span className="muted small">{diagram.kind_label}</span>
-          <h1>{diagram.title}</h1>
+          <Heading>{diagram.title}</Heading>
           <div className="row tight wrap">
             <DiagramBadges d={diagram} />
             {diagram.version ? <span className="muted small">Version {diagram.version}</span> : null}
+            <RunChoice item={diagram} />
             {diagram.generated_at ? (
               <span className="muted small" title={dateTime(diagram.generated_at)}>
                 Generated {timeAgo(diagram.generated_at)}
@@ -373,9 +386,7 @@ function DiagramView({ id, versionParam }) {
         </div>
         {canEdit ? (
           <div className="learn-actions">
-            <Button icon="refresh" busy={busy === 'refresh'} disabled={generating} onClick={refresh}>
-              Refresh
-            </Button>
+            <RefreshControl busy={busy === 'refresh'} disabled={generating} runOptions={list.data?.runOptions} stored={diagram} onRefresh={refresh} />
             <Button icon="edit" onClick={() => setRenaming(true)}>
               Rename
             </Button>

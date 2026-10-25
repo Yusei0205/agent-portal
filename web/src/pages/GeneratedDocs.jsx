@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useProject } from '../lib/context.js';
 import { saveFromApi } from '../lib/download.js';
@@ -7,7 +7,8 @@ import { go, href, sessionHref } from '../lib/router.js';
 import { useLoad } from '../lib/useAsync.js';
 import { bytes, cx, dateTime, plural, timeAgo } from '../lib/util.js';
 import { Markdown } from '../components/Markdown.jsx';
-import { Badge, Button, Empty, ErrorNote, Field, Modal, Note, PageHeader, Spinner, Toggle, useUi } from '../components/ui.jsx';
+import { RefreshControl, RunChoice, RunOptionsSection, initialRunOptions, runOptionsBody, showWarnings } from '../components/RunOptions.jsx';
+import { Badge, Button, EmbeddedContext, Empty, ErrorNote, Field, Modal, Note, PageHeader, Spinner, Toggle, useUi } from '../components/ui.jsx';
 
 const BUILT_IN = 'Built-in look';
 const TYPE_HINT = {
@@ -69,10 +70,11 @@ function DocList() {
   const docs = list.data?.documents || [];
   const staleCount = docs.filter((d) => d.stale && d.status !== 'generating').length;
 
-  const refreshStale = async () => {
+  const refreshStale = async (body) => {
     setBusy(true);
     try {
-      const r = await api.post(`${base(project.id)}/refresh-stale`);
+      const r = await api.post(`${base(project.id)}/refresh-stale`, body);
+      showWarnings(toast, r.warnings);
       const parts = [`${plural(r.started.length, 'document')} started`];
       if (r.skipped.length) parts.push(`${r.skipped.length} skipped (${r.skipped[0].reason})`);
       toast(parts.join(', '), r.started.length ? 'ok' : 'danger');
@@ -98,9 +100,13 @@ function DocList() {
           canEdit ? (
             <>
               {staleCount ? (
-                <Button icon="refresh" busy={busy} onClick={refreshStale}>
-                  Refresh all stale ({staleCount})
-                </Button>
+                <RefreshControl
+                  label={`Refresh all stale (${staleCount})`}
+                  busy={busy}
+                  runOptions={list.data?.runOptions}
+                  note="The plain button reuses the choice saved with each document. Pick one here to use it for every stale document in this refresh; it replaces what each had saved."
+                  onRefresh={refreshStale}
+                />
               ) : null}
               {newButton}
             </>
@@ -160,7 +166,7 @@ function DocList() {
           </table>
         </div>
       ) : null}
-      {creating ? <NewDocument data={list.data} onClose={() => setCreating(false)} /> : null}
+      {creating ? <NewDocument data={list.data} runOptions={list.data?.runOptions} onClose={() => setCreating(false)} /> : null}
     </div>
   );
 }
@@ -179,7 +185,7 @@ function TemplateSelect({ value, onChange, effective, options }) {
       hint={
         effective
           ? `Without a choice the document follows "${effective.name}" (${effective.scope === 'portal' ? 'portal default' : "this project's default"}).`
-          : 'No Word template applies yet, so the built-in look is used. Upload one in Setup, Templates.'
+          : 'No Word template applies yet, so the built-in look is used. Upload one under Create › Templates.'
       }
     >
       {(id) => (
@@ -196,7 +202,7 @@ function TemplateSelect({ value, onChange, effective, options }) {
   );
 }
 
-function NewDocument({ data, onClose }) {
+function NewDocument({ data, runOptions, onClose }) {
   const { project } = useProject();
   const { toast } = useUi();
   const limits = data?.limits || { titleChars: 120, audienceChars: 200, repos: 8, diagrams: 10 };
@@ -204,6 +210,7 @@ function NewDocument({ data, onClose }) {
   const repos = useLoad(() => api.get(`/api/projects/${encodeURIComponent(project.id)}/repos`), [project.id]);
   const diagrams = useLoad(() => api.get(`/api/projects/${encodeURIComponent(project.id)}/diagrams`), [project.id]);
   const tpl = useWordTemplates();
+  const [run, setRun] = useState(() => initialRunOptions(runOptions));
   const [form, setForm] = useState({ type: types[0]?.id || 'overview', repoIds: [], includeKnowledge: true, includeDecisions: true, diagramIds: [], audience: '', title: '', templateId: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -221,12 +228,13 @@ function NewDocument({ data, onClose }) {
     setBusy(true);
     setError(null);
     try {
-      const body = { type: form.type, repoIds: form.repoIds, includeKnowledge: form.includeKnowledge, includeDecisions: form.includeDecisions, diagramIds: form.diagramIds };
+      const body = { type: form.type, repoIds: form.repoIds, includeKnowledge: form.includeKnowledge, includeDecisions: form.includeDecisions, diagramIds: form.diagramIds, ...runOptionsBody(run) };
       if (form.audience.trim()) body.audience = form.audience.trim();
       if (form.title.trim()) body.title = form.title.trim();
       if (form.templateId) body.templateId = form.templateId;
       const r = await api.post(base(project.id), body);
       toast('Document started');
+      showWarnings(toast, r.warnings);
       go(project.id, 'documents', r.document.id);
     } catch (err) {
       setError(err);
@@ -325,15 +333,17 @@ function NewDocument({ data, onClose }) {
           </Field>
         </div>
         <TemplateSelect value={form.templateId} onChange={(templateId) => set({ templateId })} effective={data?.template} options={tpl.list} />
+        <RunOptionsSection runOptions={runOptions} value={run} onChange={setRun} />
         <ErrorNote error={error} />
       </form>
     </Modal>
   );
 }
 
-function RegenerateDialog({ doc, effective, onClose, onDone }) {
+function RegenerateDialog({ doc, effective, runOptions, onClose, onDone }) {
   const { project } = useProject();
   const tpl = useWordTemplates();
+  const [run, setRun] = useState(() => initialRunOptions(runOptions, doc));
   const [form, setForm] = useState({ audience: doc.audience || '', title: doc.title, templateId: doc.template.requested_id || '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -343,8 +353,8 @@ function RegenerateDialog({ doc, effective, onClose, onDone }) {
     setBusy(true);
     setError(null);
     try {
-      await api.post(`${base(project.id)}/${doc.id}/regenerate`, { audience: form.audience.trim(), title: form.title.trim(), templateId: form.templateId || null });
-      onDone();
+      const r = await api.post(`${base(project.id)}/${doc.id}/regenerate`, { audience: form.audience.trim(), title: form.title.trim(), templateId: form.templateId || null, ...runOptionsBody(run) });
+      onDone(r);
     } catch (err) {
       setError(err);
       setBusy(false);
@@ -368,6 +378,7 @@ function RegenerateDialog({ doc, effective, onClose, onDone }) {
         <Field label="Title">{(id) => <input id={id} className="input" maxLength={120} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />}</Field>
         <Field label="Audience (optional)">{(id) => <input id={id} className="input" maxLength={200} value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })} />}</Field>
         <TemplateSelect value={form.templateId} onChange={(templateId) => setForm({ ...form, templateId })} effective={effective} options={tpl.list} />
+        <RunOptionsSection runOptions={runOptions} value={run} onChange={setRun} />
         <ErrorNote error={error} />
       </form>
     </Modal>
@@ -447,6 +458,7 @@ function DocView({ id, versionParam }) {
     if (x?.id && d.data && x.id !== d.data.document.id) return;
     d.reload(true);
   });
+  const Heading = useContext(EmbeddedContext) ? 'h2' : 'h1';
   const [busy, setBusy] = useState(null);
   const [regenerating, setRegenerating] = useState(false);
   const back = (
@@ -496,9 +508,10 @@ function DocView({ id, versionParam }) {
   // Downloads go through fetch so a refusal (a version with no Word file) shows as a message, not as a saved error file.
   const download = (format) =>
     act(format, () => saveFromApi(format === 'docx' ? wordLink : shown.links.markdown, `${fileBase}.${format === 'docx' ? 'docx' : 'md'}`));
-  const refreshStale = () =>
+  const refreshStale = (body) =>
     act('refresh', async () => {
-      const r = await api.post(`${base(project.id)}/refresh-stale`);
+      const r = await api.post(`${base(project.id)}/refresh-stale`, body);
+      showWarnings(toast, r.warnings);
       toast(r.started.length ? `${plural(r.started.length, 'document')} started` : r.skipped[0]?.reason || 'Nothing to refresh', r.started.length ? 'ok' : 'danger');
       d.reload(true);
     });
@@ -524,11 +537,12 @@ function DocView({ id, versionParam }) {
       <header className="learn-head">
         <div>
           <span className="muted small">{doc.type_label}</span>
-          <h1>{doc.title}</h1>
+          <Heading>{doc.title}</Heading>
           <div className="row tight wrap">
             <DocBadges d={doc} />
             {doc.version ? <span className="muted small">Version {doc.version}</span> : null}
             {doc.version ? <span className="muted small">Template: {templateWords(doc)}</span> : null}
+            <RunChoice item={doc} />
             {doc.generated_at ? (
               <span className="muted small" title={dateTime(doc.generated_at)}>
                 Generated {timeAgo(doc.generated_at)}
@@ -551,9 +565,13 @@ function DocView({ id, versionParam }) {
           {canEdit ? (
             <>
               {list.data && list.data.documents.filter((x) => x.stale && x.status !== 'generating').length ? (
-                <Button icon="refresh" busy={busy === 'refresh'} onClick={refreshStale}>
-                  Refresh all stale ({list.data.documents.filter((x) => x.stale && x.status !== 'generating').length})
-                </Button>
+                <RefreshControl
+                  label={`Refresh all stale (${list.data.documents.filter((x) => x.stale && x.status !== 'generating').length})`}
+                  busy={busy === 'refresh'}
+                  runOptions={list.data.runOptions}
+                  note="The plain button reuses the choice saved with each document. Pick one here to use it for every stale document in this refresh; it replaces what each had saved."
+                  onRefresh={refreshStale}
+                />
               ) : null}
               <Button icon="refresh" disabled={generating} title={generating ? 'Still being written' : undefined} onClick={() => setRegenerating(true)}>
                 Regenerate
@@ -667,10 +685,12 @@ function DocView({ id, versionParam }) {
         <RegenerateDialog
           doc={doc}
           effective={list.data?.template}
+          runOptions={list.data?.runOptions}
           onClose={() => setRegenerating(false)}
-          onDone={() => {
+          onDone={(r) => {
             setRegenerating(false);
             toast('Rewrite started');
+            showWarnings(toast, r?.warnings);
             go(project.id, 'documents', doc.id);
             d.reload(true);
           }}
