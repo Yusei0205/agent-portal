@@ -29,6 +29,7 @@ import PptxGenJS from 'pptxgenjs';
 import { checkMermaidSource, IMAGE_LIMITS, ImageError, loadImageFile, renderToPng, safeInputPath, type Raster, type RenderItem } from './docimage.ts';
 import { buildFromTemplate, type PreparedSlide, type PreparedVisual } from './pptx-template.ts';
 import { openWordTemplate, type WordLook } from './docx-template.ts';
+import { requireDocxCapability, requireExcelCapability, requirePptxCapability } from './docs-pack.ts';
 
 export type Cell = string | number | boolean | null | { formula: string };
 
@@ -137,8 +138,9 @@ function visualReq(o: any, kind: 'image' | 'mermaid', at: string): VisualReq {
   }
 }
 
-/** The line that stands in for a picture that could not be put in the file. Icon diagrams (.drawio) are named as such. */
+/** The line that stands in for a picture that could not be put in the file. Icon diagrams (.drawio, .structure.json) are named as such. */
 function notEmbedded(p: string, reason: string): string {
+  if (/\.structure\.json$/i.test(p)) return `[Icon diagram not drawn: ${p} (${reason}). Fix the structure file and regenerate.]`;
   return /\.drawio$/i.test(p) ? `[Icon diagram not drawn: ${p} (${reason}). Open the .drawio file in the portal or at draw.io to see it.]` : `[Image not embedded: ${p} (${reason})]`;
 }
 
@@ -148,21 +150,34 @@ async function resolveVisuals(reqs: VisualReq[], baseDir: string, warnings: stri
   if (reqs.filter((r) => r.kind === 'mermaid').length > IMAGE_LIMITS.mermaidPerDoc) fail(`Too many Mermaid diagrams (max ${IMAGE_LIMITS.mermaidPerDoc})`);
   const out: Resolved[] = new Array(reqs.length);
   const toRender: { at: number; item: RenderItem }[] = [];
-  reqs.forEach((r, i) => {
+  for (let i = 0; i < reqs.length; i++) {
+    const r = reqs[i];
     try {
       if (r.kind === 'mermaid') {
         toRender.push({ at: i, item: { kind: 'mermaid', source: r.source } });
-        return;
+        continue;
       }
-      const loaded = loadImageFile(baseDir, r.path, `image "${r.path}"`);
+      const loaded = await loadImageFile(baseDir, r.path, `image "${r.path}"`);
       if (loaded.kind === 'raster') out[i] = { ok: true, image: loaded.image };
       else if (loaded.kind === 'drawio') toRender.push({ at: i, item: { kind: 'drawio', source: loaded.text } });
       else toRender.push({ at: i, item: { kind: 'svg', source: loaded.text } });
     } catch (e) {
-      if (e instanceof ImageError) throw new DocError(e.message);
+      if (e instanceof ImageError) {
+        // A structure file that is invalid (bad JSON, failed layout, etc.) becomes a warning and
+        // a labelled placeholder — consistent with a .drawio file that fails validateDrawio at
+        // render time.  Other ImageErrors (path escape, size limit, format) remain hard errors.
+        const p = typeof (r as any).path === 'string' ? (r as any).path as string : '';
+        if (p.toLowerCase().endsWith('.structure.json')) {
+          const reason = e.message.replace(/^image "[^"]*": /, '');
+          out[i] = { ok: false, reason };
+          warnings.push(`Icon diagram "${p}" not drawn: ${reason}`);
+          continue;
+        }
+        throw new DocError(e.message);
+      }
       throw e;
     }
-  });
+  }
   if (toRender.length) {
     const rendered = await renderToPng(toRender.map((t) => t.item));
     rendered.forEach((res, k) => {
@@ -356,6 +371,7 @@ function codeParagraphs(text: string, look?: WordLook): Paragraph[] {
 }
 
 async function buildDocx(spec: Extract<DocSpec, { type: 'docx' }>, baseDir: string, warnings: string[], look?: WordLook): Promise<Buffer> {
+  requireDocxCapability();
   if (spec.markdown === undefined && spec.blocks === undefined) fail('A Word document needs "markdown" or "blocks"');
   let blocks = spec.markdown !== undefined ? markdownToBlocks(str(spec.markdown, 'markdown')) : blocksFromSpec(spec.blocks!);
   let docTitle = spec.title;
@@ -531,6 +547,7 @@ function cellText(c: Cell | undefined): string {
 }
 
 async function buildXlsx(spec: Extract<DocSpec, { type: 'xlsx' }>): Promise<Buffer> {
+  requireExcelCapability();
   if (!Array.isArray(spec.sheets) || !spec.sheets.length) fail('An Excel file needs at least one sheet in "sheets"');
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Agent Portal';
@@ -662,6 +679,7 @@ function preparedVisual(req: VisualReq, res: Resolved): PreparedVisual {
 }
 
 async function buildPptx(spec: Extract<DocSpec, { type: 'pptx' }>, baseDir: string, warnings: string[]): Promise<PptxResult> {
+  requirePptxCapability();
   if (!Array.isArray(spec.slides) || !spec.slides.length) fail('A presentation needs at least one slide in "slides"');
   if (spec.slides.length > LIMITS.slides) fail(`Too many slides (max ${LIMITS.slides})`);
 

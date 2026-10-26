@@ -1,12 +1,14 @@
 /**
  * Optional tool-pack registry.
  *
- * Four packs are defined:
+ * Five packs are defined:
  *   'uv'      — Python / uvx runner, needed by the AWS integration and custom MCP servers.
  *   'kiro'    — Kiro CLI engine, needed by the Kiro provider.
  *   'browser' — Web browser MCP server, needed by the browser integration.
  *   'drawio'  — Icon diagrams: the draw.io MCP server (shape lookup) and the draw.io viewer files that draw
  *               diagrams offline; admin-installed with a live log (drawio-pack.ts). Off by default.
+ *   'docs'    — Document libraries (pdfjs-dist, docx, exceljs, pptxgenjs): PDF upload, Word/Excel/PPTX
+ *               generation. Detected by whether the npm packages are installed in node_modules.
  *
  * Detection is injectable so tests need no real tools or network.
  *
@@ -25,6 +27,7 @@ import { HttpError, newId, now } from './util.ts';
 import { auditRaw } from './audit.ts';
 import { publish, subscribe, projectChannel } from './events.ts';
 import { DRAWIO_PACK_ID, DRAWIO_PIN, IMAGE_LIBS, RENDERER_FILES, drawioPackState, manifestFile, mcpPrefix, packDir, rendererDir, shapeIndexFile, type PackManifest } from './drawio-pack.ts';
+import { DOCS_PACK_ID, docsPackState, clearDocsPackCache } from './docs-pack.ts';
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -168,6 +171,12 @@ async function detectDrawio(): Promise<{ status: PackStatus; reason: string; par
   return { status: 'available', reason: st.renderer.ok ? `${st.tool.reason}; the viewer files are installed` : `${st.tool.reason}; ${st.renderer.reason}, so previews and exports need them`, parts };
 }
 
+function detectDocs(): { status: PackStatus; reason: string; parts: NonNullable<ToolPack['parts']> } {
+  const st = docsPackState();
+  const parts = st.parts.map((p) => ({ id: p.id, label: p.label, ok: p.available, reason: p.reason }));
+  return { status: st.available ? 'available' : 'missing', reason: st.reason, parts };
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
@@ -193,6 +202,8 @@ export async function getToolPacks(
     detectBrowser(probe),
     detectDrawio(),
   ]);
+
+  const docs = detectDocs();
 
   const packs: ToolPack[] = [
     {
@@ -227,6 +238,15 @@ export async function getToolPacks(
       reason: drawio.reason,
       hint: 'An admin can install the Icon diagrams pack under Settings › Tools',
       parts: drawio.parts,
+    },
+    {
+      id: DOCS_PACK_ID,
+      label: 'Documents & spreadsheets',
+      neededBy: 'Upload PDF files; generate Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files',
+      status: docs.status,
+      reason: docs.reason,
+      hint: 'Run: npm install pdfjs-dist docx exceljs pptxgenjs (or install the Documents pack under Settings › Tools)',
+      parts: docs.parts,
     },
   ];
 

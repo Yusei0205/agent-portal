@@ -24,6 +24,193 @@ const AUTH_OPTIONS = [
   { value: 'sso', label: 'AWS SSO account and role', hint: 'Sign in under Settings › Amazon Bedrock › AWS SSO first.' },
 ];
 
+/**
+ * Parse a pasted AWS credentials block in any of the three standard formats:
+ *
+ *   1. AWS Console "Export credentials" / aws configure export:
+ *      [default]
+ *      aws_access_key_id = ASIA...
+ *      aws_secret_access_key = ...
+ *      aws_session_token = ...
+ *
+ *   2. AWS CLI environment-variable block (shown in the Console after assuming a role):
+ *      export AWS_ACCESS_KEY_ID=ASIA...
+ *      export AWS_SECRET_ACCESS_KEY=...
+ *      export AWS_SESSION_TOKEN=...
+ *
+ *   3. Windows cmd set block:
+ *      set AWS_ACCESS_KEY_ID=ASIA...
+ *      set AWS_SECRET_ACCESS_KEY=...
+ *      set AWS_SESSION_TOKEN=...
+ *
+ *   4. Raw JSON (from aws sts assume-role --output json):
+ *      {"AccessKeyId":"ASIA...","SecretAccessKey":"...","SessionToken":"...","Expiration":"..."}
+ *      or nested under "Credentials": { ... }
+ *
+ * Returns { accessKeyId, secretAccessKey, sessionToken } with empty strings for anything not found.
+ */
+function parseCredentialsBlock(text) {
+  if (!text || !text.trim()) return null;
+  const t = text.trim();
+
+  // JSON
+  if (t.startsWith('{')) {
+    try {
+      const obj = JSON.parse(t);
+      const creds = obj.Credentials ?? obj.credentials ?? obj;
+      const keyId = creds.AccessKeyId ?? creds.access_key_id ?? creds.accessKeyId ?? '';
+      const secret = creds.SecretAccessKey ?? creds.secret_access_key ?? creds.secretAccessKey ?? '';
+      const token = creds.SessionToken ?? creds.session_token ?? creds.sessionToken ?? '';
+      if (keyId) return { accessKeyId: keyId.trim(), secretAccessKey: secret.trim(), sessionToken: token.trim() };
+    } catch {
+      // not JSON
+    }
+  }
+
+  // Ini / export / set  — case-insensitive key matching
+  const patterns = [
+    // ini: aws_access_key_id = VALUE
+    [/aws_access_key_id\s*=\s*(\S+)/i, /aws_secret_access_key\s*=\s*(\S+)/i, /aws_session_token\s*=\s*(\S+)/i],
+    // export/set: AWS_ACCESS_KEY_ID=VALUE
+    [/AWS_ACCESS_KEY_ID[=\s]+(\S+)/i, /AWS_SECRET_ACCESS_KEY[=\s]+(\S+)/i, /AWS_SESSION_TOKEN[=\s]+(\S+)/i],
+  ];
+  for (const [keyRe, secretRe, tokenRe] of patterns) {
+    const keyMatch = t.match(keyRe);
+    const secretMatch = t.match(secretRe);
+    if (keyMatch && secretMatch) {
+      const tokenMatch = t.match(tokenRe);
+      return {
+        accessKeyId: keyMatch[1].trim(),
+        secretAccessKey: secretMatch[1].trim(),
+        sessionToken: tokenMatch ? tokenMatch[1].trim() : '',
+      };
+    }
+  }
+  return null;
+}
+
+/** The access-key fields with an optional "paste credentials block" shortcut. */
+function KeysFields({ form, setForm, isEdit, initial }) {
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [pasteError, setPasteError] = useState('');
+
+  function applyPaste() {
+    const parsed = parseCredentialsBlock(pasteText);
+    if (!parsed) {
+      setPasteError('Could not read these credentials. Paste the full block from the AWS Console, CLI, or aws sts assume-role output.');
+      return;
+    }
+    setForm((f) => ({
+      ...f,
+      accessKeyId: parsed.accessKeyId || f.accessKeyId,
+      secretAccessKey: parsed.secretAccessKey || f.secretAccessKey,
+      sessionToken: parsed.sessionToken,
+    }));
+    setPasteText('');
+    setPasteError('');
+    setShowPaste(false);
+  }
+
+  return (
+    <div className="stack">
+      {/* Paste shortcut toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => { setShowPaste((v) => !v); setPasteError(''); }}
+          aria-expanded={showPaste}
+        >
+          {showPaste ? '▲ Hide paste block' : '▼ Paste credentials block'}
+        </button>
+        <span className="muted small">Paste all three values at once from the AWS Console or CLI.</span>
+      </div>
+
+      {showPaste ? (
+        <div className="stack" style={{ padding: '0.75rem', background: 'var(--bg-raised, #f5f5f5)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+          <p className="muted small" style={{ margin: 0 }}>
+            Paste any of these formats:
+          </p>
+          <ul className="muted small" style={{ margin: '0.25rem 0 0.5rem 1.25rem', lineHeight: 1.6 }}>
+            <li>AWS Console <strong>Export credentials</strong> block (ini format)</li>
+            <li><code>export AWS_ACCESS_KEY_ID=…</code> lines from the CLI</li>
+            <li>JSON from <code>aws sts assume-role --output json</code></li>
+          </ul>
+          <textarea
+            className="input mono"
+            rows={6}
+            value={pasteText}
+            onChange={(e) => { setPasteText(e.target.value); setPasteError(''); }}
+            placeholder={`[default]\naws_access_key_id = ASIA...\naws_secret_access_key = ...\naws_session_token = ...`}
+            autoComplete="off"
+            spellCheck={false}
+            style={{ fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
+          />
+          {pasteError ? <p className="note note-warn small" style={{ margin: 0 }}>{pasteError}</p> : null}
+          <div className="row tight">
+            <button type="button" className="btn btn-sm btn-primary" onClick={applyPaste}>
+              Fill fields
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => { setShowPaste(false); setPasteError(''); setPasteText(''); }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Individual fields */}
+      <Field
+        label={
+          isEdit && initial?.accessKey?.set
+            ? `Access key ID (saved${initial.accessKey.hint ? `, ${initial.accessKey.hint}` : ''}; type to replace)`
+            : 'Access key ID'
+        }
+      >
+        {(id) => (
+          <input
+            id={id}
+            className="input mono input-md"
+            value={form.accessKeyId}
+            autoComplete="off"
+            onChange={(e) => setForm((f) => ({ ...f, accessKeyId: e.target.value.trim() }))}
+            placeholder={isEdit && initial?.accessKey?.set ? '••••••••••••••••' : 'AKIA… or ASIA…'}
+          />
+        )}
+      </Field>
+      <Field label={isEdit ? 'Secret access key (saved; type to replace)' : 'Secret access key'}>
+        {(id) => (
+          <input
+            id={id}
+            type="password"
+            className="input mono input-md"
+            value={form.secretAccessKey}
+            autoComplete="off"
+            onChange={(e) => setForm((f) => ({ ...f, secretAccessKey: e.target.value.trim() }))}
+            placeholder={isEdit ? '••••••••••••••••' : ''}
+          />
+        )}
+      </Field>
+      <Field
+        label="Session token (only for temporary credentials)"
+        hint="Replace the keys and the token together when temporary credentials expire."
+      >
+        {(id) => (
+          <input
+            id={id}
+            type="password"
+            className="input mono input-md"
+            value={form.sessionToken}
+            autoComplete="off"
+            onChange={(e) => setForm((f) => ({ ...f, sessionToken: e.target.value.trim() }))}
+            placeholder={form.sessionToken ? '••••••••••••••••' : ''}
+          />
+        )}
+      </Field>
+    </div>
+  );
+}
+
 function ConnectionForm({ initial, onSave, onCancel }) {
   const [form, setForm] = useState(() => ({
     name: initial?.name ?? '',
@@ -226,54 +413,7 @@ function ConnectionForm({ initial, onSave, onCancel }) {
 
       {/* Access keys */}
       {form.auth === 'keys' ? (
-        <div className="stack">
-          <Field
-            label={
-              isEdit && initial.accessKey?.set
-                ? `Access key ID (saved${initial.accessKey.hint ? `, ${initial.accessKey.hint}` : ''}; type to replace)`
-                : 'Access key ID'
-            }
-          >
-            {(id) => (
-              <input
-                id={id}
-                className="input mono input-md"
-                value={form.accessKeyId}
-                autoComplete="off"
-                onChange={(e) => setForm({ ...form, accessKeyId: e.target.value.trim() })}
-                placeholder={isEdit && initial.accessKey?.set ? '••••••••••••••••' : 'AKIA…'}
-              />
-            )}
-          </Field>
-          <Field label={isEdit ? 'Secret access key (saved; type to replace)' : 'Secret access key'}>
-            {(id) => (
-              <input
-                id={id}
-                type="password"
-                className="input mono input-md"
-                value={form.secretAccessKey}
-                autoComplete="off"
-                onChange={(e) => setForm({ ...form, secretAccessKey: e.target.value.trim() })}
-                placeholder={isEdit ? '••••••••••••••••' : ''}
-              />
-            )}
-          </Field>
-          <Field
-            label="Session token (only for temporary credentials)"
-            hint="Replace the keys and the token together when temporary credentials expire."
-          >
-            {(id) => (
-              <input
-                id={id}
-                type="password"
-                className="input mono input-md"
-                value={form.sessionToken}
-                autoComplete="off"
-                onChange={(e) => setForm({ ...form, sessionToken: e.target.value.trim() })}
-              />
-            )}
-          </Field>
-        </div>
+        <KeysFields form={form} setForm={setForm} isEdit={isEdit} initial={initial} />
       ) : null}
 
       {/* SSO */}
@@ -381,10 +521,17 @@ function ConnectionForm({ initial, onSave, onCancel }) {
 
 /* ── Single connection card ───────────────────────────────────── */
 
-function ConnectionCard({ conn, canManage, onEdit, onDelete, onCheck }) {
+function ConnectionCard({ conn, canManage, onEdit, onDelete, onCheck, onRefreshKeys }) {
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState(null);
   const [checkResult, setCheckResult] = useState(null);
+
+  // Quick-refresh panel state (only for keys auth with temporary credentials)
+  const [showRefresh, setShowRefresh] = useState(false);
+  const [refreshText, setRefreshText] = useState('');
+  const [refreshError, setRefreshError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshOk, setRefreshOk] = useState(false);
 
   const check = async () => {
     setChecking(true);
@@ -400,6 +547,33 @@ function ConnectionCard({ conn, canManage, onEdit, onDelete, onCheck }) {
     }
   };
 
+  const doRefresh = async () => {
+    const parsed = parseCredentialsBlock(refreshText);
+    if (!parsed || !parsed.accessKeyId || !parsed.secretAccessKey) {
+      setRefreshError('Could not read these credentials. Paste the full block from the AWS Console, CLI, or aws sts assume-role output.');
+      return;
+    }
+    setRefreshing(true);
+    setRefreshError('');
+    setRefreshOk(false);
+    try {
+      await onRefreshKeys(conn.id, parsed);
+      setRefreshOk(true);
+      setRefreshText('');
+      // Auto-close after a moment so the user sees the success feedback
+      setTimeout(() => setShowRefresh(false), 1800);
+    } catch (err) {
+      setRefreshError(err.message || String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const identity = conn.identity ?? (conn.arn ?? null);
+  const usedBy = typeof conn.usedBy === 'number' ? conn.usedBy : (conn.projects?.length ?? 0);
+  // Show the quick-refresh button only for key-based connections (temporary or not)
+  const canQuickRefresh = canManage && conn.auth === 'keys';
+
   return (
     <div className="panel stack">
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -407,39 +581,81 @@ function ConnectionCard({ conn, canManage, onEdit, onDelete, onCheck }) {
           <div className="row tight" style={{ flexWrap: 'wrap' }}>
             <Icon name="lock" />
             <strong style={{ fontSize: '1rem' }}>{conn.name}</strong>
+            <Badge tone={conn.health === 'ok' ? 'ok' : 'muted'}>{conn.health === 'ok' ? 'Verified' : 'Not verified'}</Badge>
             <Badge tone="muted">{conn.how}</Badge>
             <Badge tone="muted">{conn.region}</Badge>
+            {conn.temporary ? <Badge tone="warn">Temporary</Badge> : null}
           </div>
-          {conn.account ? (
-            <p className="muted small">
-              AWS account <strong>{conn.account}</strong>
-              {conn.arn ? (
-                <span className="mono break"> · {conn.arn}</span>
-              ) : null}
-              {conn.checkedAt ? (
-                <span> · checked {timeAgo(conn.checkedAt)}</span>
-              ) : null}
-            </p>
-          ) : (
-            <p className="muted small">
-              {conn.checkedAt ? `Checked ${timeAgo(conn.checkedAt)} — account unknown` : 'Not checked yet'}
-            </p>
-          )}
+          <dl className="kv" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+            {identity ? (
+              <div><dt>Identity</dt><dd className="mono break small">{identity}</dd></div>
+            ) : conn.account ? (
+              <div><dt>AWS account</dt><dd><strong>{conn.account}</strong></dd></div>
+            ) : null}
+            {conn.accessKeyHint ? <div><dt>Access key</dt><dd className="mono small">{conn.accessKeyHint}</dd></div> : null}
+            <div>
+              <dt>Used by</dt>
+              <dd>{usedBy > 0 ? `${usedBy} project${usedBy === 1 ? '' : 's'}` : 'no projects'}</dd>
+            </div>
+            <div>
+              <dt>Last checked</dt>
+              <dd>{conn.checkedAt ? timeAgo(conn.checkedAt) : 'never'}</dd>
+            </div>
+            {conn.updatedBy ? <div><dt>Last updated by</dt><dd>{conn.updatedBy}</dd></div> : null}
+          </dl>
         </div>
-        {canManage ? (
+        <div className="row tight" style={{ flexWrap: 'wrap' }}>
+          <Button size="sm" busy={checking} onClick={check}>
+            {conn.checkedAt ? 'Check again' : 'Check'}
+          </Button>
+          {canQuickRefresh ? (
+            <Button size="sm" icon="edit" onClick={() => { setShowRefresh((v) => !v); setRefreshError(''); setRefreshOk(false); }}>
+              Refresh credentials
+            </Button>
+          ) : null}
+          {canManage ? (
+            <>
+              <Button size="sm" icon="edit" onClick={() => onEdit(conn)}>
+                Edit
+              </Button>
+              <Button size="sm" icon="trash" variant="danger" onClick={() => onDelete(conn)}>
+                Delete
+              </Button>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Quick-refresh panel */}
+      {showRefresh ? (
+        <div className="stack" style={{ padding: '0.75rem', background: 'var(--bg-raised, #f5f5f5)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+          <p className="small" style={{ margin: 0, fontWeight: 600 }}>Refresh credentials</p>
+          <p className="muted small" style={{ margin: 0 }}>
+            Paste any format — ini block, <code>export AWS_…</code> lines, or JSON from{' '}
+            <code>aws sts assume-role</code>. The region and name stay unchanged.
+          </p>
+          <textarea
+            className="input mono"
+            rows={6}
+            value={refreshText}
+            onChange={(e) => { setRefreshText(e.target.value); setRefreshError(''); setRefreshOk(false); }}
+            placeholder={`[default]\naws_access_key_id = ASIA...\naws_secret_access_key = ...\naws_session_token = ...`}
+            autoComplete="off"
+            spellCheck={false}
+            style={{ fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
+          />
+          {refreshError ? <p className="note note-warn small" style={{ margin: 0 }}>{refreshError}</p> : null}
+          {refreshOk ? <p className="note note-ok small" style={{ margin: 0 }}>Credentials updated and verified ✓</p> : null}
           <div className="row tight">
-            <Button size="sm" busy={checking} onClick={check}>
-              Check
+            <Button size="sm" variant="primary" busy={refreshing} onClick={doRefresh} disabled={!refreshText.trim()}>
+              Save &amp; verify
             </Button>
-            <Button size="sm" icon="edit" onClick={() => onEdit(conn)}>
-              Edit
-            </Button>
-            <Button size="sm" icon="trash" variant="danger" onClick={() => onDelete(conn)}>
-              Delete
+            <Button size="sm" onClick={() => { setShowRefresh(false); setRefreshText(''); setRefreshError(''); setRefreshOk(false); }}>
+              Cancel
             </Button>
           </div>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {/* Live check result */}
       {checkResult ? (
@@ -606,6 +822,18 @@ export function AwsAccounts() {
     return r;
   };
 
+  const handleRefreshKeys = async (id, parsed) => {
+    // PUT only the three key fields — name, region, auth stay unchanged
+    const r = await api.put(`/api/aws/connections/${id}`, {
+      accessKeyId: parsed.accessKeyId,
+      secretAccessKey: parsed.secretAccessKey,
+      sessionToken: parsed.sessionToken ?? '',
+    });
+    await conns.reload(true);
+    if (!r.check?.ok) throw new Error(r.check?.error || 'Credentials saved but the check failed');
+    return r;
+  };
+
   const handleDelete = async (conn) => {
     const ok = await confirm({
       title: 'Delete AWS account',
@@ -649,6 +877,21 @@ export function AwsAccounts() {
         }
       />
 
+      {/* ── Counter strip ── */}
+      {connections.length > 0 ? (() => {
+        const workingCount = connections.filter((c) => c.health === 'ok').length;
+        const attentionCount = connections.filter((c) => c.health === 'attention').length;
+        const temporaryCount = connections.filter((c) => c.temporary).length;
+        return (
+          <div className="conn-strip">
+            <span><strong>{connections.length}</strong> Connection{connections.length === 1 ? '' : 's'}</span>
+            {workingCount > 0 ? <span className="ok"><strong>{workingCount}</strong> Working</span> : null}
+            {attentionCount > 0 ? <span className="danger"><strong>{attentionCount}</strong> Need attention</span> : null}
+            {temporaryCount > 0 ? <span className="warn"><strong>{temporaryCount}</strong> Temporary credentials</span> : null}
+          </div>
+        );
+      })() : null}
+
       {/* ── Connection cards ── */}
       {conns.loading && !conns.data ? (
         <Spinner />
@@ -678,6 +921,7 @@ export function AwsAccounts() {
               conn={c}
               canManage={canManage}
               onCheck={handleCheck}
+              onRefreshKeys={handleRefreshKeys}
               onEdit={(conn) => setModal({ mode: 'edit', conn })}
               onDelete={handleDelete}
             />

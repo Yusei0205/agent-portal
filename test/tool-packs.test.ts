@@ -147,11 +147,11 @@ test('tool-packs: browser reports available when URL is reachable', async () => 
 
 // ── all three packs present ──────────────────────────────────────────────
 
-test('tool-packs: returns all four packs', async () => {
+test('tool-packs: returns all five packs', async () => {
   clearPackCache();
   const packs = await getToolPacks(makeRunner(['uvx', 'kiro-cli']), makeProbe([]));
-  assert.equal(packs.length, 4, 'should return exactly 4 packs');
-  assert.deepEqual(packs.map((p) => p.id).sort(), ['browser', 'drawio', 'kiro', 'uv']);
+  assert.equal(packs.length, 5, 'should return exactly 5 packs');
+  assert.deepEqual(packs.map((p) => p.id).sort(), ['browser', 'docs', 'drawio', 'kiro', 'uv']);
 });
 
 // ── /api/tools route ────────────────────────────────────────────────────────

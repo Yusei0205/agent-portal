@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import JSZip from 'jszip';
 import { badRequest, slugify, sha256 } from './util.ts';
+import { requirePdfCapability } from './docs-pack.ts';
 
 const execFileP = promisify(execFile);
 
@@ -271,6 +272,7 @@ export async function pptxToMarkdown(buf: Buffer): Promise<string> {
 const PDFJS = 'pdfjs-dist/legacy/build/pdf.mjs';
 
 export async function pdfToMarkdown(buf: Buffer): Promise<string> {
+  requirePdfCapability();
   const pdfjs: any = await import(PDFJS);
   const doc = await pdfjs.getDocument({
     data: new Uint8Array(buf),
