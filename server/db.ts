@@ -965,9 +965,173 @@ const M7_KNOWLEDGE = `
   CREATE INDEX IF NOT EXISTS output_files_run ON output_files(run_id);
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE];
+/**
+ * Migration 8: P10 Code Review tables (reviews, findings) with new schema columns,
+ * Loop Specs and Loop Runs tables for the greenfield rebuild.
+ * Seeded with 7 built-in loop spec templates.
+ */
+const M8_REVIEW_LOOPS = `
+  CREATE TABLE IF NOT EXISTS p10_reviews (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id),
+    base_ref TEXT NOT NULL,
+    head_ref TEXT NOT NULL,
+    pr_number INTEGER,
+    repo_id TEXT REFERENCES repositories(id),
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK(status IN ('pending','running','done','failed')),
+    post_mode TEXT NOT NULL DEFAULT 'draft'
+      CHECK(post_mode IN ('draft','auto')),
+    from_loop TEXT,
+    workflow_id TEXT REFERENCES p6_workflows(id),
+    min_severity TEXT NOT NULL DEFAULT 'medium',
+    summary TEXT,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p10_reviews_project ON p10_reviews(project_id, created_at);
 
-export const SCHEMA_VERSION = MIGRATIONS.length; // = 7
+  CREATE TABLE IF NOT EXISTS p10_findings (
+    id TEXT PRIMARY KEY,
+    review_id TEXT NOT NULL REFERENCES p10_reviews(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    line_number INTEGER,
+    severity TEXT NOT NULL CHECK(severity IN ('critical','high','medium','low','info')),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    confidence REAL,
+    accepted INTEGER NOT NULL DEFAULT 0,
+    posted_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p10_findings_review ON p10_findings(review_id);
+
+  CREATE TABLE IF NOT EXISTS p10_loop_specs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id),
+    name TEXT NOT NULL,
+    description TEXT,
+    trigger_type TEXT NOT NULL
+      CHECK(trigger_type IN ('manual','cron','interval','webhook','github','jira')),
+    trigger_config TEXT NOT NULL DEFAULT '{}',
+    goal_template TEXT NOT NULL,
+    rules TEXT,
+    stop_config TEXT NOT NULL DEFAULT '{}',
+    max_iterations INTEGER NOT NULL DEFAULT 10,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p10_loop_specs_project ON p10_loop_specs(project_id);
+
+  CREATE TABLE IF NOT EXISTS p10_loop_runs (
+    id TEXT PRIMARY KEY,
+    spec_id TEXT NOT NULL REFERENCES p10_loop_specs(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'running'
+      CHECK(status IN ('running','done','failed','stopped')),
+    iteration INTEGER NOT NULL DEFAULT 0,
+    last_workflow_id TEXT REFERENCES p6_workflows(id),
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS p10_loop_runs_spec ON p10_loop_runs(spec_id, started_at);
+
+  -- Seed 7 built-in loop specs (is_builtin=1, project_id=NULL means global/built-in)
+  INSERT OR IGNORE INTO p10_loop_specs (id, project_id, name, description, trigger_type, trigger_config, goal_template, stop_config, max_iterations, is_builtin) VALUES
+    ('builtin-investigate-fix', NULL, 'Investigate and fix a ticket', 'Research a ticket, reproduce it, write the RCA, fix it, and open a PR.', 'manual', '{}', 'Investigate and fix: {{ticket}}', '{"maxIterations":10,"stagnationWindow":3}', 10, 1),
+    ('builtin-feature-ticket', NULL, 'Feature from Jira ticket', 'Implement a feature described in a Jira ticket. Fires when the ticket enters In Progress.', 'jira', '{"statusName":"In Progress"}', 'Implement feature from {{ticket.title}}: {{ticket.description}}', '{"maxIterations":10,"requireVerification":true}', 10, 1),
+    ('builtin-bug-fix', NULL, 'Bug fix', 'Fix a bug from a Jira ticket or a direct instruction.', 'manual', '{}', 'Fix bug: {{description}}', '{"maxIterations":8,"requireVerification":true}', 8, 1),
+    ('builtin-nightly-test-fixer', NULL, 'Nightly test fixer', 'Run nightly, pick up any failing tests, and open a PR with a fix.', 'cron', '{"cron":"0 2 * * *"}', 'Find and fix failing tests', '{"maxIterations":6,"budgetUsd":3,"requireVerification":true}', 6, 1),
+    ('builtin-dependency-update', NULL, 'Dependency update', 'Update outdated dependencies, run tests, and open a PR.', 'cron', '{"cron":"0 3 * * 1"}', 'Update outdated dependencies and run tests', '{"maxIterations":5,"budgetUsd":2}', 5, 1),
+    ('builtin-keep-docs-current', NULL, 'Keep docs current', 'When a PR is merged or nightly: refresh stale diagrams and docs, open one PR with the changes.', 'github', '{"events":["pull_request"],"mergedOnly":true,"cron":"0 1 * * *","actions":["refresh_diagrams","refresh_docs"],"publishPr":true}', 'Refresh stale architecture diagrams and documentation', '{"maxIterations":1,"budgetUsd":5}', 1, 1),
+    ('builtin-review-prs', NULL, 'Review new pull requests', 'When a PR is opened, reopened, gets new commits or is marked ready for review, review it. Drafts and portal own PRs are skipped.', 'github', '{"events":["pull_request"],"action":"review_pr","postMode":"draft","minSeverity":"medium","maxComments":20}', 'Review pull request #{{pr_number}}', '{"maxIterations":1,"budgetUsd":2}', 1, 1);
+`;
+
+/**
+ * Migration 9: Documents & Presentations (P9).
+ * Drops the M3 legacy definitions of generated_docs, generated_doc_versions,
+ * doc_templates and presentations (different schemas) and replaces them with
+ * the greenfield definitions that the P9 server code uses.
+ */
+const M9_DOCS_PRESENTATIONS = `
+  -- Drop M3 legacy versions of tables that have incompatible schemas in P9.
+  -- This is safe in the greenfield rebuild (no production data yet).
+  DROP TABLE IF EXISTS generated_doc_versions;
+  DROP TABLE IF EXISTS generated_docs;
+  DROP TABLE IF EXISTS presentations;
+  DROP TABLE IF EXISTS doc_templates;
+
+  CREATE TABLE IF NOT EXISTS generated_docs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    doc_type TEXT NOT NULL
+      CHECK(doc_type IN ('overview','architecture','api','runbook','user-guide')),
+    sources_json TEXT NOT NULL DEFAULT '{}',
+    diagram_style TEXT NOT NULL DEFAULT 'mermaid',
+    diagram_cloud TEXT,
+    lead_agent TEXT,
+    trust_all_tools INTEGER NOT NULL DEFAULT 0,
+    audience TEXT,
+    latest_version_id TEXT,
+    stale INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS generated_docs_project ON generated_docs(project_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS generated_doc_versions (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL REFERENCES generated_docs(id) ON DELETE CASCADE,
+    version_num INTEGER NOT NULL DEFAULT 1,
+    md_path TEXT,
+    docx_path TEXT,
+    warnings TEXT,
+    workflow_id TEXT REFERENCES p6_workflows(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS generated_doc_versions_doc ON generated_doc_versions(doc_id, version_num);
+
+  CREATE TABLE IF NOT EXISTS presentations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    source_kind TEXT NOT NULL
+      CHECK(source_kind IN ('topic','document','session','diagram')),
+    source_ref TEXT,
+    topic TEXT,
+    slide_count INTEGER NOT NULL DEFAULT 12,
+    audience TEXT,
+    diagram_style TEXT NOT NULL DEFAULT 'mermaid',
+    diagram_cloud TEXT,
+    lead_agent TEXT,
+    trust_all_tools INTEGER NOT NULL DEFAULT 0,
+    pptx_path TEXT,
+    preview_json TEXT,
+    workflow_id TEXT REFERENCES p6_workflows(id),
+    stale INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS presentations_project ON presentations(project_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS doc_templates (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('docx','pptx')),
+    path TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    uploaded_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS doc_templates_project ON doc_templates(project_id, type);
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS];
+
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 9
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 

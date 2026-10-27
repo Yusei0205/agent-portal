@@ -25,6 +25,11 @@ import { registerDiagramRoutes } from './diagrams.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
 import { registerVaultRoutes } from './vault.ts';
 import { registerOutputFileRoutes } from './output-files.ts';
+import { registerGeneratedDocRoutes } from './generated-docs.ts';
+import { registerPresentationRoutes } from './presentations.ts';
+import { registerDocTemplateRoutes } from './doc-templates.ts';
+import { registerReviewRoutes } from './review.ts';
+import { registerLoopSpecRoutes } from './loop-specs.ts';
 
 // Track whether routes have been registered (they're global, so only once per process)
 
@@ -71,6 +76,11 @@ export async function startServer(
   registerKnowledgeRoutes();
   registerVaultRoutes();
   registerOutputFileRoutes();
+  registerGeneratedDocRoutes();
+  registerPresentationRoutes();
+  registerDocTemplateRoutes();
+  registerReviewRoutes();
+  registerLoopSpecRoutes();
 
   // 5. Auto-create admin from env vars if no users exist
   if (
