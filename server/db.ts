@@ -1129,9 +1129,42 @@ const M9_DOCS_PRESENTATIONS = `
   CREATE INDEX IF NOT EXISTS doc_templates_project ON doc_templates(project_id, type);
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS];
+/**
+ * Migration 10: Admin, Insights, Learn (P12).
+ * Adds budget_usage table and doc_reads table.
+ * learn_docs, quizzes, quiz_attempts, paths already created in M3.
+ * Adds audience column to learn_docs and doc_type alias.
+ */
+const M10_ADMIN_INSIGHTS_LEARN = `
+  -- Fine-grained budget tracking per run
+  CREATE TABLE IF NOT EXISTS budget_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT REFERENCES users(id),
+    project_id TEXT REFERENCES projects(id),
+    workflow_id TEXT REFERENCES p6_workflows(id),
+    run_id TEXT REFERENCES agent_runs(id),
+    cost_usd REAL NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    provider TEXT,
+    model TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS budget_usage_project ON budget_usage(project_id, created_at);
+  CREATE INDEX IF NOT EXISTS budget_usage_user ON budget_usage(user_id, created_at);
 
-export const SCHEMA_VERSION = MIGRATIONS.length; // = 9
+  -- doc_reads: new table not in M3
+  CREATE TABLE IF NOT EXISTS doc_reads (
+    learn_doc_id TEXT NOT NULL REFERENCES learn_docs(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    read_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (learn_doc_id, user_id)
+  );
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN];
+
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 10
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 
@@ -1162,7 +1195,10 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');
-      throw e;
+      const err = e as Error;
+      const enhanced = new Error(`Migration ${migrationId} failed: ${err.message}`);
+      enhanced.stack = err.stack;
+      throw enhanced;
     }
   }
 

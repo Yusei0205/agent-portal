@@ -7,9 +7,14 @@
 import { loadConfig, setConfig, ensureDataDirs } from './config.ts';
 import type { Config } from './config.ts';
 import { openDb, closeDb, isDbOpen } from './db.ts';
-import { createServer, clearRoutes } from './http.ts';
+import { createServer, clearRoutes, router } from './http.ts';
+import type { PortalRequest, PortalResponse } from './http.ts';
 import { registerAuthRoutes, createUser, userCount, cleanupSessions } from './auth.ts';
 import { registerHealthRoutes } from './health.ts';
+import { initStorage } from './storage-instance.ts';
+import { config } from './config.ts';
+import path from 'node:path';
+import fs from 'node:fs';
 import { registerPermissionRoutes } from './permissions.ts';
 import { registerSettingsRoutes } from './settings.ts';
 import { registerToolPackRoutes } from './tool-packs.ts';
@@ -30,6 +35,11 @@ import { registerPresentationRoutes } from './presentations.ts';
 import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLoopSpecRoutes } from './loop-specs.ts';
+import { registerInsightsRoutes } from './insights.ts';
+import { registerApiTokenRoutes } from './api-tokens.ts';
+import { registerAuditRoutes } from './audit.ts';
+import { registerLearnRoutes } from './learn.ts';
+import { registerControlPlaneRoutes } from './control-plane.ts';
 
 // Track whether routes have been registered (they're global, so only once per process)
 
@@ -51,16 +61,51 @@ export async function startServer(
   // 2. Ensure data directories exist
   ensureDataDirs(cfg.dataDir);
 
-  // 3. Open database and run migrations.
+  // 3. Initialise storage backend (local or S3)
+  await initStorage();
+
+  // 4. Open database and run migrations.
   // Skip if already open — tests may inject an in-memory DB before calling startServer.
   if (!isDbOpen()) {
     openDb(`${cfg.dataDir}/portal.db`, cfg);
   }
 
-  // 4. Register routes (clear any previously registered routes first for test isolation)
+  // 5. Register routes (clear any previously registered routes first for test isolation)
   clearRoutes();
   registerAuthRoutes();
   registerHealthRoutes();
+
+  // Static-file proxy for local storage backend
+  // GET /api/storage-file?path=<encoded-logical-path>
+  router.get('/api/storage-file', (req: PortalRequest, res: PortalResponse): void => {
+    const rawPath = req.query.get('path') ?? '';
+    if (!rawPath) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'path query param required' }));
+      return;
+    }
+    // Resolve against dataDir and serve
+    const abs = path.resolve(config.dataDir, rawPath);
+    // Security: ensure the resolved path is within dataDir
+    if (!abs.startsWith(path.resolve(config.dataDir))) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'forbidden' }));
+      return;
+    }
+    fs.stat(abs, (statErr, stat) => {
+      if (statErr || !stat.isFile()) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+        return;
+      }
+      const stream = fs.createReadStream(abs);
+      res.writeHead(200);
+      stream.pipe(res as unknown as NodeJS.WritableStream);
+      stream.on('error', () => {
+        res.end();
+      });
+    });
+  });
   registerPermissionRoutes();
   registerSettingsRoutes();
   registerToolPackRoutes();
@@ -81,8 +126,13 @@ export async function startServer(
   registerDocTemplateRoutes();
   registerReviewRoutes();
   registerLoopSpecRoutes();
+  registerInsightsRoutes();
+  registerApiTokenRoutes();
+  registerAuditRoutes();
+  registerLearnRoutes();
+  registerControlPlaneRoutes();
 
-  // 5. Auto-create admin from env vars if no users exist
+  // 6. Auto-create admin from env vars if no users exist
   if (
     userCount() === 0 &&
     process.env.ADMIN_EMAIL &&
@@ -97,7 +147,7 @@ export async function startServer(
     console.log(`[setup] Created admin account ${process.env.ADMIN_EMAIL}`);
   }
 
-  // 6. Start HTTP server
+  // 7. Start HTTP server
   const server = createServer();
   const port = opts.port ?? cfg.port;
   const host = opts.host ?? cfg.host;
@@ -115,13 +165,13 @@ export async function startServer(
     console.log('Open the address above to create the first admin account.');
   }
 
-  // 7. Periodic session cleanup every 6 hours
+  // 8. Periodic session cleanup every 6 hours
   const sessionCleanupTimer = setInterval(() => {
     if (isDbOpen()) cleanupSessions();
   }, 6 * 3600_000);
   sessionCleanupTimer.unref();
 
-  // 8. Graceful shutdown
+  // 9. Graceful shutdown
   server.on('close', () => {
     clearInterval(sessionCleanupTimer);
     closeDb();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { Learn } from './Learn.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -358,6 +359,7 @@ const TABS = [
   { id: 'search',    label: 'Search'    },
   { id: 'ask',       label: 'Ask'       },
   { id: 'decisions', label: 'Decisions' },
+  { id: 'learn',     label: 'Learn'     },
 ];
 
 export function Knowledge({ projectId }) {
@@ -387,6 +389,7 @@ export function Knowledge({ projectId }) {
         {tab === 'search'    && <SearchTab     projectId={projectId} />}
         {tab === 'ask'       && <AskTab        projectId={projectId} />}
         {tab === 'decisions' && <DecisionsTab  projectId={projectId} />}
+        {tab === 'learn'     && <Learn         projectId={projectId} />}
       </div>
     </div>
   );

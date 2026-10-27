@@ -12,6 +12,8 @@ import { Inbox } from './pages/Inbox.jsx';
 import { Create } from './pages/Create.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
 import { Vault } from './pages/Vault.jsx';
+import { Insights } from './pages/Insights.jsx';
+import { AdminPanel } from './pages/AdminPanel.jsx';
 
 // ── Navigation structure ──────────────────────────────────────────────────────
 
@@ -359,6 +361,8 @@ function Shell({ user, onSignOut }) {
   const isCreateRoute = route.projectId && route.tab === 'create';
   const isKnowledgeRoute = route.projectId && route.tab === 'knowledge';
   const isVaultRoute = route.projectId && route.tab === 'vault';
+  const isInsightsRoute = route.tab === 'insights';
+  const isAdminRoute = !route.projectId && route.tab === 'admin';
 
   return (
     <div
@@ -417,6 +421,10 @@ function Shell({ user, onSignOut }) {
           <Knowledge projectId={route.projectId} />
         ) : isVaultRoute ? (
           <Vault projectId={route.projectId} user={user} />
+        ) : isInsightsRoute ? (
+          <Insights projectId={route.projectId || null} user={user} />
+        ) : isAdminRoute ? (
+          <AdminPanel user={user} />
         ) : (
           <Placeholder tab={route.tab} />
         )}

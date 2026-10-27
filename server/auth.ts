@@ -105,19 +105,40 @@ export function cleanupSessions(): void {
 // ── Authenticator (used by HTTP router) ───────────────────────────────────────
 
 export function authenticate(rawReq: import('node:http').IncomingMessage): PortalUser | null {
+  // 1. Try cookie auth first
   const cookieHeader = rawReq.headers.cookie;
-  if (!cookieHeader) return null;
-  const cookies = parseCookies(cookieHeader);
-  const token = cookies[COOKIE_NAME];
-  if (!token) return null;
+  if (cookieHeader) {
+    const cookies = parseCookies(cookieHeader);
+    const token = cookies[COOKIE_NAME];
+    if (token) {
+      const row = one<PortalUser & { expires_at: string; disabled: number }>(
+        `SELECT u.id, u.email, u.name, u.is_admin, u.disabled, s.expires_at
+           FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`,
+        sha256(decodeURIComponent(token)),
+      );
+      if (row && !row.disabled && row.expires_at >= now()) {
+        return { id: row.id, email: row.email, name: row.name, is_admin: row.is_admin };
+      }
+    }
+  }
 
-  const row = one<PortalUser & { expires_at: string; disabled: number }>(
-    `SELECT u.id, u.email, u.name, u.is_admin, u.disabled, s.expires_at
-       FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`,
-    sha256(decodeURIComponent(token)),
-  );
-  if (!row || row.disabled || row.expires_at < now()) return null;
-  return { id: row.id, email: row.email, name: row.name, is_admin: row.is_admin };
+  // 2. Try Bearer token auth (ap_ prefix)
+  const authHeader = String(rawReq.headers.authorization ?? '');
+  if (authHeader.startsWith('Bearer ap_')) {
+    const bearerToken = authHeader.slice(7).trim();
+    const tokenHash = sha256(bearerToken);
+    const row = one<{ user_id: string; email: string; name: string; is_admin: number; disabled: number; expires_at: string; revoked_at: string | null }>(
+      `SELECT t.expires_at, t.revoked_at,
+              u.id AS user_id, u.email, u.name, u.is_admin, u.disabled
+       FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?`,
+      tokenHash,
+    );
+    if (row && !row.revoked_at && !row.disabled && row.expires_at >= now()) {
+      return { id: String(row.user_id), email: String(row.email), name: String(row.name), is_admin: Number(row.is_admin) };
+    }
+  }
+
+  return null;
 }
 
 // ── Rate limiting ──────────────────────────────────────────────────────────────

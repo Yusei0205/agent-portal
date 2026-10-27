@@ -19,6 +19,7 @@ const TABS = [
   { id: 'permissions', label: 'Permissions' },
   { id: 'users',       label: 'Users' },
   { id: 'budget',      label: 'Budget' },
+  { id: 'tokens',      label: 'API tokens' },
 ];
 
 export default function Settings() {
@@ -78,6 +79,7 @@ export default function Settings() {
             onSaved={(updated) => setSettings(updated)}
           />
         )}
+        {tab === 'tokens' && <ApiTokensSettingsTab />}
       </div>
     </div>
   );
@@ -162,6 +164,22 @@ function BudgetTab({ settings, onSaved }) {
           {busy ? 'Saving…' : 'Save budget'}
         </button>
       </form>
+    </section>
+  );
+}
+
+
+// ── API tokens tab ────────────────────────────────────────────────────────────
+
+function ApiTokensSettingsTab() {
+  return (
+    <section aria-label="API tokens">
+      <h2>API tokens</h2>
+      <p className="muted">
+        Personal access tokens let scripts and CI pipelines call the portal API as you.
+        Manage your tokens below, or visit <a href="#/admin">Admin › API tokens</a> for the full view.
+      </p>
+      <a href="#/admin" className="btn">Go to Admin › API tokens</a>
     </section>
   );
 }

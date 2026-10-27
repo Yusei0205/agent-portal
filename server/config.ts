@@ -125,6 +125,8 @@ async function resolveSecretKey(dataDir: string): Promise<string> {
 export async function loadConfig(): Promise<Config> {
   const dataDir = path.resolve(process.env.DATA_DIR ?? path.join(root, 'data'));
   const secretKey = await resolveSecretKey(dataDir);
+  const deployTarget = process.env.DEPLOY_TARGET ?? null;
+  const isCloud = deployTarget === 'cloud';
 
   return {
     root,
@@ -133,12 +135,14 @@ export async function loadConfig(): Promise<Config> {
     dataDir,
     webDir: path.resolve(process.env.WEB_DIR ?? path.join(root, 'dist', 'web')),
     secretKey,
-    cookieSecure: (process.env.COOKIE_SECURE ?? 'auto') as 'auto' | 'true' | 'false',
+    // When DEPLOY_TARGET=cloud, force secure cookies unless explicitly overridden
+    cookieSecure: (process.env.COOKIE_SECURE ?? (isCloud ? 'true' : 'auto')) as 'auto' | 'true' | 'false',
     demoSpeed: Number(process.env.DEMO_SPEED ?? 1),
     maxUploadBytes: Number(process.env.MAX_UPLOAD_MB ?? 50) * 1024 * 1024,
-    trustProxy: process.env.TRUST_PROXY === '1',
+    // When DEPLOY_TARGET=cloud, trust the proxy by default unless explicitly overridden
+    trustProxy: process.env.TRUST_PROXY === '1' || isCloud,
     awsRegion: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1',
-    deployTarget: process.env.DEPLOY_TARGET ?? null,
+    deployTarget,
   };
 }
 
