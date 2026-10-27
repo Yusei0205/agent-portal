@@ -10,6 +10,7 @@ import { openDb, closeDb, isDbOpen } from './db.ts';
 import { createServer, clearRoutes } from './http.ts';
 import { registerAuthRoutes, createUser, userCount, cleanupSessions } from './auth.ts';
 import { registerHealthRoutes } from './health.ts';
+import { registerPermissionRoutes } from './permissions.ts';
 
 // Track whether routes have been registered (they're global, so only once per process)
 
@@ -41,6 +42,7 @@ export async function startServer(
   clearRoutes();
   registerAuthRoutes();
   registerHealthRoutes();
+  registerPermissionRoutes();
 
   // 5. Auto-create admin from env vars if no users exist
   if (

@@ -1,0 +1,8 @@
+/* Agent Portal — master stylesheet.
+   Import order matters: base tokens first, then layout, then components. */
+@import './styles/base.css';
+@import './styles/layout.css';
+@import './styles/components.css';
+@import './styles/workspace.css';
+@import './styles/setup-wizard.css';
+@import './styles/file-preview.css';

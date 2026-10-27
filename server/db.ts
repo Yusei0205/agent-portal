@@ -705,7 +705,85 @@ const M3_SESSIONS = `
     ('ui.advanced', 'false');
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS];
+/**
+ * M4: Permission system — rule groups, rules, portal/project overrides, tool rules.
+ * Seeded with two built-in groups: 'core-safe' (always blocked) and 'standard'.
+ */
+const M4_PERMISSIONS = `
+  CREATE TABLE IF NOT EXISTS permission_rule_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS permission_rules (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES permission_rule_groups(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    pattern TEXT,
+    category TEXT,
+    action TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'always',
+    reason TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS permission_rules_group ON permission_rules(group_id, sort_order);
+
+  CREATE TABLE IF NOT EXISTS portal_permissions (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    default_group_id TEXT NOT NULL DEFAULT 'standard',
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS project_permissions (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    rule_group_id TEXT NOT NULL REFERENCES permission_rule_groups(id),
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS project_tool_rules (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    command_pattern TEXT,
+    scope TEXT NOT NULL DEFAULT 'always',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS project_tool_rules_project ON project_tool_rules(project_id);
+
+  -- Built-in groups
+  INSERT OR IGNORE INTO permission_rule_groups (id, name, description, is_builtin, created_at, updated_at) VALUES
+    ('core-safe', 'Core Safe', 'Commands that are always blocked regardless of trust level', 1, datetime('now'), datetime('now')),
+    ('standard', 'Standard', 'Default permission rules for most projects', 1, datetime('now'), datetime('now'));
+
+  -- Core-safe rules (scope=always): always blocked, cannot be overridden by trusted flag
+  INSERT OR IGNORE INTO permission_rules (id, group_id, name, pattern, category, action, scope, reason, sort_order, created_at, updated_at) VALUES
+    ('core-safe-1', 'core-safe', 'Block cdk deploy', '^cdk deploy', NULL, 'block', 'always', 'CDK deployments require manual approval outside the portal', 10, datetime('now'), datetime('now')),
+    ('core-safe-2', 'core-safe', 'Block cdk destroy', '^cdk destroy', NULL, 'block', 'always', 'CDK destroy requires manual approval outside the portal', 20, datetime('now'), datetime('now')),
+    ('core-safe-3', 'core-safe', 'Block aws delete', '^aws .*(delete|remove|destroy)', NULL, 'block', 'always', 'Destructive AWS CLI calls require manual approval', 30, datetime('now'), datetime('now')),
+    ('core-safe-4', 'core-safe', 'Block rm -rf', 'rm\s+-[a-zA-Z]*r[a-zA-Z]*f|rm\s+-[a-zA-Z]*f[a-zA-Z]*r', NULL, 'block', 'always', 'Recursive force delete is not allowed in agent runs', 40, datetime('now'), datetime('now'));
+
+  -- Standard group rules
+  INSERT OR IGNORE INTO permission_rules (id, group_id, name, pattern, category, action, scope, reason, sort_order, created_at, updated_at) VALUES
+    ('std-1', 'standard', 'Block cdk deploy', '^cdk deploy', NULL, 'block', 'always', 'CDK deployments require manual approval outside the portal', 10, datetime('now'), datetime('now')),
+    ('std-2', 'standard', 'Block cdk destroy', '^cdk destroy', NULL, 'block', 'always', 'CDK destroy requires manual approval', 20, datetime('now'), datetime('now')),
+    ('std-3', 'standard', 'Ask git push (untrusted)', '^git push', NULL, 'ask', 'untrusted', 'Git push requires confirmation in untrusted runs', 30, datetime('now'), datetime('now')),
+    ('std-4', 'standard', 'Ask git commit (untrusted)', '^git commit', NULL, 'ask', 'untrusted', 'Git commit requires confirmation in untrusted runs', 40, datetime('now'), datetime('now')),
+    ('std-5', 'standard', 'Block aws destructive', '^aws .*(delete|remove|destroy)', NULL, 'block', 'always', 'Destructive AWS CLI calls require manual approval', 50, datetime('now'), datetime('now'));
+
+  -- Default portal permission row
+  INSERT OR IGNORE INTO portal_permissions (id, default_group_id, updated_at) VALUES
+    (1, 'standard', datetime('now'));
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
 

@@ -1,0 +1,242 @@
+/* ── Setup Wizard ──────────────────────────────────────── */
+
+/* Full-page centred wrapper */
+.wizard-outer {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+  background: var(--canvas);
+}
+
+/* Card container */
+.wizard-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 32px 36px;
+  width: 100%;
+  max-width: 560px;
+  box-shadow: var(--shadow);
+}
+
+/* Brand at top */
+.wizard-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 24px;
+}
+
+/* Step indicator */
+.wizard-progress {
+  display: flex;
+  gap: 0;
+  margin-bottom: 28px;
+  align-items: center;
+}
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  font-weight: 550;
+}
+.wizard-step.is-active {
+  color: var(--accent);
+}
+.wizard-step.is-done {
+  color: var(--ok);
+}
+.wizard-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line);
+  flex-shrink: 0;
+}
+.wizard-step.is-active .wizard-step-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.wizard-step.is-done .wizard-step-dot {
+  background: var(--ok);
+}
+.wizard-step-connector {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+  min-width: 12px;
+  max-width: 24px;
+}
+
+/* Wizard heading */
+.wizard-heading {
+  margin-bottom: 20px;
+}
+.wizard-heading h1 {
+  font-size: 1.25rem;
+  margin-bottom: 4px;
+}
+.wizard-heading p {
+  color: var(--ink-3);
+  font-size: 0.88rem;
+}
+
+/* Action row */
+.wizard-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-2);
+}
+
+/* ── Deploy target two-card layout ───────────────────── */
+.deploy-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}
+@media (max-width: 480px) {
+  .deploy-cards {
+    grid-template-columns: 1fr;
+  }
+}
+.deploy-card {
+  border: 2px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px 16px;
+  cursor: pointer;
+  background: var(--panel);
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  display: grid;
+  gap: 6px;
+}
+.deploy-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.deploy-card.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.deploy-card-icon {
+  font-size: 1.5rem;
+  margin-bottom: 2px;
+}
+.deploy-card-title {
+  font-size: 0.94rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+.deploy-card-sub {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+
+/* ── Model provider radio options ────────────────────── */
+.provider-option {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.provider-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.provider-option-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.provider-option-label {
+  font-weight: 620;
+  font-size: 0.88rem;
+}
+.provider-option-sub {
+  font-size: 0.79rem;
+  color: var(--ink-3);
+  padding-left: 22px;
+}
+.provider-fields {
+  padding: 10px 0 4px;
+  display: grid;
+  gap: 10px;
+}
+
+/* ── Confirm / summary table ─────────────────────────── */
+.confirm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  margin-bottom: 16px;
+}
+.confirm-table th {
+  text-align: left;
+  color: var(--ink-3);
+  font-weight: 600;
+  padding: 5px 8px;
+  width: 35%;
+}
+.confirm-table td {
+  padding: 5px 8px;
+  color: var(--ink);
+}
+.confirm-table tr {
+  border-bottom: 1px solid var(--line-2);
+}
+.confirm-table tr:last-child {
+  border-bottom: none;
+}
+
+/* ── Connection test result ───────────────────────────── */
+.test-result {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 0.84rem;
+  margin-top: 8px;
+}
+.test-result.ok     { background: var(--ok-wash); color: var(--ok); }
+.test-result.error  { background: var(--danger-wash); color: var(--danger); }
+.test-result.info   { background: var(--accent-wash); color: var(--accent-ink); }
+
+/* ── Auth frame (login + setup) ──────────────────────── */
+.auth {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+}
+.auth-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 32px 36px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 18px;
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 1rem;
+}
+.auth-card h1 {
+  font-size: 1.3rem;
+}
