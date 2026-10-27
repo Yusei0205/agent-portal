@@ -825,9 +825,85 @@ const M5_REPOS = `
   CREATE INDEX IF NOT EXISTS workspaces_v2_project ON workspaces_v2(project_id);
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS];
+/**
+ * Migration 6: P6 sessions (workflows), runs, run events, approval inputs, inbox.
+ * The M3 tables cover the full reference model; these are the greenfield rebuild
+ * tables that the P6 code exclusively uses (simpler schema, no legacy fields).
+ */
+const M6_SESSIONS = `
+  CREATE TABLE IF NOT EXISTS p6_workflows (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id),
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK(status IN ('pending','running','done','blocked','failed','paused')),
+    engine TEXT NOT NULL DEFAULT 'claude-code'
+      CHECK(engine IN ('claude-code','kiro','demo')),
+    trust_tools INTEGER NOT NULL DEFAULT 0,
+    lead_agent TEXT,
+    workspace_id TEXT,
+    output_files_enabled INTEGER NOT NULL DEFAULT 0,
+    repo_ids TEXT NOT NULL DEFAULT '[]',
+    iteration_count INTEGER NOT NULL DEFAULT 0,
+    max_iterations INTEGER NOT NULL DEFAULT 10,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p6_workflows_project ON p6_workflows(project_id, updated_at);
 
-export const SCHEMA_VERSION = MIGRATIONS.length;
+  CREATE TABLE IF NOT EXISTS p6_runs (
+    id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL REFERENCES p6_workflows(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK(status IN ('pending','running','done','failed','cancelled')),
+    started_at TEXT,
+    finished_at TEXT,
+    cost_usd REAL DEFAULT 0,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p6_runs_workflow ON p6_runs(workflow_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS p6_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES p6_runs(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p6_events_run ON p6_events(run_id, id);
+
+  CREATE TABLE IF NOT EXISTS p6_inputs (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES p6_runs(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    tool_input TEXT,
+    response TEXT,
+    allow_all INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p6_inputs_run ON p6_inputs(run_id);
+
+  CREATE TABLE IF NOT EXISTS p6_inbox (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id),
+    workflow_id TEXT REFERENCES p6_workflows(id),
+    run_id TEXT REFERENCES p6_runs(id),
+    type TEXT NOT NULL CHECK(type IN ('approval','question','push','blocked','review-ready')),
+    payload TEXT NOT NULL DEFAULT '{}',
+    resolved INTEGER NOT NULL DEFAULT 0,
+    resolved_by TEXT REFERENCES users(id),
+    resolved_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p6_inbox_project ON p6_inbox(project_id, resolved);
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS];
+
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 6
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 

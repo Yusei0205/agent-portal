@@ -18,6 +18,9 @@ import { registerProjectRoutes } from './projects.ts';
 import { registerRepoRoutes } from './repos.ts';
 import { registerWorkspaceRoutes } from './workspaces.ts';
 import { registerGitConnectionRoutes } from './git-connections.ts';
+import { registerWorkflowRoutes } from './workflows/crud.ts';
+import { registerRunRoutes } from './runs.ts';
+import { registerInboxRoutes } from './inbox.ts';
 
 // Track whether routes have been registered (they're global, so only once per process)
 
@@ -57,6 +60,9 @@ export async function startServer(
   registerRepoRoutes();
   registerWorkspaceRoutes();
   registerGitConnectionRoutes();
+  registerWorkflowRoutes();
+  registerRunRoutes();
+  registerInboxRoutes();
 
   // 5. Auto-create admin from env vars if no users exist
   if (

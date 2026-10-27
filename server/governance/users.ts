@@ -80,7 +80,7 @@ export function registerUserRoutes(): void {
       return;
     }
 
-    const patch: Record<string, unknown> = {};
+    const patch: Record<string, string | number> = {};
     if (typeof body.disabled === 'boolean') patch.disabled = body.disabled ? 1 : 0;
     if (typeof body.is_admin === 'boolean') patch.is_admin = body.is_admin ? 1 : 0;
 
