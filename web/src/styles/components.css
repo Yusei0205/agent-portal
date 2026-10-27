@@ -164,16 +164,15 @@ select:disabled {
   background: #e0f7f6;
   color: #0e7a7e;
 }
-[data-theme="dark"] .badge-engine-kiro,
+[data-theme="dark"] .badge-engine-kiro {
+  background: #173236;
+  color: #3fb3b0;
+}
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .badge-engine-kiro {
     background: #173236;
     color: #3fb3b0;
   }
-}
-[data-theme="dark"] .badge-engine-kiro {
-  background: #173236;
-  color: #3fb3b0;
 }
 .badge-engine-claude {
   background: #ede8fb;
@@ -182,6 +181,12 @@ select:disabled {
 [data-theme="dark"] .badge-engine-claude {
   background: #2a1f3d;
   color: #b39ddb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .badge-engine-claude {
+    background: #2a1f3d;
+    color: #b39ddb;
+  }
 }
 
 /* ── Status dots ──────────────────────────────────────── */
