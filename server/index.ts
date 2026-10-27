@@ -10,7 +10,7 @@ import { registerProjectRoutes, getProject, projectDir } from './projects.ts';
 import { registerRepoRoutes } from './repos.ts';
 import { registerGitConnectionRoutes } from './git-connections.ts';
 import { registerWorkspaceRoutes } from './workspaces.ts';
-import { registerIntegrationRoutes, ensureBuiltInBrowserIntegration } from './integrations.ts';
+import { registerIntegrationRoutes, ensureBuiltInBrowserIntegration, ensureBuiltInAwsDocsIntegration } from './integrations.ts';
 import { registerConfigRoutes } from './config-files.ts';
 import { registerApiTokenRoutes } from './api-tokens.ts';
 import { registerVaultRoutes } from './vault.ts';
@@ -92,6 +92,8 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   cleanupSessions();
   // Create the shared "Web browser" integration when the browser pack is available (idempotent).
   ensureBuiltInBrowserIntegration().catch((e) => console.error('[integrations] built-in browser integration error:', e));
+  // The shared "AWS documentation" integration (AWS's public Knowledge MCP server), created once.
+  ensureBuiltInAwsDocsIntegration();
   // Projects that kept their own AWS credentials move onto AWS accounts (AWS accounts page) once; they keep working the same.
   const { adoptProjectCredentials } = await import('./aws-connections.ts');
   const moved = await adoptProjectCredentials().catch((e) => (console.error('[aws] could not move project credentials:', e), 0));

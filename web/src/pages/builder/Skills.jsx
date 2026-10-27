@@ -113,13 +113,15 @@ function SkillCatalog({ installed }) {
   if (!templates.data) return <Spinner />;
   const all = templates.data.skills;
   const needle = q.trim().toLowerCase();
-  const list = needle ? all.filter((s) => s.name.includes(needle) || s.description.toLowerCase().includes(needle) || s.roles.some((r) => r.title.toLowerCase().includes(needle))) : all;
+  const list = needle
+    ? all.filter((s) => s.name.includes(needle) || s.description.toLowerCase().includes(needle) || s.roles.some((r) => r.title.toLowerCase().includes(needle)) || s.source?.repo.toLowerCase().includes(needle))
+    : all;
   return (
     <div className="stack">
       <div className="stack" style={{ gap: '0.25rem' }}>
         <h2>Skill templates</h2>
         <p className="muted small">
-          {all.length} skills come with the role templates. Add one here to use it on its own, or add its role on the Roles tab to get the role’s agents too. Skills already in this project show as Added.
+          {all.length} skills come with the role templates, some of them from open-source projects (their source and licence are shown, and each brings its own LICENSE.txt). Add one here to use it on its own, or add its role on the Roles tab to get the role’s agents too. Skills already in this project show as Added.
         </p>
       </div>
       <input className="input input-md" type="search" placeholder="Search skills or roles" aria-label="Search skill templates" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -134,6 +136,12 @@ function SkillCatalog({ installed }) {
               </header>
               <p className="small">{s.description}</p>
               <p className="muted small">Role{s.roles.length === 1 ? '' : 's'}: {s.roles.map((r) => r.title).join(', ')}</p>
+              {s.source ? (
+                <p className="muted small">
+                  From <a href={s.source.url} target="_blank" rel="noreferrer">{s.source.repo}</a> · {s.source.license}
+                  {s.files > 1 ? ` · ${s.files - 1} reference file${s.files === 2 ? '' : 's'}` : ''}
+                </p>
+              ) : null}
               <div className="row tight wrap">
                 <Button size="sm" variant="ghost" onClick={() => togglePreview(s.name)} aria-expanded={open === s.name}>
                   {open === s.name ? 'Hide preview' : 'Preview'}
@@ -144,7 +152,12 @@ function SkillCatalog({ installed }) {
                   </Button>
                 ) : null}
               </div>
-              {open === s.name ? <div className="skill-preview">{preview ? <Markdown text={preview.body} /> : <Spinner small />}</div> : null}
+              {open === s.name ? (
+                <div className="skill-preview">
+                  {preview ? <Markdown text={preview.body} /> : <Spinner small />}
+                  {preview?.files?.length ? <p className="muted small">Also installs: {preview.files.map((f) => f.path).join(', ')}</p> : null}
+                </div>
+              ) : null}
             </article>
           );
         })}

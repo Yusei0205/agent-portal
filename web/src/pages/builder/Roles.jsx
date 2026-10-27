@@ -54,6 +54,7 @@ export function Roles() {
                 <div><dt>Tools</dt><dd>{t.agent.tools.map((x) => (x.startsWith('Agent(') ? 'Agent' : x)).join(', ')}</dd></div>
                 {t.team?.length ? <div><dt>Team</dt><dd>{[t.agent.name, ...t.team.map((a) => a.name)].join(', ')}</dd></div> : null}
                 {t.skills.length ? <div><dt>Skills</dt><dd>{t.skills.map((s) => s.name).join(', ')}</dd></div> : null}
+                {t.sources?.length ? <div><dt>Open source</dt><dd>{t.sources.map((s) => `${s.repo} (${s.license})`).join(', ')}</dd></div> : null}
                 {staff.length ? <div><dt>People</dt><dd>{staff.map((s) => s.name).join(', ')}</dd></div> : null}
               </dl>
               {canEdit ? (

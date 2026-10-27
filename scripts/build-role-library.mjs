@@ -6,6 +6,7 @@
 //   delivery  "ai-delivery-team (claude)" on the Desktop -> server/role-data/roles-delivery.json  (DELIVERY_ROLES)
 //
 // The output is a JSON data file (loaded by server/roles-library.ts and roles-delivery.ts) that is committed, so a cloud build needs nothing from your PC.
+// The open-source roles (public Agent Skills repositories) are built separately by scripts/build-open-source-roles.mjs.
 // Re-run it after you change an agent or skill, then rebuild.
 //
 // Adaptations (the original text is kept; these are mechanical):
