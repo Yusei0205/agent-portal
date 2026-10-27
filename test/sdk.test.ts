@@ -65,7 +65,10 @@ test('Anthropic provider: options, environment, guard, questions, approvals and 
   assert.match(call.promptMessages[0].message.content, /Pick a database for refunds/);
   assert.match(call.promptMessages[0].message.content, /Read CLAUDE\.md first/);
   assert.equal(call.guardOutside.hookSpecificOutput.permissionDecision, 'deny');
-  assert.deepEqual(call.guardRead, {});
+  // Reads stay inside the project folder (review fix): /etc/hosts is refused, project files are not.
+  assert.equal(call.guardRead.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(call.guardRead.hookSpecificOutput.permissionDecisionReason, /only read files inside this project/);
+  assert.deepEqual(call.guardReadInside, {});
   assert.deepEqual(call.questionResult.updatedInput.answers, { 'Which database?': 'Postgres' });
   assert.equal(call.bashResult.behavior, 'deny');
   assert.match(call.bashResult.message, /not now/);

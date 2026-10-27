@@ -464,7 +464,7 @@ async function publish(workflowId: string): Promise<void> {
     ...(bad.length ? ['', 'Not refreshed:', ...bad.map((b) => `- ${b.title}: ${b.error}`)] : []),
   ];
   if (steps.length) {
-    const pr = await runPipeline(steps, dest, summaryLines.join('\n'));
+    const pr = await runPipeline(steps, dest, summaryLines.join('\n'), { projectId: job.project_id, userId: job.created_by, workflowId });
     persistPipelineResult(workflowId, pr);
     log(workflowId, 'check', pr.overall_ok ? 'Verification passed' : 'Verification failed', { data: { ok: pr.overall_ok, output: formatPipelineForPrompt(pr), overall_ok: pr.overall_ok, steps: pr.steps.map((s) => ({ step: s.step, ok: s.ok, advisory: Boolean(s.advisory) })) } });
     if (!pr.overall_ok) return finishWith(workflowId, 'blocked', 'The verification pipeline failed, so nothing is proposed. The files are in the Changes tab.');

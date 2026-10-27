@@ -108,7 +108,7 @@ export function registerSessionRoutes(): void {
       }
     }
     // A single run is refused up front when the monthly budget is used up (a session is created and pauses instead).
-    if (singleRun && !queued && body.start !== false) assertBudget(engineProvider(project.id, engine || null));
+    if (singleRun && !queued && body.start !== false) assertBudget(engineProvider(project.id, engine || null), ctx.user!.id, project.id);
     const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
     const leadAgent = checkLead(project, body.leadAgent, engine);
     const contextItems = readContextItems(body.context);

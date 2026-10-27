@@ -205,8 +205,23 @@ async function waitFor(fn, what, timeoutMs = 30_000) {
 /* Compose helpers                                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A compose override with the smoke run's own settings (admin, demo speed, secret key). compose.yml does not pass these
+ * through from the host, and `docker compose up` has no -e flag, so they go in a file that every compose call below
+ * includes: a later restart or recreate (the browser profile) must keep the same secret key.
+ */
+let OVERRIDE = null;
+
+function writeOverride(project) {
+  const env = { ADMIN_EMAIL, ADMIN_PASSWORD, DEMO_SPEED: '0', PORTAL_SECRET_KEY: `smoke-test-key-${project}` };
+  const file = path.join(os.tmpdir(), `${project}.override.yml`);
+  const lines = ['services:', '  portal:', '    environment:', ...Object.entries(env).map(([k, v]) => `      ${k}: ${JSON.stringify(v)}`)];
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+  return file;
+}
+
 function compose(project, args, opts = {}) {
-  const cmd = ['docker', 'compose', '-p', project, '-f', path.join(ROOT, 'compose.yml'), ...args];
+  const cmd = ['docker', 'compose', '-p', project, '-f', path.join(ROOT, 'compose.yml'), ...(OVERRIDE ? ['-f', OVERRIDE] : []), ...args];
   return execFileAsync(cmd[0], cmd.slice(1), { cwd: ROOT, timeout: 300_000, ...opts });
 }
 
@@ -269,6 +284,11 @@ async function makeOdt() {
 /* ------------------------------------------------------------------ */
 
 async function main() {
+  // Keep the process alive until main() decides how it ends. A pending fetch with AbortSignal.timeout() holds only
+  // unreferenced timers, so Node could otherwise exit with code 0 in the middle of a wait, skipping the teardown and
+  // leaving the stack running.
+  const keepAlive = setInterval(() => {}, 60_000);
+
   // ── 0. Preflight ────────────────────────────────────────────────
   step('Checking Docker availability');
   checkDockerAvailable();
@@ -276,6 +296,7 @@ async function main() {
 
   const { project: PROJECT, volume: VOLUME } = makeRunId();
   console.log(`  Project: ${PROJECT}   Volume: ${VOLUME}`);
+  OVERRIDE = writeOverride(PROJECT);
 
   // Always tear down, even on failure.
   let toreDown = false;
@@ -293,6 +314,7 @@ async function main() {
     try {
       await execFileAsync('docker', ['volume', 'rm', '-f', VOLUME], { timeout: 20_000 });
     } catch { /* ok */ }
+    if (OVERRIDE) fs.rmSync(OVERRIDE, { force: true });
   }
 
   process.on('SIGINT', () => teardown('SIGINT').then(() => process.exit(130)));
@@ -307,19 +329,9 @@ async function main() {
     ok('Image built');
 
     step('Starting stack');
-    // Pass ADMIN_EMAIL, ADMIN_PASSWORD and DEMO_SPEED through the environment.
-    // A throwaway volume keeps the host clean.
-    await execFileAsync(
-      'docker', [
-        'compose', '-p', PROJECT, '-f', path.join(ROOT, 'compose.yml'),
-        'up', '-d', '--force-recreate',
-        '-e', `ADMIN_EMAIL=${ADMIN_EMAIL}`,
-        '-e', `ADMIN_PASSWORD=${ADMIN_PASSWORD}`,
-        '-e', 'DEMO_SPEED=0',
-        '-e', `PORTAL_SECRET_KEY=smoke-test-key-${PROJECT}`,
-      ],
-      { cwd: ROOT, timeout: 60_000 },
-    );
+    // The admin, demo speed and secret key come from the override file (see writeOverride).
+    // A throwaway project and volume keep the host clean.
+    await compose(PROJECT, ['up', '-d', '--force-recreate'], { timeout: 60_000 });
     ok('Stack started');
 
     // ── 2. Wait for /api/health ─────────────────────────────────
@@ -373,7 +385,10 @@ async function main() {
       // pandoc may be missing or the ODT may be too minimal; warn but do not fail the smoke test.
       warn(`.odt upload returned ${odtResult.status} — pandoc may not have converted it: ${JSON.stringify(odtResult.data).slice(0, 200)}`);
     } else {
-      ok(`Uploaded .odt — status: ${odtResult.data?.document?.status ?? odtResult.status}`);
+      const odtStatus = odtResult.data?.document?.status ?? odtResult.status;
+      // This hand-made .odt is minimal; a conversion error is reported, not failed (pandoc itself is in the image).
+      if (odtStatus === 'error') warn(`Uploaded .odt — status: error (${String(odtResult.data?.document?.error ?? '').slice(0, 160)})`);
+      else ok(`Uploaded .odt — status: ${odtStatus}`);
     }
 
     // Search the uploaded content.
@@ -458,22 +473,32 @@ async function main() {
     const runId = await waitFor(async () => (await client.get(`/api/workflows/${workflow.id}`)).workflow.last_run_id, 'single run to start', 60_000);
     ok(`Run started: ${runId}`);
 
-    // Approve any pending approval (Write, Bash, etc.).
+    // Answer what the run asks: approvals (Write, Bash, etc.) are allowed, and clarifying questions (the Demo agent asks
+    // some first) get each question's first option.
     let approvalCount = 0;
+    let questionCount = 0;
     const runFinished = await waitFor(async () => {
       const r = await client.get(`/api/runs/${runId}`);
-      // Approve any pending Write approvals.
       for (const inp of r.inputs ?? []) {
-        if (inp.status === 'pending' && inp.type === 'approval') {
-          try {
+        if (inp.status !== 'pending') continue;
+        try {
+          if (inp.type === 'approval') {
             await client.post(`/api/inputs/${inp.id}/answer`, { decision: 'allow' });
             approvalCount++;
-          } catch { /* may race */ }
-        }
+          } else if (inp.type === 'question') {
+            const answers = {};
+            for (const q of inp.payload?.questions ?? []) {
+              const first = q.options?.[0]?.label ?? 'Yes';
+              answers[q.question] = q.multiSelect ? [first] : first;
+            }
+            await client.post(`/api/inputs/${inp.id}/answer`, { answers });
+            questionCount++;
+          }
+        } catch { /* may race */ }
       }
       return isTerminalStatus(r.run.status) ? r : null;
     }, 'run to finish', 120_000);
-    ok(`Run finished — status: ${runFinished.run.status}, approvals given: ${approvalCount}`);
+    ok(`Run finished — status: ${runFinished.run.status}, approvals given: ${approvalCount}, questions answered: ${questionCount}`);
     if (runFinished.run.status === 'failed') {
       warn(`Run failed (demo mode may not write files): ${runFinished.run.error}`);
     }
@@ -511,10 +536,12 @@ async function main() {
     ok(`uv: ${uvPack?.status}`);
     ok(`kiro: ${kiroPack?.status}`);
     ok(`browser: ${browserPack?.status}`);
-    // All three should be missing / not configured in a basic `docker compose up`.
-    const allOff = packs.every((p) => p.status !== 'available');
-    if (!allOff) {
-      warn('Some tool packs report "available" in the default stack — check the environment');
+    // These three should be missing / not configured in a basic `docker compose up`. Other packs (the document tools,
+    // for example) may be built into the image, so they are only listed.
+    for (const p of packs.filter((x) => !['uv', 'kiro', 'browser'].includes(x.id))) ok(`${p.id}: ${p.status} (not part of this check)`);
+    const on = [uvPack, kiroPack, browserPack].filter((p) => p?.status === 'available').map((p) => p.id);
+    if (on.length) {
+      warn(`These tool packs report "available" in the default stack: ${on.join(', ')} — check the environment`);
     } else {
       ok('All tool packs are off in the default stack ✓');
     }
@@ -562,13 +589,7 @@ async function main() {
       }
 
       step('--with-packs: starting browser profile');
-      await execFileAsync(
-        'docker', [
-          'compose', '-p', PROJECT, '-f', path.join(ROOT, 'compose.yml'),
-          '--profile', 'browser', 'up', '-d',
-        ],
-        { cwd: ROOT, timeout: 60_000 },
-      );
+      await compose(PROJECT, ['--profile', 'browser', 'up', '-d'], { timeout: 60_000 });
       ok('Browser profile started');
 
       // Re-check packs.
@@ -598,6 +619,7 @@ async function main() {
     await teardown('cleanup');
   }
 
+  clearInterval(keepAlive);
   process.exit(exitCode);
 }
 

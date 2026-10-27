@@ -164,6 +164,7 @@ function ApprovalBody({ input, canApprove, onDone }) {
   const tool = input.payload?.toolName || input.tool_name;
   const toolInput = input.payload?.input || {};
   const answered = input.status !== 'pending';
+  const perCommand = input.payload?.rememberScope === 'command';
   const send = async (decision, remember) => {
     setBusy(decision + (remember ? '-all' : ''));
     setError(null);
@@ -187,7 +188,7 @@ function ApprovalBody({ input, canApprove, onDone }) {
       {answered ? (
         <p className="small">
           {input.response?.decision === 'allow' ? 'Allowed' : 'Denied'}
-          {input.response?.remember ? ' for the rest of this run' : ''}
+          {input.response?.remember ? (perCommand ? ' (this command, for the rest of this run)' : ' for the rest of this run') : ''}
           {input.answered_by_name ? ` by ${input.answered_by_name}` : ''}
           {input.response?.message ? `: ${input.response.message}` : ''}
         </p>
@@ -200,7 +201,7 @@ function ApprovalBody({ input, canApprove, onDone }) {
               Allow once
             </Button>
             <Button busy={busy === 'allow-all'} onClick={() => send('allow', true)}>
-              Allow {tool} for this run
+              {perCommand ? 'Always allow this command in this run' : `Allow ${tool} for this run`}
             </Button>
             <Button variant="danger-ghost" icon="x" busy={busy === 'deny'} onClick={() => send('deny', false)}>
               Deny

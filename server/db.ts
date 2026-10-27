@@ -849,7 +849,13 @@ const ICON_DIAGRAMS = `
   ALTER TABLE presentations ADD COLUMN diagram_cloud TEXT NOT NULL DEFAULT '';
 `;
 
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS, GENERATED_OUTPUTS, ICON_DIAGRAMS];
+const WALL_CLOCK = `
+  -- When the current stretch of a session's iterations started, for the loop spec's wall-clock stop rule. Stored so
+  -- that a server restart (which resumes the session) does not start the clock again. burst_start says which stretch
+  -- it belongs to: a person resuming the session starts a new one.
+  ALTER TABLE loop_run_states ADD COLUMN wall_clock_started_at TEXT;
+`;
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS, GENERATED_OUTPUTS, ICON_DIAGRAMS, WALL_CLOCK];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

@@ -188,7 +188,9 @@ function agentInput(body: any, name: string, existingRole: string | null): Omit<
 const TEXT_FILE_RE = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+){0,2}$/;
 
 function checkSkillFilePath(rel: unknown): string {
-  if (typeof rel !== 'string' || !TEXT_FILE_RE.test(rel) || rel.split('/').some((s) => s === '..' || s.startsWith('.')) || rel === 'SKILL.md') {
+  // SKILL.md is written from the form's fields only. Compared without case and trailing dots, since Windows and macOS
+  // would open "skill.md" or "SKILL.md." as the same file.
+  if (typeof rel !== 'string' || !TEXT_FILE_RE.test(rel) || rel.split('/').some((s) => s === '..' || s.startsWith('.') || s.endsWith('.')) || rel.toLowerCase() === 'skill.md') {
     throw badRequest('File path must be like reference.md or scripts/check.py');
   }
   return rel;

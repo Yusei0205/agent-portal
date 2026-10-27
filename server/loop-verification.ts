@@ -13,7 +13,7 @@
  *
  * Demo mode: deterministic heuristic instead of a real LLM call.
  */
-import { spawn } from 'node:child_process';
+import { runShellCheck } from './proc.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { all, one, run as exec, type Row } from './db.ts';
@@ -46,33 +46,12 @@ export interface PipelineResult {
 }
 
 /* ------------------------------------------------------------------ */
-/* Command runner (same pattern as runCheck() in workflows.ts)        */
+/* Command runner (shared with a session's verify command: proc.ts)   */
 /* ------------------------------------------------------------------ */
 
-function runCommandStep(cmd: string, cwd: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> {
-  return new Promise((resolve) => {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined && !/^(AWS_|ANTHROPIC_|PORTAL_|GITHUB_|GH_)/i.test(k)) env[k] = v;
-    }
-    const child = spawn(cmd, { cwd, env, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    const add = (d: Buffer) => { out = (out + d.toString()).slice(-6000); };
-    child.stdout.on('data', add);
-    child.stderr.on('data', add);
-    const timer = setTimeout(() => {
-      out += '\n[step timed out]';
-      child.kill();
-    }, timeoutMs);
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      resolve({ ok: false, output: `Could not start step: ${e.message}` });
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0, output: out.trim().slice(-4000) });
-    });
-  });
+async function runCommandStep(cmd: string, cwd: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> {
+  const r = await runShellCheck(cmd, cwd, timeoutMs, `[step timed out after ${Math.round(timeoutMs / 1000)} s and was stopped]`);
+  return { ok: r.ok, output: r.output };
 }
 
 /* ------------------------------------------------------------------ */
@@ -85,7 +64,15 @@ function runCommandStep(cmd: string, cwd: string, timeoutMs: number): Promise<{ 
  * In Demo mode, uses a deterministic heuristic (summary contains "pass" / "fail").
  * NEVER decides pass/fail for the pipeline — always advisory.
  */
-async function runLlmJudgeStep(step: VerificationStep, agentSummary: string): Promise<{ ok: boolean; output: string }> {
+/** Who an LLM judge step runs for: its run is recorded in this project, and counts against this person's and the project's budgets. */
+export interface JudgeContext {
+  projectId: string;
+  userId: string;
+  /** The session being checked, kept in the judge run's details. */
+  workflowId?: string;
+}
+
+async function runLlmJudgeStep(step: VerificationStep, agentSummary: string, judge?: JudgeContext): Promise<{ ok: boolean; output: string }> {
   const settings = getSettings();
   const isDemo = settings.provider.mode === 'demo';
   const rubric = step.rubric ?? 'Does the agent\'s summary indicate the task is complete and tests pass?';
@@ -100,11 +87,9 @@ async function runLlmJudgeStep(step: VerificationStep, agentSummary: string): Pr
     };
   }
 
+  if (!judge) return { ok: true, output: '[LLM judge: skipped, no project to run it in. Advisory only.]' };
   try {
-    const { oneShot } = await import('./agent/runner.ts') as any;
-    if (typeof oneShot !== 'function') {
-      return { ok: true, output: '[LLM judge: oneShot not available — skipped. Advisory only.]' };
-    }
+    const { oneshot } = await import('./agent/runner.ts');
     const prompt = `You are an advisory code review judge. You evaluate whether an AI agent completed its task.
 
 Rubric: ${rubric}
@@ -115,8 +100,18 @@ ${agentSummary.slice(0, 1000)}
 Reply in JSON: {"verdict": "pass"|"fail", "reason": "one sentence"}
 
 This verdict is ADVISORY ONLY and does not decide whether the session continues.`;
-    const result = await oneShot({ prompt, model: 'haiku', maxTokens: 200 });
-    const text = String(result?.text ?? result ?? '');
+    const result = await oneshot({
+      projectId: judge.projectId,
+      userId: judge.userId,
+      kind: 'verify',
+      title: `Check: ${step.step}`.slice(0, 120),
+      system: 'You judge whether an AI agent finished its task. Reply with the JSON object only.',
+      prompt,
+      model: 'haiku',
+      meta: { judgeOf: judge.workflowId ?? null, step: step.step },
+      demoOutput: () => '{"verdict": "pass", "reason": "Demo mode"}',
+    });
+    const text = String(result.text ?? '');
     const json = (() => { try { const m = text.match(/\{[^}]+\}/); return m ? JSON.parse(m[0]) : null; } catch { return null; } })();
     const ok = json?.verdict === 'pass';
     return { ok, output: `[LLM judge advisory] ${json?.reason ?? text.slice(0, 200)}. (Advisory only — does not decide pass/fail.)` };
@@ -139,6 +134,7 @@ export async function runPipeline(
   steps: VerificationStep[],
   cwd: string,
   agentSummary: string,
+  judge?: JudgeContext,
 ): Promise<PipelineResult> {
   const results: StepResult[] = [];
   let overallOk = true;
@@ -151,7 +147,7 @@ export async function runPipeline(
     let result: { ok: boolean; output: string };
 
     if (kind === 'llm') {
-      result = await runLlmJudgeStep(step, agentSummary);
+      result = await runLlmJudgeStep(step, agentSummary, judge);
       // LLM judge is always advisory — never affects overall_ok.
       results.push({
         step: step.step,

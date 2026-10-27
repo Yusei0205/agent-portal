@@ -20,6 +20,7 @@
  */
 
 import { test, before, after, describe } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { bootServer, Client, waitFor, type TestServer } from './client.ts';
@@ -105,7 +106,7 @@ describe('Settings RegionSelect (pages/settings/regions.jsx)', () => {
   before(() => {
     // Resolve path portably on Windows and POSIX
     const url = new URL('../web/src/pages/settings/regions.jsx', import.meta.url);
-    const filePath = url.pathname.replace(/^\/([A-Z]:\/)/i, '$1');
+    const filePath = fileURLToPath(url);
     src = fs.readFileSync(filePath, 'utf8');
   });
 
@@ -145,7 +146,7 @@ describe('Settings RegionSelect (pages/settings/regions.jsx)', () => {
   });
 
   test('AwsSection uses RegionSelect for the Region field (not a bare <input>)', () => {
-    const full = fs.readFileSync(new URL('../web/src/pages/settings/Providers.jsx', import.meta.url).pathname.replace(/^\/([A-Z]:\/)/i, '$1'), 'utf8');
+    const full = fs.readFileSync(fileURLToPath(new URL('../web/src/pages/settings/Providers.jsx', import.meta.url)), 'utf8');
     const startIdx = full.indexOf('function AwsSection(');
     const endIdx = full.indexOf('\nfunction ', startIdx + 1);
     const fn = full.slice(startIdx, endIdx < 0 ? undefined : endIdx);
@@ -153,7 +154,7 @@ describe('Settings RegionSelect (pages/settings/regions.jsx)', () => {
   });
 
   test('SsoFlow uses RegionSelect for the SSO region field (not a bare <input>)', () => {
-    const full = fs.readFileSync(new URL('../web/src/pages/settings/SsoFlow.jsx', import.meta.url).pathname.replace(/^\/([A-Z]:\/)/i, '$1'), 'utf8');
+    const full = fs.readFileSync(fileURLToPath(new URL('../web/src/pages/settings/SsoFlow.jsx', import.meta.url)), 'utf8');
     const startIdx = full.indexOf('function SsoFlow(');
     const endIdx = full.indexOf('\nfunction ', startIdx + 1);
     const fn = full.slice(startIdx, endIdx < 0 ? undefined : endIdx);

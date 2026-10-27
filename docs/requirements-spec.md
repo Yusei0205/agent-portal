@@ -105,7 +105,7 @@ Effective project access is the highest of direct membership and all team grants
 | FR-PROJ-4 | A project event stream (`/api/projects/:pid/stream`) pushes changes to open browsers. | route | |
 | FR-PROJ-5 | Every change to agents, skills, documents and decisions is committed to the project's git repo. | readme | |
 | FR-PROJ-6 | **Setup hub** per project: a readiness panel (provider, AWS account, git connection, repository, lead agent, budget) with a fix link for each gap. Tabs: Overview, Connection & provider, Repositories, Agents & skills, Team & members, Jira, Configuration, Budget. | code (`ProjectSetup.jsx`, `GET /api/projects/:pid/readiness`) | |
-| FR-PROJ-7 | Project configuration files (e.g. `CLAUDE.md`) can be listed, edited, created as folders, deleted, exported and imported as a bundle. | route (`config-files.ts`) | |
+| FR-PROJ-7 | Project configuration files (e.g. `CLAUDE.md`) can be listed, edited, created as folders, deleted, exported and imported as a bundle. Settings files, hooks and MCP configuration are admin-only, and so are the `hooks`, `mcpServers` and `permissionMode` frontmatter fields of Claude agents and skills (an import by a non-admin drops them). Claude runs start only the portal's own integrations as MCP servers (`strictMcpConfig`), never servers declared in project files. | route (`config-files.ts`) | |
 
 ### 2.3 Repositories and git (REPO)
 
@@ -197,7 +197,7 @@ A **session** is a saved goal that the portal drives through repeated agent runs
 | FR-SESS-2 | Launcher modes: **Session** (autonomous), **Single run** (one run with approval choice), **Document a repository** (writes cited docs, no code changes). | code (`NewSessionDialog.jsx`) | |
 | FR-SESS-3 | Each iteration ends with a `WORKFLOW_STATUS {state: continue|done|blocked, summary, next, needs, branch, delegate[], push}` line that the portal parses. | code (`guardrails.ts`) | |
 | FR-SESS-4 | Session statuses seen in code: `queued`, `running`, `paused`, `stopped`, `done`, `blocked`, `failed`. Finished sessions re-open when a person sends a new message. | code | |
-| FR-SESS-5 | Stop conditions: budget, max iterations per burst, stagnation (same summary N times, default 3), 2 consecutive failed runs, optional wall-clock limit, blocked commands. | code | |
+| FR-SESS-5 | Stop conditions: budget, max iterations per burst, stagnation (same summary N times, default 3), 2 consecutive failed runs, optional wall-clock limit (counted from the start of the current burst and kept across server restarts; resuming starts a new burst), blocked commands. | code | |
 | FR-SESS-6 | Controls: pause, resume, stop, cancel while queued, delete, send a message, change settings mid-session. | route | |
 | FR-SESS-7 | **Verification**: after each iteration, run the check command (legacy single `verify_command`) or the spec's pipeline; the result is fed into the next iteration's prompt. | code | |
 | FR-SESS-8 | **Context**: attach documents, files, notes to a session; they are injected into iteration prompts (inline budget 20,000 chars). | code (`session-context.ts`) | |
@@ -295,8 +295,8 @@ A **session** is a saved goal that the portal drives through repeated agent runs
 | FR-ADMIN-1 | Admin panel tabs: Users, Audit log, Control plane. With the off-by-default **Advanced** setting (`ui.advanced`, Settings › Advanced) also Teams, Google sign-in and SCIM. The switch only changes the UI; the routes work either way (D-6). | code | |
 | FR-ADMIN-2 | **Audit log**: append-only record of auth, user, member, settings, secret, project, repo, git connection, session, push, approval, token, tool install, invitation, team, SCIM and OIDC actions with actor, target, IP. | code (`audit.ts`) | |
 | FR-ADMIN-3 | **Control plane**: global / per-user (default 5) / per-project concurrency caps; excess sessions queue with a reason and position. | code (`control-plane.ts`) | |
-| FR-ADMIN-4 | Graceful **drain** on SIGTERM/SIGINT (default 60 s) and via `/api/admin/drain`: stop accepting new work, wait for running iterations. | code | |
-| FR-ADMIN-5 | Worktree clean-up: `work/<run id>/` folders for finished sessions are removed after N days (default 30); folders with uncommitted changes are skipped. Runs daily. | code | |
+| FR-ADMIN-4 | Graceful **drain** on SIGTERM/SIGINT (default 60 s) and via `/api/admin/drain`: stop accepting new work, wait for running iterations and standalone runs (reviews, questions, documents). On shutdown, standalone runs still going when the time is up are stopped and recorded as stopped before the database closes; session iterations are left to the restart recovery. | code | |
+| FR-ADMIN-5 | Worktree clean-up: `work/<run id>/` folders for finished sessions are removed after N days (default 30). Folders with uncommitted changes, with commits no remote has, or that git cannot check (an error or a timeout) are kept and the session is told once. Deleted worktrees are pruned from their repository clone. Runs daily. | code | |
 | FR-ADMIN-6 | `GET /api/health`, `dist/preflight.mjs` dependency check, backup via volume tar, upgrade with automatic DB migrations. | code, readme | |
 | FR-ADMIN-7 | Settings page: provider, Kiro, AWS auth, budget, secrets storage (local / AWS SSM), agent defaults (permission mode, max turns 40, resume after restart, default push mode `ask`), model list, delegation, control plane. | code (`settings.ts`) | |
 
