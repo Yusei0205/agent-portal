@@ -15,7 +15,7 @@ import {
   str,
   stringifyFrontmatter,
 } from './util.ts';
-import { ROLE_TEMPLATES, roleAgents, roleTemplate } from './roles.ts';
+import { ROLE_TEMPLATES, roleAgents, roleTemplate, type SkillSource } from './roles.ts';
 
 export const KNOWN_TOOLS = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'WebFetch', 'WebSearch', 'TodoWrite', 'NotebookEdit', 'Skill'];
 const MODELS = ['inherit', 'haiku', 'sonnet', 'opus'];
@@ -165,7 +165,10 @@ export function writeAgentFile(file: string, a: Omit<AgentFile, 'enabled'>): voi
   );
 }
 
-export function writeSkillFile(dir: string, s: { name: string; description: string; body: string; allowedTools?: string[]; role?: string | null }): void {
+export function writeSkillFile(
+  dir: string,
+  s: { name: string; description: string; body: string; allowedTools?: string[]; role?: string | null; files?: { path: string; content: string }[] },
+): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'SKILL.md'),
@@ -174,6 +177,15 @@ export function writeSkillFile(dir: string, s: { name: string; description: stri
       s.body.trim() + '\n',
     ),
   );
+  // A template skill's other files: reference documents and templates, and LICENSE.txt for an open-source skill.
+  for (const f of s.files ?? []) {
+    if (!/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/.test(f.path) || f.path.split('/').some((x) => x === '.' || x === '..') || f.path.toLowerCase() === 'skill.md') {
+      throw new Error(`The skill ${s.name} has a file with an unusable path: ${f.path}`);
+    }
+    const file = safeJoin(dir, f.path);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, f.content);
+  }
 }
 
 function agentInput(body: any, name: string, existingRole: string | null): Omit<AgentFile, 'enabled'> {
@@ -231,12 +243,24 @@ export async function applyRole(p: Project, key: string, userId: string): Promis
   await commitProject(p.id, `Add role: ${t.title}`, ['.claude']);
 }
 
+interface CatalogSkill {
+  name: string;
+  description: string;
+  body: string;
+  files: { path: string; content: string }[];
+  source: SkillSource | null;
+  roles: { key: string; title: string }[];
+}
+
+/** Where a template skill comes from, as the API shows it. */
+const sourceView = (s: SkillSource | null | undefined) => (s ? { repo: s.repo, url: s.url, license: s.license, commit: s.commit.slice(0, 7) } : null);
+
 /** Every skill carried by a role template, once each, with the roles that include it. Sorted by name. */
-function skillCatalog(): { name: string; description: string; body: string; roles: { key: string; title: string }[] }[] {
-  const byName = new Map<string, { name: string; description: string; body: string; roles: { key: string; title: string }[] }>();
+function skillCatalog(): CatalogSkill[] {
+  const byName = new Map<string, CatalogSkill>();
   for (const t of ROLE_TEMPLATES) {
     for (const s of t.skills) {
-      const e = byName.get(s.name) ?? { name: s.name, description: s.description, body: s.body, roles: [] };
+      const e = byName.get(s.name) ?? { name: s.name, description: s.description, body: s.body, files: s.files ?? [], source: s.source ?? null, roles: [] };
       e.roles.push({ key: t.key, title: t.title });
       byName.set(s.name, e);
     }
@@ -441,12 +465,15 @@ export function registerBuilderRoutes(): void {
   });
 
   // ---- Skill templates: every skill the role templates carry, installable on its own ----
-  get('/api/skill-templates', () => ({ skills: skillCatalog().map(({ body, ...s }) => ({ ...s, chars: body.length })) }));
+  get('/api/skill-templates', () => ({
+    skills: skillCatalog().map(({ body, files, source, ...s }) => ({ ...s, chars: body.length, files: files.length, source: sourceView(source) })),
+  }));
 
   get('/api/skill-templates/:name', (ctx) => {
     const s = skillCatalog().find((x) => x.name === ctx.params.name);
     if (!s) throw notFound('Skill template not found');
-    return { skill: s };
+    // The reference files are listed, not sent: some skills carry hundreds of kilobytes of them.
+    return { skill: { ...s, files: s.files.map((f) => ({ path: f.path, size: Buffer.byteLength(f.content) })), source: sourceView(s.source) } };
   });
 
   // Adds one template skill to the project without its role. An existing skill of that name is never overwritten.
@@ -455,7 +482,7 @@ export function registerBuilderRoutes(): void {
     const s = skillCatalog().find((x) => x.name === ctx.params.name);
     if (!s) throw notFound('Skill template not found');
     if (findSkill(project, s.name)) throw badRequest(`${s.name} is already in this project. Open it on the Skills tab to edit it.`);
-    writeSkillFile(path.join(claudeDir(project, true), 'skills', s.name), { name: s.name, description: s.description, body: s.body });
+    writeSkillFile(path.join(claudeDir(project, true), 'skills', s.name), { name: s.name, description: s.description, body: s.body, files: s.files });
     await commitProject(project.id, `Add skill ${s.name} from templates`, ['.claude']);
     notifyProject(project.id, 'builder.updated');
     return { ok: true };
@@ -469,7 +496,9 @@ export function registerBuilderRoutes(): void {
       summary: t.summary,
       agent: { name: t.agent.name, model: t.agent.model, tools: t.agent.tools, description: t.agent.description },
       team: (t.team ?? []).map((a) => ({ name: a.name, model: a.model, description: a.description })),
-      skills: t.skills.map((s) => ({ name: s.name, description: s.description })),
+      skills: t.skills.map((s) => ({ name: s.name, description: s.description, source: sourceView(s.source) })),
+      // The open-source repositories the role's skills come from, with their licences.
+      sources: [...new Map(t.skills.filter((s) => s.source).map((s) => [s.source!.repo, { repo: s.source!.repo, license: s.source!.license }])).values()],
     })),
   }));
 

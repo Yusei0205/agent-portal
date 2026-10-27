@@ -1,15 +1,36 @@
 /**
  * Role templates. Applying one writes its agent (and any team of further agents) and skills into the project's
  * .claude folder. The starter roles are written here; the library roles are generated from Claude Code agents by
- * scripts/build-role-library.mjs (server/role-data/roles-library.json).
+ * scripts/build-role-library.mjs (server/role-data/roles-library.json), and the open-source roles from public
+ * Agent Skills repositories by scripts/build-open-source-roles.mjs (server/role-data/roles-opensource.json).
  */
 import { LIBRARY_ROLES } from './roles-library.ts';
 import { DELIVERY_ROLES } from './roles-delivery.ts';
+import { OPEN_SOURCE_ROLES } from './roles-opensource.ts';
+
+/** Where an open-source skill comes from. */
+export interface SkillSource {
+  /** owner/name on GitHub. */
+  repo: string;
+  /** The skill's folder in that repository. */
+  path: string;
+  /** The reviewed commit it was taken from. */
+  commit: string;
+  url: string;
+  /** SPDX identifier, e.g. Apache-2.0, MIT, MPL-2.0. */
+  license: string;
+  /** Key of its licence text in the role data. */
+  licenseKey: string;
+}
 
 export interface SkillTemplate {
   name: string;
   description: string;
   body: string;
+  /** Further files of the skill (reference documents, templates), relative to its folder. */
+  files?: { path: string; content: string }[];
+  /** Set for skills taken from an open-source repository. */
+  source?: SkillSource;
 }
 
 export interface AgentTemplate {
@@ -432,7 +453,7 @@ Both views must come from the same source sections and must not contradict each 
   },
 ];
 
-export const ROLE_TEMPLATES: RoleTemplate[] = [...STARTER_ROLES, ...LIBRARY_ROLES, ...DELIVERY_ROLES];
+export const ROLE_TEMPLATES: RoleTemplate[] = [...STARTER_ROLES, ...LIBRARY_ROLES, ...DELIVERY_ROLES, ...OPEN_SOURCE_ROLES];
 
 /** Every agent a role installs: its lead first, then the team. */
 export function roleAgents(t: RoleTemplate): AgentTemplate[] {
