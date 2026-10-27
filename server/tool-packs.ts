@@ -139,15 +139,19 @@ async function detectUv(run: CommandRunner): Promise<{ status: PackStatus; reaso
 
 async function detectKiro(run: CommandRunner, kiroCmd?: string): Promise<{ status: PackStatus; reason: string }> {
   // Honour the custom kiro-cli command from Settings if configured, or the injected override.
-  let cmd = kiroCmd;
-  if (cmd === undefined) {
-    try {
-      const s = getSettings();
-      cmd = s.kiro?.command?.trim() || 'kiro-cli';
-    } catch {
-      cmd = 'kiro-cli';
-    }
+  let configured = '';
+  try {
+    configured = getSettings().kiro?.command?.trim() ?? '';
+  } catch {
+    /* settings not readable yet */
   }
+  // Tests run Kiro sessions against a stand-in script (PORTAL_KIRO_FAKE, see kiroCommand in agent/kiro.ts). Unless a command
+  // is set explicitly, the check must see that same program, or every Kiro session is refused on a machine without kiro-cli.
+  const fake = kiroCmd === undefined && !configured ? process.env.PORTAL_KIRO_FAKE : undefined;
+  if (fake) {
+    return fs.existsSync(fake) ? { status: 'available', reason: `test stand-in for kiro-cli (${path.basename(fake)})` } : { status: 'missing', reason: `PORTAL_KIRO_FAKE does not exist: ${fake}` };
+  }
+  const cmd = kiroCmd ?? (configured || 'kiro-cli');
   const r = await run(cmd, ['--version']);
   if (r.ok) return { status: 'available', reason: `kiro-cli found (${r.output.trim().split('\n')[0]})` };
   return { status: 'missing', reason: `kiro-cli not found (tried: ${cmd})` };
