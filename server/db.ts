@@ -901,9 +901,73 @@ const M6_SESSIONS = `
   CREATE INDEX IF NOT EXISTS p6_inbox_project ON p6_inbox(project_id, resolved);
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS];
+/**
+ * Migration 7: P7 Knowledge base, vault files, output files.
+ */
+const M7_KNOWLEDGE = `
+  CREATE TABLE IF NOT EXISTS knowledge_docs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    mime_type TEXT,
+    size_bytes INTEGER,
+    markdown_path TEXT,
+    status TEXT NOT NULL DEFAULT 'processing'
+      CHECK(status IN ('processing','ready','error')),
+    error TEXT,
+    uploaded_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_docs_project ON knowledge_docs(project_id);
 
-export const SCHEMA_VERSION = MIGRATIONS.length; // = 6
+  CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_search
+    USING fts5(doc_id UNINDEXED, content);
+
+  CREATE TABLE IF NOT EXISTS knowledge_decisions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    asked_by TEXT REFERENCES users(id),
+    answered_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_decisions_project ON knowledge_decisions(project_id);
+
+  CREATE TABLE IF NOT EXISTS vault_files (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    user_id TEXT,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size_bytes INTEGER,
+    mime_type TEXT,
+    uploaded_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS vault_files_project ON vault_files(project_id);
+  CREATE INDEX IF NOT EXISTS vault_files_user ON vault_files(user_id);
+
+  CREATE TABLE IF NOT EXISTS output_files (
+    id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL REFERENCES p6_workflows(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES p6_runs(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size_bytes INTEGER,
+    mime_type TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    refused_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS output_files_workflow ON output_files(workflow_id);
+  CREATE INDEX IF NOT EXISTS output_files_run ON output_files(run_id);
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE];
+
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 7
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 

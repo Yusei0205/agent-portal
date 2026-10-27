@@ -161,9 +161,13 @@ export function ensureDataDirs(dataDir: string): void {
   }
 }
 
-/** Helper: resolve a path relative to dataDir. */
-export function dataPath(cfg: Config, ...parts: string[]): string {
-  return path.join(cfg.dataDir, ...parts);
+/** Helper: resolve a path relative to dataDir (accepts Config or uses the singleton). */
+export function dataPath(cfgOrPart: Config | string, ...parts: string[]): string {
+  if (typeof cfgOrPart === 'string') {
+    // Called as dataPath('tools', 'icon-diagrams') — use the singleton
+    return path.join(config.dataDir, cfgOrPart, ...parts);
+  }
+  return path.join(cfgOrPart.dataDir, ...parts);
 }
 
 // ── Singleton ────────────────────────────────────────────────────────────────

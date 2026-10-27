@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import path from 'node:path';
 
 // ── Error helper ────────────────────────────────────────────────────────────
 
@@ -106,4 +107,37 @@ export function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
     if (locks.get(key) === settled) locks.delete(key);
   });
   return next;
+}
+
+// ── Slug helpers ──────────────────────────────────────────────────────────────
+
+/** Convert a title to a URL-safe kebab-case slug. */
+export function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/** Generate a prefixed unique ID (e.g. 'dg_abc123'). */
+export function newId(prefix = ''): string {
+  return prefix + randomUUID().replace(/-/g, '').slice(0, 20);
+}
+
+/** SHA-256 hex digest of a string. */
+export function sha256(input: string): string {
+  return createHash('sha256').update(input).digest('hex');
+}
+
+/**
+ * Safely join a root and a relative path, refusing to escape the root.
+ * Throws if the resolved path is outside root.
+ */
+export function safeJoin(root: string, rel: string): string {
+  const resolved = path.resolve(root, rel);
+  if (!resolved.startsWith(path.resolve(root))) {
+    throw new Error(`Path "${rel}" escapes root "${root}"`);
+  }
+  return resolved;
 }

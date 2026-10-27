@@ -9,6 +9,9 @@ import Settings from './pages/settings/Settings.jsx';
 import { Projects } from './pages/Projects.jsx';
 import { ProjectHub } from './pages/hub/ProjectHub.jsx';
 import { Inbox } from './pages/Inbox.jsx';
+import { Create } from './pages/Create.jsx';
+import { Knowledge } from './pages/Knowledge.jsx';
+import { Vault } from './pages/Vault.jsx';
 
 // ── Navigation structure ──────────────────────────────────────────────────────
 
@@ -353,6 +356,9 @@ function Shell({ user, onSignOut }) {
   const isSetupRoute = route.projectId && route.tab === 'setup';
   const isSettingsRoute = !route.projectId && route.tab === 'settings';
   const isInboxRoute = !route.projectId && route.tab === 'inbox';
+  const isCreateRoute = route.projectId && route.tab === 'create';
+  const isKnowledgeRoute = route.projectId && route.tab === 'knowledge';
+  const isVaultRoute = route.projectId && route.tab === 'vault';
 
   return (
     <div
@@ -405,6 +411,12 @@ function Shell({ user, onSignOut }) {
           <Settings />
         ) : isInboxRoute ? (
           <Inbox />
+        ) : isCreateRoute ? (
+          <Create projectId={route.projectId} />
+        ) : isKnowledgeRoute ? (
+          <Knowledge projectId={route.projectId} />
+        ) : isVaultRoute ? (
+          <Vault projectId={route.projectId} user={user} />
         ) : (
           <Placeholder tab={route.tab} />
         )}

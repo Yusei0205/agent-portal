@@ -37,11 +37,30 @@ export interface Repository {
   created_at: string;
 }
 
+/** Alias used by diagram modules — same shape as Repository. */
+export type Repo = Repository;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Resolve the directory on disk for a cloned repo. */
 function repoCloneDir(projectSlug: string, repoName: string): string {
   return path.join(config.dataDir, 'projects', projectSlug, 'repos', repoName);
+}
+
+/**
+ * The reference clone directory for a repository. Used by diagram and document agents
+ * to find the checked-out source files.
+ */
+export function repoDir(repo: Repo): string {
+  const slug = one<{ slug: string }>('SELECT slug FROM projects WHERE id = ?', repo.project_id)?.slug ?? 'unknown';
+  return repoCloneDir(slug, repo.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+}
+
+/** Look up a repo by id. Throws notFound if missing. */
+export function getRepo(id: string): Repo {
+  const r = one<Repo>('SELECT * FROM repositories WHERE id = ?', id);
+  if (!r) throw notFound('Repository not found');
+  return r;
 }
 
 /** Get the project slug for a project id. */

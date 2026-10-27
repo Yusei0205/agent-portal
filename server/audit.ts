@@ -6,6 +6,7 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
+import { getDb, isDbOpen } from './db.ts';
 import { now } from './util.ts';
 
 /**
@@ -36,4 +37,26 @@ export function appendAudit(
     JSON.stringify(detail ?? {}),
     ip ?? null,
   );
+}
+
+
+
+/**
+ * Record an audit entry using the singleton DB. Safe to call when the DB may be closing
+ * (catches all errors). For use by vault-generated.ts and similar modules.
+ */
+export function auditRaw(
+  actorId: string | null,
+  action: string,
+  target: string | null,
+  detail: object,
+): void {
+  try {
+    if (!isDbOpen()) return;
+    getDb().prepare(
+      'INSERT INTO audit_log (ts, actor_id, action, target, detail, ip) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(now(), actorId ?? null, action, target ?? null, JSON.stringify(detail), null);
+  } catch {
+    /* best-effort audit */
+  }
 }
