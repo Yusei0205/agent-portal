@@ -53,7 +53,7 @@ function ScopeTab({ projectId, scope, label }) {
         : `/api/projects/${projectId}/vault/upload`;
       const res = await fetch(uploadUrl, {
         method: 'POST',
-        headers: { 'x-requested-with': 'fetch' },
+        headers: { 'x-requested-with': 'agent-portal' },
         body: fd,
         credentials: 'same-origin',
       });

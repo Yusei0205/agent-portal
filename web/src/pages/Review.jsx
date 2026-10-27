@@ -416,10 +416,10 @@ export default function Review({ projectId, user }) {
     try {
       const [rr, repoRes] = await Promise.all([
         api.get(`/api/projects/${projectId}/reviews`),
-        api.get(`/api/projects/${projectId}/repositories`).catch(() => ({ repositories: [] })),
+        api.get(`/api/projects/${projectId}/repos`).catch(() => ({ repos: [] })),
       ]);
       setReviews(rr.reviews || []);
-      setRepos(repoRes.repositories || []);
+      setRepos(repoRes.repos || []);
     } catch (e) {
       setError(e.message);
     } finally {

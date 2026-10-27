@@ -29,7 +29,7 @@ export function FilePreviewModal({ file, previewUrl, onClose }) {
     setError(null);
     fetch(previewUrl, {
       credentials: 'same-origin',
-      headers: { 'x-requested-with': 'fetch' },
+      headers: { 'x-requested-with': 'agent-portal' },
     })
       .then((r) => r.json())
       .then((data) => setPreview(data))

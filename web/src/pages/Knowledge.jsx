@@ -52,7 +52,7 @@ function DocumentsTab({ projectId }) {
       fd.append('file', file);
       const res = await fetch(`/api/projects/${projectId}/knowledge/upload`, {
         method: 'POST',
-        headers: { 'x-requested-with': 'fetch' },
+        headers: { 'x-requested-with': 'agent-portal' },
         body: fd,
         credentials: 'same-origin',
       });

@@ -107,7 +107,7 @@ describe('Auth routes', () => {
     const user = body.user as Record<string, unknown>;
     assert.ok(user, 'Expected user in state response');
     assert.equal(user.email, 'admin@example.com');
-    assert.equal(user.isAdmin, true);
+    assert.equal(user.is_admin, true);
   });
 
   it('POST /api/auth/login succeeds with correct credentials', async () => {

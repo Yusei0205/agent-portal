@@ -200,7 +200,7 @@ export function registerAuthRoutes(): void {
             id: user.id,
             name: user.name,
             email: user.email,
-            isAdmin: Boolean(user.is_admin),
+            is_admin: Boolean(user.is_admin),
           }
         : undefined,
       deployTarget: config.deployTarget ?? null,

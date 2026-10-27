@@ -1,5 +1,5 @@
 // Thin fetch wrapper for the portal API.
-// Every state-changing call carries the CSRF header (x-requested-with: fetch).
+// Every state-changing call carries the CSRF header (x-requested-with: agent-portal).
 
 export class ApiError extends Error {
   /** @param {number} status @param {string} message */
@@ -18,7 +18,7 @@ export class ApiError extends Error {
  */
 async function request(method, url, body) {
   /** @type {Record<string, string>} */
-  const headers = { 'x-requested-with': 'fetch' };
+  const headers = { 'x-requested-with': 'agent-portal' };
   /** @type {BodyInit | undefined} */
   let payload;
   if (body !== undefined) {
