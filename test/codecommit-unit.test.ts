@@ -24,6 +24,7 @@
  */
 
 import { test, before, after, describe } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { bootServer, Client, type TestServer } from './client.ts';
@@ -856,7 +857,7 @@ describe('UI source: Repos.jsx CodeCommit feature', () => {
 
   before(() => {
     const url = new URL('../web/src/pages/Repos.jsx', import.meta.url);
-    const filePath = url.pathname.replace(/^\/([A-Z]:\/)/i, '$1');
+    const filePath = fileURLToPath(url);
     src = fs.readFileSync(filePath, 'utf8');
   });
 

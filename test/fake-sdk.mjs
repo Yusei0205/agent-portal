@@ -11,9 +11,13 @@ export function query({ prompt, options }) {
 
     // A marker in the prompt picks one of the extra scenarios at the end of this file.
     const text = typeof first.value?.message?.content === 'string' ? first.value.message.content : '';
-    const scenario = text.match(/\[(guards|metered|bash-remember)\]/)?.[1];
+    const scenario = text.match(/\[(guards|metered|bash-remember|hang)\]/)?.[1];
     if (scenario) {
       yield* extraScenario(scenario, call, options, text);
+    } else if (Array.isArray(options.tools) && options.tools.length === 0 && text.includes('advisory code review judge')) {
+      // The verification pipeline's LLM judge (loop-verification.ts).
+      const reply = '{"verdict": "pass", "reason": "the summary says the tests pass"}';
+      yield { type: 'result', subtype: 'success', is_error: false, result: reply, total_cost_usd: 0.0002, usage: { input_tokens: 120, output_tokens: 20 }, session_id: 'sess-1' };
     } else if (Array.isArray(options.tools) && options.tools.length === 0) {
       yield {
         type: 'assistant',
@@ -104,6 +108,12 @@ async function* extraScenario(name, call, options, text) {
             'claude-haiku-5-5': { inputTokens: 400, outputTokens: 50, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.01 },
           };
       yield ok('metered', { total_cost_usd: resumed ? 0.08 : 0.05, modelUsage, usage: { input_tokens: 10, output_tokens: 5 } });
+      return;
+    }
+    // A run that keeps going until it is stopped (shutdown tests).
+    case 'hang': {
+      call.hanging = true;
+      await new Promise((resolve) => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })));
       return;
     }
     case 'bash-remember': {

@@ -1,4 +1,5 @@
 import { test, before, after, describe } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -636,7 +637,7 @@ describe('UI source: Jira ticket picker in the New dialog of Sessions', () => {
   let ticketsSrc: string;
 
   before(() => {
-    const toPath = (u: URL) => u.pathname.replace(/^\/([A-Z]:\/)/i, '$1');
+    const toPath = (u: URL) => fileURLToPath(u);
     const read = (rel: string) => fs.readFileSync(toPath(new URL(rel, import.meta.url)), 'utf8');
     pickerSrc = read('../web/src/components/JiraTicketPicker.jsx');
     composerSrc = read('../web/src/pages/sessions/NewSessionDialog.jsx');
