@@ -1,20 +1,13 @@
 import { useState } from 'react';
 import { Diagrams } from './Diagrams.jsx';
+import { GeneratedDocs } from './GeneratedDocs.jsx';
+import { Presentations } from './Presentations.jsx';
 
 const TABS = [
   { id: 'diagrams',  label: 'Diagrams' },
   { id: 'documents', label: 'Documents' },
   { id: 'decks',     label: 'Decks' },
 ];
-
-function Placeholder({ label }) {
-  return (
-    <div className="page">
-      <h2>{label}</h2>
-      <p className="muted">Coming soon.</p>
-    </div>
-  );
-}
 
 /**
  * Create hub — tabs for Diagrams, Documents, Decks.
@@ -51,9 +44,9 @@ export function Create({ projectId }) {
         {activeTab === 'diagrams' ? (
           <Diagrams projectId={projectId} />
         ) : activeTab === 'documents' ? (
-          <Placeholder label="Documents" />
+          <GeneratedDocs projectId={projectId} />
         ) : (
-          <Placeholder label="Decks" />
+          <Presentations projectId={projectId} />
         )}
       </div>
     </div>
