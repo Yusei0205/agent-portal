@@ -5,6 +5,7 @@ import { Icon } from './components/Icon.jsx';
 import { Login } from './pages/Auth.jsx';
 import SetupWizard from './pages/setup/SetupWizard.jsx';
 import { SessionsShell } from './pages/sessions/SessionsShell.jsx';
+import Settings from './pages/settings/Settings.jsx';
 import { Projects } from './pages/Projects.jsx';
 import { ProjectHub } from './pages/hub/ProjectHub.jsx';
 
@@ -329,10 +330,10 @@ function Shell({ user, onSignOut }) {
   };
 
   // Decide what to render in the main area
-  const isSessionsRoute =
-    route.projectId && route.tab === 'sessions';
+  const isSessionsRoute = route.projectId && route.tab === 'sessions';
   const isProjectsRoute = !route.projectId && route.tab === 'projects';
   const isSetupRoute = route.projectId && route.tab === 'setup';
+  const isSettingsRoute = !route.projectId && route.tab === 'settings';
 
   return (
     <div
@@ -377,6 +378,8 @@ function Shell({ user, onSignOut }) {
           <Projects user={user} onProjectsChange={loadProjects} />
         ) : isSetupRoute ? (
           <ProjectHub projectId={route.projectId} user={user} />
+        ) : isSettingsRoute ? (
+          <Settings />
         ) : (
           <Placeholder tab={route.tab} />
         )}
