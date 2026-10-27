@@ -11,6 +11,13 @@ import { createServer, clearRoutes } from './http.ts';
 import { registerAuthRoutes, createUser, userCount, cleanupSessions } from './auth.ts';
 import { registerHealthRoutes } from './health.ts';
 import { registerPermissionRoutes } from './permissions.ts';
+import { registerSettingsRoutes } from './settings.ts';
+import { registerToolPackRoutes } from './tool-packs.ts';
+import { registerUserRoutes } from './governance/users.ts';
+import { registerProjectRoutes } from './projects.ts';
+import { registerRepoRoutes } from './repos.ts';
+import { registerWorkspaceRoutes } from './workspaces.ts';
+import { registerGitConnectionRoutes } from './git-connections.ts';
 
 // Track whether routes have been registered (they're global, so only once per process)
 
@@ -43,6 +50,13 @@ export async function startServer(
   registerAuthRoutes();
   registerHealthRoutes();
   registerPermissionRoutes();
+  registerSettingsRoutes();
+  registerToolPackRoutes();
+  registerUserRoutes();
+  registerProjectRoutes();
+  registerRepoRoutes();
+  registerWorkspaceRoutes();
+  registerGitConnectionRoutes();
 
   // 5. Auto-create admin from env vars if no users exist
   if (

@@ -5,6 +5,8 @@ import { Icon } from './components/Icon.jsx';
 import { Login } from './pages/Auth.jsx';
 import SetupWizard from './pages/setup/SetupWizard.jsx';
 import { SessionsShell } from './pages/sessions/SessionsShell.jsx';
+import { Projects } from './pages/Projects.jsx';
+import { ProjectHub } from './pages/hub/ProjectHub.jsx';
 
 // ── Navigation structure ──────────────────────────────────────────────────────
 
@@ -329,6 +331,8 @@ function Shell({ user, onSignOut }) {
   // Decide what to render in the main area
   const isSessionsRoute =
     route.projectId && route.tab === 'sessions';
+  const isProjectsRoute = !route.projectId && route.tab === 'projects';
+  const isSetupRoute = route.projectId && route.tab === 'setup';
 
   return (
     <div
@@ -369,6 +373,10 @@ function Shell({ user, onSignOut }) {
       >
         {isSessionsRoute ? (
           <SessionsShell projectId={route.projectId} route={route} />
+        ) : isProjectsRoute ? (
+          <Projects user={user} onProjectsChange={loadProjects} />
+        ) : isSetupRoute ? (
+          <ProjectHub projectId={route.projectId} user={user} />
         ) : (
           <Placeholder tab={route.tab} />
         )}

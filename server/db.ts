@@ -783,7 +783,49 @@ const M4_PERMISSIONS = `
     (1, 'standard', datetime('now'));
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS];
+/**
+ * Migration 5: P4 repositories, git_connections (simplified), and workspaces tables.
+ * The M2 tables (repos, git_connections, workspaces) are for the legacy model.
+ * These new tables use cleaner names and schemas for the greenfield rebuild.
+ */
+const M5_REPOS = `
+  CREATE TABLE IF NOT EXISTS repositories (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    default_branch TEXT,
+    identity TEXT,
+    last_synced_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS repositories_project ON repositories(project_id);
+
+  CREATE TABLE IF NOT EXISTS git_connections_v2 (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    credentials_enc TEXT,
+    scope TEXT NOT NULL DEFAULT 'personal',
+    owner_id TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS git_connections_v2_owner ON git_connections_v2(owner_id);
+
+  CREATE TABLE IF NOT EXISTS workspaces_v2 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    repo_ids TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS workspaces_v2_project ON workspaces_v2(project_id);
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
