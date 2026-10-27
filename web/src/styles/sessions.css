@@ -1,0 +1,328 @@
+/* ── Session workspace – extended styles ─────────────────────── */
+
+/* ── Dialog overlay ──────────────────────────────────────────── */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 200;
+  padding: 16px;
+}
+.dialog {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+}
+.dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.dialog-title {
+  font-size: 1rem;
+  font-weight: 680;
+  flex: 1;
+}
+.dialog-body {
+  padding: 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+.dialog-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+/* ── Bulk action bar ─────────────────────────────────────────── */
+.bulk-action-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+  font-size: 0.84rem;
+  flex-shrink: 0;
+}
+.bulk-action-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.bulk-action-sep {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+
+/* ── Bulk select hint ────────────────────────────────────────── */
+.bulk-select-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  padding: 3px 2px;
+  user-select: none;
+}
+.bulk-select-hint-icon {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+/* ── Session row extensions ──────────────────────────────────── */
+.session-row-checkbox {
+  transition: opacity 0.1s;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 3px;
+}
+.session-row-link {
+  transition: none;
+}
+
+/* ── Live output panel ───────────────────────────────────────── */
+.live-event {
+  padding: 4px 12px;
+  font-size: 0.84rem;
+  border-bottom: 1px solid var(--line-2);
+}
+.live-event:last-child {
+  border-bottom: none;
+}
+
+.live-assistant-text {
+  background: var(--canvas);
+}
+.live-text-block {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  margin: 6px 0;
+  color: var(--ink);
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--canvas) 80%, transparent);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--accent);
+}
+
+.live-tool-start {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+.live-tool-name {
+  font-weight: 640;
+  font-family: var(--mono);
+  font-size: 0.79rem;
+  flex-shrink: 0;
+}
+.live-tool-arg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.79rem;
+}
+
+.live-tool-end {
+  padding: 4px 12px;
+}
+.live-tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 0;
+  width: 100%;
+  text-align: left;
+}
+.live-tool-toggle:hover {
+  color: var(--ink);
+}
+.live-tool-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  flex: 1;
+}
+.live-tool-result {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--canvas);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin: 4px 0 6px;
+  color: var(--ink-2);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.live-tool-blocked {
+  color: var(--danger);
+  font-size: 0.82rem;
+  padding: 5px 12px;
+}
+
+.live-run-complete {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ok);
+  font-weight: 600;
+  padding: 10px 12px;
+  background: var(--ok-wash);
+}
+.live-run-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-weight: 600;
+  padding: 10px 12px;
+  background: var(--danger-wash);
+}
+
+.live-approval-card {
+  background: var(--warn-wash);
+  border-left: 3px solid var(--warn);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+.live-approval-desc {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--ink);
+}
+.live-approval-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.live-approval-resolved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ok);
+  font-size: 0.82rem;
+  padding: 6px 12px;
+  background: var(--ok-wash);
+}
+
+/* Running cost pill */
+.live-cost-pill {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.74rem;
+  font-weight: 640;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* ── Composer bar ────────────────────────────────────────────── */
+.ws-composer {
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  background: var(--panel);
+}
+.ws-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ws-composer-input {
+  flex: 1;
+  font-size: 0.84rem;
+  min-height: 32px;
+  padding: 5px 9px;
+}
+
+/* ── Inbox page ──────────────────────────────────────────────── */
+.inbox-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+.inbox-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.inbox-item-session {
+  font-size: 0.84rem;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.inbox-item-body {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.inbox-item-actions {
+  display: flex;
+  gap: 8px;
+}
+.inbox-item-answer-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.inbox-item-resolved {
+  opacity: 0.6;
+}
+.inbox-item-resolved-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--ok);
+}

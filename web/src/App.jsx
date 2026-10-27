@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './lib/api.js';
 import { useRoute, href, navigate } from './lib/router.js';
 import { Icon } from './components/Icon.jsx';
@@ -8,6 +8,7 @@ import { SessionsShell } from './pages/sessions/SessionsShell.jsx';
 import Settings from './pages/settings/Settings.jsx';
 import { Projects } from './pages/Projects.jsx';
 import { ProjectHub } from './pages/hub/ProjectHub.jsx';
+import { Inbox } from './pages/Inbox.jsx';
 
 // ── Navigation structure ──────────────────────────────────────────────────────
 
@@ -291,7 +292,7 @@ function Shell({ user, onSignOut }) {
   const route = useRoute();
   const [projects, setProjects] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
-  const [inboxCount] = useState(0); // Live count comes in a later phase
+  const [inboxCount, setInboxCount] = useState(0);
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem('rail-collapsed') === '1';
@@ -299,6 +300,7 @@ function Shell({ user, onSignOut }) {
       return false;
     }
   });
+  const inboxPollRef = useRef(null);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -309,9 +311,22 @@ function Shell({ user, onSignOut }) {
     }
   }, []);
 
+  const loadInboxCount = useCallback(async () => {
+    try {
+      const r = await api.get('/api/inbox/count');
+      setInboxCount(r.count ?? 0);
+    } catch {
+      // non-fatal — just don't update the badge
+    }
+  }, []);
+
   useEffect(() => {
     loadProjects();
-  }, [loadProjects]);
+    loadInboxCount();
+    // Poll inbox count every 30 seconds
+    inboxPollRef.current = setInterval(loadInboxCount, 30_000);
+    return () => clearInterval(inboxPollRef.current);
+  }, [loadProjects, loadInboxCount]);
 
   useEffect(() => {
     setNavOpen(false);
@@ -329,11 +344,15 @@ function Shell({ user, onSignOut }) {
     });
   };
 
+  // Resolve project object for pages that need it
+  const currentProject = projects?.find((p) => p.id === route.projectId) ?? null;
+
   // Decide what to render in the main area
   const isSessionsRoute = route.projectId && route.tab === 'sessions';
   const isProjectsRoute = !route.projectId && route.tab === 'projects';
   const isSetupRoute = route.projectId && route.tab === 'setup';
   const isSettingsRoute = !route.projectId && route.tab === 'settings';
+  const isInboxRoute = !route.projectId && route.tab === 'inbox';
 
   return (
     <div
@@ -373,13 +392,19 @@ function Shell({ user, onSignOut }) {
         tabIndex={-1}
       >
         {isSessionsRoute ? (
-          <SessionsShell projectId={route.projectId} route={route} />
+          <SessionsShell
+            projectId={route.projectId}
+            project={currentProject}
+            route={route}
+          />
         ) : isProjectsRoute ? (
           <Projects user={user} onProjectsChange={loadProjects} />
         ) : isSetupRoute ? (
           <ProjectHub projectId={route.projectId} user={user} />
         ) : isSettingsRoute ? (
           <Settings />
+        ) : isInboxRoute ? (
+          <Inbox />
         ) : (
           <Placeholder tab={route.tab} />
         )}

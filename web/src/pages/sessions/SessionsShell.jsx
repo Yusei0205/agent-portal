@@ -1,60 +1,51 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { navigate, href } from '../../lib/router.js';
+import { SessionList } from './SessionList.jsx';
+import { SessionWorkspace } from './SessionWorkspace.jsx';
+import { Icon } from '../../components/Icon.jsx';
 
 /**
  * Three-panel sessions layout.
- *   Panel 1: session list (placeholder for P6)
- *   Panel 2: session detail / workspace
+ *   Left:   SessionList — all sessions for the project
+ *   Right:  SessionWorkspace — selected session detail
  *
- * @param {{ projectId: string, route: { tab: string, rest: string[] } }} props
+ * @param {{
+ *   projectId: string,
+ *   project?: { id: string, name: string },
+ *   route: { tab: string, rest: string[] },
+ * }} props
  */
-export function SessionsShell({ projectId, route }) {
+export function SessionsShell({ projectId, project, route }) {
   // Derive selected session ID from URL: #/p/<pid>/sessions/<id>
   const selectedId = route.rest[0] || null;
 
-  const selectSession = (id) => {
+  // project may be passed from App or we can construct a minimal one
+  const proj = project || { id: projectId, name: projectId };
+
+  const handleSelect = (id) => {
     navigate(href(projectId, 'sessions', id));
   };
 
   return (
     <div className={`sessions-shell${selectedId ? ' with-workspace' : ''}`}>
-      {/* Panel 1 — Session list */}
-      <div className="sessions-list-panel">
-        <div className="ws-header">
-          <span className="ws-header-title">Sessions</span>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            style={{ marginLeft: 'auto' }}
-          >
-            + New
-          </button>
-        </div>
-        <div className="ws-list-body">
-          <div className="ws-section-header">Recent</div>
-          {/* Placeholder — full list comes in P6 */}
-          <div className="ws-placeholder" style={{ padding: '20px 10px' }}>
-            <p className="muted small">Sessions will appear here.</p>
-            <p className="muted small">Full implementation coming in P6.</p>
-          </div>
-        </div>
-      </div>
+      {/* Left panel — Session list */}
+      <SessionList
+        project={proj}
+        selectedId={selectedId}
+        onSelect={handleSelect}
+      />
 
-      {/* Panel 2 — Detail / empty state */}
+      {/* Right panel — Detail / empty state */}
       <div className="sessions-detail-panel">
         {selectedId ? (
-          <div style={{ padding: '24px' }}>
-            <p className="muted">Session {selectedId} workspace coming in P6.</p>
-          </div>
+          <SessionWorkspace id={selectedId} project={proj} />
         ) : (
           <div className="ws-placeholder">
             <div className="ws-placeholder-icon">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M7 4v16l13-8L7 4Z" />
-              </svg>
+              <Icon name="play" size={48} />
             </div>
             <p>Select a session to view it</p>
-            <p className="small">or start a new one above</p>
+            <p className="small muted">or start a new one with + New</p>
           </div>
         )}
       </div>
