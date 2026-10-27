@@ -504,7 +504,9 @@ export function registerTriggerRoutes(): void {
     // Verify HMAC signature from X-Hub-Signature-256 header (same format as GitHub).
     const rawBody = await ctx.raw(1_000_000);
     const sig = String(ctx.req.headers['x-hub-signature-256'] ?? ctx.req.headers['x-portal-signature'] ?? '');
-    if (sig && !verifyHmac(secret, rawBody, sig)) {
+    // The signature is required: without it anyone who knows this URL could start an unattended session.
+    if (!sig) throw new HttpError(401, 'Sign the request: send X-Hub-Signature-256 (sha256=<HMAC of the body with the spec secret>)');
+    if (!verifyHmac(secret, rawBody, sig)) {
       throw new HttpError(401, 'Webhook signature is invalid');
     }
 

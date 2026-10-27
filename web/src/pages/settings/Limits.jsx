@@ -186,6 +186,11 @@ export function AgentsSection({ s, reload }) {
         onChange={(resumeAfterRestart) => setA({ ...a, resumeAfterRestart })}
         label="Sessions that were running carry on by themselves after the server restarts (within their budget)"
       />
+      <Toggle
+        checked={Boolean(a.allowReadsOutsideProject)}
+        onChange={(allowReadsOutsideProject) => setA({ ...a, allowReadsOutsideProject })}
+        label="Let agents read files outside their project folder (off is safer: other projects and the portal's own files stay out of reach)"
+      />
       <ErrorNote error={error} />
       <Button variant="primary" busy={busy} onClick={() => save({ agents: a })} disabled={JSON.stringify(a) === JSON.stringify(s.agents)}>
         Save defaults

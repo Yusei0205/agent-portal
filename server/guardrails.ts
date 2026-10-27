@@ -3,9 +3,11 @@
  * state, and how each iteration's prompt is assembled. No database or process access here, so it can be tested alone.
  */
 
+import path from 'node:path';
+
 /**
- * Commands that are ALWAYS blocked, even in a trusted session (Trust all tools ON).
- * These include deploys, infrastructure mutations, and file deletes outside the working copy.
+ * Commands that are ALWAYS blocked, even in a trusted session (Trust all tools ON): deploys and infrastructure
+ * mutations. Deletes outside the run's folder are refused separately, for every run, by outsideDeleteReason().
  * Pattern + human-readable reason. These run before the trust-gated list.
  */
 const ALWAYS_BLOCKED: [RegExp, string][] = [
@@ -118,30 +120,117 @@ export function parseTrustedPush(command: string): { branch: string | null } | {
   return { branch: null };
 }
 
+/** True when `target` is `base` itself or inside it (Windows separators, drive letters and case handled by path.relative). */
+export function isInsideDir(base: string, target: string): boolean {
+  const rel = path.relative(path.resolve(base), path.resolve(target));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/** Programs that delete the paths they are given. */
+const DELETE_PROGRAMS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'del', 'erase', 'rd', 'remove-item', 'ri', 'rimraf']);
+/** Prefixes that run the next word as the real command. */
+const PASS_THROUGH = new Set(['sudo', 'command', 'exec', 'nohup', 'time', 'env', 'nice']);
+
+/** Words of one shell segment, with simple quoting removed. */
+function shellWords(segment: string): string[] {
+  const words: string[] = [];
+  for (const m of segment.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) words.push(m[1] ?? m[2] ?? m[3]);
+  return words;
+}
+
+export interface DeleteCheckOptions {
+  /** The shell's working directory when the command starts (the agent's cwd: the project folder). */
+  cwd: string;
+  /** The user's home directory, for ~ and $HOME. */
+  home: string;
+  /** 'win32' maps Git Bash paths such as /c/Users/x to C:\Users\x. Defaults to the host platform. */
+  platform?: string;
+}
+
 /**
- * Detect file-delete commands whose target is outside the given working copy directory.
- * Used with trust_tools ON to block outside-working-copy deletes.
- * Returns a reason string if blocked, null if allowed.
+ * Best-effort check that every path a shell command deletes lies inside `allowedDir` (the run's own folder).
+ * Follows `cd` within the command, expands ~ and $HOME, checks the folder a glob would expand in, and covers
+ * rm/rmdir/unlink/shred, Windows del/rd/Remove-Item, `find ... -delete` / `-exec rm`, `git clean` and `xargs rm`.
+ * Anything it cannot resolve (other variables, command substitution, a `cd` it cannot follow) is refused rather
+ * than allowed. Returns the reason for refusing, or null. A determined command can still evade a text check, so
+ * this is a seat belt for agents' mistakes and injected instructions, not a sandbox.
  */
-export function outsideDeleteReason(command: string, workDirAbs: string): string | null {
-  const text = String(command ?? '');
-  // Detect rm/del/Remove-Item/rmdir/rd patterns.
-  const deleteMatch = text.match(/\b(?:rm|del|rmdir|rd|Remove-Item|ri)\b(.+)/i);
-  if (!deleteMatch) return null;
-  const args = deleteMatch[1];
-  // Skip safe flags: -r, -f, -v, -rf, etc. Pick the last non-flag token as the target.
-  const tokens = args.trim().split(/\s+/).filter((t) => !t.startsWith('-') && t);
-  for (const token of tokens) {
-    // Expand common starting patterns to absolute paths.
-    let target = token;
-    // Reject absolute paths and paths starting with ~ or ..
-    if (/^(?:\/|~|\.\.)/.test(target) || /^[a-z]:[\\\/]/i.test(target)) {
-      // Check if the target is inside the work dir.
-      const norm = target.replace(/\\/g, '/');
-      const wdNorm = workDirAbs.replace(/\\/g, '/');
-      if (!norm.startsWith(wdNorm + '/') && norm !== wdNorm) {
-        return 'Deleting files outside the run\'s working copy is never allowed.';
+export function outsideDeleteReason(command: string, allowedDir: string, opts: DeleteCheckOptions): string | null {
+  const platform = opts.platform ?? process.platform;
+  const allowed = path.resolve(allowedDir);
+  const refuse = (what: string) => `Deleting ${what} is not allowed: agents may only delete inside this run's folder (${allowed}). Use a path inside it.`;
+  let cwd: string | null = path.resolve(opts.cwd);
+
+  const expand = (raw: string): string | null => {
+    let t = raw.replace(/^~(?=$|[\\/])/, opts.home).replace(/^(?:\$HOME|\$\{HOME\}|%USERPROFILE%)(?=$|[\\/])/i, opts.home);
+    if (/[$`%]/.test(t)) return null; // another variable or a command substitution: cannot tell where it points
+    if (platform === 'win32') t = t.replace(/^\/([a-z])(?=\/|$)/i, (_m, d: string) => `${d.toUpperCase()}:`);
+    return t;
+  };
+  const isFlag = (w: string) => w.startsWith('-') || (platform === 'win32' && /^\/[a-z?]{1,2}$/i.test(w));
+
+  /** `startPoint`: a find or git clean root, which deletes inside the folder, so the run folder itself is fine there. */
+  const check = (raw: string, startPoint = false): string | null => {
+    const t = expand(raw);
+    if (t === null) return refuse(`"${raw}" (a path built from a variable)`);
+    // A glob deletes inside the folder it expands in, so that folder is what must be inside the run folder.
+    const glob = t.search(/[*?[{]/);
+    const fixed = glob < 0 ? t : t.slice(0, glob);
+    const base = glob < 0 ? fixed : fixed === '' || /[\\/]$/.test(fixed) ? fixed || '.' : path.dirname(fixed);
+    if (!path.isAbsolute(base) && cwd === null) return refuse(`"${raw}" after a change of folder that cannot be followed`);
+    const abs = path.resolve(cwd ?? '/', base);
+    if (glob < 0 && !startPoint && path.relative(allowed, abs) === '') return refuse(`the run's own folder`);
+    return isInsideDir(allowed, abs) ? null : refuse(`"${raw}"`);
+  };
+
+  for (const segment of String(command ?? '').split(/&&|\|\||;|\||\n/)) {
+    const words = shellWords(segment);
+    while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift(); // FOO=bar prefixes
+    while (words.length && PASS_THROUGH.has(words[0].toLowerCase())) {
+      words.shift();
+      while (words.length && isFlag(words[0])) words.shift();
+    }
+    if (!words.length) continue;
+    const prog = path.basename(words[0]).toLowerCase().replace(/\.exe$/, '');
+    const args = words.slice(1);
+
+    if (prog === 'cd' || prog === 'pushd') {
+      const dir = args.find((w) => !isFlag(w));
+      const t = dir === undefined ? opts.home : expand(dir);
+      cwd = t === null || dir === '-' ? null : path.resolve(cwd ?? '/', t);
+      continue;
+    }
+    if (prog === 'xargs') {
+      const sub = args.find((w) => !isFlag(w));
+      if (sub && DELETE_PROGRAMS.has(path.basename(sub).toLowerCase())) return refuse('files listed by another command (xargs)');
+      continue;
+    }
+    if (prog === 'git' && args.includes('clean')) {
+      const at = args.indexOf('-C');
+      const why = check(at >= 0 && args[at + 1] ? args[at + 1] : '.', true);
+      if (why) return why;
+      continue;
+    }
+    if (prog === 'find') {
+      const exec = args.indexOf('-exec');
+      const deletes = args.includes('-delete') || (exec >= 0 && DELETE_PROGRAMS.has(path.basename(args[exec + 1] ?? '').toLowerCase()));
+      if (!deletes) continue;
+      const roots: string[] = [];
+      for (const w of args) {
+        if (isFlag(w) || w === '(' || w === '!' || w === '\\(') break;
+        roots.push(w);
       }
+      for (const r of roots.length ? roots : ['.']) {
+        const why = check(r, true);
+        if (why) return why;
+      }
+      continue;
+    }
+    if (!DELETE_PROGRAMS.has(prog)) continue;
+    for (const w of args) {
+      if (isFlag(w)) continue;
+      const why = check(w);
+      if (why) return why;
     }
   }
   return null;

@@ -35,7 +35,14 @@ export interface Settings {
   };
   budget: { monthlyUsd: number | null };
   secrets: { mode: 'local' | 'aws-ssm'; prefix: string; region: string };
-  agents: { defaultPermissionMode: 'default' | 'acceptEdits' | 'plan'; maxTurns: number; resumeAfterRestart: boolean; defaultPushMode: 'never' | 'ask' | 'auto' };
+  agents: {
+    defaultPermissionMode: 'default' | 'acceptEdits' | 'plan';
+    maxTurns: number;
+    resumeAfterRestart: boolean;
+    defaultPushMode: 'never' | 'ask' | 'auto';
+    /** Off by default: agents may read only inside their own project folder. */
+    allowReadsOutsideProject: boolean;
+  };
   /** Extra Claude models for the model picker, one per line as "model id | label"; added without a deploy. */
   modelList: { extra: string };
   /** Sessions handing tasks to separate sessions: limits for everyone. */
@@ -68,7 +75,7 @@ const DEFAULTS: Settings = {
   aws: { region: 'us-east-1', auth: 'ambient', profile: '' },
   budget: { monthlyUsd: 50 },
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
-  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask' },
+  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask', allowReadsOutsideProject: false },
   delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
   modelList: { extra: '' },
   ui: { advanced: false },
@@ -197,6 +204,7 @@ export function updateSettings(patch: any): Settings {
     a.maxTurns = Math.max(1, Math.min(500, Number(a.maxTurns) || 40));
     a.resumeAfterRestart = a.resumeAfterRestart !== false;
     if (!['never', 'ask', 'auto'].includes(a.defaultPushMode)) throw badRequest('Agent pushes must be never, ask or auto');
+    a.allowReadsOutsideProject = Boolean(a.allowReadsOutsideProject);
     saveSection('agents', a);
   }
   if (patch.modelList) {

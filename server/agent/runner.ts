@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { all, insert, one, run as exec, update, type Row } from '../db.ts';
 import { publish, projectChannel, runChannel } from '../events.ts';
@@ -7,7 +8,7 @@ import { config } from '../config.ts';
 import { ensureBuiltInSkills, getProject, projectDir, notifyProject, type Project } from '../projects.ts';
 import { HttpError, badRequest, newId, now, parseJson, withLock } from '../util.ts';
 import { commitAll } from '../git.ts';
-import { blockedCommand, alwaysBlockedCommand, parseTrustedPush, composeLeadAppend, isGitPush } from '../guardrails.ts';
+import { blockedCommand, alwaysBlockedCommand, parseTrustedPush, composeLeadAppend, isGitPush, outsideDeleteReason, isInsideDir } from '../guardrails.ts';
 import type { CanUseTool, PermissionMode, ProviderRunOptions, SdkMessage } from './types.ts';
 import { sdkRun } from './sdk.ts';
 import { kiroRun } from './kiro.ts';
@@ -93,7 +94,10 @@ interface Pending {
 
 interface Active {
   abort: AbortController;
+  /** Tools the user allowed for the rest of the run. */
   allowAll: Set<string>;
+  /** Shell commands the user allowed for the rest of the run, by exact text ("allow all Bash" was too broad). */
+  allowCommands: Set<string>;
   pending: Map<string, Pending>;
   seq: number;
   seenMessageIds: Set<string>;
@@ -108,6 +112,14 @@ const active = new Map<string, Active>();
 export const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob'];
 const AUTO_ALLOWED = ['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite', 'Agent', 'Task', 'LS'];
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+/** Read-only tools and the inputs that name what they read. */
+const READ_TOOL_FIELDS = new Map<string, string[]>([
+  ['Read', ['file_path']],
+  ['Grep', ['path']],
+  ['Glob', ['path', 'pattern']],
+  ['LS', ['path']],
+  ['NotebookRead', ['notebook_path']],
+]);
 
 function runSummary(r: Row) {
   return {
@@ -328,7 +340,8 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
   // A continued run keeps the engine of the run it continues.
   if (input.resumeOf && input.engine === undefined) input.engine = parseJson<any>(getRun(input.resumeOf).meta, {}).engine ?? null;
   const mode = engineProvider(project.id, input.engine);
-  assertBudget(mode);
+  // The person's and the project's monthly caps apply to every run, not only to diagrams and triggers.
+  assertBudget(mode, input.userId, project.id);
   const pdir = projectDir(project);
   const runId = newId('r_');
   const model = input.model || 'sonnet';
@@ -384,6 +397,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
   const a: Active = {
     abort: new AbortController(),
     allowAll: new Set(),
+    allowCommands: new Set(),
     pending: new Map(),
     seq: 0,
     seenMessageIds: new Set(),
@@ -535,18 +549,48 @@ async function execute(
     if (input.oneshot || input.kind === 'review') {
       return { behavior: 'deny', message: `${toolName} is not available for this task.` };
     }
-    if (a.allowAll.has(toolName)) return { behavior: 'allow', updatedInput: toolInput };
-    const resp = await waitForInput(runId, a, 'approval', toolName, { toolName, input: shrink(toolInput, 4000) }, signal);
+    // "Remember" for a shell command covers that exact command only: approving `npm test` once must not also
+    // approve whatever command a prompt-injected document suggests later in the run.
+    const command = toolName === 'Bash' ? String((toolInput as any).command ?? '') : null;
+    if (command !== null ? a.allowCommands.has(command) : a.allowAll.has(toolName)) return { behavior: 'allow', updatedInput: toolInput };
+    const resp = await waitForInput(
+      runId,
+      a,
+      'approval',
+      toolName,
+      { toolName, input: shrink(toolInput, 4000), rememberScope: command !== null ? 'command' : 'tool' },
+      signal,
+    );
     if (resp.decision === 'allow') {
-      if (resp.remember) a.allowAll.add(toolName);
+      if (resp.remember) {
+        if (command !== null) a.allowCommands.add(command);
+        else a.allowAll.add(toolName);
+      }
       return { behavior: 'allow', updatedInput: toolInput };
     }
     return { behavior: 'deny', message: resp.message ? `The user declined: ${resp.message}` : 'The user declined this action.' };
   };
 
+  const runDirAbs = path.resolve(o.workDir);
+  const readsAnywhere = Boolean(getSettings().agents.allowReadsOutsideProject);
   const guard = async (toolName: string, toolInput: Record<string, unknown>): Promise<string | null> => {
+    // Reads stay inside the project folder: other projects, the portal database and its key file live next door.
+    const readFields = READ_TOOL_FIELDS.get(toolName);
+    if (readFields && !readsAnywhere) {
+      for (const field of readFields) {
+        const v = toolInput[field];
+        if (typeof v !== 'string' || !v) continue;
+        if (field === 'pattern' && !path.isAbsolute(v)) continue; // a relative glob is searched from the project folder
+        if (!isInsideDir(pdir, path.resolve(pdir, v))) {
+          return 'Blocked by Agent Portal: agents may only read files inside this project. If you need something from elsewhere, ask the person to add it to the project documents, the Vault or a connected repository.';
+        }
+      }
+    }
     if (toolName === 'Bash') {
       const command = String(toolInput.command ?? '');
+      // Every run, trusted or not: deletes stay inside this run's folder (the shell starts in the project folder).
+      const outside = outsideDeleteReason(command, runDirAbs, { cwd: pdir, home: os.homedir() });
+      if (outside) return `Blocked by Agent Portal: ${outside}`;
       if (input.trustTools && !input.oneshot) {
         // Trusted session: always-blocked commands still refused.
         const alwaysBlocked = alwaysBlockedCommand(command);
@@ -577,8 +621,10 @@ async function execute(
       if (isGitPush(command)) {
         return 'Blocked by Agent Portal: do not run git push. In a session that allows agent pushes, add "push" to your status line and the portal pushes for you; otherwise a person pushes from the portal after review.';
       }
-      // blockedCommand already covers the always-blocked list; call it here for untrusted sessions.
-      // (The canUseTool for autoApprove also calls blockedCommand but guard is called first by SDK.)
+      // Untrusted sessions: the always-blocked and the untrusted lists apply here too, before any approval,
+      // so a command allowed earlier in the run (or by an approval) can never run one of them.
+      const blocked = blockedCommand(command);
+      if (blocked) return `Blocked by Agent Portal: ${blocked}`;
     }
     if (o.integ?.readOnly.size || o.integ?.onlyTools.size) {
       const why = integrationGuard(o.integ.readOnly, toolName, o.integ.onlyTools);
@@ -670,13 +716,14 @@ async function execute(
       const meta = parseJson<any>(getRun(runId).meta, {});
       if (typeof msg.estimated_cost_usd === 'number') meta.estimatedUsd = msg.estimated_cost_usd;
       if (typeof msg.kiro_credits === 'number') meta.kiroCredits = msg.kiro_credits;
-      const usage = (msg.usage ?? {}) as Record<string, number>;
+      const spent = runSpend(msg, input.resumeOf ?? null, { input: inTok, output: outTok });
+      if (spent.session) meta.sessionTotals = spent.session;
       setStatus(runId, ok ? 'completed' : 'failed', {
         result: typeof msg.result === 'string' ? msg.result : '',
         error: ok ? null : `${msg.subtype ?? 'error'}${typeof msg.result === 'string' && msg.result ? `: ${msg.result.slice(0, 500)}` : ''}`,
-        cost_usd: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : 0,
-        input_tokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) || inTok,
-        output_tokens: usage.output_tokens || outTok,
+        cost_usd: spent.costUsd,
+        input_tokens: spent.input,
+        output_tokens: spent.output,
         meta: JSON.stringify(meta),
         finished_at: now(),
       });
@@ -686,6 +733,64 @@ async function execute(
     if (a.abort.signal.aborted) throw new DOMException('Run stopped', 'AbortError');
     setStatus(runId, 'failed', { error: 'The agent ended without a result', finished_at: now() });
   }
+}
+
+interface SessionTotals {
+  costUsd: number;
+  /** Input tokens including cache reads and writes (the portal's convention for input_tokens). */
+  input: number;
+  output: number;
+  sessionId?: string;
+}
+
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/**
+ * This run's own spend. With the Claude Agent SDK a resumed session's result carries the session's running totals
+ * (its docs: "a resumed or forked session continues from the total its transcript saved"), and every session
+ * iteration and follow-up resumes the previous run. Storing those totals made budgets, caps and Insights add the
+ * earlier runs again on every iteration. A continued run now stores the difference from the run it continues.
+ * Totals come from modelUsage, which (unlike usage) includes subagents.
+ */
+export function runSpend(
+  msg: SdkMessage,
+  resumeOf: string | null,
+  live: { input: number; output: number },
+): { costUsd: number; input: number; output: number; session: SessionTotals | null } {
+  const total = num(msg.total_cost_usd);
+  const perModel = (msg as any).modelUsage;
+  if (!perModel || typeof perModel !== 'object' || !Object.keys(perModel).length) {
+    // Demo, Kiro and older results: no per-model usage, and totals are per run.
+    const usage = (msg.usage ?? {}) as Record<string, number>;
+    return {
+      costUsd: total,
+      input: num(usage.input_tokens) + num(usage.cache_read_input_tokens) + num(usage.cache_creation_input_tokens) || live.input,
+      output: num(usage.output_tokens) || live.output,
+      session: null,
+    };
+  }
+  const session: SessionTotals = { costUsd: total, input: 0, output: 0, sessionId: typeof msg.session_id === 'string' ? msg.session_id : undefined };
+  for (const m of Object.values(perModel as Record<string, any>)) {
+    session.input += num(m?.inputTokens) + num(m?.cacheReadInputTokens) + num(m?.cacheCreationInputTokens);
+    session.output += num(m?.outputTokens);
+  }
+  let prev: Partial<SessionTotals> | null = null;
+  if (resumeOf) {
+    const p = one<Row>('SELECT cost_usd, session_id, meta FROM agent_runs WHERE id = ?', resumeOf);
+    if (p) {
+      const pm = parseJson<any>(p.meta, {});
+      // Runs recorded before this fix stored the session total as their cost, so that is the earlier total.
+      prev = pm.sessionTotals ?? { costUsd: num(p.cost_usd), sessionId: p.session_id ?? undefined };
+    }
+  }
+  const sameSession = Boolean(prev) && (!prev!.sessionId || !session.sessionId || prev!.sessionId === session.sessionId);
+  const minus = (cur: number, before: number | undefined) => (sameSession && typeof before === 'number' && cur >= before ? cur - before : cur);
+  return {
+    costUsd: Number(minus(session.costUsd, prev?.costUsd).toFixed(6)),
+    input: minus(session.input, prev?.input),
+    output: minus(session.output, prev?.output),
+    session,
+  };
 }
 
 async function* demoOneshot(opts: ProviderRunOptions, output: () => string | Promise<string>): AsyncIterable<SdkMessage> {
