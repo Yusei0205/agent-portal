@@ -339,10 +339,14 @@ export function createRequestHandler(): (
 
       // ── Body parsing (JSON) ───────────────────────────────────────────────
       if (!matched.isSSE && method !== 'GET' && method !== 'HEAD') {
-        const raw = await readBody(rawReq, 5 * 1024 * 1024);
+        const ct = String(rawReq.headers['content-type'] ?? '');
+        // Multipart uploads can be up to maxUploadBytes; JSON is capped at 5 MB
+        const bodyLimit = ct.includes('multipart/form-data')
+          ? config.maxUploadBytes
+          : 5 * 1024 * 1024;
+        const raw = await readBody(rawReq, bodyLimit);
         req.rawBody = raw;
         if (raw.length > 0) {
-          const ct = String(rawReq.headers['content-type'] ?? '');
           if (ct.includes('application/json')) {
             try {
               req.body = JSON.parse(raw.toString('utf8'));

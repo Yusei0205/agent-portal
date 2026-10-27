@@ -18,56 +18,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { IncomingMessage } from 'node:http';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { all, one, run, insert } from './db.ts';
 import type { Row } from './db.ts';
-import { generateId, now, str, badRequest, notFound, forbidden } from './util.ts';
+import { generateId, now, badRequest } from './util.ts';
 import { config } from './config.ts';
 
-// ── Exported vault helpers (used by vault-generated.ts) ──────────────────────
-
-/** Maximum bytes per file in the vault. */
-export const MAX_FILE = 100 * 1024 * 1024;
-
-/** Maximum total bytes in a project's vault. */
-export const MAX_VAULT = 2 * 1024 * 1024 * 1024;
-
-/** Resolve the root directory of the vault for a scope/project/user combination. */
-export function vaultDir(scope: 'project' | 'personal' | 'portal', userId: string, projectId: string): string {
-  if (scope === 'project') {
-    return path.join(config.dataDir, 'vault', 'projects', projectId, 'project');
-  }
-  if (scope === 'personal') {
-    return path.join(config.dataDir, 'vault', 'projects', projectId, 'personal', userId);
-  }
-  return path.join(config.dataDir, 'vault', 'portal');
-}
-
-/** List all files (recursively) under a vault root directory. Returns stat entries. */
-export function listVault(root: string): { path: string; size: number }[] {
-  const out: { path: string; size: number }[] = [];
-  const walk = (dir: string) => {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.isFile()) {
-        try {
-          out.push({ path: full, size: fs.statSync(full).size });
-        } catch {
-          // unreadable
-        }
-      }
-    }
-  };
-  walk(root);
-  return out;
-}
-
-// ── Multipart reader (reused pattern from knowledge.ts) ───────────────────────
+// ── Multipart parser (uses req.rawBody — already read by HTTP framework) ──────
 
 interface UploadedFile {
   filename: string;
@@ -75,34 +33,15 @@ interface UploadedFile {
   data: Buffer;
 }
 
-async function readMultipartFile(
-  req: IncomingMessage,
-  maxBytes: number,
-): Promise<{ file: UploadedFile | null; fields: Record<string, string> }> {
-  const ct = req.headers['content-type'] ?? '';
-  const boundaryMatch = ct.match(/boundary=([^\s;]+)/);
+function parseMultipart(
+  rawBody: Buffer,
+  contentType: string,
+): { file: UploadedFile | null; fields: Record<string, string> } {
+  const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
   if (!boundaryMatch) throw badRequest('Missing multipart boundary');
   const boundary = '--' + boundaryMatch[1];
 
-  const chunks: Buffer[] = [];
-  let total = 0;
-
-  await new Promise<void>((resolve, reject) => {
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        reject(badRequest(`Upload exceeds ${Math.round(maxBytes / 1024 / 1024)} MB limit`));
-        (req as any).destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', resolve);
-    req.on('error', reject);
-  });
-
-  const body = Buffer.concat(chunks);
-  const bodyStr = body.toString('binary');
+  const bodyStr = rawBody.toString('binary');
   const boundaryBuf = Buffer.from(boundary, 'utf8');
 
   const parts: Buffer[] = [];
@@ -114,7 +53,7 @@ async function readMultipartFile(
       let end = idx;
       if (bodyStr[end - 1] === '\n') end--;
       if (bodyStr[end - 1] === '\r') end--;
-      parts.push(body.slice(start, end));
+      parts.push(rawBody.slice(start, end));
     }
     start = idx + boundaryBuf.length;
     if (bodyStr[start] === '\r') start++;
@@ -186,7 +125,6 @@ type VaultScope = 'project' | 'personal' | 'portal';
 function vaultStorePath(
   scope: VaultScope,
   projectId: string | null,
-  userId: string | null,
   fileId: string,
   filename: string,
 ): string {
@@ -196,27 +134,12 @@ function vaultStorePath(
   }
   if (scope === 'personal') {
     return path.join(
-      config.dataDir,
-      'vault',
-      'projects',
-      projectId!,
-      'personal',
-      `${fileId}-${safe}`,
+      config.dataDir, 'vault', 'projects', projectId!, 'personal', `${fileId}-${safe}`,
     );
   }
-  // project scope
   return path.join(
-    config.dataDir,
-    'vault',
-    'projects',
-    projectId!,
-    'project',
-    `${fileId}-${safe}`,
+    config.dataDir, 'vault', 'projects', projectId!, 'project', `${fileId}-${safe}`,
   );
-}
-
-function vaultRelPath(absPath: string): string {
-  return path.relative(config.dataDir, absPath);
 }
 
 function mimeFromExt(filename: string): string {
@@ -239,15 +162,22 @@ function mimeFromExt(filename: string): string {
   return MIME[path.extname(filename).toLowerCase()] ?? 'application/octet-stream';
 }
 
-async function doUpload(
+function doUpload(
   req: PortalRequest,
   res: PortalResponse,
-  scope: VaultScope,
+  defaultScope: VaultScope,
   projectId: string | null,
-): Promise<void> {
-  let parsed: Awaited<ReturnType<typeof readMultipartFile>>;
+): void {
+  if (!req.rawBody || !req.rawBody.length) {
+    sendJson(res, 400, { error: 'No file data received' });
+    return;
+  }
+
+  const contentType = String(req.headers['content-type'] ?? '');
+
+  let parsed: ReturnType<typeof parseMultipart>;
   try {
-    parsed = await readMultipartFile(req as unknown as IncomingMessage, MAX_FILE);
+    parsed = parseMultipart(req.rawBody, contentType);
   } catch (err: unknown) {
     sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
     return;
@@ -259,19 +189,20 @@ async function doUpload(
   }
 
   const { filename, mimeType, data } = parsed.file;
-  const effectiveScope: VaultScope = scope !== 'portal'
-    ? ((parsed.fields.scope as VaultScope | undefined) ?? scope)
-    : 'portal';
+  const rawScope = (parsed.fields.scope as VaultScope | undefined) ?? defaultScope;
+  const effectiveScope: VaultScope = ['project', 'personal', 'portal'].includes(rawScope)
+    ? rawScope
+    : defaultScope;
 
   const fileId = generateId();
   const userId = effectiveScope === 'personal' ? req.user!.id : null;
-  const absPath = vaultStorePath(effectiveScope, projectId, userId, fileId, filename);
+  const absPath = vaultStorePath(effectiveScope, projectId, fileId, filename);
   const safeFilename = path.basename(filename).replace(/[^\w.\-]/g, '_').slice(0, 200);
 
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, data);
 
-  const relPath = vaultRelPath(absPath);
+  const relPath = path.relative(config.dataDir, absPath);
 
   insert('vault_files', {
     id: fileId,
@@ -329,16 +260,14 @@ export function registerVaultRoutes(): void {
       return;
     }
 
-    // Return all three combined
+    // Return all combined
     const files = all<Row>(
       `SELECT * FROM vault_files
         WHERE (project_id = ? AND user_id IS NULL)
            OR (project_id = ? AND user_id = ?)
            OR project_id IS NULL
         ORDER BY created_at DESC`,
-      projectId,
-      projectId,
-      userId,
+      projectId, projectId, userId,
     );
     sendJson(res, 200, { files });
   });
@@ -346,10 +275,10 @@ export function registerVaultRoutes(): void {
   // POST /api/projects/:id/vault/upload
   router.post(
     '/api/projects/:id/vault/upload',
-    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    (req: PortalRequest, res: PortalResponse): void => {
       const project = requireMember(req, res, req.params.id);
       if (!project) return;
-      await doUpload(req, res, 'project', req.params.id);
+      doUpload(req, res, 'project', req.params.id);
     },
   );
 
@@ -376,13 +305,8 @@ export function registerVaultRoutes(): void {
         return;
       }
 
-      // Delete from disk
       const absPath = path.join(config.dataDir, String(vf.path));
-      try {
-        fs.rmSync(absPath, { force: true });
-      } catch {
-        // non-fatal
-      }
+      try { fs.rmSync(absPath, { force: true }); } catch { /* non-fatal */ }
 
       run('DELETE FROM vault_files WHERE id = ?', req.params.fileId);
       sendJson(res, 200, { ok: true });
@@ -403,25 +327,16 @@ export function registerVaultRoutes(): void {
         req.params.fileId,
         req.params.id,
       );
-      if (!vf) {
-        sendJson(res, 404, { error: 'File not found' });
-        return;
-      }
+      if (!vf) { sendJson(res, 404, { error: 'File not found' }); return; }
 
       const absPath = path.join(config.dataDir, String(vf.path));
-      if (!fs.existsSync(absPath)) {
-        sendJson(res, 404, { error: 'File not on disk' });
-        return;
-      }
+      if (!fs.existsSync(absPath)) { sendJson(res, 404, { error: 'File not on disk' }); return; }
 
       const stat = fs.statSync(absPath);
-      const mime = String(vf.mime_type || 'application/octet-stream');
-      const safeFilename = encodeURIComponent(String(vf.name));
-
       res.writeHead(200, {
-        'Content-Type': mime,
+        'Content-Type': String(vf.mime_type || 'application/octet-stream'),
         'Content-Length': stat.size,
-        'Content-Disposition': `attachment; filename="${safeFilename}"`,
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(String(vf.name))}"`,
         'Cache-Control': 'no-store',
       });
       fs.createReadStream(absPath).pipe(res);
@@ -429,49 +344,51 @@ export function registerVaultRoutes(): void {
   );
 
   // GET /api/projects/:id/vault/zip
-  router.get('/api/projects/:id/vault/zip', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const project = requireMember(req, res, req.params.id);
-    if (!project) return;
+  router.get(
+    '/api/projects/:id/vault/zip',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = requireMember(req, res, req.params.id);
+      if (!project) return;
 
-    const scope = (req.query.get('scope') as VaultScope | null) ?? 'project';
-    const userId = req.user!.id;
-    const projectId = req.params.id;
+      const scope = (req.query.get('scope') as VaultScope | null) ?? 'project';
+      const userId = req.user!.id;
+      const projectId = req.params.id;
 
-    let files: Row[];
-    if (scope === 'portal') {
-      files = all<Row>('SELECT * FROM vault_files WHERE project_id IS NULL');
-    } else if (scope === 'personal') {
-      files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ?',
-        projectId, userId,
-      );
-    } else {
-      files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL',
-        projectId,
-      );
-    }
-
-    // Dynamically import JSZip
-    const JSZip = (await import('jszip')).default;
-    const zip = new JSZip();
-
-    for (const f of files) {
-      const absPath = path.join(config.dataDir, String(f.path));
-      if (fs.existsSync(absPath)) {
-        zip.file(String(f.name), fs.readFileSync(absPath));
+      let files: Row[];
+      if (scope === 'portal') {
+        files = all<Row>('SELECT * FROM vault_files WHERE project_id IS NULL');
+      } else if (scope === 'personal') {
+        files = all<Row>(
+          'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ?',
+          projectId, userId,
+        );
+      } else {
+        files = all<Row>(
+          'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL',
+          projectId,
+        );
       }
-    }
 
-    const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-    res.writeHead(200, {
-      'Content-Type': 'application/zip',
-      'Content-Length': buf.length,
-      'Content-Disposition': `attachment; filename="vault-${scope}.zip"`,
-      'Cache-Control': 'no-store',
-    });
-    res.end(buf);
-  });
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+
+      for (const f of files) {
+        const absPath = path.join(config.dataDir, String(f.path));
+        if (fs.existsSync(absPath)) {
+          zip.file(String(f.name), fs.readFileSync(absPath));
+        }
+      }
+
+      const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Length': buf.length,
+        'Content-Disposition': `attachment; filename="vault-${scope}.zip"`,
+        'Cache-Control': 'no-store',
+      });
+      res.end(buf);
+    },
+  );
 
   // ── Portal-wide vault ─────────────────────────────────────────────────────
 
@@ -488,11 +405,11 @@ export function registerVaultRoutes(): void {
   });
 
   // POST /api/vault/upload
-  router.post('/api/vault/upload', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+  router.post('/api/vault/upload', (req: PortalRequest, res: PortalResponse): void => {
     if (!req.user?.is_admin) {
       sendJson(res, 403, { error: 'Admin only' });
       return;
     }
-    await doUpload(req, res, 'portal', null);
+    doUpload(req, res, 'portal', null);
   });
 }

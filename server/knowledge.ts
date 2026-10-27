@@ -13,7 +13,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { IncomingMessage } from 'node:http';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { all, one, run, insert, getDb } from './db.ts';
@@ -64,34 +63,15 @@ interface UploadedFile {
   data: Buffer;
 }
 
-async function readMultipartFile(
-  req: IncomingMessage,
-  maxBytes: number,
-): Promise<UploadedFile | null> {
-  const ct = req.headers['content-type'] ?? '';
-  const boundaryMatch = ct.match(/boundary=([^\s;]+)/);
+function parseMultipartFile(
+  rawBody: Buffer,
+  contentType: string,
+): UploadedFile | null {
+  const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
   if (!boundaryMatch) throw badRequest('Missing multipart boundary');
   const boundary = '--' + boundaryMatch[1];
 
-  const chunks: Buffer[] = [];
-  let total = 0;
-
-  await new Promise<void>((resolve, reject) => {
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        reject(badRequest(`Upload exceeds ${Math.round(maxBytes / 1024 / 1024)} MB limit`));
-        (req as any).destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', resolve);
-    req.on('error', reject);
-  });
-
-  const body = Buffer.concat(chunks);
-  const bodyStr = body.toString('binary');
+  const bodyStr = rawBody.toString('binary');
   const boundaryBuf = Buffer.from(boundary, 'utf8');
 
   // Split on boundary
@@ -101,11 +81,10 @@ async function readMultipartFile(
     const idx = bodyStr.indexOf(boundary, start);
     if (idx < 0) break;
     if (start > 0) {
-      // strip trailing CRLF before boundary
       let end = idx;
       if (bodyStr[end - 1] === '\n') end--;
       if (bodyStr[end - 1] === '\r') end--;
-      parts.push(body.slice(start, end));
+      parts.push(rawBody.slice(start, end));
     }
     start = idx + boundaryBuf.length;
     // skip CRLF after boundary
@@ -122,7 +101,6 @@ async function readMultipartFile(
     const headerSection = partStr.slice(0, headerEnd);
     const fileData = part.slice(headerEnd + 4);
 
-    const nameMatch = headerSection.match(/Content-Disposition:[^\r\n]*name="([^"]+)"/i);
     const filenameMatch = headerSection.match(/Content-Disposition:[^\r\n]*filename="([^"]+)"/i);
     const ctMatch = headerSection.match(/Content-Type:\s*([^\r\n]+)/i);
 
@@ -230,10 +208,13 @@ export function registerKnowledgeRoutes(): void {
       const project = requireMember(req, res, req.params.id);
       if (!project) return;
 
-      const MAX_UPLOAD = 50 * 1024 * 1024;
-      let uploaded: Awaited<ReturnType<typeof readMultipartFile>>;
+      let uploaded: ReturnType<typeof parseMultipartFile>;
       try {
-        uploaded = await readMultipartFile(req as unknown as IncomingMessage, MAX_UPLOAD);
+        if (!req.rawBody || !req.rawBody.length) {
+          throw badRequest('No file data received');
+        }
+        const contentType = String(req.headers['content-type'] ?? '');
+        uploaded = parseMultipartFile(req.rawBody, contentType);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         sendJson(res, 400, { error: msg });

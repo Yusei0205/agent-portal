@@ -16,27 +16,11 @@ import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 async function setup(baseUrl: string): Promise<{ cookie: string; projectId: string }> {
-  await fetchJson(baseUrl, '/api/auth/setup', {
-    method: 'POST',
-    body: {
-      email: `knowledge-admin-${Date.now()}@example.com`,
-      name: 'Admin',
-      password: 'password1234',
-      provider: 'demo',
-    },
-  });
-  const loginR = await fetchJson(baseUrl, '/api/auth/login', {
-    method: 'POST',
-    body: {
-      email: `knowledge-admin-${Date.now()}@example.com`,
-      password: 'password1234',
-    },
-  });
-  // Use setup cookie (first user is auto-logged-in)
+  const email = `k-admin-${Date.now()}@example.com`;
   const setupR = await fetchJson(baseUrl, '/api/auth/setup', {
     method: 'POST',
     body: {
-      email: `k-admin-${Date.now()}@example.com`,
+      email,
       name: 'Admin',
       password: 'password1234',
       provider: 'demo',
