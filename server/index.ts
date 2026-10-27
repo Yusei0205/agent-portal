@@ -40,6 +40,8 @@ import { registerApiTokenRoutes } from './api-tokens.ts';
 import { registerAuditRoutes } from './audit.ts';
 import { registerLearnRoutes } from './learn.ts';
 import { registerControlPlaneRoutes } from './control-plane.ts';
+import { registerIntegrationRoutes } from './integrations.ts';
+import { registerAwsAccountRoutes } from './aws-accounts.ts';
 
 // Track whether routes have been registered (they're global, so only once per process)
 
@@ -131,6 +133,8 @@ export async function startServer(
   registerAuditRoutes();
   registerLearnRoutes();
   registerControlPlaneRoutes();
+  registerIntegrationRoutes();
+  registerAwsAccountRoutes();
 
   // 6. Auto-create admin from env vars if no users exist
   if (

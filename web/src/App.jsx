@@ -14,6 +14,13 @@ import { Knowledge } from './pages/Knowledge.jsx';
 import { Vault } from './pages/Vault.jsx';
 import { Insights } from './pages/Insights.jsx';
 import { AdminPanel } from './pages/AdminPanel.jsx';
+import Review from './pages/Review.jsx';
+import LoopSpecs from './pages/LoopSpecs.jsx';
+import { Workspaces } from './pages/Workspaces.jsx';
+import { ApiAccess } from './pages/ApiAccess.jsx';
+import { Connections } from './pages/Connections.jsx';
+import { Integrations } from './pages/Integrations.jsx';
+import { AwsAccounts } from './pages/AwsAccounts.jsx';
 
 // ── Navigation structure ──────────────────────────────────────────────────────
 
@@ -363,6 +370,13 @@ function Shell({ user, onSignOut }) {
   const isVaultRoute = route.projectId && route.tab === 'vault';
   const isInsightsRoute = route.tab === 'insights';
   const isAdminRoute = !route.projectId && route.tab === 'admin';
+  const isReviewRoute = route.projectId && route.tab === 'review';
+  const isLoopSpecsRoute = route.projectId && route.tab === 'loop-specs';
+  const isWorkspacesRoute = route.projectId && route.tab === 'workspaces';
+  const isApiRoute = !route.projectId && route.tab === 'api';
+  const isConnectionsRoute = !route.projectId && route.tab === 'connections';
+  const isIntegrationsRoute = !route.projectId && route.tab === 'integrations';
+  const isAwsRoute = !route.projectId && route.tab === 'aws';
 
   return (
     <div
@@ -425,6 +439,20 @@ function Shell({ user, onSignOut }) {
           <Insights projectId={route.projectId || null} user={user} />
         ) : isAdminRoute ? (
           <AdminPanel user={user} />
+        ) : isReviewRoute ? (
+          <Review projectId={route.projectId} />
+        ) : isLoopSpecsRoute ? (
+          <LoopSpecs projectId={route.projectId} />
+        ) : isWorkspacesRoute ? (
+          <Workspaces projectId={route.projectId} />
+        ) : isApiRoute ? (
+          <ApiAccess />
+        ) : isConnectionsRoute ? (
+          <Connections />
+        ) : isIntegrationsRoute ? (
+          <Integrations projectId={route.projectId} />
+        ) : isAwsRoute ? (
+          <AwsAccounts projectId={route.projectId} />
         ) : (
           <Placeholder tab={route.tab} />
         )}

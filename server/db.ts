@@ -1162,9 +1162,39 @@ const M10_ADMIN_INSIGHTS_LEARN = `
   );
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN];
+/**
+ * Migration 11: MCP Integrations and AWS Accounts per project.
+ */
+const M11_INTEGRATIONS_AWS = `
+  CREATE TABLE IF NOT EXISTS mcp_integrations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('http','stdio','atlassian','aws','browser','drawio')),
+    config_enc TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS mcp_integrations_project ON mcp_integrations(project_id);
 
-export const SCHEMA_VERSION = MIGRATIONS.length; // = 10
+  CREATE TABLE IF NOT EXISTS aws_accounts (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    auth_method TEXT NOT NULL CHECK(auth_method IN ('keys','profile','instance-role','sso')),
+    region TEXT,
+    credentials_enc TEXT,
+    profile_name TEXT,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS aws_accounts_project ON aws_accounts(project_id);
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS];
+
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 11
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 

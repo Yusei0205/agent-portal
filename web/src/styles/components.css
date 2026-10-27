@@ -326,3 +326,102 @@ input[type="radio"] {
   border-color: var(--accent);
   background: var(--accent-wash);
 }
+
+
+/* ── Modal ──────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: min(560px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+}
+.modal.modal-wide { width: min(720px, 95vw); }
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.modal-header h2 { margin: 0; font-size: 1.05rem; }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+/* ── Additional badge variants ──────────────────────── */
+.badge-neutral { background: var(--line); color: var(--ink-2); }
+.badge-info    { background: #dbeafe; color: #1d4ed8; }
+.badge-success { background: var(--ok-wash); color: var(--ok); }
+.badge-error   { background: var(--danger-wash); color: var(--danger); }
+[data-theme="dark"] .badge-info { background: #1e3a5f; color: #7db3f5; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .badge-info { background: #1e3a5f; color: #7db3f5; }
+}
+
+/* ── Tab bar ────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+.tab-btn {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.tab-btn:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 50%, transparent);
+}
+.tab-btn.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Row actions ────────────────────────────────────── */
+.row-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.actions-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ── Empty state ────────────────────────────────────── */
+.empty-state {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--ink-3);
+}
+.empty-state p { margin: 0; }
