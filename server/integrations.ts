@@ -140,7 +140,7 @@ function readBody(body: any, user: User, cur?: Row) {
   }
   if (kind === 'stdio') {
     cfg.command = str(body.command ?? old.command, 'Command', { max: 200 }).trim();
-    if (!/^[\w .@/:\\()-]+$/.test(cfg.command) || cfg.command !== cfg.command.trim()) throw badRequest('The command is a program name or path, without arguments (put those under Arguments)');
+    if (!/^[\w .@/:\\()~-]+$/.test(cfg.command) || cfg.command !== cfg.command.trim()) throw badRequest('The command is a program name or path, without arguments (put those under Arguments)');
     const args = body.args ?? old.args ?? [];
     if (!Array.isArray(args) || args.length > 40) throw badRequest('Arguments must be a list (at most 40)');
     cfg.args = args.map((a: unknown) => str(a, 'Argument', { max: 500 }));

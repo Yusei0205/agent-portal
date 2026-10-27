@@ -1,5 +1,5 @@
 /** Shared state and helpers of workflow sessions: the row, its history log, the check command and the budget test. */
-import { spawn } from 'node:child_process';
+import { runShellCheck } from '../proc.ts';
 import { one, run as exec, update, type Row } from '../db.ts';
 import { notifyProject } from '../projects.ts';
 import { badRequest, notFound, now } from '../util.ts';
@@ -55,31 +55,10 @@ export function log(workflowId: string, kind: string, body: string, extra: { run
   notifyProject(w.project_id, 'workflow.updated', view(w));
 }
 
-function runCheck(command: string, cwd: string): Promise<{ ok: boolean; output: string }> {
-  return new Promise((resolve) => {
-    // Only the basics of the environment: a check must not see the portal's keys.
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(AWS_|ANTHROPIC_|PORTAL_|GITHUB_|GH_)/i.test(k)) env[k] = v;
-    const child = spawn(command, { cwd, env, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    const add = (d: Buffer) => {
-      out = (out + d.toString()).slice(-6000);
-    };
-    child.stdout.on('data', add);
-    child.stderr.on('data', add);
-    const timer = setTimeout(() => {
-      out += '\n[the check took longer than 5 minutes and was stopped]';
-      child.kill();
-    }, 5 * 60_000);
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      resolve({ ok: false, output: `Could not start the check: ${e.message}` });
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0, output: out.trim().slice(-4000) });
-    });
-  });
+async function runCheck(command: string, cwd: string): Promise<{ ok: boolean; output: string }> {
+  // A check does not see the portal's keys; on timeout its whole process tree is stopped (proc.ts).
+  const r = await runShellCheck(command, cwd, 5 * 60_000, '[the check took longer than 5 minutes and was stopped]');
+  return { ok: r.ok, output: r.output };
 }
 
 /**

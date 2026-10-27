@@ -26,26 +26,7 @@ import { HttpError, badRequest, listValue, parseFrontmatter, slugify } from '../
 import { getSettings } from '../settings.ts';
 import { listKiroAgentsAt, runProfileOf, type KiroAgentFile } from './kiro-project.ts';
 
-/**
- * Kill a process tree. On Windows, uses taskkill /T /F to terminate the whole
- * tree. On other platforms, kills the process group with SIGTERM then SIGKILL.
- */
-function killProcessTree(pid: number): void {
-  if (!pid) return;
-  try {
-    if (process.platform === 'win32') {
-      import('node:child_process').then(({ spawn: spawnCp }) => {
-        spawnCp('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', detached: true }).unref();
-      }).catch(() => {});
-    } else {
-      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* ok */ } }
-      setTimeout(() => {
-        try { process.kill(-pid, 'SIGKILL'); } catch { /* ok */ }
-        try { process.kill(pid, 'SIGKILL'); } catch { /* ok */ }
-      }, 2000).unref();
-    }
-  } catch { /* process already gone */ }
-}
+import { killProcessTree } from '../proc.ts';
 
 /** Export for use by the runner's stopRun(). */
 export { killProcessTree };

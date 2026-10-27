@@ -51,7 +51,7 @@ async function drive(id: string, gen: number): Promise<void> {
     }
   }
   const summaries: string[] = savedState?.summaries ? parseJson<string[]>(savedState.summaries, []) : [];
-  const driveStartedAt = Date.now();
+  const wallClockStart = wallClockStartedAt(id);
 
   /** Write current loop state to the database (called at the start of every iteration). */
   function persistLoopState(iteration: number): void {
@@ -92,7 +92,7 @@ async function drive(id: string, gen: number): Promise<void> {
         return s?.spec_snapshot ? parseJson<any>(s.spec_snapshot, {}) : {};
       })();
       const wallMins = Number(specSnap.stop_rules?.wallClockMinutes ?? 0);
-      if (wallMins > 0 && (Date.now() - driveStartedAt) > wallMins * 60_000) {
+      if (wallMins > 0 && (Date.now() - wallClockStart) > wallMins * 60_000) {
         return stopWith(id, 'paused', `Reached the ${wallMins}-minute wall-clock limit. Resume to go on.`);
       }
     }
@@ -295,7 +295,7 @@ async function drive(id: string, gen: number): Promise<void> {
           : [];
 
       if (verificationSteps.length) {
-        const pipelineResult = await runPipeline(verificationSteps, cwd, summary);
+        const pipelineResult = await runPipeline(verificationSteps, cwd, summary, { projectId: w.project_id, userId: w.created_by, workflowId: id });
         persistPipelineResult(id, pipelineResult);
         lastCheck = {
           command: verificationSteps.map((s) => s.step).join(', '),
@@ -413,6 +413,25 @@ export function kick(id: string): void {
       }
     })
     .finally(() => driving.delete(id));
+}
+
+/**
+ * When the session's current stretch of iterations started (milliseconds), for the wall-clock stop rule. The time is
+ * kept in loop_run_states with the stretch it belongs to (the session's burst_start), so a server restart, which
+ * resumes the session, keeps counting. A new stretch (a person resumed the session, or it paused and went on) gets a
+ * new start. Sessions without loop state (no loop spec) have no wall-clock rule, so they just get "now".
+ */
+export function wallClockStartedAt(id: string): number {
+  const w = one<Row>('SELECT burst_start FROM workflows WHERE id = ?', id);
+  const s = one<Row>('SELECT wall_clock_started_at, burst_start FROM loop_run_states WHERE workflow_id = ?', id);
+  const burst = Number(w?.burst_start ?? 0);
+  if (s?.wall_clock_started_at && Number(s.burst_start) === burst) {
+    const t = Date.parse(String(s.wall_clock_started_at));
+    if (Number.isFinite(t)) return t;
+  }
+  const started = now();
+  if (s) exec('UPDATE loop_run_states SET wall_clock_started_at = ?, burst_start = ? WHERE workflow_id = ?', started, burst, id);
+  return Date.parse(started);
 }
 
 /** True if any session is actively running a drive() loop in this process. */

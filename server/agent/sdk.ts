@@ -64,6 +64,10 @@ export async function* sdkRun(opts: ProviderRunOptions): AsyncIterable<SdkMessag
     permissionMode: opts.permissionMode,
     allowedTools: opts.allowedTools ?? [],
     settingSources: opts.settingSources,
+    // MCP servers come only from the portal's own integrations (opts.mcpServers). Without this, the SDK also starts
+    // servers declared in project files (.mcp.json, plugins, and agent frontmatter that project editors can change),
+    // which would run commands on the portal server. The Kiro engine does the same (kiro.ts).
+    strictMcpConfig: true,
     canUseTool: async (toolName: string, toolInput: Record<string, unknown>, o: any) =>
       opts.canUseTool(toolName, toolInput, { signal: o?.signal ?? opts.abort.signal, toolUseID: o?.toolUseID, agentID: o?.agentID }),
     hooks: {

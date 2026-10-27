@@ -26,6 +26,15 @@ import {
   str,
   stringifyFrontmatter,
 } from './util.ts';
+import { isCommandField } from './config-files.ts';
+
+/**
+ * The extra frontmatter fields an import may keep: plain keys only (a key with a line break or a colon could write
+ * other fields), and hooks, MCP servers and permission modes only when an admin imports, as in the file editor.
+ */
+function keptExtra(extra: Record<string, unknown> | undefined, admin: boolean): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(extra ?? {}).filter(([k]) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(k) && (admin || !isCommandField(k))));
+}
 
 /* ------------------------------------------------------------------ */
 /* Constants / limits                                                  */
@@ -543,7 +552,7 @@ function claudeDir(p: Project, enabled = true): string {
   return path.join(projectDir(p), '.claude', enabled ? '' : '_disabled');
 }
 
-async function applyImport(project: Project, body: ConfirmBody): Promise<{ imported: number; skipped: number; names: string[] }> {
+async function applyImport(project: Project, body: ConfirmBody, admin: boolean): Promise<{ imported: number; skipped: number; names: string[] }> {
   const base = claudeDir(project, true);
   const libDir = (type: 'agents' | 'skills') => dataPath('library', type);
 
@@ -576,7 +585,7 @@ async function applyImport(project: Project, body: ConfirmBody): Promise<{ impor
         tools,
         model: model !== 'inherit' ? model : undefined,
         skills: parsed.skills ?? [],
-        ...(parsed.extra ?? {}),
+        ...keptExtra(parsed.extra, admin),
       };
       fs.writeFileSync(file, stringifyFrontmatter(fm as Record<string, string | string[] | undefined>, (parsed.prompt ?? '').trim() + '\n'));
 
@@ -592,7 +601,7 @@ async function applyImport(project: Project, body: ConfirmBody): Promise<{ impor
         description: parsed.description ?? '',
         'allowed-tools': parsed.allowedTools ?? [],
         ...(parsed.argumentHint ? { 'argument-hint': parsed.argumentHint } : {}),
-        ...(parsed.extra ?? {}),
+        ...keptExtra(parsed.extra, admin),
       };
       fs.writeFileSync(path.join(skillDir, 'SKILL.md'), stringifyFrontmatter(fm as Record<string, string | string[] | undefined>, (parsed.body ?? '').trim() + '\n'));
 
@@ -602,6 +611,7 @@ async function applyImport(project: Project, body: ConfirmBody): Promise<{ impor
           const parts = relPath.split('/');
           if (parts.some((p) => p.startsWith('.') || p === '..')) continue;
           if (parts.length > MAX_SKILL_DEPTH + 1) continue;
+          if (relPath.toLowerCase() === 'skill.md') continue; // written above from the checked fields; never replaced raw
           const extLower = path.extname(relPath).toLowerCase();
           const ALLOWED_EXTS = new Set(['.md', '.txt', '.json', '.yaml', '.yml', '.py', '.ts', '.js', '.sh', '.csv', '.toml', '.ini', '.conf']);
           if (extLower && !ALLOWED_EXTS.has(extLower)) continue;
@@ -695,7 +705,7 @@ export function registerImporterRoutes(): void {
     const body: ConfirmBody = await ctx.json();
     if (!Array.isArray(body.items) || !Array.isArray(body.parsed)) throw badRequest('Invalid request body');
 
-    const { imported, skipped, names } = await applyImport(project, body);
+    const { imported, skipped, names } = await applyImport(project, body, Boolean(ctx.user!.is_admin) && !ctx.apiToken);
     if (imported === 0) return { imported, skipped, message: 'Nothing to import (all items were skipped or invalid)' };
 
     await commitProject(project.id, `Import ${imported} item${imported === 1 ? '' : 's'}: ${names.slice(0, 8).join(', ')}${names.length > 8 ? '…' : ''}`, ['.claude']);

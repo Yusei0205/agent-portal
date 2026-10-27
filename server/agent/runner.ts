@@ -105,6 +105,8 @@ interface Active {
   projectId?: string;
   workflowId?: string;
   activityAt?: number;
+  /** Why the run was stopped, for its record ("Stopped by a user" when not set). */
+  stopReason?: string;
 }
 
 const active = new Map<string, Active>();
@@ -457,7 +459,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
       const aborted = e?.name === 'AbortError' || a.abort.signal.aborted;
       const r = getRun(runId);
       if (!['completed', 'failed', 'stopped'].includes(r.status)) {
-        setStatus(runId, aborted ? 'stopped' : 'failed', { error: aborted ? 'Stopped by a user' : String(e?.message ?? e), finished_at: now() });
+        setStatus(runId, aborted ? 'stopped' : 'failed', { error: aborted ? (a.stopReason ?? 'Stopped by a user') : String(e?.message ?? e), finished_at: now() });
       }
       if (!aborted && !(e instanceof HttpError)) console.error(`[run ${runId}]`, e);
     } finally {
@@ -866,29 +868,29 @@ export function stopRun(runId: string): boolean {
   return true;
 }
 
-/**
- * Kill a process tree for a given PID.
- * On Windows: taskkill /T /F. On other platforms: SIGTERM to process group.
- * Used by the Kiro runner (see kiro.ts), exported here for any caller that needs it.
- */
-export function killProcessTree(pid: number): void {
-  if (!pid) return;
-  try {
-    if (process.platform === 'win32') {
-      // Lazy import via the module already in scope (we already import from node:child_process elsewhere in the file)
-      // spawn is imported at the top of the runner via the SDK path — re-use it.
-      import('node:child_process').then(({ spawn: spawnCp }) => {
-        spawnCp('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', detached: true }).unref();
-      }).catch(() => {});
-    } else {
-      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* ok */ } }
-      setTimeout(() => {
-        try { process.kill(-pid, 'SIGKILL'); } catch { /* ok */ }
-        try { process.kill(pid, 'SIGKILL'); } catch { /* ok */ }
-      }, 2000).unref();
-    }
-  } catch { /* process already gone */ }
+/** True while any run is going: session iterations and standalone runs (reviews, questions, documents, one-off runs). */
+export function anyRunActive(): boolean {
+  return active.size > 0;
 }
+
+/**
+ * Stop the standalone runs that are still going and wait (up to timeoutMs) until each has recorded how it ended, so
+ * the database can be closed afterwards. Session iterations are left alone: their sessions resume after a restart.
+ * Returns how many runs were stopped.
+ */
+export async function stopStandaloneRuns(reason: string, timeoutMs: number): Promise<number> {
+  const ids = [...active].filter(([, a]) => !a.workflowId).map(([id]) => id);
+  for (const id of ids) {
+    const a = active.get(id)!;
+    a.stopReason = reason;
+    a.abort.abort();
+  }
+  const until = Date.now() + timeoutMs;
+  while (ids.some((id) => active.has(id)) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  return ids.length;
+}
+
+export { killProcessTree } from '../proc.ts';
 
 export function isActive(runId: string): boolean {
   return active.has(runId);

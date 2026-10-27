@@ -1,5 +1,5 @@
 /** Ending an iteration burst: marking a session done, blocked, failed, paused or stopped. */
-import { one, type Row } from '../db.ts';
+import { one, run as exec, type Row } from '../db.ts';
 import { now, parseJson } from '../util.ts';
 import { drainQueue } from '../control-plane.ts';
 import { getLoopSpec, type EscalationConfig } from '../loop-specs.ts';
@@ -12,6 +12,8 @@ import { kick } from './driver.ts';
 export function stopWith(id: string, status: 'done' | 'blocked' | 'failed' | 'paused' | 'stopped', reason: string): void {
   const w = one<Row>('SELECT * FROM workflows WHERE id = ?', id);
   patch(id, { status, stop_reason: reason });
+  // The session stopped or paused, so whatever comes next starts a new wall-clock window (driver.ts).
+  exec('UPDATE loop_run_states SET wall_clock_started_at = NULL WHERE workflow_id = ?', id);
   log(id, 'status', reason ? `${status}: ${reason}` : status);
   childStopped(id);
 

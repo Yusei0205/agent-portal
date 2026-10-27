@@ -31,7 +31,7 @@ import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
 import { recoverWorkflows, registerWorkflowRoutes, resumeAfterRestart, anyDriving } from './workflows.ts';
 import { registerSessionCommandRoutes } from './session-commands.ts';
-import { recoverRuns } from './agent/runner.ts';
+import { anyRunActive, recoverRuns, stopStandaloneRuns } from './agent/runner.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerAuditRoutes } from './audit.ts';
 import { registerControlPlaneRoutes, startDrain, checkApprovalSla, cleanupWorktrees } from './control-plane.ts';
@@ -166,22 +166,35 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
   return server;
 }
 
+/** How long shutdown waits for stopped runs to record how they ended. */
+const STOP_RUNS_MS = 15_000;
+
+/**
+ * Graceful shutdown: accept no new work, wait (up to drainTimeoutMs) for sessions and runs to finish, stop the
+ * standalone runs still going (code reviews, questions, documents) and wait until they are recorded, then close the
+ * server, which closes the database. Without the last two steps those runs would write to a closed database and
+ * stay "running" until the next start.
+ */
+export async function shutdown(server: http.Server, drainTimeoutMs: number): Promise<void> {
+  await startDrain(drainTimeoutMs, () => anyDriving() || anyRunActive());
+  const stopped = await stopStandaloneRuns('Stopped because the server shut down', STOP_RUNS_MS);
+  if (stopped) console.log(`[drain] Stopped ${stopped} run(s) that were still going.`);
+  console.log('[drain] Closing server.');
+  server.closeAllConnections?.();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
 const isMain = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('server.mjs') || process.argv[1]?.endsWith('index.ts');
 if (isMain && !process.env.PORTAL_NO_AUTOSTART) {
   startServer().then((server) => {
     const stop = async (signal: string) => {
       console.log(`[${signal}] Graceful shutdown starting…`);
       const drainTimeout = (getSettings().controlPlane?.drainTimeoutSeconds ?? 60) * 1000;
-      // Enter drain mode: stop accepting new sessions/iterations.
-      await startDrain(drainTimeout, anyDriving);
-      console.log('[drain] All active sessions finished or timed out. Closing server.');
-      server.closeAllConnections?.();
-      server.close(() => {
-        console.log('[drain] Server closed.');
-        setTimeout(() => process.exit(0), 500).unref();
-      });
-      // Hard timeout in case server.close() hangs.
-      setTimeout(() => process.exit(0), drainTimeout + 5000).unref();
+      // Hard timeout in case something hangs.
+      setTimeout(() => process.exit(0), drainTimeout + STOP_RUNS_MS + 5000).unref();
+      await shutdown(server, drainTimeout);
+      console.log('[drain] Server closed.');
+      setTimeout(() => process.exit(0), 500).unref();
     };
     process.on('SIGINT', () => stop('SIGINT').catch(console.error));
     process.on('SIGTERM', () => stop('SIGTERM').catch(console.error));

@@ -232,30 +232,9 @@ export async function cleanupWorktrees(
     if (!workDir) continue;
     if (!fs.existsSync(workDir)) continue;
 
-    // Check for uncommitted changes in any git repo inside the work dir.
-    let hasUncommitted = false;
-    try {
-      const entries = fs.readdirSync(workDir, { withFileTypes: true });
-      for (const e of entries) {
-        if (!e.isDirectory()) continue;
-        const sub = path.join(workDir, e.name);
-        const gitDir = path.join(sub, '.git');
-        if (!fs.existsSync(gitDir)) continue;
-        const { execFileSync } = await import('node:child_process');
-        try {
-          const out = execFileSync('git', ['-C', sub, 'status', '--porcelain'], {
-            stdio: ['ignore', 'pipe', 'ignore'],
-            timeout: 5000,
-          });
-          if (out.toString().trim().length > 0) {
-            hasUncommitted = true;
-            break;
-          }
-        } catch { /* git not available or not a repo — treat as clean */ }
-      }
-    } catch { /* can't read dir, skip */ }
-
-    if (hasUncommitted) {
+    // Keep the folder when a working copy in it holds work that exists nowhere else, or when that cannot be checked.
+    const check = await checkWorkingCopies(workDir);
+    if (check.keep) {
       // Flag with a workflow event instead of deleting.
       skipped++;
       const flagged = one<{ n: number }>(
@@ -267,7 +246,7 @@ export async function cleanupWorktrees(
           "INSERT INTO workflow_events (workflow_id, kind, run_id, body, data, consumed, created_at) VALUES (?, 'worktree_dirty', ?, ?, ?, 0, ?)",
           row.wid,
           row.run_id ?? null,
-          'This session has uncommitted changes in its working copy. Review and push or discard them before the folder is cleaned up.',
+          check.keep,
           JSON.stringify({ workDir: path.relative(pdir, workDir).replace(/\\/g, '/'), flagged: true }),
           now(),
         );
@@ -276,17 +255,60 @@ export async function cleanupWorktrees(
       continue;
     }
 
-    // Safe to delete.
+    // Safe to delete. Then the repository clones forget the deleted worktrees: git would otherwise keep their
+    // branches "checked out" there and refuse to check them out in a later run's worktree.
     try {
       fs.rmSync(workDir, { recursive: true, force: true });
       deleted++;
     } catch (e) {
       console.error('[cleanup] Could not remove', workDir, e);
       skipped++;
+      continue;
     }
+    const { git } = await import('./git.ts');
+    for (const common of check.clones) await git(['--git-dir', common, 'worktree', 'prune'], { timeoutMs: 60_000 }).catch(() => undefined);
   }
 
   return { deleted, skipped };
+}
+
+/**
+ * Whether a run folder may be deleted. `keep` is the reason to keep it (shown to the session's people), or '' when
+ * every git working copy in it (the folder itself and its direct subfolders) is clean and has no commit that is not
+ * on a remote. A copy git cannot check (an error or a timeout) keeps the folder: losing work is worse than keeping
+ * a folder. `clones` are the git folders of the repository clones that the worktrees belong to.
+ */
+export async function checkWorkingCopies(workDir: string): Promise<{ keep: string; clones: string[] }> {
+  const { git } = await import('./git.ts');
+  let dirs: string[];
+  try {
+    dirs = [workDir, ...fs.readdirSync(workDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(workDir, e.name))];
+  } catch {
+    return { keep: 'The working copy of this session could not be read, so it was kept. Review it, then push or discard it.', clones: [] };
+  }
+  const clones = new Set<string>();
+  for (const dir of dirs) {
+    if (!fs.existsSync(path.join(dir, '.git'))) continue;
+    try {
+      const opts = { cwd: dir, timeoutMs: 60_000 };
+      if ((await git(['status', '--porcelain'], opts)).stdout.trim()) {
+        return { keep: 'This session has uncommitted changes in its working copy. Review and push or discard them before the folder is cleaned up.', clones: [] };
+      }
+      if (Number((await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], opts)).stdout.trim()) > 0) {
+        return { keep: 'This session has commits in its working copy that were never pushed. Push or discard them before the folder is cleaned up.', clones: [] };
+      }
+      const common = path.resolve(dir, (await git(['rev-parse', '--git-common-dir'], opts)).stdout.trim());
+      if (!isInside(workDir, common)) clones.add(common);
+    } catch {
+      return { keep: 'The working copy of this session could not be checked (git failed or took too long), so it was kept. Review it, then push or discard it.', clones: [] };
+    }
+  }
+  return { keep: '', clones: [...clones] };
+}
+
+function isInside(base: string, target: string): boolean {
+  const rel = path.relative(path.resolve(base), path.resolve(target));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 /* ------------------------------------------------------------------ */
