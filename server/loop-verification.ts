@@ -246,6 +246,18 @@ export function readProgressFile(projectId: string, workflowId: string): string 
 }
 
 /**
+ * The last few entries of the session's progress file, for the next iteration's prompt (FR-LOOP-6), newest last and at
+ * most `maxChars` long (the oldest entries go first). '' when there is no progress file yet.
+ */
+export function recentProgress(projectId: string, workflowId: string, entries = 3, maxChars = 6000): string {
+  const text = readProgressFile(projectId, workflowId);
+  const list = text.split(/^(?=## Iteration )/m).filter((e) => e.startsWith('## Iteration ')).slice(-entries);
+  while (list.length > 1 && list.join('').length > maxChars) list.shift();
+  const out = list.join('').trim();
+  return out.length > maxChars ? out.slice(-maxChars) : out;
+}
+
+/**
  * Append a new iteration summary to the progress file, keeping at most `maxEntries` entries.
  */
 export function appendProgress(projectId: string, workflowId: string, summary: string, iteration: number, maxEntries = 20): void {
