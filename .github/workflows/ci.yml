@@ -1,0 +1,60 @@
+# Checks every pull request and every push to the main branches: types, the test suite, the build, the real Claude
+# Code engine against a scripted stand-in model (no API key), and the browser walkthrough. Make "checks" and "ui"
+# required checks on main and refactor/core-model (Settings > Branches) so nothing merges red.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, refactor/core-model]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Types, tests, build, engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.3
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Type check
+        run: npm run typecheck
+      - name: Test suite (Demo mode and a stand-in SDK)
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Real engine against a stand-in model
+        run: npm run test:engine
+
+  ui:
+    name: Browser walkthrough
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.3
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # The Chromium build that matches the locked Playwright version, with its system libraries.
+      - run: npx playwright install --with-deps chromium
+      - name: Every page
+        run: npm run test:ui
+      - name: Slash commands
+        run: npm run test:ui:commands
