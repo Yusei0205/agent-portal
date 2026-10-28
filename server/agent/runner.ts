@@ -16,7 +16,7 @@ import { demoRun, demoModel } from './demo.ts';
 import { listAgentFiles, listSkillNames } from '../builder.ts';
 import { searchForAgent, reindexDecisions } from '../knowledge.ts';
 import { createWorktree, getRepo } from '../repos.ts';
-import { engineProvider } from '../project-aws.ts';
+import { clearRunAwsFiles, engineProvider, removeRunAwsFiles } from '../project-aws.ts';
 import { integrationGuard, resolveIntegrations, type RunIntegrations } from '../integrations.ts';
 import { copyVaultsInto } from '../vault.ts';
 import { syncProjectTemplates } from '../doc-templates.ts';
@@ -468,6 +468,8 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
         p.reject(new DOMException('Run ended', 'AbortError'));
       }
       active.delete(runId);
+      // The run's copy of its project's AWS keys goes with it.
+      removeRunAwsFiles(runId);
     }
     return getRun(runId);
   })();
@@ -640,7 +642,7 @@ async function execute(
     return `Blocked by Agent Portal: this run may only change files under ${writeDirRel}/.`;
   };
 
-  const env = o.mode === 'demo' ? {} : await agentEnv(project.id, o.mode as any);
+  const env = o.mode === 'demo' ? {} : await agentEnv(project.id, o.mode as any, { runId });
   const opts: ProviderRunOptions = {
     prompt,
     cwd: pdir,
@@ -903,6 +905,8 @@ export function recoverRuns(): void {
     exec("UPDATE agent_runs SET status = 'failed', error = 'The server restarted while this run was active', finished_at = ? WHERE id = ?", now(), r.id);
   }
   exec("UPDATE inputs SET status = 'cancelled' WHERE status = 'pending' AND run_id IS NOT NULL");
+  // AWS keys copied for runs that were cut off by the restart.
+  clearRunAwsFiles();
 }
 
 export { runSummary, providerMode };

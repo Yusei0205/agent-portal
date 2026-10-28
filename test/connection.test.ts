@@ -90,8 +90,12 @@ test('a project on Bedrock with its own AWS account uses that one account for th
   assert.equal(env.CLAUDE_CODE_USE_BEDROCK, '1');
   assert.equal(env.AWS_ACCESS_KEY_ID, 'AKIAPROJECTOWN00001');
   assert.equal(env.AWS_REGION, 'ap-southeast-1');
-  assert.equal(env.PROJECT_AWS_ACCESS_KEY_ID, undefined, 'no split between model and agent credentials');
-  assert.ok(!Object.entries(env).some(([k, v]) => k.toLowerCase() === 'path' && String(v).includes(path.join('data', 'bin'))), 'no aws shim on PATH');
+  // Claude Code keeps AWS_SECRET_ACCESS_KEY from its shell commands, so the agent reaches the same account through the
+  // aws wrapper and the run's own credentials file (removed when the run ends).
+  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  assert.ok(env.PROJECT_AWS_FILES?.startsWith(path.join(srv.dataDir, 'run-aws') + path.sep), 'the agent uses the same account');
+  assert.ok(!fs.existsSync(env.PROJECT_AWS_FILES), 'the credentials file went with the run');
+  assert.ok(Object.entries(env).some(([k, v]) => k.toLowerCase() === 'path' && String(v).startsWith(path.join(srv.dataDir, 'bin') + path.delimiter)), 'the aws wrapper is first on PATH');
 });
 
 test('a project that inherits the provider but has its own AWS keeps the older split', async () => {
@@ -103,7 +107,8 @@ test('a project that inherits the provider but has its own AWS keeps the older s
   await admin.post(`/api/projects/${pid}/connection/test`);
   const env = sdkCalls().at(-1).options.env;
   assert.equal(env.AWS_ACCESS_KEY_ID, 'AKIASETTINGSKEY00001', 'the model keeps the Settings account');
-  assert.equal(env.PROJECT_AWS_ACCESS_KEY_ID, 'AKIAPROJECTSPLIT0001', 'the agent’s aws command goes to the project account');
+  assert.ok(env.PROJECT_AWS_FILES, 'the agent’s aws command goes to the project account');
+  assert.equal(env.PROJECT_AWS_ACCESS_KEY_ID, undefined, 'keys travel in a file, not in variables');
 });
 
 test('a project that inherits everything behaves exactly as before', async () => {

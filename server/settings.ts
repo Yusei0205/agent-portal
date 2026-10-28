@@ -42,6 +42,8 @@ export interface Settings {
     defaultPushMode: 'never' | 'ask' | 'auto';
     /** Off by default: agents may read only inside their own project folder. */
     allowReadsOutsideProject: boolean;
+    /** Minutes one MCP tool call (an integration) may take before Claude Code gives up on it. Unbounded by default in Claude Code. */
+    mcpToolTimeoutMinutes: number;
   };
   /** Extra Claude models for the model picker, one per line as "model id | label"; added without a deploy. */
   modelList: { extra: string };
@@ -75,7 +77,7 @@ const DEFAULTS: Settings = {
   aws: { region: 'us-east-1', auth: 'ambient', profile: '' },
   budget: { monthlyUsd: 50 },
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
-  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask', allowReadsOutsideProject: false },
+  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask', allowReadsOutsideProject: false, mcpToolTimeoutMinutes: 10 },
   delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
   modelList: { extra: '' },
   ui: { advanced: false },
@@ -205,6 +207,9 @@ export function updateSettings(patch: any): Settings {
     a.resumeAfterRestart = a.resumeAfterRestart !== false;
     if (!['never', 'ask', 'auto'].includes(a.defaultPushMode)) throw badRequest('Agent pushes must be never, ask or auto');
     a.allowReadsOutsideProject = Boolean(a.allowReadsOutsideProject);
+    const mcpMinutes = Number(a.mcpToolTimeoutMinutes);
+    if (!Number.isInteger(mcpMinutes) || mcpMinutes < 1 || mcpMinutes > 240) throw badRequest('Time limit for one integration tool call must be a whole number of minutes from 1 to 240');
+    a.mcpToolTimeoutMinutes = mcpMinutes;
     saveSection('agents', a);
   }
   if (patch.modelList) {
@@ -301,11 +306,19 @@ export async function awsEnv(): Promise<Record<string, string>> {
   return env;
 }
 
-/** Full environment for a Claude Agent SDK run. With a project, its own connection (provider, AWS account) applies. */
-export async function agentEnv(projectId?: string, modeOverride?: ProviderMode): Promise<Record<string, string>> {
+/**
+ * Full environment for a Claude Agent SDK run. With a project, its own connection (provider, AWS account) applies.
+ * With a run id, the project's own AWS keys are written to that run's private credentials file for the agent.
+ */
+export async function agentEnv(projectId?: string, modeOverride?: ProviderMode, opts: { runId?: string } = {}): Promise<Record<string, string>> {
   const s = getSettings();
   const env = baseEnv();
   env.CLAUDE_CONFIG_DIR = dataPath('claude-home');
+  // All projects share one Claude config folder, so Claude Code's automatic memory would carry notes from one
+  // project into the next, unreviewed. Project knowledge lives in CLAUDE.md and the decisions log instead.
+  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+  // An MCP tool call has no time limit in Claude Code; a hung integration would hold the run (and its slot) for ever.
+  env.MCP_TOOL_TIMEOUT = String((s.agents.mcpToolTimeoutMinutes || 10) * 60_000);
 
   // Tools and CLI config live on the data volume.
   // Inside the container, HOME is already set to /data/home (Dockerfile ENV), and DATA_DIR
@@ -341,10 +354,20 @@ export async function agentEnv(projectId?: string, modeOverride?: ProviderMode):
   const pa = projectId ? await import('./project-aws.ts') : null;
   // A run that picked its engine says which provider to set up; otherwise the project's connection decides.
   const mode = modeOverride ?? (pa ? pa.effectiveProvider(projectId) : s.provider.mode);
+  if (mode === 'anthropic' || mode === 'bedrock') {
+    // The model's credentials are for Claude Code alone. With this set, the processes it starts (shell commands,
+    // hooks, MCP servers) do not inherit ANTHROPIC_API_KEY, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    // AWS_BEARER_TOKEN_BEDROCK and similar, so `printenv` in a prompt-injected command finds nothing to send away.
+    // An MCP server still gets the variables its integration sets for it. Side effect: Claude Code then starts in
+    // "default" permission mode whatever was asked, so sdk.ts sets the run's own mode before the first message.
+    env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';
+  }
   if (mode === 'anthropic') {
     const key = await getSecret(SECRET_NAMES.anthropicKey);
     if (!key) throw badRequest('Add your Anthropic API key in Settings first');
     env.ANTHROPIC_API_KEY = key;
+    // An operator may send model calls through an LLM gateway (PORTAL_ANTHROPIC_BASE_URL); never a project file.
+    if (config.anthropicBaseUrl) env.ANTHROPIC_BASE_URL = config.anthropicBaseUrl;
   } else if (mode === 'bedrock') {
     env.CLAUDE_CODE_USE_BEDROCK = '1';
     if (pa && pa.projectModelUsesOwnAws(projectId)) {
@@ -366,7 +389,7 @@ export async function agentEnv(projectId?: string, modeOverride?: ProviderMode):
   // A project with its own AWS account: the agent's AWS commands go there. The model keeps the Settings credentials
   // unless the project chose Bedrock on its own account (then both already use it).
   if (pa && projectId) {
-    const { env: extra, pathPrefix } = await pa.projectRunEnv(projectId, mode === 'bedrock');
+    const { env: extra, pathPrefix } = await pa.projectRunEnv(projectId, mode === 'bedrock', opts.runId);
     Object.assign(env, extra);
     if (pathPrefix) {
       const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';

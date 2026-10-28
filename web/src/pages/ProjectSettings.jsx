@@ -131,7 +131,7 @@ export function Connection() {
   } else if (effectiveProvider === 'bedrock' && hasOwnAws) {
     usageNote = "Bedrock model uses the Settings AWS account; CodeCommit and agents' AWS commands use this project's account. Choose Amazon Bedrock above to use this account for the model too.";
   } else if (effectiveProvider === 'bedrock' && !hasOwnAws) {
-    usageNote = 'Bedrock model uses the Settings AWS account. No separate project account.';
+    usageNote = "Bedrock model uses the Settings AWS account. Agents' shell commands never get the model's credentials; give the project its own AWS account to let agents run AWS commands.";
   } else if (effectiveProvider === 'kiro') {
     usageNote = hasOwnAws
       ? "Model uses Kiro CLI. CodeCommit and agents' AWS commands use this project's AWS account."
@@ -139,7 +139,7 @@ export function Connection() {
   } else if (effectiveProvider === 'anthropic') {
     usageNote = hasOwnAws
       ? "Model uses the Anthropic API. CodeCommit and agents' AWS commands use this project's AWS account."
-      : 'Model uses the Anthropic API. AWS commands use the Settings credentials.';
+      : "Model uses the Anthropic API. CodeCommit uses the Settings AWS credentials; give the project its own AWS account to let agents run AWS commands.";
   } else if (effectiveProvider === 'demo') {
     usageNote = 'Demo mode: agents are simulated.';
   } else if (hasOwnAws) {

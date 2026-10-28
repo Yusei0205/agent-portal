@@ -29,8 +29,14 @@ export async function* sdkRun(opts: ProviderRunOptions): AsyncIterable<SdkMessag
   let closeInput: () => void = () => {};
   const inputClosed = new Promise<void>((r) => (closeInput = r));
   opts.abort.signal.addEventListener('abort', () => closeInput(), { once: true });
+  // The first message waits until the run's permission mode is in place (see below).
+  let releaseInput: () => void = () => {};
+  const inputReleased = new Promise<void>((r) => (releaseInput = r));
+  let modeError: unknown = null;
 
   async function* input() {
+    await inputReleased;
+    if (modeError) return;
     yield { type: 'user', message: { role: 'user', content: opts.prompt }, parent_tool_use_id: null };
     await inputClosed;
   }
@@ -89,12 +95,44 @@ export async function* sdkRun(opts: ProviderRunOptions): AsyncIterable<SdkMessag
   if (opts.mcpServers && Object.keys(opts.mcpServers).length) options.mcpServers = opts.mcpServers;
 
   const q = sdk.query({ prompt: input(), options });
+  // With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (settings.ts) Claude Code starts every session in "default" mode, whatever
+  // permissionMode says. Set the run's own mode again before its first message, so plan runs cannot edit and
+  // auto-accept runs do not ask about every edit. If that fails, the run must not go on in another mode.
+  if (opts.permissionMode && opts.permissionMode !== 'default') {
+    Promise.resolve()
+      .then(() => {
+        if (typeof q.setPermissionMode !== 'function') throw new Error('this SDK cannot change the permission mode');
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Claude Code did not answer within 60 seconds')), 60_000);
+          timer.unref?.();
+        });
+        return Promise.race([q.setPermissionMode(opts.permissionMode), late]).finally(() => clearTimeout(timer));
+      })
+      .catch((e: unknown) => {
+        modeError = e;
+        try {
+          q.close?.();
+        } catch {
+          /* already closed */
+        }
+      })
+      .finally(() => releaseInput());
+  } else {
+    releaseInput();
+  }
   try {
     for await (const msg of q as AsyncIterable<SdkMessage>) {
       yield msg;
       if (msg.type === 'result') closeInput();
     }
+  } catch (e) {
+    if (!modeError) throw e;
   } finally {
     closeInput();
+  }
+  if (modeError && !opts.abort.signal.aborted) {
+    const why = modeError instanceof Error ? modeError.message : String(modeError);
+    throw new Error(`The run could not start in "${opts.permissionMode}" mode (${why}), so it did not start.`);
   }
 }

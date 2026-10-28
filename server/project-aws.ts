@@ -152,16 +152,17 @@ export async function projectAwsCredentials(projectId: string): Promise<{ region
 /* Agent runs: route the agent's `aws` command to the project account  */
 /* ------------------------------------------------------------------ */
 
-// Amazon Bedrock needs the Settings credentials in the model process's environment, and the agent's shell inherits that
-// environment. So for a Bedrock run these two small scripts, placed first on the agent's PATH, point `aws` (and, on
-// request, Terraform or SDK code) at the project's own account instead.
+// The model's credentials never reach the agent's shell: Claude Code drops every variable that looks like a secret
+// (AWS_SECRET_ACCESS_KEY, *_TOKEN, *_API_KEY, even PROJECT_AWS_SECRET_ACCESS_KEY) from the commands it starts
+// (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB in settings.ts). The project's own account is meant for the agent, so for each run
+// its keys are written to a private credentials file outside the project (runAwsDir), named by PROJECT_AWS_FILES.
+// These two small scripts, first on the agent's PATH, point `aws` (and, on request, Terraform or SDK code) at it.
 const AWS_SHIM = `#!/usr/bin/env bash
 # Sends the AWS CLI to this project's AWS account. Installed by Agent Portal; do not edit.
-if [ -n "\${PROJECT_AWS_ACCESS_KEY_ID:-}\${PROJECT_AWS_PROFILE:-}" ]; then
+if [ -n "\${PROJECT_AWS_FILES:-}\${PROJECT_AWS_PROFILE:-}" ]; then
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_BEARER_TOKEN_BEDROCK
-  if [ -n "\${PROJECT_AWS_ACCESS_KEY_ID:-}" ]; then
-    export AWS_ACCESS_KEY_ID="$PROJECT_AWS_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$PROJECT_AWS_SECRET_ACCESS_KEY"
-    [ -n "\${PROJECT_AWS_SESSION_TOKEN:-}" ] && export AWS_SESSION_TOKEN="$PROJECT_AWS_SESSION_TOKEN"
+  if [ -n "\${PROJECT_AWS_FILES:-}" ]; then
+    export AWS_SHARED_CREDENTIALS_FILE="$PROJECT_AWS_FILES/credentials" AWS_CONFIG_FILE="$PROJECT_AWS_FILES/config" AWS_PROFILE=project
   fi
   [ -n "\${PROJECT_AWS_PROFILE:-}" ] && export AWS_PROFILE="$PROJECT_AWS_PROFILE"
   [ -n "\${PROJECT_AWS_REGION:-}" ] && export AWS_REGION="$PROJECT_AWS_REGION" AWS_DEFAULT_REGION="$PROJECT_AWS_REGION"
@@ -182,15 +183,14 @@ exec "$real" "$@"
 
 const ENV_SHIM = `#!/usr/bin/env bash
 # Prints export lines for this project's AWS account, for Terraform or SDK code:  eval "$(portal-aws-env)"
-if [ -z "\${PROJECT_AWS_ACCESS_KEY_ID:-}\${PROJECT_AWS_PROFILE:-}" ]; then
-  echo "echo 'This project uses the default AWS credentials; nothing to set.' >&2"
+if [ -z "\${PROJECT_AWS_FILES:-}\${PROJECT_AWS_PROFILE:-}" ]; then
+  echo "echo 'This project has no AWS account of its own; nothing to set.' >&2"
   exit 0
 fi
 echo "unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_BEARER_TOKEN_BEDROCK"
-if [ -n "\${PROJECT_AWS_ACCESS_KEY_ID:-}" ]; then
-  printf 'export AWS_ACCESS_KEY_ID=%q AWS_SECRET_ACCESS_KEY=%q\n' "$PROJECT_AWS_ACCESS_KEY_ID" "$PROJECT_AWS_SECRET_ACCESS_KEY"
+if [ -n "\${PROJECT_AWS_FILES:-}" ]; then
+  printf 'export AWS_SHARED_CREDENTIALS_FILE=%q AWS_CONFIG_FILE=%q AWS_PROFILE=project\n' "$PROJECT_AWS_FILES/credentials" "$PROJECT_AWS_FILES/config"
 fi
-if [ -n "\${PROJECT_AWS_SESSION_TOKEN:-}" ]; then printf 'export AWS_SESSION_TOKEN=%q\n' "$PROJECT_AWS_SESSION_TOKEN"; fi
 if [ -n "\${PROJECT_AWS_PROFILE:-}" ]; then printf 'export AWS_PROFILE=%q\n' "$PROJECT_AWS_PROFILE"; fi
 if [ -n "\${PROJECT_AWS_REGION:-}" ]; then printf 'export AWS_REGION=%q AWS_DEFAULT_REGION=%q\n' "$PROJECT_AWS_REGION" "$PROJECT_AWS_REGION"; fi
 exit 0
@@ -209,23 +209,51 @@ export function ensureAwsShims(): string {
   return dir;
 }
 
+/** The private folder holding one run's copy of its project's AWS keys. Outside the project, so no run-files API serves it. */
+export function runAwsDir(runId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(runId)) throw new Error('Bad run id');
+  return dataPath('run-aws', runId);
+}
+
+/** Remove a run's AWS credentials file (when the run ends). */
+export function removeRunAwsFiles(runId: string): void {
+  try {
+    fs.rmSync(runAwsDir(runId), { recursive: true, force: true });
+  } catch {
+    /* already gone */
+  }
+}
+
+/** Remove every run's AWS credentials file (at start-up: no run is active then). */
+export function clearRunAwsFiles(): void {
+  fs.rmSync(dataPath('run-aws'), { recursive: true, force: true });
+}
+
+/** Write the project's keys as an AWS shared credentials file plus config, readable by the server user only. */
+function writeRunAwsFiles(runId: string, aws: Record<string, string>): string {
+  const dir = runAwsDir(runId);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const line = (k: string, v: string | undefined) => (v ? `${k} = ${v.replace(/[\r\n]/g, '')}\n` : '');
+  const creds = '[project]\n' + line('aws_access_key_id', aws.AWS_ACCESS_KEY_ID) + line('aws_secret_access_key', aws.AWS_SECRET_ACCESS_KEY) + line('aws_session_token', aws.AWS_SESSION_TOKEN);
+  fs.writeFileSync(path.join(dir, 'credentials'), creds, { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'config'), '[profile project]\n' + line('region', aws.AWS_REGION), { mode: 0o600 });
+  return dir;
+}
+
 /**
- * Extra environment for an agent run in this project. With a non-Bedrock model the project's AWS_* variables are set
- * directly. With Bedrock they travel as PROJECT_AWS_* and the shims above use them, so the model keeps its own account.
+ * Extra environment for an agent run in this project: its own AWS account for the agent's `aws` command (through the
+ * shims above), and for the model too when a Bedrock model runs on this account. Keys go to a per-run credentials file
+ * (removed when the run ends); a named profile and the region travel as PROJECT_AWS_* variables. Without a run id
+ * (model lists) only those plain variables are set.
  */
-export async function projectRunEnv(projectId: string, modelIsBedrock: boolean): Promise<{ env: Record<string, string>; pathPrefix?: string }> {
+export async function projectRunEnv(projectId: string, modelIsBedrock: boolean, runId?: string): Promise<{ env: Record<string, string>; pathPrefix?: string }> {
   const p = getProjectAws(projectId);
   if (p.auth === 'inherit') return { env: {} };
   const aws = await projectAwsEnv(projectId);
-  // Not Bedrock, or Bedrock on this project's own account: one set of AWS_* variables serves the model and the agent.
-  if (!modelIsBedrock || projectModelUsesOwnAws(projectId)) return { env: aws };
-  const env: Record<string, string> = { PROJECT_AWS_REGION: aws.AWS_REGION };
-  if (aws.AWS_ACCESS_KEY_ID) {
-    env.PROJECT_AWS_ACCESS_KEY_ID = aws.AWS_ACCESS_KEY_ID;
-    env.PROJECT_AWS_SECRET_ACCESS_KEY = aws.AWS_SECRET_ACCESS_KEY;
-    if (aws.AWS_SESSION_TOKEN) env.PROJECT_AWS_SESSION_TOKEN = aws.AWS_SESSION_TOKEN;
-  }
-  if (aws.AWS_PROFILE) env.PROJECT_AWS_PROFILE = aws.AWS_PROFILE;
+  const env: Record<string, string> = modelIsBedrock && projectModelUsesOwnAws(projectId) ? { ...aws } : {};
+  env.PROJECT_AWS_REGION = aws.AWS_REGION;
+  if (aws.AWS_ACCESS_KEY_ID && runId) env.PROJECT_AWS_FILES = writeRunAwsFiles(runId, aws);
+  if (aws.AWS_PROFILE && !aws.AWS_ACCESS_KEY_ID) env.PROJECT_AWS_PROFILE = aws.AWS_PROFILE;
   return { env, pathPrefix: ensureAwsShims() };
 }
 

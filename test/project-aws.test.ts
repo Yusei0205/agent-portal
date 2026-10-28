@@ -11,6 +11,8 @@ let one: typeof import('../server/db.ts').one;
 let projectAwsEnv: typeof import('../server/project-aws.ts').projectAwsEnv;
 let projectRunEnv: typeof import('../server/project-aws.ts').projectRunEnv;
 let ensureAwsShims: typeof import('../server/project-aws.ts').ensureAwsShims;
+let runAwsDir: typeof import('../server/project-aws.ts').runAwsDir;
+let removeRunAwsFiles: typeof import('../server/project-aws.ts').removeRunAwsFiles;
 let agentEnv: typeof import('../server/settings.ts').agentEnv;
 let repoGitEnv: typeof import('../server/repos.ts').repoGitEnv;
 let getRepo: typeof import('../server/repos.ts').getRepo;
@@ -48,7 +50,7 @@ before(async () => {
   process.env.AWS_ACCESS_KEY_ID = 'AKIASERVERPROCESSKEY'; // must never leak into a project's test
   srv = await bootServer();
   ({ one } = await import('../server/db.ts'));
-  ({ projectAwsEnv, projectRunEnv, ensureAwsShims } = await import('../server/project-aws.ts'));
+  ({ projectAwsEnv, projectRunEnv, ensureAwsShims, runAwsDir, removeRunAwsFiles } = await import('../server/project-aws.ts'));
   ({ agentEnv } = await import('../server/settings.ts'));
   ({ repoGitEnv, getRepo } = await import('../server/repos.ts'));
   admin = new Client(srv.base);
@@ -172,30 +174,49 @@ test('CodeCommit repositories of a project use the project’s account', async (
 
 test('agent runs: with Bedrock the model keeps Settings, and the project account rides alongside', async () => {
   await admin.put('/api/settings', { provider: { mode: 'bedrock' } });
-  const env = await agentEnv(pid);
+  const env = await agentEnv(pid, undefined, { runId: 'r_bedrockSplit1' });
   assert.equal(env.CLAUDE_CODE_USE_BEDROCK, '1');
   assert.equal(env.AWS_ACCESS_KEY_ID, 'AKIABEDROCKSETTINGS1', 'the model process still signs in with the Settings credentials');
-  assert.equal(env.PROJECT_AWS_ACCESS_KEY_ID, 'AKIAPROJECTKEY00001');
-  assert.equal(env.PROJECT_AWS_SECRET_ACCESS_KEY, 'project-a-secret-access-key-0123456789');
+  // The project's keys are for the agent, in a per-run credentials file: Claude Code drops secret-looking variables
+  // (even PROJECT_AWS_SECRET_ACCESS_KEY) from the commands it starts.
+  assert.equal(env.PROJECT_AWS_ACCESS_KEY_ID, undefined);
+  assert.equal(env.PROJECT_AWS_SECRET_ACCESS_KEY, undefined);
+  assert.equal(env.PROJECT_AWS_FILES, runAwsDir('r_bedrockSplit1'));
+  const creds = fs.readFileSync(path.join(env.PROJECT_AWS_FILES, 'credentials'), 'utf8');
+  assert.match(creds, /^\[project\]$/m);
+  assert.match(creds, /^aws_access_key_id = AKIAPROJECTKEY00001$/m);
+  assert.match(creds, /^aws_secret_access_key = project-a-secret-access-key-0123456789$/m);
+  assert.match(fs.readFileSync(path.join(env.PROJECT_AWS_FILES, 'config'), 'utf8'), /^region = ap-southeast-1$/m);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(env.PROJECT_AWS_FILES, 'credentials')).mode & 0o077, 0, 'only the server user can read it');
   assert.equal(env.PROJECT_AWS_REGION, 'ap-southeast-1');
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path')!;
   const shimDir = ensureAwsShims();
   assert.ok(env[pathKey].startsWith(shimDir + path.delimiter), 'the aws wrapper is first on the PATH');
   assert.ok(fs.existsSync(path.join(shimDir, 'aws')) && fs.existsSync(path.join(shimDir, 'portal-aws-env')));
-  const plain = await agentEnv(other);
-  assert.equal(plain.PROJECT_AWS_ACCESS_KEY_ID, undefined, 'a project without its own account gets nothing extra');
+  removeRunAwsFiles('r_bedrockSplit1');
+  assert.ok(!fs.existsSync(env.PROJECT_AWS_FILES), 'the file goes when the run ends');
+  assert.equal((await agentEnv(pid)).PROJECT_AWS_FILES, undefined, 'no run, no credentials file (model lists)');
+  const plain = await agentEnv(other, undefined, { runId: 'r_plainProject1' });
+  assert.equal(plain.PROJECT_AWS_FILES, undefined, 'a project without its own account gets nothing extra');
   assert.ok(!plain[pathKey]?.startsWith(shimDir));
   assert.equal((await projectRunEnv(other, true)).pathPrefix, undefined);
 });
 
-test('agent runs: without Bedrock the project account is simply the AWS account', async () => {
+test('agent runs: without Bedrock the project account reaches the agent through the aws wrapper', async () => {
   await admin.post('/api/settings/secrets/anthropic.api_key', { value: 'sk-ant-test-0123456789' });
   await admin.put('/api/settings', { provider: { mode: 'anthropic' } });
-  const env = await agentEnv(pid);
-  assert.equal(env.AWS_ACCESS_KEY_ID, 'AKIAPROJECTKEY00001');
-  assert.equal(env.AWS_REGION, 'ap-southeast-1');
-  assert.equal(env.PROJECT_AWS_ACCESS_KEY_ID, undefined);
-  assert.equal((await agentEnv(other)).AWS_ACCESS_KEY_ID, undefined, 'no project account, no AWS variables');
+  const env = await agentEnv(pid, undefined, { runId: 'r_anthropicAws1' });
+  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  assert.equal(env.AWS_ACCESS_KEY_ID, undefined, 'the model needs no AWS variables');
+  assert.match(fs.readFileSync(path.join(env.PROJECT_AWS_FILES, 'credentials'), 'utf8'), /^aws_access_key_id = AKIAPROJECTKEY00001$/m);
+  assert.equal(env.PROJECT_AWS_REGION, 'ap-southeast-1');
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path')!;
+  assert.ok(env[pathKey].startsWith(ensureAwsShims() + path.delimiter), 'the aws wrapper is first on the PATH');
+  removeRunAwsFiles('r_anthropicAws1');
+  const plain = await agentEnv(other, undefined, { runId: 'r_plainProject2' });
+  assert.equal(plain.AWS_ACCESS_KEY_ID, undefined, 'no project account, no AWS variables');
+  assert.equal(plain.PROJECT_AWS_FILES, undefined);
+  assert.throws(() => runAwsDir('../escape'), /Bad run id/);
 });
 
 test('a named profile works the same way, and switching away removes the stored keys', async () => {

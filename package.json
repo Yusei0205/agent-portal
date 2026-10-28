@@ -15,10 +15,11 @@
     "test": "node --disable-warning=ExperimentalWarning --import tsx --test test/*.test.ts",
     "test:ui": "node scripts/build.mjs && node --disable-warning=ExperimentalWarning --import tsx test/ui/ui-smoke.ts",
     "test:ui:commands": "node scripts/build.mjs && node --disable-warning=ExperimentalWarning --import tsx test/ui/slash-commands.ts",
-    "test:container": "node scripts/container-smoke.mjs"
+    "test:container": "node scripts/container-smoke.mjs",
+    "test:engine": "node --disable-warning=ExperimentalWarning --import tsx --test test/engine/*.test.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.303",
+    "@anthropic-ai/claude-agent-sdk": "0.3.311",
     "@aws-sdk/client-bedrock": "3.1152.0",
     "@aws-sdk/client-codecommit": "3.1152.0",
     "@aws-sdk/client-sso": "3.1152.0",
