@@ -63,7 +63,7 @@ test('Anthropic provider: options, environment, guard, questions, approvals and 
   assert.ok(o.env.PATH, 'PATH is kept');
   // The model's key stays with Claude Code: the processes it starts do not inherit it (checked against the real engine
   // in test/engine/engine-env.test.ts). Automatic memory is off and integration calls have a time limit.
-  assert.equal(o.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  assert.equal(o.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined);
   assert.equal(o.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
   assert.equal(o.env.MCP_TOOL_TIMEOUT, '600000');
   assert.equal(o.env.ANTHROPIC_BASE_URL, undefined, 'no gateway unless the operator sets one');
@@ -130,7 +130,7 @@ test('Bedrock provider: AWS keys from secrets, single-shot options', async () =>
   assert.equal(o.env.AWS_SECRET_ACCESS_KEY, 'secret/example/key/value');
   assert.equal(o.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'global.anthropic.claude-haiku-5-5');
   assert.equal(o.env.ANTHROPIC_API_KEY, undefined, 'Anthropic key is not sent to Bedrock runs');
-  assert.equal(o.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1', 'Bedrock keys stay with Claude Code too');
+  assert.equal(o.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined, 'Bedrock keys stay with Claude Code too (Windows; elsewhere with the sandbox)');
   assert.deepEqual(o.tools, []);
   assert.deepEqual(o.settingSources, []);
   assert.equal(o.maxTurns, 1);

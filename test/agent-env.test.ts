@@ -46,7 +46,13 @@ test('agentEnv: Claude runs keep the model key from their shell; every run gets 
     updateSettings({ agents: { mcpToolTimeoutMinutes: 3 } });
     const claude = await agentEnv(undefined, 'anthropic');
     assert.equal(claude.ANTHROPIC_API_KEY, 'sk-ant-agent-env-test-key');
-    assert.equal(claude.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+    // On by default on Windows only: on Linux and macOS Claude Code ties it to its sandbox (see scrubAgentEnv).
+    assert.equal(claude.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined);
+    process.env.PORTAL_AGENT_ENV_SCRUB = '1';
+    assert.equal((await agentEnv(undefined, 'anthropic')).CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1', 'an operator can turn it on');
+    process.env.PORTAL_AGENT_ENV_SCRUB = '0';
+    assert.equal((await agentEnv(undefined, 'anthropic')).CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, undefined, 'or off');
+    delete process.env.PORTAL_AGENT_ENV_SCRUB;
     assert.equal(claude.MCP_TOOL_TIMEOUT, '180000');
     assert.equal(claude.ANTHROPIC_BASE_URL, 'https://llm-gateway.example.com/anthropic', 'the operator gateway applies');
 

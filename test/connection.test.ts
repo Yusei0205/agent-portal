@@ -92,7 +92,7 @@ test('a project on Bedrock with its own AWS account uses that one account for th
   assert.equal(env.AWS_REGION, 'ap-southeast-1');
   // Claude Code keeps AWS_SECRET_ACCESS_KEY from its shell commands, so the agent reaches the same account through the
   // aws wrapper and the run's own credentials file (removed when the run ends).
-  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined);
   assert.ok(env.PROJECT_AWS_FILES?.startsWith(path.join(srv.dataDir, 'run-aws') + path.sep), 'the agent uses the same account');
   assert.ok(!fs.existsSync(env.PROJECT_AWS_FILES), 'the credentials file went with the run');
   assert.ok(Object.entries(env).some(([k, v]) => k.toLowerCase() === 'path' && String(v).startsWith(path.join(srv.dataDir, 'bin') + path.delimiter)), 'the aws wrapper is first on PATH');

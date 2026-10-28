@@ -307,6 +307,20 @@ export async function awsEnv(): Promise<Record<string, string>> {
 }
 
 /**
+ * Whether Claude runs set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (see agentEnv). On Windows it only hides the variables. On
+ * Linux and macOS Claude Code also runs every shell command in its sandbox then: with bubblewrap and socat missing it
+ * refuses to run any command, and without socat the sandbox has no network at all (checked with the real engine), so
+ * agents could not install packages or fetch. There it comes with the sandbox change, which sets up the network
+ * allowlists. PORTAL_AGENT_ENV_SCRUB=1 turns it on anyway, 0 turns it off.
+ */
+export function scrubAgentEnv(): boolean {
+  const v = process.env.PORTAL_AGENT_ENV_SCRUB;
+  if (v === '1') return true;
+  if (v === '0') return false;
+  return process.platform === 'win32';
+}
+
+/**
  * Full environment for a Claude Agent SDK run. With a project, its own connection (provider, AWS account) applies.
  * With a run id, the project's own AWS keys are written to that run's private credentials file for the agent.
  */
@@ -354,12 +368,13 @@ export async function agentEnv(projectId?: string, modeOverride?: ProviderMode, 
   const pa = projectId ? await import('./project-aws.ts') : null;
   // A run that picked its engine says which provider to set up; otherwise the project's connection decides.
   const mode = modeOverride ?? (pa ? pa.effectiveProvider(projectId) : s.provider.mode);
-  if (mode === 'anthropic' || mode === 'bedrock') {
+  if ((mode === 'anthropic' || mode === 'bedrock') && scrubAgentEnv()) {
     // The model's credentials are for Claude Code alone. With this set, the processes it starts (shell commands,
     // hooks, MCP servers) do not inherit ANTHROPIC_API_KEY, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
-    // AWS_BEARER_TOKEN_BEDROCK and similar, so `printenv` in a prompt-injected command finds nothing to send away.
-    // An MCP server still gets the variables its integration sets for it. Side effect: Claude Code then starts in
-    // "default" permission mode whatever was asked, so sdk.ts sets the run's own mode before the first message.
+    // AWS_BEARER_TOKEN_BEDROCK or any other secret-looking variable, so `printenv` in a prompt-injected command finds
+    // nothing to send away. An MCP server still gets the variables its integration sets for it. Side effect: Claude Code
+    // then starts in "default" permission mode whatever was asked, so sdk.ts sets the run's own mode before the first
+    // message (it does so on every platform).
     env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';
   }
   if (mode === 'anthropic') {

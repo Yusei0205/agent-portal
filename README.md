@@ -374,12 +374,15 @@ monthly cap.
 - Agent runs get a cleaned environment (no portal secrets), may only write inside their own
   `work/<run id>/` folder, and need approval for edits and shell commands unless a run is
   started with *Auto-accept edits*. Commands still ask.
-- The model's credentials (Anthropic API key, Bedrock keys or token) stay with Claude Code:
-  shell commands, hooks and MCP servers it starts do not inherit them, nor any other variable
-  that looks like a secret (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`). An agent's AWS commands use the
-  project's own AWS account, through the `aws` wrapper and a credentials file that exists only
-  while the run does (`DATA_DIR/run-aws/<run id>/`). This keeps keys out of `printenv`; it is
-  not a sandbox, so a shell command can still read files the portal's user can read.
+- On Windows the model's credentials (Anthropic API key, Bedrock keys or token) stay with Claude
+  Code: shell commands, hooks and MCP servers it starts do not inherit them, nor any other
+  variable that looks like a secret (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`). On Linux and macOS
+  Claude Code runs every command in its sandbox when this is on, which needs bubblewrap and
+  socat and then has no network, so there it comes with the sandbox change
+  (`PORTAL_AGENT_ENV_SCRUB=1` turns it on anyway). An agent's AWS commands use the project's own
+  AWS account, through the `aws` wrapper and a credentials file that exists only while the run
+  does (`DATA_DIR/run-aws/<run id>/`). None of this is a sandbox: a shell command can still read
+  files the portal's user can read.
 - Claude Code's automatic memory is off (one config folder serves every project), and one
   integration (MCP) tool call may take at most 10 minutes (Settings › Limits).
 - Agents run as the portal’s operating-system user. For untrusted repositories, run the

@@ -59,7 +59,9 @@ function toolResults(r: any): string {
   return out.join('\n');
 }
 
-test('the model key never reaches a shell command; the project AWS account does; the run keeps its mode', { timeout: 200_000 }, async () => {
+test('the model key never reaches a shell command; the project AWS account does; the run keeps its mode', { timeout: 200_000 }, async (t) => {
+  const { scrubAgentEnv } = await import('../../server/settings.ts');
+  const scrubbed = scrubAgentEnv();
   await c.put(`/api/projects/${pid}/aws`, { auth: 'keys', region: 'eu-west-1', accessKeyId: 'AKIAENGINETEST000001', secretAccessKey: 'engine-test-project-secret-0123456789' });
   // `portal-aws-env` is the wrapper agents use for Terraform or SDK code; it points AWS_* at the run's credentials file.
   const awsCheck = 'eval "$(portal-aws-env)"; echo "profile=$AWS_PROFILE region=$AWS_REGION"; grep -c "aws_access_key_id = AKIAENGINETEST000001" "$AWS_SHARED_CREDENTIALS_FILE"';
@@ -73,13 +75,18 @@ test('the model key never reaches a shell command; the project AWS account does;
 
   const out = toolResults(r);
   assert.match(out, /^PATH=/m, 'printenv ran in the shell');
-  assert.ok(!out.includes(KEY), 'the Anthropic key is not in the shell environment');
-  assert.doesNotMatch(out, /^ANTHROPIC_API_KEY=/m);
-  assert.ok(api.requests.some((q) => q.headers['x-api-key'] === KEY), 'Claude Code itself still calls the API with the key');
+  assert.ok(api.requests.some((q) => q.headers['x-api-key'] === KEY), 'Claude Code itself calls the API with the key');
+  if (scrubbed) {
+    assert.ok(!out.includes(KEY), 'the Anthropic key is not in the shell environment');
+    assert.doesNotMatch(out, /^ANTHROPIC_API_KEY=/m);
+  } else {
+    // Linux and macOS: Claude Code ties the scrub to its sandbox, which comes with the sandbox change (scrubAgentEnv).
+    t.diagnostic(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is off on ${process.platform}; the shell still sees the model key until the sandbox lands`);
+  }
 
   // The project's own AWS account is meant for the agent: a per-run credentials file, not secret-looking variables.
-  assert.doesNotMatch(out, /AKIAENGINETEST000001.*\n.*engine-test-project-secret/, 'the keys are not in the environment');
-  assert.doesNotMatch(out, /^(PROJECT_)?AWS_SECRET_ACCESS_KEY=/m);
+  assert.doesNotMatch(out, /AKIAENGINETEST000001.*\n.*engine-test-project-secret/, 'the project keys are not in the environment');
+  assert.doesNotMatch(out, /^PROJECT_AWS_SECRET_ACCESS_KEY=/m);
   assert.match(out, /^PROJECT_AWS_FILES=.*run-aws/m);
   assert.match(out, /profile=project region=eu-west-1\n1/, 'the wrapper points the agent at the project account');
 

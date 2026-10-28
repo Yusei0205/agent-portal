@@ -206,7 +206,7 @@ test('agent runs: without Bedrock the project account reaches the agent through 
   await admin.post('/api/settings/secrets/anthropic.api_key', { value: 'sk-ant-test-0123456789' });
   await admin.put('/api/settings', { provider: { mode: 'anthropic' } });
   const env = await agentEnv(pid, undefined, { runId: 'r_anthropicAws1' });
-  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined);
   assert.equal(env.AWS_ACCESS_KEY_ID, undefined, 'the model needs no AWS variables');
   assert.match(fs.readFileSync(path.join(env.PROJECT_AWS_FILES, 'credentials'), 'utf8'), /^aws_access_key_id = AKIAPROJECTKEY00001$/m);
   assert.equal(env.PROJECT_AWS_REGION, 'ap-southeast-1');
@@ -260,12 +260,15 @@ test('the aws wrapper sends the CLI to the project account and leaves the modelâ
   const fakeDir = path.join(tmp, 'realbin');
   fs.mkdirSync(fakeDir, { recursive: true });
   // a pretend "real" aws that prints the variables it sees
-  fs.writeFileSync(path.join(fakeDir, 'aws'), '#!/usr/bin/env bash\necho "KEY=${AWS_ACCESS_KEY_ID:-} SECRET=${AWS_SECRET_ACCESS_KEY:-} TOKEN=${AWS_SESSION_TOKEN:-} PROFILE=${AWS_PROFILE:-} REGION=${AWS_REGION:-}/${AWS_DEFAULT_REGION:-} BEARER=${AWS_BEARER_TOKEN_BEDROCK:-} ARGS=$*"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(fakeDir, 'aws'), '#!/usr/bin/env bash\nF=""; [ -n "${AWS_SHARED_CREDENTIALS_FILE:-}" ] && F=" FILES=$AWS_SHARED_CREDENTIALS_FILE|$AWS_CONFIG_FILE"\necho "KEY=${AWS_ACCESS_KEY_ID:-} SECRET=${AWS_SECRET_ACCESS_KEY:-} TOKEN=${AWS_SESSION_TOKEN:-} PROFILE=${AWS_PROFILE:-} REGION=${AWS_REGION:-}/${AWS_DEFAULT_REGION:-} BEARER=${AWS_BEARER_TOKEN_BEDROCK:-}$F ARGS=$*"\n', { mode: 0o755 });
   const base = { ...process.env, PATH: [shimDir, fakeDir, process.env.PATH].join(path.delimiter) };
   const run = (extra: Record<string, string>) => execFileSync('bash', [`${shimDir}/aws`, 'sts', 'get-caller-identity'], { env: { ...base, ...extra }, encoding: 'utf8' }).trim();
 
-  const withKeys = run({ AWS_ACCESS_KEY_ID: 'AKIAMODEL', AWS_SECRET_ACCESS_KEY: 'modelsecret', AWS_BEARER_TOKEN_BEDROCK: 'bearer', AWS_REGION: 'us-east-1', PROJECT_AWS_ACCESS_KEY_ID: 'AKIAPROJ', PROJECT_AWS_SECRET_ACCESS_KEY: 'projsecret', PROJECT_AWS_SESSION_TOKEN: 'ptoken', PROJECT_AWS_REGION: 'ap-southeast-1' });
-  assert.equal(withKeys, 'KEY=AKIAPROJ SECRET=projsecret TOKEN=ptoken PROFILE= REGION=ap-southeast-1/ap-southeast-1 BEARER= ARGS=sts get-caller-identity');
+  // The project's keys come in the run's credentials file; the model's variables are cleared for the CLI.
+  const files = path.join(tmp, 'run-aws-files').replace(/\\/g, '/');
+  fs.mkdirSync(files, { recursive: true });
+  const withKeys = run({ AWS_ACCESS_KEY_ID: 'AKIAMODEL', AWS_SECRET_ACCESS_KEY: 'modelsecret', AWS_BEARER_TOKEN_BEDROCK: 'bearer', AWS_REGION: 'us-east-1', PROJECT_AWS_FILES: files, PROJECT_AWS_REGION: 'ap-southeast-1' });
+  assert.equal(withKeys, `KEY= SECRET= TOKEN= PROFILE=project REGION=ap-southeast-1/ap-southeast-1 BEARER= FILES=${files}/credentials|${files}/config ARGS=sts get-caller-identity`);
 
   const withProfile = run({ AWS_ACCESS_KEY_ID: 'AKIAMODEL', PROJECT_AWS_PROFILE: 'client-b', PROJECT_AWS_REGION: 'us-west-2' });
   assert.equal(withProfile, 'KEY= SECRET= TOKEN= PROFILE=client-b REGION=us-west-2/us-west-2 BEARER= ARGS=sts get-caller-identity');
@@ -284,14 +287,15 @@ test('the aws wrapper sends the CLI to the project account and leaves the modelâ
 
 test('portal-aws-env prints export lines that are safe to eval, even for awkward values', { skip: !hasBash && 'bash is not available' }, () => {
   const shimDir = ensureAwsShims().replace(/\\/g, '/');
-  const script = `eval "$(bash ${shimDir}/portal-aws-env)"; printf '%s|%s|%s|%s' "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_SESSION_TOKEN" "$AWS_REGION"`;
+  const script = `eval "$(bash ${shimDir}/portal-aws-env)"; printf '%s|%s|%s|%s|%s' "$AWS_SHARED_CREDENTIALS_FILE" "$AWS_CONFIG_FILE" "$AWS_PROFILE" "$AWS_ACCESS_KEY_ID" "$AWS_REGION"`;
+  const awkward = `/tmp/we"ird 'dir$x;rm -rf /`;
   const out = execFileSync('bash', ['-c', script], {
-    env: { ...process.env, AWS_BEARER_TOKEN_BEDROCK: 'bearer', PROJECT_AWS_ACCESS_KEY_ID: 'AKIAPROJ', PROJECT_AWS_SECRET_ACCESS_KEY: `we"ird 'sec$ret;rm -rf /`, PROJECT_AWS_SESSION_TOKEN: 'tok/en+==', PROJECT_AWS_REGION: 'eu-west-1' },
+    env: { ...process.env, AWS_ACCESS_KEY_ID: 'AKIAMODEL', AWS_BEARER_TOKEN_BEDROCK: 'bearer', PROJECT_AWS_FILES: awkward, PROJECT_AWS_REGION: 'eu-west-1' },
     encoding: 'utf8',
   });
-  assert.equal(out, `AKIAPROJ|we"ird 'sec$ret;rm -rf /|tok/en+==|eu-west-1`, 'values survive eval exactly and nothing is executed');
-  const cleared = execFileSync('bash', ['-c', `eval "$(bash ${shimDir}/portal-aws-env)"; echo "[$AWS_BEARER_TOKEN_BEDROCK]"`], { env: { ...process.env, AWS_BEARER_TOKEN_BEDROCK: 'bearer', PROJECT_AWS_ACCESS_KEY_ID: 'AKIAPROJ', PROJECT_AWS_SECRET_ACCESS_KEY: 's' }, encoding: 'utf8' }).trim();
+  assert.equal(out, `${awkward}/credentials|${awkward}/config|project||eu-west-1`, 'values survive eval exactly, nothing is executed, the model key is cleared');
+  const cleared = execFileSync('bash', ['-c', `eval "$(bash ${shimDir}/portal-aws-env)"; echo "[$AWS_BEARER_TOKEN_BEDROCK]"`], { env: { ...process.env, AWS_BEARER_TOKEN_BEDROCK: 'bearer', PROJECT_AWS_FILES: '/tmp/x' }, encoding: 'utf8' }).trim();
   assert.equal(cleared, '[]', 'the Bedrock variables are cleared for Terraform and SDK code');
-  const none = spawnSync('bash', ['-c', `bash ${shimDir}/portal-aws-env`], { env: { ...process.env, PROJECT_AWS_ACCESS_KEY_ID: '', PROJECT_AWS_PROFILE: '' }, encoding: 'utf8' });
+  const none = spawnSync('bash', ['-c', `bash ${shimDir}/portal-aws-env`], { env: { ...process.env, PROJECT_AWS_FILES: '', PROJECT_AWS_PROFILE: '' }, encoding: 'utf8' });
   assert.match(none.stdout, /nothing to set/);
 });

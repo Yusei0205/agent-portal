@@ -152,10 +152,10 @@ export async function projectAwsCredentials(projectId: string): Promise<{ region
 /* Agent runs: route the agent's `aws` command to the project account  */
 /* ------------------------------------------------------------------ */
 
-// The model's credentials never reach the agent's shell: Claude Code drops every variable that looks like a secret
-// (AWS_SECRET_ACCESS_KEY, *_TOKEN, *_API_KEY, even PROJECT_AWS_SECRET_ACCESS_KEY) from the commands it starts
-// (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB in settings.ts). The project's own account is meant for the agent, so for each run
-// its keys are written to a private credentials file outside the project (runAwsDir), named by PROJECT_AWS_FILES.
+// Where Claude Code keeps the model's credentials from the commands it starts (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB in
+// settings.ts), it drops every variable that looks like a secret (AWS_SECRET_ACCESS_KEY, *_TOKEN, *_API_KEY, even
+// PROJECT_AWS_SECRET_ACCESS_KEY). The project's own account is meant for the agent, so for each run its keys are
+// written to a private credentials file outside the project (runAwsDir), named by PROJECT_AWS_FILES, on every platform.
 // These two small scripts, first on the agent's PATH, point `aws` (and, on request, Terraform or SDK code) at it.
 const AWS_SHIM = `#!/usr/bin/env bash
 # Sends the AWS CLI to this project's AWS account. Installed by Agent Portal; do not edit.
