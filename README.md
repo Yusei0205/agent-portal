@@ -383,6 +383,9 @@ monthly cap.
   AWS account, through the `aws` wrapper and a credentials file that exists only while the run
   does (`DATA_DIR/run-aws/<run id>/`). None of this is a sandbox: a shell command can still read
   files the portal's user can read.
+- Agents may not change tool settings (`.claude/settings*.json`, `.mcp.json`, `.kiro/settings/`) or
+  anything under `.git/`, and path checks follow symbolic links. The portal runs its own git
+  commands without hooks, so nothing an agent leaves in a repository runs later on the server.
 - An approval shows the whole command and allows only that exact call; *Always allow* covers one
   command, or one host for web fetches. A question or approval nobody answers ends after 60
   minutes (Settings › Limits), and a push is refused if the working copy changed after the
