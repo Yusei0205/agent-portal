@@ -71,7 +71,7 @@ test('Kiro run: guard, approvals, tool events, credits, profile cleanup', async 
   const write = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.type === 'approval' && i.status === 'pending'), 'write approval');
   assert.equal(write.tool_name, 'Write');
   assert.ok(String(write.payload.input.file_path).includes(path.join('work', run.id)));
-  await c.post(`/api/inputs/${write.id}/answer`, { decision: 'allow' });
+  await c.post(`/api/inputs/${write.id}/answer`, { decision: 'allow', inputHash: write.payload.inputHash });
 
   const shell = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Bash' && i.status === 'pending'), 'shell approval');
   assert.equal(shell.payload.input.command, 'npm test');
@@ -123,7 +123,7 @@ test('Kiro follow-up resumes the same session and ignores the replayed history',
   const run = { id: runId };
   // acceptEdits: the inside write needs nobody; the shell command still asks.
   const shell = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Bash' && i.status === 'pending'), 'shell approval');
-  await c.post(`/api/inputs/${shell.id}/answer`, { decision: 'allow' });
+  await c.post(`/api/inputs/${shell.id}/answer`, { decision: 'allow', inputHash: shell.payload.inputHash });
   const done = await waitFor(async () => {
     const r = await c.get(`/api/runs/${run.id}`);
     return ['completed', 'failed'].includes(r.run.status) ? r : null;
@@ -166,7 +166,7 @@ test('Kiro subagents: the project roles become the team, each subagent is its ow
 
   // Starting subagents asks first, like any tool that is not a plain edit.
   const spawn = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Subagents' && i.status === 'pending'), 'subagent approval');
-  await c.post(`/api/inputs/${spawn.id}/answer`, { decision: 'allow' });
+  await c.post(`/api/inputs/${spawn.id}/answer`, { decision: 'allow', inputHash: spawn.payload.inputHash });
   const done = await waitFor(async () => {
     const r = await c.get(`/api/runs/${run.id}`);
     return ['completed', 'failed'].includes(r.run.status) ? r : null;

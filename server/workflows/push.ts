@@ -1,10 +1,14 @@
 /** Agent pushes: the portal pushes a session branch when the agents ask and a person allows it. */
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { run as exec, type Row } from '../db.ts';
 import { post } from '../http.ts';
-import { requireProject } from '../projects.ts';
+import { getProject, projectDir, requireProject } from '../projects.ts';
 import { getRepo, checkBranch, repoDir } from '../repos.ts';
 import { getRun } from '../agent/runner.ts';
-import { badRequest, now, parseJson, str } from '../util.ts';
+import { HttpError, badRequest, now, parseJson, str } from '../util.ts';
 import { pushRun, isSharedBranch } from '../runs.ts';
 import { runRepos } from '../agent/runner.ts';
 import { git } from '../git.ts';
@@ -23,6 +27,30 @@ export interface PushRequest {
   /** What the agent reported with the request, so approving can finish a session that was done. */
   state: string;
   at: string;
+  /** The working copies' content when the agents asked (worktreeFingerprint), so a person allows exactly that. */
+  tree?: string;
+}
+
+/**
+ * The content of a run's working copies, as one string: for each, the git tree of everything in it (committed or not,
+ * except ignored files), written through a throw-away index so the working copy itself is not touched.
+ */
+export async function worktreeFingerprint(run: Row): Promise<string> {
+  const pdir = projectDir(getProject(run.project_id));
+  const parts: string[] = [];
+  for (const x of runRepos(run)) {
+    const dir = path.join(pdir, x.worktree);
+    const index = path.join(os.tmpdir(), `portal-index-${randomUUID()}`);
+    try {
+      const env = { GIT_INDEX_FILE: index };
+      await git(['read-tree', 'HEAD'], { cwd: dir, env });
+      await git(['add', '-A'], { cwd: dir, env });
+      parts.push(`${x.repoId}:${(await git(['write-tree'], { cwd: dir, env })).stdout.trim()}`);
+    } finally {
+      fs.rmSync(index, { force: true });
+    }
+  }
+  return parts.join(',');
 }
 
 /** Push every working copy of a session's run to its new branch; the results go into the history. */
@@ -157,6 +185,11 @@ export function registerPushRoutes(): void {
     const req = w.pending_push ? parseJson<PushRequest | null>(w.pending_push, null) : null;
     if (!req) throw badRequest('This session is not waiting for a push');
     if (w.status === 'running' || driving.has(w.id)) throw badRequest('Wait for the current iteration to finish');
+    // Allowing a push allows what the agents asked to push. If the working copy changed since (a follow-up run, say),
+    // the person has not seen what would go out.
+    if (req.tree && (await worktreeFingerprint(getRun(req.runId)).catch(() => '')) !== req.tree) {
+      throw new HttpError(409, 'The working copy changed after the agents asked to push. Review the changes again, then push from the Changes tab, or deny this and let the agents ask again.');
+    }
     const body = await ctx.json().catch(() => ({}));
     if (body.message) req.message = str(body.message, 'Commit message', { max: 500 });
     if (body.pr !== undefined) req.pr = Boolean(body.pr);

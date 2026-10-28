@@ -250,7 +250,7 @@ test('a Kiro run led by a project Kiro agent: its own profile and team, with eve
   clearLog();
   const { run } = await startSingleRun(admin, pid, { prompt: 'Build the API [delegate]', engine: 'kiro', leadAgent: 'kiro-lead', permissionMode: 'acceptEdits' });
   const spawn = await waitFor(async () => (await admin.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.tool_name === 'Subagents' && i.status === 'pending'), 'subagent approval');
-  await admin.post(`/api/inputs/${spawn.id}/answer`, { decision: 'allow' });
+  await admin.post(`/api/inputs/${spawn.id}/answer`, { decision: 'allow', inputHash: spawn.payload.inputHash });
   const done = await waitFor(async () => {
     const r = await admin.get(`/api/runs/${run.id}`);
     return ['completed', 'failed'].includes(r.run.status) ? r : null;

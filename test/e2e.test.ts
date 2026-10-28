@@ -280,7 +280,7 @@ test('agent run: questions, approvals, subagents, live stream, push', async () =
   assert.equal(approval.tool_name, 'Write');
   const viewerApproval = await viewer.req('POST', `/api/inputs/${approval.id}/answer`, { decision: 'allow' });
   assert.equal(viewerApproval.status, 403);
-  await editor.post(`/api/inputs/${approval.id}/answer`, { decision: 'allow' });
+  await editor.post(`/api/inputs/${approval.id}/answer`, { decision: 'allow', inputHash: approval.payload.inputHash });
 
   const done = await runDone(editor, run.id);
   ctrl.abort();

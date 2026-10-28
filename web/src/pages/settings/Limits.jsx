@@ -182,6 +182,19 @@ export function AgentsSection({ s, reload }) {
             />
           )}
         </Field>
+        <Field label="Minutes a question or approval waits" hint="Then the agent carries on without it (an approval counts as declined). 0 waits until the run is stopped.">
+          {(id) => (
+            <input
+              id={id}
+              type="number"
+              min={0}
+              max={10080}
+              className="input input-num"
+              value={a.approvalExpiryMinutes ?? 60}
+              onChange={(e) => setA({ ...a, approvalExpiryMinutes: Number(e.target.value) })}
+            />
+          )}
+        </Field>
         <Field label="Agent pushes for new sessions" hint="Only ever to the session's own new branch, never to the base or shared branches. Each session can change it.">
           {(id) => (
             <select id={id} className="input" value={a.defaultPushMode || 'ask'} onChange={(e) => setA({ ...a, defaultPushMode: e.target.value })}>

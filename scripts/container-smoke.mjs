@@ -483,7 +483,7 @@ async function main() {
         if (inp.status !== 'pending') continue;
         try {
           if (inp.type === 'approval') {
-            await client.post(`/api/inputs/${inp.id}/answer`, { decision: 'allow' });
+            await client.post(`/api/inputs/${inp.id}/answer`, { decision: 'allow', inputHash: inp.payload?.inputHash });
             approvalCount++;
           } else if (inp.type === 'question') {
             const answers = {};

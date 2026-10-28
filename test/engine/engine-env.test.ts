@@ -38,7 +38,7 @@ async function runToEnd(body: Record<string, unknown>) {
     async () => {
       const r = await c.get(`/api/runs/${run.id}`);
       for (const i of r.inputs ?? []) {
-        if (i.status === 'pending' && i.type === 'approval') await c.post(`/api/inputs/${i.id}/answer`, { decision: 'allow' }).catch(() => {});
+        if (i.status === 'pending' && i.type === 'approval') await c.post(`/api/inputs/${i.id}/answer`, { decision: 'allow', inputHash: i.payload?.inputHash }).catch(() => {});
       }
       return ['completed', 'failed', 'stopped'].includes(r.run.status) ? r : null;
     },
