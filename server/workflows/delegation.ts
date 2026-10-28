@@ -12,6 +12,15 @@ export function childrenOf(id: string): Row[] {
   return all<Row>('SELECT id, title, status, summary, stop_reason, seen_by_parent FROM workflows WHERE parent_id = ? ORDER BY created_at', id);
 }
 
+/** What a new delegated session of this parent may spend, in USD (never more than the parent's own budget). */
+export function childBudget(parent: Row): number {
+  const committed = Number(
+    one<Row>("SELECT COALESCE(SUM(MAX(budget_usd - spent_usd, 0)), 0) AS n FROM workflows WHERE parent_id = ? AND status IN ('running', 'queued', 'paused')", parent.id)?.n ?? 0,
+  );
+  const left = Number(parent.budget_usd ?? 0) - Number(parent.spent_usd ?? 0) - committed;
+  return Number(Math.min(Number(parent.budget_usd ?? 0), Math.max(0, left)).toFixed(4));
+}
+
 export function runningChildren(id: string): number {
   return Number(one<Row>("SELECT COUNT(*) AS n FROM workflows WHERE parent_id = ? AND status = 'running'", id)?.n ?? 0);
 }
@@ -37,6 +46,7 @@ export function createChild(parent: Row, task: { title?: string; goal: string },
   if (!room.canStart) throw badRequest(`Cannot delegate now: ${room.why}.`);
   const goal = task.goal.trim();
   if (!goal) throw badRequest('Say what the delegated session should do');
+  if (childBudget(parent) < 0.1) throw badRequest('Cannot delegate now: this session has no budget left for another session. Raise its budget first.');
   const id = newId('w_');
   const title = (task.title?.trim() || goal.split('\n')[0]).slice(0, 80);
   insert('workflows', {
@@ -50,7 +60,9 @@ export function createChild(parent: Row, task: { title?: string; goal: string },
     branch: parent.branch,
     repos: parent.repos,
     model: parent.model,
-    budget_usd: parent.budget_usd,
+    // A delegated session spends from its parent's budget: what the parent has left, less what its other running
+    // delegated sessions may still spend. Copying the parent's whole budget let a $5 session start three $5 children.
+    budget_usd: childBudget(parent),
     budget_credits: parent.budget_credits,
     max_iterations: parent.max_iterations,
     verify_command: parent.verify_command,

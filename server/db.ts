@@ -855,7 +855,12 @@ const WALL_CLOCK = `
   -- it belongs to: a person resuming the session starts a new one.
   ALTER TABLE loop_run_states ADD COLUMN wall_clock_started_at TEXT;
 `;
-const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS, GENERATED_OUTPUTS, ICON_DIAGRAMS, WALL_CLOCK];
+const CACHE_TOKENS = `
+  -- The cache parts of a run's input tokens (input_tokens still includes them), so the cache hit rate can be seen.
+  ALTER TABLE agent_runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE agent_runs ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+`;
+const MIGRATIONS: string[] = [BASELINE, DIAGRAMS, TEMPLATES, GENERATED_DOCS, DOCS_SYNC, PR_REVIEW, RUN_OPTIONS, GENERATED_OUTPUTS, ICON_DIAGRAMS, WALL_CLOCK, CACHE_TOKENS];
 
 /** The schema version of a database that is up to date. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

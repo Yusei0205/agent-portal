@@ -18,7 +18,7 @@ export function query({ prompt, options }) {
 
     // A marker in the prompt picks one of the extra scenarios at the end of this file.
     const text = typeof first.value?.message?.content === 'string' ? first.value.message.content : '';
-    const scenario = text.match(/\[(guards|metered|bash-remember|hang|approvals|expiry)\]/)?.[1];
+    const scenario = text.match(/\[(guards|metered|bash-remember|hang|approvals|expiry|budget|spend-then-hang|ask-slowly)\]/)?.[1];
     if (scenario) {
       yield* extraScenario(scenario, call, options, text);
     } else if (Array.isArray(options.tools) && options.tools.length === 0 && text.includes('advisory code review judge')) {
@@ -158,6 +158,26 @@ async function* extraScenario(name, call, options, text) {
       call.expiredBash = await options.canUseTool('Bash', { command: 'npm run slow' }, ctx('e1'));
       call.expiredQuestion = await options.canUseTool('AskUserQuestion', { questions: [{ question: 'Which region?', header: 'Region', multiSelect: false, options: [{ label: 'eu', description: '' }] }] }, ctx('e2'));
       yield ok('expiry done');
+      return;
+    }
+    // The SDK stops a run at its maxBudgetUsd with this result.
+    case 'budget': {
+      yield { type: 'assistant', session_id: 'sess-1', parent_tool_use_id: null, message: { id: 'mb1', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'working' }], usage: { input_tokens: 1000, output_tokens: 100 } } };
+      yield { type: 'result', subtype: 'error_max_budget_usd', is_error: true, total_cost_usd: 5.02, session_id: 'sess-1', usage: { input_tokens: 1000, output_tokens: 100 } };
+      return;
+    }
+    // Spends (a main-agent and a subagent message), then keeps working until it is stopped: no result ever comes.
+    case 'spend-then-hang': {
+      yield { type: 'assistant', session_id: 'sess-1', parent_tool_use_id: null, message: { id: 'sh1', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'big job' }], usage: { input_tokens: 100000, output_tokens: 20000, cache_read_input_tokens: 50000, cache_creation_input_tokens: 0 } } };
+      yield { type: 'assistant', session_id: 'sess-1', parent_tool_use_id: 'task-1', message: { id: 'sh2', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'sub' }], usage: { input_tokens: 10000, output_tokens: 1000 } } };
+      call.hanging = true;
+      await new Promise((resolve) => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })));
+      return;
+    }
+    // A question that a person answers late: waiting must not use up the run's working time.
+    case 'ask-slowly': {
+      call.answer = await options.canUseTool('AskUserQuestion', { questions: [{ question: 'Which size?', header: 'Size', multiSelect: false, options: [{ label: 'small', description: '' }] }] }, { signal, toolUseID: 'q1', requestId: 'q1' });
+      yield ok('answered');
       return;
     }
     case 'bash-remember': {

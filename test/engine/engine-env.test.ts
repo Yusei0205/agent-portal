@@ -93,3 +93,24 @@ test('the model key never reaches a shell command; the project AWS account does;
   const init = r.events.find((e: any) => e.type === 'system:init');
   assert.equal(init?.data?.permissionMode, 'acceptEdits', 'the run kept its own permission mode');
 });
+
+test('the engine stops a run at its budget, and the portal records it as stopped', { timeout: 200_000 }, async () => {
+  // Every reply now costs several dollars, so the first one goes past the $5 cap per run.
+  api.setUsage({ input_tokens: 3_000_000, output_tokens: 20 });
+  try {
+    api.setScript([
+      { tool: 'Bash', input: { command: 'echo one', description: 'Step one' } },
+      { tool: 'Bash', input: { command: 'echo two', description: 'Step two' } },
+      { tool: 'Bash', input: { command: 'echo three', description: 'Step three' } },
+      { text: 'Done.' },
+    ]);
+    const r = await runToEnd({ prompt: 'Do three steps', permissionMode: 'acceptEdits' });
+    const result = r.events.find((e: any) => e.type.startsWith('result'));
+    assert.equal(result?.type, 'result:error_max_budget_usd', 'the engine ended the run at maxBudgetUsd');
+    assert.equal(r.run.status, 'stopped');
+    assert.match(r.run.error, /Stopped at this run's budget of \$5/);
+    assert.ok(r.run.cost_usd > 5, `its spend is recorded: ${r.run.cost_usd}`);
+  } finally {
+    api.setUsage({ input_tokens: 100, output_tokens: 20 });
+  }
+});

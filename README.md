@@ -383,6 +383,9 @@ monthly cap.
   AWS account, through the `aws` wrapper and a credentials file that exists only while the run
   does (`DATA_DIR/run-aws/<run id>/`). None of this is a sandbox: a shell command can still read
   files the portal's user can read.
+- Each run has a spend cap ($5 by default) and a working-time limit (60 minutes, not counting
+  time spent waiting for a person); a session iteration also stops at what the session has
+  left. A run that is stopped or crashes is priced from what it used. Settings › Limits.
 - Agents may not change tool settings (`.claude/settings*.json`, `.mcp.json`, `.kiro/settings/`) or
   anything under `.git/`, and path checks follow symbolic links. The portal runs its own git
   commands without hooks, so nothing an agent leaves in a repository runs later on the server.

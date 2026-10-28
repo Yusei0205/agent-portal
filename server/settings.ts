@@ -46,6 +46,14 @@ export interface Settings {
     mcpToolTimeoutMinutes: number;
     /** Minutes an agent's question or tool approval waits for a person before the run carries on without it (0 = until the run is stopped). */
     approvalExpiryMinutes: number;
+    /** Spend cap for one run in USD, subagents included (null = none). Session iterations get the lower of this and what the session has left. */
+    maxBudgetUsdPerRun: number | null;
+    /** Minutes one run may work, not counting time spent waiting for a person (null = no limit). */
+    runTimeoutMinutes: number | null;
+    /** Model to switch to when the chosen one is overloaded ('' = none). */
+    fallbackModel: '' | 'sonnet' | 'haiku' | 'opus';
+    /** Default thinking effort ('' = the model's own default). */
+    effort: '' | EffortLevel;
   };
   /** Extra Claude models for the model picker, one per line as "model id | label"; added without a deploy. */
   modelList: { extra: string };
@@ -73,13 +81,16 @@ export interface Settings {
   };
 }
 
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export const EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
 const DEFAULTS: Settings = {
   provider: { mode: 'demo', models: { sonnet: '', haiku: '', opus: '' } },
   kiro: { command: '', models: { sonnet: '', haiku: '', opus: '' } },
   aws: { region: 'us-east-1', auth: 'ambient', profile: '' },
   budget: { monthlyUsd: 50 },
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
-  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask', allowReadsOutsideProject: false, mcpToolTimeoutMinutes: 10, approvalExpiryMinutes: 60 },
+  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask', allowReadsOutsideProject: false, mcpToolTimeoutMinutes: 10, approvalExpiryMinutes: 60, maxBudgetUsdPerRun: 5, runTimeoutMinutes: 60, fallbackModel: '', effort: '' },
   delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
   modelList: { extra: '' },
   ui: { advanced: false },
@@ -215,6 +226,12 @@ export function updateSettings(patch: any): Settings {
     const expiry = Number(a.approvalExpiryMinutes);
     if (!Number.isFinite(expiry) || expiry < 0 || expiry > 10080) throw badRequest('Minutes a question or approval waits must be from 0 (no limit) to 10080');
     a.approvalExpiryMinutes = expiry;
+    a.maxBudgetUsdPerRun = optionalNumber(a.maxBudgetUsdPerRun, 'Budget per run', 0.01, 1000);
+    a.runTimeoutMinutes = optionalNumber(a.runTimeoutMinutes, 'Time limit per run', 0.01, 1440);
+    if (!['', 'sonnet', 'haiku', 'opus'].includes(a.fallbackModel ?? '')) throw badRequest('Fallback model must be sonnet, haiku, opus or none');
+    a.fallbackModel = a.fallbackModel ?? '';
+    if ((a.effort ?? '') !== '' && !EFFORT_LEVELS.includes(a.effort)) throw badRequest('Thinking effort must be low, medium, high, xhigh, max or the model default');
+    a.effort = a.effort ?? '';
     saveSection('agents', a);
   }
   if (patch.modelList) {
@@ -264,6 +281,14 @@ export function updateSettings(patch: any): Settings {
     });
   }
   return getSettings();
+}
+
+/** null, undefined or '' means "no limit"; otherwise a number from min to max. */
+function optionalNumber(v: unknown, label: string, min: number, max: number): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < min || n > max) throw badRequest(`${label} must be from ${min} to ${max}, or empty for no limit`);
+  return n;
 }
 
 /** Environment variables that must never reach an agent process. */
