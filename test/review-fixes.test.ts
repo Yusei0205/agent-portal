@@ -152,9 +152,24 @@ const UNTRUSTED = {
   curlShell: 'deny',
   terraform: 'deny',
   npmTest: 'allow',
+  writeNotes: 'allow',
+  writeClaudeSettings: 'deny',
+  writeGitHook: 'deny',
+  editMcp: 'deny',
+  bashSettings: 'deny',
+  bashGitConfig: 'deny',
+  bashReadMcp: 'allow',
+  readThroughLink: 'deny',
 };
 
 test('guards: reads stay in the project, deletes in the run folder, blocked commands never reach an approval', async () => {
+  // A folder link inside the project that points outside it (a junction on Windows needs no extra rights).
+  const slug = (await c.get(`/api/projects/${pid}`)).project.slug;
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'));
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'not for agents');
+  const link = path.join(srv.dataDir, 'projects', slug, 'docs', 'outside-link');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(outside, link, 'junction');
   const { run } = await startSingleRun(c, pid, { prompt: '[guards] untrusted' });
   await runEnded(run.id);
   assert.deepEqual(lastCall().guards, UNTRUSTED);

@@ -1,4 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 import { HttpError } from './util.ts';
 
 export interface GitResult {
@@ -7,7 +9,11 @@ export interface GitResult {
 }
 
 // Windows stops at 260 characters unless git is told otherwise; some repositories have deeper paths than that.
-const GIT_BASE = ['-c', 'core.longpaths=true'];
+// The portal's own git commands also run no hooks and no fsmonitor program: agents work in these repositories and
+// could leave a hook (or a core.fsmonitor setting) behind for the portal to run later, after the run and its approvals.
+// The hooks folder named here is never created.
+const NO_HOOKS = path.join(os.tmpdir(), 'agent-portal-no-git-hooks');
+export const GIT_BASE = ['-c', 'core.longpaths=true', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false'];
 
 export function git(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; maxBuffer?: number } = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {

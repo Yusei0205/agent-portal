@@ -9,7 +9,8 @@ import { config } from '../config.ts';
 import { ensureBuiltInSkills, getProject, projectDir, notifyProject, type Project } from '../projects.ts';
 import { HttpError, badRequest, newId, now, parseJson, withLock } from '../util.ts';
 import { commitAll } from '../git.ts';
-import { blockedCommand, alwaysBlockedCommand, parseTrustedPush, composeLeadAppend, isGitPush, outsideDeleteReason, isInsideDir } from '../guardrails.ts';
+import { blockedCommand, alwaysBlockedCommand, parseTrustedPush, composeLeadAppend, isGitPush, outsideDeleteReason, protectedCommandReason, protectedConfigReason } from '../guardrails.ts';
+import { isReallyInsideDir } from '../real-path.ts';
 import type { CanUseTool, PermissionMode, ProviderRunOptions, SdkMessage } from './types.ts';
 import { sdkRun } from './sdk.ts';
 import { kiroRun } from './kiro.ts';
@@ -683,7 +684,8 @@ async function execute(
         const v = toolInput[field];
         if (typeof v !== 'string' || !v) continue;
         if (field === 'pattern' && !path.isAbsolute(v)) continue; // a relative glob is searched from the project folder
-        if (!isInsideDir(pdir, path.resolve(pdir, v))) {
+        // Symbolic links are followed: a link inside the project that points elsewhere is outside.
+        if (!isReallyInsideDir(pdir, path.resolve(pdir, v))) {
           return 'Blocked by Agent Portal: agents may only read files inside this project. If you need something from elsewhere, ask the person to add it to the project documents, the Vault or a connected repository.';
         }
       }
@@ -693,6 +695,9 @@ async function execute(
       // Every run, trusted or not: deletes stay inside this run's folder (the shell starts in the project folder).
       const outside = outsideDeleteReason(command, runDirAbs, { cwd: pdir, home: os.homedir() });
       if (outside) return `Blocked by Agent Portal: ${outside}`;
+      // Every run, trusted or not: tool settings, MCP lists and git hooks/config stay as people set them.
+      const config = protectedCommandReason(command);
+      if (config) return `Blocked by Agent Portal: ${config}`;
       if (input.trustTools && !input.oneshot) {
         // Trusted session: always-blocked commands still refused.
         const alwaysBlocked = alwaysBlockedCommand(command);
@@ -736,8 +741,10 @@ async function execute(
     const target = String(toolInput.file_path ?? toolInput.notebook_path ?? '');
     if (!target) return null;
     const abs = path.resolve(pdir, target);
-    if (abs === writeDirAbs || abs.startsWith(writeDirAbs + path.sep)) return null;
-    return `Blocked by Agent Portal: this run may only change files under ${writeDirRel}/.`;
+    // Symbolic links are followed, so a link in the working copy cannot carry a write out of the run's folder.
+    if (!isReallyInsideDir(writeDirAbs, abs)) return `Blocked by Agent Portal: this run may only change files under ${writeDirRel}/.`;
+    const config = protectedConfigReason(path.relative(writeDirAbs, abs) || target);
+    return config ? `Blocked by Agent Portal: ${config}` : null;
   };
 
   const env = o.mode === 'demo' ? {} : await agentEnv(project.id, o.mode as any, { runId });

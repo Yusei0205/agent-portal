@@ -126,6 +126,43 @@ export function isInsideDir(base: string, target: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/**
+ * Files that make tools run commands or skip approvals: Claude Code and Kiro settings, MCP server lists, and anything in
+ * a .git folder (hooks, config). An agent edit there would reach the next run, the portal's own git commands, or, once
+ * pushed, everyone who opens the repository. A person changes them (admins through the portal's config editor).
+ */
+export function protectedConfigReason(file: string): string | null {
+  const parts = path.normalize(file).split(/[\\/]+/).map((x) => x.toLowerCase());
+  const name = parts[parts.length - 1] ?? '';
+  const parent = parts[parts.length - 2] ?? '';
+  const hit =
+    parts.includes('.git') ||
+    (parent === '.claude' && (name === 'settings.json' || name === 'settings.local.json')) ||
+    name === '.mcp.json' ||
+    parts.some((x, i) => x === '.kiro' && parts[i + 1] === 'settings');
+  return hit ? `${file} configures tools that run commands or skip approvals, so agents may not change it. Ask a person to make the change.` : null;
+}
+
+const PROTECTED_IN_COMMAND = /(?:\.claude[\\/]+settings(?:\.local)?\.json|\.mcp\.json|\.git[\\/]+(?:hooks|config|info[\\/]+attributes)\b|\.kiro[\\/]+settings)/i;
+const WRITES_IN_COMMAND =
+  /(?:>|\btee\b|\bcp\b|\bmv\b|\bln\b|\binstall\b|\brsync\b|\bdd\b|\btruncate\b|\btouch\b|\bchmod\b|\bsed\b[^|;&\n]*\s-i|\bperl\b[^|;&\n]*\s-[a-z]*i|\b(?:Set|Add|Out)-Content\b|\bOut-File\b|\b(?:Copy|Move|New)-Item\b|\bwriteFile|\bopen\s*\()/i;
+const GIT_CONFIG_RUNS_COMMANDS = /\bgit\b[^|;&\n]*\bconfig\b[^|;&\n]*\b(?:core\.hookspath|core\.fsmonitor|core\.sshcommand|core\.editor|core\.pager|diff\.external|filter\.|alias\.|includeif\.|include\.path)/i;
+
+/**
+ * A shell command that writes one of the protected files, or sets a git option that runs a program. A seat belt until
+ * agents' shell commands run in a sandbox: it reads the command text, so a determined command can get past it.
+ */
+export function protectedCommandReason(command: string): string | null {
+  const text = String(command ?? '');
+  if (PROTECTED_IN_COMMAND.test(text) && WRITES_IN_COMMAND.test(text)) {
+    return 'agents may not change tool settings, MCP server lists or git hooks and config (they run commands or skip approvals). Ask a person to make the change.';
+  }
+  if (GIT_CONFIG_RUNS_COMMANDS.test(text)) {
+    return 'agents may not set git options that run programs (hooks, fsmonitor, filters, aliases, includes). Ask a person to make the change.';
+  }
+  return null;
+}
+
 /** Programs that delete the paths they are given. */
 const DELETE_PROGRAMS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'del', 'erase', 'rd', 'remove-item', 'ri', 'rimraf']);
 /** Prefixes that run the next word as the real command. */
