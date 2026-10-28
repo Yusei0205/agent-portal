@@ -18,7 +18,7 @@
 import crypto from 'node:crypto';
 import { all, one, insert, run as exec, type Row, isDbOpen } from './db.ts';
 import { post, get } from './http.ts';
-import { requireProject, getProject, notifyProject } from './projects.ts';
+import { requireProject, getProject, notifyProject, accessOf } from './projects.ts';
 import { badRequest, notFound, newId, now, str, parseJson, HttpError } from './util.ts';
 import { audit } from './audit.ts';
 import { checkConcurrency, isDraining, concurrencyReason, queueReasonLabel, drainQueue } from './control-plane.ts';
@@ -334,10 +334,13 @@ async function runCronTick(): Promise<void> {
     }
     if (isDraining()) continue;
 
-    // Find a valid user (the spec's creator; fall back to any admin).
+    // The person the trigger runs as (see resolveTriggerUser); without one it does not fire.
     if (!isDbOpen()) return;
     const userId = await resolveTriggerUser(spec.project_id, spec.created_by);
-    if (!userId) continue;
+    if (!userId) {
+      console.warn(`[trigger] cron spec "${spec.name}" (${spec.id}) skipped: ${NO_OWNER}`);
+      continue;
+    }
 
     try {
       if (!isDbOpen()) return;
@@ -407,7 +410,10 @@ async function pollJiraForSpec(r: Row): Promise<void> {
   if (rateErr) return;
 
   const userId = await resolveTriggerUser(spec.project_id, spec.created_by);
-  if (!userId) return;
+  if (!userId) {
+    console.warn(`[trigger] Jira spec "${spec.name}" (${spec.id}) skipped: ${NO_OWNER}`);
+    return;
+  }
 
   for (const ticket of tickets.slice(0, 3)) {
     const dedupKey = `jira:${spec.id}:${ticket.key}:${tc.statusName ?? tc.jql ?? ''}`;
@@ -434,16 +440,23 @@ async function pollJiraForSpec(r: Row): Promise<void> {
   }
 }
 
-/** Find a valid user ID to own a trigger-fired session: creator first, then any admin. */
-async function resolveTriggerUser(projectId: string, preferredUserId: string | null): Promise<string | null> {
-  if (preferredUserId) {
-    const u = one<{ id: string; disabled: number }>('SELECT id, disabled FROM users WHERE id = ?', preferredUserId);
-    if (u && !u.disabled) return u.id;
-  }
-  // Fall back to any admin who is a project member or any admin.
-  const admin = one<{ id: string }>('SELECT id FROM users WHERE is_admin = 1 AND disabled = 0 LIMIT 1');
-  return admin?.id ?? null;
+/**
+ * The person a trigger-fired session runs as: the one who last saved the trigger, while they can still sign in and
+ * still have edit access to the project. Nobody else: falling back to "any admin" let a trigger keep running with an
+ * admin's identity and budget after its owner left the project. Without an owner the trigger does not fire; saving it
+ * again makes the person who saves it the owner.
+ */
+export async function resolveTriggerUser(projectId: string, preferredUserId: string | null): Promise<string | null> {
+  if (!preferredUserId) return null;
+  const u = one<{ id: string; email: string; name: string; is_admin: number; disabled: number }>('SELECT id, email, name, is_admin, disabled FROM users WHERE id = ?', preferredUserId);
+  if (!u || u.disabled) return null;
+  const access = accessOf(u as any, projectId);
+  if (access !== 'editor' && access !== 'owner') return null;
+  return u.id;
 }
+
+/** Why a trigger cannot fire for want of an owner, for the caller's error. */
+const NO_OWNER = 'This trigger has no owner who can run it (disabled, or no longer an editor of the project). Save the trigger again to become its owner.';
 
 /* ------------------------------------------------------------------ */
 /* Start / stop the trigger engine                                     */
@@ -537,7 +550,7 @@ export function registerTriggerRoutes(): void {
     flatten(payload);
 
     const userId = await resolveTriggerUser(spec.project_id, spec.created_by);
-    if (!userId) throw new HttpError(503, 'No active user found to own this trigger-fired session');
+    if (!userId) throw new HttpError(409, NO_OWNER);
 
     const wf = await createWorkflowFromSpec(spec, userId, vars);
     recordTriggerFire(spec.id, 'webhook', payload, wf.id);
@@ -584,7 +597,7 @@ export function registerTriggerRoutes(): void {
       if (rateErr) throw new HttpError(429, rateErr);
       if (isDraining()) throw new HttpError(503, 'The server is draining.');
       const userId = await resolveTriggerUser(spec.project_id, spec.created_by);
-      if (!userId) throw new HttpError(503, 'No active user for trigger-fired session');
+      if (!userId) throw new HttpError(409, NO_OWNER);
       const wf = await createWorkflowFromSpec(spec, userId, d.vars);
       if (!wf.id) return { ok: true, ignored: true, reason: String(wf.stop_reason) };
       recordTriggerFire(spec.id, 'github_event', { event, deliveryId, pr: d.vars['pr.number'], sha: d.vars['pr.sha'] }, wf.id);
@@ -640,7 +653,7 @@ export function registerTriggerRoutes(): void {
     }
 
     const userId = await resolveTriggerUser(spec.project_id, spec.created_by);
-    if (!userId) throw new HttpError(503, 'No active user for trigger-fired session');
+    if (!userId) throw new HttpError(409, NO_OWNER);
 
     const wf = await createWorkflowFromSpec(spec, userId, vars);
     recordTriggerFire(spec.id, 'github_event', { event, deliveryId }, wf.id);

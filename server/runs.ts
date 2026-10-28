@@ -378,6 +378,11 @@ export function registerRunRoutes(): void {
     if (!row) throw notFound('Question not found');
     requireProject(ctx, row.project_id, row.type === 'approval' ? 'editor' : 'viewer');
     const body = await ctx.json();
+    // An approval is a person looking at a tool call. A token (a script, or whoever found it) may answer questions and
+    // decline tool calls, but allowing one takes a signed-in person.
+    if (ctx.apiToken && row.type === 'approval' && body?.decision === 'allow') {
+      throw new HttpError(403, 'API tokens cannot approve tool calls. Approve it from a signed-in browser, or decline it.');
+    }
     const updated = await answerInput(row.id, { id: ctx.user!.id, name: ctx.user!.name }, body);
     return { input: inputView(updated) };
   });

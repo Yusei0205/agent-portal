@@ -3,9 +3,11 @@
  *
  * A token acts as the person who made it: sessions it starts are theirs. Only its SHA-256 is stored; the token itself
  * is shown once. Read tokens may only read; write tokens may also start, steer and stop sessions and runs, answer
- * questions and edit the project's .claude/.kiro files. Everything else stays browser-only: users, tokens, settings,
- * connections, integrations, AWS accounts, admin actions, pushing to remotes and protected config files. So a leaked
- * token cannot change who has access, mint more tokens, read or replace secrets, or push code.
+ * questions, decline tool calls and edit the project's .claude/.kiro files. Everything else stays browser-only: users,
+ * tokens, settings, connections, integrations, AWS accounts, admin actions, pushing to remotes, protected config files,
+ * approving a tool call (runs.ts), and turning on "trust all tools", pushes without asking or a check command for a
+ * session (workflows/validation.ts). So a leaked token cannot change who has access, mint more tokens, read or replace
+ * secrets, push code, or let agents run any command without a person.
  */
 import { randomBytes } from 'node:crypto';
 import { all, insert, one, run as exec, type Row } from './db.ts';
