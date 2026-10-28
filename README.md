@@ -383,6 +383,10 @@ monthly cap.
   AWS account, through the `aws` wrapper and a credentials file that exists only while the run
   does (`DATA_DIR/run-aws/<run id>/`). None of this is a sandbox: a shell command can still read
   files the portal's user can read.
+- An approval shows the whole command and allows only that exact call; *Always allow* covers one
+  command, or one host for web fetches. A question or approval nobody answers ends after 60
+  minutes (Settings › Limits), and a push is refused if the working copy changed after the
+  agents asked.
 - Only the person who started a session can turn on *Trust all tools*, pushes without asking,
   unattended running or a check command for it; anyone with edit access can turn them off.
   API tokens cannot approve tool calls or turn these on (they can start unattended sessions).

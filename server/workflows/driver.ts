@@ -23,7 +23,7 @@ import { askEngineSwitch, closeEngineSwitch } from './engine-switch.ts';
 import { stopWith } from './lifecycle.ts';
 import { childrenOf, runningChildren, createChild, delegationRoom } from './delegation.ts';
 import { isKiro } from './validation.ts';
-import { PushRequest, pushForSession, pushBlocker, performTrustedPush, deriveBranchName } from './push.ts';
+import { PushRequest, pushForSession, pushBlocker, performTrustedPush, deriveBranchName, worktreeFingerprint } from './push.ts';
 
 async function drive(id: string, gen: number): Promise<void> {
   // --- Restore durable loop state from the database ---
@@ -350,6 +350,8 @@ async function drive(id: string, gen: number): Promise<void> {
         if (mode === 'auto') {
           await pushForSession(w, req, 'The agents');
         } else {
+          // Remember what the working copies hold now: allowing the push allows exactly this.
+          req.tree = await worktreeFingerprint(finished).catch(() => undefined);
           patch(id, { pending_push: JSON.stringify(req) });
           return stopWith(id, 'paused', `Waiting for you to allow pushing to "${w.work_branch}".`);
         }

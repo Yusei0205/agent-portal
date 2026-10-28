@@ -164,12 +164,17 @@ function ApprovalBody({ input, canApprove, onDone }) {
   const tool = input.payload?.toolName || input.tool_name;
   const toolInput = input.payload?.input || {};
   const answered = input.status !== 'pending';
-  const perCommand = input.payload?.rememberScope === 'command';
+  const scope = input.payload?.rememberScope;
+  const label = input.payload?.rememberLabel;
+  const rememberText =
+    scope === 'command' ? 'Always allow this command in this run' : scope === 'host' && label ? `Allow ${tool} to ${label} for this run` : `Allow ${tool} for this run`;
+  const rememberedText = scope === 'command' ? ' (this command, for the rest of this run)' : scope === 'host' && label ? ` (${label}, for the rest of this run)` : ' for the rest of this run';
   const send = async (decision, remember) => {
     setBusy(decision + (remember ? '-all' : ''));
     setError(null);
     try {
-      await api.post(`/api/inputs/${input.id}/answer`, { decision, remember, message: reason });
+      // The fingerprint of the call shown here: the server allows only that exact call.
+      await api.post(`/api/inputs/${input.id}/answer`, { decision, remember, message: reason, inputHash: input.payload?.inputHash });
       onDone?.();
     } catch (e) {
       setError(e);
@@ -177,18 +182,20 @@ function ApprovalBody({ input, canApprove, onDone }) {
       setBusy(null);
     }
   };
+  // The server sends commands, addresses and paths whole; only long file contents are cut.
+  const shown = toolInput.command ?? toolInput.content ?? toolInput.new_string;
   return (
     <div className="input-body">
       <p className="tool-line">
         <code>{tool}</code> <span className="muted">{toolSummary(tool, toolInput)}</span>
       </p>
-      {toolInput.content || toolInput.new_string || toolInput.command ? (
-        <pre className="preview">{String(toolInput.content ?? toolInput.new_string ?? toolInput.command).slice(0, 4000)}</pre>
-      ) : null}
-      {answered ? (
+      {shown ? <pre className="preview">{String(shown)}</pre> : null}
+      {input.status === 'expired' ? (
+        <p className="small">Nobody answered in time, so the agent carried on without it.</p>
+      ) : answered ? (
         <p className="small">
           {input.response?.decision === 'allow' ? 'Allowed' : 'Denied'}
-          {input.response?.remember ? (perCommand ? ' (this command, for the rest of this run)' : ' for the rest of this run') : ''}
+          {input.response?.remember ? rememberedText : ''}
           {input.answered_by_name ? ` by ${input.answered_by_name}` : ''}
           {input.response?.message ? `: ${input.response.message}` : ''}
         </p>
@@ -201,12 +208,13 @@ function ApprovalBody({ input, canApprove, onDone }) {
               Allow once
             </Button>
             <Button busy={busy === 'allow-all'} onClick={() => send('allow', true)}>
-              {perCommand ? 'Always allow this command in this run' : `Allow ${tool} for this run`}
+              {rememberText}
             </Button>
             <Button variant="danger-ghost" icon="x" busy={busy === 'deny'} onClick={() => send('deny', false)}>
               Deny
             </Button>
           </div>
+          {input.expires_at ? <p className="muted small">If nobody answers by {new Date(input.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, it counts as declined.</p> : null}
         </>
       ) : (
         <p className="muted small">An editor needs to approve this.</p>

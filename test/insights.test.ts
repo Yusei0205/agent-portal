@@ -158,7 +158,7 @@ test('a real Demo run shows up with its subagents', async () => {
   await waitFor(async () => {
     const r = await admin.get(`/api/runs/${run.id}`);
     for (const i of r.inputs.filter((x: any) => x.status === 'pending')) {
-      await admin.post(`/api/inputs/${i.id}/answer`, i.type === 'question' ? { answers: Object.fromEntries((i.payload.questions || []).map((q: any) => [q.question, q.options?.[0]?.label ?? 'yes'])) } : { decision: 'allow' });
+      await admin.post(`/api/inputs/${i.id}/answer`, i.type === 'question' ? { answers: Object.fromEntries((i.payload.questions || []).map((q: any) => [q.question, q.options?.[0]?.label ?? 'yes'])) } : { decision: 'allow', inputHash: i.payload?.inputHash });
     }
     return ['completed', 'failed'].includes(r.run.status) ? r : null;
   }, 'demo run', 60_000);

@@ -23,7 +23,7 @@ async function finish(c: Client, runId: string) {
   return waitFor(async () => {
     const r = await c.get(`/api/runs/${runId}`);
     for (const i of r.inputs.filter((x: any) => x.status === 'pending')) {
-      await c.post(`/api/inputs/${i.id}/answer`, i.type === 'question' ? { answers: { 'Which database?': 'Postgres' } } : { decision: 'allow' });
+      await c.post(`/api/inputs/${i.id}/answer`, i.type === 'question' ? { answers: { 'Which database?': 'Postgres' } } : { decision: 'allow', inputHash: i.payload?.inputHash });
     }
     return ['completed', 'failed', 'stopped'].includes(r.run.status) ? r : null;
   }, `run ${runId}`);

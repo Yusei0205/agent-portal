@@ -18,7 +18,7 @@ export function query({ prompt, options }) {
 
     // A marker in the prompt picks one of the extra scenarios at the end of this file.
     const text = typeof first.value?.message?.content === 'string' ? first.value.message.content : '';
-    const scenario = text.match(/\[(guards|metered|bash-remember|hang)\]/)?.[1];
+    const scenario = text.match(/\[(guards|metered|bash-remember|hang|approvals|expiry)\]/)?.[1];
     if (scenario) {
       yield* extraScenario(scenario, call, options, text);
     } else if (Array.isArray(options.tools) && options.tools.length === 0 && text.includes('advisory code review judge')) {
@@ -130,6 +130,25 @@ async function* extraScenario(name, call, options, text) {
     case 'hang': {
       call.hanging = true;
       await new Promise((resolve) => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })));
+      return;
+    }
+    // Approvals bound to the exact call: a long command shown whole, WebFetch remembered per host, an unreviewable command.
+    case 'approvals': {
+      const ctx = (id) => ({ signal, toolUseID: id, requestId: id });
+      call.longBash = await options.canUseTool('Bash', { command: 'echo ' + 'x'.repeat(5000) }, ctx('a1'));
+      call.fetch1 = await options.canUseTool('WebFetch', { url: 'https://docs.example.com/a', prompt: 'read' }, ctx('a2'));
+      call.fetch2 = await options.canUseTool('WebFetch', { url: 'https://docs.example.com/b', prompt: 'read' }, ctx('a3'));
+      call.fetch3 = await options.canUseTool('WebFetch', { url: 'https://evil.example.net/x', prompt: 'read' }, ctx('a4'));
+      call.huge = await options.canUseTool('Bash', { command: 'y'.repeat(25000) }, ctx('a5'));
+      yield ok('approvals done');
+      return;
+    }
+    // Nobody answers: the approval and the question both end after agents.approvalExpiryMinutes.
+    case 'expiry': {
+      const ctx = (id) => ({ signal, toolUseID: id, requestId: id });
+      call.expiredBash = await options.canUseTool('Bash', { command: 'npm run slow' }, ctx('e1'));
+      call.expiredQuestion = await options.canUseTool('AskUserQuestion', { questions: [{ question: 'Which region?', header: 'Region', multiSelect: false, options: [{ label: 'eu', description: '' }] }] }, ctx('e2'));
+      yield ok('expiry done');
       return;
     }
     case 'bash-remember': {

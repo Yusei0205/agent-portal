@@ -44,6 +44,8 @@ export interface Settings {
     allowReadsOutsideProject: boolean;
     /** Minutes one MCP tool call (an integration) may take before Claude Code gives up on it. Unbounded by default in Claude Code. */
     mcpToolTimeoutMinutes: number;
+    /** Minutes an agent's question or tool approval waits for a person before the run carries on without it (0 = until the run is stopped). */
+    approvalExpiryMinutes: number;
   };
   /** Extra Claude models for the model picker, one per line as "model id | label"; added without a deploy. */
   modelList: { extra: string };
@@ -77,7 +79,7 @@ const DEFAULTS: Settings = {
   aws: { region: 'us-east-1', auth: 'ambient', profile: '' },
   budget: { monthlyUsd: 50 },
   secrets: { mode: 'local', prefix: '/agent-portal/', region: '' },
-  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask', allowReadsOutsideProject: false, mcpToolTimeoutMinutes: 10 },
+  agents: { defaultPermissionMode: 'default', maxTurns: 40, resumeAfterRestart: true, defaultPushMode: 'ask', allowReadsOutsideProject: false, mcpToolTimeoutMinutes: 10, approvalExpiryMinutes: 60 },
   delegation: { enabled: true, maxPerParent: 3, maxPerUser: 6, allowNested: false, nudgeThreshold: 4 },
   modelList: { extra: '' },
   ui: { advanced: false },
@@ -210,6 +212,9 @@ export function updateSettings(patch: any): Settings {
     const mcpMinutes = Number(a.mcpToolTimeoutMinutes);
     if (!Number.isInteger(mcpMinutes) || mcpMinutes < 1 || mcpMinutes > 240) throw badRequest('Time limit for one integration tool call must be a whole number of minutes from 1 to 240');
     a.mcpToolTimeoutMinutes = mcpMinutes;
+    const expiry = Number(a.approvalExpiryMinutes);
+    if (!Number.isFinite(expiry) || expiry < 0 || expiry > 10080) throw badRequest('Minutes a question or approval waits must be from 0 (no limit) to 10080');
+    a.approvalExpiryMinutes = expiry;
     saveSection('agents', a);
   }
   if (patch.modelList) {

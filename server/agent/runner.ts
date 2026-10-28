@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -90,14 +91,17 @@ export function runRepos(r: Row): RunRepo[] {
 interface Pending {
   resolve: (v: any) => void;
   reject: (e: unknown) => void;
+  /** Ends the wait when nobody answers in time (agents.approvalExpiryMinutes). */
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 interface Active {
   abort: AbortController;
-  /** Tools the user allowed for the rest of the run. */
-  allowAll: Set<string>;
-  /** Shell commands the user allowed for the rest of the run, by exact text ("allow all Bash" was too broad). */
-  allowCommands: Set<string>;
+  /**
+   * What the user allowed for the rest of the run, by rememberKey(): one exact shell command, one web host, or one other
+   * tool ("allow all Bash" or "all WebFetch" was too broad: one approval then covered whatever a document asked for later).
+   */
+  allowed: Set<string>;
   pending: Map<string, Pending>;
   seq: number;
   seenMessageIds: Set<string>;
@@ -207,6 +211,56 @@ function announceActivity(runId: string, a: Active, parent: string | null, data:
 /* Questions and approvals                                             */
 /* ------------------------------------------------------------------ */
 
+/** The fields of a tool call that decide what it does. An approval shows them whole, never cut. */
+const DECIDING_FIELDS = new Set(['command', 'url', 'file_path', 'notebook_path', 'path', 'pattern', 'branch']);
+/** A shell command longer than this is refused instead of shown to a person: nobody can review it. */
+export const MAX_REVIEWABLE_COMMAND = 20_000;
+
+/** JSON with sorted keys, so the same tool call always gives the same text. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+/** The fingerprint of one exact tool call. An approval must send it back, so a person allows exactly what they saw. */
+export function inputFingerprint(toolName: string, input: unknown): string {
+  return createHash('sha256').update(canonicalJson({ tool: toolName, input })).digest('hex');
+}
+
+/** What an approval shows: the deciding fields whole, other long strings (file contents) cut at 4,000 characters. */
+function approvalView(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) out[k] = DECIDING_FIELDS.has(k) && typeof v === 'string' ? v : shrink(v, 4000);
+  return out;
+}
+
+/**
+ * What "allow for the rest of this run" covers: one exact shell command (approving `npm test` must not approve what a
+ * prompt-injected document suggests later), one web host for WebFetch (not every address), or one other tool.
+ */
+export function rememberKey(toolName: string, input: Record<string, unknown>): { key: string; scope: 'command' | 'host' | 'tool'; label: string } {
+  if (toolName === 'Bash') {
+    const command = String(input.command ?? '');
+    return { key: `Bash\u0000${command}`, scope: 'command', label: command };
+  }
+  if (toolName === 'WebFetch') {
+    let host = '';
+    try {
+      host = new URL(String(input.url ?? '')).host.toLowerCase();
+    } catch {
+      /* not a URL: only this exact call */
+    }
+    return host ? { key: `WebFetch\u0000${host}`, scope: 'host', label: host } : { key: `WebFetch\u0000${String(input.url ?? '')}`, scope: 'command', label: String(input.url ?? '') };
+  }
+  return { key: toolName, scope: 'tool', label: toolName };
+}
+
 export function createInput(opts: {
   projectId: string;
   runId: string | null;
@@ -214,6 +268,8 @@ export function createInput(opts: {
   toolName: string | null;
   payload: unknown;
   userId: string | null;
+  /** When nobody answering by then ends the wait (ISO time). */
+  expiresAt?: string | null;
 }): Row {
   const id = newId('i_');
   insert('inputs', {
@@ -226,6 +282,7 @@ export function createInput(opts: {
     status: 'pending',
     created_by: opts.userId,
     created_at: now(),
+    expires_at: opts.expiresAt ?? null,
   });
   const row = one('SELECT * FROM inputs WHERE id = ?', id)!;
   notifyProject(opts.projectId, 'input.created', inputView(row));
@@ -236,14 +293,41 @@ export function inputView(r: Row) {
   return { ...r, payload: parseJson(r.payload, {}), response: parseJson(r.response, null) };
 }
 
+/** What the agent hears when nobody answered in time. */
+function expiredResponse(type: 'question' | 'approval', minutes: number) {
+  return type === 'approval'
+    ? { decision: 'deny', remember: false, expired: true, message: `Nobody answered within ${minutes} minutes, so this was declined. Carry on without it, or report blocked and say what you need.` }
+    : { answers: {}, expired: true, response: `Nobody answered within ${minutes} minutes. Choose the most reasonable option and list it as an assumption in your summary.` };
+}
+
 function waitForInput(runId: string, a: Active, type: 'question' | 'approval', toolName: string, payload: unknown, signal: AbortSignal): Promise<any> {
   const r = getRun(runId);
-  const input = createInput({ projectId: r.project_id, runId, type, toolName, payload, userId: r.created_by });
-  recordEvent(runId, a, 'portal:input', null, { inputId: input.id, inputType: type, toolName, payload });
+  // A request nobody answers ends after agents.approvalExpiryMinutes (0 = waits until the run is stopped), so a
+  // forgotten approval does not hold the run, its budget and its slot for ever.
+  const minutes = Number(getSettings().agents.approvalExpiryMinutes ?? 60);
+  const expiresAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000).toISOString() : null;
+  const input = createInput({ projectId: r.project_id, runId, type, toolName, payload, userId: r.created_by, expiresAt });
+  recordEvent(runId, a, 'portal:input', null, { inputId: input.id, inputType: type, toolName, payload, expiresAt });
   setStatus(runId, 'waiting');
   return new Promise((resolve, reject) => {
-    a.pending.set(input.id, { resolve, reject });
+    const pending: Pending = { resolve, reject };
+    a.pending.set(input.id, pending);
+    if (minutes > 0) {
+      pending.timer = setTimeout(() => {
+        const response = expiredResponse(type, minutes);
+        const claimed = exec("UPDATE inputs SET status = 'expired', response = ?, answered_at = ? WHERE id = ? AND status = 'pending'", JSON.stringify(response), now(), input.id);
+        if (!claimed.changes || a.pending.get(input.id) !== pending) return;
+        a.pending.delete(input.id);
+        notifyProject(r.project_id, 'input.resolved', { id: input.id, status: 'expired' });
+        recordEvent(runId, a, 'portal:input_expired', null, { inputId: input.id, minutes });
+        if (!a.pending.size) setStatus(runId, 'running');
+        resolve(response);
+      }, minutes * 60_000);
+      pending.timer.unref?.();
+    }
     const onAbort = () => {
+      clearTimeout(pending.timer);
+      if (a.pending.get(input.id) !== pending) return; // already answered or expired
       a.pending.delete(input.id);
       exec("UPDATE inputs SET status = 'cancelled' WHERE id = ? AND status = 'pending'", input.id);
       notifyProject(r.project_id, 'input.resolved', { id: input.id, status: 'cancelled' });
@@ -278,9 +362,11 @@ async function appendDecisions(projectId: string, questions: any[], answers: Rec
 export async function answerInput(inputId: string, user: { id: string; name: string }, body: any): Promise<Row> {
   const row = one('SELECT * FROM inputs WHERE id = ?', inputId);
   if (!row) throw new HttpError(404, 'Question not found');
+  if (row.status === 'expired') throw new HttpError(409, 'Nobody answered this in time, so the agent was told to carry on without it.');
   if (row.status !== 'pending') throw badRequest('This was already answered');
   const payload = parseJson<any>(row.payload, {});
   let response: any;
+  let questions: { list: any[]; answers: Record<string, string | string[]> } | null = null;
   if (row.type === 'question') {
     const answers: Record<string, string | string[]> = {};
     for (const q of payload.questions || []) {
@@ -291,28 +377,40 @@ export async function answerInput(inputId: string, user: { id: string; name: str
     const free = typeof body.response === 'string' ? body.response.trim().slice(0, 4000) : '';
     if (!Object.keys(answers).length && !free) throw badRequest('Answer at least one question');
     response = { answers, ...(free ? { response: free } : {}) };
-    const r = row.run_id ? one('SELECT title FROM agent_runs WHERE id = ?', row.run_id) : null;
-    await appendDecisions(row.project_id, payload.questions, answers, user.name, r ? `run “${r.title}”` : payload.source === 'qa' ? 'a Knowledge question' : '');
+    questions = { list: payload.questions, answers };
   } else {
     if (body.decision !== 'allow' && body.decision !== 'deny') throw badRequest('Choose allow or deny');
+    // Allowing is bound to the exact call the person saw (its fingerprint); declining needs no proof.
+    if (body.decision === 'allow' && payload.inputHash && body.inputHash !== payload.inputHash) {
+      throw new HttpError(409, 'This is not the tool call you reviewed. Reload the page and review it again.');
+    }
     response = {
       decision: body.decision,
       remember: Boolean(body.remember),
       message: typeof body.message === 'string' ? body.message.slice(0, 2000) : '',
     };
   }
-  exec(
-    "UPDATE inputs SET status = 'answered', response = ?, answered_by = ?, answered_at = ? WHERE id = ?",
+  // Claim it in one step, so two people answering at once cannot both win, and an expiry cannot overtake an answer.
+  const claimed = exec(
+    "UPDATE inputs SET status = 'answered', response = ?, answered_by = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
     JSON.stringify(response),
     user.id,
     now(),
     inputId,
   );
+  if (!claimed.changes) throw new HttpError(409, 'Someone answered this a moment ago.');
+  if (questions) {
+    const r = row.run_id ? one('SELECT title FROM agent_runs WHERE id = ?', row.run_id) : null;
+    await appendDecisions(row.project_id, questions.list, questions.answers, user.name, r ? `run “${r.title}”` : payload.source === 'qa' ? 'a Knowledge question' : '').catch((e) =>
+      console.error(`[inputs] could not record the decision of ${inputId}:`, e),
+    );
+  }
   notifyProject(row.project_id, 'input.resolved', { id: inputId, status: 'answered' });
   if (row.run_id) {
     const a = active.get(row.run_id);
     const p = a?.pending.get(inputId);
     if (a && p) {
+      clearTimeout(p.timer);
       a.pending.delete(inputId);
       recordEvent(row.run_id, a, 'portal:input_answered', null, { inputId, response, by: user.name });
       if (!a.pending.size) setStatus(row.run_id, 'running');
@@ -398,8 +496,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
   });
   const a: Active = {
     abort: new AbortController(),
-    allowAll: new Set(),
-    allowCommands: new Set(),
+    allowed: new Set(),
     pending: new Map(),
     seq: 0,
     seenMessageIds: new Set(),
@@ -553,26 +650,27 @@ async function execute(
     if (input.oneshot || input.kind === 'review') {
       return { behavior: 'deny', message: `${toolName} is not available for this task.` };
     }
-    // "Remember" for a shell command covers that exact command only: approving `npm test` once must not also
-    // approve whatever command a prompt-injected document suggests later in the run.
-    const command = toolName === 'Bash' ? String((toolInput as any).command ?? '') : null;
-    if (command !== null ? a.allowCommands.has(command) : a.allowAll.has(toolName)) return { behavior: 'allow', updatedInput: toolInput };
+    const remember = rememberKey(toolName, toolInput);
+    if (a.allowed.has(remember.key)) return { behavior: 'allow', updatedInput: toolInput };
+    const command = toolName === 'Bash' ? String((toolInput as any).command ?? '') : '';
+    if (command.length > MAX_REVIEWABLE_COMMAND) {
+      return { behavior: 'deny', message: `This command is ${command.length} characters long, too long for a person to review. Write a script file first, or split it into smaller steps.` };
+    }
+    // The approval shows the whole command, address or path, and is bound to the exact call by its fingerprint. The
+    // call that runs is always this one (toolInput, held here), whatever the browser sends.
     const resp = await waitForInput(
       runId,
       a,
       'approval',
       toolName,
-      { toolName, input: shrink(toolInput, 4000), rememberScope: command !== null ? 'command' : 'tool' },
+      { toolName, input: approvalView(toolInput), inputHash: inputFingerprint(toolName, toolInput), rememberScope: remember.scope, rememberLabel: remember.label.slice(0, 300) },
       signal,
     );
     if (resp.decision === 'allow') {
-      if (resp.remember) {
-        if (command !== null) a.allowCommands.add(command);
-        else a.allowAll.add(toolName);
-      }
+      if (resp.remember) a.allowed.add(remember.key);
       return { behavior: 'allow', updatedInput: toolInput };
     }
-    return { behavior: 'deny', message: resp.message ? `The user declined: ${resp.message}` : 'The user declined this action.' };
+    return { behavior: 'deny', message: resp.message ? (resp.expired ? resp.message : `The user declined: ${resp.message}`) : 'The user declined this action.' };
   };
 
   const runDirAbs = path.resolve(o.workDir);

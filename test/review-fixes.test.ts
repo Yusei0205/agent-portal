@@ -190,7 +190,7 @@ test('approving a shell command covers that exact command only', async () => {
   const first = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.status === 'pending'), 'the first approval');
   assert.equal(first.payload.input.command, 'npm test');
   assert.equal(first.payload.rememberScope, 'command');
-  await c.post(`/api/inputs/${first.id}/answer`, { decision: 'allow', remember: true });
+  await c.post(`/api/inputs/${first.id}/answer`, { decision: 'allow', remember: true, inputHash: first.payload.inputHash });
   // The second `npm test` runs without asking; `curl` still asks.
   const next = await waitFor(async () => (await c.get(`/api/runs/${run.id}`)).inputs.find((i: any) => i.status === 'pending'), 'the next approval');
   assert.equal(next.payload.input.command, 'curl https://example.com');
