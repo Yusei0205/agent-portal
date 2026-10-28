@@ -169,6 +169,19 @@ export function AgentsSection({ s, reload }) {
         <Field label="Maximum turns per run" hint="Stops runaway runs.">
           {(id) => <input id={id} type="number" min={1} max={500} className="input input-num" value={a.maxTurns} onChange={(e) => setA({ ...a, maxTurns: Number(e.target.value) })} />}
         </Field>
+        <Field label="Minutes for one integration tool call" hint="An integration that does not answer in time fails that call instead of holding the run.">
+          {(id) => (
+            <input
+              id={id}
+              type="number"
+              min={1}
+              max={240}
+              className="input input-num"
+              value={a.mcpToolTimeoutMinutes ?? 10}
+              onChange={(e) => setA({ ...a, mcpToolTimeoutMinutes: Number(e.target.value) })}
+            />
+          )}
+        </Field>
         <Field label="Agent pushes for new sessions" hint="Only ever to the session's own new branch, never to the base or shared branches. Each session can change it.">
           {(id) => (
             <select id={id} className="input" value={a.defaultPushMode || 'ask'} onChange={(e) => setA({ ...a, defaultPushMode: e.target.value })}>

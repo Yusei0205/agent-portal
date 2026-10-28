@@ -29,6 +29,8 @@ export const config = {
   demoSpeed: Number(process.env.DEMO_SPEED ?? 1),
   maxUploadBytes: Number(process.env.MAX_UPLOAD_MB || 50) * 1024 * 1024,
   trustProxy: process.env.TRUST_PROXY === '1',
+  /** Optional: send Anthropic API calls through an LLM gateway or proxy instead of api.anthropic.com. */
+  anthropicBaseUrl: process.env.PORTAL_ANTHROPIC_BASE_URL || '',
 };
 
 export function dataPath(...parts: string[]): string {

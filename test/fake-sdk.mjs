@@ -1,13 +1,20 @@
 // A stand-in for @anthropic-ai/claude-agent-sdk that records how the portal calls it.
 export function query({ prompt, options }) {
-  const call = { options, promptMessages: [], inputClosed: null };
+  const call = { options, promptMessages: [], inputClosed: null, permissionModes: [] };
   (globalThis.__fakeSdkCalls ??= []).push(call);
 
   async function* run() {
     const it = prompt[Symbol.asyncIterator]();
     const first = await it.next();
+    // Which permission modes the portal had set by the time its first message arrived.
+    call.modesBeforeFirstMessage = [...call.permissionModes];
+    if (first.done) {
+      call.noFirstMessage = true;
+      return;
+    }
     call.promptMessages.push(first.value);
-    yield { type: 'system', subtype: 'init', session_id: 'sess-1', model: 'claude-sonnet-5-5', tools: options.tools ?? [] };
+    const permissionMode = call.permissionModes.at(-1) ?? options.permissionMode;
+    yield { type: 'system', subtype: 'init', session_id: 'sess-1', model: 'claude-sonnet-5-5', tools: options.tools ?? [], permissionMode };
 
     // A marker in the prompt picks one of the extra scenarios at the end of this file.
     const text = typeof first.value?.message?.content === 'string' ? first.value.message.content : '';
@@ -58,7 +65,16 @@ export function query({ prompt, options }) {
     const next = await Promise.race([it.next(), new Promise((r) => setTimeout(() => r('timeout'), 2000))]);
     call.inputClosed = next !== 'timeout' && next.done === true;
   }
-  return run();
+  const q = run();
+  // Control requests of the real Query object. A test sets globalThis.__fakeSdkModeFails to make the mode change fail.
+  q.setPermissionMode = async (mode) => {
+    if (globalThis.__fakeSdkModeFails) throw new Error('mode change refused');
+    call.permissionModes.push(mode);
+  };
+  q.close = () => {
+    call.closed = true;
+  };
+  return q;
 }
 
 const ok = (result, extra = {}) => ({ type: 'result', subtype: 'success', is_error: false, result, total_cost_usd: 0.001, session_id: 'sess-1', ...extra });

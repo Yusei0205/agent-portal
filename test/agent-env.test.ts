@@ -17,6 +17,7 @@ before(() => {
   process.env.DEMO_SPEED = '0';
   process.env.PORTAL_SECRET_KEY = 'test-secret-key-for-agent-env-tests';
   process.env.PORTAL_NO_AUTOSTART = '1';
+  process.env.PORTAL_ANTHROPIC_BASE_URL = 'https://llm-gateway.example.com/anthropic';
 });
 
 after(() => {
@@ -25,6 +26,42 @@ after(() => {
   delete process.env.DEMO_SPEED;
   delete process.env.PORTAL_SECRET_KEY;
   delete process.env.PORTAL_NO_AUTOSTART;
+  delete process.env.PORTAL_ANTHROPIC_BASE_URL;
+});
+
+test('agentEnv: Claude runs keep the model key from their shell; every run gets the memory and tool-time rules', async () => {
+  const { openDb, closeDb } = await import('../server/db.ts');
+  const { ensureDataDirs } = await import('../server/config.ts');
+  const { agentEnv, updateSettings, SECRET_NAMES } = await import('../server/settings.ts');
+  const { setSecret } = await import('../server/secrets.ts');
+  ensureDataDirs();
+  openDb();
+  try {
+    const demo = await agentEnv(undefined, 'demo');
+    assert.equal(demo.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, undefined, 'no model key, nothing to keep back');
+    assert.equal(demo.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+    assert.equal(demo.MCP_TOOL_TIMEOUT, '600000', 'ten minutes by default');
+
+    await setSecret(SECRET_NAMES.anthropicKey, 'sk-ant-agent-env-test-key');
+    updateSettings({ agents: { mcpToolTimeoutMinutes: 3 } });
+    const claude = await agentEnv(undefined, 'anthropic');
+    assert.equal(claude.ANTHROPIC_API_KEY, 'sk-ant-agent-env-test-key');
+    // On by default on Windows only: on Linux and macOS Claude Code ties it to its sandbox (see scrubAgentEnv).
+    assert.equal(claude.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined);
+    process.env.PORTAL_AGENT_ENV_SCRUB = '1';
+    assert.equal((await agentEnv(undefined, 'anthropic')).CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1', 'an operator can turn it on');
+    process.env.PORTAL_AGENT_ENV_SCRUB = '0';
+    assert.equal((await agentEnv(undefined, 'anthropic')).CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, undefined, 'or off');
+    delete process.env.PORTAL_AGENT_ENV_SCRUB;
+    assert.equal(claude.MCP_TOOL_TIMEOUT, '180000');
+    assert.equal(claude.ANTHROPIC_BASE_URL, 'https://llm-gateway.example.com/anthropic', 'the operator gateway applies');
+
+    for (const bad of [0, 241, 2.5, 'ten']) {
+      assert.throws(() => updateSettings({ agents: { mcpToolTimeoutMinutes: bad } }), /whole number of minutes from 1 to 240/);
+    }
+  } finally {
+    closeDb();
+  }
 });
 
 test('agentEnv: HOME points to the data-volume home directory', async () => {

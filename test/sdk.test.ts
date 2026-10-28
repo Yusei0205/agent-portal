@@ -61,6 +61,13 @@ test('Anthropic provider: options, environment, guard, questions, approvals and 
   assert.equal(o.env.PORTAL_SECRET_KEY, undefined);
   assert.equal(o.env.CLAUDE_CODE_USE_BEDROCK, undefined);
   assert.ok(o.env.PATH, 'PATH is kept');
+  // The model's key stays with Claude Code: the processes it starts do not inherit it (checked against the real engine
+  // in test/engine/engine-env.test.ts). Automatic memory is off and integration calls have a time limit.
+  assert.equal(o.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined);
+  assert.equal(o.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+  assert.equal(o.env.MCP_TOOL_TIMEOUT, '600000');
+  assert.equal(o.env.ANTHROPIC_BASE_URL, undefined, 'no gateway unless the operator sets one');
+  assert.deepEqual(call.permissionModes, [], 'a default-mode run needs no mode change');
 
   assert.match(call.promptMessages[0].message.content, /Pick a database for refunds/);
   assert.match(call.promptMessages[0].message.content, /Read CLAUDE\.md first/);
@@ -79,6 +86,37 @@ test('Anthropic provider: options, environment, guard, questions, approvals and 
   assert.ok(done.events.some((e: any) => e.type === 'hook:SubagentStart'));
 });
 
+test('a run in another permission mode sets it before its first message, and fails if it cannot', async () => {
+  // Claude Code starts in "default" mode when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set, so the portal sets the mode again.
+  const { run } = await startSingleRun(c, pid, { prompt: 'Tidy the docs [metered]', permissionMode: 'acceptEdits' });
+  const done = await waitFor(async () => {
+    const r = await c.get(`/api/runs/${run.id}`);
+    return ['completed', 'failed'].includes(r.run.status) ? r : null;
+  }, 'acceptEdits run');
+  const call = calls().at(-1);
+  assert.equal(call.options.permissionMode, 'acceptEdits');
+  assert.deepEqual(call.permissionModes, ['acceptEdits']);
+  assert.deepEqual(call.modesBeforeFirstMessage, ['acceptEdits'], 'the mode is in place before the first message');
+  const init = done.events.find((e: any) => e.type === 'system:init');
+  assert.equal(init?.data?.permissionMode, 'acceptEdits');
+
+  (globalThis as any).__fakeSdkModeFails = true;
+  try {
+    const { run: r2 } = await startSingleRun(c, pid, { prompt: 'Plan the release', permissionMode: 'plan' });
+    const failed = await waitFor(async () => {
+      const r = await c.get(`/api/runs/${r2.id}`);
+      return ['completed', 'failed', 'stopped'].includes(r.run.status) ? r : null;
+    }, 'plan run that cannot set its mode');
+    assert.equal(failed.run.status, 'failed');
+    assert.match(failed.run.error, /could not start in "plan" mode/);
+    const c2 = calls().at(-1);
+    assert.equal(c2.noFirstMessage, true, 'nothing reached the model');
+    assert.equal(c2.closed, true, 'the engine was closed');
+  } finally {
+    (globalThis as any).__fakeSdkModeFails = false;
+  }
+});
+
 test('Bedrock provider: AWS keys from secrets, single-shot options', async () => {
   await c.put('/api/settings', { provider: { mode: 'bedrock', models: { haiku: 'global.anthropic.claude-haiku-5-5' } }, aws: { region: 'ap-southeast-1', auth: 'keys' } });
   await c.post('/api/settings/secrets/aws.access_key_id', { value: 'AKIAEXAMPLEEXAMPLE12' });
@@ -92,6 +130,7 @@ test('Bedrock provider: AWS keys from secrets, single-shot options', async () =>
   assert.equal(o.env.AWS_SECRET_ACCESS_KEY, 'secret/example/key/value');
   assert.equal(o.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'global.anthropic.claude-haiku-5-5');
   assert.equal(o.env.ANTHROPIC_API_KEY, undefined, 'Anthropic key is not sent to Bedrock runs');
+  assert.equal(o.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, process.platform === 'win32' ? '1' : undefined, 'Bedrock keys stay with Claude Code too (Windows; elsewhere with the sandbox)');
   assert.deepEqual(o.tools, []);
   assert.deepEqual(o.settingSources, []);
   assert.equal(o.maxTurns, 1);
