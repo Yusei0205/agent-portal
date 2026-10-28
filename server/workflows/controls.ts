@@ -13,7 +13,7 @@ import { view } from './views.ts';
 import { pendingEngineSwitch, closeEngineSwitch } from './engine-switch.ts';
 import { stopWith } from './lifecycle.ts';
 import { kick } from './driver.ts';
-import { readContextItems, addContextItems } from './validation.ts';
+import { readContextItems, addContextItems, checkSafetyChange } from './validation.ts';
 
 /** Start a stopped session again: queued when the concurrency cap or a server drain says so, running otherwise. */
 function resumeSession(w: Row, ctx: Ctx): void {
@@ -42,6 +42,7 @@ export function registerControlRoutes(): void {
     const text = str(body.body, 'Instruction', { max: 4000 }).trim();
     if (REOPENABLE.includes(w.status) && overBudget(w)) throw badRequest('This session has used its budget. Raise the budget first, then send the instruction.');
     const permissionMode = body.permissionMode === undefined ? undefined : readPermissionMode(body.permissionMode);
+    if (permissionMode !== undefined) checkSafetyChange(ctx, w as any, { permission_mode: permissionMode });
     addContextItems(w.id, { id: ctx.user!.id, name: ctx.user!.name }, readContextItems(body.context));
     if (permissionMode !== undefined && permissionMode !== (w.permission_mode || '')) patch(w.id, { permission_mode: permissionMode });
     log(w.id, 'human', text, { data: { by: ctx.user!.name } });

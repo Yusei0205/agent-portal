@@ -19,6 +19,7 @@ import { requireProject, getProject, notifyProject, projectDir } from './project
 import { badRequest, notFound, newId, now, str, parseJson, HttpError } from './util.ts';
 import { audit } from './audit.ts';
 import type { AuditAction } from './audit.ts';
+import { blockedCommand } from './guardrails.ts';
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -516,6 +517,12 @@ export function specMonthSpend(specId: string): number {
   return Number(one<{ n: number }>('SELECT COALESCE(SUM(spent_usd), 0) AS n FROM workflows WHERE loop_spec_id = ? AND created_at >= ?', specId, since)?.n ?? 0);
 }
 
+function readSpecPushMode(raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (!['never', 'ask', 'auto'].includes(String(raw))) throw badRequest('Agent pushes must be never, ask or auto');
+  return String(raw);
+}
+
 function validateVerification(raw: unknown): VerificationStep[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) throw badRequest('Verification must be a list of steps');
@@ -536,6 +543,9 @@ function validateVerification(raw: unknown): VerificationStep[] {
     } else {
       if (!s.cmd) throw badRequest(`Step "${s.step}" must have a cmd`);
       step.cmd = String(s.cmd).slice(0, 1000);
+      // Check steps run on the server without approval and outside the agents' guard.
+      const why = blockedCommand(step.cmd);
+      if (why) throw badRequest(`Step "${step.step}" is not allowed: ${why}`);
       if (s.workRepo) step.workRepo = String(s.workRepo).slice(0, 80);
     }
     return step;
@@ -929,7 +939,7 @@ export function registerLoopSpecRoutes(): void {
       stop_rules: JSON.stringify(validateStopRules(body.stopRules ?? body.stop_rules)),
       memory_config: JSON.stringify(validateMemoryConfig(body.memoryConfig ?? body.memory_config)),
       escalation: JSON.stringify(validateEscalation(body.escalation)),
-      push_mode: body.pushMode ?? body.push_mode ?? null,
+      push_mode: readSpecPushMode(body.pushMode ?? body.push_mode ?? null),
       trust_tools: body.trustTools !== undefined ? (body.trustTools ? 1 : 0) : (body.trust_tools !== undefined ? Number(body.trust_tools) : null),
       lead_agent: body.leadAgent ?? body.lead_agent ?? null,
       engine: body.engine ?? null,
@@ -974,15 +984,19 @@ export function registerLoopSpecRoutes(): void {
     if (body.stopRules !== undefined || body.stop_rules !== undefined) p.stop_rules = JSON.stringify(validateStopRules(body.stopRules ?? body.stop_rules));
     if (body.memoryConfig !== undefined || body.memory_config !== undefined) p.memory_config = JSON.stringify(validateMemoryConfig(body.memoryConfig ?? body.memory_config));
     if (body.escalation !== undefined) p.escalation = JSON.stringify(validateEscalation(body.escalation));
-    if (body.pushMode !== undefined || body.push_mode !== undefined) p.push_mode = body.pushMode ?? body.push_mode;
+    if (body.pushMode !== undefined || body.push_mode !== undefined) p.push_mode = readSpecPushMode(body.pushMode ?? body.push_mode);
     if (body.trustTools !== undefined || body.trust_tools !== undefined) p.trust_tools = body.trustTools ? 1 : 0;
     if (body.leadAgent !== undefined || body.lead_agent !== undefined) p.lead_agent = body.leadAgent ?? body.lead_agent;
     if (body.engine !== undefined) p.engine = body.engine;
     if (body.monthlyBudgetUsd !== undefined) p.monthly_budget_usd = Number(body.monthlyBudgetUsd);
     if (body.planningGate !== undefined) p.planning_gate = body.planningGate ? 1 : 0;
+    // A trigger-fired session runs as the spec's owner, so whoever changes what the spec does becomes its owner: an
+    // editor must not set up work that then runs with someone else's identity and budget.
+    const newOwner = spec.created_by !== ctx.user!.id;
+    if (newOwner) p.created_by = ctx.user!.id;
     update('loop_specs', spec.id, p as Record<string, Parameters<typeof update>[2][string]>);
     const updated = getLoopSpec(spec.id);
-    audit(ctx, 'loop_spec.update' as AuditAction, `loop_spec:${spec.id}`, { projectId: project.id });
+    audit(ctx, 'loop_spec.update' as AuditAction, `loop_spec:${spec.id}`, { projectId: project.id, ...(newOwner ? { previousOwner: spec.created_by, owner: ctx.user!.id } : {}) });
     notifyProject(project.id, 'loop_spec.updated', { id: spec.id });
     return { spec: updated };
   });

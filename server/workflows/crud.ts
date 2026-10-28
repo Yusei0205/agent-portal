@@ -19,7 +19,7 @@ import { sessionOutput } from '../outputs.ts';
 import { SINGLE_RUN_BUDGET_USD, driving, getWorkflow, patch, log } from './store.ts';
 import { sessionRepos, view } from './views.ts';
 import { kick } from './driver.ts';
-import { readSettings, isKiro, checkLead, readContextItems, addContextItems, readEngine } from './validation.ts';
+import { readSettings, isKiro, checkLead, readContextItems, addContextItems, readEngine, checkSafetyChange } from './validation.ts';
 
 export function registerSessionRoutes(): void {
   // Which engines a project can run on, for the New dialog.
@@ -110,6 +110,7 @@ export function registerSessionRoutes(): void {
     // A single run is refused up front when the monthly budget is used up (a session is created and pauses instead).
     if (singleRun && !queued && body.start !== false) assertBudget(engineProvider(project.id, engine || null), ctx.user!.id, project.id);
     const s = readSettings(body, undefined, { hasRepos: repos.length > 0, isPlayground: playground });
+    checkSafetyChange(ctx, null, s);
     const leadAgent = checkLead(project, body.leadAgent, engine);
     const contextItems = readContextItems(body.context);
     // Check pack availability BEFORE writing anything: a missing required pack returns 400 cleanly.
@@ -184,6 +185,7 @@ export function registerSessionRoutes(): void {
     requireProject(ctx, w.project_id, 'editor');
     const body = await ctx.json();
     const s = readSettings(body, w, { hasRepos: sessionRepos(w).length > 0, isPlayground: Boolean(w.playground) });
+    checkSafetyChange(ctx, w as any, s);
     const p: Record<string, string | number | null> = { ...s };
     if (body.engine !== undefined) p.engine = readEngine(w.project_id, body.engine);
     if (body.leadAgent !== undefined) p.lead_agent = checkLead(getProject(w.project_id), body.leadAgent, p.engine === undefined ? w.engine : String(p.engine));

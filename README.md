@@ -383,6 +383,10 @@ monthly cap.
   AWS account, through the `aws` wrapper and a credentials file that exists only while the run
   does (`DATA_DIR/run-aws/<run id>/`). None of this is a sandbox: a shell command can still read
   files the portal's user can read.
+- Only the person who started a session can turn on *Trust all tools*, pushes without asking,
+  unattended running or a check command for it; anyone with edit access can turn them off.
+  API tokens cannot approve tool calls or turn these on (they can start unattended sessions).
+  A trigger runs as the person who last saved it, only while they can still edit the project.
 - Claude Code's automatic memory is off (one config folder serves every project), and one
   integration (MCP) tool call may take at most 10 minutes (Settings › Limits).
 - Agents run as the portal’s operating-system user. For untrusted repositories, run the
