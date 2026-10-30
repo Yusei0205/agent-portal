@@ -27,6 +27,33 @@ import { config } from '../config.ts';
 import type { AgentRun, RunContext } from './types.ts';
 import { runDemo } from './demo.ts';
 
+// ── Run lifecycle hook ────────────────────────────────────────────────────────
+
+/**
+ * Optional hook called at key lifecycle points for every run.
+ * Registered by review-lifecycle.ts (and any other consumer) to react to run
+ * state changes without coupling the runner to domain-specific logic.
+ *
+ * event: 'start'     — run has moved from pending → running
+ *        'done'      — run completed successfully
+ *        'failed'    — run failed (non-abort error)
+ *        'cancelled' — run was aborted / cancelled by the user
+ */
+let _runLifecycleHook: (
+  (workflowId: string, runId: string, event: 'start' | 'done' | 'failed' | 'cancelled') => void
+) | null = null;
+
+export function setRunLifecycleHook(
+  fn: (workflowId: string, runId: string, event: 'start' | 'done' | 'failed' | 'cancelled') => void,
+): void {
+  _runLifecycleHook = fn;
+}
+
+function fireHook(workflowId: string, runId: string, event: 'start' | 'done' | 'failed' | 'cancelled'): void {
+  if (!_runLifecycleHook) return;
+  try { _runLifecycleHook(workflowId, runId, event); } catch { /* hook errors must not crash the runner */ }
+}
+
 // ── Pending approval map ──────────────────────────────────────────────────────
 
 interface PendingApproval {
@@ -61,8 +88,10 @@ export function resolveApproval(
 
 /**
  * Emit an event for a run: writes to p6_events and to the SSE channel.
+ * workflowId is included in the SSE payload so clients can match run events
+ * to a specific workflow without a separate lookup.
  */
-export function emitRunEvent(runId: string, projectId: string | null, type: string, payload: object): void {
+export function emitRunEvent(runId: string, projectId: string | null, workflowId: string | null, type: string, payload: object): void {
   insert('p6_events', {
     run_id: runId,
     type,
@@ -71,7 +100,7 @@ export function emitRunEvent(runId: string, projectId: string | null, type: stri
   });
   // Publish to project SSE channel so connected UIs see it live
   if (projectId) {
-    emit(projectId, { type: 'run.event', runId, eventType: type, payload });
+    emit(projectId, { type: 'run.event', runId, workflowId, eventType: type, payload });
   }
 }
 
@@ -110,6 +139,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     emit(String(workflow.project_id), { type: 'run.started', runId, workflowId });
   }
 
+  // Notify lifecycle hook (e.g. marks associated review as 'running')
+  fireHook(workflowId, runId, 'start');
+
   // Register abort controller
   const ctrl = registerRun(runId);
 
@@ -126,6 +158,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       workflowId,
       projectId: workflow.project_id ? String(workflow.project_id) : null,
       goal: String(workflow.goal),
+      kind: workflow.kind ? String(workflow.kind) : null,
       engine: (workflow.engine as 'claude-code' | 'kiro' | 'demo') || 'demo',
       trusted: Boolean(workflow.trust_tools),
       dataDir: config.dataDir,
@@ -141,7 +174,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
     const runContext: RunContext = {
       run: agentRun,
-      emit: (type, payload) => emitRunEvent(runId, agentRun.projectId, type, payload),
+      emit: (type, payload) => emitRunEvent(runId, agentRun.projectId, agentRun.workflowId, type, payload),
       awaitInput: (toolName, toolInput) => awaitApproval(runId, workflowId, agentRun, toolName, toolInput, runApprovals, ctrl.signal),
       allowAll: new Set<string>(),
     };
@@ -175,6 +208,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       workflowId,
     );
 
+    // Notify lifecycle hook (e.g. finalises associated review stats and auto-post)
+    fireHook(workflowId, runId, 'done');
+
     if (agentRun.projectId) {
       emit(agentRun.projectId, { type: 'run.done', runId, workflowId, result: result.slice(0, 400) });
     }
@@ -198,7 +234,15 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       workflowId,
     );
 
-    emitRunEvent(runId, workflow.project_id ? String(workflow.project_id) : null, 'run-failed', { error: msg });
+    emitRunEvent(runId, workflow.project_id ? String(workflow.project_id) : null, workflowId, 'run-failed', { error: msg });
+
+    // Notify lifecycle hook — fires for both abort/cancel and real failures.
+    // 'cancelled' keeps the review out of 'running' limbo; 'failed' marks actual errors.
+    if (aborted) {
+      fireHook(workflowId, runId, 'cancelled');
+    } else {
+      fireHook(workflowId, runId, 'failed');
+    }
 
     if (!aborted) {
       console.error(`[runner] Run ${runId} failed:`, e);
@@ -252,7 +296,7 @@ async function awaitApproval(
   // Update run to waiting
   dbRun('UPDATE p6_runs SET status = ? WHERE id = ?', 'running', runId);
 
-  emitRunEvent(runId, run.projectId, 'approval-request', {
+  emitRunEvent(runId, run.projectId, workflowId, 'approval-request', {
     inputId,
     toolName,
     toolInput,

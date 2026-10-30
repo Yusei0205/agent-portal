@@ -15,6 +15,8 @@ import { Vault } from './pages/Vault.jsx';
 import { Insights } from './pages/Insights.jsx';
 import { AdminPanel } from './pages/AdminPanel.jsx';
 import Review from './pages/Review.jsx';
+import ReviewDetail from './pages/ReviewDetail.jsx';
+import ReviewDashboard from './pages/ReviewDashboard.jsx';
 import LoopSpecs from './pages/LoopSpecs.jsx';
 import { Workspaces } from './pages/Workspaces.jsx';
 import { ApiAccess } from './pages/ApiAccess.jsx';
@@ -25,26 +27,28 @@ import { AwsAccounts } from './pages/AwsAccounts.jsx';
 // ── Navigation structure ──────────────────────────────────────────────────────
 
 const PROJECT_MAIN_ITEMS = [
-  { tab: 'sessions',    label: 'Sessions',    icon: 'play' },
-  { tab: 'workspaces',  label: 'Workspaces',  icon: 'projects' },
-  { tab: 'tickets',     label: 'Tickets',     icon: 'inbox',    needsJira: true },
-  { tab: 'review',      label: 'Code review', icon: 'review' },
-  { tab: 'knowledge',   label: 'Knowledge',   icon: 'knowledge' },
-  { tab: 'create',      label: 'Create',      icon: 'builder' },
-  { tab: 'vault',       label: 'Vault',       icon: 'inbox',    scoped: true },
-  { tab: 'insights',    label: 'Insights',    icon: 'chart',    scoped: true },
-  { tab: 'setup',       label: 'Setup',       icon: 'settings' },
-  { group: 'portal',    label: 'Portal',      icon: 'lock' },
+  { tab: 'sessions',      label: 'Sessions',      icon: 'play' },
+  { tab: 'workspaces',    label: 'Workspaces',    icon: 'projects' },
+  { tab: 'tickets',       label: 'Tickets',       icon: 'inbox',    needsJira: true },
+  { tab: 'review',        label: 'Code review',   icon: 'review' },
+  { tab: 'knowledge',     label: 'Knowledge',     icon: 'knowledge' },
+  { tab: 'create',        label: 'Create',        icon: 'builder' },
+  { tab: 'vault',         label: 'Vault',         icon: 'inbox',    scoped: true },
+  { tab: 'insights',      label: 'Insights',      icon: 'chart',    scoped: true },
+  { tab: 'integrations',  label: 'Integrations',  icon: 'builder' },
+  { tab: 'setup',         label: 'Setup',         icon: 'settings' },
+  { group: 'portal',      label: 'Portal',        icon: 'lock' },
 ];
 
 const PORTAL_ITEMS = [
-  { tab: 'inbox',        label: 'Inbox',           icon: 'inbox',    global: true },
-  { tab: 'connections',  label: 'Git connections', icon: 'branch',   global: true },
-  { tab: 'integrations', label: 'Integrations',    icon: 'builder',  global: true },
-  { tab: 'aws',          label: 'AWS accounts',    icon: 'lock',     global: true },
-  { tab: 'api',          label: 'API access',      icon: 'lock',     global: true },
-  { tab: 'admin',        label: 'Admin',           icon: 'user',     global: true, adminOnly: true },
-  { tab: 'settings',     label: 'Settings',        icon: 'settings', global: true, adminOnly: true },
+  { tab: 'inbox',        label: 'Inbox',              icon: 'inbox',    global: true },
+  { tab: 'connections',  label: 'Git connections',    icon: 'branch',   global: true },
+  { tab: 'integrations', label: 'Integrations',       icon: 'builder',  global: true },
+  { tab: 'aws',          label: 'AWS accounts',       icon: 'lock',     global: true },
+  { tab: 'api',          label: 'API access',         icon: 'lock',     global: true },
+  { tab: 'reviews',      label: 'Review dashboard',   icon: 'review',   global: true },
+  { tab: 'admin',        label: 'Admin',              icon: 'user',     global: true, adminOnly: true },
+  { tab: 'settings',     label: 'Settings',           icon: 'settings', global: true, adminOnly: true },
 ];
 
 // Pages that come in later phases — show placeholder for now
@@ -64,6 +68,7 @@ const PAGE_LABELS = {
   integrations: 'Integrations',
   aws:          'AWS accounts',
   api:          'API access',
+  reviews:      'Review dashboard',
   admin:        'Admin',
   settings:     'Settings',
 };
@@ -370,12 +375,14 @@ function Shell({ user, onSignOut }) {
   const isVaultRoute = route.projectId && route.tab === 'vault';
   const isInsightsRoute = route.tab === 'insights';
   const isAdminRoute = !route.projectId && route.tab === 'admin';
-  const isReviewRoute = route.projectId && route.tab === 'review';
+  const isReviewRoute       = route.projectId && route.tab === 'review' && !route.rest?.[0];
+  const isReviewDetailRoute = route.projectId && route.tab === 'review' && Boolean(route.rest?.[0]);
+  const isReviewDashboardRoute = !route.projectId && route.tab === 'reviews';
   const isLoopSpecsRoute = route.projectId && route.tab === 'loop-specs';
   const isWorkspacesRoute = route.projectId && route.tab === 'workspaces';
   const isApiRoute = !route.projectId && route.tab === 'api';
   const isConnectionsRoute = !route.projectId && route.tab === 'connections';
-  const isIntegrationsRoute = !route.projectId && route.tab === 'integrations';
+  const isIntegrationsRoute = route.tab === 'integrations';
   const isAwsRoute = !route.projectId && route.tab === 'aws';
 
   return (
@@ -426,7 +433,7 @@ function Shell({ user, onSignOut }) {
         ) : isSetupRoute ? (
           <ProjectHub projectId={route.projectId} user={user} />
         ) : isSettingsRoute ? (
-          <Settings />
+          <Settings user={user} />
         ) : isInboxRoute ? (
           <Inbox />
         ) : isCreateRoute ? (
@@ -440,7 +447,11 @@ function Shell({ user, onSignOut }) {
         ) : isAdminRoute ? (
           <AdminPanel user={user} />
         ) : isReviewRoute ? (
-          <Review projectId={route.projectId} />
+          <Review projectId={route.projectId} user={user} />
+        ) : isReviewDetailRoute ? (
+          <ReviewDetail key={route.rest[0]} projectId={route.projectId} reviewId={route.rest[0]} user={user} />
+        ) : isReviewDashboardRoute ? (
+          <ReviewDashboard />
         ) : isLoopSpecsRoute ? (
           <LoopSpecs projectId={route.projectId} />
         ) : isWorkspacesRoute ? (

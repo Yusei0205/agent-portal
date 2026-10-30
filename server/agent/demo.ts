@@ -138,6 +138,29 @@ export async function runDemo(ctx: RunContext): Promise<string> {
     ? `Done. I analysed the goal and wrote an action plan to \`${planRelPath}\`.\n\n**Goal:** ${shortGoal}\n\n**Plan written.** Review \`AGENT_PLAN.md\` in the Changes tab and push when ready.`
     : `Done. I analysed the goal: "${shortGoal}".\n\nI could not write the plan file (write not approved). Here is what I would do:\n\n${planContent}`;
 
+  // For code review workflows, emit a parseable findings block so that
+  // review-lifecycle.ts can extract at least one finding and verify the
+  // pipeline works end-to-end. Identified by the explicit workflow kind field
+  // (set by review.ts for both initial runs and re-runs) rather than goal-string
+  // sniffing, which missed the re-run goal prefix.
+  const isReviewRun = run.kind === 'review';
+  if (isReviewRun) {
+    const findingsBlock = JSON.stringify([{
+      file: 'src/demo-placeholder.ts',
+      line: 1,
+      severity: 'info',
+      title: 'Demo review placeholder',
+      body: 'Placeholder finding from the demo engine. No real code analysis was performed. Switch to a real model provider for actual code review.',
+      confidence: 0.5,
+    }]);
+    emit('assistant-text', {
+      text: `\n## Review Findings\n\n\`\`\`json\n${findingsBlock}\n\`\`\`\n`,
+      input_tokens: 0,
+      output_tokens: 0,
+    });
+    await pause(100);
+  }
+
   emit('run-complete', { result: summary, cost_usd: 0 });
   return summary;
 }

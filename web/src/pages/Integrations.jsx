@@ -82,6 +82,21 @@ function ConfigFields({ type, config, onChange }) {
           />
         </div>
         <div className="field">
+          <label htmlFor="int-jira-email">Account email</label>
+          <input
+            id="int-jira-email"
+            type="email"
+            value={config.email ?? ''}
+            onChange={(e) => update('email', e.target.value)}
+            placeholder="you@company.com"
+            autoComplete="email"
+          />
+          <p className="field-hint">
+            Required for <strong>Jira Cloud</strong> (email&nbsp;+&nbsp;API token auth).
+            Leave blank for <strong>Jira Data Center / Server</strong> (API token only).
+          </p>
+        </div>
+        <div className="field">
           <label htmlFor="int-jira-token">API token</label>
           <input
             id="int-jira-token"

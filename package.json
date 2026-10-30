@@ -13,7 +13,7 @@
     "dev": "node scripts/build.mjs --web-only && node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --import tsx server/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --import tsx --test test/*.test.ts",
-    "test:ui": "node scripts/build.mjs && node --disable-warning=ExperimentalWarning --import tsx test/ui/ui-smoke.ts",
+    "test:ui": "node scripts/build.mjs && node --disable-warning=ExperimentalWarning --import tsx test/ui/smoke.ts",
     "test:ui:commands": "node scripts/build.mjs && node --disable-warning=ExperimentalWarning --import tsx test/ui/slash-commands.ts",
     "test:container": "node scripts/container-smoke.mjs"
   },

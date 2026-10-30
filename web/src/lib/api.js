@@ -2,11 +2,13 @@
 // Every state-changing call carries the CSRF header (x-requested-with: agent-portal).
 
 export class ApiError extends Error {
-  /** @param {number} status @param {string} message */
-  constructor(status, message) {
+  /** @param {number} status @param {string} message @param {Record<string, unknown>} [data] */
+  constructor(status, message, data) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    /** Parsed response body from the server (may be undefined for network errors). */
+    this.data = data;
   }
 }
 
@@ -44,7 +46,7 @@ async function request(method, url, body) {
     const msg =
       (data && typeof data === 'object' && data.error) ||
       `Request failed (${res.status})`;
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, typeof data === 'object' && data !== null ? data : undefined);
   }
   return data;
 }

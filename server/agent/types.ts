@@ -11,6 +11,8 @@ export interface AgentRun {
   workflowId: string;
   projectId: string | null;
   goal: string;
+  /** Explicit workflow kind — 'review' for code-review runs; null for generic runs. */
+  kind: string | null;
   engine: 'claude-code' | 'kiro' | 'demo';
   trusted: boolean;
   dataDir: string;

@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 /**
  * Playwright smoke tests for Agent Portal.
  *
@@ -168,9 +169,47 @@ async function createProjectApi(name: string): Promise<string> {
     headers,
     body: JSON.stringify({ name, description: 'Smoke test project' }),
   });
-  const data = await res.json();
+  const data = await res.json() as any;
   if (!res.ok) throw new Error(`Create project: ${data.error || res.status}`);
   return data.project.id as string;
+}
+
+async function apiGet(urlPath: string): Promise<any> {
+  const headers: Record<string, string> = { 'x-requested-with': 'agent-portal' };
+  if (sessionCookie) headers['cookie'] = sessionCookie;
+  const res = await fetch(`${BASE}${urlPath}`, { headers });
+  const ct = res.headers.get('content-type') ?? '';
+  const data = ct.includes('application/json') ? await res.json() : await res.text();
+  if (!res.ok) {
+    const msg = (data && typeof data === 'object' && (data as any).error) || `HTTP ${res.status}`;
+    throw new Error(`GET ${urlPath}: ${msg}`);
+  }
+  return data;
+}
+
+async function apiPut(urlPath: string, body: unknown): Promise<any> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'x-requested-with': 'agent-portal',
+  };
+  if (sessionCookie) headers['cookie'] = sessionCookie;
+  const res = await fetch(`${BASE}${urlPath}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const ct = res.headers.get('content-type') ?? '';
+  const data = ct.includes('application/json') ? await res.json() : await res.text();
+  if (!res.ok) {
+    const msg = (data && typeof data === 'object' && (data as any).error) || `HTTP ${res.status}`;
+    throw new Error(`PUT ${urlPath}: ${msg}`);
+  }
+  return data;
+}
+
+async function createReviewApi(pid: string, baseRef: string, headRef: string): Promise<string> {
+  const data = await apiPost(`/api/projects/${pid}/reviews`, { baseRef, headRef });
+  return data.review.id as string;
 }
 
 // ── Page helpers ──────────────────────────────────────────────────────────────
@@ -461,6 +500,313 @@ async function main() {
     await test('Code review page renders', async (p) => {
       await goto(p, `/p/${projectId}/review`);
       await assertHeading(p, /code review/i);
+    }, page);
+
+    // ── 18. Review dashboard ──────────────────────────────────────────────
+    console.log('\n18. Review dashboard');
+    await test('Review dashboard heading renders', async (p) => {
+      await goto(p, '/reviews', 1200);
+      await assertHeading(p, /review dashboard/i);
+    }, page);
+
+    await test('Period toggles Today/7/30/90 switch without JS errors', async (p) => {
+      await goto(p, '/reviews', 1200);
+      await p.waitForSelector('[role="group"][aria-label="Time period"], .tab-bar', { timeout: 8000 });
+      const periodLabels = ['Today', '7 days', '30 days', '90 days'];
+      for (const label of periodLabels) {
+        const btn = p.locator('button').filter({ hasText: new RegExp(`^${label}$`, 'i') }).first();
+        const btnCount = await btn.count();
+        if (btnCount === 0) throw new Error(`Period toggle button "${label}" not found`);
+        await btn.click();
+        await p.waitForTimeout(600);
+        const headings = await p.locator('h1, h2').allTextContents();
+        const hasHeading = headings.some(t => /review dashboard/i.test(t));
+        if (!hasHeading) throw new Error(`Heading disappeared after clicking "${label}" period toggle`);
+      }
+    }, page);
+
+    await test('Empty state shown when no reviews exist in period', async (p) => {
+      await goto(p, '/reviews', 1200);
+      // Wait for spinner to clear
+      await p.waitForSelector('.spinner', { state: 'detached', timeout: 10_000 }).catch(() => {});
+      await p.waitForTimeout(600);
+      // Fresh DB: no reviews → stat tiles show 0 or empty-state paragraph appears
+      // Use body.innerText to avoid strict-mode violation from multiple .page / main elements
+      const pageText = await p.evaluate(() => document.body.innerText);
+      const hasEmptyOrZero =
+        /no code reviews/i.test(pageText) ||
+        /no reviews in this period/i.test(pageText) ||
+        /start a review/i.test(pageText) ||
+        (pageText.includes('Reviews') && /\b0\b/.test(pageText));
+      if (!hasEmptyOrZero) {
+        throw new Error(`Expected empty-state content on a fresh DB, got: ${pageText.slice(0, 300)}`);
+      }
+    }, page);
+
+    // ── 19. Settings › Code review tab ───────────────────────────────────
+    console.log('\n19. Settings › Code review tab');
+    await test('Code review tab renders merge threshold options', async (p) => {
+      await goto(p, '/settings', 1400);
+      await p.waitForSelector('#tab-codereview', { timeout: 8000 });
+      await p.click('#tab-codereview');
+      await p.waitForTimeout(800);
+      const radios = await p.locator('[name="mergeThreshold"]').count();
+      if (radios < 6) throw new Error(`Expected ≥6 mergeThreshold radio inputs, found ${radios}`);
+      await p.waitForSelector('#rc-input', { timeout: 5000 });
+      await p.waitForSelector('#rc-output', { timeout: 3000 });
+    }, page);
+
+    await test('Changing threshold + rate card saves (verified via GET /api/settings/review)', async (p) => {
+      await goto(p, '/settings', 1400);
+      await p.waitForSelector('#tab-codereview', { timeout: 8000 });
+      await p.click('#tab-codereview');
+      await p.waitForTimeout(800);
+      // Select "medium" threshold radio
+      await p.click('[name="mergeThreshold"][value="medium"]');
+      // Update input rate field
+      await p.fill('#rc-input', '6');
+      await p.click('button[type="submit"]');
+      // Wait for success status message
+      await p.locator('[role="status"]').filter({ hasText: /saved/i }).waitFor({ timeout: 8000 });
+      // Confirm via API
+      const settings = await apiGet('/api/settings/review');
+      if (settings.mergeThreshold !== 'medium') {
+        throw new Error(`mergeThreshold should be "medium" after save, got "${settings.mergeThreshold}"`);
+      }
+      if (Number(settings.rateCard?.inputUsd) !== 6) {
+        throw new Error(`inputUsd should be 6 after save, got ${settings.rateCard?.inputUsd}`);
+      }
+    }, page);
+
+    await test('Negative rate card value shows API error message', async (p) => {
+      await goto(p, '/settings', 1400);
+      await p.waitForSelector('#tab-codereview', { timeout: 8000 });
+      await p.click('#tab-codereview');
+      await p.waitForTimeout(800);
+      // noValidate form — browser won't block submission with min="0" violated
+      await p.fill('#rc-input', '-1');
+      await p.click('button[type="submit"]');
+      // Server returns 400 for negative rate; component shows saveError in role=alert
+      await p.locator('[role="alert"]').waitFor({ timeout: 8000 });
+      const alertText = await p.locator('[role="alert"]').first().textContent();
+      if (!alertText) throw new Error('Error alert element is empty');
+    }, page);
+
+    // Restore defaults after settings tests
+    try {
+      await apiPut('/api/settings/review', {
+        mergeThreshold: 'high',
+        rateCard: { inputUsd: 3, outputUsd: 15, cacheWriteUsd: 3.75, cacheReadUsd: 0.30 },
+      });
+    } catch { /* best effort */ }
+
+    // ── 20. Code review page — new review dialog ──────────────────────────
+    console.log('\n20. Code review page — new review dialog');
+
+    let reviewId = '';
+
+    await test('New review dialog has optional Jira ticket key field', async (p) => {
+      await goto(p, `/p/${projectId}/review`, 800);
+      const newBtn = p.locator('button').filter({ hasText: /\+ New review/i }).first();
+      await newBtn.waitFor({ timeout: 8000 });
+      await newBtn.click();
+      await p.waitForSelector('[role="dialog"][aria-label="New code review"]', { timeout: 6000 });
+      // The Jira key field has aria-describedby="jira-key-hint"
+      const jiraInput = p.locator('[aria-describedby="jira-key-hint"]').first();
+      await jiraInput.waitFor({ timeout: 4000 });
+      const ph = await jiraInput.getAttribute('placeholder');
+      if (!ph?.toLowerCase().includes('proj')) {
+        throw new Error(`Jira key placeholder unexpected: "${ph}"`);
+      }
+      // hint span should also be present
+      await p.locator('#jira-key-hint').waitFor({ timeout: 3000 });
+      await p.keyboard.press('Escape');
+      await p.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5000 }).catch(() => {});
+    }, page);
+
+    await test('Creating a review then opening it navigates to #/p/:pid/review/:rid', async (p) => {
+      // Navigate via an intermediate page to ensure a full page reload (same-hash goto is a no-op)
+      await goto(p, '/projects', 400);
+      await goto(p, `/p/${projectId}/review`, 1200);
+      const newBtn = p.locator('button').filter({ hasText: /\+ New review/i }).first();
+      await newBtn.waitFor({ timeout: 10_000 });
+      await newBtn.click();
+      await p.waitForSelector('[role="dialog"][aria-label="New code review"]', { timeout: 6000 });
+      // Fill required head branch
+      await p.fill('input[placeholder="feature/my-branch"]', 'feature/smoke-test');
+      // Fill optional Jira key
+      await p.fill('[aria-describedby="jira-key-hint"]', 'SMOKE-1');
+      // Submit and wait for API response
+      const submitBtn = p.locator('[role="dialog"] button[type="submit"]').first();
+      await Promise.all([
+        p.waitForResponse(
+          (r) => r.url().includes('/reviews') && r.request().method() === 'POST',
+          { timeout: 10_000 },
+        ),
+        submitBtn.click(),
+      ]);
+      // Modal closes; review appears in list
+      await p.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 8000 }).catch(() => {});
+      await p.waitForTimeout(600);
+      // Find the "Open" link for the new review
+      const openLink = p.locator('a[aria-label^="Open full detail"]').first();
+      await openLink.waitFor({ timeout: 8000 });
+      const hrefAttr = await openLink.getAttribute('href');
+      const match = hrefAttr?.match(/\/review\/([^/?#]+)/);
+      if (!match) throw new Error(`Could not extract reviewId from href: ${hrefAttr}`);
+      reviewId = match[1];
+      await openLink.click();
+      await p.waitForTimeout(1000);
+      const currentUrl = p.url();
+      if (!currentUrl.includes(`/review/${reviewId}`)) {
+        throw new Error(`Expected URL to contain /review/${reviewId}, got: ${currentUrl}`);
+      }
+    }, page);
+
+    // ── 21. Review detail ─────────────────────────────────────────────────
+    console.log('\n21. Review detail');
+
+    // Fallback: create via API if the UI creation test above failed
+    if (!reviewId) {
+      try {
+        reviewId = await createReviewApi(projectId, 'main', 'feature/smoke-fallback');
+      } catch { /* sub-tests will fail with a clear message */ }
+    }
+
+    await test('Verdict banner is present on review detail page', async (p) => {
+      if (!reviewId) throw new Error('No reviewId — review creation test failed');
+      await goto(p, `/p/${projectId}/review/${reviewId}`, 1500);
+      // Server always computes verdict (even for pending reviews)
+      await p.waitForSelector('[role="status"]', { timeout: 10_000 });
+    }, page);
+
+    await test('Merge button disabled with visible reason for non-done review', async (p) => {
+      if (!reviewId) throw new Error('No reviewId — review creation test failed');
+      await goto(p, `/p/${projectId}/review/${reviewId}`, 1500);
+      const mergeBtn = p.locator('button').filter({ hasText: /Merge pull request/i }).first();
+      await mergeBtn.waitFor({ timeout: 10_000 });
+      const disabled = await mergeBtn.isDisabled();
+      if (!disabled) throw new Error('Merge button must be disabled for a pending review');
+      // Visible reason paragraph
+      await p.waitForSelector('#merge-reason', { timeout: 5000 });
+      const reason = await p.locator('#merge-reason').textContent();
+      if (!reason?.includes('Merge disabled:')) {
+        throw new Error(`Expected "Merge disabled:" text in #merge-reason, got: ${reason}`);
+      }
+    }, page);
+
+    await test('Re-run creates a new review and navigates to it showing "Re-run of"', async (p) => {
+      if (!reviewId) throw new Error('No reviewId — review creation test failed');
+      // The Re-run button in the UI is disabled for pending/running reviews.
+      // Trigger re-run via the API and then verify the resulting detail page
+      // shows "Re-run of <parentId>".
+      const rerunData = await apiPost(`/api/projects/${projectId}/reviews/${reviewId}/rerun`, {});
+      const newReviewId = rerunData.review?.id;
+      if (!newReviewId) throw new Error(`Re-run API did not return a review id: ${JSON.stringify(rerunData)}`);
+      if (rerunData.parentReviewId !== reviewId) {
+        throw new Error(`parentReviewId mismatch: expected ${reviewId}, got ${rerunData.parentReviewId}`);
+      }
+      // Navigate to the new review detail page
+      await goto(p, `/p/${projectId}/review/${newReviewId}`, 1500);
+      // The page should show "Re-run of <parentId>" because parent_review_id is set
+      await p.getByText('Re-run of', { exact: false }).waitFor({ timeout: 8000 });
+      const urlAfter = p.url();
+      if (!urlAfter.includes(`/review/${newReviewId}`)) {
+        throw new Error(`URL should show new review ${newReviewId}, got: ${urlAfter}`);
+      }
+    }, page);
+
+    await test('Excel download button triggers a spreadsheet response', async (p) => {
+      if (!reviewId) throw new Error('No reviewId — review creation test failed');
+      await goto(p, `/p/${projectId}/review/${reviewId}`, 1500);
+      const excelBtn = p.locator('[aria-label="Download Excel report"]').first();
+      await excelBtn.waitFor({ timeout: 8000 });
+      const [xlsxResponse] = await Promise.all([
+        p.waitForResponse((r) => r.url().includes('/export/xlsx'), { timeout: 15_000 }),
+        excelBtn.click(),
+      ]);
+      const ct = xlsxResponse.headers()['content-type'] ?? '';
+      if (!ct.includes('spreadsheetml') && !ct.includes('octet-stream')) {
+        throw new Error(`Expected spreadsheet content-type for xlsx, got: "${ct}"`);
+      }
+    }, page);
+
+    await test('Word download button triggers a document response', async (p) => {
+      if (!reviewId) throw new Error('No reviewId — review creation test failed');
+      await goto(p, `/p/${projectId}/review/${reviewId}`, 1500);
+      const wordBtn = p.locator('[aria-label="Download Word report"]').first();
+      await wordBtn.waitFor({ timeout: 8000 });
+      const [docxResponse] = await Promise.all([
+        p.waitForResponse((r) => r.url().includes('/export/docx'), { timeout: 15_000 }),
+        wordBtn.click(),
+      ]);
+      const ct = docxResponse.headers()['content-type'] ?? '';
+      if (!ct.includes('wordprocessingml') && !ct.includes('octet-stream')) {
+        throw new Error(`Expected Word document content-type for docx, got: "${ct}"`);
+      }
+    }, page);
+
+    await test('Show log button toggles run log open and closed', async (p) => {
+      if (!reviewId) throw new Error('No reviewId — review creation test failed');
+      await goto(p, `/p/${projectId}/review/${reviewId}`, 1500);
+      // For a pending review with no log entries, the RunLog component shows
+      // "No log entries recorded." instead of the Show/Hide log toggle.
+      // Either case is valid behavior — test whichever is present.
+      const showLogBtn = p.locator('button').filter({ hasText: /Show log/i }).first();
+      const showLogCount = await showLogBtn.count();
+      if (showLogCount === 0) {
+        // No log entries yet — verify the "No log entries recorded." message appears
+        const noLogText = p.getByText('No log entries recorded', { exact: false });
+        await noLogText.waitFor({ timeout: 5000 });
+        // Test passes — empty log state is correct for a fresh pending review
+        return;
+      }
+      await showLogBtn.waitFor({ timeout: 5000 });
+      await showLogBtn.click();
+      await p.waitForTimeout(400);
+      // "Hide log" should now be visible
+      const hideLogBtn = p.locator('button').filter({ hasText: /Hide log/i }).first();
+      await hideLogBtn.waitFor({ timeout: 4000 });
+      // Verify the log panel rendered
+      const logPanel = await p.locator('[role="log"], [aria-label="Agent run log"]').count();
+      const mainText = await p.evaluate(() => document.body.innerText);
+      if (logPanel === 0 && !mainText.includes('entries')) {
+        throw new Error('Run log panel did not appear after clicking "Show log"');
+      }
+      // Click to close
+      await hideLogBtn.click();
+      await p.waitForTimeout(300);
+      await p.locator('button').filter({ hasText: /Show log/i }).first().waitFor({ timeout: 4000 });
+    }, page);
+
+    // ── 22. Integrations — Atlassian type ────────────────────────────────
+    console.log('\n22. Integrations');
+    await test('Atlassian integration type shows Account email field', async (p) => {
+      // The Integrations component needs a projectId to show "Add integration".
+      // App.jsx only routes #/integrations (global, no project) to <Integrations projectId={null}>,
+      // where the button is hidden. Navigating #/p/:pid/integrations falls through to a Placeholder.
+      // This test attempts the project-scoped URL to surface that routing gap.
+      await goto(p, `/p/${projectId}/integrations`, 800);
+      // Detect placeholder (Coming soon. is in a <p>, not a heading)
+      const pageBody = await p.evaluate(() => document.body.innerText);
+      const hasComingSoon = /coming soon/i.test(pageBody);
+      if (hasComingSoon) {
+        throw new Error(
+          'APP BUG: #/p/:projectId/integrations shows "Coming soon" placeholder. ' +
+          'App.jsx routes integrations only for the global case (!route.projectId), ' +
+          'so a project-scoped URL falls through to Placeholder instead of ' +
+          '<Integrations projectId={projectId} />. ' +
+          'Fix: add `route.projectId && route.tab === "integrations"` as a route in App.jsx.',
+        );
+      }
+      // If page renders correctly, test the Atlassian modal
+      const addBtn = p.locator('button').filter({ hasText: /Add integration/i }).first();
+      await addBtn.waitFor({ timeout: 5000 });
+      await addBtn.click();
+      await p.selectOption('#int-type', 'atlassian');
+      await p.waitForTimeout(400);
+      await p.locator('#int-jira-email').waitFor({ timeout: 4000 });
+      await p.keyboard.press('Escape');
     }, page);
 
     // ── JS errors report ──────────────────────────────────────────────────

@@ -1192,9 +1192,54 @@ const M11_INTEGRATIONS_AWS = `
   CREATE INDEX IF NOT EXISTS aws_accounts_project ON aws_accounts(project_id);
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS];
+/**
+ * Migration 12: Code Review upgrade — reproducibility, cost tracking, merge gate.
+ * Adds columns to p10_reviews for: parent_review_id, source_sha, dest_sha,
+ * provider_id, model_id, jira_context, run_log, token counts, duration,
+ * started_at, merged_at, merged_by, head_commit_sha.
+ * Seeds review.mergeThreshold and review.rateCard settings.
+ */
+const M12_REVIEW_UPGRADE = `
+  ALTER TABLE p10_reviews ADD COLUMN parent_review_id TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN source_sha TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN dest_sha TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN provider_id TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN model_id TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN jira_context TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE p10_reviews ADD COLUMN run_log TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE p10_reviews ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN llm_requests INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN files_reviewed INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p10_reviews ADD COLUMN duration_ms INTEGER;
+  ALTER TABLE p10_reviews ADD COLUMN started_at TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN merged_at TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN merged_by TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN head_commit_sha TEXT;
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('review.mergeThreshold', '"high"');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('review.rateCard', '{"inputUsd":3,"outputUsd":15,"cacheWriteUsd":3.75,"cacheReadUsd":0.30}');
+`;
 
-export const SCHEMA_VERSION = MIGRATIONS.length; // = 11
+/**
+ * Migration 13: Review workflow kind + raw_output column.
+ *
+ * - p6_workflows.kind: explicit workflow classification ('review' for code reviews).
+ *   Replaces goal-string sniffing in the demo engine and lifecycle hook.
+ * - p10_reviews.raw_output: full untruncated assistant transcript for parsing/audit.
+ *   The summary column now stores a bounded human-readable snippet (≤ 4 KB).
+ */
+const M13_REVIEW_KIND_RAWOUTPUT = `
+  ALTER TABLE p6_workflows ADD COLUMN kind TEXT;
+  ALTER TABLE p10_reviews ADD COLUMN raw_output TEXT;
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT];
+
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 13
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 

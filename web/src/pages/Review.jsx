@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
+import { navigate, href } from '../lib/router.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
     prNumber: '',
     postMode: 'draft',
     minSeverity: 'medium',
+    jiraKey: '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -86,6 +88,7 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
         minSeverity: form.minSeverity,
       };
       if (form.prNumber) body.prNumber = Number(form.prNumber);
+      if (form.jiraKey.trim()) body.jiraKey = form.jiraKey.trim();
       const r = await api.post(`/api/projects/${projectId}/reviews`, body);
       onCreated(r.review);
     } catch (e) {
@@ -156,6 +159,20 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
               min="1"
               style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, boxSizing: 'border-box' }}
             />
+          </label>
+
+          <label style={{ display: 'block', marginBottom: 12 }}>
+            <span style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>Jira ticket key (optional)</span>
+            <input
+              value={form.jiraKey}
+              onChange={(e) => setForm((f) => ({ ...f, jiraKey: e.target.value }))}
+              placeholder="e.g. PROJ-123 — auto-detected from branch when blank"
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, boxSizing: 'border-box' }}
+              aria-describedby="jira-key-hint"
+            />
+            <span id="jira-key-hint" style={{ display: 'block', fontSize: 12, color: '#6b7280', marginTop: 3 }}>
+              Leave blank to auto-detect from the branch name (e.g. feature/PROJ-123-my-feature).
+            </span>
           </label>
 
           <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
@@ -386,6 +403,17 @@ function ReviewRow({ review, projectId, isAdmin }) {
         >
           {expanded ? 'Hide findings' : 'View findings'}
         </button>
+        <a
+          href={href(projectId, 'review', review.id)}
+          style={{
+            padding: '4px 10px', fontSize: 13, textDecoration: 'none',
+            border: '1px solid #2563eb', borderRadius: 4, background: '#2563eb',
+            color: '#fff', cursor: 'pointer', display: 'inline-block',
+          }}
+          aria-label={`Open full detail for review ${review.head_ref}`}
+        >
+          Open
+        </a>
       </div>
       {review.summary && (
         <p style={{ margin: '6px 0 0', fontSize: 13, color: '#6b7280' }}>{review.summary}</p>
@@ -434,7 +462,16 @@ export default function Review({ projectId, user }) {
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Code Review</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Code Review</h1>
+          <a
+            href="#/reviews"
+            style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none' }}
+            title="Portal-wide review dashboard"
+          >
+            Dashboard →
+          </a>
+        </div>
         <button
           onClick={() => setShowModal(true)}
           style={{

@@ -42,6 +42,7 @@ import { registerLearnRoutes } from './learn.ts';
 import { registerControlPlaneRoutes } from './control-plane.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
+import './review-lifecycle.ts'; // Register review lifecycle hook (wires run stats → review row)
 
 // Track whether routes have been registered (they're global, so only once per process)
 
