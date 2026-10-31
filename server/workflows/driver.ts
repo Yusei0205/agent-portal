@@ -17,7 +17,7 @@ import { getToolPacks } from '../tool-packs.ts';
 import { isDraining } from '../control-plane.ts';
 import { type VerificationStep } from '../loop-specs.ts';
 import { runPipeline, formatPipelineForPrompt, persistPipelineResult, appendProgress } from '../loop-verification.ts';
-import { driving, getWorkflow, isSingleRun, patch, log, overBudget } from './store.ts';
+import { driving, getWorkflow, isSingleRun, iterationBudget, patch, log, overBudget } from './store.ts';
 import { sessionRepos, reposView } from './views.ts';
 import { askEngineSwitch, closeEngineSwitch } from './engine-switch.ts';
 import { stopWith } from './lifecycle.ts';
@@ -201,6 +201,9 @@ async function drive(id: string, gen: number): Promise<void> {
         trustTools: Boolean(w.trust_tools),
         trustedPushHandler: w.trust_tools ? (branch) => performTrustedPush(id, branch) : undefined,
         model: w.model,
+        // The session's budget is a hard limit inside an iteration too: the run may spend what the session has left
+        // (with 10% headroom, since the SDK checks after each response), and no more than the per-run cap.
+        maxBudgetUsd: iterationBudget(w),
         resumeOf: prev && prev.session_id && sameRepos ? prev.id : null,
         lead,
         meta: { iteration, leadAgent: lead ? w.lead_agent : '', ...(w.jira_key ? { jiraKey: w.jira_key, jiraUrl: w.jira_url, jiraSummary: w.jira_summary } : {}) },

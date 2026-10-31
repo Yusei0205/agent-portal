@@ -86,6 +86,10 @@ export async function startMockAnthropic({ script = [{ text: 'done' }] as MockSt
       steps = next;
       step = 0;
     },
+    /** The token counts every reply reports from now on (what the engine prices). */
+    setUsage(next: { input_tokens: number; output_tokens: number }) {
+      usage = next;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();

@@ -90,6 +90,9 @@ export async function* sdkRun(opts: ProviderRunOptions): AsyncIterable<SdkMessag
   };
   if (opts.tools) options.tools = opts.tools;
   if (opts.maxTurns) options.maxTurns = opts.maxTurns;
+  if (opts.maxBudgetUsd) options.maxBudgetUsd = opts.maxBudgetUsd;
+  if (opts.fallbackModel && opts.fallbackModel !== opts.model) options.fallbackModel = opts.fallbackModel;
+  if (opts.effort) options.effort = opts.effort;
   if (opts.resume) options.resume = opts.resume;
   if (opts.additionalDirectories?.length) options.additionalDirectories = opts.additionalDirectories;
   if (opts.mcpServers && Object.keys(opts.mcpServers).length) options.mcpServers = opts.mcpServers;

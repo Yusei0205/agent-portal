@@ -80,6 +80,12 @@ export interface ProviderRunOptions {
   /** Restrict the tools Claude can see at all. */
   tools?: string[];
   maxTurns?: number;
+  /** Spend cap for this run in USD, subagents included (the SDK ends it with result subtype error_max_budget_usd). */
+  maxBudgetUsd?: number;
+  /** Model to switch to when the chosen one is overloaded. */
+  fallbackModel?: string;
+  /** Thinking effort: low | medium | high | xhigh | max. */
+  effort?: string;
   resume?: string;
   settingSources: ('user' | 'project' | 'local')[];
   additionalDirectories?: string[];

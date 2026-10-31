@@ -3,12 +3,20 @@ import { runShellCheck } from '../proc.ts';
 import { one, run as exec, update, type Row } from '../db.ts';
 import { notifyProject } from '../projects.ts';
 import { badRequest, notFound, now } from '../util.ts';
+import { getSettings } from '../settings.ts';
 import { view } from './views.ts';
 
 export const OPEN = ['running'];
 
 /** Budget of a single run, whose follow-ups are held to it (a session's own default is $5). */
 export const SINGLE_RUN_BUDGET_USD = 25;
+
+/** What one iteration may spend: the session's remaining budget less 10% headroom, capped by Settings › Limits. */
+export function iterationBudget(w: Row): number {
+  const left = Math.max(0, Number(w.budget_usd ?? 0) - Number(w.spent_usd ?? 0)) * 0.9;
+  const cap = getSettings().agents.maxBudgetUsdPerRun;
+  return Number(Math.max(0.01, cap ? Math.min(cap, left) : left).toFixed(4));
+}
 
 export const REOPENABLE = ['done', 'blocked', 'paused', 'stopped', 'failed'];
 

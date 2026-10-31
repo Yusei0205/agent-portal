@@ -166,6 +166,55 @@ export function AgentsSection({ s, reload }) {
             </select>
           )}
         </Field>
+        <Field label="Budget per run (USD)" hint="Subagents included. Empty for no cap. Session iterations also stop at what the session has left.">
+          {(id) => (
+            <input
+              id={id}
+              type="number"
+              min={0.01}
+              max={1000}
+              step="0.5"
+              className="input input-num"
+              value={a.maxBudgetUsdPerRun ?? ''}
+              onChange={(e) => setA({ ...a, maxBudgetUsdPerRun: e.target.value === '' ? null : Number(e.target.value) })}
+            />
+          )}
+        </Field>
+        <Field label="Minutes a run may work" hint="Time spent waiting for a person does not count. Empty for no limit.">
+          {(id) => (
+            <input
+              id={id}
+              type="number"
+              min={1}
+              max={1440}
+              className="input input-num"
+              value={a.runTimeoutMinutes ?? ''}
+              onChange={(e) => setA({ ...a, runTimeoutMinutes: e.target.value === '' ? null : Number(e.target.value) })}
+            />
+          )}
+        </Field>
+        <Field label="Thinking effort" hint="How hard Claude thinks before answering; more effort costs more.">
+          {(id) => (
+            <select id={id} className="input" value={a.effort ?? ''} onChange={(e) => setA({ ...a, effort: e.target.value })}>
+              <option value="">Model default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+              <option value="max">Maximum</option>
+            </select>
+          )}
+        </Field>
+        <Field label="When the model is overloaded" hint="Switch to this model instead of failing the run.">
+          {(id) => (
+            <select id={id} className="input" value={a.fallbackModel ?? ''} onChange={(e) => setA({ ...a, fallbackModel: e.target.value })}>
+              <option value="">Fail the run</option>
+              <option value="sonnet">Use Sonnet</option>
+              <option value="haiku">Use Haiku</option>
+              <option value="opus">Use Opus</option>
+            </select>
+          )}
+        </Field>
         <Field label="Maximum turns per run" hint="Stops runaway runs.">
           {(id) => <input id={id} type="number" min={1} max={500} className="input input-num" value={a.maxTurns} onChange={(e) => setA({ ...a, maxTurns: Number(e.target.value) })} />}
         </Field>

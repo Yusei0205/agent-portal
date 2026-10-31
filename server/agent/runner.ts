@@ -13,6 +13,7 @@ import { blockedCommand, alwaysBlockedCommand, parseTrustedPush, composeLeadAppe
 import { isReallyInsideDir } from '../real-path.ts';
 import type { CanUseTool, PermissionMode, ProviderRunOptions, SdkMessage } from './types.ts';
 import { sdkRun } from './sdk.ts';
+import { estimateCost, type Usage } from './pricing.ts';
 import { kiroRun } from './kiro.ts';
 import { demoRun, demoModel } from './demo.ts';
 import { listAgentFiles, listSkillNames } from '../builder.ts';
@@ -51,6 +52,10 @@ export interface StartRunInput {
   lead?: { name: string; description: string; prompt: string; team: { name: string; description: string }[]; isKiroNative?: boolean };
   systemPrompt?: string;
   maxTurns?: number;
+  /** Spend cap for this run in USD, subagents included; undefined = Settings › Limits, null = none. */
+  maxBudgetUsd?: number | null;
+  /** Thinking effort for this run; undefined = the default from Settings. */
+  effort?: string;
   meta?: Record<string, unknown>;
   /** Unattended workflow runs: tools are allowed without asking, except the commands in guardrails.ts. */
   autoApprove?: boolean;
@@ -112,12 +117,47 @@ interface Active {
   activityAt?: number;
   /** Why the run was stopped, for its record ("Stopped by a user" when not set). */
   stopReason?: string;
+  /** Working time against agents.runTimeoutMinutes. */
+  clock?: Clock;
+}
+
+/** Working time of a run. It stops while the run waits for a person, so waiting for an answer never uses it up. */
+interface Clock {
+  limitMs: number;
+  usedMs: number;
+  startedAt: number | null;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 const active = new Map<string, Active>();
 
+/** Start (or carry on) a run's working-time clock; when it runs out the run is stopped with the reason. */
+function startClock(runId: string, a: Active): void {
+  const c = a.clock;
+  if (!c || c.startedAt !== null) return;
+  c.startedAt = Date.now();
+  const minutes = c.limitMs / 60_000;
+  const shown = minutes >= 1 ? `${Math.round(minutes)} minute${Math.round(minutes) === 1 ? '' : 's'}` : `${Math.max(1, Math.round(c.limitMs / 1000))} seconds`;
+  c.timer = setTimeout(
+    () => stopRun(runId, `Stopped: it worked for more than ${shown}, the time limit per run (Settings › Limits). Send a follow-up to let it carry on.`),
+    Math.max(0, c.limitMs - c.usedMs),
+  );
+  c.timer.unref?.();
+}
+
+/** Stop the clock while the run waits for a person. */
+function pauseClock(a: Active): void {
+  const c = a.clock;
+  if (!c || c.startedAt === null) return;
+  c.usedMs += Date.now() - c.startedAt;
+  c.startedAt = null;
+  if (c.timer) clearTimeout(c.timer);
+  c.timer = null;
+}
+
 export const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob'];
-const AUTO_ALLOWED = ['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite', 'Agent', 'Task', 'LS'];
+// TaskCreate/TaskGet/TaskList/TaskUpdate replaced TodoWrite in Claude Code; like it, they only track the agent's plan.
+const AUTO_ALLOWED = ['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate', 'Agent', 'Task', 'LS'];
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 /** Read-only tools and the inputs that name what they read. */
 const READ_TOOL_FIELDS = new Map<string, string[]>([
@@ -139,6 +179,8 @@ function runSummary(r: Row) {
     cost_usd: r.cost_usd,
     input_tokens: r.input_tokens,
     output_tokens: r.output_tokens,
+    cache_read_tokens: r.cache_read_tokens ?? 0,
+    cache_write_tokens: r.cache_write_tokens ?? 0,
     model: r.model,
     provider: r.provider,
     created_at: r.created_at,
@@ -309,6 +351,7 @@ function waitForInput(runId: string, a: Active, type: 'question' | 'approval', t
   const expiresAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000).toISOString() : null;
   const input = createInput({ projectId: r.project_id, runId, type, toolName, payload, userId: r.created_by, expiresAt });
   recordEvent(runId, a, 'portal:input', null, { inputId: input.id, inputType: type, toolName, payload, expiresAt });
+  pauseClock(a);
   setStatus(runId, 'waiting');
   return new Promise((resolve, reject) => {
     const pending: Pending = { resolve, reject };
@@ -321,7 +364,10 @@ function waitForInput(runId: string, a: Active, type: 'question' | 'approval', t
         a.pending.delete(input.id);
         notifyProject(r.project_id, 'input.resolved', { id: input.id, status: 'expired' });
         recordEvent(runId, a, 'portal:input_expired', null, { inputId: input.id, minutes });
-        if (!a.pending.size) setStatus(runId, 'running');
+        if (!a.pending.size) {
+          setStatus(runId, 'running');
+          startClock(runId, a);
+        }
         resolve(response);
       }, minutes * 60_000);
       pending.timer.unref?.();
@@ -414,7 +460,10 @@ export async function answerInput(inputId: string, user: { id: string; name: str
       clearTimeout(p.timer);
       a.pending.delete(inputId);
       recordEvent(row.run_id, a, 'portal:input_answered', null, { inputId, response, by: user.name });
-      if (!a.pending.size) setStatus(row.run_id, 'running');
+      if (!a.pending.size) {
+        setStatus(row.run_id, 'running');
+        startClock(row.run_id, a);
+      }
       p.resolve(response);
     }
   }
@@ -561,6 +610,7 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
       }
       if (!aborted && !(e instanceof HttpError)) console.error(`[run ${runId}]`, e);
     } finally {
+      pauseClock(a);
       for (const [inputId, p] of a.pending) {
         exec("UPDATE inputs SET status = 'cancelled' WHERE id = ? AND status = 'pending'", inputId);
         p.reject(new DOMException('Run ended', 'AbortError'));
@@ -747,6 +797,11 @@ async function execute(
     return config ? `Blocked by Agent Portal: ${config}` : null;
   };
 
+  const limits = getSettings().agents;
+  // A run's own spend cap (Settings › Limits unless the caller set one) and its working-time limit.
+  const budget = input.maxBudgetUsd === undefined ? limits.maxBudgetUsdPerRun : input.maxBudgetUsd;
+  if (limits.runTimeoutMinutes) a.clock = { limitMs: limits.runTimeoutMinutes * 60_000, usedMs: 0, startedAt: null, timer: null };
+
   const env = o.mode === 'demo' ? {} : await agentEnv(project.id, o.mode as any, { runId });
   const opts: ProviderRunOptions = {
     prompt,
@@ -755,7 +810,10 @@ async function execute(
     permissionMode: o.permissionMode,
     allowedTools: input.allowedTools ?? (input.oneshot ? [] : AUTO_ALLOWED),
     tools: input.tools,
-    maxTurns: input.maxTurns ?? (input.oneshot ? 1 : getSettings().agents.maxTurns),
+    maxTurns: input.maxTurns ?? (input.oneshot ? 1 : limits.maxTurns),
+    maxBudgetUsd: budget ?? undefined,
+    fallbackModel: limits.fallbackModel || undefined,
+    effort: input.effort || limits.effort || undefined,
     resume: o.resumeSession,
     settingSources: input.oneshot ? [] : ['project'],
     systemAppend:
@@ -791,6 +849,7 @@ async function execute(
   };
 
   setStatus(runId, 'running', { started_at: now() });
+  startClock(runId, a);
 
   const stream: AsyncIterable<SdkMessage> =
     o.mode === 'demo'
@@ -801,41 +860,79 @@ async function execute(
         ? kiroRun(opts)
         : sdkRun(opts);
 
+  // Live counts from every assistant message (subagents' too, one per message id), per model, until the result's
+  // complete usage replaces them. A run that ends without a result (stopped, crashed, time limit) keeps these, priced.
   let inTok = 0;
   let outTok = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  const liveByModel = new Map<string, Usage>();
   let sawResult = false;
-  for await (const msg of stream) {
-    const type = msg.subtype ? `${msg.type}:${msg.subtype}` : msg.type;
-    recordEvent(runId, a, type, (msg.parent_tool_use_id as string) ?? null, msg);
-    if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id) {
-      update('agent_runs', runId, { session_id: msg.session_id });
-    }
-    if (msg.type === 'assistant' && msg.message?.usage) {
-      const mid = msg.message.id || msg.uuid || '';
-      if (!a.seenMessageIds.has(mid)) {
-        a.seenMessageIds.add(mid);
-        inTok += (msg.message.usage.input_tokens || 0) + (msg.message.usage.cache_read_input_tokens || 0) + (msg.message.usage.cache_creation_input_tokens || 0);
-        outTok += msg.message.usage.output_tokens || 0;
-        update('agent_runs', runId, { input_tokens: inTok, output_tokens: outTok });
+  try {
+    for await (const msg of stream) {
+      const type = msg.subtype ? `${msg.type}:${msg.subtype}` : msg.type;
+      recordEvent(runId, a, type, (msg.parent_tool_use_id as string) ?? null, msg);
+      if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id) {
+        update('agent_runs', runId, { session_id: msg.session_id });
+      }
+      if (msg.type === 'assistant' && msg.message?.usage) {
+        const mid = msg.message.id || msg.uuid || '';
+        if (!a.seenMessageIds.has(mid)) {
+          a.seenMessageIds.add(mid);
+          const u = msg.message.usage;
+          inTok += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+          outTok += u.output_tokens || 0;
+          cacheRead += u.cache_read_input_tokens || 0;
+          cacheWrite += u.cache_creation_input_tokens || 0;
+          const model = String(msg.message.model || o.model);
+          const m = liveByModel.get(model) ?? { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+          m.input_tokens = (m.input_tokens ?? 0) + (u.input_tokens || 0);
+          m.output_tokens = (m.output_tokens ?? 0) + (u.output_tokens || 0);
+          m.cache_read_input_tokens = (m.cache_read_input_tokens ?? 0) + (u.cache_read_input_tokens || 0);
+          m.cache_creation_input_tokens = (m.cache_creation_input_tokens ?? 0) + (u.cache_creation_input_tokens || 0);
+          liveByModel.set(model, m);
+          update('agent_runs', runId, { input_tokens: inTok, output_tokens: outTok, cache_read_tokens: cacheRead, cache_write_tokens: cacheWrite });
+        }
+      }
+      if (msg.type === 'result') {
+        sawResult = true;
+        const ok = msg.subtype === 'success' && !msg.is_error;
+        const overBudget = msg.subtype === 'error_max_budget_usd';
+        const meta = parseJson<any>(getRun(runId).meta, {});
+        if (typeof msg.estimated_cost_usd === 'number') meta.estimatedUsd = msg.estimated_cost_usd;
+        if (typeof msg.kiro_credits === 'number') meta.kiroCredits = msg.kiro_credits;
+        if (budget) meta.budgetUsd = budget;
+        const spent = runSpend(msg, input.resumeOf ?? null, { input: inTok, output: outTok, cacheRead, cacheWrite });
+        if (spent.session) meta.sessionTotals = spent.session;
+        const text = typeof msg.result === 'string' ? msg.result : '';
+        // Reaching its budget is a planned stop, not a failure: a follow-up carries on with a new budget.
+        setStatus(runId, ok ? 'completed' : overBudget ? 'stopped' : 'failed', {
+          result: text,
+          error: ok
+            ? null
+            : overBudget
+              ? `Stopped at this run's budget of $${budget}. Send a follow-up to let it carry on with a new budget.`
+              : `${msg.subtype ?? 'error'}${text ? `: ${text.slice(0, 500)}` : ''}`,
+          cost_usd: spent.costUsd,
+          input_tokens: spent.input,
+          output_tokens: spent.output,
+          cache_read_tokens: spent.cacheRead,
+          cache_write_tokens: spent.cacheWrite,
+          meta: JSON.stringify(meta),
+          finished_at: now(),
+        });
       }
     }
-    if (msg.type === 'result') {
-      sawResult = true;
-      const ok = msg.subtype === 'success' && !msg.is_error;
+  } finally {
+    // No result: what the run spent until it stopped is still spent. Price the usage seen so far (Claude engines only;
+    // Kiro counts credits, not dollars), so budgets and reports do not count a runaway run as free.
+    if (!sawResult && o.mode !== 'kiro' && liveByModel.size) {
+      let usd = 0;
+      for (const [model, u] of liveByModel) usd += estimateCost(model, u);
       const meta = parseJson<any>(getRun(runId).meta, {});
-      if (typeof msg.estimated_cost_usd === 'number') meta.estimatedUsd = msg.estimated_cost_usd;
-      if (typeof msg.kiro_credits === 'number') meta.kiroCredits = msg.kiro_credits;
-      const spent = runSpend(msg, input.resumeOf ?? null, { input: inTok, output: outTok });
-      if (spent.session) meta.sessionTotals = spent.session;
-      setStatus(runId, ok ? 'completed' : 'failed', {
-        result: typeof msg.result === 'string' ? msg.result : '',
-        error: ok ? null : `${msg.subtype ?? 'error'}${typeof msg.result === 'string' && msg.result ? `: ${msg.result.slice(0, 500)}` : ''}`,
-        cost_usd: spent.costUsd,
-        input_tokens: spent.input,
-        output_tokens: spent.output,
-        meta: JSON.stringify(meta),
-        finished_at: now(),
-      });
+      meta.costEstimated = true;
+      if (o.mode === 'demo') meta.estimatedUsd = Number(usd.toFixed(6));
+      update('agent_runs', runId, { cost_usd: o.mode === 'demo' ? 0 : Number(usd.toFixed(6)), meta: JSON.stringify(meta) });
     }
   }
   if (!sawResult) {
@@ -849,6 +946,9 @@ interface SessionTotals {
   /** Input tokens including cache reads and writes (the portal's convention for input_tokens). */
   input: number;
   output: number;
+  /** The cache parts of input, kept apart so the cache hit rate can be seen. */
+  cacheRead?: number;
+  cacheWrite?: number;
   sessionId?: string;
 }
 
@@ -864,8 +964,8 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0
 export function runSpend(
   msg: SdkMessage,
   resumeOf: string | null,
-  live: { input: number; output: number },
-): { costUsd: number; input: number; output: number; session: SessionTotals | null } {
+  live: { input: number; output: number; cacheRead?: number; cacheWrite?: number },
+): { costUsd: number; input: number; output: number; cacheRead: number; cacheWrite: number; session: SessionTotals | null } {
   const total = num(msg.total_cost_usd);
   const perModel = (msg as any).modelUsage;
   if (!perModel || typeof perModel !== 'object' || !Object.keys(perModel).length) {
@@ -875,13 +975,17 @@ export function runSpend(
       costUsd: total,
       input: num(usage.input_tokens) + num(usage.cache_read_input_tokens) + num(usage.cache_creation_input_tokens) || live.input,
       output: num(usage.output_tokens) || live.output,
+      cacheRead: num(usage.cache_read_input_tokens) || num(live.cacheRead),
+      cacheWrite: num(usage.cache_creation_input_tokens) || num(live.cacheWrite),
       session: null,
     };
   }
-  const session: SessionTotals = { costUsd: total, input: 0, output: 0, sessionId: typeof msg.session_id === 'string' ? msg.session_id : undefined };
+  const session: SessionTotals = { costUsd: total, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessionId: typeof msg.session_id === 'string' ? msg.session_id : undefined };
   for (const m of Object.values(perModel as Record<string, any>)) {
     session.input += num(m?.inputTokens) + num(m?.cacheReadInputTokens) + num(m?.cacheCreationInputTokens);
     session.output += num(m?.outputTokens);
+    session.cacheRead = (session.cacheRead ?? 0) + num(m?.cacheReadInputTokens);
+    session.cacheWrite = (session.cacheWrite ?? 0) + num(m?.cacheCreationInputTokens);
   }
   let prev: Partial<SessionTotals> | null = null;
   if (resumeOf) {
@@ -898,6 +1002,8 @@ export function runSpend(
     costUsd: Number(minus(session.costUsd, prev?.costUsd).toFixed(6)),
     input: minus(session.input, prev?.input),
     output: minus(session.output, prev?.output),
+    cacheRead: minus(session.cacheRead ?? 0, prev?.cacheRead),
+    cacheWrite: minus(session.cacheWrite ?? 0, prev?.cacheWrite),
     session,
   };
 }
@@ -968,9 +1074,10 @@ export async function oneshot(opts: {
   return { text: final.result || '', runId: run.id };
 }
 
-export function stopRun(runId: string): boolean {
+export function stopRun(runId: string, reason?: string): boolean {
   const a = active.get(runId);
   if (!a) return false;
+  if (reason && !a.stopReason) a.stopReason = reason;
   a.abort.abort();
   return true;
 }
