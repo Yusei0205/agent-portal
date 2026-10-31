@@ -1,13 +1,19 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../lib/api.js';
+import { formatRelative } from '../../lib/util.js';
+import { Icon } from '../../components/Icon.jsx';
+import { useFocusTrap } from '../../lib/useFocusTrap.js';
+import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../../components/Toast.jsx';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
 const STATUS_CLASS = {
-  new: 'badge-neutral',
+  new:     'badge-neutral',
   cloning: 'badge-info',
-  ready: 'badge-success',
-  error: 'badge-error',
+  syncing: 'badge-info',
+  ready:   'badge-success',
+  error:   'badge-error',
 };
 
 function StatusBadge({ status }) {
@@ -15,82 +21,583 @@ function StatusBadge({ status }) {
   return <span className={`badge ${cls}`}>{status}</span>;
 }
 
-// ── Add repo modal ────────────────────────────────────────────────────────────
+// ── Clone / sync progress helpers ────────────────────────────────────────────
 
-function AddRepoModal({ projectId, onClose, onAdded }) {
-  const [name, setName] = useState('');
-  const [url, setUrl] = useState('');
-  const [provider, setProvider] = useState('github');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
+const PHASE_ORDER = ['connecting','counting','compressing','receiving','resolving','checkout','finalizing'];
+const STEP_PHASES = ['connecting','receiving','resolving','checkout'];
+const STEP_LABELS = { connecting:'Connecting', receiving:'Receiving', resolving:'Resolving', checkout:'Checkout' };
 
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!name.trim()) { setError('Name is required'); return; }
-    if (!url.trim()) { setError('URL is required'); return; }
-    setBusy(true);
-    setError(null);
+/** True while any operation (clone or re-sync) is running on this repo. */
+function isRepoInProgress(r) {
+  return r.status === 'cloning' || r.status === 'syncing' || r.progress != null;
+}
+
+/** "45s" or "1m 12s" since startedAt ISO string. */
+function formatElapsed(startedAt) {
+  if (!startedAt) return '';
+  const secs = Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 1000));
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
+/**
+ * Compact progress bar shown inside a repo card while cloning/syncing.
+ * Respects prefers-reduced-motion for the indeterminate animation.
+ */
+function RepoProgressBar({ repoName, progress }) {
+  const [elapsed, setElapsed] = useState(() => formatElapsed(progress.startedAt));
+
+  useEffect(() => {
+    const tid = setInterval(() => setElapsed(formatElapsed(progress.startedAt)), 1000);
+    return () => clearInterval(tid);
+  }, [progress.startedAt]);
+
+  const { phase, phaseLabel, percent, detail } = progress;
+  const isDeterminate = percent !== null && percent !== undefined;
+  const phaseIdx      = PHASE_ORDER.indexOf(phase ?? '');
+
+  return (
+    <div className="repo-progress">
+      {/* Phase label + percent + elapsed */}
+      <div className="repo-progress-header">
+        <span className="repo-progress-phase">{phaseLabel || phase || 'Starting…'}</span>
+        <span className="repo-progress-pct">
+          {isDeterminate ? `${Math.round(percent)}% · ` : ''}{elapsed}
+        </span>
+      </div>
+
+      {/* Progress bar — determinate or indeterminate */}
+      <div
+        className="progress-track"
+        role="progressbar"
+        aria-label={`${repoName} clone progress`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        {...(isDeterminate ? { 'aria-valuenow': Math.round(percent) } : {})}
+      >
+        <div
+          className={`progress-fill${isDeterminate ? '' : ' is-indeterminate'}`}
+          style={isDeterminate ? { width: `${Math.max(2, percent)}%` } : undefined}
+        />
+      </div>
+
+      {/* Speed / object count detail */}
+      {detail && <div className="repo-progress-detail">{detail}</div>}
+
+      {/* Abbreviated phase steps */}
+      <div className="repo-phase-steps" aria-hidden="true">
+        {STEP_PHASES.map((p, i) => {
+          const idx      = PHASE_ORDER.indexOf(p);
+          const isDone   = phaseIdx > idx;
+          const isActive = phaseIdx === idx;
+          return [
+            i > 0 ? <span key={`sep-${p}`} className="repo-phase-sep">→</span> : null,
+            <span
+              key={p}
+              className={`repo-phase-step${isActive ? ' is-active' : isDone ? ' is-done' : ''}`}
+            >
+              {STEP_LABELS[p]}
+            </span>,
+          ];
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Add repos modal (Browse connection + URL tabs) ───────────────────────────
+
+function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
+  const dialogRef  = useFocusTrap();
+  const searchRef  = useRef(null);
+
+  // ── UI tabs ───────────────────────────────────────────────────────────────
+  const [addTab, setAddTab] = useState('browse'); // 'browse' | 'url'
+
+  // ── Browse tab state ──────────────────────────────────────────────────────
+  const [connections,    setConnections]    = useState([]);
+  const [connsLoading,   setConnsLoading]   = useState(true);
+  const [connId,         setConnId]         = useState('');
+  const [search,         setSearch]         = useState('');
+  const [debouncedSearch,setDebouncedSearch]= useState('');
+  const [workspace,      setWorkspace]      = useState('');
+  const [workspaces,     setWorkspaces]     = useState([]); // Bitbucket workspace list
+  const [repoList,       setRepoList]       = useState(null);
+  const [repoLoading,    setRepoLoading]    = useState(false);
+  const [repoError,      setRepoError]      = useState(null);
+  const [nextPage,       setNextPage]       = useState(null);
+  const [loadingMore,    setLoadingMore]    = useState(false);
+  const [region,         setRegion]         = useState(null); // CodeCommit region from last repos response
+  const [loadMoreError,  setLoadMoreError]  = useState(null); // error from "Load more"
+  const [selected,       setSelected]       = useState(new Set()); // fullName → true
+  const [adding,         setAdding]         = useState(false);
+  const [addError,       setAddError]       = useState(null);
+  const [addSummary,     setAddSummary]     = useState(null); // { added, skipped, errors }
+
+  // ── URL tab state ─────────────────────────────────────────────────────────
+  const [urlName,     setUrlName]     = useState('');
+  const [urlUrl,      setUrlUrl]      = useState('');
+  const [urlProvider, setUrlProvider] = useState('github');
+  const [urlAdding,   setUrlAdding]   = useState(false);
+  const [urlError,    setUrlError]    = useState(null);
+
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Load connections on mount
+  useEffect(() => {
+    api.get('/api/git-connections')
+      .then((r) => {
+        const list = r.connections || [];
+        setConnections(list);
+        if (list.length > 0) setConnId(list[0].id);
+      })
+      .catch(() => {})
+      .finally(() => setConnsLoading(false));
+  }, []);
+
+  // Fetch repos when connection / search / workspace changes
+  useEffect(() => {
+    if (!connId) { setRepoList(null); return; }
+    let cancelled = false;
+    setRepoLoading(true);
+    setRepoError(null);
+    setNextPage(null);
+    setRegion(null);
+    setLoadMoreError(null);
+
+    const params = new URLSearchParams();
+    if (debouncedSearch) params.set('q', debouncedSearch);
+    if (workspace)       params.set('workspace', workspace);
+
+    api.get(`/api/git-connections/${connId}/repos?${params}`)
+      .then((r) => {
+        if (cancelled) return;
+        setRepoList(r.repos || []);
+        setNextPage(r.nextPage || null);
+        if (r.workspaces) setWorkspaces(r.workspaces);
+        if (r.region)     setRegion(r.region);
+        // HTTP 200 with { repos: [], error: "…" } means the provider failed
+        if (r.error)      setRepoError(r.error);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setRepoError(e.message);
+        setRepoList(null);
+      })
+      .finally(() => { if (!cancelled) setRepoLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [connId, debouncedSearch, workspace]);
+
+  const loadMore = async () => {
+    if (!nextPage || loadingMore) return;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+    const params = new URLSearchParams();
+    if (debouncedSearch) params.set('q', debouncedSearch);
+    if (workspace)       params.set('workspace', workspace);
+    params.set('page', nextPage);
     try {
-      const r = await api.post(`/api/projects/${projectId}/repos`, {
-        name: name.trim(),
-        url: url.trim(),
-        provider,
-      });
-      onAdded(r.repo);
-    } catch (err) {
-      setError(err.message || 'Failed to add repository');
-      setBusy(false);
+      const r = await api.get(`/api/git-connections/${connId}/repos?${params}`);
+      setRepoList((prev) => [...(prev || []), ...(r.repos || [])]);
+      setNextPage(r.nextPage || null);
+      // HTTP 200 with { repos: [], error: "…" } means the provider failed mid-pagination
+      if (r.error) setLoadMoreError(r.error);
+    } catch (e) {
+      setLoadMoreError(e.message || 'Failed to load more repositories');
+    } finally {
+      setLoadingMore(false);
     }
   };
 
+  // Existing repo URLs for "Already added" detection
+  const existingUrls = new Set((existingRepos || []).map((r) => r.url));
+
+  const isAdded = (repo) =>
+    existingUrls.has(repo.url) || existingUrls.has(repo.fullName);
+
+  const toggleSelect = (repo) => {
+    if (isAdded(repo)) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(repo.fullName)) next.delete(repo.fullName);
+      else next.add(repo.fullName);
+      return next;
+    });
+  };
+
+  const selectablePage  = (repoList || []).filter((r) => !isAdded(r));
+  const allPageSelected = selectablePage.length > 0 && selectablePage.every((r) => selected.has(r.fullName));
+
+  const toggleSelectAll = () => {
+    if (allPageSelected) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        selectablePage.forEach((r) => next.delete(r.fullName));
+        return next;
+      });
+    } else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        selectablePage.forEach((r) => next.add(r.fullName));
+        return next;
+      });
+    }
+  };
+
+  const selectedRepos = (repoList || []).filter((r) => selected.has(r.fullName));
+
+  const bulkAdd = async () => {
+    if (selectedRepos.length === 0 || !connId) return;
+    setAdding(true);
+    setAddError(null);
+    setAddSummary(null);
+    try {
+      const r = await api.post(`/api/projects/${projectId}/repos/bulk`, {
+        connectionId: connId,
+        repos: selectedRepos.map((r) => ({
+          url:           r.url,
+          name:          r.name,
+          defaultBranch: r.defaultBranch,
+        })),
+      });
+      const added   = Array.isArray(r.added)   ? r.added   : [];
+      const skipped = Array.isArray(r.skipped) ? r.skipped : [];
+      setAddSummary({ added, skipped, errors: r.errors || [] });
+      if (added.length > 0) {
+        onNewRepos(added); // use real repo rows returned by the server
+      }
+      setSelected(new Set());
+    } catch (e) {
+      setAddError(e.message);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const addByUrl = async (e) => {
+    e.preventDefault();
+    if (!urlName.trim()) { setUrlError('Name is required.'); return; }
+    if (!urlUrl.trim())  { setUrlError('URL is required.');  return; }
+    setUrlAdding(true);
+    setUrlError(null);
+    try {
+      const r = await api.post(`/api/projects/${projectId}/repos`, {
+        name:     urlName.trim(),
+        url:      urlUrl.trim(),
+        provider: urlProvider,
+      });
+      onNewRepos([r.repo]);
+      onClose();
+    } catch (err) {
+      setUrlError(err.message || 'Failed to add repository');
+      setUrlAdding(false);
+    }
+  };
+
+  const selectedConn = connections.find((c) => c.id === connId);
+  const isBitbucket  = selectedConn?.provider === 'bitbucket';
+
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-repo-title">
-      <div className="modal">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-repos-title">
+      <div className="modal modal-wide" ref={dialogRef}>
         <div className="modal-header">
-          <h2 id="add-repo-title">Add repository</h2>
-          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">✕</button>
+          <h2 id="add-repos-title">Add repositories</h2>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close dialog">
+            <Icon name="x" size={16} />
+          </button>
         </div>
-        <form onSubmit={submit} className="stack">
-          <div className="field">
-            <label htmlFor="ar-name">Name <span aria-hidden="true">*</span></label>
-            <input
-              id="ar-name"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              autoFocus
-              placeholder="e.g. my-service"
-            />
+
+        {/* Tab bar */}
+        <div className="conn-dialog-tabs" role="tablist" aria-label="Add method">
+          <button
+            type="button"
+            role="tab"
+            className={`conn-dialog-tab${addTab === 'browse' ? ' is-active' : ''}`}
+            aria-selected={addTab === 'browse'}
+            onClick={() => setAddTab('browse')}
+          >
+            Browse connection
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`conn-dialog-tab${addTab === 'url' ? ' is-active' : ''}`}
+            aria-selected={addTab === 'url'}
+            onClick={() => setAddTab('url')}
+          >
+            Add by URL
+          </button>
+        </div>
+
+        {/* ── Browse tab ──────────────────────────────────────── */}
+        {addTab === 'browse' && (
+          <div className="stack">
+            {connsLoading ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--ink-3)', fontSize: '0.84rem' }}>
+                <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading connections…" />
+                Loading connections…
+              </div>
+            ) : connections.length === 0 ? (
+              <div className="card">
+                <p className="muted" style={{ fontSize: '0.84rem' }}>
+                  No Git connections configured.{' '}
+                  <a href="#/connections/git">Add a connection</a> first, then come back here.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Connection picker */}
+                <div className="field">
+                  <label htmlFor="repos-conn-id">Connection</label>
+                  <select
+                    id="repos-conn-id"
+                    value={connId}
+                    onChange={(e) => { setConnId(e.target.value); setSelected(new Set()); setSearch(''); setWorkspace(''); setAddSummary(null); }}
+                  >
+                    {connections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.provider})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Search + workspace filter */}
+                <div className="conn-search-bar">
+                  <input
+                    ref={searchRef}
+                    type="search"
+                    placeholder="Search repositories…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    aria-label="Search repositories"
+                    style={{ flex: 1, width: 'auto' }}
+                  />
+                  {isBitbucket && workspaces.length > 0 && (
+                    <select
+                      value={workspace}
+                      onChange={(e) => { setWorkspace(e.target.value); setSelected(new Set()); }}
+                      aria-label="Filter by workspace"
+                      style={{ width: 'auto', flexShrink: 0 }}
+                    >
+                      <option value="">All workspaces</option>
+                      {workspaces.map((w) => (
+                        <option key={w} value={w}>{w}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Select-all bar */}
+                {repoList && repoList.length > 0 && !repoLoading && (
+                  <div className="conn-select-bar">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={allPageSelected}
+                        onChange={toggleSelectAll}
+                        aria-label="Select all repositories on this page"
+                      />
+                      Select all ({selectablePage.length})
+                    </label>
+                    {selected.size > 0 && (
+                      <span className="muted" style={{ fontSize: '0.82rem', marginLeft: 'auto' }}>
+                        {selected.size} selected
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Repo list */}
+                {repoLoading ? (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--ink-3)', fontSize: '0.84rem', padding: '8px 0' }}>
+                    <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading repositories…" />
+                    Loading repositories…
+                  </div>
+                ) : repoError ? (
+                  <div>
+                    <p className="error-note" role="alert">{repoError}</p>
+                  </div>
+                ) : repoList && repoList.length === 0 ? (
+                  <div className="conn-repo-list">
+                    <div className="conn-repo-empty">
+                      {search
+                        ? `No repositories matching "${search}"`
+                        : region
+                          ? (
+                            <>
+                              No repositories found in {region}.
+                              <div className="muted" style={{ marginTop: 4, fontSize: '0.82em' }}>
+                                The connection's region can be changed under{' '}
+                                <a href="#/connections/git">Connections</a>.
+                              </div>
+                            </>
+                          )
+                          : 'No repositories found for this connection.'}
+                    </div>
+                  </div>
+                ) : repoList ? (
+                  <div className="conn-repo-list" role="list" aria-label="Available repositories">
+                    {repoList.map((repo) => {
+                      const added   = isAdded(repo);
+                      const checked = selected.has(repo.fullName);
+                      return (
+                        <div
+                          key={repo.fullName || repo.url}
+                          className={`conn-repo-row${added ? ' is-added' : ''}${checked ? ' is-selected' : ''}`}
+                          role="listitem"
+                          onClick={() => toggleSelect(repo)}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked || added}
+                            disabled={added}
+                            onChange={() => toggleSelect(repo)}
+                            aria-label={`Select ${repo.fullName || repo.name}`}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <div className="conn-repo-body">
+                            <div className="conn-repo-name">
+                              <span className="conn-repo-name-text">{repo.fullName || repo.name}</span>
+                              <span className={`badge ${repo.private ? 'badge-neutral' : 'badge-ok'}`} style={{ flexShrink: 0 }}>
+                                {repo.private ? 'private' : 'public'}
+                              </span>
+                              {added && (
+                                <span className="badge badge-info" style={{ flexShrink: 0 }}>Added</span>
+                              )}
+                            </div>
+                            {repo.description && (
+                              <div className="conn-repo-desc">{repo.description}</div>
+                            )}
+                            <div className="conn-repo-meta">
+                              {repo.defaultBranch && <span>Branch: {repo.defaultBranch}</span>}
+                              {repo.updatedAt     && <span>{formatRelative(repo.updatedAt)}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {nextPage && (
+                      <div className="conn-load-more">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={loadMore}
+                          disabled={loadingMore}
+                        >
+                          {loadingMore ? 'Loading…' : 'Load more'}
+                        </button>
+                      </div>
+                    )}
+                    {loadMoreError && (
+                      <p className="error-note" role="alert" style={{ margin: '8px 0 0' }}>{loadMoreError}</p>
+                    )}
+                  </div>
+                ) : null}
+
+                {/* Live region for status */}
+                <div aria-live="polite" aria-atomic="true" className="sr-only">
+                  {repoList ? `${repoList.length} repositories loaded` : ''}
+                </div>
+
+                {addError && <p className="error-note" role="alert">{addError}</p>}
+
+                {addSummary && (
+                  <div
+                    className={`conn-bulk-summary ${addSummary.errors.length > 0 || addSummary.skipped.length > 0 ? 'is-warn' : 'is-ok'}`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {addSummary.added.length > 0 && (
+                      <span>✓ {addSummary.added.length} {addSummary.added.length === 1 ? 'repository' : 'repositories'} added. </span>
+                    )}
+                    {addSummary.skipped.length > 0 && (
+                      <span>{addSummary.skipped.length} skipped (already in project). </span>
+                    )}
+                    {addSummary.errors.length > 0 && (
+                      <span>{addSummary.errors.length} failed.</span>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="modal-footer" style={{ marginTop: 0 }}>
+              <button type="button" className="btn" onClick={onClose}>
+                {addSummary ? 'Close' : 'Cancel'}
+              </button>
+              {connections.length > 0 && !addSummary && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={bulkAdd}
+                  disabled={selected.size === 0 || adding}
+                  aria-disabled={selected.size === 0}
+                >
+                  {adding
+                    ? 'Adding…'
+                    : selected.size === 0
+                      ? 'Add repositories'
+                      : `Add ${selected.size} ${selected.size === 1 ? 'repository' : 'repositories'}`}
+                </button>
+              )}
+            </div>
           </div>
-          <div className="field">
-            <label htmlFor="ar-url">URL <span aria-hidden="true">*</span></label>
-            <input
-              id="ar-url"
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
-              placeholder="https://github.com/owner/repo"
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="ar-provider">Provider</label>
-            <select id="ar-provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
-              <option value="github">GitHub</option>
-              <option value="codecommit">AWS CodeCommit</option>
-              <option value="bitbucket">Bitbucket</option>
-              <option value="git">Other Git</option>
-            </select>
-          </div>
-          {error && <div className="error-note" role="alert">{error}</div>}
-          <div className="row gap-sm">
-            <button type="submit" className="btn btn-primary" disabled={busy}>
-              {busy ? 'Adding…' : 'Add repository'}
-            </button>
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          </div>
-        </form>
+        )}
+
+        {/* ── Add by URL tab ───────────────────────────────────── */}
+        {addTab === 'url' && (
+          <form onSubmit={addByUrl} noValidate>
+            <div className="stack">
+              <div className="field">
+                <label htmlFor="ar-name">Name <span aria-hidden="true">*</span></label>
+                <input
+                  id="ar-name"
+                  type="text"
+                  value={urlName}
+                  onChange={(e) => setUrlName(e.target.value)}
+                  required
+                  autoFocus
+                  placeholder="e.g. my-service"
+                  aria-required="true"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="ar-url">URL <span aria-hidden="true">*</span></label>
+                <input
+                  id="ar-url"
+                  type="url"
+                  value={urlUrl}
+                  onChange={(e) => setUrlUrl(e.target.value)}
+                  required
+                  placeholder="https://github.com/owner/repo"
+                  aria-required="true"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="ar-provider">Provider</label>
+                <select id="ar-provider" value={urlProvider} onChange={(e) => setUrlProvider(e.target.value)}>
+                  <option value="github">GitHub</option>
+                  <option value="codecommit">AWS CodeCommit</option>
+                  <option value="bitbucket">Bitbucket</option>
+                  <option value="git">Other Git</option>
+                </select>
+              </div>
+              {urlError && <p className="error-note" role="alert">{urlError}</p>}
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn" onClick={onClose}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={urlAdding}>
+                {urlAdding ? 'Adding…' : 'Add repository'}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -128,7 +635,9 @@ function AddMemberModal({ projectId, onClose, onAdded }) {
       <div className="modal">
         <div className="modal-header">
           <h2 id="add-member-title">Add member</h2>
-          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">
+            <Icon name="x" size={16} />
+          </button>
         </div>
         <form onSubmit={submit} className="stack">
           <div className="field">
@@ -163,23 +672,42 @@ function AddMemberModal({ projectId, onClose, onAdded }) {
 
 // ── Overview tab ──────────────────────────────────────────────────────────────
 
-function OverviewTab({ projectId, repos, members }) {
+function OverviewTab({ projectId, repos, members, onNavigateTab }) {
   const [settings, setSettings] = useState(null);
 
   useEffect(() => {
-    api.get('/api/auth/state').then((s) => {
-      setSettings({ provider: s.provider || 'demo' });
+    api.get('/api/settings').then((s) => {
+      setSettings(s);
     }).catch(() => {});
   }, []);
 
-  const hasProvider = settings?.provider && settings.provider !== 'demo';
-  const hasRepo = repos?.some((r) => r.status === 'ready');
-  const hasMember = (members?.length ?? 0) > 1; // more than just the owner
+  const providerMode = settings?.provider?.mode;
+  const isSsoAuth    = providerMode === 'bedrock' && settings?.provider?.bedrockAuth === 'sso';
+  const hasProvider  = Boolean(providerMode && providerMode !== 'demo' && (!isSsoAuth || settings?.provider?.sso?.signedIn));
+  const hasRepo      = repos?.some((r) => r.status === 'ready');
+  const hasMember    = (members?.length ?? 0) > 1; // more than just the owner
+
+  const linkBtnStyle = {
+    color: 'var(--link, var(--accent))',
+    background: 'none', border: 'none', cursor: 'pointer', padding: 0, font: 'inherit',
+  };
 
   const checks = [
-    { label: 'Model provider configured', ok: hasProvider },
-    { label: 'At least one repository cloned and ready', ok: hasRepo },
-    { label: 'At least one team member added', ok: hasMember },
+    {
+      label: 'Model provider configured',
+      ok: hasProvider,
+      fix: <a href="#/settings" style={{ color: 'var(--link, var(--accent))' }}>Settings › Provider</a>,
+    },
+    {
+      label: 'At least one repository cloned and ready',
+      ok: hasRepo,
+      fix: <button type="button" style={linkBtnStyle} onClick={() => onNavigateTab?.('repositories')}>Repositories tab</button>,
+    },
+    {
+      label: 'At least one team member added',
+      ok: hasMember,
+      fix: <button type="button" style={linkBtnStyle} onClick={() => onNavigateTab?.('team')}>Team tab</button>,
+    },
   ];
 
   return (
@@ -190,7 +718,11 @@ function OverviewTab({ projectId, repos, members }) {
           <li key={c.label} className={`checklist-item ${c.ok ? 'ok' : 'pending'}`}>
             <span className="checklist-icon" aria-hidden="true">{c.ok ? '✓' : '○'}</span>
             <span>{c.label}</span>
-            {!c.ok && <span className="muted small"> — not yet</span>}
+            {!c.ok && (
+              <span className="muted small">
+                {' '}— not yet{c.fix ? <> · {c.fix}</> : ''}
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -200,29 +732,134 @@ function OverviewTab({ projectId, repos, members }) {
 
 // ── Repositories tab ──────────────────────────────────────────────────────────
 
-function RepositoriesTab({ projectId, repos, setRepos }) {
-  const [showModal, setShowModal] = useState(false);
-  const [expanded, setExpanded] = useState({});
-  const [branches, setBranches] = useState({});
+function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) {
+  const [showModal,   setShowModal]   = useState(false);
+  const [expanded,    setExpanded]    = useState({});
+  const [branches,    setBranches]    = useState({});
+  const [justSynced,  setJustSynced]  = useState({});  // { [id]: true } — brief success flash
+  const [liveMessage, setLiveMessage] = useState('');  // aria-live announcement text
+
+  // ── Progress polling ─────────────────────────────────────────────────────
+  // anyInProgress flips true → false as repos finish, which both starts and
+  // stops the effect.  Visibility pausing and cleanup are handled inside.
+  const anyInProgress = repos.some(isRepoInProgress);
+
+  useEffect(() => {
+    if (!anyInProgress) return;
+
+    let active = true;
+    let timer  = null;
+
+    const poll = async () => {
+      if (!active) return;
+      // Pause while tab is hidden; resume on visibilitychange (see listener below)
+      if (document.visibilityState === 'hidden') {
+        timer = setTimeout(poll, 1500);
+        return;
+      }
+
+      try {
+        const r = await api.get(`/api/projects/${projectId}/repos/progress`);
+        if (!active) return;
+
+        const progressList = r.repos || [];
+        const stillActive  = progressList.some(isRepoInProgress);
+
+        // Merge lightweight progress snapshot into full repo list
+        setRepos((prev) =>
+          prev.map((repo) => {
+            const upd = progressList.find((p) => p.id === repo.id);
+            if (!upd) return repo;
+            return {
+              ...repo,
+              status:     upd.status,
+              progress:   upd.progress    ?? null,
+              last_error: upd.lastError   ?? repo.last_error,
+            };
+          }),
+        );
+
+        if (!stillActive && progressList.length > 0) {
+          // All repos done — full refresh to pick up last_synced_at / default branch.
+          // Not guarded by `active` so it fires even after effect cleanup.
+          const doneIds = progressList.map((p) => p.id);
+          api.get(`/api/projects/${projectId}/repos`)
+            .then((full) => {
+              setRepos(full.repos || []);
+              const synced = {};
+              const failed = [];
+              for (const repo of (full.repos || [])) {
+                if (!doneIds.includes(repo.id)) continue;
+                if (repo.status === 'ready') synced[repo.id] = true;
+                if (repo.status === 'error') failed.push(repo.name);
+              }
+              if (Object.keys(synced).length > 0) {
+                const names = (full.repos || [])
+                  .filter((repo) => synced[repo.id])
+                  .map((repo)  => repo.name)
+                  .join(', ');
+                setJustSynced(synced);
+                setLiveMessage(`${names} synced successfully`);
+                setTimeout(() => { setJustSynced({}); setLiveMessage(''); }, 3500);
+              }
+              if (failed.length > 0) {
+                setLiveMessage(`Sync failed for: ${failed.join(', ')}`);
+                setTimeout(() => setLiveMessage(''), 5000);
+              }
+            })
+            .catch(() => {});
+          return; // stop polling loop
+        }
+      } catch { /* non-fatal — keep trying */ }
+
+      timer = setTimeout(poll, 1500);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        clearTimeout(timer);
+        poll();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    poll();
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyInProgress, projectId]);
 
   const sync = async (repoId) => {
     try {
       await api.post(`/api/projects/${projectId}/repos/${repoId}/sync`);
       setRepos((prev) =>
-        prev.map((r) => r.id === repoId ? { ...r, status: 'cloning' } : r),
+        prev.map((r) => r.id === repoId
+          ? { ...r, status: 'cloning', progress: null, last_error: null }
+          : r),
       );
     } catch (err) {
-      alert(err.message || 'Sync failed');
+      if (err.status === 409) {
+        // Already syncing — attach to the existing progress stream
+        setRepos((prev) =>
+          prev.map((r) => r.id === repoId ? { ...r, status: 'cloning', last_error: null } : r),
+        );
+      } else {
+        toast(err.message || 'Sync failed', 'error');
+      }
     }
   };
 
   const remove = async (repoId) => {
-    if (!confirm('Remove this repository from the project?')) return;
+    const ok = await requestConfirm('Remove this repository from the project?', 'Remove', 'danger');
+    if (!ok) return;
     try {
       await api.delete(`/api/projects/${projectId}/repos/${repoId}`);
       setRepos((prev) => prev.filter((r) => r.id !== repoId));
     } catch (err) {
-      alert(err.message || 'Failed to remove repository');
+      toast(err.message || 'Failed to remove repository', 'error');
     }
   };
 
@@ -240,10 +877,16 @@ function RepositoriesTab({ projectId, repos, setRepos }) {
 
   return (
     <div className="stack">
-      <div className="row-between">
+      {/* Polite live region — announces sync completion/failure to screen readers */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {liveMessage}
+      </div>
+
+      <div className="row between">
         <h2>Repositories</h2>
         <button type="button" className="btn btn-primary" onClick={() => setShowModal(true)}>
-          + Add repository
+          <Icon name="plus" size={14} />
+          Add repositories
         </button>
       </div>
 
@@ -254,24 +897,25 @@ function RepositoriesTab({ projectId, repos, setRepos }) {
       <div className="stack">
         {repos.map((repo) => (
           <div key={repo.id} className="card">
-            <div className="row-between">
+            <div className="row between">
               <div>
                 <strong>{repo.name}</strong>
                 <span className="muted small" style={{ marginLeft: '0.5em' }}>{repo.provider}</span>
               </div>
-              <div className="row gap-sm">
+              <div className="row tight">
                 <StatusBadge status={repo.status} />
                 <button
                   type="button"
-                  className="btn btn-small"
+                  className="btn btn-sm"
                   onClick={() => sync(repo.id)}
-                  disabled={repo.status === 'cloning'}
+                  disabled={isRepoInProgress(repo)}
+                  aria-busy={isRepoInProgress(repo) || undefined}
                 >
-                  {repo.status === 'cloning' ? 'Syncing…' : 'Sync'}
+                  {isRepoInProgress(repo) ? 'Syncing…' : 'Sync'}
                 </button>
                 <button
                   type="button"
-                  className="btn btn-small"
+                  className="btn btn-sm"
                   onClick={() => toggleBranches(repo.id)}
                   aria-expanded={Boolean(expanded[repo.id])}
                 >
@@ -284,13 +928,22 @@ function RepositoriesTab({ projectId, repos, setRepos }) {
                   aria-label={`Remove ${repo.name}`}
                   title="Remove repository"
                 >
-                  ✕
+                  <Icon name="x" size={14} />
                 </button>
               </div>
             </div>
             <p className="muted small" style={{ marginTop: '0.25em' }}>{repo.url}</p>
-            {repo.last_error && (
-              <p className="error-note small" style={{ marginTop: '0.25em' }}>{repo.last_error}</p>
+            {repo.progress ? (
+              <RepoProgressBar repoName={repo.name} progress={repo.progress} />
+            ) : (
+              <>
+                {justSynced[repo.id] && (
+                  <p className="success-note small" style={{ marginTop: '0.5em' }}>✓ Synced just now</p>
+                )}
+                {repo.last_error && (
+                  <p className="error-note small" style={{ marginTop: '0.25em' }}>{repo.last_error}</p>
+                )}
+              </>
             )}
             {expanded[repo.id] && (
               <div style={{ marginTop: '0.5em' }}>
@@ -310,13 +963,11 @@ function RepositoriesTab({ projectId, repos, setRepos }) {
       </div>
 
       {showModal && (
-        <AddRepoModal
+        <AddReposModal
           projectId={projectId}
+          existingRepos={repos}
+          onNewRepos={(newRepos) => setRepos((prev) => [...prev, ...newRepos])}
           onClose={() => setShowModal(false)}
-          onAdded={(repo) => {
-            setShowModal(false);
-            setRepos((prev) => [...prev, repo]);
-          }}
         />
       )}
     </div>
@@ -325,7 +976,7 @@ function RepositoriesTab({ projectId, repos, setRepos }) {
 
 // ── Team tab ──────────────────────────────────────────────────────────────────
 
-function TeamTab({ projectId, members, setMembers, currentUserId, isAdmin }) {
+function TeamTab({ projectId, members, setMembers, currentUserId, isAdmin, requestConfirm, toast }) {
   const [showModal, setShowModal] = useState(false);
 
   const changeRole = async (userId, role) => {
@@ -335,17 +986,18 @@ function TeamTab({ projectId, members, setMembers, currentUserId, isAdmin }) {
         prev.map((m) => m.user_id === userId ? { ...m, role, access: role } : m),
       );
     } catch (err) {
-      alert(err.message || 'Failed to change role');
+      toast(err.message || 'Failed to change role', 'error');
     }
   };
 
   const removeMember = async (userId) => {
-    if (!confirm('Remove this member from the project?')) return;
+    const ok = await requestConfirm('Remove this member from the project?', 'Remove', 'danger');
+    if (!ok) return;
     try {
       await api.delete(`/api/projects/${projectId}/members/${userId}`);
       setMembers((prev) => prev.filter((m) => m.user_id !== userId));
     } catch (err) {
-      alert(err.message || 'Failed to remove member');
+      toast(err.message || 'Failed to remove member', 'error');
     }
   };
 
@@ -404,7 +1056,7 @@ function TeamTab({ projectId, members, setMembers, currentUserId, isAdmin }) {
                     aria-label={`Remove ${m.name}`}
                     title="Remove member"
                   >
-                    ✕
+                    <Icon name="x" size={14} />
                   </button>
                 )}
               </div>
@@ -429,7 +1081,7 @@ function TeamTab({ projectId, members, setMembers, currentUserId, isAdmin }) {
 
 // ── Permissions tab ───────────────────────────────────────────────────────────
 
-function PermissionsTab({ projectId }) {
+function PermissionsTab({ projectId, toast }) {
   const [groups, setGroups] = useState([]);
   const [currentGroupId, setCurrentGroupId] = useState(null);
   const [toolRules, setToolRules] = useState([]);
@@ -454,7 +1106,7 @@ function PermissionsTab({ projectId }) {
       await api.put(`/api/projects/${projectId}/permissions`, { ruleGroupId: groupId || null });
       setCurrentGroupId(groupId || null);
     } catch (err) {
-      alert(err.message || 'Failed to save permission override');
+      toast(err.message || 'Failed to save permission override', 'error');
     } finally {
       setBusy(false);
     }
@@ -471,7 +1123,7 @@ function PermissionsTab({ projectId }) {
       setToolRules((prev) => [...prev, r.rule]);
       setNewTool('');
     } catch (err) {
-      alert(err.message || 'Failed to add tool rule');
+      toast(err.message || 'Failed to add tool rule', 'error');
     }
   };
 
@@ -480,7 +1132,7 @@ function PermissionsTab({ projectId }) {
       await api.delete(`/api/projects/${projectId}/tool-rules/${ruleId}`);
       setToolRules((prev) => prev.filter((r) => r.id !== ruleId));
     } catch (err) {
-      alert(err.message || 'Failed to remove tool rule');
+      toast(err.message || 'Failed to remove tool rule', 'error');
     }
   };
 
@@ -518,7 +1170,7 @@ function PermissionsTab({ projectId }) {
                 onClick={() => removeToolRule(rule.id)}
                 aria-label={`Remove rule for ${rule.tool_name}`}
               >
-                ✕
+                <Icon name="x" size={14} />
               </button>
             </div>
           ))}
@@ -555,15 +1207,21 @@ const TABS = [
 ];
 
 /**
- * @param {{ projectId: string, user: object }} props
+ * @param {{ projectId: string, user: object, initialTab?: string }} props
  */
-export function ProjectHub({ projectId, user }) {
-  const [activeTab, setActiveTab] = useState('overview');
+export function ProjectHub({ projectId, user, initialTab }) {
+  const validTabIds = TABS.map((t) => t.id);
+  const [activeTab, setActiveTab] = useState(
+    initialTab && validTabIds.includes(initialTab) ? initialTab : 'overview',
+  );
   const [project, setProject] = useState(null);
   const [members, setMembers] = useState([]);
   const [repos, setRepos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toasts, toast, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -635,10 +1293,10 @@ export function ProjectHub({ projectId, user }) {
       {/* Tab panels */}
       <div role="tabpanel" id={`tabpanel-${activeTab}`} className="tab-panel">
         {activeTab === 'overview' && (
-          <OverviewTab projectId={projectId} repos={repos} members={members} />
+          <OverviewTab projectId={projectId} repos={repos} members={members} onNavigateTab={setActiveTab} />
         )}
         {activeTab === 'repositories' && (
-          <RepositoriesTab projectId={projectId} repos={repos} setRepos={setRepos} />
+          <RepositoriesTab projectId={projectId} repos={repos} setRepos={setRepos} requestConfirm={requestConfirm} toast={toast} />
         )}
         {activeTab === 'team' && (
           <TeamTab
@@ -647,12 +1305,16 @@ export function ProjectHub({ projectId, user }) {
             setMembers={setMembers}
             currentUserId={currentUserId}
             isAdmin={isAdmin}
+            requestConfirm={requestConfirm}
+            toast={toast}
           />
         )}
         {activeTab === 'permissions' && (
-          <PermissionsTab projectId={projectId} />
+          <PermissionsTab projectId={projectId} toast={toast} />
         )}
       </div>
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

@@ -1,0 +1,265 @@
+/**
+ * Aethrix Night — template-specific visual enhancements.
+ *
+ * All rules are gated on data-template="aethrix-night" or data-fx-* attributes
+ * so they have zero effect when Classic Teal (or another template) is active.
+ *
+ * Motion is gated on prefers-reduced-motion where applicable.
+ */
+
+/* ── Canvas: faint dot grid ──────────────────────────────── */
+[data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, var(--ink-3) 14%, transparent) 1px,
+      transparent 0
+    );
+  background-size: 28px 28px;
+}
+/* Disable grid behind editors and IDE panels */
+[data-fx-grid="true"] .ide-workspace,
+[data-fx-grid="true"] .ide-body,
+[data-fx-grid="true"] .ide-codemirror-host,
+[data-fx-grid="true"] .ide-terminal-panel {
+  background-image: none !important;
+}
+
+/* ── Hero / greeting nebula glow ─────────────────────────── */
+[data-fx-glow="true"] .page-greeting {
+  position: relative;
+}
+[data-fx-glow="true"] .page-greeting::before {
+  content: '';
+  position: absolute;
+  top: -40px;
+  left: -60px;
+  width: 340px;
+  height: 200px;
+  background: radial-gradient(
+    ellipse at 30% 50%,
+    color-mix(in srgb, var(--accent) 12%, transparent) 0%,
+    color-mix(in srgb, var(--accent-2) 6%, transparent) 50%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+[data-fx-glow="true"] .page-greeting > * { position: relative; z-index: 1; }
+
+/* ── Rail active pill ────────────────────────────────────── */
+[data-template="aethrix-night"] .rail-link.is-active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+              0 0 12px color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: var(--radius-md);
+  /* Remove the left border indicator — replaced by pill + glow */
+  border: none;
+}
+[data-template="aethrix-night"] .rail-link.is-active svg {
+  color: var(--accent);
+}
+/* Active group button */
+[data-template="aethrix-night"] .rail-group-btn.has-active-child {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+  border: none;
+}
+
+/* ── Rail brand mark ─────────────────────────────────────── */
+[data-template="aethrix-night"] .brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-size: 1rem;
+}
+
+/* ── Top header: search bar style ───────────────────────── */
+[data-template="aethrix-night"] .palette-trigger-btn {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-md);
+  min-width: 180px;
+  justify-content: space-between;
+}
+[data-template="aethrix-night"] .palette-trigger-btn:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* ── App header ──────────────────────────────────────────── */
+[data-template="aethrix-night"] .app-header {
+  background: var(--rail);
+  border-bottom-color: var(--line);
+}
+
+/* ── Panel inner highlight ───────────────────────────────── */
+[data-fx-glow="true"] .panel {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+/* ── Project cards in Aethrix Night ──────────────────────── */
+[data-template="aethrix-night"] .project-card {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+[data-template="aethrix-night"] .project-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent),
+              0 0 20px color-mix(in srgb, var(--accent) 12%, transparent),
+              var(--shadow);
+}
+
+/* ── KPI row ─────────────────────────────────────────────── */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+}
+
+/* ── Stepper ─────────────────────────────────────────────── */
+.stepper {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.stepper-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 80px;
+  position: relative;
+}
+/* Connector line between steps */
+.stepper-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+.stepper-step:not(:last-child).stepper-done::after {
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-fx-glow="true"] .stepper-step:not(:last-child).stepper-done::after {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent)));
+    box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+}
+.stepper-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+}
+.stepper-step.stepper-done .stepper-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.stepper-step.stepper-current .stepper-dot {
+  border-color: var(--accent);
+  background: var(--panel);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+[data-fx-glow="true"] .stepper-step.stepper-current .stepper-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent),
+              0 0 12px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.stepper-step.stepper-current .stepper-dot::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.stepper-label {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-align: center;
+  white-space: nowrap;
+}
+.stepper-step.stepper-done .stepper-label,
+.stepper-step.stepper-current .stepper-label {
+  color: var(--ink);
+}
+
+/* ── Greeting area ───────────────────────────────────────── */
+.greeting-title {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+.greeting-subtitle {
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+/* ── Skeleton loaders ────────────────────────────────────── */
+.skeleton-kpi {
+  height: 96px;
+  border-radius: var(--radius-xl, var(--radius-lg));
+}
+
+/* ── Motion: full / reduced / none ──────────────────────── */
+[data-fx-motion="none"] *,
+[data-fx-motion="none"] *::before,
+[data-fx-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* ── Palette dialog in Aethrix Night ─────────────────────── */
+[data-fx-glow="true"] .palette-dialog {
+  box-shadow: 0 20px 60px rgba(0,0,0,.45),
+              0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+[data-fx-glow="true"] .palette-item:hover,
+[data-fx-glow="true"] .palette-item[aria-selected="true"] {
+  background: var(--accent-wash);
+}
+
+/* ── Notification badge in header ────────────────────────── */
+.header-inbox-badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--danger);
+  border: 2px solid var(--panel);
+  pointer-events: none;
+  /* Number display */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  box-sizing: border-box;
+}

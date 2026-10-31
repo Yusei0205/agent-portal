@@ -1,17 +1,29 @@
 import { useState } from 'react';
 import { api } from '../lib/api.js';
+import { getTemplate, getActiveTemplateId } from '../lib/theme.js';
 
 /**
  * Centered auth card frame.
+ * Uses the active template's brand (product name + logo) so the login and
+ * setup screens match whatever template the admin has configured.
+ *
  * @param {{ title: string, intro?: string, children: React.ReactNode }} props
  */
 function AuthFrame({ title, intro, children }) {
+  const tmpl = getTemplate(getActiveTemplateId());
+  const productName = tmpl?.brand?.productName || 'Agent Portal';
+  const logoSvg     = tmpl?.brand?.logoSvg;
+  const logoDataUrl = logoSvg
+    ? `data:image/svg+xml,${encodeURIComponent(logoSvg)}`
+    : '/favicon.svg';
+
   return (
     <div className="auth">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/favicon.svg" alt="" width={28} height={28} />
-          <span>Agent Portal</span>
+          {/* Render logo as <img> data URL — prevents script execution even if sanitiser misses something */}
+          <img src={logoDataUrl} alt="" width={28} height={28} />
+          <span>{productName}</span>
         </div>
         <h1>{title}</h1>
         {intro && <p className="muted small">{intro}</p>}

@@ -15,6 +15,9 @@ import assert from 'node:assert/strict';
 import { createTestServer, createTestDb, cleanup, fetchJson } from './fixtures.ts';
 import { getSetting, setSetting, getSettings } from '../server/settings.ts';
 import { resolveModel, MODEL_DEFAULTS } from '../server/models.ts';
+import { setBedrockClientFactory, callTextModel, type BedrockClientLike, type BedrockConverseInput } from '../server/testing/model-provider.ts';
+import { config } from '../server/config.ts';
+import { getDb } from '../server/db.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -311,5 +314,171 @@ describe('Governance user routes', () => {
     assert.equal(acceptR.status, 200, `Accept invite failed: ${JSON.stringify(acceptR.body)}`);
     const body = acceptR.body as { ok: boolean };
     assert.equal(body.ok, true);
+  });
+});
+
+describe('defaultModel — settings round-trip', () => {
+  let baseUrl: string;
+  let adminCookie: string;
+
+  before(async () => {
+    const ts = await createTestServer();
+    baseUrl = ts.baseUrl;
+    adminCookie = await loginAdmin(baseUrl);
+  });
+
+  after(async () => {
+    await cleanup();
+  });
+
+  it('GET /api/settings includes defaultModel field (empty by default)', async () => {
+    const r = await fetchJson(baseUrl, '/api/settings', { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    const body = r.body as Record<string, unknown>;
+    assert.ok('defaultModel' in body, 'response must include defaultModel');
+    assert.equal(typeof body.defaultModel, 'string', 'defaultModel must be a string');
+  });
+
+  it('PUT defaultModel saves value and GET returns it', async () => {
+    const r = await fetchJson(baseUrl, '/api/settings', {
+      method: 'PUT',
+      body: { defaultModel: 'us.anthropic.claude-sonnet-4-5-20251001-v1:0' },
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 200);
+    const body = r.body as Record<string, unknown>;
+    assert.equal(body.defaultModel, 'us.anthropic.claude-sonnet-4-5-20251001-v1:0');
+
+    const r2 = await fetchJson(baseUrl, '/api/settings', { cookie: adminCookie });
+    assert.equal((r2.body as Record<string, unknown>).defaultModel, 'us.anthropic.claude-sonnet-4-5-20251001-v1:0');
+  });
+
+  it('PUT defaultModel empty string clears override', async () => {
+    const r = await fetchJson(baseUrl, '/api/settings', {
+      method: 'PUT',
+      body: { defaultModel: '' },
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 200);
+    assert.equal((r.body as Record<string, unknown>).defaultModel, '');
+  });
+
+  it('PUT defaultModel rejects invalid model ID (control chars)', async () => {
+    const r = await fetchJson(baseUrl, '/api/settings', {
+      method: 'PUT',
+      body: { defaultModel: 'bad\x00model' },
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 400);
+  });
+
+  it('PUT defaultModel rejects overly long model ID', async () => {
+    const r = await fetchJson(baseUrl, '/api/settings', {
+      method: 'PUT',
+      body: { defaultModel: 'a'.repeat(201) },
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 400);
+  });
+
+  it('PUT defaultModel rejects "kiro-default" placeholder with 400', async () => {
+    const r = await fetchJson(baseUrl, '/api/settings', {
+      method: 'PUT',
+      body: { defaultModel: 'kiro-default' },
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 400, `Expected 400 for kiro-default, got ${r.status}: ${JSON.stringify(r.body)}`);
+    const body = r.body as Record<string, unknown>;
+    assert.ok(
+      typeof body.error === 'string' && body.error.toLowerCase().includes('placeholder'),
+      `error message must mention "placeholder", got: ${body.error}`,
+    );
+  });
+
+  it('PUT defaultModel rejects "demo-model" placeholder with 400', async () => {
+    const r = await fetchJson(baseUrl, '/api/settings', {
+      method: 'PUT',
+      body: { defaultModel: 'demo-model' },
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 400, `Expected 400 for demo-model, got ${r.status}: ${JSON.stringify(r.body)}`);
+    const body = r.body as Record<string, unknown>;
+    assert.ok(
+      typeof body.error === 'string' && body.error.toLowerCase().includes('placeholder'),
+      `error message must mention "placeholder", got: ${body.error}`,
+    );
+  });
+});
+
+describe('defaultModel — backward compatibility with model.sonnet', () => {
+  it('getSettings() defaultModel mirrors model.sonnet when default.model is not set', () => {
+    const db = createTestDb();
+    setSetting(db, 'model.sonnet', 'legacy-sonnet-model');
+    const s = getSettings(db);
+    assert.equal(s.defaultModel, 'legacy-sonnet-model', 'defaultModel must fall back to model.sonnet');
+  });
+
+  it('getSettings() defaultModel uses default.model when both keys are set', () => {
+    const db = createTestDb();
+    setSetting(db, 'model.sonnet', 'legacy-sonnet-model');
+    setSetting(db, 'default.model', 'new-default-model');
+    const s = getSettings(db);
+    assert.equal(s.defaultModel, 'new-default-model', 'default.model must take priority over model.sonnet');
+  });
+
+  it('getSettings() defaultModel is empty when neither key is set', () => {
+    const db = createTestDb();
+    const s = getSettings(db);
+    assert.equal(s.defaultModel, '', 'defaultModel must be empty when no model is configured');
+  });
+});
+
+describe('callTextModel uses defaultModel', () => {
+  function makeMockFactory(captured: BedrockConverseInput[]): (r: string) => BedrockClientLike {
+    return (_region) => ({
+      async converse(input: BedrockConverseInput) {
+        captured.push(input);
+        return { output: { message: { content: [{ text: 'ok' }] } } };
+      },
+    });
+  }
+
+  before(async () => {
+    await createTestServer();
+  });
+
+  after(async () => {
+    setBedrockClientFactory(null);
+    await cleanup();
+  });
+
+  it('callTextModel uses default.model setting when explicitly set', async () => {
+    const db = getDb();
+    setSetting(db, 'provider.mode', 'bedrock');
+    setSetting(db, 'bedrock.auth', 'ambient');
+    setSetting(db, 'default.model', 'explicit-default-model');
+    try { setSetting(db, 'model.sonnet', ''); } catch { /* ignore */ }
+
+    const captured: BedrockConverseInput[] = [];
+    setBedrockClientFactory(makeMockFactory(captured));
+
+    await callTextModel('system', 'user');
+    assert.ok(captured.length > 0, 'Bedrock must be called');
+    assert.equal(captured[0].modelId, 'explicit-default-model');
+  });
+
+  it('callTextModel falls back to model.sonnet via defaultModel when default.model not set', async () => {
+    const db = getDb();
+    setSetting(db, 'provider.mode', 'bedrock');
+    setSetting(db, 'bedrock.auth', 'ambient');
+    setSetting(db, 'model.sonnet', 'legacy-sonnet-id');
+    try { setSetting(db, 'default.model', ''); } catch { /* ignore */ }
+
+    const captured: BedrockConverseInput[] = [];
+    setBedrockClientFactory(makeMockFactory(captured));
+
+    await callTextModel('system', 'user');
+    assert.ok(captured.length > 0, 'Bedrock must be called');
+    assert.equal(captured[0].modelId, 'legacy-sonnet-id', 'must fall back to model.sonnet via defaultModel');
   });
 });

@@ -15,9 +15,13 @@ import path from 'node:path';
 /**
  * Create the work directory for a run and copy the project skeleton into it.
  * Returns the absolute path to the created directory.
+ *
+ * @param dirName - directory name to create under `projectDir/work/`.
+ *   Pass `workflowId` for a persistent working copy that survives across runs,
+ *   or `runId` for the legacy per-run layout.
  */
-export async function createWorkDir(runId: string, projectDir: string): Promise<string> {
-  const workDir = path.join(projectDir, 'work', runId);
+export async function createWorkDir(dirName: string, projectDir: string): Promise<string> {
+  const workDir = path.join(projectDir, 'work', dirName);
   await fsp.mkdir(workDir, { recursive: true });
 
   // Copy project skeleton files the agent needs

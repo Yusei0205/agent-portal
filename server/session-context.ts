@@ -3,6 +3,9 @@
  *
  * buildSessionContext() gathers everything the agent needs before a run:
  * CLAUDE.md content, repository list, skill names, vault file list.
+ *
+ * Routes:
+ *   GET /api/workflows/:id/context  — context items for the IDE context panel
  */
 
 import fs from 'node:fs';
@@ -10,6 +13,8 @@ import path from 'node:path';
 import { all, one } from './db.ts';
 import type { Row } from './db.ts';
 import { config } from './config.ts';
+import { router, sendJson } from './http.ts';
+import type { PortalRequest, PortalResponse } from './http.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -122,4 +127,107 @@ function collectFiles(dir: string, out: VaultFile[]): void {
       out.push({ name: entry.name, path: full });
     }
   }
+}
+
+// ── Context item type (for the IDE Context panel) ─────────────────────────────
+
+export interface ContextItem {
+  id: string;
+  title: string;
+  kind: string;
+  body: string;
+}
+
+// ── Route registration ────────────────────────────────────────────────────────
+
+/**
+ * Access helper — mirrors the pattern in output-files.ts.
+ * Returns the workflow row or null (response already sent).
+ */
+function requireWorkflowAccess(
+  req: PortalRequest,
+  res: PortalResponse,
+  workflowId: string,
+): Row | null {
+  if (!req.user) {
+    sendJson(res, 401, { error: 'Sign in to continue' });
+    return null;
+  }
+  const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  if (!wf) {
+    sendJson(res, 404, { error: 'Workflow not found' });
+    return null;
+  }
+  if (req.user.is_admin) return wf;
+  if (!wf.project_id) return wf;
+  const member = one<Row>(
+    'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
+    wf.project_id as string,
+    req.user.id,
+  );
+  if (!member) {
+    sendJson(res, 403, { error: 'Not a project member' });
+    return null;
+  }
+  return wf;
+}
+
+export function registerSessionContextRoutes(): void {
+  router.get(
+    '/api/workflows/:id/context',
+    (req: PortalRequest, res: PortalResponse): void => {
+      const wf = requireWorkflowAccess(req, res, req.params.id);
+      if (!wf) return;
+
+      const projectRow = wf.project_id
+        ? one<Row>('SELECT * FROM projects WHERE id = ?', wf.project_id as string)
+        : null;
+
+      if (!projectRow) {
+        sendJson(res, 200, { context: [] });
+        return;
+      }
+
+      const ctx = buildSessionContext(wf, projectRow);
+      const items: ContextItem[] = [];
+
+      if (ctx.claudeMd) {
+        items.push({
+          id: 'claude-md',
+          title: 'CLAUDE.md',
+          kind: 'document',
+          body: ctx.claudeMd.slice(0, 300),
+        });
+      }
+
+      for (const repo of ctx.repos) {
+        items.push({
+          id: `repo-${repo.id}`,
+          title: repo.name,
+          kind: 'repository',
+          body: repo.url,
+        });
+      }
+
+      for (const skill of ctx.skills) {
+        items.push({
+          id: `skill-${skill.name}`,
+          title: skill.name,
+          kind: 'skill',
+          body: '',
+        });
+      }
+
+      for (const vf of ctx.vaultFiles) {
+        items.push({
+          id: `vault-${vf.name}`,
+          title: vf.name,
+          kind: 'vault-file',
+          body: '',
+        });
+      }
+
+      sendJson(res, 200, { context: items });
+    },
+  );
 }

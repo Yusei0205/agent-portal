@@ -13,9 +13,11 @@ import { Icon } from '../../components/Icon.jsx';
  *   projectId: string,
  *   project?: { id: string, name: string },
  *   route: { tab: string, rest: string[] },
+ *   initialDialogTicket?: object | null,
+ *   onInitialDialogConsumed?: () => void,
  * }} props
  */
-export function SessionsShell({ projectId, project, route }) {
+export function SessionsShell({ projectId, project, route, initialDialogTicket, onInitialDialogConsumed }) {
   // Derive selected session ID from URL: #/p/<pid>/sessions/<id>
   const selectedId = route.rest[0] || null;
 
@@ -33,6 +35,8 @@ export function SessionsShell({ projectId, project, route }) {
         project={proj}
         selectedId={selectedId}
         onSelect={handleSelect}
+        initialDialogTicket={initialDialogTicket ?? null}
+        onInitialDialogConsumed={onInitialDialogConsumed}
       />
 
       {/* Right panel — Detail / empty state */}

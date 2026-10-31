@@ -3,12 +3,17 @@
  * and spawns the agent runner in the background.
  */
 
-import { one, insert, run as dbRun } from '../db.ts';
+import { one, insert, run as dbRun, setBeforeCloseHook } from '../db.ts';
 import type { Row } from '../db.ts';
 import { generateId, now, badRequest } from '../util.ts';
 import { emit } from '../events.ts';
-import { activeRunCount } from './controls.ts';
+import { activeRunCount, abortAllRuns } from './controls.ts';
 import { executeRun } from '../agent/runner.ts';
+
+// ── Before-close hook ─────────────────────────────────────────────────────────
+// Abort all active runs when the database is closed so background executeRun
+// tasks don't attempt to insert into a replaced in-memory DB (FK violations).
+setBeforeCloseHook(abortAllRuns);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -26,6 +31,34 @@ const MAX_CONCURRENT_RUNS = 5;
 export async function startRun(workflowId: string): Promise<string> {
   const workflow = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
   if (!workflow) throw badRequest('Workflow not found');
+
+  // Idempotency: if a run is already active for this workflow, return it.
+  // This prevents double-starts when the /message route and the composer UI
+  // both call /start in rapid succession.
+  const activeRun = one<Row>(
+    "SELECT id FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
+    workflowId,
+  );
+  if (activeRun) {
+    return String(activeRun.id);
+  }
+
+  // max_iterations enforcement: if the workflow has already exhausted its
+  // iteration budget, refuse to start a new run with a clear stop reason.
+  const maxIter = Number(workflow.max_iterations ?? 0);
+  const iterCount = Number(workflow.iteration_count ?? 0);
+  if (maxIter > 0 && iterCount >= maxIter) {
+    // Mark workflow done with stop_reason='max_iterations' if not already
+    dbRun(
+      `UPDATE p6_workflows SET status = 'done', stop_reason = 'max_iterations', updated_at = ? WHERE id = ? AND stop_reason != 'max_iterations'`,
+      now(),
+      workflowId,
+    );
+    throw badRequest(
+      `Workflow has reached its maximum iteration limit (${maxIter}). ` +
+      `Create a new session or increase max_iterations to continue.`,
+    );
+  }
 
   // Concurrency check
   if (activeRunCount() >= MAX_CONCURRENT_RUNS) {
@@ -62,6 +95,8 @@ export async function startRun(workflowId: string): Promise<string> {
       workflowId,
       runId,
     });
+    emit(String(workflow.project_id), { type: 'workflow.updated', workflowId, status: 'running' });
+    emit(String(workflow.project_id), { type: 'run.updated', workflowId, runId, status: 'pending' });
   }
 
   // Spawn the run in the background (fire-and-forget)
@@ -80,6 +115,10 @@ export async function startRun(workflowId: string): Promise<string> {
         now(),
         workflowId,
       );
+      if (workflow.project_id) {
+        emit(String(workflow.project_id), { type: 'run.updated', workflowId, runId, status: 'failed' });
+        emit(String(workflow.project_id), { type: 'workflow.updated', workflowId, status: 'failed' });
+      }
     } catch {
       // DB may be closed during shutdown — ignore
     }

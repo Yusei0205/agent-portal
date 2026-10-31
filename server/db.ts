@@ -1237,9 +1237,626 @@ const M13_REVIEW_KIND_RAWOUTPUT = `
   ALTER TABLE p10_reviews ADD COLUMN raw_output TEXT;
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT];
+/**
+ * Migration 14: Real engine columns for p6_runs.
+ * Adds per-run cache token tracking so review-lifecycle.ts can read them and
+ * budget_usage records have full token data. Added by the engines agent.
+ */
+const M14_ENGINE_CACHE_TOKENS = `
+  ALTER TABLE p6_runs ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE p6_runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+`;
+/**
+ * Migration 15: Session IDE — uploads tracking and terminal feature flag.
+ *
+ * Adds the terminal.enabled portal setting (default: true) and seeds
+ * nothing else — the session uploads directory is managed on-disk.
+ */
+const M15_SESSION_IDE = `
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('terminal.enabled', 'true');
+`;
 
-export const SCHEMA_VERSION = MIGRATIONS.length; // = 13
+/**
+ * Migration 16: Session lifecycle polish (F1 + F3).
+ *
+ * - p6_workflows.title: user-editable display name (empty → UI uses goal slice).
+ * - p6_workflows.last_turn_at: ISO timestamp of the last user message or run start;
+ *   drives idle-stop without keeping timer state in memory.
+ * - p6_workflows.stop_reason: why the session was paused ('idle' | '' | other).
+ * - p6_workflow_events: lightweight event log for p6 sessions (rename, idle-stop,
+ *   slash-commands). Separate from workflow_events (which FK-references old workflows)
+ *   and from p6_events (which requires a run_id).
+ * - settings: session.idle_timeout_minutes (default 30, range 5–240).
+ */
+const M16_SESSION_LIFECYCLE = `
+  ALTER TABLE p6_workflows ADD COLUMN title TEXT NOT NULL DEFAULT '';
+  ALTER TABLE p6_workflows ADD COLUMN last_turn_at TEXT;
+  ALTER TABLE p6_workflows ADD COLUMN stop_reason TEXT NOT NULL DEFAULT '';
+  ALTER TABLE p6_workflows ADD COLUMN parent_id TEXT;
+
+  CREATE TABLE IF NOT EXISTS p6_workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    data TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS p6_wf_events_wf ON p6_workflow_events(workflow_id, id);
+  CREATE INDEX IF NOT EXISTS p6_workflows_parent ON p6_workflows(parent_id);
+
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('session.idle_timeout_minutes', '30');
+`;
+
+/**
+ * Migration 17: Per-run model tracking.
+ *
+ * Adds p6_runs.model so status-bar and budget_usage can report which model
+ * was actually used in each run. Engines write the model name on completion.
+ */
+const M17_RUN_MODEL = `
+  ALTER TABLE p6_runs ADD COLUMN model TEXT;
+`;
+
+/**
+ * Migration 18: Per-user engine credentials (F4) + F8 settings keys.
+ *
+ * - engine_credentials: stores per-user credentials for kiro and claude-code engines.
+ *   mode kiro: api_key | identity_center
+ *   mode claude-code: api_key | subscription_token | bedrock_role
+ *   Secrets stored encrypted (AES-256-GCM via server/secrets.ts).
+ * - p6_workflows.credential_id: optional FK to an engine_credentials row so runs
+ *   can use a specific credential instead of the user's default or portal provider.
+ * - settings keys for Claude model list and settings-change tracking (F8).
+ */
+const M18_ENGINE_CREDENTIALS = `
+  CREATE TABLE IF NOT EXISTS engine_credentials (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    engine TEXT NOT NULL CHECK(engine IN ('kiro','claude-code')),
+    name TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    secret_enc TEXT,
+    extra_config TEXT NOT NULL DEFAULT '{}',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    last4 TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by TEXT REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS engine_creds_user ON engine_credentials(user_id, engine);
+  ALTER TABLE p6_workflows ADD COLUMN credential_id TEXT;
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('claude.models', '');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('settings.last_changed_at', '');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('settings.last_changed_by', '');
+`;
+
+/**
+ * Migration 19: Personal config editor (F5).
+ *
+ * - team_config_versions: versioned snapshots of the team default per folder
+ *   (kiro / claude / aws), published by admins.
+ * - user_config_state: per-user, per-folder follow state. following=1 means the user
+ *   has not deviated from the latest team version; first edit sets following=0.
+ */
+const M19_USER_CONFIG = `
+  CREATE TABLE IF NOT EXISTS team_config_versions (
+    id TEXT PRIMARY KEY,
+    folder TEXT NOT NULL CHECK(folder IN ('kiro','claude','aws')),
+    published_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    published_at TEXT NOT NULL DEFAULT (datetime('now')),
+    files_json TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE INDEX IF NOT EXISTS team_config_versions_folder ON team_config_versions(folder, published_at);
+
+  CREATE TABLE IF NOT EXISTS user_config_state (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    folder TEXT NOT NULL CHECK(folder IN ('kiro','claude','aws')),
+    following INTEGER NOT NULL DEFAULT 1,
+    customised_at TEXT,
+    team_version_id TEXT,
+    PRIMARY KEY (user_id, folder)
+  );
+`;
+
+/**
+ * Migration 20: Branch Scans (F9) + Review list enhancements (F10).
+ *
+ * - p10_scans: branch scan records (estimate → queued → reviewing → completed/failed).
+ * - p10_scan_files: per-file scan progress; unique(scan_id, file_path).
+ * - p10_reviews.scan_id: links a review's findings back to its parent scan.
+ * - Settings:
+ *     review.fullScanUsers   — JSON array of user IDs allowed to run branch scans.
+ *     review.prCommentMode   — "manual" | "automatic" portal-level default for new reviews.
+ *     litellm.baseUrl        — LiteLLM gateway base URL.
+ *     litellm.key.enc        — LiteLLM API key, AES-256-GCM encrypted.
+ *     litellm.model          — Default model to pass to the LiteLLM gateway.
+ *     litellm.showGatewayWarning — Always true; UI uses this to warn that gateway sees code.
+ *
+ * NOTE: M19 is reserved for the F5 config-editor agent. If M19 has not yet been
+ * added when this runs, it will be applied as migration ID 19 temporarily and M20
+ * will shift to ID 20 once M19 is inserted. Databases in test/dev mode are
+ * re-created on each run, so this is safe for this branch.
+ */
+const M20_BRANCH_SCANS = `
+  CREATE TABLE IF NOT EXISTS p10_scans (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    repo_id TEXT REFERENCES repositories(id),
+    branch TEXT,
+    pinned_sha TEXT,
+    include_paths TEXT NOT NULL DEFAULT '[]',
+    exclude_paths TEXT NOT NULL DEFAULT '[]',
+    background_doc_ids TEXT NOT NULL DEFAULT '[]',
+    model_role TEXT,
+    provider_id TEXT,
+    model_id TEXT,
+    status TEXT NOT NULL DEFAULT 'estimating'
+      CHECK(status IN ('estimating','estimate_ready','queued','fetching','reviewing','completed','failed')),
+    fail_reason TEXT,
+    budget_tokens INTEGER,
+    estimated_files INTEGER,
+    estimated_bytes INTEGER,
+    estimated_tokens INTEGER,
+    estimated_cost_usd REAL,
+    estimated_minutes REAL,
+    files_total INTEGER NOT NULL DEFAULT 0,
+    files_done INTEGER NOT NULL DEFAULT 0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    summary TEXT,
+    review_id TEXT,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    workflow_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS p10_scans_project ON p10_scans(project_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS p10_scan_files (
+    id TEXT PRIMARY KEY,
+    scan_id TEXT NOT NULL REFERENCES p10_scans(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    file_sha TEXT,
+    file_size INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK(status IN ('pending','done','skipped')),
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    done_at TEXT,
+    UNIQUE(scan_id, file_path)
+  );
+  CREATE INDEX IF NOT EXISTS p10_scan_files_scan ON p10_scan_files(scan_id, status);
+
+  ALTER TABLE p10_reviews ADD COLUMN scan_id TEXT;
+
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('review.fullScanUsers', '[]');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('review.prCommentMode', '"manual"');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('litellm.baseUrl', '');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('litellm.key.enc', '');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('litellm.model', '"gpt-4o"');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('litellm.showGatewayWarning', 'true');
+`;
+
+/**
+ * Migration 21: Persistent working copies + consumed-event tracking.
+ *
+ * - p6_workflows.work_dir: absolute path to the workflow's persistent working
+ *   copy directory. NULL until the first run creates and persists it; all
+ *   subsequent runs reuse the same directory so artefacts survive across turns.
+ * - p6_workflow_events.consumed: 0/1 flag. Set to 1 by the runner when a run
+ *   has picked up the event as its prompt, ensuring each message is only used
+ *   once and is not replayed on the next resume.
+ * - Index: (workflow_id, consumed, id) so the runner can quickly find pending
+ *   unconsumed messages without scanning the full event table.
+ */
+const M21_WORKDIR_CONSUMED = `
+  ALTER TABLE p6_workflows ADD COLUMN work_dir TEXT;
+  ALTER TABLE p6_workflow_events ADD COLUMN consumed INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX IF NOT EXISTS p6_wf_events_consumed
+    ON p6_workflow_events(workflow_id, consumed, id);
+`;
+
+/**
+ * Migration 22: API token scope expansion (F11).
+ *
+ * Adds a `scopes` JSON-array column to api_tokens to support the multi-scope
+ * model: read | write | review | merge.
+ * The legacy `scope` TEXT column is kept for backwards compatibility.
+ * Existing tokens are seeded: scope='write' → scopes=["read","write"],
+ * scope='read' → scopes=["read"].
+ */
+const M22_TOKEN_SCOPES = `
+  ALTER TABLE api_tokens ADD COLUMN scopes TEXT;
+  UPDATE api_tokens SET scopes = CASE WHEN scope = 'write' THEN '["read","write"]' ELSE '["read"]' END WHERE scopes IS NULL;
+`;
+
+/**
+ * Migration 23: Delegation feature settings (F7).
+ *
+ * Seeds the delegation control knobs into the settings table:
+ *   delegation.enabled             — global on/off (default true)
+ *   delegation.maxRunningPerParent — max concurrent children per parent (0–10, default 3)
+ *   delegation.maxRunningPerUser   — max concurrent children per user (0–20, default 5)
+ *   delegation.idleStopMinutes     — auto-stop finished children after N minutes (1–240, default 15)
+ *   delegation.allowNested         — allow children to delegate further (default false)
+ *   delegation.nudgeThreshold      — in-process subagent count before nudge (0–20, 0=off, default 4)
+ */
+const M23_DELEGATION = `
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('delegation.enabled', 'true');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('delegation.maxRunningPerParent', '3');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('delegation.maxRunningPerUser', '5');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('delegation.idleStopMinutes', '15');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('delegation.allowNested', 'false');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('delegation.nudgeThreshold', '4');
+`;
+
+/**
+ * Migration 25: Tests Module (F12a–F12c).
+ *
+ * - test_projects: per-portal-project test projects with app URL, viewport, timeout, AI rules.
+ * - test_vault_items: named logins (username/password/TOTP) and secrets, encrypted at rest.
+ * - test_vault_files: named files for upload steps, stored on disk.
+ * - test_groups: ordered groups of scripts within a test project.
+ * - test_scripts: ordered steps within a group.
+ * - test_runs: run records; states: queued → running → passed | failed | cancelled | error.
+ * - test_run_steps: per-step status, duration, error, screenshot_path.
+ * - test_generations: async AI generation/refine/import jobs.
+ * - settings.test.run_concurrency: max concurrent runs (default 2).
+ *
+ * This entry is at array position 24 (1-based migration ID 24).
+ * Delegation settings were added at position 23 as M23_DELEGATION.
+ */
+const M25_TESTS_MODULE = `
+  CREATE TABLE IF NOT EXISTS test_projects (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    app_url TEXT NOT NULL,
+    api_base_url TEXT,
+    repo_ids TEXT NOT NULL DEFAULT '[]',
+    vault_doc_paths TEXT NOT NULL DEFAULT '[]',
+    viewport_width INTEGER NOT NULL DEFAULT 1440,
+    viewport_height INTEGER NOT NULL DEFAULT 900,
+    timeout_secs INTEGER NOT NULL DEFAULT 300,
+    rules_for_ai TEXT NOT NULL DEFAULT '',
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS test_projects_project ON test_projects(project_id);
+
+  CREATE TABLE IF NOT EXISTS test_vault_items (
+    id TEXT PRIMARY KEY,
+    test_project_id TEXT NOT NULL REFERENCES test_projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('login','secret')),
+    username TEXT,
+    password_enc TEXT,
+    totp_secret_enc TEXT,
+    value_enc TEXT,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(test_project_id, name)
+  );
+  CREATE INDEX IF NOT EXISTS test_vault_items_project ON test_vault_items(test_project_id);
+
+  CREATE TABLE IF NOT EXISTS test_vault_files (
+    id TEXT PRIMARY KEY,
+    test_project_id TEXT NOT NULL REFERENCES test_projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    mime_type TEXT,
+    uploaded_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(test_project_id, name)
+  );
+  CREATE INDEX IF NOT EXISTS test_vault_files_project ON test_vault_files(test_project_id);
+
+  CREATE TABLE IF NOT EXISTS test_groups (
+    id TEXT PRIMARY KEY,
+    test_project_id TEXT NOT NULL REFERENCES test_projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS test_groups_project ON test_groups(test_project_id, sort_order);
+
+  CREATE TABLE IF NOT EXISTS test_scripts (
+    id TEXT PRIMARY KEY,
+    test_project_id TEXT NOT NULL REFERENCES test_projects(id) ON DELETE CASCADE,
+    test_group_id TEXT NOT NULL REFERENCES test_groups(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    steps TEXT NOT NULL DEFAULT '[]',
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS test_scripts_group ON test_scripts(test_group_id, sort_order);
+  CREATE INDEX IF NOT EXISTS test_scripts_project ON test_scripts(test_project_id);
+
+  CREATE TABLE IF NOT EXISTS test_runs (
+    id TEXT PRIMARY KEY,
+    test_project_id TEXT NOT NULL REFERENCES test_projects(id) ON DELETE CASCADE,
+    script_id TEXT REFERENCES test_scripts(id) ON DELETE SET NULL,
+    group_id TEXT REFERENCES test_groups(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'queued'
+      CHECK(status IN ('queued','running','passed','failed','cancelled','error')),
+    error TEXT,
+    artifact_dir TEXT,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS test_runs_project ON test_runs(test_project_id, created_at);
+  CREATE INDEX IF NOT EXISTS test_runs_script ON test_runs(script_id);
+
+  CREATE TABLE IF NOT EXISTS test_run_steps (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+    script_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('passed','failed','error','skipped')),
+    duration_ms INTEGER,
+    error TEXT,
+    screenshot_path TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS test_run_steps_run ON test_run_steps(run_id, step_index);
+
+  CREATE TABLE IF NOT EXISTS test_generations (
+    id TEXT PRIMARY KEY,
+    test_project_id TEXT NOT NULL REFERENCES test_projects(id) ON DELETE CASCADE,
+    script_id TEXT REFERENCES test_scripts(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('generate','refine','import')),
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK(status IN ('pending','running','done','failed')),
+    error TEXT,
+    result_script_ids TEXT NOT NULL DEFAULT '[]',
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS test_generations_project ON test_generations(test_project_id, created_at);
+
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('test.run_concurrency', '2');
+`;
+
+/**
+ * Migration 26: Delegate token binding + SSRF setting (F7 security hardening, F12 SSRF guard).
+ *
+ * - api_tokens.workflow_id: binds a delegate-scoped token to a specific parent workflow so the
+ *   delegate_session MCP tool can only create children of that workflow.
+ * - settings.test.allowPrivateNetworks: controls whether test runs may reach loopback /
+ *   private-range addresses. Cloud metadata endpoints (169.254.x.x, metadata.google.internal,
+ *   etc.) are ALWAYS blocked regardless of this setting. Default: 'true' so local dev works.
+ */
+const M26_DELEGATE_BIND = `
+  ALTER TABLE api_tokens ADD COLUMN workflow_id TEXT;
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('test.allowPrivateNetworks', 'true');
+`;
+
+/**
+ * Migration 27: FK cascade fixes via safe copy-rebuild (SQLite cannot add FKs with ALTER).
+ *
+ * - p10_scans.repo_id → ON DELETE SET NULL:
+ *     Deleting a repository preserves scan history; the FK reference becomes NULL
+ *     so the scan record remains auditable without the repo link.
+ *
+ * - p6_workflow_events.workflow_id → REFERENCES p6_workflows(id) ON DELETE CASCADE:
+ *     Events belong to the workflow; deleting the workflow removes its events.
+ *     The column was previously TEXT NOT NULL with no FK reference, so orphaned
+ *     event rows could accumulate after a parent was deleted.
+ *
+ * Both rebuilds follow the recommended SQLite schema-change recipe:
+ *   CREATE new → INSERT SELECT → DROP old → RENAME new.
+ * Foreign-key checks are disabled for the duration so the copy can proceed
+ * when referential constraints don't hold on the old data.
+ */
+const M27_FK_CASCADES = `
+  PRAGMA foreign_keys = OFF;
+
+  -- ── Rebuild p10_scans with repo_id ON DELETE SET NULL ──────────────────────
+  CREATE TABLE IF NOT EXISTS p10_scans_new (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    repo_id TEXT REFERENCES repositories(id) ON DELETE SET NULL,
+    branch TEXT,
+    pinned_sha TEXT,
+    include_paths TEXT NOT NULL DEFAULT '[]',
+    exclude_paths TEXT NOT NULL DEFAULT '[]',
+    background_doc_ids TEXT NOT NULL DEFAULT '[]',
+    model_role TEXT,
+    provider_id TEXT,
+    model_id TEXT,
+    status TEXT NOT NULL DEFAULT 'estimating'
+      CHECK(status IN ('estimating','estimate_ready','queued','fetching','reviewing','completed','failed')),
+    fail_reason TEXT,
+    budget_tokens INTEGER,
+    estimated_files INTEGER,
+    estimated_bytes INTEGER,
+    estimated_tokens INTEGER,
+    estimated_cost_usd REAL,
+    estimated_minutes REAL,
+    files_total INTEGER NOT NULL DEFAULT 0,
+    files_done INTEGER NOT NULL DEFAULT 0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    summary TEXT,
+    review_id TEXT,
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    workflow_id TEXT
+  );
+  INSERT OR IGNORE INTO p10_scans_new SELECT * FROM p10_scans;
+  DROP TABLE p10_scans;
+  ALTER TABLE p10_scans_new RENAME TO p10_scans;
+  CREATE INDEX IF NOT EXISTS p10_scans_project ON p10_scans(project_id, created_at);
+
+  -- ── Rebuild p6_workflow_events with workflow_id FK ON DELETE CASCADE ────────
+  CREATE TABLE IF NOT EXISTS p6_workflow_events_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id TEXT NOT NULL REFERENCES p6_workflows(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    data TEXT NOT NULL DEFAULT '{}',
+    consumed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  INSERT OR IGNORE INTO p6_workflow_events_new
+    SELECT id, workflow_id, kind, body, data, consumed, created_at
+      FROM p6_workflow_events
+     WHERE workflow_id IN (SELECT id FROM p6_workflows);
+  DROP TABLE p6_workflow_events;
+  ALTER TABLE p6_workflow_events_new RENAME TO p6_workflow_events;
+  CREATE INDEX IF NOT EXISTS p6_wf_events_wf ON p6_workflow_events(workflow_id, id);
+  CREATE INDEX IF NOT EXISTS p6_wf_events_consumed
+    ON p6_workflow_events(workflow_id, consumed, id);
+
+  PRAGMA foreign_keys = ON;
+`;
+
+/**
+ * Migration 28: Look-and-feel themes.
+ *
+ * - themes: custom theme storage (built-ins live in server/themes.ts, not DB).
+ * - settings: theme.active — the active theme ID (default: 'aethrix-night').
+ */
+const M28_THEMES = `
+  CREATE TABLE IF NOT EXISTS themes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    template_json TEXT NOT NULL,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('theme.active', '"aethrix-night"');
+`;
+
+/**
+ * Migration 29: AI Attachments (F-AI-Attach).
+ *
+ * - ai_attachments: stores files uploaded by editors for AI generation context.
+ *   kind: 'image' | 'document' | 'diagram'.
+ *   parent_kind/parent_id: set when linked to a diagram/doc/presentation.
+ *   NULL parent means the attachment is "pending" (not yet used).
+ *   Orphans (parent_id IS NULL, older than 24h) are swept by a periodic cleanup.
+ *
+ * - attachment_ids TEXT column added to diagrams, generated_docs, and presentations
+ *   to track which attachments were staged for a run. Persists across refreshes.
+ */
+const M29_AI_ATTACHMENTS = `
+  CREATE TABLE IF NOT EXISTS ai_attachments (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('image','document','diagram')),
+    file_path TEXT NOT NULL,
+    parent_kind TEXT CHECK(parent_kind IN ('diagram','doc','presentation')),
+    parent_id TEXT,
+    uploaded_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS ai_attachments_project ON ai_attachments(project_id, created_at);
+  CREATE INDEX IF NOT EXISTS ai_attachments_parent ON ai_attachments(parent_kind, parent_id);
+
+  ALTER TABLE diagrams ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE generated_docs ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE presentations ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]';
+`;
+
+/**
+ * Migration 30: Per-workflow model selection (F-MODEL).
+ *
+ * - p6_workflows.model: the model ID the user chose when creating the session.
+ *   Empty or NULL means "engine default" (current behaviour).
+ *   Engines receive this via AgentRun.model and pass it as --model <id> (kiro)
+ *   or as the SDK model option (claude-code).
+ *   Child sessions inherit the parent's model in createChildSession().
+ */
+const M30_WORKFLOW_MODEL = `
+  ALTER TABLE p6_workflows ADD COLUMN model TEXT NOT NULL DEFAULT '';
+`;
+
+/**
+ * Migration 31: Git connections v2 extensions.
+ *
+ * - repositories.connection_id: links a cloned repo back to the git_connections_v2
+ *   row that was used to add it, enabling credential lookup during clone/fetch.
+ */
+const M31_GIT_CONNECTIONS_EXT = `
+  ALTER TABLE repositories ADD COLUMN connection_id TEXT;
+`;
+
+/**
+ * Migration 32: Test generation warnings column.
+ *
+ * - test_generations.warnings: JSON array of warning strings surfaced when generation
+ *   partially succeeded (some steps dropped or repaired after validation failure).
+ */
+const M32_TEST_GENERATION_WARNINGS = `
+  ALTER TABLE test_generations ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]';
+`;
+
+/**
+ * Migration 33: Dashboard performance indexes (Agent Performance Dashboard).
+ *
+ * - idx_dash_runs_created: allows the dashboard to scan p6_runs by period
+ *   without a full-table scan when joining through p6_workflows.
+ * - idx_dash_events_type: speeds up per-run tool-call counting by (run_id, type).
+ * - idx_dash_budget_workflow: enables fast provider lookups on budget_usage by
+ *   workflow_id (the column used instead of run_id for p6 runs).
+ */
+const M33_DASHBOARD_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_dash_runs_created ON p6_runs(created_at);
+  CREATE INDEX IF NOT EXISTS idx_dash_events_type ON p6_events(run_id, type);
+  CREATE INDEX IF NOT EXISTS idx_dash_budget_workflow ON budget_usage(workflow_id);
+`;
+
+/**
+ * Migration 34: Jira integration.
+ *
+ * - project_jira: per-project Jira connection settings.
+ *   project_keys is a JSON array of allowed Jira project keys (empty = all visible).
+ * - p6_workflows.jira_key / jira_summary / jira_url: ticket attached when a session
+ *   is created from a Jira ticket, so the driver can load and fence the ticket each
+ *   iteration.
+ */
+const M34_JIRA = `
+  CREATE TABLE IF NOT EXISTS project_jira (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    project_keys TEXT NOT NULL DEFAULT '[]',
+    jql TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  ALTER TABLE p6_workflows ADD COLUMN jira_key TEXT NOT NULL DEFAULT '';
+  ALTER TABLE p6_workflows ADD COLUMN jira_summary TEXT NOT NULL DEFAULT '';
+  ALTER TABLE p6_workflows ADD COLUMN jira_url TEXT NOT NULL DEFAULT '';
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA];
+
+// IDs are array positions (1-based): M1_CORE=1, ..., M33_DASHBOARD_INDEXES=32, M34_JIRA=33.
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 33
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 
@@ -1265,7 +1882,24 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
     if (applied.has(migrationId)) continue;
     db.exec('BEGIN');
     try {
-      db.exec(MIGRATIONS[i]);
+      // Split the migration into individual statements so ALTER TABLE ADD COLUMN
+      // can be made idempotent: SQLite has no IF NOT EXISTS for column additions,
+      // so we skip "duplicate column name" errors rather than rolling back.
+      const stmts = MIGRATIONS[i]
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const stmt of stmts) {
+        try {
+          db.exec(stmt);
+        } catch (stmtErr: unknown) {
+          const msg = (stmtErr as Error)?.message ?? '';
+          // If the column already exists (e.g. from a partial earlier run), skip it.
+          const isAddColumn = /^\s*alter\s+table\b.+\badd\s+column\b/i.test(stmt);
+          if (isAddColumn && /duplicate column name/i.test(msg)) continue;
+          throw stmtErr;
+        }
+      }
       db.prepare('INSERT INTO schema_migrations (id) VALUES (?)').run(migrationId);
       db.exec('COMMIT');
     } catch (e) {
@@ -1276,6 +1910,46 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
       throw enhanced;
     }
   }
+
+  // Startup recovery: any workflow or run that was left 'running' when the
+  // previous process stopped (crash, SIGKILL, restart) will never complete.
+  // Flip them to 'failed' so they are not stuck forever. This is idempotent —
+  // rows already in a terminal state are unaffected by the WHERE clause.
+  db.exec(`
+    UPDATE p6_workflows
+       SET status = 'failed', updated_at = datetime('now')
+     WHERE status = 'running';
+
+    UPDATE p6_runs
+       SET status = 'failed', finished_at = datetime('now')
+     WHERE status IN ('pending', 'running') AND finished_at IS NULL;
+
+    UPDATE p10_loop_runs
+       SET status = 'failed'
+     WHERE status = 'running';
+
+    UPDATE p10_scans
+       SET status = 'failed'
+     WHERE status IN ('estimating', 'queued', 'fetching', 'reviewing');
+
+    UPDATE p10_reviews
+       SET status = 'failed'
+     WHERE status IN ('running', 'pending');
+
+    UPDATE repositories
+       SET status = 'error', last_error = 'Interrupted by server restart'
+     WHERE status = 'cloning';
+
+    UPDATE test_runs
+       SET status = 'error', finished_at = datetime('now')
+     WHERE status IN ('queued', 'running');
+
+    UPDATE test_generations
+       SET status = 'failed',
+           error = 'Interrupted by a server restart. Start the generation again.',
+           finished_at = datetime('now')
+     WHERE status IN ('pending', 'running');
+  `);
 
   return db;
 }
@@ -1290,8 +1964,26 @@ export function isDbOpen(): boolean {
 }
 
 export function closeDb(): void {
+  // Abort all active runs before closing so background executeRun tasks do not
+  // insert into a subsequent in-memory database (which would cause FK violations).
+  if (_beforeCloseHook) {
+    try { _beforeCloseHook(); } catch { /* ignore */ }
+  }
   db?.close();
   db = null;
+}
+
+// ── Before-close hook ─────────────────────────────────────────────────────────
+
+/**
+ * Register a callback to run immediately before the database is closed.
+ * Used by the run driver to abort all active background runs (controls.ts).
+ * Only one hook is supported; repeated calls replace the previous registration.
+ */
+let _beforeCloseHook: (() => void) | null = null;
+
+export function setBeforeCloseHook(fn: () => void): void {
+  _beforeCloseHook = fn;
 }
 
 // ── Query helpers ─────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all } from './db.ts';
 import type { Row } from './db.ts';
 import { config } from './config.ts';
-import { subscribe } from './events.ts';
+import { addLiveSubscriber } from './events.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -163,8 +163,9 @@ export function registerRunRoutes(): void {
 
     // Subscribe to live events for this project
     if (workflow.project_id) {
-      const unsubscribe = subscribe(String(workflow.project_id), res);
-      res.on('close', unsubscribe);
+      // addLiveSubscriber does NOT write headers (they are already sent above),
+      // but sets up the keep-alive heartbeat and auto-cleanup on close.
+      addLiveSubscriber(String(workflow.project_id), res);
     }
   });
 

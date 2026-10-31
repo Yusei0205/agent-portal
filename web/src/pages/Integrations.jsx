@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 const INTEGRATION_TYPES = [
   { value: 'http',       label: 'HTTP' },
@@ -213,6 +215,8 @@ export function Integrations({ projectId }) {
   const [modal, setModal]               = useState(null); // null | 'new' | { integration }
   const [testResults, setTestResults]   = useState({}); // id → { ok, note, error }
   const [testing, setTesting]           = useState({}); // id → bool
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     if (!projectId) { setLoading(false); return; }
@@ -237,7 +241,7 @@ export function Integrations({ projectId }) {
       });
       setIntegrations((prev) => prev.map((i) => (i.id === r.integration.id ? r.integration : i)));
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
     }
   };
 
@@ -255,12 +259,12 @@ export function Integrations({ projectId }) {
   };
 
   const deleteIntegration = async (intg) => {
-    if (!confirm(`Remove integration "${intg.name}"?`)) return;
+    if (!await requestConfirm(`Remove integration "${intg.name}"?`, 'Remove', 'danger')) return;
     try {
       await api.delete(`/api/projects/${projectId}/integrations/${intg.id}`);
       setIntegrations((prev) => prev.filter((i) => i.id !== intg.id));
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
     }
   };
 
@@ -279,6 +283,8 @@ export function Integrations({ projectId }) {
 
   return (
     <div className="page">
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       <div className="page-head">
         <h1>Integrations</h1>
         <div className="page-actions">

@@ -1,0 +1,505 @@
+/* ── Design-system enhancement tokens ──────────────────
+   Agent Portal — precise, developer-tool aesthetic.
+   Adds depth, motion, and typography refinements on top
+   of base.css. Motion is gated on prefers-reduced-motion.
+   ─────────────────────────────────────────────────────── */
+
+/* ── Extended surface depth (dark theme prominent) ── */
+:root {
+  /* Depth layers — light theme uses small elevation only */
+  --surface-0: var(--canvas);
+  --surface-1: var(--panel);
+  --surface-2: color-mix(in srgb, var(--panel) 90%, var(--ink) 4%);
+  --surface-raised: var(--panel);
+
+  /* Hairline inner highlight on raised elements */
+  --highlight: inset 0 1px 0 rgba(255,255,255,0.06);
+
+  /* Accent glow for primary interactive */
+  --accent-glow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  --accent-glow-strong: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+
+  /* Focus ring — crisp teal, slightly offset */
+  --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--focus);
+
+  /* Motion — ease-out curves */
+  --t-fast:  80ms ease-out;
+  --t-base: 140ms ease-out;
+  --t-slow: 220ms ease-out;
+
+  /* Typography */
+  --font-numeric: 'tabular-nums';
+}
+
+[data-theme="dark"] {
+  /* Deeper layering in dark theme */
+  --surface-0: #0d1117;
+  --surface-1: #161b24;
+  --surface-2: #1e2535;
+  --surface-raised: #222b3a;
+
+  /* Stronger inner highlight in dark */
+  --highlight: inset 0 1px 0 rgba(255,255,255,0.07);
+
+  /* Accent glow is more vivid in dark */
+  --accent-glow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+  --accent-glow-strong: 0 0 0 3px color-mix(in srgb, var(--accent) 50%, transparent),
+                        0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface-0: #0d1117;
+    --surface-1: #161b24;
+    --surface-2: #1e2535;
+    --surface-raised: #222b3a;
+    --highlight: inset 0 1px 0 rgba(255,255,255,0.07);
+    --accent-glow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+    --accent-glow-strong: 0 0 0 3px color-mix(in srgb, var(--accent) 50%, transparent),
+                          0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+  }
+}
+
+/* ── Tabular numerics — numbers and costs always mono-spaced */
+.tabular, .cost, .token-count, .badge,
+.data-table td,
+.ide-status-bar,
+.stat-value,
+.run-cost,
+.session-cost {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Monospace for technical content ── */
+.mono-id,
+code, pre, .mono,
+[class*="branch-"],
+[class*="-id"],
+.session-id,
+.review-id,
+.scan-id,
+.model-id {
+  font-family: var(--mono);
+}
+
+/* ── Subtle canvas grid (dark only, reduced-motion safe) ── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shell > .shell-right > .main {
+    background-image: radial-gradient(
+      circle, color-mix(in srgb, var(--ink-3) 8%, transparent) 1px, transparent 0
+    );
+    background-size: 24px 24px;
+  }
+}
+[data-theme="dark"] .shell > .shell-right > .main {
+  background-image: radial-gradient(
+    circle, color-mix(in srgb, var(--ink-3) 8%, transparent) 1px, transparent 0
+  );
+  background-size: 24px 24px;
+}
+
+/* ── Tighter heading scale ── */
+h1 { font-size: 1.4rem; font-weight: 660; letter-spacing: -0.02em; }
+h2 { font-size: 1.05rem; font-weight: 640; letter-spacing: -0.015em; }
+h3 { font-size: 0.92rem; font-weight: 630; }
+
+/* ── Focus rings — crisp, layered ── */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius);
+}
+a:focus-visible { border-radius: 3px; }
+.btn:focus-visible,
+.btn-primary:focus-visible { box-shadow: var(--focus-ring), var(--accent-glow); }
+
+/* ── Button enhancements ── */
+.btn {
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast),
+    transform var(--t-fast);
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+
+.btn-primary {
+  box-shadow: var(--highlight);
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: var(--highlight), var(--accent-glow);
+}
+.btn-primary:active:not(:disabled) {
+  box-shadow: none;
+  transform: translateY(1px);
+}
+
+/* ghost / icon button press feedback */
+.btn-ghost:active:not(:disabled),
+.btn-icon:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  .btn, .btn-primary, .btn-ghost, .btn-icon { transition: none; transform: none !important; }
+}
+
+/* ── Card and list-row lift ── */
+.card {
+  transition: box-shadow var(--t-base), border-color var(--t-base);
+}
+.card:hover {
+  box-shadow: var(--shadow), 0 0 0 1px var(--line);
+}
+.project-card {
+  cursor: pointer;
+  transition: box-shadow var(--t-base), border-color var(--t-base), transform var(--t-base);
+}
+.project-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow), 0 0 0 1px var(--accent);
+}
+.project-card:active {
+  transform: translateY(1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .card, .project-card { transition: none; transform: none !important; }
+}
+
+/* ── Table row hover ── */
+.data-table tbody tr {
+  transition: background var(--t-fast);
+}
+
+/* ── Skeleton loading ── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--line-2) 25%,
+    color-mix(in srgb, var(--line-2) 60%, var(--panel)) 50%,
+    var(--line-2) 75%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius);
+  animation: skeleton-sweep 1.5s ease-in-out infinite;
+}
+@keyframes skeleton-sweep {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; background: var(--line-2); }
+}
+
+/* Skeleton size helpers */
+.skeleton-text { height: 0.85em; display: block; }
+.skeleton-h1   { height: 1.4em; width: 40%; }
+.skeleton-row  { height: 36px; }
+
+/* ── Pulsing status dot — running states ── */
+@media (prefers-reduced-motion: no-preference) {
+  .dot-running { animation: dot-pulse 2s ease-in-out infinite; }
+  @keyframes dot-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 40%, transparent); }
+    50%       { opacity: 0.75; box-shadow: 0 0 0 4px transparent; }
+  }
+  .dot-reviewing { background: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb,var(--focus) 20%,transparent); animation: dot-pulse 2s ease-in-out infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot-running { animation: none; }
+}
+
+/* ── Toast feedback ── */
+.toast-shelf {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 400;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow), var(--highlight);
+  font-size: 0.84rem;
+  color: var(--ink);
+  max-width: 340px;
+  pointer-events: auto;
+  animation: toast-in var(--t-slow) ease-out;
+}
+.toast.toast-ok     { border-left: 3px solid var(--ok); }
+.toast.toast-error  { border-left: 3px solid var(--danger); }
+.toast.toast-info   { border-left: 3px solid var(--accent); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
+
+/* ── Modal / flyout entry animations ── */
+@media (prefers-reduced-motion: no-preference) {
+  .modal-backdrop { animation: fade-in 120ms ease-out; }
+  .modal { animation: scale-in 140ms ease-out; }
+  .project-picker-popover { animation: flyout-in 140ms ease-out; }
+  .palette-backdrop { animation: fade-in 100ms ease-out; }
+  .palette-dialog { animation: scale-in 120ms ease-out; }
+}
+@keyframes fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scale-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+@keyframes flyout-in {
+  from { opacity: 0; transform: translateX(-6px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+/* ── Empty-state hero ── */
+.empty-state-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 24px;
+  text-align: center;
+  gap: 10px;
+}
+.empty-state-icon {
+  color: var(--ink-3);
+  margin-bottom: 6px;
+}
+.empty-state-title {
+  font-size: 1.05rem;
+  font-weight: 640;
+  color: var(--ink);
+  margin: 0;
+}
+.empty-state-body {
+  font-size: 0.875rem;
+  color: var(--ink-3);
+  margin: 0;
+  max-width: 360px;
+  line-height: 1.5;
+}
+.empty-state-hero .btn {
+  margin-top: 6px;
+}
+
+/* ── Rail link transitions ── */
+.rail-link {
+  transition:
+    background var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-link { transition: none; }
+}
+
+/* ── Tooltip (collapsed rail) — rendered via createPortal in Rail.jsx ── */
+/* position: fixed; top set inline; left positions to right of 56px collapsed rail */
+.rail-tooltip {
+  position: fixed;
+  left: 60px;
+  background: var(--ink);
+  color: var(--canvas);
+  padding: 4px 9px;
+  border-radius: var(--radius);
+  font-size: 0.79rem;
+  font-weight: 540;
+  white-space: nowrap;
+  z-index: 600;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  transform: translateY(-50%);
+  animation: tooltip-in 80ms ease-out;
+}
+@keyframes tooltip-in {
+  from { opacity: 0; transform: translateY(-50%) translateX(-4px); }
+  to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-tooltip { animation: none; }
+}
+
+/* ── Template / Appearance cards ── */
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.template-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl, var(--radius-lg));
+  overflow: hidden;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.template-card:hover {
+  border-color: var(--accent);
+}
+.template-card-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+[data-fx-glow="true"] .template-card-active {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+              0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.template-swatches {
+  display: flex;
+  height: 10px;
+}
+.template-swatch {
+  flex: 1;
+}
+.template-card-body {
+  padding: 12px 14px 8px;
+}
+.template-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.template-name {
+  font-weight: 640;
+  font-size: 0.92rem;
+  flex: 1;
+  color: var(--ink);
+}
+.template-desc {
+  margin-top: 4px;
+}
+.template-font {
+  margin-top: 4px;
+  font-size: 0.79rem;
+}
+.template-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px 12px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line-2);
+}
+
+/* ── Greeting page area ── */
+.page-greeting {
+  display: grid;
+  gap: 2px;
+}
+
+/* ── Template editor layout ── */
+.editor-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+}
+.editor-main {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .editor-main { grid-template-columns: 1fr; }
+}
+.editor-settings {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px 16px;
+  overflow-y: auto;
+  max-height: calc(100vh - 120px);
+}
+.editor-section {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.editor-section-title {
+  font-size: 0.82rem;
+  font-weight: 660;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  background: var(--canvas);
+  user-select: none;
+}
+.editor-section-title:hover { background: var(--raised); }
+.editor-section-body { padding: 10px; }
+
+.editor-colour-field {
+  margin-bottom: 8px;
+}
+.editor-colour-field[data-has-error="true"] .editor-token-input {
+  border-color: var(--danger);
+}
+.editor-token-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  margin-bottom: 3px;
+}
+.editor-token-input {
+  font-size: 0.82rem;
+  font-family: var(--mono);
+  flex: 1;
+  min-width: 0;
+}
+
+/* Preview pane */
+.editor-preview-container {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+}
+.editor-preview-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.editor-preview-label {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas);
+  font-style: italic;
+}
+.editor-preview-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.editor-preview-pane {
+  padding: 14px;
+  border-right: 1px solid var(--line);
+  min-height: 500px;
+}
+.editor-preview-pane:last-child { border-right: none; }
+.editor-preview-mode-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  margin-bottom: 10px;
+}

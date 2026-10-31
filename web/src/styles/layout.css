@@ -1,11 +1,20 @@
 /* ── Shell grid ──────────────────────────────────────── */
 .shell {
   display: grid;
-  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-columns: var(--rail-w, 236px) 1fr;
   min-height: 100vh;
 }
 .shell.rail-collapsed {
-  grid-template-columns: 48px 1fr;
+  grid-template-columns: 56px 1fr;
+}
+
+/* Right column wrapper — flex column, full viewport height */
+.shell-right {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  min-width: 0;
 }
 
 /* ── Rail ────────────────────────────────────────────── */
@@ -14,12 +23,12 @@
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 10px;
+  gap: 6px;
+  padding: 8px 6px;
   position: sticky;
   top: 0;
   height: 100vh;
-  overflow-y: auto;
+  overflow-y: hidden; /* only .rail-nav-wrap scrolls */
   overflow-x: hidden;
 }
 .brand {
@@ -32,65 +41,375 @@
   text-decoration: none;
   padding: 2px 6px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .brand-icon {
   flex-shrink: 0;
 }
+
+/* ── Collapsed rail ─────────────────────────────────── */
 .rail-collapsed .brand span,
-.rail-collapsed .switcher-label,
-.rail-collapsed .switcher-select,
 .rail-collapsed .rail-link span,
-.rail-collapsed .rail-group-btn span,
 .rail-collapsed .rail-foot-name,
+.rail-collapsed .rail-collapse-btn span,
 .rail-collapsed .rail-count { display: none; }
 
-/* Project switcher */
-.switcher {
-  display: grid;
+/* Tighten the rail container itself so all icons fit at 800 px viewport height.
+   Reduces padding from 8px→6px and the gap between flex children from 6px→4px.
+   Every nav link still meets the 28 px minimum hit-target requirement. */
+.rail-collapsed .rail {
+  padding: 6px;
   gap: 4px;
-  padding: 0 4px;
-}
-.switcher-label {
-  font-size: 0.76rem;
-  color: var(--ink-3);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.switcher-select {
-  font: inherit;
-  font-size: 0.82rem;
-  font-weight: 600;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  color: var(--ink);
-  padding: 4px 6px;
-  width: 100%;
 }
 
-/* Nav links */
-.rail-nav-wrap {
+/* Centre icons when collapsed */
+.rail-collapsed .brand {
+  justify-content: center;
+  padding: 2px;
+}
+/* 6 px vertical padding + 16 px icon = 28 px hit target (minimum). */
+.rail-collapsed .rail-link {
+  justify-content: center;
+  padding: 6px 0;
+  min-height: 28px;
+  gap: 0;
+}
+/* Thinner gap around the section-divider line. */
+.rail-collapsed .rail-section-divider {
+  margin: 2px 4px;
+}
+/* Tighter inter-section spacing in collapsed mode. */
+.rail-collapsed .rail-section + .rail-section {
+  margin-top: 2px;
+}
+/* No bottom padding inside the scrollable nav region when collapsed. */
+.rail-collapsed .rail-nav-wrap nav {
+  padding-bottom: 0;
+}
+/* 7 px padding + 15 px icon = 29 px — still comfortable. */
+.rail-collapsed .rail-collapse-btn {
+  justify-content: center;
+  padding: 7px 0;
+  min-height: 28px;
+}
+/* Reduce footer gap and top padding so the footer stays compact. */
+.rail-collapsed .rail-foot {
+  gap: 6px;
+  padding-top: 6px;
+}
+.rail-collapsed .rail-user {
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+}
+/* 3 px padding + 22 px avatar = 28 px hit target. */
+.rail-collapsed .rail-user-name {
+  padding: 3px;
+  justify-content: center;
+}
+.rail-collapsed .rail-user-name span,
+.rail-collapsed .rail-user-name .rail-foot-name {
+  display: none;
+}
+
+/* ── Rail resize separator ──────────────────────────── */
+.rail-sep {
+  position: fixed;
+  top: 0;
+  left: calc(var(--rail-w, 236px) - 2px);
+  width: 4px;
+  height: 100vh;
+  cursor: col-resize;
+  z-index: 50;
+  background: transparent;
+  transition: background 80ms;
+}
+.rail-sep:hover,
+.rail-sep:focus-visible {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  outline: none;
+}
+
+/* ── Project picker ──────────────────────────────────── */
+.project-picker-wrap {
+  flex-shrink: 0;
+}
+.project-picker-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
+}
+.project-picker-card:hover {
+  border-color: var(--accent);
+}
+.project-picker-card.no-project {
+  color: var(--ink-3);
+  border-style: dashed;
+}
+.project-picker-card-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: 0.67rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.project-picker-card-name {
   flex: 1;
-  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-picker-card-chevron {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+
+/* Collapsed avatar button */
+.project-picker-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+  cursor: pointer;
+  margin: 0 auto;
+}
+.project-picker-avatar:hover { border-color: var(--accent); color: var(--ink); }
+.project-picker-avatar.has-project {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.project-picker-initials {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Project picker popover (rendered via portal into document.body) */
+.project-picker-popover {
+  position: fixed;
+  min-width: 220px;
+  max-width: 300px;
+  max-height: calc(100vh - 80px);
   overflow-y: auto;
-  overflow-x: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow), 0 8px 32px rgba(0,0,0,0.15);
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
 }
-.rail-nav {
-  display: grid;
-  gap: 2px;
-  padding-bottom: 4px;
+.picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 499;
+  background: rgba(0,0,0,0.04);
 }
-.rail-link {
+.picker-header {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid var(--line-2);
+}
+.picker-search-wrap {
+  padding: 8px;
+  border-bottom: 1px solid var(--line-2);
+}
+.picker-search {
+  font: inherit;
+  font-size: 0.83rem;
+  width: 100%;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 9px;
+  color: var(--ink);
+  min-height: 30px;
+}
+.picker-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.picker-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+.picker-empty {
+  padding: 12px;
+  font-size: 0.83rem;
+  color: var(--ink-3);
+  text-align: center;
+}
+.picker-item {
   display: flex;
   align-items: center;
   gap: 9px;
+  width: 100%;
   padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 530;
+  text-align: left;
+  cursor: pointer;
+}
+.picker-item:hover { background: color-mix(in srgb, var(--accent-wash) 60%, transparent); color: var(--ink); }
+.picker-item.is-active { background: var(--accent-wash); color: var(--link); font-weight: 600; }
+.picker-item-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.67rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.picker-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-item-check { color: var(--accent); margin-left: auto; }
+.picker-footer {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-top: 1px solid var(--line-2);
+}
+.picker-footer-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--ink-3);
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 530;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+}
+.picker-footer-link:hover { color: var(--ink); background: color-mix(in srgb, var(--panel) 60%, transparent); }
+
+/* ── Nav sections ────────────────────────────────────── */
+/* Outer wrapper: provides the flex: 1 slot and hosts fade pseudo-elements */
+.rail-nav-outer {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+/* Fade overlays — shown via data-can-up/down set by JS */
+.rail-nav-outer::before,
+.rail-nav-outer::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.rail-nav-outer::before {
+  top: 0;
+  background: linear-gradient(var(--rail), transparent);
+}
+.rail-nav-outer::after {
+  bottom: 0;
+  background: linear-gradient(transparent, var(--rail));
+}
+.rail-nav-outer[data-can-up="1"]::before  { opacity: 1; }
+.rail-nav-outer[data-can-down="1"]::after { opacity: 1; }
+
+/* Inner scroll region */
+.rail-nav-wrap {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.rail-nav-wrap nav { padding-bottom: 4px; }
+
+.rail-section { display: grid; gap: 1px; }
+.rail-section + .rail-section { margin-top: 4px; }
+.rail-section-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 0 9px 2px;
+  white-space: nowrap;
+}
+/* Collapsed: section label becomes a thin divider */
+.rail-section-divider {
+  height: 1px;
+  background: var(--line-2);
+  margin: 5px 4px;
+}
+.rail-section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+}
+
+/* Nav links */
+.rail-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
   border-radius: var(--radius);
   color: var(--ink-2);
   text-decoration: none;
   font-weight: 530;
+  font-size: 0.83rem;
   white-space: nowrap;
   overflow: hidden;
+  position: relative;
 }
 .rail-link:hover {
   background: color-mix(in srgb, var(--panel) 60%, transparent);
@@ -101,6 +420,13 @@
   color: var(--ink);
   box-shadow: inset 3px 0 0 var(--accent);
 }
+.rail-link.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Inbox count badge */
 .rail-count {
   margin-left: auto;
   background: var(--warn-wash);
@@ -113,49 +439,32 @@
   flex-shrink: 0;
 }
 
-/* Portal group (expandable) */
-.rail-group-btn {
+/* Collapsed inbox dot */
+.rail-badge-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex-shrink: 0;
+}
+
+/* Rail avatar initials */
+.rail-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent);
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 7px 10px;
-  border-radius: var(--radius);
-  border: 0;
-  background: transparent;
-  color: var(--ink-2);
-  font: inherit;
-  font-weight: 530;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.rail-group-btn:hover {
-  background: color-mix(in srgb, var(--panel) 60%, transparent);
-  color: var(--ink);
-}
-.rail-group-btn.has-active-child {
-  background: var(--panel);
-  color: var(--ink);
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-.rail-group-chevron {
-  margin-left: auto;
-  opacity: 0.6;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
   flex-shrink: 0;
-  transition: transform 0.18s;
-}
-.rail-group-chevron.is-rotated {
-  transform: rotate(90deg);
-}
-.rail-group-items {
-  display: grid;
-  gap: 1px;
-  padding-left: 6px;
-}
-.rail-link-nested {
-  font-size: 0.84rem;
-  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* Rail collapse toggle */
@@ -178,6 +487,7 @@
 /* Rail footer */
 .rail-foot {
   margin-top: auto;
+  flex-shrink: 0;
   display: grid;
   gap: 8px;
   border-top: 1px solid var(--line);
@@ -206,16 +516,33 @@
   white-space: nowrap;
 }
 
+/* ── Drawer backdrop (mobile) ────────────────────────── */
+.drawer-backdrop {
+  display: none;
+}
+@media (max-width: 900px) {
+  .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(2px);
+  }
+}
+
 /* ── Main area ───────────────────────────────────────── */
 .main {
+  flex: 1;
+  min-height: 0;
   min-width: 0;
   outline: none;
+  overflow-y: auto; /* pages scroll within the content column */
 }
 .main.full-height {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
+  overflow: hidden; /* sessions shell fills the remaining space */
 }
 
 /* ── Page padding ────────────────────────────────────── */
@@ -228,7 +555,8 @@
 }
 .page.wide   { max-width: 1440px; }
 .page.narrow { max-width: 760px; }
-.page-head {
+.page-head,
+.page-header {
   display: flex;
   gap: 14px;
   align-items: flex-start;
@@ -245,12 +573,15 @@
 /* ── Three-panel sessions layout ─────────────────────── */
 .sessions-shell {
   display: grid;
-  grid-template-columns: 260px 1fr;
-  height: 100vh;
+  /* minmax(0, 1fr) lets the detail panel shrink below its content width instead of overflowing */
+  grid-template-columns: 260px minmax(0, 1fr);
+  height: 100%; /* parent flex provides the 100vh space */
   overflow: hidden;
 }
+/* With a session open the shell still has two children (list + detail);
+   the detail panel takes all remaining width. */
 .sessions-shell.with-workspace {
-  grid-template-columns: 260px 1fr 1fr;
+  grid-template-columns: 260px minmax(0, 1fr);
 }
 .sessions-list-panel {
   border-right: 1px solid var(--line);
@@ -317,8 +648,24 @@
     display: flex;
     position: fixed;
     inset: 0 auto 0 0;
-    width: var(--rail-w);
+    width: var(--rail-w, 236px);
     z-index: 100;
+  }
+  /* Collapse button hidden in mobile drawer */
+  .shell.nav-open .rail-sep { display: none; }
+  /* shell-right fills the single column; allow natural page scroll */
+  .shell-right {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  .main {
+    overflow-y: visible; /* body scroll on mobile */
+  }
+  /* sessions still need contained height on mobile */
+  .main.full-height {
+    min-height: calc(100vh - 88px); /* topbar + app-header */
+    overflow: hidden;
   }
   .topbar {
     display: flex;
@@ -332,6 +679,8 @@
     font-weight: 700;
     font-size: 0.94rem;
   }
+  /* Hide resize separator on mobile */
+  .rail-sep { display: none; }
 }
 @media (max-width: 640px) {
   .sessions-shell {

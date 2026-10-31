@@ -51,6 +51,15 @@ import { styleChoices } from './diagram-icons.ts';
 import { rendererProblem } from './docimage.ts';
 import { getRepo } from './repos.ts';
 import type { Repo } from './repos.ts';
+import {
+  validateAttachmentIds,
+  stageAttachmentsToWorkDir,
+  buildAttachmentPromptBlock,
+  linkAttachmentsToParent,
+  deleteAttachmentsForParent,
+  getAttachmentsView,
+} from './ai-attachments.ts';
+import { createWorkDir } from './workflows/working-copies.ts';
 
 export { DIAGRAM_KINDS, DIAGRAM_LIMITS, KIND_LABELS, type DiagramKind };
 
@@ -152,6 +161,7 @@ function iconExportCapability(): { drawio: boolean; png: boolean; svg: boolean; 
 }
 
 function diagramView(d: Row): object {
+  const attIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
   return {
     id: d.id,
     project_id: d.project_id,
@@ -175,6 +185,7 @@ function diagramView(d: Row): object {
     created_by: d.created_by ?? null,
     created_at: d.created_at,
     updated_at: d.updated_at,
+    attachments: attIds.length > 0 ? getAttachmentsView(String(d.project_id), attIds) : [],
   };
 }
 
@@ -226,6 +237,7 @@ export function buildDiagramPrompt(
 async function startDiagramGeneration(
   diagramId: string,
   userId: string,
+  attachmentRows: Row[] = [],
 ): Promise<{ workflowId: string }> {
   const d = one<Row>('SELECT * FROM diagrams WHERE id = ?', diagramId);
   if (!d) throw notFound('Diagram not found');
@@ -240,7 +252,7 @@ async function startDiagramGeneration(
   }
   if (!repos.length) throw badRequest('The diagram has no repositories');
 
-  const goal = buildDiagramPrompt(d, repos);
+  let goal = buildDiagramPrompt(d, repos);
 
   // Build rules for the agent
   const style = (d.style ?? 'mermaid') as DiagramStyle;
@@ -249,6 +261,18 @@ async function startDiagramGeneration(
   // Create workflow
   const workflowId = newId('w_');
   const ts = now();
+
+  // Pre-stage attachment files if provided
+  let preWorkDir: string | null = null;
+  if (attachmentRows.length > 0) {
+    const project = one<Row>('SELECT slug FROM projects WHERE id = ?', String(d.project_id));
+    if (project) {
+      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+      preWorkDir = await createWorkDir(workflowId, projectDir);
+      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+      goal += buildAttachmentPromptBlock(staged);
+    }
+  }
 
   insert('p6_workflows', {
     id: workflowId,
@@ -263,6 +287,7 @@ async function startDiagramGeneration(
     repo_ids: String(d.repo_ids),
     iteration_count: 0,
     max_iterations: 1,
+    work_dir: preWorkDir,
     created_by: userId,
     created_at: ts,
     updated_at: ts,
@@ -531,6 +556,7 @@ export function registerDiagramRoutes(): void {
     const focus = str(body.focus, 'Focus', { max: DIAGRAM_LIMITS.focusChars, optional: true }).trim();
     const leadAgent = str(body.leadAgent as string ?? '', 'Lead agent', { max: 200, optional: true }).trim();
     const trustAllTools = Boolean(body.trustAllTools);
+    const rawAttachmentIds = Array.isArray(body.attachmentIds) ? (body.attachmentIds as unknown[]).map(String) : [];
 
     if (cloud && style !== 'icon') throw badRequest('A cloud only applies to the icon style');
 
@@ -559,6 +585,14 @@ export function registerDiagramRoutes(): void {
     const repoNames = repos.map((r) => r.name);
     const title = name || `${KIND_LABELS[kind]}: ${repoNames.join(', ')}`.slice(0, DIAGRAM_LIMITS.titleChars);
 
+    // Validate attachment IDs before inserting the diagram
+    let attachmentRows: Row[] = [];
+    if (rawAttachmentIds.length > 0) {
+      const { error, rows } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+      if (error) throw badRequest(error);
+      attachmentRows = rows!;
+    }
+
     const id = newId('dg_');
     const ts = now();
 
@@ -582,6 +616,7 @@ export function registerDiagramRoutes(): void {
       lead_agent: leadAgent,
       trust_tools: trustAllTools ? 1 : 0,
       workflow_id: null,
+      attachment_ids: JSON.stringify(rawAttachmentIds),
       created_by: req.user!.id,
       created_at: ts,
       updated_at: ts,
@@ -589,11 +624,16 @@ export function registerDiagramRoutes(): void {
 
     let workflowId: string;
     try {
-      const gen = await startDiagramGeneration(id, req.user!.id);
+      const gen = await startDiagramGeneration(id, req.user!.id, attachmentRows);
       workflowId = gen.workflowId;
     } catch (e) {
       dbRun('DELETE FROM diagrams WHERE id = ?', id);
       throw e;
+    }
+
+    // Link attachments to this diagram
+    if (rawAttachmentIds.length > 0) {
+      linkAttachmentsToParent(rawAttachmentIds, 'diagram', id);
     }
 
     const diagram = one<Row>('SELECT * FROM diagrams WHERE id = ?', id)!;
@@ -630,6 +670,7 @@ export function registerDiagramRoutes(): void {
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);
+    deleteAttachmentsForParent('diagram', String(d.id));
     dbRun('DELETE FROM diagrams WHERE id = ?', String(d.id));
 
     notifyProject(String(project.id), 'diagrams.updated', { id: d.id });
@@ -645,6 +686,9 @@ export function registerDiagramRoutes(): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const style = readStyle(body.style);
     const cloud = readCloud(body.cloud);
+    const rawAttachmentIds = Array.isArray(body.attachmentIds)
+      ? (body.attachmentIds as unknown[]).map(String)
+      : null; // null = use existing
 
     if (style) {
       update('diagrams', String(d.id), { style, cloud: cloud ?? (style === 'icon' ? DEFAULT_CLOUD : ''), updated_at: now() });
@@ -652,9 +696,38 @@ export function registerDiagramRoutes(): void {
       update('diagrams', String(d.id), { cloud, updated_at: now() });
     }
 
-    const gen = await startDiagramGeneration(String(d.id), req.user!.id);
-    const updated = one<Row>('SELECT * FROM diagrams WHERE id = ?', String(d.id))!;
+    // Determine which attachment IDs to use: new ones (if provided) or existing
+    let effectiveAttachmentIds: string[];
+    if (rawAttachmentIds !== null) {
+      if (rawAttachmentIds.length > 0) {
+        const { error } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+        if (error) { sendJson(res, 400, { error }); return; }
+      }
+      // Replace: unlink old attachments, link new ones
+      const oldIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
+      if (oldIds.length > 0) deleteAttachmentsForParent('diagram', String(d.id));
+      effectiveAttachmentIds = rawAttachmentIds;
+      update('diagrams', String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
+    } else {
+      effectiveAttachmentIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
+    }
 
+    // Reload updated diagram row and resolve attachment rows
+    const dUpdated = getDiagramRow(String(project.id), req.params.did);
+    let attachmentRows: Row[] = [];
+    if (effectiveAttachmentIds.length > 0) {
+      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      attachmentRows = rows ?? [];
+    }
+
+    const gen = await startDiagramGeneration(String(dUpdated.id), req.user!.id, attachmentRows);
+
+    // Link new attachment IDs (if replaced)
+    if (rawAttachmentIds !== null && rawAttachmentIds.length > 0) {
+      linkAttachmentsToParent(rawAttachmentIds, 'diagram', String(dUpdated.id));
+    }
+
+    const updated = one<Row>('SELECT * FROM diagrams WHERE id = ?', String(dUpdated.id))!;
     sendJson(res, 200, {
       diagram: diagramView(updated),
       workflowId: gen.workflowId,

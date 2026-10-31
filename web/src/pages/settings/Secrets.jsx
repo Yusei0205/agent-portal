@@ -206,10 +206,10 @@ export default function Secrets() {
 
 function PackStatus({ status }) {
   const map = {
-    'available':     { label: 'Available',     className: 'badge badge-green' },
-    'not-available': { label: 'Not available', className: 'badge badge-gray' },
-    'installing':    { label: 'Installing…',   className: 'badge badge-blue' },
-    'error':         { label: 'Error',         className: 'badge badge-red' },
+    'available':     { label: 'Available',     className: 'badge badge-ok' },
+    'not-available': { label: 'Not available', className: 'badge badge-neutral' },
+    'installing':    { label: 'Installing…',   className: 'badge badge-info' },
+    'error':         { label: 'Error',         className: 'badge badge-danger' },
   };
   const info = map[status] ?? map['not-available'];
   return <span className={info.className}>{info.label}</span>;

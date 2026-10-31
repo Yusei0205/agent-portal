@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { AwsRegionSelect } from '../components/AwsRegionSelect.jsx';
 
 const AUTH_METHODS = [
   { value: 'keys',          label: 'Access keys' },
@@ -143,12 +146,10 @@ function AwsAccountModal({ projectId, account, onClose, onSave }) {
             </div>
             <div className="field">
               <label htmlFor="aws-region">Region</label>
-              <input
+              <AwsRegionSelect
                 id="aws-region"
-                type="text"
                 value={region}
                 onChange={(e) => setRegion(e.target.value)}
-                placeholder="us-east-1"
               />
             </div>
             {!account && (
@@ -198,13 +199,15 @@ function AwsAccountModal({ projectId, account, onClose, onSave }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function AwsAccounts({ projectId }) {
+export function AwsAccounts({ projectId, currentProject }) {
   const [accounts, setAccounts]       = useState([]);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
   const [modal, setModal]             = useState(null); // null | 'new' | { account }
   const [testResults, setTestResults] = useState({}); // id → { ok, identity?, note?, error? }
   const [testing, setTesting]         = useState({}); // id → bool
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     if (!projectId) { setLoading(false); return; }
@@ -236,12 +239,12 @@ export function AwsAccounts({ projectId }) {
   };
 
   const deleteAccount = async (acct) => {
-    if (!confirm(`Remove AWS account "${acct.name}"?`)) return;
+    if (!await requestConfirm(`Remove AWS account "${acct.name}"?`, 'Remove', 'danger')) return;
     try {
       await api.delete(`/api/projects/${projectId}/aws-accounts/${acct.id}`);
       setAccounts((prev) => prev.filter((a) => a.id !== acct.id));
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
     }
   };
 
@@ -266,11 +269,30 @@ export function AwsAccounts({ projectId }) {
   };
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>AWS accounts</h1>
-        <div className="page-actions">
-          {projectId && (
+    <>
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
+
+      {/* No project selected — helpful prompt */}
+      {!projectId && (
+        <div className="card">
+          <p className="muted">
+            No project selected.{' '}
+            <a href="#/projects">Choose a project</a> in the rail picker to manage its AWS credentials here.
+          </p>
+        </div>
+      )}
+
+      {/* Project-scoped content */}
+      {projectId && (
+        <>
+          {/* Project context header */}
+          <p className="muted" style={{ marginBottom: '0.75rem', fontSize: '0.84rem' }}>
+            AWS accounts for project:{' '}
+            <strong>{currentProject?.name ?? projectId}</strong>
+          </p>
+
+          <div className="page-actions" style={{ marginBottom: '1rem' }}>
             <button
               type="button"
               className="btn btn-primary"
@@ -279,75 +301,69 @@ export function AwsAccounts({ projectId }) {
               <Icon name="plus" size={14} />
               Add account
             </button>
+          </div>
+          <p className="muted">AWS accounts available to agent runs in this project.</p>
+
+          {loading && <p className="muted">Loading…</p>}
+          {error && <p className="error-note" role="alert">{error}</p>}
+
+          {!loading && !error && accounts.length === 0 && (
+            <div className="card">
+              <p className="muted">No AWS accounts yet.</p>
+            </div>
           )}
-        </div>
-      </div>
-      <p className="muted">AWS accounts available to agent runs in this project.</p>
 
-      {!projectId && (
-        <div className="card">
-          <p className="muted">Open a project and go to AWS accounts to manage its AWS credentials.</p>
-        </div>
-      )}
-
-      {projectId && loading && <p className="muted">Loading…</p>}
-      {projectId && error && <p className="error-note" role="alert">{error}</p>}
-
-      {!loading && !error && accounts.length === 0 && (
-        <div className="card">
-          <p className="muted">No AWS accounts yet.</p>
-        </div>
-      )}
-
-      {!loading && accounts.length > 0 && (
-        <table className="data-table" aria-label="AWS accounts">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Auth method</th>
-              <th>Region</th>
-              <th>Added</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {accounts.map((acct) => (
-              <tr key={acct.id}>
-                <td>{acct.name}</td>
-                <td>
-                  <span className={METHOD_BADGE_CLASS[acct.auth_method] || 'badge badge-neutral'}>
-                    {AUTH_METHODS.find((m) => m.value === acct.auth_method)?.label ?? acct.auth_method}
-                  </span>
-                </td>
-                <td className="muted">{acct.region || '—'}</td>
-                <td className="muted">{formatRelative(acct.created_at)}</td>
-                <td>
-                  <div className="row">
-                    {renderTestResult(testResults[acct.id])}
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => testAccount(acct)}
-                      disabled={testing[acct.id]}
-                      aria-label={`Test ${acct.name}`}
-                    >
-                      {testing[acct.id] ? 'Testing…' : 'Test'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-icon"
-                      title="Delete"
-                      aria-label={`Delete ${acct.name}`}
-                      onClick={() => deleteAccount(acct)}
-                    >
-                      <Icon name="trash" size={14} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          {!loading && accounts.length > 0 && (
+            <table className="data-table" aria-label="AWS accounts">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Auth method</th>
+                  <th>Region</th>
+                  <th>Added</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map((acct) => (
+                  <tr key={acct.id}>
+                    <td>{acct.name}</td>
+                    <td>
+                      <span className={METHOD_BADGE_CLASS[acct.auth_method] || 'badge badge-neutral'}>
+                        {AUTH_METHODS.find((m) => m.value === acct.auth_method)?.label ?? acct.auth_method}
+                      </span>
+                    </td>
+                    <td className="muted">{acct.region || '—'}</td>
+                    <td className="muted">{formatRelative(acct.created_at)}</td>
+                    <td>
+                      <div className="row">
+                        {renderTestResult(testResults[acct.id])}
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => testAccount(acct)}
+                          disabled={testing[acct.id]}
+                          aria-label={`Test ${acct.name}`}
+                        >
+                          {testing[acct.id] ? 'Testing…' : 'Test'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-icon"
+                          title="Delete"
+                          aria-label={`Delete ${acct.name}`}
+                          onClick={() => deleteAccount(acct)}
+                        >
+                          <Icon name="trash" size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
       )}
 
       {modal && (
@@ -358,7 +374,7 @@ export function AwsAccounts({ projectId }) {
           onSave={handleSave}
         />
       )}
-    </div>
+    </>
   );
 }
 

@@ -1,0 +1,819 @@
+{
+  "version": "1",
+  "modules": {
+    "auth": {
+      "description": "Authentication, login, session cookies",
+      "sources": [
+        "server/auth.ts",
+        "web/src/pages/Auth.jsx"
+      ],
+      "tests": [
+        "test/auth.test.ts"
+      ],
+      "smokeIds": ["auth"]
+    },
+    "setup": {
+      "description": "First-run setup wizard",
+      "sources": [
+        "web/src/pages/setup/SetupWizard.jsx",
+        "web/src/pages/setup/AdminAccount.jsx",
+        "web/src/pages/setup/CloudSecurity.jsx",
+        "web/src/pages/setup/CloudStorage.jsx",
+        "web/src/pages/setup/ConfirmStep.jsx",
+        "web/src/pages/setup/DeployTarget.jsx",
+        "web/src/pages/setup/ModelProvider.jsx",
+        "web/src/pages/hub/ProjectHub.jsx",
+        "web/src/components/WizardProgress.jsx",
+        "web/src/styles/setup-wizard.css"
+      ],
+      "tests": [],
+      "smokeIds": ["setup"]
+    },
+    "api-tokens": {
+      "description": "API token management and token scope enforcement",
+      "sources": [
+        "server/api-tokens.ts"
+      ],
+      "tests": [
+        "test/api-tokens.test.ts",
+        "test/token-scopes.test.ts"
+      ],
+      "smokeIds": ["api-tokens"]
+    },
+    "permissions": {
+      "description": "Role-based access control, permission checks",
+      "sources": [
+        "server/permissions.ts",
+        "server/governance/users.ts"
+      ],
+      "tests": [
+        "test/permissions.test.ts"
+      ],
+      "smokeIds": ["permissions"]
+    },
+    "audit": {
+      "description": "Audit log recording and retrieval",
+      "sources": [
+        "server/audit.ts"
+      ],
+      "tests": [
+        "test/audit-fixes.test.ts",
+        "test/audit-fixes-3.test.ts"
+      ],
+      "smokeIds": ["audit"]
+    },
+    "delegation": {
+      "description": "Delegate tokens for sub-agent authentication",
+      "sources": [
+        "server/delegation.ts"
+      ],
+      "tests": [
+        "test/delegate-token.test.ts",
+        "test/delegation.test.ts"
+      ],
+      "smokeIds": ["delegation"]
+    },
+    "projects": {
+      "description": "Project CRUD and listing",
+      "sources": [
+        "server/projects.ts",
+        "web/src/pages/Projects.jsx"
+      ],
+      "tests": [
+        "test/projects.test.ts"
+      ],
+      "smokeIds": ["projects"]
+    },
+    "workspaces": {
+      "description": "Workspace management per project",
+      "sources": [
+        "server/workspaces.ts",
+        "web/src/pages/Workspaces.jsx",
+        "web/src/components/WorkspaceHeader.jsx",
+        "web/src/styles/workspace.css"
+      ],
+      "tests": [],
+      "smokeIds": ["workspaces"]
+    },
+    "sessions": {
+      "description": "Session lifecycle, context, files, and live run streaming",
+      "sources": [
+        "server/session-lifecycle.ts",
+        "server/session-context.ts",
+        "server/session-files.ts",
+        "server/runs.ts",
+        "server/portal-events.ts",
+        "server/superpowers-skills.ts",
+        "web/src/pages/sessions/SessionList.jsx",
+        "web/src/pages/sessions/SessionLive.jsx",
+        "web/src/pages/sessions/SessionsShell.jsx",
+        "web/src/pages/sessions/SessionWorkspace.jsx",
+        "web/src/pages/sessions/SessionChanges.jsx",
+        "web/src/pages/sessions/NewSessionDialog.jsx",
+        "web/src/lib/useRunStream.js",
+        "web/src/lib/mergeEvents.js",
+        "web/src/styles/sessions.css"
+      ],
+      "tests": [
+        "test/session-lifecycle.test.ts",
+        "test/session-context.test.ts",
+        "test/session-files.test.ts",
+        "test/sanitize-merge.test.ts"
+      ],
+      "smokeIds": ["sessions"]
+    },
+    "workflows": {
+      "description": "Workflow engine, controls, and driver",
+      "sources": [
+        "server/workflows/crud.ts",
+        "server/workflows/controls.ts",
+        "server/workflows/driver.ts",
+        "server/workflows/working-copies.ts",
+        "server/tool-packs.ts"
+      ],
+      "tests": [
+        "test/workflows.test.ts",
+        "test/session-sse.test.ts"
+      ],
+      "smokeIds": ["sessions"],
+      "note": "No dedicated smoke section. Session creation (section 31) exercises workflow engine; use sessions smoke ID."
+    },
+    "ide": {
+      "description": "In-browser IDE workspace — editor, explorer, terminal, source control",
+      "sources": [
+        "server/terminal.ts",
+        "web/src/pages/sessions/IdeAgents.jsx",
+        "web/src/pages/sessions/IdeBrowser.jsx",
+        "web/src/pages/sessions/IdeEditor.jsx",
+        "web/src/pages/sessions/IdeExplorer.jsx",
+        "web/src/pages/sessions/IdeHeader.jsx",
+        "web/src/pages/sessions/IdeSessionPanel.jsx",
+        "web/src/pages/sessions/IdeSourceControl.jsx",
+        "web/src/pages/sessions/IdeStatusBar.jsx",
+        "web/src/pages/sessions/IdeTerminal.jsx",
+        "web/src/pages/sessions/IdeWorkspace.jsx",
+        "web/src/pages/sessions/codemirror-editor.jsx",
+        "web/src/pages/sessions/xterm-terminal.jsx",
+        "web/src/styles/ide.css"
+      ],
+      "tests": [],
+      "smokeIds": ["ide"]
+    },
+    "dashboard": {
+      "description": "Agent performance dashboard KPIs and drill-downs",
+      "sources": [
+        "server/dashboard.ts",
+        "web/src/pages/Dashboard.jsx",
+        "web/src/styles/dashboard.css"
+      ],
+      "tests": [
+        "test/dashboard.test.ts"
+      ],
+      "smokeIds": ["dashboard"]
+    },
+    "knowledge": {
+      "description": "Knowledge base documents, search, ask, decisions, and learning content",
+      "sources": [
+        "server/knowledge.ts",
+        "server/learn.ts",
+        "web/src/pages/Knowledge.jsx",
+        "web/src/pages/Learn.jsx",
+        "web/src/lib/templates/index.js"
+      ],
+      "tests": [
+        "test/knowledge.test.ts"
+      ],
+      "smokeIds": ["knowledge"]
+    },
+    "create": {
+      "description": "Create hub page (container for Diagrams / Documents / Decks tabs)",
+      "sources": [
+        "web/src/pages/Create.jsx"
+      ],
+      "tests": [],
+      "smokeIds": ["create"]
+    },
+    "diagrams": {
+      "description": "Diagram creation and rendering — draw.io, mermaid, and icon packs",
+      "sources": [
+        "server/diagrams.ts",
+        "server/drawio.ts",
+        "server/drawio-cloud.ts",
+        "server/drawio-pack.ts",
+        "server/drawio-render.ts",
+        "server/drawio-text.ts",
+        "server/diagram-icons.ts",
+        "server/diagram-text.ts",
+        "web/src/pages/Diagrams.jsx",
+        "web/src/components/DiagramStyle.jsx",
+        "web/src/components/MermaidViewer.jsx"
+      ],
+      "tests": [
+        "test/diagrams.test.ts"
+      ],
+      "smokeIds": ["create"],
+      "note": "Section 5 (Create) covers the Diagrams tab. No standalone diagrams smoke section."
+    },
+    "generated-docs": {
+      "description": "AI-generated documents — Word/PDF/HTML generation pipeline",
+      "sources": [
+        "server/generated-docs.ts",
+        "server/generated-doc-text.ts",
+        "server/docgen.ts",
+        "server/docimage.ts",
+        "server/docs-pack.ts",
+        "server/doc-templates.ts",
+        "server/docx-template.ts",
+        "server/ooxml.ts",
+        "server/template-check.ts",
+        "server/convert.ts",
+        "web/src/pages/GeneratedDocs.jsx"
+      ],
+      "tests": [
+        "test/generated-docs.test.ts"
+      ],
+      "smokeIds": ["create"],
+      "note": "Section 5 (Create) covers the Documents tab. No standalone generated-docs smoke section."
+    },
+    "presentations": {
+      "description": "AI-generated presentations — PPTX creation and preview",
+      "sources": [
+        "server/presentations.ts",
+        "server/presentation-text.ts",
+        "server/pptx-preview.ts",
+        "server/pptx-template.ts",
+        "web/src/pages/Presentations.jsx"
+      ],
+      "tests": [
+        "test/presentations.test.ts"
+      ],
+      "smokeIds": ["create"],
+      "note": "Section 5 (Create) covers the Decks tab. No standalone presentations smoke section."
+    },
+    "vault": {
+      "description": "Secret vault — project, personal, and portal secrets",
+      "sources": [
+        "server/vault.ts",
+        "server/vault-generated.ts",
+        "server/secrets.ts",
+        "web/src/pages/Vault.jsx"
+      ],
+      "tests": [
+        "test/vault.test.ts"
+      ],
+      "smokeIds": ["vault"]
+    },
+    "insights": {
+      "description": "Session and cost insights analytics",
+      "sources": [
+        "server/insights.ts",
+        "web/src/pages/Insights.jsx"
+      ],
+      "tests": [
+        "test/insights.test.ts"
+      ],
+      "smokeIds": ["insights"]
+    },
+    "inbox": {
+      "description": "Agent inbox for incoming tasks and messages",
+      "sources": [
+        "server/inbox.ts",
+        "web/src/pages/Inbox.jsx"
+      ],
+      "tests": [],
+      "smokeIds": ["inbox"]
+    },
+    "connections": {
+      "description": "Git provider connections management",
+      "sources": [
+        "server/git-connections.ts",
+        "web/src/pages/Connections.jsx",
+        "web/src/pages/ConnectionsPage.jsx",
+        "web/src/styles/connections.css"
+      ],
+      "tests": [
+        "test/git-connections.test.ts"
+      ],
+      "smokeIds": ["connections"]
+    },
+    "repos": {
+      "description": "Repository listing, cloning, and clone progress tracking",
+      "sources": [
+        "server/repos.ts",
+        "server/git-progress.ts"
+      ],
+      "tests": [
+        "test/repos.test.ts",
+        "test/repos-progress.test.ts"
+      ],
+      "smokeIds": ["repos"]
+    },
+    "integrations": {
+      "description": "Third-party integrations (Atlassian, etc.)",
+      "sources": [
+        "server/integrations.ts",
+        "web/src/pages/Integrations.jsx"
+      ],
+      "tests": [],
+      "smokeIds": ["integrations"]
+    },
+    "jira": {
+      "description": "Jira integration: OAuth/API-token auth, ticket browse, session context",
+      "sources": [
+        "server/jira.ts",
+        "server/jira-text.ts",
+        "server/jira-adf.ts",
+        "server/workflows/crud.ts",
+        "server/workflows/driver.ts",
+        "server/agent/runner.ts"
+      ],
+      "tests": [
+        "test/jira.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "aws-accounts": {
+      "description": "AWS account management and region selection",
+      "sources": [
+        "server/aws-accounts.ts",
+        "web/src/pages/AwsAccounts.jsx",
+        "web/src/components/AwsRegionSelect.jsx",
+        "web/src/lib/awsRegions.js"
+      ],
+      "tests": [],
+      "smokeIds": ["aws-accounts"]
+    },
+    "credentials": {
+      "description": "AWS credentials management and parser",
+      "sources": [
+        "server/credentials.ts",
+        "server/kiro-idc.ts",
+        "web/src/pages/Credentials.jsx",
+        "web/src/lib/awsCredParser.js",
+        "web/src/styles/credentials.css"
+      ],
+      "tests": [
+        "test/credentials.test.ts",
+        "test/aws-cred-parser.test.ts"
+      ],
+      "smokeIds": ["credentials"]
+    },
+    "bedrock-sso": {
+      "description": "Bedrock SSO via AWS Identity Center (IDC)",
+      "sources": [
+        "server/bedrock-sso.ts",
+        "server/kiro-idc.ts",
+        "server/kiro-idc-check.ts",
+        "web/src/components/DeviceCodeBox.jsx"
+      ],
+      "tests": [
+        "test/bedrock-sso.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for Bedrock SSO device-code flow. Settings section 32 covers providers UI only."
+    },
+    "settings": {
+      "description": "Portal settings — AI provider, tools, permissions, code review, appearance",
+      "sources": [
+        "server/settings.ts",
+        "web/src/pages/settings/Appearance.jsx",
+        "web/src/pages/settings/Providers.jsx",
+        "web/src/pages/settings/Secrets.jsx",
+        "web/src/pages/settings/Settings.jsx",
+        "web/src/pages/settings/Users.jsx",
+        "web/src/pages/AdminPanel.jsx"
+      ],
+      "tests": [
+        "test/settings.test.ts"
+      ],
+      "smokeIds": ["settings"]
+    },
+    "config": {
+      "description": "Portal configuration — deploy target, cloud config, config file editor",
+      "sources": [
+        "server/config.ts",
+        "web/src/pages/Configuration.jsx",
+        "web/src/pages/config/ConfigEditor.jsx",
+        "web/src/pages/config/ConfigFileTree.jsx",
+        "web/src/pages/config/ConfigStatus.jsx",
+        "web/src/styles/config.css"
+      ],
+      "tests": [
+        "test/cloud-config.test.ts"
+      ],
+      "smokeIds": ["config"]
+    },
+    "kiro": {
+      "description": "Kiro CLI integration — command runner, settings parser, MCP server",
+      "sources": [
+        "server/kiro-cmd.ts",
+        "server/kiro-settings.ts",
+        "server/mcp-server.ts"
+      ],
+      "tests": [
+        "test/kiro-cmd.test.ts",
+        "test/kiro-mcp-generate.test.ts",
+        "test/kiro-models-parser.test.ts",
+        "test/kiro-settings.test.ts",
+        "test/kiro-win-env.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
+    },
+    "reviews": {
+      "description": "Code review creation, lifecycle, verdict, exports, and CI control plane",
+      "sources": [
+        "server/review.ts",
+        "server/review-lifecycle.ts",
+        "server/control-plane.ts",
+        "web/src/pages/Review.jsx",
+        "web/src/pages/ReviewDashboard.jsx",
+        "web/src/pages/ReviewDetail.jsx",
+        "web/src/pages/ReviewsPage.jsx"
+      ],
+      "tests": [
+        "test/review.test.ts"
+      ],
+      "smokeIds": ["reviews"]
+    },
+    "branch-scans": {
+      "description": "Branch scan creation and detail views",
+      "sources": [
+        "server/scan.ts",
+        "web/src/pages/BranchScans.jsx",
+        "web/src/pages/BranchScanDetail.jsx"
+      ],
+      "tests": [
+        "test/scan.test.ts"
+      ],
+      "smokeIds": ["branch-scans"]
+    },
+    "testing-module": {
+      "description": "Tests module — test project management, script generation, and MCP tools",
+      "sources": [
+        "server/testing/index.ts",
+        "server/testing/generate.ts",
+        "server/testing/helpers.ts",
+        "server/testing/model-provider.ts",
+        "server/testing/projects.ts",
+        "server/testing/runner.ts",
+        "server/testing/scripts.ts",
+        "server/testing/ssrf.ts",
+        "server/testing/totp.ts",
+        "server/testing/types.ts",
+        "server/testing/vault.ts",
+        "server/mcp-routes.ts",
+        "web/src/pages/tests/TestsPage.jsx"
+      ],
+      "tests": [
+        "test/testing.test.ts",
+        "test/testing-runs.test.ts",
+        "test/testing-generate.test.ts",
+        "test/testing-bedrock.test.ts",
+        "test/testing-kiro-provider.test.ts",
+        "test/mcp-tests-scope.test.ts"
+      ],
+      "smokeIds": ["testing-module"]
+    },
+    "api-access": {
+      "description": "API access page — scope checkboxes and MCP section (UI; backend covered by api-tokens)",
+      "sources": [
+        "web/src/pages/ApiAccess.jsx",
+        "web/src/styles/tokens.css"
+      ],
+      "tests": [],
+      "smokeIds": ["api-access", "api-tokens"]
+    },
+    "loop-specs": {
+      "description": "Loop specifications for multi-agent orchestration",
+      "sources": [
+        "server/loop-specs.ts",
+        "web/src/pages/LoopSpecs.jsx"
+      ],
+      "tests": [
+        "test/loop-specs.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for Loop Specs yet."
+    },
+    "engines": {
+      "description": "AI engine and model configuration, listing, and passthrough",
+      "sources": [
+        "server/models.ts",
+        "server/kiro-list-models.ts"
+      ],
+      "tests": [
+        "test/engines.test.ts",
+        "test/engine-models.test.ts",
+        "test/engine-model-passthrough.test.ts",
+        "test/model-listing.test.ts"
+      ],
+      "smokeIds": ["engines"]
+    },
+    "shell": {
+      "description": "App shell — rail navigation, command palette, shortcuts, header, breadcrumb, dialogs",
+      "sources": [
+        "web/src/components/Rail.jsx",
+        "web/src/components/CommandPalette.jsx",
+        "web/src/components/ShortcutsSheet.jsx",
+        "web/src/components/AppHeader.jsx",
+        "web/src/components/Breadcrumb.jsx",
+        "web/src/components/ConfirmDialog.jsx",
+        "web/src/components/BulkActionBar.jsx",
+        "web/src/components/Skeleton.jsx",
+        "web/src/lib/pages-extra.js",
+        "web/src/lib/useBulkSelect.js",
+        "web/src/lib/useFocusTrap.js",
+        "web/src/styles/layout.css",
+        "web/src/styles/palette.css"
+      ],
+      "tests": [],
+      "smokeIds": ["shell"]
+    },
+    "theme": {
+      "description": "Theme system — theme cycling, persistence, and custom CSS templates",
+      "sources": [
+        "server/themes.ts",
+        "web/src/lib/theme.js",
+        "web/src/lib/shortcuts.js",
+        "web/src/styles/aethrix.css",
+        "web/theme-init.js"
+      ],
+      "tests": [
+        "test/themes.test.ts"
+      ],
+      "smokeIds": ["theme"]
+    },
+    "attachments": {
+      "description": "AI attachments — file upload, preview, and picker for session context",
+      "sources": [
+        "server/ai-attachments.ts",
+        "web/src/components/AttachmentPicker.jsx",
+        "web/src/components/FilePreviewModal.jsx",
+        "web/src/styles/file-preview.css"
+      ],
+      "tests": [
+        "test/ai-attachments.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for attachments yet."
+    },
+    "security": {
+      "description": "Security regression tests — SSRF guard, token scope enforcement, child-session cap (backend-only; sources are shared core files)",
+      "sources": [],
+      "tests": [
+        "test/security-fixes.test.ts",
+        "test/ssrf.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* — all in the shared section. Changes to those shared files already mark this module affected."
+    },
+    "storage": {
+      "description": "File storage abstraction — local filesystem and S3 backends",
+      "sources": [
+        "server/storage/index.ts",
+        "server/storage/local.ts",
+        "server/storage/s3.ts",
+        "server/storage-instance.ts"
+      ],
+      "tests": [
+        "test/storage.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "db": {
+      "description": "SQLite database recovery and migration tests (backend-only; server/db.ts is shared core)",
+      "sources": [],
+      "tests": [
+        "test/db-recovery.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "server/db.ts is in the shared section (affects: *). Changes to db.ts already mark this module affected."
+    },
+    "health": {
+      "description": "Health-check endpoint",
+      "sources": [
+        "server/health.ts"
+      ],
+      "tests": [
+        "test/health.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "guardrails": {
+      "description": "Output guardrails runner",
+      "sources": [
+        "server/guardrails.ts"
+      ],
+      "tests": [
+        "test/guardrails-runner.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "output-files": {
+      "description": "Session output file management",
+      "sources": [
+        "server/output-files.ts"
+      ],
+      "tests": [
+        "test/output-files.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "user-config": {
+      "description": "Per-user configuration storage and retrieval",
+      "sources": [
+        "server/user-config.ts"
+      ],
+      "tests": [
+        "test/user-config.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "tickets": {
+      "description": "Jira ticket integration — connect, browse, and start sessions from tickets",
+      "sources": [
+        "web/src/pages/Tickets.jsx",
+        "web/src/components/JiraTicketPicker.jsx",
+        "web/src/components/TicketPreview.jsx",
+        "web/src/components/Markdown.jsx",
+        "web/src/pages/sessions/ticketVars.js",
+        "web/src/styles/jira.css"
+      ],
+      "tests": [],
+      "smokeIds": ["tickets"]
+    }
+  },
+
+  "shared": [
+    {
+      "description": "Core server infrastructure — database, HTTP routing, utilities, entry point, event bus",
+      "sources": [
+        "server/db.ts",
+        "server/http.ts",
+        "server/util.ts",
+        "server/index.ts",
+        "server/events.ts"
+      ],
+      "affects": "*",
+      "rationale": "Every server module depends on the DB, router, util helpers, entry-point registration, or the event bus. The UI smoke tests run against the real server binary, so a change here can break any module's backend tests AND its smoke assertions. No part restriction."
+    },
+    {
+      "description": "Build and dependency manifest",
+      "sources": [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "scripts/build.mjs",
+        "scripts/preflight.mjs"
+      ],
+      "affects": "*",
+      "rationale": "Dependency or build-config changes can break any module silently — both compiled server code and the web bundle. Affects both backend and UI."
+    },
+    {
+      "description": "Shared backend test infrastructure",
+      "sources": [
+        "test/fixtures.ts",
+        "test/fake-sdk.mjs",
+        "test/fake-kiro.mjs"
+      ],
+      "affects": "*",
+      "part": "backend",
+      "rationale": "Every backend test imports from fixtures.ts. fake-sdk and fake-kiro are used across multiple test suites. These are test helpers only — they don't affect the built server or the smoke suite."
+    },
+    {
+      "description": "Smoke test runner",
+      "sources": [
+        "test/ui/smoke.ts"
+      ],
+      "affects": "*",
+      "part": "ui",
+      "rationale": "The smoke runner itself is shared UI infrastructure. Changes to timing, helpers, section list, or the SMOKE_ONLY mechanism only affect smoke (UI) outcomes, not backend unit tests."
+    },
+    {
+      "description": "Agent runner infrastructure",
+      "sources": [
+        "server/agent/runner.ts",
+        "server/agent/claude-code.ts",
+        "server/agent/demo.ts",
+        "server/agent/kiro.ts",
+        "server/agent/litellm.ts",
+        "server/agent/pricing.ts",
+        "server/agent/types.ts"
+      ],
+      "affects": ["sessions", "workflows", "reviews", "branch-scans", "testing-module"],
+      "rationale": "The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction."
+    },
+    {
+      "description": "Core web app infrastructure — routing, API client, event system, global styles",
+      "sources": [
+        "web/src/App.jsx",
+        "web/src/main.jsx",
+        "web/src/styles.css",
+        "web/src/styles/base.css",
+        "web/src/styles/components.css",
+        "web/src/lib/api.js",
+        "web/src/lib/events.js",
+        "web/src/lib/cx.js",
+        "web/src/lib/util.js"
+      ],
+      "affects": "*",
+      "part": "ui",
+      "rationale": "Every page is rendered through App.jsx and uses api.js, events, and the global stylesheet. Web-only files — they don't affect backend unit tests. Affects only UI parts."
+    },
+    {
+      "description": "Universal UI primitives — icons, skeleton loading, toast notifications",
+      "sources": [
+        "web/src/components/Icon.jsx",
+        "web/src/components/Skeleton.jsx",
+        "web/src/components/Toast.jsx"
+      ],
+      "affects": "*",
+      "part": "ui",
+      "rationale": "Used on virtually every page; a breakage is visible across the entire UI. Web-only files — affects only UI parts."
+    },
+    {
+      "description": "Live run-stream hook",
+      "sources": [
+        "web/src/lib/useRunStream.js"
+      ],
+      "affects": ["sessions", "reviews", "testing-module"],
+      "part": "ui",
+      "rationale": "Only features that display real-time agent output use this hook. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Markdown sanitizer (DOMPurify wrapper)",
+      "sources": [
+        "web/src/lib/sanitize.js"
+      ],
+      "affects": ["sessions", "attachments", "knowledge"],
+      "part": "ui",
+      "rationale": "Used in SessionLive.jsx (sessions) and FilePreviewModal.jsx (attachments, knowledge) to sanitize marked output. Web-only — affects only UI parts."
+    },
+    {
+      "description": "File preview modal",
+      "sources": [
+        "web/src/components/FilePreviewModal.jsx"
+      ],
+      "affects": ["attachments", "sessions", "knowledge"],
+      "part": "ui",
+      "rationale": "Used for previewing uploaded files in sessions, knowledge base documents, and the attachments picker. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "AWS credential and region utilities",
+      "sources": [
+        "web/src/lib/awsCredParser.js",
+        "web/src/lib/awsRegions.js",
+        "web/src/components/AwsRegionSelect.jsx"
+      ],
+      "affects": ["credentials", "aws-accounts", "bedrock-sso"],
+      "part": "ui",
+      "rationale": "Specific to AWS credential entry, account management, and Bedrock SSO flows. Web-only files — affects only UI parts."
+    },
+    {
+      "description": "Device code OAuth box",
+      "sources": [
+        "web/src/components/DeviceCodeBox.jsx"
+      ],
+      "affects": ["bedrock-sso", "auth", "credentials"],
+      "part": "ui",
+      "rationale": "Used in Bedrock SSO device-code flow, auth provider setup, and the Kiro IAM Identity Center re-authentication flow in the Credentials page. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Workspace / session header component",
+      "sources": [
+        "web/src/components/WorkspaceHeader.jsx"
+      ],
+      "affects": ["workspaces", "sessions", "ide"],
+      "part": "ui",
+      "rationale": "Rendered in workspace and session views. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Shared router and navigation",
+      "sources": [
+        "web/src/lib/router.js"
+      ],
+      "affects": ["shell", "projects", "auth", "setup"],
+      "part": "ui",
+      "rationale": "Route changes affect navigation in shell, project listing, post-login redirect, and setup wizard steps. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Template library",
+      "sources": [
+        "web/src/lib/templates/index.js"
+      ],
+      "affects": ["knowledge", "generated-docs", "presentations"],
+      "part": "ui",
+      "rationale": "Document and presentation templates used across knowledge base, generated docs, and presentations. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Shared theme CSS variables",
+      "sources": [
+        "shared/themes"
+      ],
+      "affects": ["theme"],
+      "part": "ui",
+      "rationale": "Theme palette CSS definitions — web-only. Changes affect only the theme module's UI part."
+    }
+  ]
+}

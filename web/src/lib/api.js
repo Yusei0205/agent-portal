@@ -13,6 +13,40 @@ export class ApiError extends Error {
 }
 
 /**
+ * Multipart upload — sends FormData without setting Content-Type so the browser
+ * can include the multipart boundary. The CSRF header is still sent.
+ *
+ * @param {string} url
+ * @param {FormData} formData
+ * @returns {Promise<any>}
+ */
+async function requestUpload(url, formData) {
+  const headers = { 'x-requested-with': 'agent-portal' };
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: formData,
+      credentials: 'same-origin',
+    });
+  } catch {
+    throw new ApiError(0, 'Cannot reach the portal server. Check that it is running.');
+  }
+  const contentType = res.headers.get('content-type') || '';
+  const data = contentType.includes('application/json')
+    ? await res.json()
+    : await res.text();
+  if (!res.ok) {
+    const msg =
+      (data && typeof data === 'object' && data.error) ||
+      `Request failed (${res.status})`;
+    throw new ApiError(res.status, msg, typeof data === 'object' && data !== null ? data : undefined);
+  }
+  return data;
+}
+
+/**
  * @param {string} method
  * @param {string} url
  * @param {unknown} [body]
@@ -59,7 +93,16 @@ export const api = {
   /** @param {string} url @param {unknown} [body] @returns {Promise<any>} */
   put: (url, body = {}) => request('PUT', url, body),
   /** @param {string} url @param {unknown} [body] @returns {Promise<any>} */
+  patch: (url, body = {}) => request('PATCH', url, body),
+  /** @param {string} url @param {unknown} [body] @returns {Promise<any>} */
   delete: (url, body) => request('DELETE', url, body),
+  /**
+   * Multipart file upload — body must be FormData.
+   * The CSRF header is sent; Content-Type is omitted so the browser sets the
+   * multipart boundary automatically.
+   * @param {string} url @param {FormData} formData @returns {Promise<any>}
+   */
+  upload: (url, formData) => requestUpload(url, formData),
 };
 
 export default api;

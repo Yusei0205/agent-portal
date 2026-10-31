@@ -7,7 +7,7 @@
 import { loadConfig, setConfig, ensureDataDirs } from './config.ts';
 import type { Config } from './config.ts';
 import { openDb, closeDb, isDbOpen } from './db.ts';
-import { createServer, clearRoutes, router } from './http.ts';
+import { createServer, clearRoutes, router, setWsUpgradeHandler } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { registerAuthRoutes, createUser, userCount, cleanupSessions } from './auth.ts';
 import { registerHealthRoutes } from './health.ts';
@@ -36,12 +36,29 @@ import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLoopSpecRoutes } from './loop-specs.ts';
 import { registerInsightsRoutes } from './insights.ts';
+import { registerDashboardRoutes } from './dashboard.ts';
 import { registerApiTokenRoutes } from './api-tokens.ts';
 import { registerAuditRoutes } from './audit.ts';
 import { registerLearnRoutes } from './learn.ts';
 import { registerControlPlaneRoutes } from './control-plane.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
+import { registerSessionFileRoutes } from './session-files.ts';
+import { registerTerminalRoutes, handleTerminalUpgrade } from './terminal.ts';
+import { registerSessionLifecycleRoutes, startIdleStopTimer, stopIdleStopTimer } from './session-lifecycle.ts';
+import { registerCredentialRoutes } from './credentials.ts';
+import { registerUserConfigRoutes } from './user-config.ts';
+import { registerScanRoutes } from './scan.ts';
+import { registerMcpRoutes } from './mcp-routes.ts';
+import { registerTestingRoutes } from './testing/index.ts';
+import { registerThemeRoutes } from './themes.ts';
+import { registerPortalEventsRoutes } from './portal-events.ts';
+import { registerAiAttachmentRoutes, cleanupOrphanedAttachments } from './ai-attachments.ts';
+import { registerBedrockSsoRoutes } from './bedrock-sso.ts';
+import { registerKiroSettingsRoutes } from './kiro-settings.ts';
+import { registerEngineModelRoutes } from './models.ts';
+import { registerSessionContextRoutes } from './session-context.ts';
+import { registerJiraRoutes } from './jira.ts';
 import './review-lifecycle.ts'; // Register review lifecycle hook (wires run stats → review row)
 
 // Track whether routes have been registered (they're global, so only once per process)
@@ -130,12 +147,29 @@ export async function startServer(
   registerReviewRoutes();
   registerLoopSpecRoutes();
   registerInsightsRoutes();
+  registerDashboardRoutes();
   registerApiTokenRoutes();
   registerAuditRoutes();
   registerLearnRoutes();
   registerControlPlaneRoutes();
   registerIntegrationRoutes();
   registerAwsAccountRoutes();
+  registerSessionFileRoutes();
+  registerTerminalRoutes();
+  registerSessionLifecycleRoutes();
+  registerScanRoutes();
+  registerUserConfigRoutes();
+  registerCredentialRoutes();
+  registerMcpRoutes();
+  registerTestingRoutes();
+  registerThemeRoutes();
+  registerPortalEventsRoutes();
+  registerAiAttachmentRoutes();
+  registerBedrockSsoRoutes();
+  registerKiroSettingsRoutes();
+  registerEngineModelRoutes();
+  registerSessionContextRoutes();
+  registerJiraRoutes();
 
   // 6. Auto-create admin from env vars if no users exist
   if (
@@ -154,6 +188,9 @@ export async function startServer(
 
   // 7. Start HTTP server
   const server = createServer();
+
+  // Register WebSocket terminal upgrade handler
+  setWsUpgradeHandler(handleTerminalUpgrade);
   const port = opts.port ?? cfg.port;
   const host = opts.host ?? cfg.host;
 
@@ -176,9 +213,20 @@ export async function startServer(
   }, 6 * 3600_000);
   sessionCleanupTimer.unref();
 
-  // 9. Graceful shutdown
+  // 8b. Periodic AI attachment orphan cleanup (every 6 hours)
+  const attachmentCleanupTimer = setInterval(() => {
+    if (isDbOpen()) cleanupOrphanedAttachments();
+  }, 6 * 3600_000);
+  attachmentCleanupTimer.unref();
+
+  // 9. Idle-session stop timer (checks every minute)
+  startIdleStopTimer();
+
+  // 10. Graceful shutdown
   server.on('close', () => {
     clearInterval(sessionCleanupTimer);
+    clearInterval(attachmentCleanupTimer);
+    stopIdleStopTimer();
     closeDb();
   });
 

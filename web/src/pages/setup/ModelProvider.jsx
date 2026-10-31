@@ -1,3 +1,5 @@
+import { AWS_REGION_GROUPS } from '../../lib/awsRegions.js';
+
 const PROVIDERS = [
   {
     id: 'demo',
@@ -21,11 +23,6 @@ const PROVIDERS = [
   },
 ];
 
-const AWS_REGIONS = [
-  'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-  'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1',
-  'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1',
-];
 
 const AUTH_METHODS = [
   { value: 'instance',  label: "Server's own AWS identity (instance role / task role)" },
@@ -98,8 +95,14 @@ export function ModelProvider({ data, onChange, onNext, onBack }) {
                     onChange={(e) => onChange({ region: e.target.value })}
                   >
                     <option value="">— select region —</option>
-                    {AWS_REGIONS.map((r) => (
-                      <option key={r} value={r}>{r}</option>
+                    {AWS_REGION_GROUPS.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.regions.map((r) => (
+                          <option key={r.code} value={r.code}>
+                            {r.name} — {r.code}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>

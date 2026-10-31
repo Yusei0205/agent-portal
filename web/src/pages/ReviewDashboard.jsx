@@ -78,7 +78,7 @@ function RecentReviewRow({ review }) {
           type="button"
           className="btn btn-ghost btn-sm"
           style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', padding: '2px 6px' }}
-          onClick={() => navigate(`/p/${review.project_id}/review/${review.id}`)}
+          onClick={() => navigate(`/p/${review.project_id}/reviews/code/${review.id}`)}
         >
           {review.base_ref}
           <Icon name="chevronRight" size={12} />
@@ -102,7 +102,7 @@ function RecentReviewRow({ review }) {
         <button
           type="button"
           className="btn btn-sm"
-          onClick={() => navigate(`/p/${review.project_id}/review/${review.id}`)}
+          onClick={() => navigate(`/p/${review.project_id}/reviews/code/${review.id}`)}
           aria-label={`Open review for ${review.head_ref}`}
         >
           Open

@@ -5,5 +5,13 @@ data/
 *.log
 server.out.log
 server.err.log
-data-v2/
-data-v2.log
+test/ui/screenshots/
+
+# Test affected — local pass record (never commit; content hashes are machine-local)
+.test-pass-record.json
+
+# Local test run artifacts
+data-playwright-test/
+data-screenshot-test/
+.playwright-mcp/
+test-*.txt

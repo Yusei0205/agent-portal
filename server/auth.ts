@@ -14,7 +14,7 @@
 
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import { router, sendJson, setCookie, parseCookies, setAuthenticator } from './http.ts';
-import type { PortalRequest, PortalResponse, PortalUser } from './http.ts';
+import type { PortalRequest, PortalResponse, PortalUser, AuthInfo } from './http.ts';
 import { one, run, insert, update, all } from './db.ts';
 import { generateId, now, str, badRequest, HttpError } from './util.ts';
 import { appendAudit } from './audit.ts';
@@ -104,7 +104,7 @@ export function cleanupSessions(): void {
 
 // ── Authenticator (used by HTTP router) ───────────────────────────────────────
 
-export function authenticate(rawReq: import('node:http').IncomingMessage): PortalUser | null {
+export function authenticate(rawReq: import('node:http').IncomingMessage, authInfo: AuthInfo = {}): PortalUser | null {
   // 1. Try cookie auth first
   const cookieHeader = rawReq.headers.cookie;
   if (cookieHeader) {
@@ -127,13 +127,21 @@ export function authenticate(rawReq: import('node:http').IncomingMessage): Porta
   if (authHeader.startsWith('Bearer ap_')) {
     const bearerToken = authHeader.slice(7).trim();
     const tokenHash = sha256(bearerToken);
-    const row = one<{ user_id: string; email: string; name: string; is_admin: number; disabled: number; expires_at: string; revoked_at: string | null }>(
-      `SELECT t.expires_at, t.revoked_at,
+    const row = one<{ user_id: string; email: string; name: string; is_admin: number; disabled: number; expires_at: string; revoked_at: string | null; scopes: string | null; scope: string; workflow_id: string | null }>(
+      `SELECT t.expires_at, t.revoked_at, t.scopes, t.scope, t.workflow_id,
               u.id AS user_id, u.email, u.name, u.is_admin, u.disabled
        FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?`,
       tokenHash,
     );
     if (row && !row.revoked_at && !row.disabled && row.expires_at >= now()) {
+      // Populate AuthInfo for downstream scope checks
+      const scopesRaw = row.scopes ? String(row.scopes) : null;
+      const scopes: string[] = scopesRaw
+        ? ((): string[] => { try { return JSON.parse(scopesRaw) as string[]; } catch { return [String(row.scope) === 'write' ? 'write' : 'read']; } })()
+        : (String(row.scope) === 'write' ? ['read', 'write'] : ['read']);
+      authInfo.tokenScopes = scopes;
+      authInfo.authViaToken = true;
+      authInfo.tokenWorkflowId = row.workflow_id ?? null;
       return { id: String(row.user_id), email: String(row.email), name: String(row.name), is_admin: Number(row.is_admin) };
     }
   }
@@ -347,6 +355,7 @@ export function registerAuthRoutes(): void {
   // GET /api/users  (admin: list users)
   router.get('/api/users', (req: PortalRequest, res: PortalResponse): void => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+    if (!req.user.is_admin) { sendJson(res, 403, { error: 'Admin access required' }); return; }
     const users = all('SELECT id, email, name, is_admin, disabled, created_at FROM users ORDER BY created_at');
     sendJson(res, 200, { users });
   });

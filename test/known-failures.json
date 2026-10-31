@@ -1,0 +1,69 @@
+{
+  "version": "1",
+  "entries": [
+    {
+      "module": "workflows",
+      "part": "backend",
+      "file": "test/workflows.test.ts",
+      "testName": "__process_timeout__",
+      "reason": "test/workflows.test.ts: modified workflow tests include slow agent operations that exceed the runner timeout; process killed after 3 minutes",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "repos",
+      "part": "backend",
+      "file": "test/repos.test.ts",
+      "testName": "__process_timeout__",
+      "reason": "repos.test.ts: createTestServer() background git clone subprocess keeps the event loop alive after tests complete; process killed after 3 minutes",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "repos",
+      "part": "backend",
+      "file": "test/repos.test.ts",
+      "testName": "Repositories API > POST .../sync changes status to \"cloning\"",
+      "reason": "Background performSync from POST /repos sets syncInFlight before the sync-status test fires, returning 409 instead of 202",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "repos",
+      "part": "backend",
+      "file": "test/repos-progress.test.ts",
+      "testName": "__process_timeout__",
+      "reason": "repos-progress.test.ts: createTestServer() in before() hook hangs; background git clone subprocess never terminates",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "attachments",
+      "part": "backend",
+      "file": "test/ai-attachments.test.ts",
+      "testName": "__process_timeout__",
+      "reason": "test/ai-attachments.test.ts: generate-based tests spin up a server that keeps the event loop alive past the runner timeout",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "repos",
+      "part": "ui",
+      "sectionId": "repos",
+      "testName": "Repo with in-progress clone renders [role=progressbar]",
+      "reason": "Clone progress indicator not rendering in repos list during an active clone",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "reviews",
+      "part": "ui",
+      "sectionId": "reviews",
+      "testName": "Creating a review then opening it navigates to reviews/code/:rid",
+      "reason": "Review detail navigation route does not match expected /reviews/code/:rid",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "testing-module",
+      "part": "ui",
+      "sectionId": "testing-module",
+      "testName": "Async generate: dialog closes, indicator appears, done clears it and shows toast",
+      "reason": "Async generate flow: dialog-close and indicator-appear state transitions do not fire in the expected order",
+      "addedAt": "2026-10-31"
+    }
+  ]
+}

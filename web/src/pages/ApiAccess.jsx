@@ -2,16 +2,91 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { formatDate, formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
+
+// ── Scope definitions ─────────────────────────────────────────────────────────
+
+const SCOPES = [
+  {
+    id: 'read',
+    label: 'Read',
+    description: 'List sessions, get transcripts, list and get reviews.',
+    alwaysOn: true,
+  },
+  {
+    id: 'write',
+    label: 'Write',
+    description: 'Start, prompt and stop sessions; edit configuration.',
+    alwaysOn: false,
+  },
+  {
+    id: 'review',
+    label: 'Review',
+    description: 'Start code reviews and branch scans, post PR comments.',
+    alwaysOn: false,
+  },
+  {
+    id: 'merge',
+    label: 'Merge',
+    description: 'Merge pull requests via the portal.',
+    alwaysOn: false,
+  },
+];
+
+const EXPIRY_OPTIONS = [
+  { value: 30,  label: '30 days' },
+  { value: 90,  label: '90 days (default)' },
+  { value: 365, label: '1 year' },
+];
+
+// ── Copy button ───────────────────────────────────────────────────────────────
+
+function CopyButton({ text, label, className }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* fallback */ }
+  };
+  return (
+    <button
+      type="button"
+      className={className ?? 'btn btn-sm'}
+      onClick={copy}
+      aria-label={label ?? 'Copy to clipboard'}
+    >
+      <Icon name="copy" size={13} />
+      {copied ? ' Copied!' : ' Copy'}
+    </button>
+  );
+}
 
 // ── New token modal ───────────────────────────────────────────────────────────
 
 function NewTokenModal({ projects, onClose, onCreated }) {
   const [name, setName]         = useState('');
-  const [scope, setScope]       = useState('read');
+  const [scopes, setScopes]     = useState(['read']);
   const [projectId, setProjectId] = useState('');
-  const [expiresAt, setExpiresAt] = useState('');
+  const [expiryDays, setExpiryDays] = useState(90);
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState(null);
+
+  // Close on Escape from anywhere on the page
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const toggleScope = (id) => {
+    if (id === 'read') return; // always on
+    setScopes((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
+    );
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -19,11 +94,12 @@ function NewTokenModal({ projects, onClose, onCreated }) {
     setSaving(true);
     setError(null);
     try {
+      const expiresAt = new Date(Date.now() + expiryDays * 86_400_000).toISOString();
       const body = {
         name: name.trim(),
-        scope,
+        scopes,
         ...(projectId ? { projectId } : {}),
-        ...(expiresAt ? { expiresAt } : {}),
+        expiresAt,
       };
       const r = await api.post('/api/api-tokens', body);
       onCreated(r.token, r.info);
@@ -55,13 +131,53 @@ function NewTokenModal({ projects, onClose, onCreated }) {
                 autoFocus
               />
             </div>
+
+            {/* Scopes */}
+            <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+              <legend style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: 6 }}>Scopes</legend>
+              {SCOPES.map((s) => (
+                <label
+                  key={s.id}
+                  className={`choice${scopes.includes(s.id) ? ' is-checked' : ''}`}
+                  style={{ marginBottom: 4, cursor: s.alwaysOn ? 'default' : 'pointer' }}
+                  aria-label={`${s.label} scope: ${s.description}`}
+                >
+                  <input
+                    type="checkbox"
+                    name="tok-scope"
+                    value={s.id}
+                    checked={scopes.includes(s.id)}
+                    onChange={() => toggleScope(s.id)}
+                    disabled={s.alwaysOn}
+                    aria-describedby={`scope-desc-${s.id}`}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {s.label}
+                      {s.alwaysOn && <span className="badge badge-neutral" style={{ fontWeight: 400 }}>always on</span>}
+                    </div>
+                    <div id={`scope-desc-${s.id}`} className="muted" style={{ fontSize: '0.82rem', marginTop: 1 }}>
+                      {s.description}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </fieldset>
+
+            {/* Expiry */}
             <div className="field">
-              <label htmlFor="tok-scope">Scope</label>
-              <select id="tok-scope" value={scope} onChange={(e) => setScope(e.target.value)}>
-                <option value="read">Read</option>
-                <option value="write">Read + Write</option>
+              <label htmlFor="tok-expiry">Expiry</label>
+              <select
+                id="tok-expiry"
+                value={expiryDays}
+                onChange={(e) => setExpiryDays(Number(e.target.value))}
+              >
+                {EXPIRY_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
               </select>
             </div>
+
             {projects && projects.length > 0 && (
               <div className="field">
                 <label htmlFor="tok-project">Restrict to project (optional)</label>
@@ -73,17 +189,7 @@ function NewTokenModal({ projects, onClose, onCreated }) {
                 </select>
               </div>
             )}
-            <div className="field">
-              <label htmlFor="tok-expires">Expiry date (optional)</label>
-              <input
-                id="tok-expires"
-                type="date"
-                value={expiresAt}
-                min={new Date().toISOString().slice(0, 10)}
-                onChange={(e) => setExpiresAt(e.target.value)}
-              />
-              <span className="field-hint">Leave blank for the default 90-day expiry.</span>
-            </div>
+
             {error && <p className="error-note" role="alert">{error}</p>}
           </div>
           <div className="modal-footer">
@@ -151,26 +257,224 @@ function TokenRevealModal({ token, onClose }) {
   );
 }
 
+// ── MCP section ───────────────────────────────────────────────────────────────
+
+const SCOPE_GROUPS = ['read', 'write', 'review', 'merge'];
+
+function McpSection({ mcpInfo }) {
+  if (!mcpInfo) return null;
+
+  const { url, transport, tools, clientConfigExample, tokenStats } = mcpInfo;
+  const configSnippet = JSON.stringify(clientConfigExample, null, 2);
+  const baseUrl = window.location.origin;
+  const fullUrl = `${baseUrl}${url}`;
+
+  // Group tools by scope
+  const byScope = {};
+  for (const scope of SCOPE_GROUPS) byScope[scope] = [];
+  for (const t of (tools || [])) {
+    if (byScope[t.scope]) byScope[t.scope].push(t);
+  }
+
+  return (
+    <section
+      aria-label="Connect an AI agent (MCP)"
+      style={{
+        marginTop: 32,
+        paddingTop: 20,
+        borderTop: '1px solid var(--line)',
+      }}
+    >
+      <h2 style={{ fontSize: 18, marginBottom: 4 }}>Connect an AI agent (MCP)</h2>
+      <p className="muted" style={{ marginBottom: 16 }}>
+        Connect MCP-compatible AI agents (e.g. Claude Code, Kiro) to this portal using a personal access token.
+      </p>
+
+      {/* Stats row */}
+      {tokenStats && (
+        <div
+          role="region"
+          aria-label="Token statistics"
+          style={{
+            display: 'flex', gap: 24, flexWrap: 'wrap',
+            background: 'var(--canvas)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)', padding: '12px 16px', marginBottom: 20,
+          }}
+        >
+          {[
+            { label: 'Active tokens (of 10)', value: `${tokenStats.active} / 10` },
+            { label: 'With write scope', value: tokenStats.withWrite },
+            { label: 'With merge scope', value: tokenStats.withMerge },
+            { label: 'Never used', value: tokenStats.neverUsed },
+          ].map(({ label, value }) => (
+            <div key={label}>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{value}</div>
+              <div className="muted" style={{ fontSize: 12 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* MCP endpoint */}
+      <div className="field" style={{ marginBottom: 16 }}>
+        <label>MCP endpoint</label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <code
+            style={{
+              flex: 1, padding: '6px 10px',
+              background: 'var(--canvas)', border: '1px solid var(--line)',
+              borderRadius: 'var(--radius)', fontFamily: 'var(--mono)', fontSize: '0.88rem',
+              wordBreak: 'break-all',
+            }}
+            aria-label="MCP endpoint URL"
+          >
+            {fullUrl}
+          </code>
+          <CopyButton text={fullUrl} label="Copy MCP endpoint URL" />
+        </div>
+        <p className="field-hint">Transport: {transport}</p>
+      </div>
+
+      {/* Client config snippet */}
+      <div className="field" style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <label style={{ marginBottom: 0 }}>Client configuration snippet</label>
+          <CopyButton text={configSnippet} label="Copy client config snippet" />
+        </div>
+        <pre
+          style={{
+            background: 'var(--canvas)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)', padding: '10px 12px',
+            fontFamily: 'var(--mono)', fontSize: '0.8rem',
+            overflowX: 'auto', margin: 0,
+          }}
+          aria-label="MCP client configuration example"
+        >
+          {configSnippet}
+        </pre>
+        <p className="field-hint">Replace <code>&lt;your-token&gt;</code> with a personal access token from the table above.</p>
+      </div>
+
+      {/* Tool list */}
+      <div>
+        <h3 style={{ fontSize: 15, marginBottom: 10 }}>Available tools by scope</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+          {SCOPE_GROUPS.map((scope) => (
+            <div
+              key={scope}
+              style={{
+                background: 'var(--canvas)', border: '1px solid var(--line)',
+                borderRadius: 'var(--radius)', padding: '10px 12px',
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: 6, textTransform: 'capitalize' }}>
+                {scope}
+              </div>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {(byScope[scope] || []).map((t) => (
+                  <li key={t.name} title={t.description} style={{ fontSize: '0.8rem', marginBottom: 3 }}>
+                    <code style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem' }}>{t.name}</code>
+                    <span className="muted" style={{ display: 'block', fontSize: '0.75rem' }}>{t.description}</span>
+                  </li>
+                ))}
+                {(byScope[scope] || []).length === 0 && (
+                  <li className="muted" style={{ fontSize: '0.8rem' }}>No tools</li>
+                )}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── REST section ──────────────────────────────────────────────────────────────
+
+function RestSection() {
+  const baseUrl = window.location.origin;
+  const curlExample = `curl -H "Authorization: Bearer <your-token>" \\
+  -H "x-requested-with: agent-portal" \\
+  ${baseUrl}/api/projects`;
+
+  return (
+    <section
+      aria-label="REST API"
+      style={{
+        marginTop: 32,
+        paddingTop: 20,
+        borderTop: '1px solid var(--line)',
+      }}
+    >
+      <h2 style={{ fontSize: 18, marginBottom: 4 }}>REST API</h2>
+      <p className="muted" style={{ marginBottom: 16 }}>
+        Use the portal REST API from scripts, CI pipelines, or any HTTP client.
+      </p>
+
+      <div className="field" style={{ marginBottom: 12 }}>
+        <label>Base URL</label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <code
+            style={{
+              flex: 1, padding: '6px 10px',
+              background: 'var(--canvas)', border: '1px solid var(--line)',
+              borderRadius: 'var(--radius)', fontFamily: 'var(--mono)', fontSize: '0.88rem',
+            }}
+            aria-label="REST API base URL"
+          >
+            {baseUrl}/api
+          </code>
+          <CopyButton text={`${baseUrl}/api`} label="Copy API base URL" />
+        </div>
+      </div>
+
+      <div className="field">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <label style={{ marginBottom: 0 }}>Example request</label>
+          <CopyButton text={curlExample} label="Copy curl example" />
+        </div>
+        <pre
+          style={{
+            background: 'var(--canvas)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)', padding: '10px 12px',
+            fontFamily: 'var(--mono)', fontSize: '0.8rem',
+            overflowX: 'auto', margin: 0,
+          }}
+          aria-label="REST API curl example"
+        >
+          {curlExample}
+        </pre>
+        <p className="field-hint">All mutating requests also require the <code>x-requested-with: agent-portal</code> header.</p>
+      </div>
+    </section>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function ApiAccess() {
   const [tokens, setTokens]       = useState([]);
   const [projects, setProjects]   = useState([]);
+  const [mcpInfo, setMcpInfo]     = useState(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
   const [showNew, setShowNew]     = useState(false);
   const [revealToken, setRevealToken] = useState(null); // raw token string
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [tokRes, projRes] = await Promise.all([
+      const [tokRes, projRes, mcpRes] = await Promise.all([
         api.get('/api/api-tokens'),
         api.get('/api/projects').catch(() => ({ projects: [] })),
+        api.get('/api/mcp/info').catch(() => null),
       ]);
       setTokens(tokRes.tokens || []);
       setProjects(projRes.projects || []);
+      setMcpInfo(mcpRes);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -187,19 +491,29 @@ export function ApiAccess() {
   };
 
   const revokeToken = async (tok) => {
-    if (!confirm(`Revoke token "${tok.name}"? This cannot be undone.`)) return;
+    if (!await requestConfirm(`Revoke token "${tok.name}"? This cannot be undone.`, 'Revoke', 'danger')) return;
     try {
       await api.delete(`/api/api-tokens/${tok.id}`);
       setTokens((prev) => prev.map((t) => (t.id === tok.id ? { ...t, active: false, revoked_at: new Date().toISOString() } : t)));
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
     }
   };
 
   const projectName = (id) => projects.find((p) => p.id === id)?.name ?? id;
 
+  const scopeLabel = (tok) => {
+    const scopes = tok.scopes || [];
+    if (scopes.includes('merge')) return 'read + write + review + merge';
+    if (scopes.includes('review')) return 'read + write + review';
+    if (scopes.includes('write')) return 'read + write';
+    return 'read';
+  };
+
   return (
     <div className="page">
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       <div className="page-head">
         <h1>API access</h1>
         <div className="page-actions">
@@ -225,7 +539,7 @@ export function ApiAccess() {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Scope</th>
+              <th>Scopes</th>
               <th>Project</th>
               <th>Created</th>
               <th>Last used</th>
@@ -245,9 +559,7 @@ export function ApiAccess() {
                   )}
                 </td>
                 <td>
-                  <span className={`badge ${tok.scope === 'write' ? 'badge-info' : 'badge-neutral'}`}>
-                    {tok.scope}
-                  </span>
+                  <span className="muted" style={{ fontSize: '0.82rem' }}>{scopeLabel(tok)}</span>
                 </td>
                 <td className="muted">{tok.project_id ? projectName(tok.project_id) : '—'}</td>
                 <td className="muted">{formatRelative(tok.created_at)}</td>
@@ -270,6 +582,12 @@ export function ApiAccess() {
           </tbody>
         </table>
       )}
+
+      {/* MCP section */}
+      <McpSection mcpInfo={mcpInfo} />
+
+      {/* REST section */}
+      <RestSection />
 
       {showNew && (
         <NewTokenModal

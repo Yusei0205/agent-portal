@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -20,6 +21,7 @@ function ScopeTab({ projectId, scope, label }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const fileRef = useRef(null);
+  const { confirmState, requestConfirm } = useConfirm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,7 +88,7 @@ function ScopeTab({ projectId, scope, label }) {
   };
 
   const deleteFile = async (fileId, fileName) => {
-    if (!confirm(`Delete "${fileName}"?`)) return;
+    if (!await requestConfirm(`Delete "${fileName}"?`, 'Delete', 'danger')) return;
     try {
       await api.delete(`/api/projects/${projectId}/vault/${fileId}`);
       setFiles((f) => f.filter((x) => x.id !== fileId));
@@ -99,7 +101,8 @@ function ScopeTab({ projectId, scope, label }) {
 
   return (
     <div className="stack">
-      {error && <p className="error-msg" role="alert">{error}</p>}
+      <ConfirmDialog state={confirmState} />
+      {error && <p className="error-note" role="alert">{error}</p>}
 
       <div className="actions-row">
         <label className={`btn btn-primary${uploading ? ' disabled' : ''}`}>

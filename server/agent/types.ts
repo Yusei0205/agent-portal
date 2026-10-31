@@ -21,6 +21,16 @@ export interface AgentRun {
   repoIds: string[];
   leadAgent: string | null;
   permissions: RunPermissions;
+  /** Optional per-user credential to use for this run (F4). */
+  credentialId: string | null;
+  /** User ID of the workflow owner — used to look up their default credential. */
+  credentialOwnerId: string | null;
+  /**
+   * Optional model ID chosen by the user when creating the session (F-MODEL).
+   * Empty/null means engine default.  Engines pass --model <id> (kiro) or
+   * set model in the SDK options (claude-code).
+   */
+  model: string | null;
 }
 
 // ── Tool call ─────────────────────────────────────────────────────────────────
@@ -39,4 +49,6 @@ export interface RunContext {
   awaitInput: (toolName: string, toolInput: string) => Promise<'approve' | 'deny'>;
   /** Tool names that are auto-approved for this run (remember=true). */
   allowAll: Set<string>;
+  /** Abort signal for the run; engines must propagate this to child processes and SDK calls. */
+  signal: AbortSignal | null;
 }

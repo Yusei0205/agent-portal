@@ -1,9 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
+import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
+import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar, BulkSelectHint } from '../components/BulkActionBar.jsx';
 import { DiagramStyle } from '../components/DiagramStyle.jsx';
 import { MermaidViewer } from '../components/MermaidViewer.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,6 +45,13 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
   const [selectedRepos, setSelectedRepos] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [attachmentIds, setAttachmentIds] = useState([]);
+  const [uploadsBusy, setUploadsBusy]     = useState(false);
+
+  const handleAttachments = (ids, uploading) => {
+    setAttachmentIds(ids);
+    setUploadsBusy(uploading);
+  };
 
   const toggleRepo = (id) => {
     setSelectedRepos((prev) =>
@@ -51,6 +62,7 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
   const submit = async (e) => {
     e.preventDefault();
     if (!selectedRepos.length) { setError('Select at least one repository'); return; }
+    if (uploadsBusy) return;
     setBusy(true);
     setError(null);
     try {
@@ -59,7 +71,8 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
         kind,
         style,
         cloud: style === 'icon' ? cloud : undefined,
-        repoIds: selectedRepos,
+        repoIds:       selectedRepos,
+        attachmentIds: attachmentIds.length ? attachmentIds : undefined,
       });
       onCreated(r);
     } catch (err) {
@@ -124,11 +137,20 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
             )}
           </div>
 
+          <div className="field">
+            <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+            <AttachmentPicker
+              projectId={projectId}
+              onAttachmentsChange={handleAttachments}
+              disabled={busy}
+            />
+          </div>
+
           {error && <div className="error-note" role="alert">{error}</div>}
 
           <div className="row gap-sm">
-            <button type="submit" className="btn btn-primary" disabled={busy || !repos.length}>
-              {busy ? 'Creating…' : 'Create diagram'}
+            <button type="submit" className="btn btn-primary" disabled={busy || uploadsBusy || !repos.length}>
+              {busy ? 'Creating…' : uploadsBusy ? 'Uploading…' : 'Create diagram'}
             </button>
             <button type="button" className="btn" onClick={onClose}>Cancel</button>
           </div>
@@ -187,33 +209,127 @@ function ViewDiagramModal({ diagram, onClose }) {
   );
 }
 
+// ── Refresh diagram dialog ────────────────────────────────────────────────────
+
+function RefreshDiagramDialog({ projectId, diagram, onClose, onRefreshed }) {
+  const [busy, setBusy]                   = useState(false);
+  const [error, setError]                 = useState(null);
+  const [attachmentIds, setAttachmentIds] = useState([]);
+  const [uploadsBusy, setUploadsBusy]     = useState(false);
+  const trapRef = useFocusTrap();
+
+  const handleAttachments = (ids, uploading) => {
+    setAttachmentIds(ids);
+    setUploadsBusy(uploading);
+  };
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !busy && !uploadsBusy) onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, busy, uploadsBusy]);
+
+  const submit = async () => {
+    if (busy || uploadsBusy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(
+        `/api/projects/${diagram.project_id}/diagrams/${diagram.id}/refresh`,
+        { attachmentIds: attachmentIds.length ? attachmentIds : undefined },
+      );
+      onRefreshed();
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Failed to start refresh');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="dialog-overlay"
+      role="presentation"
+      onClick={(e) => { if (e.target === e.currentTarget && !busy && !uploadsBusy) onClose(); }}
+    >
+      <div
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="refresh-diag-title"
+        style={{ maxWidth: 520 }}
+        ref={trapRef}
+      >
+        <div className="dialog-head">
+          <h2 className="dialog-title" id="refresh-diag-title">Refresh diagram</h2>
+          <button
+            type="button"
+            className="btn-icon"
+            onClick={onClose}
+            disabled={busy || uploadsBusy}
+            aria-label="Close"
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
+        <div className="dialog-body stack">
+          <p className="muted" style={{ fontSize: '0.84rem' }}>
+            Regenerate <strong>{diagram.title}</strong>. Attach additional files to supplement
+            or replace the existing source material.
+          </p>
+          <div className="field">
+            <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+            <AttachmentPicker
+              projectId={projectId}
+              initialAttachments={diagram.attachments ?? []}
+              onAttachmentsChange={handleAttachments}
+              disabled={busy}
+            />
+          </div>
+          {error && <div className="error-note" role="alert">{error}</div>}
+        </div>
+        <div className="dialog-foot">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onClose}
+            disabled={busy || uploadsBusy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={busy || uploadsBusy}
+          >
+            {busy
+              ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Refreshing…</>
+              : uploadsBusy
+                ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Uploading…</>
+                : <><Icon name="refresh" size={14} /> Refresh</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Diagram row ───────────────────────────────────────────────────────────────
 
-function DiagramRow({ diagram, selected, onSelect, onRefresh, onDelete, onView }) {
+function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onDelete, onView, requestConfirm, toast }) {
   const [deleting, setDeleting] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
 
   const handleDelete = async () => {
-    if (!confirm(`Delete diagram "${diagram.title}"?`)) return;
+    const ok = await requestConfirm(`Delete diagram "${diagram.title}"?`, 'Delete', 'danger');
+    if (!ok) return;
     setDeleting(true);
     try {
       await api.delete(`/api/projects/${diagram.project_id}/diagrams/${diagram.id}`);
       onDelete(diagram.id);
     } catch (err) {
-      alert(err.message || 'Failed to delete');
+      toast(err.message || 'Failed to delete', 'error');
       setDeleting(false);
-    }
-  };
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await api.post(`/api/projects/${diagram.project_id}/diagrams/${diagram.id}/refresh`, {});
-      onRefresh();
-    } catch (err) {
-      alert(err.message || 'Failed to start refresh');
-    } finally {
-      setRefreshing(false);
     }
   };
 
@@ -235,6 +351,16 @@ function DiagramRow({ diagram, selected, onSelect, onRefresh, onDelete, onView }
         <button type="button" className="btn-link" onClick={() => onView(diagram)}>
           {diagram.title}
         </button>
+        {diagram.attachments?.length > 0 && (
+          <span
+            className="badge badge-muted"
+            style={{ marginLeft: 6 }}
+            title={`${diagram.attachments.length} attachment${diagram.attachments.length !== 1 ? 's' : ''}`}
+          >
+            <Icon name="attach" size={10} />
+            {' '}{diagram.attachments.length}
+          </span>
+        )}
         <div className="row gap-xs muted small">
           <span>{diagram.kind_label}</span>
           {diagram.cloud_label && <><span>·</span><span>{diagram.cloud_label}</span></>}
@@ -271,8 +397,8 @@ function DiagramRow({ diagram, selected, onSelect, onRefresh, onDelete, onView }
           <button
             type="button"
             className="btn btn-sm"
-            onClick={handleRefresh}
-            disabled={refreshing || diagram.status === 'generating'}
+            onClick={() => onRefreshWithAttachments(diagram)}
+            disabled={diagram.status === 'generating'}
             aria-label={`Refresh ${diagram.title}`}
             title="Redraw diagram"
           >
@@ -305,6 +431,9 @@ export function Diagrams({ projectId }) {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [viewingDiagram, setViewingDiagram] = useState(null);
+  const [refreshingDiagram, setRefreshingDiagram] = useState(null);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const packsAvailable = styles.find((s) => s.id === 'icon')?.available === true;
 
@@ -345,7 +474,12 @@ export function Diagrams({ projectId }) {
   };
 
   const bulkDelete = async () => {
-    if (!confirm(`Delete ${selected.size} diagram${selected.size === 1 ? '' : 's'}?`)) return;
+    const ok = await requestConfirm(
+      `Delete ${selected.size} diagram${selected.size === 1 ? '' : 's'}?`,
+      'Delete',
+      'danger',
+    );
+    if (!ok) return;
     setBulkDeleting(true);
     try {
       await Promise.all([...selected].map((id) =>
@@ -354,7 +488,7 @@ export function Diagrams({ projectId }) {
       setDiagrams((prev) => prev.filter((d) => !selected.has(d.id)));
       setSelected(new Set());
     } catch (err) {
-      alert(err.message || 'Failed to delete some diagrams');
+      toast(err.message || 'Failed to delete some diagrams', 'error');
     } finally {
       setBulkDeleting(false);
     }
@@ -412,8 +546,10 @@ export function Diagrams({ projectId }) {
                     setDiagrams((prev) => prev.filter((x) => x.id !== id));
                     setSelected((prev) => { const next = new Set(prev); next.delete(id); return next; });
                   }}
-                  onRefresh={load}
+                  onRefreshWithAttachments={setRefreshingDiagram}
                   onView={setViewingDiagram}
+                  requestConfirm={requestConfirm}
+                  toast={toast}
                 />
               ))}
             </tbody>
@@ -443,6 +579,18 @@ export function Diagrams({ projectId }) {
           onClose={() => setViewingDiagram(null)}
         />
       )}
+
+      {refreshingDiagram && (
+        <RefreshDiagramDialog
+          projectId={projectId}
+          diagram={refreshingDiagram}
+          onClose={() => setRefreshingDiagram(null)}
+          onRefreshed={() => { setRefreshingDiagram(null); load(); }}
+        />
+      )}
+
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

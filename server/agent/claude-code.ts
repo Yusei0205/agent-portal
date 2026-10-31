@@ -1,0 +1,536 @@
+/**
+ * Claude Code engine — runs agent workflows via the @anthropic-ai/claude-agent-sdk.
+ *
+ * Supports providers:
+ *   'anthropic' — ANTHROPIC_API_KEY from portal settings
+ *   'bedrock'   — AWS credentials from portal settings (ambient/profile/keys/bedrock-key)
+ *
+ * Guardrails:
+ *   - Every tool call routed through evaluateCommand() (allow/ask/block).
+ *   - 'ask' suspends until the user approves or denies via ctx.awaitInput.
+ *   - 'block' denies immediately without asking.
+ *   - Writes outside workDir are always blocked.
+ *   - allowAll set: tools in this set skip the 'ask' step.
+ *
+ * Usage / cost:
+ *   - Per-turn cache tokens recorded on assistant-text events.
+ *   - Run totals + cost written to p6_runs and budget_usage on completion.
+ */
+
+import path from 'node:path';
+import { one, run as dbRun, insert } from '../db.ts';
+import type { Row } from '../db.ts';
+import { now, generateId, HttpError } from '../util.ts';
+import { evaluateCommand } from '../guardrails.ts';
+import { getSettings, getAgentEnv } from '../settings.ts';
+import { resolveCredentialEnv } from '../credentials.ts';
+import { getRunHomeDir } from '../user-config.ts';
+import { estimateCost } from './pricing.ts';
+import type { RunContext } from './types.ts';
+import { getDelegationSettings, createChildSession } from '../delegation.ts';
+
+// ── SDK loader ────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SdkModule = Record<string, any>;
+let _sdkPromise: Promise<SdkModule> | null = null;
+let _sdkPkg: string | undefined;
+
+function loadSdk(): Promise<SdkModule> {
+  // Read env at call time so tests can set PORTAL_SDK_MODULE before calling.
+  // Invalidate the cache if the package path changes (e.g. between tests).
+  const pkg = process.env.PORTAL_SDK_MODULE ?? '@anthropic-ai/claude-agent-sdk';
+  if (!_sdkPromise || _sdkPkg !== pkg) {
+    _sdkPkg = pkg;
+    // Use Function('m', ...) so the import expression is not rewritten by bundlers
+    _sdkPromise = (Function('m', 'return import(m)')(pkg) as Promise<SdkModule>).catch(
+      (e: unknown) => {
+        _sdkPromise = null;
+        _sdkPkg = undefined;
+        throw new HttpError(
+          500,
+          `The Claude Agent SDK is not available (${(e as Error)?.message ?? e}). ` +
+            'Run "npm install" in the portal directory, or switch Settings › Provider to Demo.',
+        );
+      },
+    );
+  }
+  return _sdkPromise;
+}
+
+// ── Tool helpers ──────────────────────────────────────────────────────────────
+
+const WRITE_TOOLS = new Set([
+  'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
+  'write', 'edit', 'str_replace_editor',
+]);
+
+const BASH_TOOLS = new Set([
+  'Bash', 'bash', 'execute_bash', 'execute_command', 'computer',
+]);
+
+const READ_TOOLS = new Set([
+  'Read', 'read', 'Glob', 'glob', 'Grep', 'grep',
+  'LS', 'ls', 'view', 'cat',
+  'WebSearch', 'WebFetch', 'web_search', 'web_fetch',
+]);
+
+function toolCategory(name: string): string | null {
+  if (WRITE_TOOLS.has(name)) return 'write';
+  if (BASH_TOOLS.has(name)) return 'bash';
+  if (READ_TOOLS.has(name)) return 'read';
+  return null;
+}
+
+/** Build the command string fed to evaluateCommand for non-bash tools. */
+function toolCommandStr(name: string, input: Record<string, unknown>): string {
+  if (BASH_TOOLS.has(name)) {
+    return String(input.command ?? input.cmd ?? name);
+  }
+  if (WRITE_TOOLS.has(name)) {
+    const fp = String(input.file_path ?? input.path ?? input.new_path ?? '');
+    return fp ? `${name} ${fp}` : name;
+  }
+  if (READ_TOOLS.has(name)) {
+    const fp = String(input.file_path ?? input.path ?? input.query ?? '');
+    return fp ? `${name} ${fp}` : name;
+  }
+  return name;
+}
+
+// ── Model resolution ──────────────────────────────────────────────────────────
+
+function resolveModel(runModel?: string | null): string {
+  if (runModel && runModel.trim()) return runModel.trim();
+  const settings = getSettings();
+  return settings.defaultModel || 'claude-sonnet-4-5';
+}
+
+// ── Review system append ──────────────────────────────────────────────────────
+
+const REVIEW_SYSTEM_APPEND = `
+You are performing a code review. Read diff.patch (if present in the working directory) and the source files it touches.
+Identify real defects, security risks, reliability issues, and best-practice violations.
+
+At the end of your response, output all findings as a JSON array in a markdown code block:
+
+\`\`\`json
+[
+  {
+    "file": "path/to/file.ext",
+    "line": 42,
+    "severity": "critical|high|medium|low|info",
+    "title": "Short description",
+    "body": "Detailed explanation and suggestion.",
+    "confidence": 0.9
+  }
+]
+\`\`\`
+
+Use severities: critical, high, medium, low, info.
+Set confidence between 0.0 and 1.0.
+Only include real findings — an empty array [] is correct when the diff is clean.
+`.trim();
+
+// ── Main entry point ──────────────────────────────────────────────────────────
+
+/**
+ * Run a workflow using the Claude Code SDK. Emits events via ctx.emit() and
+ * returns the final summary text.
+ */
+export async function runClaudeCode(ctx: RunContext): Promise<string> {
+  const { run, emit, awaitInput, allowAll } = ctx;
+
+  // ── Pre-flight: credentials check ─────────────────────────────────────────
+  // Resolve env from per-user credential, default credential, or portal provider.
+  const agentEnv = await resolveCredentialEnv('claude-code', run.credentialOwnerId, run.credentialId);
+
+  // ── Materialised home dir (F5) ─────────────────────────────────────────────
+  // materialiseForRun() is called before the engine by runner.ts.
+  // Set HOME (and USERPROFILE on Windows) so claude-code reads agents/, steering/,
+  // and mcp.json from the materialised directory rather than the portal process home.
+  const homeDir = getRunHomeDir(run.runId);
+  const sdkEnv: Record<string, string> = { ...(process.env as Record<string, string>), ...agentEnv };
+  if (homeDir) {
+    sdkEnv.HOME = homeDir;
+    if (process.platform === 'win32') {
+      sdkEnv.USERPROFILE = homeDir;
+    }
+  }
+
+  if (!sdkEnv.ANTHROPIC_API_KEY && !sdkEnv.CLAUDE_CODE_USE_BEDROCK && !sdkEnv.CLAUDE_CODE_OAUTH_TOKEN) {
+    const settings = getSettings();
+    const mode = settings.provider.mode;
+    if (mode === 'demo' || mode === 'kiro') {
+      throw new HttpError(
+        400,
+        `Provider is set to "${mode}". Select Anthropic or Amazon Bedrock in Settings › Provider to use the Claude Code engine.`,
+      );
+    }
+    if (mode === 'anthropic') {
+      throw new HttpError(
+        400,
+        'No Anthropic API key configured. Add one in Settings › Provider › Anthropic API key, or add a credential in Credentials.',
+      );
+    }
+    if (mode === 'bedrock') {
+      throw new HttpError(
+        400,
+        'Amazon Bedrock is selected but AWS credentials are not configured. ' +
+          'Set them in Settings › Provider › Amazon Bedrock, or add a Bedrock credential in Credentials.',
+      );
+    }
+    throw new HttpError(
+      400,
+      'No Claude Code credentials configured. Add a credential in Credentials, or configure the provider in Settings.',
+    );
+  }
+
+  // ── Load SDK ───────────────────────────────────────────────────────────────
+  const sdk = await loadSdk();
+  if (typeof sdk.query !== 'function') {
+    throw new HttpError(500, 'Loaded Claude Agent SDK does not export a query() function. Check the SDK version.');
+  }
+
+  // ── Model ──────────────────────────────────────────────────────────────────
+  const model = resolveModel(run.model);
+
+  // ── Delegation settings ────────────────────────────────────────────────────
+  const delegationSettings = getDelegationSettings();
+  const delegationEnabled = delegationSettings.enabled;
+  const nudgeThreshold = delegationSettings.nudgeThreshold;
+
+  // ── Subagent nudge tracking ────────────────────────────────────────────────
+  let nudgeFired = false;
+  let runningSubagents = 0;
+
+  // ── Pending tool-use tracking (for tool-end correlation) ──────────────────
+  const pendingToolUses = new Map<string, { name: string; inputStr: string }>();
+
+  // ── Aggregate counters ─────────────────────────────────────────────────────
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheWriteTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCostUsd = 0;
+  const textParts: string[] = [];
+
+  // ── canUseTool callback ────────────────────────────────────────────────────
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const canUseTool = async (toolName: string, input: Record<string, unknown>, opts: Record<string, any>) => {
+    const inputStr = JSON.stringify(input);
+
+    // Respect cancellation
+    if (ctx.signal?.aborted || opts?.signal?.aborted) {
+      return { behavior: 'deny', message: 'Run cancelled.' };
+    }
+
+    // Write guard: file writes must stay inside workDir
+    if (WRITE_TOOLS.has(toolName)) {
+      const relPath = String(input.file_path ?? input.path ?? input.new_path ?? '');
+      if (relPath) {
+        const absPath = path.resolve(run.workDir, relPath);
+        const workDirResolved = path.resolve(run.workDir);
+        if (!absPath.startsWith(workDirResolved + path.sep) && absPath !== workDirResolved) {
+          const reason = `Write to "${relPath}" is outside the run working directory.`;
+          emit('tool-blocked', { toolName, toolInput: inputStr, reason });
+          return { behavior: 'deny', message: reason };
+        }
+      }
+    }
+
+    // Guardrail evaluation
+    const cmdStr = toolCommandStr(toolName, input);
+    const decision = evaluateCommand(
+      { command: cmdStr, category: toolCategory(toolName) },
+      run.permissions,
+      run.trusted,
+    );
+
+    if (decision.action === 'block') {
+      const reason = decision.reason || `Tool "${toolName}" is blocked by portal guardrails.`;
+      emit('tool-blocked', { toolName, toolInput: inputStr, reason });
+      return { behavior: 'deny', message: reason };
+    }
+
+    if (decision.action === 'ask' && !allowAll.has(toolName)) {
+      // Suspend until the user responds
+      let approval: 'approve' | 'deny';
+      try {
+        approval = await awaitInput(toolName, inputStr);
+      } catch {
+        // Abort during approval wait
+        return { behavior: 'deny', message: 'Run cancelled during approval wait.' };
+      }
+      if (approval === 'deny') {
+        emit('tool-blocked', { toolName, toolInput: inputStr, reason: 'Denied by user.' });
+        return { behavior: 'deny', message: 'Denied by user.' };
+      }
+    }
+
+    emit('tool-start', { toolName, toolInput: inputStr });
+    return { behavior: 'allow' };
+  };
+
+  // ── Build goal prompt ──────────────────────────────────────────────────────
+  let prompt: string = run.goal;
+  if (run.kind === 'review') {
+    prompt = `${run.goal}\n\n${REVIEW_SYSTEM_APPEND}`;
+  }
+
+  // ── In-process MCP server for delegation (F7) ─────────────────────────────
+  // Expose delegate_session as a custom tool when delegation is enabled and
+  // the workflow has an owner. The tool creates a child session immediately and
+  // returns the child's workflow ID and title to the agent.
+  // Source: @anthropic-ai/claude-agent-sdk createSdkMcpServer() + tool() API
+  // (sdk.d.ts lines 631–643, 9903–9911, options.mcpServers line 1988).
+  type McpServerConfigWithInstance = {
+    type: 'sdk';
+    name: string;
+    instance: unknown;
+  };
+
+  let delegationMcpServers: Record<string, McpServerConfigWithInstance> | undefined;
+
+  if (delegationEnabled && run.credentialOwnerId && typeof sdk.createSdkMcpServer === 'function' && typeof sdk.tool === 'function') {
+    try {
+      const delegateTool = sdk.tool(
+        'delegate_session',
+        'Delegate a sub-task to a new child session with its own working copy and branch. ' +
+          'Use this to hand off heavy or parallel work so you can continue with other tasks. ' +
+          'Returns the child session ID and title.',
+        {
+          task: { type: 'string', describe: 'The goal or task for the child session to accomplish' } as unknown as import('zod').ZodString,
+          title: { type: 'string', describe: 'Optional short title for the child session', optional: true } as unknown as import('zod').ZodString,
+        },
+        async (args: Record<string, unknown>) => {
+          try {
+            const task = String(args.task ?? '').trim();
+            if (!task) return { content: [{ type: 'text' as const, text: 'Error: task is required' }], isError: true };
+            const title = args.title ? String(args.title).trim() : undefined;
+            const child = await createChildSession(run.workflowId, run.credentialOwnerId!, task, { title });
+            const childId = String(child.id);
+            const childTitle = String(child.title || (child.goal as string).slice(0, 60));
+            emit('tool-start', { toolName: 'delegate_session', toolInput: JSON.stringify(args) });
+            const result = JSON.stringify({ childWorkflowId: childId, title: childTitle, status: 'started' });
+            emit('tool-end', { toolName: 'delegate_session', output: result });
+            return { content: [{ type: 'text' as const, text: result }] };
+          } catch (e: unknown) {
+            const msg = (e as Error)?.message ?? String(e);
+            return { content: [{ type: 'text' as const, text: `Error delegating: ${msg}` }], isError: true };
+          }
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ) as unknown as Record<string, unknown>;
+
+      const mcpConfig = sdk.createSdkMcpServer({
+        name: 'portal-delegation',
+        tools: [delegateTool],
+      }) as McpServerConfigWithInstance;
+
+      delegationMcpServers = { 'portal-delegation': mcpConfig };
+    } catch {
+      // Non-fatal: if SDK version doesn't support createSdkMcpServer, skip delegation tool
+    }
+  }
+
+  // ── Run SDK ────────────────────────────────────────────────────────────────
+  const abortController = new AbortController();
+
+  // Forward the run's abort signal to the SDK
+  const onAbort = (): void => { abortController.abort(); };
+  if (ctx.signal) {
+    if (ctx.signal.aborted) {
+      abortController.abort();
+    } else {
+      ctx.signal.addEventListener('abort', onAbort, { once: true });
+    }
+  }
+
+  try {
+    const q = sdk.query({
+      prompt,
+      options: {
+        cwd: run.workDir,
+        model,
+        canUseTool,
+        env: sdkEnv,
+        abortController,
+        // 'default' keeps our canUseTool in control of all permissions.
+        // Do not use 'bypassPermissions' — canUseTool is not called in that mode.
+        permissionMode: 'default',
+        // No pre-allowed tools; every tool routes through canUseTool.
+        allowedTools: [],
+        // Suppress CLAUDE.md system prompt loading from PORTAL's cwd (not the run's cwd)
+        settingSources: [],
+        // In-process delegation MCP server (F7)
+        ...(delegationMcpServers ? { mcpServers: delegationMcpServers as unknown as Record<string, object> } : {}),
+      },
+    });
+
+    for await (const msg of q as AsyncIterable<Record<string, unknown>>) {
+      // Abort check
+      if (abortController.signal.aborted) break;
+
+      const msgType = String(msg.type ?? '');
+
+      if (msgType === 'assistant') {
+        const message = msg.message as Record<string, unknown> | undefined;
+        if (!message) continue;
+
+        const usage = message.usage as Record<string, number> | undefined;
+        const inputTok = usage?.input_tokens ?? 0;
+        const outputTok = usage?.output_tokens ?? 0;
+        const cacheWriteTok = usage?.cache_creation_input_tokens ?? 0;
+        const cacheReadTok = usage?.cache_read_input_tokens ?? 0;
+
+        totalInputTokens += inputTok;
+        totalOutputTokens += outputTok;
+        totalCacheWriteTokens += cacheWriteTok;
+        totalCacheReadTokens += cacheReadTok;
+
+        const content = message.content;
+        if (!Array.isArray(content)) continue;
+
+        let textAccum = '';
+        for (const block of content as Array<Record<string, unknown>>) {
+          if (block.type === 'text') {
+            textAccum += String(block.text ?? '');
+          } else if (block.type === 'thinking') {
+            // Skip thinking blocks — don't emit to UI
+          } else if (block.type === 'tool_use') {
+            const id = String(block.id ?? generateId());
+            const name = String(block.name ?? '');
+            const toolInput = block.input as Record<string, unknown> ?? {};
+            pendingToolUses.set(id, { name, inputStr: JSON.stringify(toolInput) });
+
+            // Subagent nudge tracking (F7): detect Agent/Task tool starts
+            if (name === 'Agent' || name === 'Task') {
+              runningSubagents++;
+              if (!nudgeFired && nudgeThreshold > 0 && runningSubagents >= nudgeThreshold) {
+                nudgeFired = true;
+                // Record nudge event via ctx.emit (writes to p6_events + SSE)
+                emit('subagent-nudge', {
+                  runningSubagents,
+                  threshold: nudgeThreshold,
+                  message: 'Consider using delegate_session for heavy parallel work instead of spawning more in-process subagents.',
+                });
+              }
+            }
+          }
+        }
+
+        if (textAccum) {
+          emit('assistant-text', {
+            text: textAccum,
+            input_tokens: inputTok,
+            output_tokens: outputTok,
+            cache_write_tokens: cacheWriteTok,
+            cache_read_tokens: cacheReadTok,
+          });
+          textParts.push(textAccum);
+        }
+
+      } else if (msgType === 'user') {
+        // Emit tool-end events when we see tool_result blocks
+        const message = msg.message as Record<string, unknown> | undefined;
+        if (!message) continue;
+        const content = message.content;
+        if (!Array.isArray(content)) continue;
+
+        for (const block of content as Array<Record<string, unknown>>) {
+          if (block.type === 'tool_result') {
+            const toolUseId = String(block.tool_use_id ?? '');
+            const pending = toolUseId ? pendingToolUses.get(toolUseId) : undefined;
+            if (pending) {
+              pendingToolUses.delete(toolUseId);
+              const rawOut = block.content;
+              const output = typeof rawOut === 'string'
+                ? rawOut.slice(0, 1000)
+                : JSON.stringify(rawOut).slice(0, 1000);
+              emit('tool-end', { toolName: pending.name, output });
+            }
+          }
+        }
+
+      } else if (msgType === 'result') {
+        // SDK-reported total cost (authoritative over our estimate)
+        const sdkCost = (msg as Record<string, unknown>).total_cost_usd;
+        if (typeof sdkCost === 'number' && sdkCost > 0) {
+          totalCostUsd = sdkCost;
+        }
+      }
+    }
+  } catch (e: unknown) {
+    const isAbort =
+      (e as { name?: string })?.name === 'AbortError' || abortController.signal.aborted;
+    if (isAbort) {
+      throw new DOMException('Run cancelled', 'AbortError');
+    }
+    throw e;
+  } finally {
+    if (ctx.signal) {
+      ctx.signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  // If the run was cancelled (loop exited via break), throw now so the runner
+  // marks the run as cancelled rather than done.
+  if (abortController.signal.aborted || ctx.signal?.aborted) {
+    throw new DOMException('Run cancelled', 'AbortError');
+  }
+
+  // ── Emit any remaining tool-ends (for tools that returned without user msg) ─
+  for (const [, pending] of pendingToolUses) {
+    emit('tool-end', { toolName: pending.name, output: '(completed)' });
+  }
+
+  // ── Estimate cost if SDK didn't report it ──────────────────────────────────
+  if (totalCostUsd === 0 && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+    totalCostUsd = estimateCost(model, {
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      cache_read_input_tokens: totalCacheReadTokens,
+      cache_creation_input_tokens: totalCacheWriteTokens,
+    });
+  }
+
+  // ── Persist totals to p6_runs ──────────────────────────────────────────────
+  dbRun(
+    `UPDATE p6_runs
+        SET cost_usd = ?, input_tokens = ?, output_tokens = ?,
+            cache_write_tokens = ?, cache_read_tokens = ?,
+            model = ?
+      WHERE id = ?`,
+    totalCostUsd,
+    totalInputTokens,
+    totalOutputTokens,
+    totalCacheWriteTokens,
+    totalCacheReadTokens,
+    model,
+    run.runId,
+  );
+
+  // ── Insert budget_usage record ─────────────────────────────────────────────
+  if (totalCostUsd > 0 || totalInputTokens > 0 || totalOutputTokens > 0) {
+    // Look up the workflow creator for budget attribution
+    const wfRow = one<Row>('SELECT created_by FROM p6_workflows WHERE id = ?', run.workflowId);
+    insert('budget_usage', {
+      user_id: (wfRow?.created_by as string | null) ?? null,
+      project_id: run.projectId,
+      workflow_id: run.workflowId,
+      run_id: null,
+      cost_usd: totalCostUsd,
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      provider: sdkEnv.CLAUDE_CODE_USE_BEDROCK ? 'bedrock' : sdkEnv.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'anthropic',
+      model,
+      created_at: now(),
+    });
+  }
+
+  const summary = textParts.join('\n').trim() || 'Run complete.';
+  emit('run-complete', { result: summary, cost_usd: totalCostUsd });
+  return summary;
+}

@@ -1,72 +1,386 @@
-import { useEffect, useRef, useState } from 'react';
+/**
+ * New session dialog (F6 parity).
+ *
+ * Enhancements:
+ *   - Workspace picker with "Playground (no workspace)" option
+ *   - Engine cards disabled with setup link when no credential AND no portal provider
+ *   - Agent picker from GET /api/user-config/agents?engine=
+ *   - Model picker for Kiro and Claude Code: calls GET /api/engines/:engine/models,
+ *     shows inline spinner while loading, error hint + Refresh button on failure,
+ *     and a "Runs as: {label}" hint once loaded; "Engine default" always selectable
+ *   - Credential picker when >1 credential for the engine
+ *   - Trust all tools toggle with one-line explanation
+ *   - model sent for both Kiro and Claude Code sessions when chosen
+ *   - Alt+N shortcut handled at App level (existing behaviour preserved)
+ */
+
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { api } from '../../lib/api.js';
 import { navigate, href } from '../../lib/router.js';
 import { Icon } from '../../components/Icon.jsx';
+import { useFocusTrap } from '../../lib/useFocusTrap.js';
+import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
+import { fillGoalVars } from './ticketVars.js';
 
 const GOAL_MAX = 8000;
 
+// ── Engine definitions ─────────────────────────────────────────────────────────
+
+const ENGINES = [
+  {
+    id: 'demo',
+    label: 'Demo',
+    hint: 'Simulated run, no API cost',
+    providerModes: ['demo'],
+  },
+  {
+    id: 'claude-code',
+    label: 'Claude Code',
+    hint: 'Anthropic Claude via Claude Code SDK',
+    providerModes: ['anthropic', 'bedrock', 'litellm'],
+  },
+  {
+    id: 'kiro',
+    label: 'Kiro',
+    hint: 'Kiro CLI engine',
+    providerModes: ['kiro'],
+  },
+];
+
+// ── Agent select ───────────────────────────────────────────────────────────────
+
+function AgentPicker({ engine, value, onChange }) {
+  const [agents, setAgents] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (engine === 'demo') { setAgents(null); return; }
+    setLoading(true);
+    try {
+      const { agents: list } = await api.get(`/api/user-config/agents?engine=${encodeURIComponent(engine)}`);
+      setAgents(list || []);
+    } catch {
+      setAgents([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [engine]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (engine === 'demo' || agents === null) return null;
+
+  const count = agents.length;
+  const hint = count > 0 ? `${count} from your config` : 'No agents in your config';
+
+  return (
+    <div className="field">
+      <label htmlFor="ns-agent">Lead agent</label>
+      {loading ? (
+        <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading agents…" />
+      ) : (
+        <>
+          <select
+            id="ns-agent"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            aria-describedby="ns-agent-hint"
+          >
+            <option value="">Engine default</option>
+            {agents.map((a) => (
+              <option key={a.name} value={a.name}>
+                {a.name}
+                {a.description ? ` — ${a.description.slice(0, 50)}` : ''}
+              </option>
+            ))}
+          </select>
+          <p className="field-hint" id="ns-agent-hint">{hint}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Model picker ───────────────────────────────────────────────────────────────
+
 /**
- * New session dialog / modal overlay.
- *
+ * Model picker for Kiro and Claude Code engines.
+ * Calls GET /api/engines/:engine/models?credentialId=<id> on mount and whenever
+ * engine or credentialId changes. Pass refresh=1 when the Refresh button is clicked.
+ * "Engine default" is always available — it remains selectable even when the
+ * endpoint returns an error or an empty list.
+ */
+function ModelPicker({ engine, credentialId, value, onChange }) {
+  const [models, setModels] = useState([]);
+  const [runsAs, setRunsAs] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async (forceRefresh = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (credentialId) params.set('credentialId', credentialId);
+      if (forceRefresh) params.set('refresh', '1');
+      const qs = params.toString();
+      const data = await api.get(
+        `/api/engines/${encodeURIComponent(engine)}/models${qs ? `?${qs}` : ''}`,
+      );
+      setModels(data.models || []);
+      setRunsAs(data.runsAs || null);
+      // Server may return partial success with a warning in `error`
+      if (data.error) setError(data.error);
+    } catch (e) {
+      setModels([]);
+      setError(e.message || 'Failed to load models');
+    } finally {
+      setLoading(false);
+    }
+  }, [engine, credentialId]);
+
+  useEffect(() => { load(false); }, [load]);
+
+  return (
+    <div className="field">
+      <label htmlFor="ns-model">Model</label>
+      {loading ? (
+        <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading models…" />
+      ) : (
+        <select
+          id="ns-model"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-describedby={error ? 'ns-model-error' : runsAs ? 'ns-model-hint' : undefined}
+        >
+          <option value="">Engine default</option>
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label || m.id}
+            </option>
+          ))}
+        </select>
+      )}
+      {error && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+          <p
+            id="ns-model-error"
+            className="field-hint"
+            style={{ color: 'var(--danger)', flex: 1, margin: 0 }}
+          >
+            {error}
+          </p>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => load(true)}
+            aria-label="Refresh model list"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+      {!error && runsAs && (
+        <p id="ns-model-hint" className="field-hint" style={{ marginTop: 4 }}>
+          Runs as: {runsAs.label}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Credential picker ──────────────────────────────────────────────────────────
+
+function CredentialPicker({ engine, credentials, value, onChange }) {
+  // Only show when there's more than one credential for the engine
+  const filtered = (credentials || []).filter((c) => c.engine === engine);
+  if (filtered.length <= 1) return null;
+
+  return (
+    <div className="field">
+      <label htmlFor="ns-cred">Credential</label>
+      <select
+        id="ns-cred"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {filtered.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+            {c.isDefault ? ' (default)' : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// ── Main dialog ────────────────────────────────────────────────────────────────
+
+/**
  * @param {{
  *   project: { id: string, name: string },
  *   repos: Array<{ id: string, name: string, status: string }>,
+ *   workspaces: Array<{ id: string, name: string }>,
  *   onClose: () => void,
  *   onCreated?: (workflowId: string) => void,
+ *   initialTicket?: { key: string, summary?: string, status?: any, priority?: string, url?: string } | null,
  * }} props
  */
-export function NewSessionDialog({ project, repos = [], onClose, onCreated }) {
-  const [goal, setGoal] = useState('');
+export function NewSessionDialog({ project, repos = [], workspaces = [], onClose, onCreated, initialTicket = null }) {
+  const [goal, setGoal] = useState(
+    initialTicket
+      ? `Investigate and resolve ${initialTicket.key}: ${initialTicket.summary || initialTicket.key}`
+      : '',
+  );
   const [engine, setEngine] = useState('demo');
   const [trustTools, setTrustTools] = useState(false);
   const [leadAgent, setLeadAgent] = useState('');
+  const [model, setModel] = useState('');
+  const [credentialId, setCredentialId] = useState('');
   const [maxIterations, setMaxIterations] = useState(10);
-  const [selectedRepos, setSelectedRepos] = useState(/** @type {Set<string>} */ (new Set()));
+  const [selectedRepos, setSelectedRepos] = useState(new Set());
+  const [workspaceId, setWorkspaceId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const goalRef = useRef(null);
+  const trapRef = useFocusTrap();
 
-  // Focus goal textarea on open
-  useEffect(() => {
-    goalRef.current?.focus();
+  // Jira integration — load status and track selected ticket.
+  // When initialTicket is provided we know Jira is connected (the user came from
+  // the Tickets page), so we can skip the extra /jira fetch.
+  const initialTicketRef = useRef(initialTicket);
+  const [jira, setJira] = useState(initialTicket ? { connected: true } : null);
+  const [ticket, setTicket] = useState(initialTicket);
+
+  // Credentials summary + settings (loaded once)
+  const [credSummary, setCredSummary] = useState(null);
+  const [portalMode, setPortalMode] = useState('demo');
+  const [initLoaded, setInitLoaded] = useState(false);
+
+  // Reset model when credential changes manually (engine changes already handled below)
+  const handleCredentialChange = useCallback((newCredId) => {
+    setCredentialId(newCredId);
+    setModel('');
   }, []);
+
+  // Load credentials summary and portal mode
+  useEffect(() => {
+    Promise.all([
+      api.get('/api/credentials/summary').catch(() => ({ summary: [] })),
+      api.get('/api/settings').catch(() => ({ provider: { mode: 'demo' } })),
+    ]).then(([cs, s]) => {
+      const summary = cs.summary || [];
+      // Flatten to { engine → credential[] }
+      const map = {};
+      for (const entry of summary) {
+        map[entry.engine] = entry.credentials || [];
+      }
+      setCredSummary(map);
+      setPortalMode(s.provider?.mode || 'demo');
+
+      // Auto-select first credential for the current engine
+      const claudeCreds = map['claude-code'] || [];
+      if (claudeCreds.length > 0) {
+        const def = claudeCreds.find((c) => c.isDefault) || claudeCreds[0];
+        if (engine === 'claude-code') setCredentialId(def.id);
+      }
+      setInitLoaded(true);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Update default credential when engine changes
+  useEffect(() => {
+    if (!credSummary) return;
+    const creds = credSummary[engine] || [];
+    const def = creds.find((c) => c.isDefault) || creds[0];
+    setCredentialId(def?.id || '');
+    setLeadAgent('');
+    setModel('');
+  }, [engine, credSummary]);
+
+  // Focus goal on open
+  useEffect(() => { goalRef.current?.focus(); }, []);
+
+  // Load Jira connection status for this project (skip when we already have a ticket)
+  useEffect(() => {
+    if (!project?.id || initialTicketRef.current) return;
+    api.get(`/api/projects/${project.id}/jira`)
+      .then((r) => setJira(r))
+      .catch(() => setJira(null));
+  }, [project?.id]);
+
+  // When a ticket is chosen, auto-fill the goal if it is empty
+  const handleTicketChange = useCallback((t) => {
+    setTicket(t);
+    if (t && !goal.trim()) {
+      setGoal(`Investigate and resolve ${t.key}: ${t.summary || t.key}`);
+    }
+  }, [goal]);
 
   // Close on Escape
   useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Check if engine is available
+  const isEngineAvailable = (eng) => {
+    if (eng === 'demo') return true;
+    if (!initLoaded) return true; // optimistic until loaded
+    const hasCreds = (credSummary?.[eng] || []).length > 0;
+    const hasPortalProvider = ENGINES.find((e) => e.id === eng)?.providerModes?.includes(portalMode);
+    return hasCreds || hasPortalProvider;
+  };
+
   const readyRepos = repos.filter((r) => r.status === 'ready');
+
+  // When a workspace is selected, build a hint showing which repos it includes.
+  const workspaceRepoHint = (() => {
+    if (!workspaceId) return null;
+    const ws = workspaces.find((w) => w.id === workspaceId);
+    if (!ws) return null;
+    const ids = ws.repo_ids || [];
+    if (ids.length === 0) return 'No repositories in this workspace.';
+    const names = ids
+      .map((id) => repos.find((r) => r.id === id)?.name ?? id)
+      .join(', ');
+    return `Repos: ${names}`;
+  })();
 
   const toggleRepo = (id) => {
     setSelectedRepos((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
 
-  const canSubmit = goal.trim().length > 0 && !busy;
+  const canSubmit = (goal.trim().length > 0 || Boolean(ticket)) && !busy;
 
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
     try {
-      const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, {
+      const payload = {
         goal: goal.trim(),
         engine,
         trustTools: engine !== 'demo' ? trustTools : false,
         leadAgent: leadAgent.trim() || undefined,
         maxIterations: Number(maxIterations),
         repoIds: [...selectedRepos],
-      });
-      // Immediately start the first run
+        workspaceId: workspaceId || undefined,
+        credentialId: credentialId || undefined,
+        jiraKey: ticket?.key || undefined,
+      };
+      // Send model for both Kiro and Claude Code when one is chosen
+      if (model && engine !== 'demo') {
+        payload.model = model;
+      }
+
+      const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, payload);
       await api.post(`/api/projects/${project.id}/workflows/${workflow.id}/start`);
       if (onCreated) onCreated(workflow.id);
       navigate(href(project.id, 'sessions', workflow.id));
@@ -81,6 +395,11 @@ export function NewSessionDialog({ project, repos = [], onClose, onCreated }) {
     if (e.target === e.currentTarget) onClose();
   };
 
+  // Credentials for the current engine (flattened from summary)
+  const engineCreds = credSummary
+    ? (credSummary[engine] || []).map((c) => ({ ...c, engine }))
+    : [];
+
   return (
     <div
       className="dialog-overlay"
@@ -93,6 +412,8 @@ export function NewSessionDialog({ project, repos = [], onClose, onCreated }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-session-title"
+        style={{ maxWidth: 580, maxHeight: '90vh', overflowY: 'auto' }}
+        ref={trapRef}
       >
         {/* Header */}
         <div className="dialog-head">
@@ -133,34 +454,118 @@ export function NewSessionDialog({ project, repos = [], onClose, onCreated }) {
 
           {/* Engine */}
           <fieldset>
-            <legend className="field" style={{ display: 'contents' }}>
-              <label>Engine</label>
+            <legend style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: 8, display: 'block' }}>
+              Engine
             </legend>
             <div className="stack" style={{ gap: 6 }}>
-              {[
-                { value: 'demo', label: 'Demo', hint: 'Simulated run, no API cost' },
-                { value: 'claude-code', label: 'Claude Code', hint: 'Anthropic Claude via Claude Code SDK' },
-                { value: 'kiro', label: 'Kiro', hint: 'Kiro CLI engine' },
-              ].map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`choice${engine === opt.value ? ' is-checked' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name="ns-engine"
-                    value={opt.value}
-                    checked={engine === opt.value}
-                    onChange={() => setEngine(opt.value)}
-                  />
-                  <span>
-                    <strong>{opt.label}</strong>{' '}
-                    <span className="muted">{opt.hint}</span>
-                  </span>
-                </label>
-              ))}
+              {ENGINES.map((opt) => {
+                const available = isEngineAvailable(opt.id);
+                return (
+                  <label
+                    key={opt.id}
+                    className={`choice${engine === opt.id ? ' is-checked' : ''}${!available ? ' is-disabled' : ''}`}
+                    style={{ cursor: 'pointer', opacity: available ? 1 : 0.65 }}
+                    aria-describedby={!available ? `ns-engine-${opt.id}-hint` : undefined}
+                  >
+                    <input
+                      type="radio"
+                      name="ns-engine"
+                      value={opt.id}
+                      checked={engine === opt.id}
+                      disabled={!available}
+                      onChange={() => available && setEngine(opt.id)}
+                    />
+                    <span>
+                      <strong>{opt.label}</strong>{' '}
+                      <span className="muted">{opt.hint}</span>
+                    </span>
+                    {!available && (
+                      <span
+                        id={`ns-engine-${opt.id}-hint`}
+                        style={{ fontSize: '0.78rem', color: 'var(--ink-3)', marginLeft: 'auto' }}
+                      >
+                        Not set up yet —{' '}
+                        <a
+                          href="#/credentials"
+                          onClick={() => onClose()}
+                          style={{ color: 'var(--accent)' }}
+                        >
+                          Set up a credential
+                        </a>
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
             </div>
           </fieldset>
+
+          {/* Workspace */}
+          {(workspaces.length > 0 || readyRepos.length > 0) && (
+            <div className="field">
+              <label htmlFor="ns-workspace">Workspace</label>
+              <select
+                id="ns-workspace"
+                value={workspaceId}
+                onChange={(e) => setWorkspaceId(e.target.value)}
+              >
+                <option value="">Playground (no workspace)</option>
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+              <p className="field-hint">
+                Playground sessions run without a git checkout.
+              </p>
+              {workspaceRepoHint && (
+                <p className="field-hint">{workspaceRepoHint}</p>
+              )}
+            </div>
+          )}
+
+          {/* Hint when the project has no repos or workspaces yet */}
+          {workspaces.length === 0 && readyRepos.length === 0 && repos.length === 0 && project?.id && (
+            <p className="field-hint" style={{ fontSize: '0.82rem' }}>
+              This project has no repositories yet.{' '}
+              <a
+                href={`#/p/${project.id}/setup/repositories`}
+                onClick={onClose}
+                style={{ color: 'var(--link, var(--accent))' }}
+              >
+                Add repositories
+              </a>{' '}
+              to give sessions access to code.
+            </p>
+          )}
+
+          {/* Agent picker (loaded per engine) */}
+          {engine !== 'demo' && (
+            <AgentPicker
+              engine={engine}
+              value={leadAgent}
+              onChange={setLeadAgent}
+            />
+          )}
+
+          {/* Model picker (Kiro and Claude Code) */}
+          {engine !== 'demo' && (
+            <ModelPicker
+              engine={engine}
+              credentialId={credentialId}
+              value={model}
+              onChange={setModel}
+            />
+          )}
+
+          {/* Credential picker (when >1) */}
+          {engine !== 'demo' && initLoaded && (
+            <CredentialPicker
+              engine={engine}
+              credentials={engineCreds}
+              value={credentialId}
+              onChange={handleCredentialChange}
+            />
+          )}
 
           {/* Trust all tools — hidden for demo */}
           {engine !== 'demo' && (
@@ -181,18 +586,6 @@ export function NewSessionDialog({ project, repos = [], onClose, onCreated }) {
             </div>
           )}
 
-          {/* Lead agent */}
-          <div className="field">
-            <label htmlFor="ns-lead">Lead agent (optional)</label>
-            <input
-              id="ns-lead"
-              type="text"
-              value={leadAgent}
-              onChange={(e) => setLeadAgent(e.target.value)}
-              placeholder="e.g. backend-engineer"
-            />
-          </div>
-
           {/* Max iterations */}
           <div className="field" style={{ maxWidth: 180 }}>
             <label htmlFor="ns-iters">Max iterations</label>
@@ -206,11 +599,11 @@ export function NewSessionDialog({ project, repos = [], onClose, onCreated }) {
             />
           </div>
 
-          {/* Repositories */}
-          {readyRepos.length > 0 && (
+          {/* Repositories (legacy: shown when no workspaces and repos exist) */}
+          {workspaces.length === 0 && readyRepos.length > 0 && (
             <fieldset>
-              <legend className="field" style={{ display: 'contents' }}>
-                <label>Repositories</label>
+              <legend style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: 6, display: 'block' }}>
+                Repositories
               </legend>
               <div className="stack" style={{ gap: 4 }}>
                 {readyRepos.map((r) => (
@@ -228,6 +621,29 @@ export function NewSessionDialog({ project, repos = [], onClose, onCreated }) {
                 ))}
               </div>
             </fieldset>
+          )}
+
+          {/* Jira ticket — only shown when Jira is connected for this project */}
+          {jira?.connected && (
+            <div className="field">
+              <label htmlFor="ns-jira-ticket">
+                Ticket{' '}
+                <span className="muted" style={{ fontWeight: 400 }}>
+                  (optional)
+                </span>
+              </label>
+              <JiraTicketPicker
+                projectId={project.id}
+                jiraMapping={jira?.mapping ?? null}
+                value={ticket}
+                onChange={handleTicketChange}
+              />
+              {ticket && (
+                <p className="field-hint">
+                  Ticket context will be sent with the session goal.
+                </p>
+              )}
+            </div>
           )}
 
           {/* Error */}

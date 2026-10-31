@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { sanitizeMarkdown } from '../lib/sanitize.js';
 
 // ── FilePreviewModal ──────────────────────────────────────────────────────────
 //

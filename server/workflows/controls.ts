@@ -39,3 +39,14 @@ export function deregisterRun(runId: string): void {
 export function activeRunCount(): number {
   return controllers.size;
 }
+
+/**
+ * Abort every active run. Called by closeDb() to prevent background runs from
+ * inserting into a replaced in-memory database (FK violations in test isolation).
+ */
+export function abortAllRuns(): void {
+  for (const ctrl of controllers.values()) {
+    try { ctrl.abort(); } catch { /* ignore */ }
+  }
+  controllers.clear();
+}

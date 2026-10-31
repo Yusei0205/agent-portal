@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Learn } from './Learn.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,7 @@ function DocumentsTab({ projectId }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const fileRef = useRef(null);
+  const { confirmState, requestConfirm } = useConfirm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -70,7 +72,7 @@ function DocumentsTab({ projectId }) {
   };
 
   const deleteDoc = async (docId) => {
-    if (!confirm('Delete this document?')) return;
+    if (!await requestConfirm('Delete this document?', 'Delete', 'danger')) return;
     try {
       await api.delete(`/api/projects/${projectId}/knowledge/${docId}`);
       setDocs((d) => d.filter((x) => x.id !== docId));
@@ -83,7 +85,8 @@ function DocumentsTab({ projectId }) {
 
   return (
     <div className="stack">
-      {error && <p className="error-msg" role="alert">{error}</p>}
+      <ConfirmDialog state={confirmState} />
+      {error && <p className="error-note" role="alert">{error}</p>}
 
       <div className="actions-row">
         <label className={`btn btn-primary${uploading ? ' disabled' : ''}`}>
@@ -183,7 +186,7 @@ function SearchTab({ projectId }) {
 
   return (
     <div className="stack">
-      {error && <p className="error-msg" role="alert">{error}</p>}
+      {error && <p className="error-note" role="alert">{error}</p>}
 
       <form onSubmit={search} className="search-form" role="search">
         <input
@@ -253,7 +256,7 @@ function AskTab({ projectId }) {
 
   return (
     <div className="stack">
-      {error && <p className="error-msg" role="alert">{error}</p>}
+      {error && <p className="error-note" role="alert">{error}</p>}
 
       <form onSubmit={ask} className="stack">
         <div className="field">
@@ -300,7 +303,7 @@ function AskTab({ projectId }) {
       )}
 
       {teamSent && (
-        <p className="success-msg">
+        <p className="success-note">
           <Icon name="check" size={14} /> Sent to team questions.
         </p>
       )}
@@ -326,7 +329,7 @@ function DecisionsTab({ projectId }) {
 
   return (
     <div className="stack">
-      {error && <p className="error-msg" role="alert">{error}</p>}
+      {error && <p className="error-note" role="alert">{error}</p>}
       {decisions.length === 0 ? (
         <div className="empty-state">
           <p>No decisions yet. They appear when team questions are answered.</p>

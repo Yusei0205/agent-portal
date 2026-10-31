@@ -13,7 +13,7 @@ import { one, all, run as dbRun } from './db.ts';
 import type { Row } from './db.ts';
 import { now } from './util.ts';
 import { setRunLifecycleHook } from './agent/runner.ts';
-import { processReviewOutput, triggerAutoPost } from './review.ts';
+import { processReviewOutput, triggerAutoPost, getPrCommentMode } from './review.ts';
 import { config } from './config.ts';
 
 // ── Run-log entry ─────────────────────────────────────────────────────────────
@@ -297,8 +297,10 @@ export function handleReviewLifecycle(
       return;
     }
 
-    // Fire auto-post if configured (best-effort, errors are swallowed)
-    if (review.post_mode === 'auto') {
+    // Fire auto-post if the review was set to auto-post, or if the global
+    // prCommentMode is 'automatic' (F10).
+    const shouldAutoPost = review.post_mode === 'auto' || getPrCommentMode() === 'automatic';
+    if (shouldAutoPost) {
       triggerAutoPost(review.id, review.project_id ?? undefined).catch(() => { /* best effort */ });
     }
   }

@@ -6,6 +6,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 import UsersPage from './settings/Users.jsx';
 
 // ── Audit log tab ─────────────────────────────────────────────────────────────
@@ -70,7 +72,7 @@ function AuditLogTab() {
 
       {!loading && entries.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
-          <table className="table" style={{ width: '100%', fontSize: '.875rem' }}>
+          <table className="data-table" style={{ width: '100%', fontSize: '.875rem' }}>
             <thead>
               <tr>
                 <th>Time</th>
@@ -86,8 +88,8 @@ function AuditLogTab() {
                   <td style={{ whiteSpace: 'nowrap' }}>{e.ts ? formatRelative(e.ts) : '—'}</td>
                   <td>{e.actor_name || e.actor_email || e.actor_id || 'system'}</td>
                   <td><code style={{ fontSize: '.8rem' }}>{e.action}</code></td>
-                  <td style={{ color: 'var(--muted)', fontSize: '.8rem' }}>{e.target || '—'}</td>
-                  <td style={{ color: 'var(--muted)', fontSize: '.8rem' }}>{e.ip || '—'}</td>
+                  <td className="muted" style={{ fontSize: '.8rem' }}>{e.target || '—'}</td>
+                  <td className="muted" style={{ fontSize: '.8rem' }}>{e.ip || '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -133,6 +135,8 @@ function ApiTokensTab({ isAdmin }) {
   const [createForm, setCreateForm] = useState({ name: '', scope: 'read' });
   const [createError, setCreateError] = useState(null);
   const [newToken, setNewToken] = useState(null);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -171,12 +175,12 @@ function ApiTokensTab({ isAdmin }) {
   };
 
   const revokeToken = async (id) => {
-    if (!confirm('Revoke this token?')) return;
+    if (!await requestConfirm('Revoke this token?', 'Revoke', 'danger')) return;
     try {
       await api.delete(`/api/api-tokens/${id}`);
       await load();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   };
 
@@ -185,8 +189,10 @@ function ApiTokensTab({ isAdmin }) {
 
   return (
     <div>
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       {newToken && (
-        <div className="card" style={{ padding: '1rem', marginBottom: '1rem', background: 'var(--surface-success, #f0fdf4)', border: '1px solid var(--success, #22c55e)' }}>
+        <div className="card" style={{ padding: '1rem', marginBottom: '1rem', background: 'var(--ok-wash)', border: '1px solid var(--ok)' }}>
           <p style={{ margin: '0 0 .5rem', fontWeight: 600 }}>Token created — copy it now, it won't be shown again.</p>
           <code style={{ wordBreak: 'break-all', fontSize: '.9rem' }}>{newToken}</code>
           <br /><br />
@@ -237,7 +243,7 @@ function ApiTokensTab({ isAdmin }) {
       {tokens.length === 0 ? (
         <p className="muted">No tokens yet.</p>
       ) : (
-        <table className="table" style={{ width: '100%', fontSize: '.875rem' }}>
+        <table className="data-table" style={{ width: '100%', fontSize: '.875rem' }}>
           <thead>
             <tr>
               <th>Name</th>
@@ -255,8 +261,8 @@ function ApiTokensTab({ isAdmin }) {
                 <td>{t.name}</td>
                 <td><code>{t.prefix}…</code></td>
                 <td>{t.scope}</td>
-                <td style={{ color: 'var(--muted)' }}>{t.expires_at ? new Date(t.expires_at).toLocaleDateString() : '—'}</td>
-                <td style={{ color: 'var(--muted)' }}>{t.last_used_at ? formatRelative(t.last_used_at) : 'Never'}</td>
+                <td className="muted">{t.expires_at ? new Date(t.expires_at).toLocaleDateString() : '—'}</td>
+                <td className="muted">{t.last_used_at ? formatRelative(t.last_used_at) : 'Never'}</td>
                 <td>{t.revoked_at ? <span className="badge badge-error">Revoked</span> : <span className="badge badge-success">Active</span>}</td>
                 <td>
                   {!t.revoked_at && (
@@ -274,7 +280,7 @@ function ApiTokensTab({ isAdmin }) {
       {isAdmin && allTokens.length > 0 && (
         <>
           <h3 style={{ fontSize: '1rem', marginTop: '1.5rem' }}>All tokens (admin view)</h3>
-          <table className="table" style={{ width: '100%', fontSize: '.875rem' }}>
+          <table className="data-table" style={{ width: '100%', fontSize: '.875rem' }}>
             <thead>
               <tr>
                 <th>Name</th>
@@ -288,9 +294,9 @@ function ApiTokensTab({ isAdmin }) {
               {allTokens.map((t) => (
                 <tr key={t.id} style={{ opacity: t.active ? 1 : 0.5 }}>
                   <td>{t.name}</td>
-                  <td style={{ fontSize: '.8rem', color: 'var(--muted)' }}>{t.user_name || t.user_email}</td>
+                  <td className="muted" style={{ fontSize: '.8rem' }}>{t.user_name || t.user_email}</td>
                   <td>{t.scope}</td>
-                  <td style={{ color: 'var(--muted)' }}>{t.last_used_at ? formatRelative(t.last_used_at) : 'Never'}</td>
+                  <td className="muted">{t.last_used_at ? formatRelative(t.last_used_at) : 'Never'}</td>
                   <td>{t.revoked_at ? <span className="badge badge-error">Revoked</span> : <span className="badge badge-success">Active</span>}</td>
                 </tr>
               ))}
@@ -311,6 +317,7 @@ function ControlPlaneTab() {
   const [capsForm, setCapsForm] = useState({ globalMax: 0, perUserMax: 5, perProjectMax: 0 });
   const [saving, setSaving] = useState(false);
   const [draining, setDraining] = useState(false);
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -338,7 +345,7 @@ function ControlPlaneTab() {
       await api.post('/api/admin/drain', { enable: !cp?.drain?.active });
       await load();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     } finally {
       setDraining(false);
     }
@@ -355,7 +362,7 @@ function ControlPlaneTab() {
       });
       await load();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     } finally {
       setSaving(false);
     }
@@ -366,6 +373,7 @@ function ControlPlaneTab() {
 
   return (
     <div className="stack" style={{ maxWidth: 600 }}>
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       {/* Status */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
         <div className="card" style={{ padding: '1rem', textAlign: 'center' }}>
@@ -449,7 +457,7 @@ export function AdminPanel({ user }) {
   if (!user?.is_admin) {
     return (
       <div className="page">
-        <h1>Admin</h1>
+        <h1>Users</h1>
         <p className="error-note">Admin access required.</p>
       </div>
     );
@@ -457,9 +465,9 @@ export function AdminPanel({ user }) {
 
   return (
     <div className="page">
-      <h1>Admin</h1>
+      <h1>Users</h1>
 
-      <div className="tabs" role="tablist" aria-label="Admin sections">
+      <div className="tab-bar" role="tablist" aria-label="Admin sections">
         {ADMIN_TABS.map((t) => (
           <button
             key={t.id}

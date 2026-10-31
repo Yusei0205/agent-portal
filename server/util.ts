@@ -133,10 +133,15 @@ export function sha256(input: string): string {
 /**
  * Safely join a root and a relative path, refusing to escape the root.
  * Throws if the resolved path is outside root.
+ *
+ * Uses a trailing `path.sep` in the containment check so that a sibling
+ * directory whose name shares a prefix with the root cannot pass:
+ *   root = /a/b/c  →  /a/b/csibling is rejected (does not start with /a/b/c/)
  */
 export function safeJoin(root: string, rel: string): string {
+  const resolvedRoot = path.resolve(root);
   const resolved = path.resolve(root, rel);
-  if (!resolved.startsWith(path.resolve(root))) {
+  if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
     throw new Error(`Path "${rel}" escapes root "${root}"`);
   }
   return resolved;

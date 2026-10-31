@@ -43,24 +43,27 @@ function fmtMs(ms) {
 
 function Tile({ label, value, sub }) {
   return (
-    <div className="stat-tile" style={{ padding: '1.25rem', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-      <div style={{ fontSize: '.8rem', color: 'var(--muted)', marginBottom: '.25rem' }}>{label}</div>
+    <div className="stat-tile" style={{ padding: '1.25rem', background: 'var(--panel)', borderRadius: 8, border: '1px solid var(--line)' }}>
+      <div style={{ fontSize: '.8rem', color: 'var(--ink-3)', marginBottom: '.25rem' }}>{label}</div>
       <div style={{ fontSize: '1.8rem', fontWeight: 700, lineHeight: 1.1 }}>{value}</div>
-      {sub && <div style={{ fontSize: '.8rem', color: 'var(--muted)', marginTop: '.25rem' }}>{sub}</div>}
+      {sub && <div style={{ fontSize: '.8rem', color: 'var(--ink-3)', marginTop: '.25rem' }}>{sub}</div>}
     </div>
   );
 }
 
-// ── Status colours ────────────────────────────────────────────────────────────
-
-const STATUS_COLORS = {
-  completed: '#22c55e',
-  failed: '#ef4444',
-  running: '#3b82f6',
-  queued: '#f59e0b',
-  stopped: '#6b7280',
-  waiting: '#8b5cf6',
-};
+// ── Status colours — read from CSS tokens at render time so they follow the theme ──
+function getStatusColors() {
+  const s = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => s.getPropertyValue(name).trim() || fallback;
+  return {
+    completed: v('--ok',       '#2c7a4e'),
+    failed:    v('--danger',   '#b0281c'),
+    running:   v('--info',     '#2f6fde'),
+    queued:    v('--warn',     '#9a6512'),
+    stopped:   v('--ink-3',    '#737e93'),
+    waiting:   v('--accent-3', '#a855f7'),
+  };
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -69,6 +72,10 @@ export function Insights({ projectId, user }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Compute CSS-variable colours at render time so they track the active theme
+  const STATUS_COLORS = getStatusColors();
+  const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#0e7a7e';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -129,11 +136,11 @@ export function Insights({ projectId, user }) {
               <h2 style={{ fontSize: '1rem', marginBottom: '.75rem' }}>Daily costs (USD)</h2>
               <ResponsiveContainer width="100%" height={180}>
                 <LineChart data={data.dailyCosts} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d) => d.slice(5)} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v.toFixed(2)}`} width={55} />
                   <Tooltip formatter={(v) => [`$${Number(v).toFixed(4)}`, 'Cost']} />
-                  <Line type="monotone" dataKey="cost" stroke="#0f7c80" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="cost" stroke={accentColor} strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </section>
@@ -146,11 +153,11 @@ export function Insights({ projectId, user }) {
                 <h2 style={{ fontSize: '1rem', marginBottom: '.75rem' }}>Cost by project</h2>
                 <ResponsiveContainer width="100%" height={Math.max(120, data.costByProject.length * 32)}>
                   <BarChart layout="vertical" data={data.costByProject} margin={{ left: 0, right: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
                     <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v.toFixed(2)}`} />
                     <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={120} />
                     <Tooltip formatter={(v) => [`$${Number(v).toFixed(4)}`, 'Cost']} />
-                    <Bar dataKey="cost" fill="#0f7c80" />
+                    <Bar dataKey="cost" fill={accentColor} />
                   </BarChart>
                 </ResponsiveContainer>
               </section>
@@ -190,7 +197,7 @@ export function Insights({ projectId, user }) {
           {user?.is_admin && data.costByUser?.length > 0 && (
             <section style={{ marginBottom: '2rem' }}>
               <h2 style={{ fontSize: '1rem', marginBottom: '.75rem' }}>Cost by user</h2>
-              <table className="table" style={{ width: '100%' }}>
+              <table className="data-table" style={{ width: '100%' }}>
                 <thead>
                   <tr>
                     <th>User</th>

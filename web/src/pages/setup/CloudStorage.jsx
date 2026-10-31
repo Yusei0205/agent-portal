@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
+import { AwsRegionSelect } from '../../components/AwsRegionSelect.jsx';
 
 /**
  * @param {{
@@ -70,12 +71,10 @@ export function CloudStorage({ data, onChange, onNext, onBack }) {
             </div>
             <div className="field">
               <label htmlFor="setup-s3-region">Bucket region</label>
-              <input
+              <AwsRegionSelect
                 id="setup-s3-region"
-                type="text"
                 value={data.s3Region}
                 onChange={(e) => onChange({ s3Region: e.target.value })}
-                placeholder="us-east-1"
                 required
               />
             </div>

@@ -18,6 +18,7 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, insert } from './db.ts';
 import { generateId, now, str, parseJson, newId } from './util.ts';
+import { emit } from './events.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -308,6 +309,7 @@ export function registerLoopSpecRoutes(): void {
         updated_at: ts,
       });
       workflowId = wid;
+      emit(req.params.id, { type: 'workflow.created', workflowId: wid });
     } catch { /* if workflow insert fails, continue */ }
 
     insert('p10_loop_runs', {

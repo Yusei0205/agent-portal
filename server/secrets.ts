@@ -44,3 +44,40 @@ export function decrypt(ciphertext: string, key: string): string {
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
+
+// ── Secrets table helpers ────────────────────────────────────────────────────
+// Read and write encrypted entries in the `secrets` table that migrations
+// create.  These are used by Jira integration (and potentially other
+// per-project credentials) to avoid scattering SQL across feature modules.
+
+import { one, run as dbRun } from './db.ts';
+import { config } from './config.ts';
+import { now } from './util.ts';
+
+/** Store an encrypted plaintext value under a named key. */
+export async function setSecret(name: string, value: string): Promise<void> {
+  const enc = encrypt(value, config.secretKey);
+  dbRun(
+    'INSERT INTO secrets (name, value, hint, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, hint = excluded.hint, updated_at = excluded.updated_at',
+    name,
+    enc,
+    value.length > 8 ? `…${value.slice(-4)}` : 'set',
+    now(),
+  );
+}
+
+/** Retrieve and decrypt a value stored by {@link setSecret}. Returns null if not found. */
+export async function getSecret(name: string): Promise<string | null> {
+  const row = one<{ value: string }>('SELECT value FROM secrets WHERE name = ?', name);
+  if (!row) return null;
+  try {
+    return decrypt(row.value, config.secretKey);
+  } catch {
+    return null;
+  }
+}
+
+/** Delete a secret entry. No-op if it does not exist. */
+export function deleteSecret(name: string): void {
+  dbRun('DELETE FROM secrets WHERE name = ?', name);
+}

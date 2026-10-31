@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
+import { Icon } from '../components/Icon.jsx';
+import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
+import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar, BulkSelectHint } from '../components/BulkActionBar.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,23 +65,32 @@ function NewPresentationModal({ projectId, onClose, onCreated }) {
   const [audience, setAudience] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [attachmentIds, setAttachmentIds] = useState([]);
+  const [uploadsBusy, setUploadsBusy]     = useState(false);
+
+  const handleAttachments = (ids, uploading) => {
+    setAttachmentIds(ids);
+    setUploadsBusy(uploading);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
     if (sourceKind === 'topic' && !topic.trim()) { setError('Topic is required'); return; }
     if (sourceKind !== 'topic' && !sourceRef.trim()) { setError('Source reference is required'); return; }
+    if (uploadsBusy) return;
 
     setBusy(true);
     setError(null);
     try {
       const r = await api.post(`/api/projects/${projectId}/presentations`, {
-        name: name.trim(),
+        name:          name.trim(),
         sourceKind,
-        topic: sourceKind === 'topic' ? topic.trim() : undefined,
-        sourceRef: sourceKind !== 'topic' ? sourceRef.trim() : undefined,
-        slideCount: Number(slideCount),
-        audience: audience.trim() || undefined,
+        topic:         sourceKind === 'topic' ? topic.trim() : undefined,
+        sourceRef:     sourceKind !== 'topic' ? sourceRef.trim() : undefined,
+        slideCount:    Number(slideCount),
+        audience:      audience.trim() || undefined,
+        attachmentIds: attachmentIds.length ? attachmentIds : undefined,
       });
       onCreated(r);
     } catch (err) {
@@ -182,15 +196,127 @@ function NewPresentationModal({ projectId, onClose, onCreated }) {
 
           {error && <p className="error-msg" role="alert">{error}</p>}
 
+          <AttachmentPicker
+            projectId={projectId}
+            onAttachmentsChange={handleAttachments}
+            disabled={busy}
+          />
+
           <div className="modal-footer">
-            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy || uploadsBusy}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>
-              {busy ? 'Creating…' : 'Create'}
+            <button type="submit" className="btn btn-primary" disabled={busy || uploadsBusy || !name.trim()}>
+              {busy ? 'Creating…' : uploadsBusy ? 'Uploading…' : 'Create'}
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Refresh presentation dialog ───────────────────────────────────────────────
+
+function RefreshPresDialog({ projectId, presentation, onClose, onRefreshed }) {
+  const [busy, setBusy]                   = useState(false);
+  const [error, setError]                 = useState(null);
+  const [attachmentIds, setAttachmentIds] = useState([]);
+  const [uploadsBusy, setUploadsBusy]     = useState(false);
+  const trapRef = useFocusTrap();
+
+  const handleAttachments = (ids, uploading) => {
+    setAttachmentIds(ids);
+    setUploadsBusy(uploading);
+  };
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !busy && !uploadsBusy) onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, busy, uploadsBusy]);
+
+  const submit = async () => {
+    if (busy || uploadsBusy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(
+        `/api/projects/${projectId}/presentations/${presentation.id}/refresh`,
+        { attachmentIds: attachmentIds.length ? attachmentIds : undefined },
+      );
+      onRefreshed();
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Failed to refresh');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="dialog-overlay"
+      role="presentation"
+      onClick={(e) => { if (e.target === e.currentTarget && !busy && !uploadsBusy) onClose(); }}
+    >
+      <div
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="refresh-pres-title"
+        style={{ maxWidth: 520 }}
+        ref={trapRef}
+      >
+        <div className="dialog-head">
+          <h2 className="dialog-title" id="refresh-pres-title">Refresh presentation</h2>
+          <button
+            type="button"
+            className="btn-icon"
+            onClick={onClose}
+            disabled={busy || uploadsBusy}
+            aria-label="Close"
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
+        <div className="dialog-body stack">
+          <p className="muted" style={{ fontSize: '0.84rem' }}>
+            Regenerate <strong>{presentation.name}</strong>. Attach additional files to supplement
+            or replace the existing source material.
+          </p>
+          <div className="field">
+            <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+            <AttachmentPicker
+              projectId={projectId}
+              initialAttachments={presentation.attachments ?? []}
+              onAttachmentsChange={handleAttachments}
+              disabled={busy}
+            />
+          </div>
+          {error && <div className="error-note" role="alert">{error}</div>}
+        </div>
+        <div className="dialog-foot">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onClose}
+            disabled={busy || uploadsBusy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={busy || uploadsBusy}
+          >
+            {busy
+              ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Refreshing…</>
+              : uploadsBusy
+                ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Uploading…</>
+                : <><Icon name="refresh" size={14} /> Refresh</>}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -211,6 +337,9 @@ export function Presentations({ projectId }) {
   const [selected, setSelected] = useState(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [preview, setPreview] = useState(null); // { name, slides }
+  const [refreshingPres, setRefreshingPres] = useState(null);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     try {
@@ -231,27 +360,24 @@ export function Presentations({ projectId }) {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this presentation?')) return;
+    const ok = await requestConfirm('Delete this presentation?', 'Delete', 'danger');
+    if (!ok) return;
     try {
       await api.delete(`/api/projects/${projectId}/presentations/${id}`);
       setPresentations((prev) => prev.filter((p) => p.id !== id));
       setSelected((prev) => { const s = new Set(prev); s.delete(id); return s; });
     } catch (err) {
-      alert(err.message || 'Failed to delete');
+      toast(err.message || 'Failed to delete', 'error');
     }
   };
 
-  const handleRefresh = async (id) => {
-    try {
-      await api.post(`/api/projects/${projectId}/presentations/${id}/refresh`, {});
-      load();
-    } catch (err) {
-      alert(err.message || 'Failed to refresh');
-    }
+  const handleRefresh = (presentation) => {
+    setRefreshingPres(presentation);
   };
 
   const handleBulkDelete = async () => {
-    if (!confirm(`Delete ${selected.size} presentation(s)?`)) return;
+    const ok = await requestConfirm(`Delete ${selected.size} presentation(s)?`, 'Delete', 'danger');
+    if (!ok) return;
     setBulkBusy(true);
     try {
       for (const id of selected) {
@@ -260,7 +386,7 @@ export function Presentations({ projectId }) {
       setSelected(new Set());
       load();
     } catch (err) {
-      alert(err.message || 'Failed to delete');
+      toast(err.message || 'Failed to delete', 'error');
     } finally {
       setBulkBusy(false);
     }
@@ -337,7 +463,19 @@ export function Presentations({ projectId }) {
                       aria-label={`Select ${p.name}`}
                     />
                   </td>
-                  <td className="table-primary">{p.name}</td>
+                  <td className="table-primary">
+                    {p.name}
+                    {p.attachments?.length > 0 && (
+                      <span
+                        className="badge badge-muted"
+                        style={{ marginLeft: 6 }}
+                        title={`${p.attachments.length} attachment${p.attachments.length !== 1 ? 's' : ''}`}
+                      >
+                        <Icon name="attach" size={10} />
+                        {' '}{p.attachments.length}
+                      </span>
+                    )}
+                  </td>
                   <td className="table-muted">
                     {p.source_kind === 'topic' ? (
                       <span title={p.topic ?? ''}>{p.topic ? p.topic.slice(0, 40) + (p.topic.length > 40 ? '…' : '') : '—'}</span>
@@ -373,7 +511,7 @@ export function Presentations({ projectId }) {
                       <button
                         type="button"
                         className="btn btn-sm btn-ghost"
-                        onClick={() => handleRefresh(p.id)}
+                        onClick={() => handleRefresh(p)}
                         title="Refresh presentation"
                       >
                         Refresh
@@ -419,6 +557,18 @@ export function Presentations({ projectId }) {
           onClose={() => setPreview(null)}
         />
       )}
+
+      {refreshingPres && (
+        <RefreshPresDialog
+          projectId={projectId}
+          presentation={refreshingPres}
+          onClose={() => setRefreshingPres(null)}
+          onRefreshed={() => { setRefreshingPres(null); load(); }}
+        />
+      )}
+
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

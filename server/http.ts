@@ -31,11 +31,27 @@ export interface PortalRequest extends IncomingMessage {
   secure: boolean;
   /** Raw body buffer, lazily read. */
   rawBody?: Buffer;
+  /** Scopes from the API token, if authenticated via Bearer token. Undefined for cookie/anon auth. */
+  tokenScopes?: string[];
+  /** True when the request was authenticated via an API token (not a browser cookie). */
+  authViaToken?: boolean;
+  /** For delegate-scoped tokens: the workflow ID the token is bound to. */
+  tokenWorkflowId?: string | null;
 }
 
 export type PortalResponse = ServerResponse;
 
 export type Handler = (req: PortalRequest, res: PortalResponse) => Promise<void> | void;
+
+// ── Auth info (populated by authenticator, consumed by request handler) ───────
+
+/** Side-channel output written by the authenticator for token-based auth. */
+export interface AuthInfo {
+  tokenScopes?: string[];
+  authViaToken?: boolean;
+  /** For delegate-scoped tokens: the workflow ID the token is bound to. */
+  tokenWorkflowId?: string | null;
+}
 
 // ── Route registry ────────────────────────────────────────────────────────────
 
@@ -47,6 +63,8 @@ interface Route {
   isSSE: boolean;
   /** Pattern the route was registered with, for debugging. */
   pattern: string;
+  /** When true: skip CSRF check and body parsing (for API-token-only endpoints). */
+  bypassCsrf: boolean;
 }
 
 const routes: Route[] = [];
@@ -61,6 +79,7 @@ function registerRoute(
   pattern: string,
   handler: Handler,
   isSSE = false,
+  bypassCsrf = false,
 ): void {
   const keys: string[] = [];
   const re = new RegExp(
@@ -71,7 +90,7 @@ function registerRoute(
       }) +
       '/?$',
   );
-  routes.push({ method, re, keys, handler, isSSE, pattern });
+  routes.push({ method, re, keys, handler, isSSE, pattern, bypassCsrf });
 }
 
 // ── Public router object ──────────────────────────────────────────────────────
@@ -95,6 +114,21 @@ export const router = {
   /** Register a Server-Sent Events endpoint. No CSRF check, no JSON body parsing. */
   sse(pattern: string, handler: Handler): void {
     registerRoute('GET', pattern, handler, true);
+  },
+  /**
+   * Register a POST endpoint that bypasses CSRF check and body parsing.
+   * Use for Bearer-token-only API endpoints (e.g. MCP). The handler is
+   * responsible for reading the body and enforcing its own authentication.
+   */
+  rawPost(pattern: string, handler: Handler): void {
+    registerRoute('POST', pattern, handler, false, true);
+  },
+  /**
+   * Register a GET endpoint that bypasses body parsing (body is never relevant for GET,
+   * but marks the route so the handler can opt out of standard processing if needed).
+   */
+  rawGet(pattern: string, handler: Handler): void {
+    registerRoute('GET', pattern, handler, false, true);
   },
 };
 
@@ -213,7 +247,7 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string)
 
 // ── Authenticator injection ───────────────────────────────────────────────────
 
-export type Authenticator = (req: IncomingMessage) => PortalUser | null;
+export type Authenticator = (req: IncomingMessage, authInfo: AuthInfo) => PortalUser | null;
 
 let _authenticator: Authenticator = () => null;
 
@@ -234,6 +268,27 @@ export function requireAuth(
   return async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) {
       sendJson(res, 401, { error: 'Sign in to continue' });
+      return;
+    }
+    return handler(req, res);
+  };
+}
+
+/**
+ * Middleware that requires browser-session authentication only.
+ * Rejects API token requests with 403.
+ * Use for routes that manage sensitive user data: tokens, credentials, settings.
+ */
+export function requireCookieAuth(
+  handler: (req: PortalRequest, res: PortalResponse) => Promise<void> | void,
+): Handler {
+  return async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) {
+      sendJson(res, 401, { error: 'Sign in to continue' });
+      return;
+    }
+    if (req.authViaToken) {
+      sendJson(res, 403, { error: 'This endpoint requires browser authentication, not an API token' });
       return;
     }
     return handler(req, res);
@@ -300,7 +355,21 @@ export function createRequestHandler(): (
       }
 
       // ── Authenticate ──────────────────────────────────────────────────────
-      req.user = _authenticator(rawReq);
+      const _authInfo: AuthInfo = {};
+      req.user = _authenticator(rawReq, _authInfo);
+      if (_authInfo.tokenScopes !== undefined) req.tokenScopes = _authInfo.tokenScopes;
+      if (_authInfo.authViaToken) req.authViaToken = true;
+      if (_authInfo.tokenWorkflowId !== undefined) req.tokenWorkflowId = _authInfo.tokenWorkflowId;
+
+      // Delegate-scoped tokens may only reach the MCP endpoint — nothing on REST.
+      if (
+        req.authViaToken &&
+        req.tokenScopes?.length === 1 &&
+        req.tokenScopes[0] === 'delegate' &&
+        !urlPath.startsWith('/api/mcp')
+      ) {
+        throw new HttpError(401, 'Delegate tokens can only be used with the /api/mcp endpoint');
+      }
 
       // ── Route matching ────────────────────────────────────────────────────
       const method = rawReq.method ?? 'GET';
@@ -327,9 +396,10 @@ export function createRequestHandler(): (
 
       // ── CSRF guard ─────────────────────────────────────────────────────────
       // State-changing API calls must carry the custom header that only same-origin scripts can set.
-      // SSE endpoints are read-only; GET/HEAD are safe.
+      // SSE endpoints are read-only; GET/HEAD are safe; bypassCsrf routes use Bearer tokens (CSRF-safe).
       if (
         !matched.isSSE &&
+        !matched.bypassCsrf &&
         method !== 'GET' &&
         method !== 'HEAD' &&
         rawReq.headers['x-requested-with'] !== 'agent-portal'
@@ -338,7 +408,7 @@ export function createRequestHandler(): (
       }
 
       // ── Body parsing (JSON) ───────────────────────────────────────────────
-      if (!matched.isSSE && method !== 'GET' && method !== 'HEAD') {
+      if (!matched.isSSE && !matched.bypassCsrf && method !== 'GET' && method !== 'HEAD') {
         const ct = String(rawReq.headers['content-type'] ?? '');
         // Multipart uploads can be up to maxUploadBytes; JSON is capped at 5 MB
         const bodyLimit = ct.includes('multipart/form-data')
@@ -377,6 +447,24 @@ export function createRequestHandler(): (
   };
 }
 
+// ── WebSocket upgrade hook ────────────────────────────────────────────────────
+
+type WsUpgradeHandler = (
+  req: import('node:http').IncomingMessage,
+  socket: import('node:stream').Duplex,
+  head: Buffer,
+) => void;
+
+let _wsUpgradeHandler: WsUpgradeHandler | null = null;
+
+/**
+ * Register a handler for WebSocket upgrade requests.
+ * Only one handler can be registered; subsequent calls overwrite the previous one.
+ */
+export function setWsUpgradeHandler(fn: WsUpgradeHandler): void {
+  _wsUpgradeHandler = fn;
+}
+
 // ── HTTP server factory ───────────────────────────────────────────────────────
 
 export function createServer(): http.Server {
@@ -389,5 +477,15 @@ export function createServer(): http.Server {
   });
   server.requestTimeout = 0; // uploads and SSE streams can be long
   server.headersTimeout = 60_000;
+
+  // WebSocket upgrade events (terminal, future live features)
+  server.on('upgrade', (req, socket, head) => {
+    if (_wsUpgradeHandler) {
+      _wsUpgradeHandler(req, socket, head);
+    } else {
+      socket.destroy();
+    }
+  });
+
   return server;
 }

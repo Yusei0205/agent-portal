@@ -27,7 +27,8 @@ import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, insert, getDb } from './db.ts';
 import { generateId, now, parseJson, newId } from './util.ts';
-import { getSetting, setSetting } from './settings.ts';
+import { getSetting, setSetting, getSettings } from './settings.ts';
+import { emit } from './events.ts';
 import { appendAudit } from './audit.ts';
 import { buildXlsx, buildDocx } from './docgen.ts';
 import { decrypt } from './secrets.ts';
@@ -157,13 +158,24 @@ function getMergeThreshold(): MergeThreshold {
   return 'high';
 }
 
-function getRateCard(): RateCard {
+export function getRateCard(): RateCard {
   const raw = getSetting(getDb(), 'review.rateCard');
   if (raw) {
     const parsed = parseJson<Partial<RateCard>>(raw, {});
     return { ...DEFAULT_RATE_CARD, ...parsed };
   }
   return { ...DEFAULT_RATE_CARD };
+}
+
+export function getPrCommentMode(): 'manual' | 'automatic' {
+  const raw = getSetting(getDb(), 'review.prCommentMode');
+  if (raw) {
+    try {
+      const v = JSON.parse(raw);
+      if (v === 'automatic') return 'automatic';
+    } catch { /* fall through */ }
+  }
+  return 'manual';
 }
 
 // ── Cost computation (R3) ─────────────────────────────────────────────────────
@@ -369,10 +381,11 @@ interface GitHubMergeResult { sha: string }
  * 'profile': use a named AWS CLI profile from ~/.aws/credentials.
  * 'instance-role': use the EC2/ECS instance profile (default credential chain).
  * 'sso': use AWS SSO via a named profile.
+ * 'portal-sso': use the portal-wide Bedrock SSO identity.
  */
 interface CodeCommitCreds {
   region: string;
-  authMethod: 'keys' | 'profile' | 'instance-role' | 'sso';
+  authMethod: 'keys' | 'profile' | 'instance-role' | 'sso' | 'portal-sso';
   accessKeyId?: string;
   secretAccessKey?: string;
   profileName?: string;
@@ -392,6 +405,11 @@ async function makeCodeCommitClient(creds: CodeCommitCreds) {
   if (creds.authMethod === 'sso') {
     const { fromSSO } = await import('@aws-sdk/credential-providers');
     return new CodeCommitClient({ ...base, credentials: fromSSO({ profile: creds.profileName }) });
+  }
+  if (creds.authMethod === 'portal-sso') {
+    const { getBedrockSsoCredentials } = await import('./bedrock-sso.ts');
+    const c = await getBedrockSsoCredentials();
+    return new CodeCommitClient({ ...base, credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey, sessionToken: c.sessionToken } });
   }
   // instance-role: SDK uses the default credential chain (IMDS / env / container)
   return new CodeCommitClient(base);
@@ -568,6 +586,113 @@ async function _doCodeCommitPostComment(
   }));
 }
 
+// ── Bitbucket provider helpers ────────────────────────────────────────────────
+
+function parseBitbucketOwnerRepoFromUrl(url: string): { workspace: string; repoSlug: string } | null {
+  const m = url.match(/bitbucket\.org[/:]([^/]+)\/([^/]+?)(?:\.git)?(?:[/?#]|$)/);
+  if (!m) return null;
+  return { workspace: m[1], repoSlug: m[2] };
+}
+
+function findBitbucketCredsForUser(userId: string): { email: string; apiToken: string } | null {
+  interface ConnRow { credentials_enc: string | null }
+  const conns = all<ConnRow>(
+    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'bitbucket' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
+    userId,
+  );
+  for (const c of conns) {
+    if (!c.credentials_enc) continue;
+    try {
+      const plain = decrypt(c.credentials_enc, config.secretKey);
+      const creds = JSON.parse(plain) as Record<string, unknown>;
+      if (typeof creds.email === 'string' && typeof creds.apiToken === 'string' && creds.apiToken) {
+        return { email: creds.email, apiToken: creds.apiToken };
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+function bitbucketBasicAuthHeader(email: string, apiToken: string): string {
+  return 'Basic ' + Buffer.from(`${email}:${apiToken}`).toString('base64');
+}
+
+async function _doBitbucketGetPrShas(
+  workspace: string, repoSlug: string, prId: string,
+  email: string, apiToken: string,
+): Promise<{ sourceSha: string | null; destSha: string | null }> {
+  const resp = await fetch(
+    `https://api.bitbucket.org/2.0/repositories/${workspace}/${repoSlug}/pullrequests/${prId}`,
+    {
+      headers: { Authorization: bitbucketBasicAuthHeader(email, apiToken), Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (!resp.ok) return { sourceSha: null, destSha: null };
+  const data = await resp.json() as {
+    source?: { commit?: { hash?: string } };
+    destination?: { commit?: { hash?: string } };
+  };
+  return {
+    sourceSha: data.source?.commit?.hash ?? null,
+    destSha: data.destination?.commit?.hash ?? null,
+  };
+}
+
+async function _doBitbucketMerge(
+  workspace: string, repoSlug: string, prId: string,
+  email: string, apiToken: string,
+): Promise<void> {
+  const resp = await fetch(
+    `https://api.bitbucket.org/2.0/repositories/${workspace}/${repoSlug}/pullrequests/${prId}/merge`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: bitbucketBasicAuthHeader(email, apiToken),
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ type: 'commit' }),
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  if (resp.status === 409) {
+    const body = await resp.json().catch(() => ({})) as { error?: { message?: string } };
+    throw new MergeConflictError(`Bitbucket merge conflict: ${body.error?.message ?? resp.statusText}`);
+  }
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({})) as { error?: { message?: string } };
+    throw new Error(`Bitbucket merge failed (${resp.status}): ${body.error?.message ?? resp.statusText}`);
+  }
+}
+
+async function _doBitbucketPostComment(
+  workspace: string, repoSlug: string, prId: string,
+  content: string, filePath: string | null, lineNumber: number | null,
+  email: string, apiToken: string,
+): Promise<{ ok: boolean; status: number }> {
+  const payload: Record<string, unknown> = {
+    content: { raw: content },
+  };
+  if (filePath && lineNumber != null) {
+    payload.inline = { to: lineNumber, path: filePath };
+  }
+  const resp = await fetch(
+    `https://api.bitbucket.org/2.0/repositories/${workspace}/${repoSlug}/pullrequests/${prId}/comments`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: bitbucketBasicAuthHeader(email, apiToken),
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  return { ok: resp.ok, status: resp.status };
+}
+
 /**
  * Test-injectable provider implementations.
  * Override these in tests to mock network calls.
@@ -587,6 +712,9 @@ export const _providers = {
   codecommitGetPrShas: _doCodeCommitGetPrShas,
   codecommitMerge: _doCodeCommitMerge,
   codecommitPostComment: _doCodeCommitPostComment,
+  bitbucketGetPrShas: _doBitbucketGetPrShas,
+  bitbucketMerge: _doBitbucketMerge,
+  bitbucketPostComment: _doBitbucketPostComment,
 };
 
 // ── Credential lookup helpers ─────────────────────────────────────────────────
@@ -661,9 +789,28 @@ function findCodeCommitCreds(projectId: string, actorId: string): CodeCommitCred
     try {
       const plain = decrypt(c.credentials_enc, config.secretKey);
       const creds = JSON.parse(plain) as Record<string, unknown>;
-      if (typeof creds.accessKeyId === 'string' && typeof creds.secretAccessKey === 'string') {
-        const region = typeof creds.region === 'string' && creds.region ? creds.region : 'us-east-1';
+      const region = typeof creds.region === 'string' && creds.region ? creds.region : 'us-east-1';
+      const mode = typeof creds.mode === 'string' ? creds.mode : 'keys';
+
+      if (mode === 'keys' && typeof creds.accessKeyId === 'string' && typeof creds.secretAccessKey === 'string') {
         return { authMethod: 'keys', region, accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey };
+      }
+      if (mode === 'portal-sso') {
+        return { authMethod: 'portal-sso', region };
+      }
+      if (mode === 'aws-account' && typeof creds.awsAccountId === 'string') {
+        interface AccRow { credentials_enc: string | null; auth_method: string }
+        const acc = one<AccRow>('SELECT credentials_enc, auth_method FROM aws_accounts WHERE id = ? LIMIT 1', creds.awsAccountId);
+        if (acc && acc.auth_method === 'keys' && acc.credentials_enc) {
+          try {
+            const accPlain = decrypt(acc.credentials_enc, config.secretKey);
+            const accCreds = JSON.parse(accPlain) as Record<string, unknown>;
+            if (typeof accCreds.accessKeyId === 'string' && typeof accCreds.secretAccessKey === 'string') {
+              return { authMethod: 'keys', region, accessKeyId: accCreds.accessKeyId, secretAccessKey: accCreds.secretAccessKey };
+            }
+          } catch { /* skip */ }
+        }
+        if (acc?.auth_method === 'instance-role') return { authMethod: 'instance-role', region };
       }
     } catch { /* skip */ }
   }
@@ -689,7 +836,14 @@ function addComputedFields(
   };
 }
 
-// ── Access helpers ────────────────────────────────────────────────────────────
+/**
+ * Returns true when the request has the given scope, or is a browser session (all scopes allowed).
+ * Handles the extended scope set: read | write | review | merge | tests.
+ */
+function hasTokenScope(req: PortalRequest, scope: string): boolean {
+  if (!req.authViaToken) return true;
+  return (req.tokenScopes ?? []).includes(scope);
+}
 
 function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
   if (!req.user) {
@@ -968,7 +1122,8 @@ async function checkAutoPostShouldSkip(
 export async function triggerAutoPost(reviewId: string, _projectId?: string): Promise<{ posted: number; skipped: number }> {
   const review = one<Review>('SELECT * FROM p10_reviews WHERE id = ?', reviewId);
   if (!review || review.status !== 'done') return { posted: 0, skipped: 0 };
-  if (review.post_mode !== 'auto') return { posted: 0, skipped: 0 };
+  // Auto-post when either the review-level mode is 'auto' OR the global prCommentMode is 'automatic'.
+  if (review.post_mode !== 'auto' && getPrCommentMode() !== 'automatic') return { posted: 0, skipped: 0 };
 
   const actorId = review.created_by ?? '';
 
@@ -1063,6 +1218,7 @@ export function registerReviewRoutes(): void {
     sendJson(res, 200, {
       mergeThreshold: getMergeThreshold(),
       rateCard: getRateCard(),
+      prCommentMode: getPrCommentMode(),
     });
   }));
 
@@ -1099,9 +1255,19 @@ export function registerReviewRoutes(): void {
       setSetting(db, 'review.rateCard', JSON.stringify(updated));
     }
 
+    if (body.prCommentMode !== undefined) {
+      const v = String(body.prCommentMode);
+      if (v !== 'manual' && v !== 'automatic') {
+        sendJson(res, 400, { error: 'prCommentMode must be "manual" or "automatic"' });
+        return;
+      }
+      setSetting(db, 'review.prCommentMode', JSON.stringify(v));
+    }
+
     sendJson(res, 200, {
       mergeThreshold: getMergeThreshold(),
       rateCard: getRateCard(),
+      prCommentMode: getPrCommentMode(),
     });
   }));
 
@@ -1214,9 +1380,73 @@ export function registerReviewRoutes(): void {
   router.get('/api/projects/:id/reviews', (req: PortalRequest, res: PortalResponse): void => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    // Exclude run_log (structured event log) and raw_output (full transcript) from the list
-    // response — they can be very large and are not needed for list rendering.
-    // The detail endpoint (GET /reviews/:rid) returns the full row including run_log.
+    const q = req.query;
+    const runBy = q.get('runBy') ?? 'everyone';
+    const account = q.get('account');    // filter by provider_id
+    const status = q.get('status');
+    const type = q.get('type');          // 'pr' | 'scan'
+    const repoId = q.get('repository');
+    const dateFrom = q.get('dateFrom');
+    const dateTo = q.get('dateTo');
+    const search = q.get('q');
+    const page = Math.max(1, parseInt(q.get('page') ?? '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(q.get('limit') ?? '20', 10)));
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ['r.project_id = ?'];
+    const params: (string | number | null)[] = [req.params.id];
+
+    if (runBy === 'me') {
+      conditions.push('r.created_by = ?');
+      params.push(req.user!.id);
+    } else if (runBy !== 'everyone') {
+      conditions.push('r.created_by = ?');
+      params.push(runBy);
+    }
+
+    if (account) {
+      conditions.push('r.provider_id = ?');
+      params.push(account);
+    }
+
+    if (status) {
+      conditions.push('r.status = ?');
+      params.push(status);
+    }
+
+    if (type === 'pr') {
+      conditions.push('r.pr_number IS NOT NULL AND r.scan_id IS NULL');
+    } else if (type === 'scan') {
+      conditions.push('r.scan_id IS NOT NULL');
+    }
+
+    if (repoId) {
+      conditions.push('r.repo_id = ?');
+      params.push(repoId);
+    }
+
+    if (dateFrom) {
+      conditions.push('r.created_at >= ?');
+      params.push(dateFrom);
+    }
+
+    if (dateTo) {
+      conditions.push('r.created_at <= ?');
+      params.push(dateTo);
+    }
+
+    if (search) {
+      conditions.push("(r.head_ref LIKE ? OR r.base_ref LIKE ? OR r.summary LIKE ?)");
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    const where = conditions.join(' AND ');
+
+    const total = (one<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM p10_reviews r WHERE ${where}`,
+      ...params,
+    ) ?? { n: 0 }).n;
+
     type ReviewListRow = Omit<Review, 'run_log' | 'raw_output'> & { finding_count?: number; repo_name?: string };
     const reviews = all<ReviewListRow>(
       `SELECT
@@ -1231,17 +1461,20 @@ export function registerReviewRoutes(): void {
          repos.name AS repo_name
        FROM p10_reviews r
        LEFT JOIN repositories repos ON repos.id = r.repo_id
-       WHERE r.project_id = ?
+       WHERE ${where}
        ORDER BY r.created_at DESC
-       LIMIT 100`,
-      req.params.id,
+       LIMIT ? OFFSET ?`,
+      ...params,
+      limit,
+      offset,
     );
 
-    sendJson(res, 200, { reviews });
+    sendJson(res, 200, { reviews, total, page, limit });
   });
 
   // ── POST /api/projects/:id/reviews ────────────────────────────────────────
   router.post('/api/projects/:id/reviews', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -1264,7 +1497,9 @@ export function registerReviewRoutes(): void {
     }
 
     const prNumber = body.prNumber != null ? Number(body.prNumber) : null;
-    const postMode = body.postMode === 'auto' ? 'auto' : 'draft';
+    const postMode = body.postMode === 'auto'
+      ? 'auto'
+      : (body.postMode === 'draft' ? 'draft' : (getPrCommentMode() === 'automatic' ? 'auto' : 'draft'));
     const minSeverity = SEVERITIES.includes(body.minSeverity as Severity) ? String(body.minSeverity) : 'medium';
     const sourceSha = body.sourceSha != null ? String(body.sourceSha).slice(0, 64) : null;
     const destSha = body.destSha != null ? String(body.destSha).slice(0, 64) : null;
@@ -1312,12 +1547,23 @@ export function registerReviewRoutes(): void {
     try {
       const wid = generateId();
       const ts0 = now();
+      // Choose engine based on providerId or portal provider setting.
+      // 'litellm' → uses the LiteLLM review engine (runner.ts dispatches to runLiteLLM).
+      // Other provider modes → engine that matches (anthropic/bedrock → claude-code,
+      // kiro → kiro, demo → demo).
+      const portalMode = getSettings().provider.mode;
+      const effectiveProvider = providerId ?? portalMode;
+      const reviewEngine =
+        effectiveProvider === 'litellm' ? 'litellm'
+        : (effectiveProvider === 'anthropic' || effectiveProvider === 'bedrock') ? 'claude-code'
+        : effectiveProvider === 'kiro' ? 'kiro'
+        : 'demo';
       insert('p6_workflows', {
         id: wid,
         project_id: req.params.id,
         goal,
         status: 'pending',
-        engine: 'demo',
+        engine: reviewEngine,
         trust_tools: 0,
         lead_agent: body.leadAgent != null ? String(body.leadAgent) : null,
         workspace_id: null,
@@ -1331,6 +1577,7 @@ export function registerReviewRoutes(): void {
         updated_at: ts0,
       });
       workflowId = wid;
+      emit(req.params.id, { type: 'workflow.created', workflowId: wid });
     } catch { /* continue without workflow */ }
 
     const id = generateId();
@@ -1469,6 +1716,7 @@ export function registerReviewRoutes(): void {
 
   // ── POST /api/projects/:id/reviews/:rid/post ──────────────────────────────
   router.post('/api/projects/:id/reviews/:rid/post', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     if (!req.user.is_admin) {
       const member = one<{ access: string }>(
@@ -1701,6 +1949,7 @@ export function registerReviewRoutes(): void {
 
   // ── POST /api/projects/:id/reviews/:rid/merge (R1) ────────────────────────
   router.post('/api/projects/:id/reviews/:rid/merge', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'merge')) { sendJson(res, 403, { error: 'merge scope required' }); return; }
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
     const review = one<Review>(
@@ -1856,6 +2105,7 @@ export function registerReviewRoutes(): void {
 
   // ── POST /api/projects/:id/reviews/:rid/rerun (R2) ────────────────────────
   router.post('/api/projects/:id/reviews/:rid/rerun', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
     const parent = one<Review>(
@@ -1903,6 +2153,7 @@ export function registerReviewRoutes(): void {
         updated_at: ts,
       });
       workflowId = wid;
+      emit(req.params.id, { type: 'workflow.created', workflowId: wid });
     } catch { /* continue */ }
 
     // Attempt to refresh source/dest SHAs from the provider (best-effort).

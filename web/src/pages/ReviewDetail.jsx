@@ -13,18 +13,11 @@ import { subscribeProject } from '../lib/events.js';
 import { href, navigate } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { formatRelative, formatDate } from '../lib/util.js';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
-
-const SEV_PILL = {
-  critical: { background: '#fee2e2', color: '#991b1b', border: '#fca5a5' },
-  high:     { background: '#ffedd5', color: '#9a3412', border: '#fdba74' },
-  medium:   { background: '#fef3c7', color: '#92400e', border: '#fcd34d' },
-  low:      { background: '#f0fdf4', color: '#3f6212', border: '#86efac' },
-  info:     { background: '#dbeafe', color: '#1e40af', border: '#93c5fd' },
-};
 
 const LOG_TYPE_LABEL = { llm: 'LLM', tool: 'Tool', tool_result: 'Result', error: 'Error', system: 'System' };
 const LOG_TYPE_ICON  = { llm: 'builder', tool: 'builder', tool_result: 'check', error: 'warning', system: 'settings' };
@@ -78,21 +71,10 @@ function thresholdLabel(threshold) {
 // ── Severity badge ─────────────────────────────────────────────────────────────
 
 function SevBadge({ severity }) {
-  const s = SEV_PILL[severity] ?? SEV_PILL.info;
   return (
     <span
-      style={{
-        display: 'inline-block',
-        padding: '1px 8px',
-        borderRadius: 4,
-        fontSize: 11,
-        fontWeight: 700,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        background: s.background,
-        color: s.color,
-        border: `1px solid ${s.border}`,
-      }}
+      className={`badge badge-sev-${severity ?? 'info'}`}
+      style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}
     >
       {severity}
     </span>
@@ -330,7 +312,7 @@ function MergeDialog({ projectId, review, repoName, onClose, onMerged, onRerun }
 
 // ── Findings panel ─────────────────────────────────────────────────────────────
 
-function FindingsPanel({ projectId, reviewId, findings, onFindingChange }) {
+function FindingsPanel({ projectId, reviewId, findings, onFindingChange, onError }) {
   const [filter, setFilter] = useState('all');
   const [copyFeedback, setCopyFeedback] = useState(null); // findingId that was just copied
 
@@ -366,7 +348,12 @@ function FindingsPanel({ projectId, reviewId, findings, onFindingChange }) {
       );
       onFindingChange(r.finding);
     } catch (e) {
-      alert(e.message);
+      // Surface error via parent toast when provided; fall back to console
+      if (onError) {
+        onError(e.message);
+      } else {
+        console.error('accept finding:', e.message);
+      }
     }
   };
 
@@ -402,12 +389,7 @@ function FindingsPanel({ projectId, reviewId, findings, onFindingChange }) {
             role="tab"
             type="button"
             aria-selected={filter === sev}
-            className="btn btn-sm"
-            style={filter === sev ? {
-              background: SEV_PILL[sev].background,
-              color: SEV_PILL[sev].color,
-              borderColor: SEV_PILL[sev].border,
-            } : {}}
+            className={`btn btn-sm${filter === sev ? ` badge-sev-${sev}` : ''}`}
             onClick={() => setFilter(sev)}
           >
             {sev[0].toUpperCase() + sev.slice(1)} ({activeCounts[sev]})
@@ -433,22 +415,12 @@ function FindingsPanel({ projectId, reviewId, findings, onFindingChange }) {
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
           {filtered.map((f) => {
-            const s = SEV_PILL[f.severity] ?? SEV_PILL.info;
             const isDismissed = f.accepted === -1;
             return (
               <li
                 key={f.id}
-                style={{
-                  borderLeft: `3px solid ${s.border}`,
-                  padding: '10px 14px',
-                  marginBottom: 8,
-                  background: isDismissed ? 'var(--canvas)' : 'var(--panel)',
-                  borderRadius: '0 var(--radius) var(--radius) 0',
-                  border: `1px solid var(--line)`,
-                  borderLeftWidth: 3,
-                  borderLeftColor: s.border,
-                  opacity: isDismissed ? 0.6 : 1,
-                }}
+                className={`finding-item finding-item-${f.severity ?? 'info'}${isDismissed ? ' is-dismissed' : ''}`}
+                style={{ padding: '10px 14px', marginBottom: 8 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
                   <SevBadge severity={f.severity} />
@@ -852,6 +824,7 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
   const [posting, setPosting] = useState(false);
   const [postResult, setPostResult] = useState(null);
   const liveTimerRef = useRef(null);
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -928,8 +901,8 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
     setRerunError(null);
     try {
       const r = await api.post(`/api/projects/${projectId}/reviews/${reviewId}/rerun`, {});
-      // Navigate to the new review
-      navigate(`/p/${projectId}/review/${r.review.id}`);
+      // Navigate to the new review (within the reviews/code tab)
+      navigate(`/p/${projectId}/reviews/code/${r.review.id}`);
     } catch (e) {
       setRerunError(e.message);
       setRerunning(false);
@@ -955,7 +928,7 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
         `/api/projects/${projectId}/reviews/${reviewId}/export/${type}`,
         { headers: { 'x-requested-with': 'agent-portal' }, credentials: 'same-origin' },
       );
-      if (!res.ok) { alert(`Download failed (${res.status})`); return; }
+      if (!res.ok) { toast(`Download failed (${res.status})`, 'error'); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -966,7 +939,7 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (e) {
-      alert('Download failed: ' + e.message);
+      toast('Download failed: ' + e.message, 'error');
     }
   };
 
@@ -982,7 +955,7 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
 
   if (loading) {
     return (
-      <div className="page">
+      <div style={{ padding: '48px 0', textAlign: 'center' }}>
         <div className="spinner" aria-label="Loading review…" />
       </div>
     );
@@ -990,10 +963,10 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
 
   if (error) {
     return (
-      <div className="page">
+      <div>
         <p className="error-note" role="alert">{error}</p>
         <div className="row">
-          <button type="button" className="btn" onClick={() => navigate(href(projectId, 'review'))}>
+          <button type="button" className="btn" onClick={() => navigate(href(projectId, 'reviews', 'code'))}>
             <Icon name="chevronLeft" size={14} />
             Back to reviews
           </button>
@@ -1005,9 +978,9 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
 
   if (!review) {
     return (
-      <div className="page">
+      <div>
         <p className="muted">Review not found.</p>
-        <button type="button" className="btn" onClick={() => navigate(href(projectId, 'review'))}>
+        <button type="button" className="btn" onClick={() => navigate(href(projectId, 'reviews', 'code'))}>
           <Icon name="chevronLeft" size={14} />
           Back to reviews
         </button>
@@ -1036,11 +1009,11 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
     (review.repo_id ? (repos.find((r) => r.id === review.repo_id)?.name ?? null) : null);
 
   return (
-    <div className="page" style={{ maxWidth: 860 }}>
+    <div style={{ maxWidth: 860 }}>
       {/* ── Back ── */}
       <div className="row" style={{ marginBottom: -4 }}>
         <a
-          href={href(projectId, 'review')}
+          href={href(projectId, 'reviews', 'code')}
           className="btn btn-ghost btn-sm"
           style={{ fontSize: '0.82rem' }}
         >
@@ -1079,7 +1052,7 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
             {review.parent_review_id && (
               <span style={{ fontSize: '0.82rem', color: 'var(--ink-3)' }}>
                 Re-run of{' '}
-                <a href={href(projectId, 'review', review.parent_review_id)} style={{ color: 'var(--accent-ink)' }}>
+                <a href={href(projectId, 'reviews', 'code', review.parent_review_id)} style={{ color: 'var(--link)' }}>
                   {review.parent_review_id.slice(0, 8)}
                 </a>
               </span>
@@ -1172,6 +1145,7 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
         reviewId={reviewId}
         findings={findings}
         onFindingChange={handleFindingChange}
+        onError={(msg) => toast(msg, 'error')}
       />
 
       {/* ── Reproducibility ── */}
@@ -1194,6 +1168,7 @@ export default function ReviewDetail({ projectId, reviewId, user }) {
           onRerun={rerun}
         />
       )}
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

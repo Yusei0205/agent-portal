@@ -9,8 +9,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { sleep } from '../util.ts';
+import { run as dbRun } from '../db.ts';
 import { evaluateCommand } from '../guardrails.ts';
 import type { RunContext } from './types.ts';
+import { getDelegationSettings, createChildSession } from '../delegation.ts';
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -24,8 +26,40 @@ export async function runDemo(ctx: RunContext): Promise<string> {
   const shortGoal = goal.replace(/\s+/g, ' ').slice(0, 80);
 
   const pause = async (ms: number): Promise<void> => {
+    if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
     await sleep(ms);
+    if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
   };
+
+  // ── Delegation simulation (F7) ────────────────────────────────────────────
+  // When the goal contains "delegate:", create one child session to simulate
+  // what an agent would do with the delegate_session tool.
+  const delegationMatch = goal.match(/delegate:\s*(.+?)(?:\n|$)/i);
+  if (delegationMatch && run.credentialOwnerId) {
+    const delegationSettings = getDelegationSettings();
+    if (delegationSettings.enabled) {
+      const delegatedTask = delegationMatch[1].trim();
+      emit('assistant-text', { text: `I'll delegate the sub-task to a child session: "${delegatedTask}"` });
+      await pause(200);
+
+      try {
+        const child = await createChildSession(run.workflowId, run.credentialOwnerId, delegatedTask, {
+          title: `Delegated: ${delegatedTask.slice(0, 50)}`,
+        });
+        const childId = String(child.id);
+        const childTitle = String(child.title || delegatedTask.slice(0, 60));
+        emit('tool-start', { toolName: 'delegate_session', toolInput: JSON.stringify({ task: delegatedTask }) });
+        await pause(100);
+        emit('tool-end', { toolName: 'delegate_session', output: JSON.stringify({ childWorkflowId: childId, title: childTitle, status: 'started' }) });
+        await pause(200);
+        emit('assistant-text', { text: `Child session started (ID: ${childId}). I'll wait for it to finish.` });
+      } catch (e: unknown) {
+        const msg = (e as Error)?.message ?? String(e);
+        emit('assistant-text', { text: `Could not delegate: ${msg}` });
+      }
+      await pause(300);
+    }
+  }
 
   // 1. Thinking text
   emit('assistant-text', { text: `I'll start by understanding the goal: "${shortGoal}". Let me look at the project structure first.` });
@@ -162,6 +196,10 @@ export async function runDemo(ctx: RunContext): Promise<string> {
   }
 
   emit('run-complete', { result: summary, cost_usd: 0 });
+  // Record model used for this run (gap 9)
+  try {
+    dbRun('UPDATE p6_runs SET model = ? WHERE id = ?', 'demo', run.runId);
+  } catch { /* non-fatal */ }
   return summary;
 }
 

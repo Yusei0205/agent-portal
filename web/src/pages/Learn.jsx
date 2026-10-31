@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -17,7 +18,7 @@ const AUDIENCES = ['everyone', 'engineers'];
 
 function StaleBadge() {
   return (
-    <span className="badge badge-warning" title="Sources have changed — regenerate to refresh">
+    <span className="badge badge-warn" title="Sources have changed — regenerate to refresh">
       Stale
     </span>
   );
@@ -43,6 +44,7 @@ function OverviewTab({ projectId }) {
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({ title: '', doc_type: 'overview', audience: 'everyone' });
   const [createError, setCreateError] = useState(null);
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -81,7 +83,7 @@ function OverviewTab({ projectId }) {
       await api.post(`/api/learn/docs/${doc.id}/${action}`);
       await load();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   };
 
@@ -153,7 +155,7 @@ function OverviewTab({ projectId }) {
             <div key={doc.id} className="card" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 200 }}>
                 <div style={{ fontWeight: 600 }}>{doc.title}</div>
-                <div style={{ fontSize: '.85rem', color: 'var(--muted)' }}>
+                <div className="muted" style={{ fontSize: '.85rem' }}>
                   {doc.kind || doc.doc_type} · {doc.audience || 'everyone'} ·{' '}
                   <StatusBadge status={doc.status || (doc.published ? 'published' : 'draft')} />
                   {doc.stale && <> <StaleBadge /></>}
@@ -173,6 +175,7 @@ function OverviewTab({ projectId }) {
           ))}
         </div>
       )}
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }
@@ -187,6 +190,7 @@ function QuizzesTab({ projectId }) {
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -210,7 +214,7 @@ function QuizzesTab({ projectId }) {
       setAnswers({});
       setResult(null);
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   };
 
@@ -221,7 +225,7 @@ function QuizzesTab({ projectId }) {
       const r = await api.post(`/api/learn/quizzes/${taking.id}/attempts`, { answers });
       setResult(r.attempt);
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -286,18 +290,18 @@ function QuizzesTab({ projectId }) {
         </div>
         <div className="card" style={{ padding: '1.5rem', textAlign: 'center', marginBottom: '1rem' }}>
           <div style={{ fontSize: '2rem', fontWeight: 700 }}>{result.score}/{result.total}</div>
-          <div style={{ color: result.passed ? 'var(--success)' : 'var(--error)', fontWeight: 600, marginTop: '.5rem' }}>
+          <div style={{ color: result.passed ? 'var(--ok)' : 'var(--danger)', fontWeight: 600, marginTop: '.5rem' }}>
             {result.passed ? '✓ Passed' : '✗ Not passed'}
           </div>
         </div>
         <div className="stack">
           {result.results?.map((r, i) => (
-            <div key={r.id} className="card" style={{ padding: '.75rem', borderLeft: `3px solid ${r.correct ? '#22c55e' : '#ef4444'}` }}>
+            <div key={r.id} className="card" style={{ padding: '.75rem', borderLeft: `3px solid ${r.correct ? 'var(--ok)' : 'var(--danger)'}` }}>
               <div style={{ fontWeight: 600, marginBottom: '.25rem' }}>
                 {r.correct ? '✓' : '✗'} Q{i + 1}: {r.given || '(no answer)'}
               </div>
               {!r.correct && (
-                <div style={{ fontSize: '.85rem', color: 'var(--muted)' }}>
+                <div className="muted" style={{ fontSize: '.85rem' }}>
                   Correct: {r.answer} {r.explanation ? `— ${r.explanation}` : ''}
                 </div>
               )}
@@ -318,7 +322,7 @@ function QuizzesTab({ projectId }) {
             <div key={q.id} className="card" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 200 }}>
                 <div style={{ fontWeight: 600 }}>{q.title}</div>
-                <div style={{ fontSize: '.85rem', color: 'var(--muted)' }}>
+                <div className="muted" style={{ fontSize: '.85rem' }}>
                   {q.audience} · {q.difficulty} · {q.question_count ?? 0} questions
                   {q.stale && <> <StaleBadge /></>}
                 </div>
@@ -332,6 +336,7 @@ function QuizzesTab({ projectId }) {
           ))}
         </div>
       )}
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }
@@ -372,14 +377,14 @@ function OnboardingTab({ projectId }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600 }}>{p.title}</div>
-                  <div style={{ fontSize: '.85rem', color: 'var(--muted)' }}>
+                  <div className="muted" style={{ fontSize: '.85rem' }}>
                     {p.audience} · {p.steps?.length ?? 0} steps
                   </div>
                 </div>
                 {p.progress !== undefined && (
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{p.progress}%</div>
-                    <div style={{ fontSize: '.8rem', color: 'var(--muted)' }}>progress</div>
+                    <div className="muted" style={{ fontSize: '.8rem' }}>progress</div>
                   </div>
                 )}
               </div>

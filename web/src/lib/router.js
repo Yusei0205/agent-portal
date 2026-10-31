@@ -11,7 +11,9 @@ import { useEffect, useState } from 'react';
  * @returns {{ tab: string, projectId: string | null, rest: string[] }}
  */
 export function parseRoute(hash = window.location.hash) {
-  const raw = hash.replace(/^#\/?/, '');
+  // Strip the hash query string (e.g. ?status=done) so filter state in
+  // hash-scoped pages doesn't break route matching.
+  const raw = hash.replace(/^#\/?/, '').split('?')[0];
   const parts = raw.split('/').filter(Boolean).map(decodeURIComponent);
 
   if (parts[0] === 'p' && parts[1]) {
@@ -26,15 +28,28 @@ export function parseRoute(hash = window.location.hash) {
     return { projectId: null, tab: parts[0], rest: parts.slice(1) };
   }
 
-  return { projectId: null, tab: 'projects', rest: [] };
+  return { projectId: null, tab: 'dashboard', rest: [] };
 }
 
 /**
- * Navigate to a hash path.
+ * Navigate to a hash path (pushes a new history entry).
  * @param {string} path — e.g. '/p/my-project/sessions' or '/settings'
  */
 export function navigate(path) {
   window.location.hash = path.startsWith('#') ? path : '#' + path;
+}
+
+/**
+ * Navigate to a hash path, *replacing* the current history entry.
+ * Use this for redirects so the Back button skips the old URL and returns to
+ * the page the user was on before (no back-button trap).
+ * @param {string} path — e.g. '/p/my-project/sessions' or '/settings'
+ */
+export function navigateReplace(path) {
+  const hash = path.startsWith('#') ? path : '#' + path;
+  window.location.replace(
+    window.location.pathname + window.location.search + hash,
+  );
 }
 
 /**

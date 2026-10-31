@@ -6,37 +6,50 @@
  *
  * Token format: ap_<random 32 hex chars>
  *
- * Routes:
+ * Scopes (multi-valued, stored as JSON array in `scopes` column):
+ *   read    — always granted; list sessions, get transcripts, list/get reviews
+ *   write   — sessions: start, prompt, stop; config edits
+ *   review  — start reviews/scans, post PR comments
+ *   merge   — merge pull requests
+ *
+ * Routes (browser-session only — API tokens are refused):
  *   GET    /api/api-tokens              — list user's own tokens
  *   POST   /api/api-tokens              — create token (returns token once)
  *   DELETE /api/api-tokens/:id          — revoke
  *   GET    /api/admin/api-tokens        — list all tokens (admin only)
- *
- * Middleware:
- *   authenticateApiToken — reads Authorization: Bearer ap_... header,
- *   verifies against DB, sets req.user and req.tokenScope
  */
 
 import { randomBytes } from 'node:crypto';
-import { router, sendJson, requireAuth } from './http.ts';
+import { router, sendJson, requireCookieAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { all, one, run, insert } from './db.ts';
 import type { Row } from './db.ts';
-import { generateId, now, str, badRequest, sha256 } from './util.ts';
+import { generateId, now, str, sha256 } from './util.ts';
 
 export const TOKEN_PREFIX = 'ap_';
 const MAX_ACTIVE = 10;
 
-export type TokenScope = 'read' | 'write';
+export type TokenScope = 'read' | 'write' | 'review' | 'merge' | 'tests' | 'delegate';
+
+const VALID_SCOPES: TokenScope[] = ['read', 'write', 'review', 'merge', 'tests'];
+// 'delegate' is an internal scope created only by createRunToken() — not user-creatable.
 
 // ── View helper ───────────────────────────────────────────────────────────────
 
 function tokenView(t: Row) {
+  const rawScopes = t.scopes as string | null;
+  const scopes: string[] = rawScopes
+    ? ((): string[] => {
+        try { return JSON.parse(rawScopes) as string[]; }
+        catch { return [String(t.scope) === 'write' ? 'write' : 'read']; }
+      })()
+    : (String(t.scope) === 'write' ? ['read', 'write'] : ['read']);
   return {
     id: t.id,
     name: t.name,
     prefix: t.prefix,
     scope: t.scope,
+    scopes,
     project_id: t.project_id ?? null,
     created_at: t.created_at,
     expires_at: t.expires_at,
@@ -46,12 +59,14 @@ function tokenView(t: Row) {
   };
 }
 
-// ── Middleware ────────────────────────────────────────────────────────────────
+// ── Legacy middleware (kept as export; auth.ts handles scope propagation now) ─
 
 /**
+ * @deprecated Use req.tokenScopes (set by auth.ts authenticator) instead.
+ *
  * Reads Authorization: Bearer ap_... header, sha256-hashes the token,
- * looks up in api_tokens table, verifies not revoked/expired, sets req.user.
- * Returns true if authenticated via token, false otherwise.
+ * looks up in api_tokens table, verifies not revoked/expired, sets req.user
+ * and req.tokenScopes. Returns true if authenticated via token.
  */
 export function authenticateApiToken(req: PortalRequest): boolean {
   const authHeader = req.headers.authorization;
@@ -62,7 +77,7 @@ export function authenticateApiToken(req: PortalRequest): boolean {
 
   const hash = sha256(token);
   const row = one<Row>(
-    `SELECT t.id, t.scope, t.expires_at, t.revoked_at, t.last_used_at,
+    `SELECT t.id, t.scope, t.scopes, t.expires_at, t.revoked_at, t.last_used_at,
             u.id AS user_id, u.email, u.name, u.is_admin, u.disabled
      FROM api_tokens t
      JOIN users u ON u.id = t.user_id
@@ -86,23 +101,28 @@ export function authenticateApiToken(req: PortalRequest): boolean {
     name: String(row.name),
     is_admin: Number(row.is_admin),
   };
-  // Attach token scope to request for downstream use
-  (req as PortalRequest & { tokenScope?: TokenScope }).tokenScope = row.scope as TokenScope;
+  const rawScopes = row.scopes as string | null;
+  req.tokenScopes = rawScopes
+    ? ((): string[] => { try { return JSON.parse(rawScopes) as string[]; } catch { return ['read']; } })()
+    : (String(row.scope) === 'write' ? ['read', 'write'] : ['read']);
+  req.authViaToken = true;
   return true;
 }
 
-// ── Routes ────────────────────────────────────────────────────────────────────
+// ── Routes (browser-session only) ────────────────────────────────────────────
 
 export function registerApiTokenRoutes(): void {
-  /** GET /api/api-tokens — list user's own tokens (no hash, prefix only) */
+  /** GET /api/api-tokens — list user's own tokens (browser-session only) */
   router.get(
     '/api/api-tokens',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+      // Delegate tokens are internal run tokens; hide them from the user list.
       const tokens = all<Row>(
-        `SELECT id, name, prefix, scope, project_id, created_at, expires_at,
+        `SELECT id, name, prefix, scope, scopes, project_id, created_at, expires_at,
                 last_used_at, revoked_at
          FROM api_tokens
          WHERE user_id = ?
+           AND (scopes IS NULL OR scopes NOT LIKE '%"delegate"%')
          ORDER BY created_at DESC
          LIMIT 50`,
         req.user!.id,
@@ -111,10 +131,10 @@ export function registerApiTokenRoutes(): void {
     }),
   );
 
-  /** POST /api/api-tokens — create a new token */
+  /** POST /api/api-tokens — create a new token (browser-session only) */
   router.post(
     '/api/api-tokens',
-    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
+    requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
       const body = req.body as Record<string, unknown>;
       const name = str(body.name, 'Token name', { max: 80 }).trim();
       if (!name) {
@@ -122,7 +142,19 @@ export function registerApiTokenRoutes(): void {
         return;
       }
 
-      const scope: TokenScope = body.scope === 'write' ? 'write' : 'read';
+      // Support both legacy `scope` (string) and new `scopes` (array) fields.
+      let scopes: TokenScope[];
+      if (Array.isArray(body.scopes)) {
+        scopes = ['read', ...((body.scopes as unknown[])
+          .map(String)
+          .filter((s) => VALID_SCOPES.includes(s as TokenScope) && s !== 'read') as TokenScope[])];
+      } else {
+        const legacyScope = body.scope === 'write' ? 'write' : 'read';
+        scopes = legacyScope === 'write' ? ['read', 'write'] : ['read'];
+      }
+      // Derive legacy scope for backward compatibility
+      const scopeLegacy: TokenScope = scopes.includes('write') ? 'write' : 'read';
+
       const projectId = body.projectId ? String(body.projectId) : null;
 
       // Optional expiry — defaults to 90 days
@@ -151,7 +183,6 @@ export function registerApiTokenRoutes(): void {
         return;
       }
 
-      // Generate: ap_ + 32 hex chars (16 random bytes)
       const token = `${TOKEN_PREFIX}${randomBytes(16).toString('hex')}`;
       const id = generateId();
 
@@ -161,7 +192,8 @@ export function registerApiTokenRoutes(): void {
         name,
         token_hash: sha256(token),
         prefix: token.slice(0, 10),
-        scope,
+        scope: scopeLegacy,
+        scopes: JSON.stringify(scopes),
         project_id: projectId,
         expires_at: expiresAt,
         created_at: now(),
@@ -170,15 +202,14 @@ export function registerApiTokenRoutes(): void {
       const info = tokenView(
         one<Row>('SELECT * FROM api_tokens WHERE id = ?', id)!,
       );
-      // Return the raw token ONCE — it cannot be retrieved again
       sendJson(res, 201, { token, info });
     }),
   );
 
-  /** DELETE /api/api-tokens/:id — revoke a token */
+  /** DELETE /api/api-tokens/:id — revoke a token (browser-session only) */
   router.delete(
     '/api/api-tokens/:id',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
       const t = one<Row>(
         'SELECT * FROM api_tokens WHERE id = ? AND user_id = ?',
         req.params.id,
@@ -195,20 +226,22 @@ export function registerApiTokenRoutes(): void {
     }),
   );
 
-  /** GET /api/admin/api-tokens — list all tokens (admin only) */
+  /** GET /api/admin/api-tokens — list all tokens (admin, browser-session only) */
   router.get(
     '/api/admin/api-tokens',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
       if (!req.user?.is_admin) {
         sendJson(res, 403, { error: 'Admin access required' });
         return;
       }
+      // Delegate tokens are internal run tokens; hide them from admin listings too.
       const tokens = all<Row>(
-        `SELECT t.id, t.name, t.prefix, t.scope, t.project_id,
+        `SELECT t.id, t.name, t.prefix, t.scope, t.scopes, t.project_id,
                 t.created_at, t.expires_at, t.last_used_at, t.revoked_at,
                 u.id AS user_id, u.name AS user_name, u.email AS user_email
          FROM api_tokens t
          JOIN users u ON u.id = t.user_id
+         WHERE (t.scopes IS NULL OR t.scopes NOT LIKE '%"delegate"%')
          ORDER BY t.created_at DESC
          LIMIT 200`,
       );

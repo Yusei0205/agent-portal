@@ -75,7 +75,58 @@ const html = fs
 
 fs.writeFileSync(path.join(webOut, 'index.html'), html);
 fs.copyFileSync(path.join(root, 'web/favicon.svg'), path.join(webOut, 'favicon.svg'));
-fs.copyFileSync(path.join(root, 'web/theme-init.js'), path.join(webOut, 'theme-init.js'));
+
+// ── Generate theme-init.js from shared/themes/*.json ────────────────────────
+// This replaces the old fs.copyFileSync of web/theme-init.js.
+// We read the canonical JSON, pre-compute normalised token tables, and inject
+// them so theme-init.js never contains hardcoded palettes.
+
+const FONT_STACKS = {
+  'Space Grotesk':  "'Space Grotesk Variable','Space Grotesk',system-ui,sans-serif",
+  'Inter':          "'Inter Variable','Inter',system-ui,sans-serif",
+  'JetBrains Mono': "'JetBrains Mono Variable','JetBrains Mono','SF Mono',Consolas,monospace",
+  'system-ui':      "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
+  'ui-monospace':   "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",
+};
+
+function resolveFontStackNode(name) {
+  if (!name) return name;
+  if (name.includes(',') || name.includes("'")) return name;
+  return FONT_STACKS[name] || name;
+}
+
+function normaliseForInit(raw) {
+  const modes = {};
+  for (const [mode, tokens] of Object.entries(raw.modes || {})) {
+    modes[mode] = { ...tokens };
+    if (!modes[mode].link) {
+      modes[mode].link = tokens.accent || tokens['accent-ink'];
+    }
+  }
+  const fonts = raw.fonts ? {
+    display: resolveFontStackNode(raw.fonts.display),
+    body:    resolveFontStackNode(raw.fonts.body),
+    mono:    resolveFontStackNode(raw.fonts.mono),
+  } : raw.fonts;
+  const radius = raw.radius ? Object.fromEntries(
+    Object.entries(raw.radius).map(([k, v]) => [k, typeof v === 'number' ? `${v}px` : v]),
+  ) : raw.radius;
+  return { ...raw, modes, fonts, radius };
+}
+
+const aethrixJson    = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/aethrix-night.json'), 'utf8'));
+const classicJson    = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/classic-teal.json'),  'utf8'));
+const bundledThemes  = {
+  'aethrix-night': normaliseForInit(aethrixJson),
+  'classic-teal':  normaliseForInit(classicJson),
+};
+
+const themeInitSrc = fs.readFileSync(path.join(root, 'web/theme-init.js'), 'utf8');
+const themeInitOut = themeInitSrc.replace(
+  '/* __BUNDLED_THEMES__ */',
+  `var BUNDLED_THEMES = ${JSON.stringify(bundledThemes)};`,
+);
+fs.writeFileSync(path.join(webOut, 'theme-init.js'), themeInitOut);
 
 const totalBytes = Object.entries(web.metafile.outputs)
   .filter(([f]) => !f.endsWith('.map'))

@@ -1,36 +1,36 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
+import { useFocusTrap } from '../lib/useFocusTrap.js';
+import { Icon } from '../components/Icon.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-const TRIGGER_COLORS = {
-  manual: '#6b7280',
-  cron: '#7c3aed',
-  interval: '#0891b2',
-  webhook: '#d97706',
-  github: '#1d4ed8',
-  jira: '#0052cc',
+/**
+ * Map trigger type to a badge variant.
+ * We only have badge-info / badge-ok / badge-danger / badge-warn / badge-neutral
+ * so we approximate as best we can without inventing new classes.
+ */
+const TRIGGER_BADGE = {
+  manual:  'badge-neutral',
+  cron:    'badge-info',
+  interval:'badge-info',
+  webhook: 'badge-warn',
+  github:  'badge-info',
+  jira:    'badge-info',
 };
 
-const RUN_STATUS_COLORS = {
-  running: '#2563eb',
-  done: '#16a34a',
-  failed: '#dc2626',
-  stopped: '#6b7280',
+const RUN_STATUS_BADGE = {
+  running: 'badge-info',
+  done:    'badge-ok',
+  failed:  'badge-danger',
+  stopped: 'badge-neutral',
 };
 
 function TriggerBadge({ type }) {
   return (
-    <span
-      style={{
-        background: TRIGGER_COLORS[type] ?? '#6b7280',
-        color: '#fff',
-        borderRadius: 4,
-        padding: '1px 8px',
-        fontSize: 12,
-        fontWeight: 600,
-      }}
-    >
+    <span className={`badge ${TRIGGER_BADGE[type] ?? 'badge-neutral'}`}>
       {type}
     </span>
   );
@@ -38,16 +38,7 @@ function TriggerBadge({ type }) {
 
 function StatusBadge({ status }) {
   return (
-    <span
-      style={{
-        background: RUN_STATUS_COLORS[status] ?? '#6b7280',
-        color: '#fff',
-        borderRadius: 4,
-        padding: '1px 8px',
-        fontSize: 12,
-        fontWeight: 600,
-      }}
-    >
+    <span className={`badge ${RUN_STATUS_BADGE[status] ?? 'badge-neutral'}`}>
       {status}
     </span>
   );
@@ -71,6 +62,7 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const dialogRef = useFocusTrap();
 
   const submit = async (e) => {
     e.preventDefault();
@@ -92,75 +84,118 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
     }
   };
 
-  const field = (label, key, type = 'text', props = {}) => (
-    <label style={{ display: 'block', marginBottom: 12 }}>
-      <span style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>{label}</span>
-      {type === 'textarea' ? (
-        <textarea
-          value={form[key]}
-          onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-          style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, boxSizing: 'border-box', minHeight: 80, fontFamily: 'monospace', fontSize: 13 }}
-          {...props}
-        />
-      ) : (
-        <input
-          type={type}
-          value={form[key]}
-          onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-          style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, boxSizing: 'border-box' }}
-          {...props}
-        />
-      )}
-    </label>
-  );
+  const handleBackdropClick = (e) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') onClose();
+  };
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Add loop spec"
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+      className="dialog-overlay"
+      role="presentation"
+      onClick={handleBackdropClick}
+      onKeyDown={handleKeyDown}
     >
-      <div style={{ background: '#fff', borderRadius: 8, padding: 24, width: 480, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
-        <h2 style={{ margin: '0 0 16px', fontSize: 18 }}>Add Loop Spec</h2>
-        <form onSubmit={submit}>
-          {field('Name', 'name', 'text', { required: true, placeholder: 'My loop spec' })}
-          {field('Description', 'description', 'text', { placeholder: 'Optional description' })}
+      <div
+        ref={dialogRef}
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-spec-title"
+      >
+        <div className="dialog-head">
+          <h2 className="dialog-title" id="add-spec-title">Add Loop Spec</h2>
+          <button
+            type="button"
+            className="btn-icon"
+            onClick={onClose}
+            aria-label="Close dialog"
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
 
-          <label style={{ display: 'block', marginBottom: 12 }}>
-            <span style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>Trigger type</span>
-            <select
-              value={form.triggerType}
-              onChange={(e) => setForm((f) => ({ ...f, triggerType: e.target.value }))}
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4 }}
-            >
-              <option value="manual">Manual</option>
-              <option value="cron">Cron</option>
-              <option value="interval">Interval</option>
-              <option value="webhook">Webhook</option>
-              <option value="github">GitHub</option>
-              <option value="jira">Jira</option>
-            </select>
-          </label>
+        <form onSubmit={submit} noValidate style={{ display: 'contents' }}>
+          <div className="dialog-body stack">
+            <div className="field">
+              <label htmlFor="ls-name">Name</label>
+              <input
+                id="ls-name"
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="My loop spec"
+                required
+                maxLength={200}
+              />
+            </div>
 
-          {field('Goal template', 'goalTemplate', 'textarea', { placeholder: 'What should the agent do? Use {{variable}} for placeholders.' })}
+            <div className="field">
+              <label htmlFor="ls-desc">Description</label>
+              <input
+                id="ls-desc"
+                type="text"
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Optional description"
+              />
+            </div>
 
-          {field('Max iterations', 'maxIterations', 'number', { min: 1, max: 50 })}
+            <div className="field">
+              <label htmlFor="ls-trigger">Trigger type</label>
+              <select
+                id="ls-trigger"
+                value={form.triggerType}
+                onChange={(e) => setForm((f) => ({ ...f, triggerType: e.target.value }))}
+              >
+                <option value="manual">Manual</option>
+                <option value="cron">Cron</option>
+                <option value="interval">Interval</option>
+                <option value="webhook">Webhook</option>
+                <option value="github">GitHub</option>
+                <option value="jira">Jira</option>
+              </select>
+            </div>
 
-          {error && <p style={{ color: '#dc2626', margin: '8px 0', fontSize: 14 }}>{error}</p>}
+            <div className="field">
+              <label htmlFor="ls-goal">Goal template</label>
+              <textarea
+                id="ls-goal"
+                value={form.goalTemplate}
+                onChange={(e) => setForm((f) => ({ ...f, goalTemplate: e.target.value }))}
+                placeholder="What should the agent do? Use {{variable}} for placeholders."
+                style={{ minHeight: 80, fontFamily: 'var(--mono)', fontSize: 13 }}
+              />
+            </div>
 
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
-            <button type="button" onClick={onClose} style={{ padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: 4, background: '#fff', cursor: 'pointer' }}>
-              Cancel
-            </button>
+            <div className="field">
+              <label htmlFor="ls-max">Max iterations</label>
+              <input
+                id="ls-max"
+                type="number"
+                value={form.maxIterations}
+                onChange={(e) => setForm((f) => ({ ...f, maxIterations: e.target.value }))}
+                min={1}
+                max={50}
+                style={{ width: 100 }}
+              />
+            </div>
+
+            {error && (
+              <p className="error-note" role="alert">{error}</p>
+            )}
+          </div>
+
+          <div className="dialog-foot">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button
               type="submit"
+              className="btn btn-primary"
               disabled={loading}
-              style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', opacity: loading ? 0.7 : 1 }}
+              aria-busy={loading}
             >
               {loading ? 'Creating…' : 'Create Spec'}
             </button>
@@ -184,8 +219,8 @@ function RunHistory({ projectId, specId }) {
       .finally(() => setLoading(false));
   }, [projectId, specId]);
 
-  if (loading) return <div style={{ padding: '8px 0', color: '#6b7280', fontSize: 13 }}>Loading runs…</div>;
-  if (!runs.length) return <div style={{ padding: '8px 0', color: '#6b7280', fontSize: 13 }}>No runs yet.</div>;
+  if (loading) return <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading runs…" />;
+  if (!runs.length) return <p className="muted" style={{ fontSize: 13, padding: '8px 0' }}>No runs yet.</p>;
 
   return (
     <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -193,9 +228,9 @@ function RunHistory({ projectId, specId }) {
         <li key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }}>
           <StatusBadge status={r.status} />
           <span>Iteration {r.iteration}</span>
-          <span style={{ color: '#9ca3af' }}>{formatDate(r.started_at)}</span>
+          <span className="muted">{formatDate(r.started_at)}</span>
           {r.finished_at && (
-            <span style={{ color: '#9ca3af' }}>→ {formatDate(r.finished_at)}</span>
+            <span className="muted">→ {formatDate(r.finished_at)}</span>
           )}
         </li>
       ))}
@@ -219,7 +254,7 @@ function SpecRow({ spec, projectId, onRunNow, onDelete }) {
   };
 
   return (
-    <li style={{ borderBottom: '1px solid #f3f4f6', padding: '12px 0' }}>
+    <li style={{ borderBottom: '1px solid var(--line)', padding: '12px 0' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -230,44 +265,45 @@ function SpecRow({ spec, projectId, onRunNow, onDelete }) {
             <TriggerBadge type={spec.trigger_type} />
           </div>
           {spec.description && (
-            <p style={{ margin: '0 0 4px', fontSize: 13, color: '#6b7280' }}>{spec.description}</p>
+            <p className="muted" style={{ margin: '0 0 4px', fontSize: 13 }}>{spec.description}</p>
           )}
           {spec.last_run && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#9ca3af' }}>
-              <span>Last run:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              <span className="muted">Last run:</span>
               <StatusBadge status={spec.last_run.status} />
-              <span>{formatDate(spec.last_run.started_at)}</span>
+              <span className="muted">{formatDate(spec.last_run.started_at)}</span>
             </div>
           )}
         </div>
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
           <button
+            type="button"
+            className="btn btn-primary btn-sm"
             onClick={handleRunNow}
             disabled={running || !spec.enabled}
             title={!spec.enabled ? 'This spec is disabled' : 'Run now'}
-            style={{
-              padding: '5px 12px', fontSize: 13, background: '#2563eb', color: '#fff',
-              border: 'none', borderRadius: 4, cursor: spec.enabled ? 'pointer' : 'not-allowed',
-              opacity: running || !spec.enabled ? 0.6 : 1,
-            }}
+            aria-busy={running}
           >
             {running ? '▶ Running…' : '▶ Run now'}
           </button>
 
           <button
+            type="button"
+            className="btn btn-sm"
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
-            style={{ padding: '5px 10px', fontSize: 13, border: '1px solid #e5e7eb', borderRadius: 4, background: '#fff', cursor: 'pointer' }}
           >
             {expanded ? 'Hide runs' : 'Runs'}
           </button>
 
           {!spec.is_builtin && onDelete && (
             <button
+              type="button"
+              className="btn btn-sm btn-danger"
               onClick={() => onDelete(spec.id)}
               title="Delete this spec"
-              style={{ padding: '5px 10px', fontSize: 13, color: '#dc2626', border: '1px solid #fca5a5', borderRadius: 4, background: '#fff', cursor: 'pointer' }}
+              aria-label={`Delete spec: ${spec.name}`}
             >
               Delete
             </button>
@@ -276,15 +312,15 @@ function SpecRow({ spec, projectId, onRunNow, onDelete }) {
       </div>
 
       {expanded && (
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #f3f4f6' }}>
-          <h4 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600, color: '#374151' }}>
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+          <h4 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600 }}>
             Recent runs
           </h4>
           <RunHistory projectId={projectId} specId={spec.id} />
 
           <div style={{ marginTop: 12 }}>
-            <h4 style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 600, color: '#374151' }}>Goal template</h4>
-            <pre style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 4, padding: '8px 12px', fontSize: 12, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 }}>
+            <h4 style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 600 }}>Goal template</h4>
+            <pre style={{ background: 'var(--canvas)', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: '8px 12px', fontSize: 12, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 }}>
               {spec.goal_template || '(no goal template)'}
             </pre>
           </div>
@@ -302,6 +338,9 @@ export default function LoopSpecs({ projectId, user }) {
   const [error, setError] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [runMsg, setRunMsg] = useState(null);
+  const [runMsgKind, setRunMsgKind] = useState('ok');
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -323,20 +362,23 @@ export default function LoopSpecs({ projectId, user }) {
     try {
       const r = await api.post(`/api/projects/${projectId}/loop-specs/${specId}/run`, {});
       setRunMsg(`Loop run started. Workflow ID: ${r.workflow_id ?? 'N/A'}`);
+      setRunMsgKind('ok');
       // Reload to update last run info
       setTimeout(() => load(), 500);
     } catch (e) {
       setRunMsg(`Error: ${e.message}`);
+      setRunMsgKind('error');
     }
   };
 
   const handleDelete = async (specId) => {
-    if (!confirm('Delete this loop spec? This cannot be undone.')) return;
+    const ok = await requestConfirm('Delete this loop spec? This cannot be undone.', 'Delete', 'danger');
+    if (!ok) return;
     try {
       await api.delete(`/api/projects/${projectId}/loop-specs/${specId}`);
       setSpecs((prev) => prev.filter((s) => s.id !== specId));
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
     }
   };
 
@@ -344,40 +386,49 @@ export default function LoopSpecs({ projectId, user }) {
   const custom = specs.filter((s) => !s.is_builtin);
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Loop Specs</h1>
-        <button
-          onClick={() => setShowModal(true)}
-          style={{
-            padding: '8px 16px', background: '#2563eb', color: '#fff',
-            border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 500,
-          }}
-        >
-          + Add spec
-        </button>
+    <div className="page">
+      <div className="page-head">
+        <h1>Loop Specs</h1>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShowModal(true)}
+          >
+            + Add spec
+          </button>
+        </div>
       </div>
 
       {error && (
-        <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 4, padding: '8px 12px', marginBottom: 16, color: '#dc2626' }}>
-          {error}
-        </div>
+        <p className="error-note" role="alert">{error}</p>
       )}
 
       {runMsg && (
-        <div style={{ background: '#dcfce7', border: '1px solid #86efac', borderRadius: 4, padding: '8px 12px', marginBottom: 16, color: '#166534', fontSize: 14 }}>
+        <p
+          className={runMsgKind === 'ok' ? 'success-note' : 'error-note'}
+          role="status"
+        >
           {runMsg}
-          <button onClick={() => setRunMsg(null)} style={{ marginLeft: 12, background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#166534' }}>✕</button>
-        </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setRunMsg(null)}
+            style={{ marginLeft: 12 }}
+            aria-label="Dismiss message"
+          >
+            ✕
+          </button>
+        </p>
       )}
 
       {loading ? (
-        <p style={{ color: '#6b7280' }}>Loading loop specs…</p>
+        <div className="spinner" aria-label="Loading loop specs…" />
       ) : (
         <>
           {builtins.length > 0 && (
             <section style={{ marginBottom: 32 }}>
-              <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px', color: '#374151' }}>
+              <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px' }}>
                 Built-in specs
               </h2>
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -395,11 +446,13 @@ export default function LoopSpecs({ projectId, user }) {
           )}
 
           <section>
-            <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px', color: '#374151' }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px' }}>
               Project specs
             </h2>
             {custom.length === 0 ? (
-              <p style={{ color: '#6b7280', fontSize: 14 }}>No custom loop specs yet. Click "+ Add spec" to create one.</p>
+              <div className="empty-state">
+                <p>No custom loop specs yet. Click &ldquo;+ Add spec&rdquo; to create one.</p>
+              </div>
             ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                 {custom.map((s) => (
@@ -427,6 +480,8 @@ export default function LoopSpecs({ projectId, user }) {
           }}
         />
       )}
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

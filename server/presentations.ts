@@ -15,7 +15,8 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, insert, run as dbRun, update } from './db.ts';
 import type { Row } from './db.ts';
-import { newId, now, badRequest, notFound, str } from './util.ts';
+import { newId, now, badRequest, notFound, str, parseJson } from './util.ts';
+import { emit } from './events.ts';
 import {
   PRESENTATION_SOURCES,
   PRESENTATION_LIMITS,
@@ -25,6 +26,16 @@ import {
   type PresentationSourceKind,
 } from './presentation-text.ts';
 import { pptxSlides } from './convert.ts';
+import {
+  validateAttachmentIds,
+  stageAttachmentsToWorkDir,
+  buildAttachmentPromptBlock,
+  linkAttachmentsToParent,
+  deleteAttachmentsForParent,
+  getAttachmentsView,
+} from './ai-attachments.ts';
+import { createWorkDir } from './workflows/working-copies.ts';
+import { config } from './config.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -61,6 +72,7 @@ function requireProjectAccess(
 }
 
 function presView(p: Row) {
+  const attIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
   return {
     id: p.id,
     project_id: p.project_id,
@@ -81,6 +93,7 @@ function presView(p: Row) {
     created_by: p.created_by ?? null,
     created_at: p.created_at,
     updated_at: p.updated_at,
+    attachments: attIds.length > 0 ? getAttachmentsView(String(p.project_id), attIds) : [],
   };
 }
 
@@ -97,8 +110,9 @@ async function startPresRun(
   userId: string,
   leadAgent?: string | null,
   trustAllTools?: boolean,
+  preconfig?: { workflowId?: string; workDir?: string | null },
 ): Promise<string> {
-  const workflowId = newId('w_');
+  const workflowId = preconfig?.workflowId ?? newId('w_');
   const ts = now();
 
   insert('p6_workflows', {
@@ -114,10 +128,13 @@ async function startPresRun(
     repo_ids: '[]',
     iteration_count: 0,
     max_iterations: 1,
+    work_dir: preconfig?.workDir ?? null,
     created_by: userId,
     created_at: ts,
     updated_at: ts,
   });
+
+  emit(projectId, { type: 'workflow.created', workflowId });
 
   setTimeout(async () => {
     try {
@@ -243,6 +260,15 @@ export function registerPresentationRoutes(): void {
     const diagramStyle = (body.diagramStyle as string) ?? 'mermaid';
     const leadAgent = str((body.leadAgent as string) ?? '', 'leadAgent', { max: 200, optional: true }) || null;
     const trustAllTools = Boolean(body.trustAllTools);
+    const rawAttachmentIds = Array.isArray(body.attachmentIds) ? (body.attachmentIds as unknown[]).map(String) : [];
+
+    // Validate attachment IDs
+    let attachmentRows: Row[] = [];
+    if (rawAttachmentIds.length > 0) {
+      const { error, rows } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+      if (error) throw badRequest(error);
+      attachmentRows = rows!;
+    }
 
     // Check per-project limit
     const count = (one<{ n: number }>(
@@ -267,7 +293,7 @@ export function registerPresentationRoutes(): void {
     const sourceBlock = buildSourceBlock(tempRow);
     const tplBlock = templateBlock({ mode: 'none' });
 
-    const goal = composePresentationPrompt({
+    let goal = composePresentationPrompt({
       kind: sourceKind as PresentationSourceKind,
       title: name,
       audience: audience ?? '',
@@ -275,6 +301,17 @@ export function registerPresentationRoutes(): void {
       source: sourceBlock,
       template: tplBlock,
     });
+
+    // Pre-stage attachment files if provided
+    let preWorkflowId: string | undefined;
+    let preWorkDir: string | null = null;
+    if (attachmentRows.length > 0) {
+      preWorkflowId = newId('w_');
+      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
+      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+      goal += buildAttachmentPromptBlock(staged);
+    }
 
     insert('presentations', {
       id,
@@ -293,6 +330,7 @@ export function registerPresentationRoutes(): void {
       preview_json: null,
       workflow_id: null,
       stale: 0,
+      attachment_ids: JSON.stringify(rawAttachmentIds),
       created_by: req.user!.id,
       created_at: ts,
       updated_at: ts,
@@ -305,9 +343,13 @@ export function registerPresentationRoutes(): void {
       req.user!.id,
       leadAgent,
       trustAllTools,
+      { workflowId: preWorkflowId, workDir: preWorkDir },
     );
 
-    // Link the workflow to the presentation
+    // Link attachments and the workflow to the presentation
+    if (rawAttachmentIds.length > 0) {
+      linkAttachmentsToParent(rawAttachmentIds, 'presentation', id);
+    }
     update('presentations', id, { workflow_id: workflowId, updated_at: now() });
 
     const p = one<Row>('SELECT * FROM presentations WHERE id = ?', id)!;
@@ -329,6 +371,7 @@ export function registerPresentationRoutes(): void {
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));
+    deleteAttachmentsForParent('presentation', String(p.id));
     dbRun('DELETE FROM presentations WHERE id = ?', String(p.id));
     sendJson(res, 200, { ok: true });
   });
@@ -339,11 +382,36 @@ export function registerPresentationRoutes(): void {
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawAttachmentIds = Array.isArray(body.attachmentIds)
+      ? (body.attachmentIds as unknown[]).map(String)
+      : null;
+
+    // Determine effective attachment IDs
+    let effectiveAttachmentIds: string[];
+    if (rawAttachmentIds !== null) {
+      if (rawAttachmentIds.length > 0) {
+        const { error } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+        if (error) { sendJson(res, 400, { error }); return; }
+      }
+      const oldIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
+      if (oldIds.length > 0) deleteAttachmentsForParent('presentation', String(p.id));
+      effectiveAttachmentIds = rawAttachmentIds;
+      update('presentations', String(p.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
+    } else {
+      effectiveAttachmentIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
+    }
+
+    let attachmentRows: Row[] = [];
+    if (effectiveAttachmentIds.length > 0) {
+      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      attachmentRows = rows ?? [];
+    }
 
     const sourceBlock = buildSourceBlock(p);
     const tplBlock = templateBlock({ mode: 'none' });
 
-    const goal = composePresentationPrompt({
+    let goal = composePresentationPrompt({
       kind: String(p.source_kind) as PresentationSourceKind,
       title: String(p.name),
       audience: String(p.audience ?? ''),
@@ -352,6 +420,16 @@ export function registerPresentationRoutes(): void {
       template: tplBlock,
     });
 
+    let preWorkflowId: string | undefined;
+    let preWorkDir: string | null = null;
+    if (attachmentRows.length > 0) {
+      preWorkflowId = newId('w_');
+      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
+      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+      goal += buildAttachmentPromptBlock(staged);
+    }
+
     const workflowId = await startPresRun(
       String(project.id),
       String(p.id),
@@ -359,8 +437,12 @@ export function registerPresentationRoutes(): void {
       req.user!.id,
       p.lead_agent ? String(p.lead_agent) : null,
       Boolean(p.trust_all_tools),
+      { workflowId: preWorkflowId, workDir: preWorkDir },
     );
 
+    if (rawAttachmentIds !== null && rawAttachmentIds.length > 0) {
+      linkAttachmentsToParent(rawAttachmentIds, 'presentation', String(p.id));
+    }
     update('presentations', String(p.id), { workflow_id: workflowId, updated_at: now() });
     sendJson(res, 200, { workflowId });
   });

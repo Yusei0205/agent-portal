@@ -1,0 +1,681 @@
+/* ── IDE Workspace ─────────────────────────────────────── */
+
+/* ── Layout ──────────────────────────────────────────── */
+.ide-workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.ide-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Activity bar ────────────────────────────────────── */
+.ide-activity-bar {
+  width: 40px;
+  flex-shrink: 0;
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  gap: 2px;
+  z-index: 2;
+}
+
+.ide-activity-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  border-radius: var(--radius);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  transition: color 0.12s, background 0.12s;
+}
+.ide-activity-btn:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.ide-activity-btn.is-active {
+  background: var(--accent-wash);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* ── Sidebar panel ───────────────────────────────────── */
+.ide-sidebar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  position: relative;
+  min-width: 160px;
+}
+
+.ide-resize-handle-x {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 10;
+  transition: background 0.12s;
+}
+.ide-resize-handle-x:hover,
+.ide-resize-handle-x.is-dragging {
+  background: var(--accent);
+}
+
+.ide-resize-handle-y {
+  height: 4px;
+  cursor: row-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  transition: background 0.12s;
+}
+.ide-resize-handle-y:hover,
+.ide-resize-handle-y.is-dragging {
+  background: var(--accent);
+}
+
+/* Panel section header */
+.ide-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 12px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  min-height: 32px;
+}
+.ide-panel-header-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ide-panel-header-actions {
+  display: flex;
+  gap: 2px;
+}
+
+/* ── Main content area ───────────────────────────────── */
+.ide-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.ide-main-row {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Editor panel ────────────────────────────────────── */
+.ide-editor-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  border-right: 1px solid var(--line);
+}
+
+.ide-editor-tabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+  overflow-x: auto;
+  min-height: 36px;
+}
+.ide-editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 14px;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  border: none;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 180px;
+  position: relative;
+  flex-shrink: 0;
+}
+.ide-editor-tab:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+  color: var(--ink);
+}
+.ide-editor-tab.is-active {
+  background: var(--canvas);
+  color: var(--ink);
+  border-bottom: 2px solid var(--accent);
+}
+.ide-editor-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.ide-editor-tab-dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.ide-editor-tab-close {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  flex-shrink: 0;
+  opacity: 0;
+}
+.ide-editor-tab:hover .ide-editor-tab-close,
+.ide-editor-tab.is-active .ide-editor-tab-close {
+  opacity: 1;
+}
+.ide-editor-tab-close:hover {
+  background: var(--line);
+}
+
+.ide-editor-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+/* CodeMirror host */
+.ide-codemirror-host {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+}
+.ide-codemirror-host .cm-editor {
+  height: 100%;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+}
+.ide-codemirror-host .cm-scroller {
+  overflow: auto;
+}
+
+/* Conflict banner */
+.ide-stale-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--warn-wash);
+  border-bottom: 1px solid var(--warn);
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.83rem;
+  z-index: 5;
+}
+.ide-stale-banner-msg {
+  flex: 1;
+  color: var(--ink);
+}
+
+/* Empty editor placeholder */
+.ide-editor-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--ink-3);
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  font-size: 0.875rem;
+}
+
+/* ── Collapsible editor area ─────────────────────────── */
+.ide-editor-area {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  min-width: 200px;
+}
+
+/* Thin vertical strip that toggles the editor panel */
+.ide-editor-toggle-strip {
+  width: 14px;
+  align-self: stretch;
+  flex-shrink: 0;
+  background: var(--panel);
+  border: none;
+  border-right: 1px solid var(--line);
+  color: var(--ink-3);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0 0;
+  transition: background 0.12s, color 0.12s;
+  outline: none;
+}
+.ide-editor-toggle-strip:hover {
+  background: color-mix(in srgb, var(--raised) 70%, var(--accent-wash) 30%);
+  color: var(--ink);
+}
+.ide-editor-toggle-strip:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+
+/* ── Agent panel ─────────────────────────────────────── */
+.ide-agent-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  position: relative;
+}
+
+/* ── Terminal panel ──────────────────────────────────── */
+.ide-terminal-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  background: #1e1e1e;
+  position: relative;
+}
+
+.ide-terminal-host {
+  flex: 1;
+  overflow: hidden;
+  padding: 4px;
+}
+
+/* ── Status bar ──────────────────────────────────────── */
+.ide-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 8px;
+  height: 24px;
+  background: var(--accent);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.ide-status-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  white-space: nowrap;
+  border-right: 1px solid rgba(255,255,255,0.2);
+  height: 100%;
+  font-weight: 500;
+}
+.ide-status-item:last-child {
+  border-right: none;
+}
+.ide-status-item.muted {
+  opacity: 0.7;
+}
+/* Model name: the global .muted colour (grey ink) is unreadable on the
+   accent-coloured bar, so keep the bar's light text and only soften it slightly. */
+.ide-status-item.ide-status-model {
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--mono);
+}
+
+/* ── IDE Header ──────────────────────────────────────── */
+.ide-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 42px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.ide-header-title-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ide-header-title {
+  font-size: 0.88rem;
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  color: var(--ink);
+}
+
+.ide-header-rename-form {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ide-header-rename-input {
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 620;
+  height: 28px;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.ide-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Engine badge in header */
+.ide-engine-badge {
+  font-size: 0.69rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+/* ── File explorer ───────────────────────────────────── */
+.ide-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-size: 0.82rem;
+}
+
+.ide-tree-root {
+  margin-bottom: 2px;
+}
+
+.ide-tree-root-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 4px 8px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-2);
+  user-select: none;
+}
+.ide-tree-root-header:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+}
+.ide-tree-root-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+}
+.ide-tree-root-header:hover .ide-tree-root-actions {
+  opacity: 1;
+}
+
+.ide-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 0;
+  cursor: pointer;
+  color: var(--ink);
+  user-select: none;
+  border-radius: var(--radius);
+  position: relative;
+}
+.ide-tree-node:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+}
+.ide-tree-node.is-active {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.ide-tree-node.is-ignored {
+  opacity: 0.45;
+}
+.ide-tree-node-icon {
+  flex-shrink: 0;
+  color: var(--ink-3);
+}
+.ide-tree-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.ide-tree-node-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  flex-shrink: 0;
+}
+.ide-tree-node:hover .ide-tree-node-actions {
+  opacity: 1;
+}
+
+/* Drop zone highlight */
+.ide-tree.drag-over {
+  background: var(--accent-wash);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── Source control ──────────────────────────────────── */
+.ide-sc-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+.ide-sc-file:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+}
+.ide-sc-status {
+  font-size: 0.72rem;
+  font-weight: 700;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.ide-sc-status.M { color: var(--warn); }
+.ide-sc-status.A { color: var(--ok); }
+.ide-sc-status.D { color: var(--danger); }
+.ide-sc-status.R { color: var(--accent); }
+.ide-sc-status.\? { color: var(--ink-3); }
+
+.ide-diff-view {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.ide-diff-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ide-diff-line.add { background: color-mix(in srgb, var(--ok-wash) 80%, transparent); color: var(--ok); }
+.ide-diff-line.del { background: color-mix(in srgb, var(--danger-wash) 80%, transparent); color: var(--danger); }
+.ide-diff-line.hunk { background: var(--canvas); color: var(--ink-3); font-style: italic; }
+
+/* ── Browser panel ───────────────────────────────────── */
+.ide-browser-url {
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  color: var(--ink-2);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ide-browser-screenshot {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px;
+}
+.ide-browser-screenshot img {
+  max-width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+/* ── Agents activity ─────────────────────────────────── */
+.ide-agent-item {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-2);
+  display: grid;
+  gap: 2px;
+}
+.ide-agent-item-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ide-agent-item-meta {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ── Idle stop banner ────────────────────────────────── */
+.ide-idle-banner {
+  background: var(--warn-wash);
+  border-bottom: 1px solid var(--warn);
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  flex-shrink: 0;
+}
+.ide-idle-banner-msg {
+  flex: 1;
+  color: var(--ink);
+}
+
+/* ── Transcript load more ────────────────────────────── */
+.ide-load-more {
+  padding: 8px 12px;
+  text-align: center;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+/* ── Slash command event ─────────────────────────────── */
+.live-slash-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--line-2);
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+.live-slash-command-label {
+  font-family: var(--mono);
+  font-weight: 650;
+  color: var(--accent);
+}
+.live-slash-command-result {
+  margin: 0 12px 4px;
+  padding: 4px 8px;
+  background: var(--canvas);
+  border-radius: var(--radius);
+  border-left: 2px solid var(--ink-3);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+/* ── Rename in session list ──────────────────────────── */
+.session-row-rename-form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  padding: 2px 4px;
+}
+.session-row-rename-input {
+  flex: 1;
+  font-size: 0.875rem;
+  font-weight: 550;
+  height: 26px;
+  padding: 0 6px;
+  min-width: 0;
+}

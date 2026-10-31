@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ function ApprovalItem({ item, onResolved }) {
   const [busy, setBusy] = useState(false);
   const [resolved, setResolved] = useState(false);
   const [resolutionLabel, setResolutionLabel] = useState('');
+  const { toast, toasts, removeToast } = useToast();
 
   const resolve = async (response) => {
     setBusy(true);
@@ -51,7 +53,7 @@ function ApprovalItem({ item, onResolved }) {
       setResolutionLabel(response === 'approve' ? 'Approved' : 'Denied');
       if (onResolved) onResolved();
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
       setBusy(false);
     }
   };
@@ -60,6 +62,7 @@ function ApprovalItem({ item, onResolved }) {
 
   return (
     <div className={`inbox-item${resolved ? ' inbox-item-resolved' : ''}`}>
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       <div className="inbox-item-meta">
         {item.project_name && (
           <span className="badge">{item.project_name}</span>
@@ -107,6 +110,7 @@ function QuestionItem({ item, onResolved }) {
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   const [resolved, setResolved] = useState(false);
+  const { toast, toasts, removeToast } = useToast();
 
   const question = item.payload?.question || payloadSummary(item) || 'Answer required';
 
@@ -119,7 +123,7 @@ function QuestionItem({ item, onResolved }) {
       setResolved(true);
       if (onResolved) onResolved();
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
       setBusy(false);
     }
   };
@@ -128,6 +132,7 @@ function QuestionItem({ item, onResolved }) {
 
   return (
     <div className={`inbox-item${resolved ? ' inbox-item-resolved' : ''}`}>
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       <div className="inbox-item-meta">
         {item.project_name && (
           <span className="badge">{item.project_name}</span>
@@ -175,6 +180,7 @@ function QuestionItem({ item, onResolved }) {
 function GenericItem({ item, onResolved }) {
   const [busy, setBusy] = useState(false);
   const [resolved, setResolved] = useState(false);
+  const { toast, toasts, removeToast } = useToast();
   const summary = payloadSummary(item);
 
   const dismiss = async () => {
@@ -184,13 +190,14 @@ function GenericItem({ item, onResolved }) {
       setResolved(true);
       if (onResolved) onResolved();
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
       setBusy(false);
     }
   };
 
   return (
     <div className={`inbox-item${resolved ? ' inbox-item-resolved' : ''}`}>
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       <div className="inbox-item-meta">
         {item.project_name && <span className="badge">{item.project_name}</span>}
         {item.workflow_goal && (

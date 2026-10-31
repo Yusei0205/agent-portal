@@ -252,3 +252,4 @@ export function registerInsightsRoutes(): void {
 }
 
 export { computeInsights };
+

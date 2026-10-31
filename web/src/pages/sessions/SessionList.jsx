@@ -7,6 +7,8 @@ import { navigate, href } from '../../lib/router.js';
 import { Icon } from '../../components/Icon.jsx';
 import { BulkActionBar, BulkSelectHint } from '../../components/BulkActionBar.jsx';
 import { NewSessionDialog } from './NewSessionDialog.jsx';
+import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../../components/Toast.jsx';
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -75,12 +77,15 @@ function groupWorkflows(workflows) {
 
 // ── Session row ────────────────────────────────────────────────────────────────
 
-function SessionRow({ w, projectName, active, checked, onCheck }) {
+function SessionRow({ w, projectName, active, checked, onCheck, onRename }) {
   const [hovered, setHovered] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
   const showCheckbox = hovered || active || checked;
 
-  const title = w.goal
-    ? (w.goal.length > 60 ? w.goal.slice(0, 59) + '…' : w.goal)
+  const title = (w.title || w.goal)
+    ? ((w.title || w.goal).length > 60 ? (w.title || w.goal).slice(0, 59) + '…' : (w.title || w.goal))
     : `Session ${w.id.slice(0, 8)}`;
 
   const engineBadgeClass =
@@ -90,6 +95,26 @@ function SessionRow({ w, projectName, active, checked, onCheck }) {
       ? 'badge badge-engine-claude'
       : 'badge';
 
+  const startRename = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setRenameValue(w.title || w.goal || '');
+    setRenaming(true);
+  };
+
+  const submitRename = async (e) => {
+    e?.preventDefault();
+    const t = renameValue.trim();
+    if (!t) { setRenaming(false); return; }
+    setRenameBusy(true);
+    try {
+      await api.patch(`/api/projects/${w.project_id}/workflows/${w.id}`, { title: t });
+      setRenaming(false);
+      if (onRename) onRename(w.id, t);
+    } catch { setRenaming(false); }
+    finally { setRenameBusy(false); }
+  };
+
   return (
     <div
       className={`ws-item${active ? ' is-active' : ''}`}
@@ -97,48 +122,71 @@ function SessionRow({ w, projectName, active, checked, onCheck }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Checkbox — visible on hover or when selected */}
-      <div
-        className="session-row-checkbox"
-        style={{ opacity: showCheckbox ? 1 : 0, width: 18, flexShrink: 0 }}
-      >
+      {/* Checkbox */}
+      <div className="session-row-checkbox" style={{ opacity: showCheckbox ? 1 : 0, width: 18, flexShrink: 0 }}>
         <input
           type="checkbox"
           aria-label={`Select session: ${title}`}
           checked={checked}
-          onChange={(e) => {
-            e.stopPropagation();
-            onCheck(w.id);
-          }}
+          onChange={(e) => { e.stopPropagation(); onCheck(w.id); }}
           onClick={(e) => e.stopPropagation()}
           style={{ cursor: 'pointer' }}
         />
       </div>
 
-      {/* Clickable row body */}
-      <a
-        href={href(w.project_id, 'sessions', w.id)}
-        className="session-row-link"
-        aria-current={active ? 'page' : undefined}
-        style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 8, textDecoration: 'none', color: 'inherit' }}
-      >
-        <span
-          className={`dot ${dotClass(w.status)}`}
-          title={w.status}
-          style={{ marginTop: 4, flexShrink: 0 }}
-          aria-label={w.status}
-        />
-        <div className="ws-item-body">
-          <span className="ws-item-title">{title}</span>
-          <div className="ws-item-sub">
-            <span className={engineBadgeClass}>{engineLabel(w.engine)}</span>
-            {projectName && <span>{projectName}</span>}
-            <span className="muted" style={{ marginLeft: 'auto' }}>
-              {formatRelative(w.updated_at)}
-            </span>
-          </div>
-        </div>
-      </a>
+      {renaming ? (
+        <form className="session-row-rename-form" onSubmit={submitRename} onClick={(e) => e.stopPropagation()}>
+          <input
+            autoFocus
+            className="session-row-rename-input"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={() => !renameBusy && setRenaming(false)}
+            onKeyDown={(e) => { if (e.key === 'Escape') setRenaming(false); }}
+            aria-label="Rename session"
+            disabled={renameBusy}
+          />
+          <button type="submit" className="btn-icon" disabled={renameBusy} aria-label="Save name" style={{ width: 24, height: 24 }}>
+            {renameBusy ? <span className="spinner" style={{ width: 11, height: 11 }} /> : <Icon name="check" size={12} />}
+          </button>
+          <button type="button" className="btn-icon" aria-label="Cancel" onClick={() => setRenaming(false)} style={{ width: 24, height: 24 }}>
+            <Icon name="x" size={12} />
+          </button>
+        </form>
+      ) : (
+        <>
+          {/* Clickable row body */}
+          <a
+            href={href(w.project_id, 'sessions', w.id)}
+            className="session-row-link"
+            aria-current={active ? 'page' : undefined}
+            style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 8, textDecoration: 'none', color: 'inherit' }}
+          >
+            <span className={`dot ${dotClass(w.status)}`} title={w.status} style={{ marginTop: 4, flexShrink: 0 }} aria-label={w.status} />
+            <div className="ws-item-body">
+              <span className="ws-item-title">{title}</span>
+              <div className="ws-item-sub">
+                <span className={engineBadgeClass}>{engineLabel(w.engine)}</span>
+                {projectName && <span>{projectName}</span>}
+                <span className="muted" style={{ marginLeft: 'auto' }}>{formatRelative(w.updated_at)}</span>
+              </div>
+            </div>
+          </a>
+          {/* Rename action (visible on hover) */}
+          {hovered && (
+            <button
+              type="button"
+              className="btn-icon"
+              aria-label="Rename session"
+              title="Rename session"
+              style={{ width: 24, height: 24, flexShrink: 0, opacity: 0.7 }}
+              onClick={startRename}
+            >
+              <Icon name="rename" size={12} />
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -152,20 +200,26 @@ function SessionRow({ w, projectName, active, checked, onCheck }) {
  *   project: { id: string, name: string },
  *   selectedId: string | null,
  *   onSelect: (id: string) => void,
+ *   initialDialogTicket?: object | null,
+ *   onInitialDialogConsumed?: () => void,
  * }} props
  */
-export function SessionList({ project, selectedId, onSelect }) {
+export function SessionList({ project, selectedId, onSelect, initialDialogTicket, onInitialDialogConsumed }) {
   const [workflows, setWorkflows] = useState(null);
   const [repos, setRepos] = useState([]);
+  const [workspaces, setWorkspaces] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [engineFilter, setEngineFilter] = useState('all');
   const [showNewDialog, setShowNewDialog] = useState(false);
+  const [dialogInitialTicket, setDialogInitialTicket] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const searchRef = useRef(null);
   const timerRef = useRef(null);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     try {
@@ -189,12 +243,23 @@ export function SessionList({ project, selectedId, onSelect }) {
     }
   }, [project.id]);
 
+  // Load workspaces for the new session dialog
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      const data = await api.get(`/api/projects/${project.id}/workspaces`);
+      setWorkspaces(data.workspaces || []);
+    } catch {
+      setWorkspaces([]);
+    }
+  }, [project.id]);
+
   useEffect(() => {
     setLoading(true);
     setWorkflows(null);
     load();
     loadRepos();
-  }, [load, loadRepos]);
+    loadWorkspaces();
+  }, [load, loadRepos, loadWorkspaces]);
 
   // Real-time updates via project SSE
   useEffect(() => {
@@ -209,6 +274,13 @@ export function SessionList({ project, selectedId, onSelect }) {
         clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => load(), 400);
       }
+      // Inline title update without full reload
+      if (event.type === 'workflow.renamed' && event.workflowId) {
+        setWorkflows((prev) => prev
+          ? prev.map((w) => w.id === event.workflowId ? { ...w, title: event.title } : w)
+          : prev,
+        );
+      }
     });
     return () => {
       unsubscribe();
@@ -216,9 +288,10 @@ export function SessionList({ project, selectedId, onSelect }) {
     };
   }, [project.id, load]);
 
-  // '/' shortcut focuses search box
+  // Alt+N opens new session dialog; '/' focuses search
   useEffect(() => {
     const onKey = (e) => {
+      if (e.altKey && e.key === 'n') { e.preventDefault(); setShowNewDialog(true); return; }
       if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
         e.preventDefault();
         searchRef.current?.focus();
@@ -227,6 +300,14 @@ export function SessionList({ project, selectedId, onSelect }) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
+
+  // When the parent sends a ticket to pre-fill (from Tickets page), open the dialog
+  useEffect(() => {
+    if (!initialDialogTicket) return;
+    setDialogInitialTicket(initialDialogTicket);
+    setShowNewDialog(true);
+    if (onInitialDialogConsumed) onInitialDialogConsumed();
+  }, [initialDialogTicket, onInitialDialogConsumed]);
 
   const needle = search.trim().toLowerCase();
 
@@ -256,7 +337,12 @@ export function SessionList({ project, selectedId, onSelect }) {
 
   const handleDelete = async () => {
     if (bulk.selected.size === 0) return;
-    if (!window.confirm(`Delete ${bulk.selected.size} session${bulk.selected.size === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    const ok = await requestConfirm(
+      `Delete ${bulk.selected.size} session${bulk.selected.size === 1 ? '' : 's'}? This cannot be undone.`,
+      'Delete',
+      'danger',
+    );
+    if (!ok) return;
     setDeleting(true);
     try {
       await Promise.all(
@@ -267,7 +353,7 @@ export function SessionList({ project, selectedId, onSelect }) {
       bulk.clearAll();
       load();
     } catch (e) {
-      alert(e.message);
+      toast(e.message, 'error');
     } finally {
       setDeleting(false);
     }
@@ -286,50 +372,33 @@ export function SessionList({ project, selectedId, onSelect }) {
           type="button"
           className="btn btn-sm btn-primary"
           onClick={() => setShowNewDialog(true)}
-          title="New session (⌘⌥N)"
-          aria-label="New session"
+          title="New session (Alt+N)"
+          aria-label="New session (Alt+N)"
+          aria-keyshortcuts="Alt+n"
           style={{ marginLeft: 'auto' }}
         >
           <Icon name="plus" size={14} />
-          New
+          New session
         </button>
       </div>
 
       {/* Search */}
       <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--line)' }}>
-        <div style={{ position: 'relative' }}>
-          <Icon
-            name="search"
-            size={14}
-            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-3)', pointerEvents: 'none' }}
-          />
+        <div className="session-search-wrap">
+          <span className="session-search-icon" aria-hidden="true">
+            <Icon name="search" size={14} />
+          </span>
           <input
             ref={searchRef}
             type="search"
+            className="session-search-input"
             aria-label="Search sessions"
             placeholder="Search sessions"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ paddingLeft: 28, paddingRight: 28 }}
           />
           {!search && (
-            <kbd
-              style={{
-                position: 'absolute',
-                right: 8,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                fontSize: '0.7rem',
-                color: 'var(--ink-3)',
-                border: '1px solid var(--line)',
-                borderRadius: 3,
-                padding: '1px 4px',
-                pointerEvents: 'none',
-              }}
-              aria-hidden="true"
-            >
-              /
-            </kbd>
+            <kbd className="session-search-kbd" aria-hidden="true">/</kbd>
           )}
         </div>
       </div>
@@ -425,6 +494,12 @@ export function SessionList({ project, selectedId, onSelect }) {
                   active={w.id === selectedId}
                   checked={bulk.selected.has(w.id)}
                   onCheck={bulk.toggle}
+                  onRename={(id, title) => {
+                    setWorkflows((prev) => prev
+                      ? prev.map((wf) => wf.id === id ? { ...wf, title } : wf)
+                      : prev,
+                    );
+                  }}
                 />
               ))}
             </div>
@@ -445,9 +520,13 @@ export function SessionList({ project, selectedId, onSelect }) {
         <NewSessionDialog
           project={project}
           repos={repos}
-          onClose={() => setShowNewDialog(false)}
+          workspaces={workspaces}
+          onClose={() => { setShowNewDialog(false); setDialogInitialTicket(null); }}
+          initialTicket={dialogInitialTicket}
         />
       )}
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

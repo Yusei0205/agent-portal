@@ -17,6 +17,7 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, insert, run as dbRun, update } from './db.ts';
 import type { Row } from './db.ts';
 import { newId, now, badRequest, notFound, str, parseJson } from './util.ts';
+import { emit } from './events.ts';
 import { config } from './config.ts';
 import {
   DOC_TYPES,
@@ -25,6 +26,15 @@ import {
   composeDocPrompt,
   type DocType,
 } from './generated-doc-text.ts';
+import {
+  validateAttachmentIds,
+  stageAttachmentsToWorkDir,
+  buildAttachmentPromptBlock,
+  linkAttachmentsToParent,
+  deleteAttachmentsForParent,
+  getAttachmentsView,
+} from './ai-attachments.ts';
+import { createWorkDir } from './workflows/working-copies.ts';
 
 export { DOC_TYPES, DOC_TYPE_LABELS, DOC_LIMITS, type DocType };
 
@@ -63,6 +73,7 @@ function requireProjectAccess(
 }
 
 function docView(d: Row, version?: Row | null) {
+  const attIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
   return {
     id: d.id,
     project_id: d.project_id,
@@ -80,6 +91,7 @@ function docView(d: Row, version?: Row | null) {
     created_by: d.created_by ?? null,
     created_at: d.created_at,
     latest_version: version ? versionView(version) : null,
+    attachments: attIds.length > 0 ? getAttachmentsView(String(d.project_id), attIds) : [],
   };
 }
 
@@ -106,8 +118,16 @@ function latestVersion(docId: string): Row | null {
   return one<Row>('SELECT * FROM generated_doc_versions WHERE doc_id = ? ORDER BY version_num DESC LIMIT 1', docId) ?? null;
 }
 
-async function startDocRun(projectId: string, docId: string, goal: string, userId: string, leadAgent?: string | null, trustAllTools?: boolean): Promise<string> {
-  const workflowId = newId('w_');
+async function startDocRun(
+  projectId: string,
+  docId: string,
+  goal: string,
+  userId: string,
+  leadAgent?: string | null,
+  trustAllTools?: boolean,
+  preconfig?: { workflowId?: string; workDir?: string | null },
+): Promise<string> {
+  const workflowId = preconfig?.workflowId ?? newId('w_');
   const ts = now();
 
   insert('p6_workflows', {
@@ -123,10 +143,13 @@ async function startDocRun(projectId: string, docId: string, goal: string, userI
     repo_ids: '[]',
     iteration_count: 0,
     max_iterations: 1,
+    work_dir: preconfig?.workDir ?? null,
     created_by: userId,
     created_at: ts,
     updated_at: ts,
   });
+
+  emit(projectId, { type: 'workflow.created', workflowId });
 
   setTimeout(async () => {
     try {
@@ -242,6 +265,15 @@ export function registerGeneratedDocRoutes(): void {
     const audience = str((body.audience as string) ?? '', 'audience', { max: DOC_LIMITS.audienceChars, optional: true });
     const leadAgent = str((body.leadAgent as string) ?? '', 'leadAgent', { max: 200, optional: true }) || null;
     const trustAllTools = Boolean(body.trustAllTools);
+    const rawAttachmentIds = Array.isArray(body.attachmentIds) ? (body.attachmentIds as unknown[]).map(String) : [];
+
+    // Validate attachment IDs
+    let attachmentRows: Row[] = [];
+    if (rawAttachmentIds.length > 0) {
+      const { error, rows } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+      if (error) throw badRequest(error);
+      attachmentRows = rows!;
+    }
 
     // Check per-project limit
     const count = (one<{ n: number }>(
@@ -253,7 +285,7 @@ export function registerGeneratedDocRoutes(): void {
     }
 
     // Build the goal/prompt
-    const goal = composeDocPrompt({
+    let goal = composeDocPrompt({
       type: docType as DocType,
       title: name,
       audience: audience ?? '',
@@ -262,6 +294,17 @@ export function registerGeneratedDocRoutes(): void {
       decisions: false,
       diagrams: [],
     });
+
+    // Pre-stage attachment files if provided
+    let preWorkflowId: string | undefined;
+    let preWorkDir: string | null = null;
+    if (attachmentRows.length > 0) {
+      preWorkflowId = newId('w_');
+      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
+      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+      goal += buildAttachmentPromptBlock(staged);
+    }
 
     const id = newId('gd_');
     const ts = now();
@@ -279,6 +322,7 @@ export function registerGeneratedDocRoutes(): void {
       audience: audience || null,
       latest_version_id: null,
       stale: 0,
+      attachment_ids: JSON.stringify(rawAttachmentIds),
       created_by: req.user!.id,
       created_at: ts,
     });
@@ -290,7 +334,13 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       leadAgent,
       trustAllTools,
+      { workflowId: preWorkflowId, workDir: preWorkDir },
     );
+
+    // Link attachments to this document
+    if (rawAttachmentIds.length > 0) {
+      linkAttachmentsToParent(rawAttachmentIds, 'doc', id);
+    }
 
     const d = one<Row>('SELECT * FROM generated_docs WHERE id = ?', id)!;
     sendJson(res, 200, { doc: docView(d, null), workflowId });
@@ -312,6 +362,7 @@ export function registerGeneratedDocRoutes(): void {
     if (!project) return;
 
     const d = getDoc(req.params.docId, String(project.id));
+    deleteAttachmentsForParent('doc', String(d.id));
     dbRun('DELETE FROM generated_docs WHERE id = ?', String(d.id));
     sendJson(res, 200, { ok: true });
   });
@@ -322,8 +373,32 @@ export function registerGeneratedDocRoutes(): void {
     if (!project) return;
 
     const d = getDoc(req.params.docId, String(project.id));
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawAttachmentIds = Array.isArray(body.attachmentIds) ? (body.attachmentIds as unknown[]).map(String) : null;
 
-    const goal = composeDocPrompt({
+    // Determine effective attachment IDs
+    let effectiveAttachmentIds: string[];
+    if (rawAttachmentIds !== null) {
+      if (rawAttachmentIds.length > 0) {
+        const { error } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+        if (error) { sendJson(res, 400, { error }); return; }
+      }
+      // Replace old attachments
+      const oldIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
+      if (oldIds.length > 0) deleteAttachmentsForParent('doc', String(d.id));
+      effectiveAttachmentIds = rawAttachmentIds;
+      update('generated_docs', String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds) });
+    } else {
+      effectiveAttachmentIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
+    }
+
+    let attachmentRows: Row[] = [];
+    if (effectiveAttachmentIds.length > 0) {
+      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      attachmentRows = rows ?? [];
+    }
+
+    let goal = composeDocPrompt({
       type: String(d.doc_type) as DocType,
       title: String(d.name),
       audience: String(d.audience ?? ''),
@@ -333,6 +408,16 @@ export function registerGeneratedDocRoutes(): void {
       diagrams: [],
     });
 
+    let preWorkflowId: string | undefined;
+    let preWorkDir: string | null = null;
+    if (attachmentRows.length > 0) {
+      preWorkflowId = newId('w_');
+      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
+      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+      goal += buildAttachmentPromptBlock(staged);
+    }
+
     const workflowId = await startDocRun(
       String(project.id),
       String(d.id),
@@ -340,7 +425,12 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       d.lead_agent ? String(d.lead_agent) : null,
       Boolean(d.trust_all_tools),
+      { workflowId: preWorkflowId, workDir: preWorkDir },
     );
+
+    if (rawAttachmentIds !== null && rawAttachmentIds.length > 0) {
+      linkAttachmentsToParent(rawAttachmentIds, 'doc', String(d.id));
+    }
 
     sendJson(res, 200, { workflowId });
   });

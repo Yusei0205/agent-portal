@@ -69,7 +69,7 @@ describe('Repositories API', () => {
     assert.equal(repo.name, 'my-service');
     assert.equal(repo.url, 'https://github.com/example/my-service');
     assert.equal(repo.provider, 'github');
-    assert.equal(repo.status, 'new', 'initial status should be "new"');
+    assert.equal(repo.status, 'cloning', 'initial status should be "cloning" (clone starts immediately)');
     assert.equal(repo.project_id, projectId);
   });
 

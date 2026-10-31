@@ -4,6 +4,7 @@
  * Routes:
  *   GET    /api/projects/:id/repos                         — list repos
  *   POST   /api/projects/:id/repos                         — add repo
+ *   GET    /api/projects/:id/repos/progress                — lightweight progress poll
  *   GET    /api/projects/:id/repos/:repoId                 — get repo details
  *   DELETE /api/projects/:id/repos/:repoId                 — remove repo
  *   POST   /api/projects/:id/repos/:repoId/sync            — trigger clone/sync
@@ -14,12 +15,17 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, insert } from './db.ts';
-import { generateId, now, str, badRequest, notFound } from './util.ts';
+import { generateId, now, str, badRequest, notFound, parseJson } from './util.ts';
 import { config } from './config.ts';
+import { buildGitEnv } from './git-connections.ts';
+import { decrypt } from './secrets.ts';
+import { ProgressTracker, redactCredentials } from './git-progress.ts';
+import type { ProgressInfo } from './git-progress.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,10 +41,35 @@ export interface Repository {
   last_synced_at: string | null;
   last_error: string | null;
   created_at: string;
+  connection_id: string | null;
 }
 
 /** Alias used by diagram modules — same shape as Repository. */
 export type Repo = Repository;
+
+// ── In-memory progress state ──────────────────────────────────────────────────
+
+/**
+ * Active progress trackers, keyed by repo id.
+ * Populated when a sync starts; deleted ~2 s after it finishes.
+ */
+const repoProgress = new Map<string, ProgressTracker>();
+
+/**
+ * Repo ids whose sync is currently in-flight.
+ * Used to prevent concurrent syncs and to return 409.
+ */
+const syncInFlight = new Set<string>();
+
+/** @internal Exposed for tests only — do not mutate from outside tests. */
+export const _repoProgressForTest = repoProgress;
+/** @internal Exposed for tests only. */
+export const _syncInFlightForTest = syncInFlight;
+
+/** Attach the current progress snapshot (or null) to a repo row. */
+function withProgress(repo: Repository): Repository & { progress: ProgressInfo | null } {
+  return { ...repo, progress: repoProgress.get(repo.id)?.snapshot ?? null };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +122,9 @@ function spawnGit(args: string[], cwd: string, env?: Record<string, string>): Pr
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
     });
+    proc.unref();
+    proc.stdout.unref();
+    proc.stderr.unref();
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     proc.stdout.on('data', (d: Buffer) => out.push(d));
@@ -106,25 +140,223 @@ function spawnGit(args: string[], cwd: string, env?: Record<string, string>): Pr
   });
 }
 
+/**
+ * Like spawnGit but:
+ *   - Feeds stderr chunks to `onStderrChunk` for live progress parsing.
+ *   - Redacts credentials from error messages before rejecting.
+ */
+function spawnGitWithProgress(
+  args: string[],
+  cwd: string,
+  env?: Record<string, string>,
+  onStderrChunk?: (chunk: Buffer) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...env },
+    });
+    proc.unref();
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    proc.stdout.on('data', (d: Buffer) => out.push(d));
+    proc.stderr.on('data', (d: Buffer) => {
+      err.push(d);
+      onStderrChunk?.(d);
+    });
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve(Buffer.concat(out).toString('utf8').trim());
+      } else {
+        const raw = Buffer.concat(err).toString('utf8').trim() || `git exited with ${code}`;
+        reject(new Error(redactCredentials(raw)));
+      }
+    });
+    proc.on('error', reject);
+  });
+}
+
+// ── Git credential helpers ─────────────────────────────────────────────────────
+
+/**
+ * Generate a SigV4-derived username/password for CodeCommit HTTPS.
+ *
+ * Implements the exact algorithm from the AWS CLI codecommit credential helper
+ * (awscli/customizations/codecommit.py, CodeCommitGetCommand.sign_request).
+ *
+ * canonical_request = "GIT\n{repoPath}\n\nhost:{hostname}\n\nhost\n"
+ * string_to_sign    = "AWS4-HMAC-SHA256\n{timestamp}\n{scope}\n{sha256(canonical_request)}"
+ * password          = "{timestamp}Z{hex(HMAC-signing-key, string_to_sign)}"
+ * username          = accessKeyId [ "%" rawSessionToken ]   ← token is NOT percent-encoded
+ *
+ * The path signed is /v1/repos/<name> (trailing slash and .git stripped).
+ * CodeCommit validates the signature against the repo path regardless of the
+ * sub-path git requests (/info/refs, /git-upload-pack, …), so signing the
+ * repo root path is correct when we inject a static http.<host>.extraHeader.
+ *
+ * Region is parsed from the host rather than passed as a parameter so the
+ * credential exactly matches the endpoint git is talking to.
+ */
+export function _buildCodeCommitSigV4Password(
+  accessKeyId: string,
+  secretAccessKey: string,
+  sessionToken: string | undefined,
+  remoteUrl: string,
+  nowDate: Date = new Date(),
+): { username: string; password: string } {
+  let hostname: string;
+  let repoPath: string;
+  try {
+    const u = new URL(remoteUrl);
+    hostname = u.hostname;
+    repoPath = u.pathname.replace(/\.git$/, '').replace(/\/$/, '') || '/';
+  } catch {
+    throw new Error(`Invalid CodeCommit remote URL: ${remoteUrl}`);
+  }
+
+  const regionMatch = hostname.match(
+    /(vpce-.+\.)?git-codecommit(-fips)?\.([^.]+)\.(vpce\.)?amazonaws\.com/,
+  );
+  const region = regionMatch ? regionMatch[3] : 'us-east-1';
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const datestamp = `${nowDate.getUTCFullYear()}${pad(nowDate.getUTCMonth() + 1)}${pad(nowDate.getUTCDate())}`;
+  const timestamp = `${datestamp}T${pad(nowDate.getUTCHours())}${pad(nowDate.getUTCMinutes())}${pad(nowDate.getUTCSeconds())}`;
+
+  const canonicalRequest = `GIT\n${repoPath}\n\nhost:${hostname}\n\nhost\n`;
+  const canonicalHash = crypto.createHash('sha256').update(canonicalRequest, 'utf8').digest('hex');
+
+  const scope = `${datestamp}/${region}/codecommit/aws4_request`;
+  const stringToSign = `AWS4-HMAC-SHA256\n${timestamp}\n${scope}\n${canonicalHash}`;
+
+  const hmac = (key: Buffer | string, data: string): Buffer =>
+    crypto.createHmac('sha256', key).update(data, 'utf8').digest();
+
+  const kDate = hmac(Buffer.from('AWS4' + secretAccessKey, 'utf8'), datestamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, 'codecommit');
+  const kSigning = hmac(kService, 'aws4_request');
+  const signature = hmac(kSigning, stringToSign).toString('hex');
+
+  const username = sessionToken
+    ? `${accessKeyId}%${sessionToken}`
+    : accessKeyId;
+
+  return { username, password: `${timestamp}Z${signature}` };
+}
+
+/**
+ * Build a git credential environment using GIT_CONFIG_COUNT/GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n
+ * (git ≥ 2.31) to inject an http.extraHeader Authorization header.
+ *
+ * Keeps secrets out of argv, out of process substitution, and out of .git/config.
+ * Always adds GIT_TERMINAL_PROMPT=0 so a missing credential fails fast.
+ */
+async function getCloneEnv(repo: Repository): Promise<Record<string, string>> {
+  if (!repo.connection_id) return { GIT_TERMINAL_PROMPT: '0' };
+
+  interface ConnRow { provider: string; credentials_enc: string | null }
+  const conn = one<ConnRow>(
+    'SELECT provider, credentials_enc FROM git_connections_v2 WHERE id = ?',
+    repo.connection_id,
+  );
+  if (!conn?.credentials_enc) return { GIT_TERMINAL_PROMPT: '0' };
+
+  let creds: Record<string, string>;
+  try {
+    const plain = decrypt(conn.credentials_enc, config.secretKey);
+    creds = parseJson<Record<string, string>>(plain, {});
+  } catch {
+    return { GIT_TERMINAL_PROMPT: '0' };
+  }
+
+  if (conn.provider === 'codecommit') {
+    const mode = (creds.mode as 'keys' | 'aws-account' | 'portal-sso' | undefined) ?? 'keys';
+    const region = creds.region ?? 'us-east-1';
+
+    let accessKeyId: string | undefined;
+    let secretAccessKey: string | undefined;
+    let sessionToken: string | undefined;
+
+    if (mode === 'keys') {
+      accessKeyId = creds.accessKeyId;
+      secretAccessKey = creds.secretAccessKey;
+      sessionToken = creds.sessionToken;
+    } else if (mode === 'aws-account' && creds.awsAccountId) {
+      interface AccRow { credentials_enc: string | null; auth_method: string }
+      const acc = one<AccRow>(
+        'SELECT credentials_enc, auth_method FROM aws_accounts WHERE id = ? LIMIT 1',
+        creds.awsAccountId,
+      );
+      if (acc?.auth_method === 'keys' && acc.credentials_enc) {
+        const plain = decrypt(acc.credentials_enc, config.secretKey);
+        const c = parseJson<Record<string, string>>(plain, {});
+        accessKeyId = c.accessKeyId;
+        secretAccessKey = c.secretAccessKey;
+      }
+    } else if (mode === 'portal-sso') {
+      const { getBedrockSsoCredentials } = await import('./bedrock-sso.ts');
+      const sso = await getBedrockSsoCredentials();
+      accessKeyId = sso.accessKeyId;
+      secretAccessKey = sso.secretAccessKey;
+      sessionToken = sso.sessionToken;
+    }
+
+    if (!accessKeyId || !secretAccessKey) return { GIT_TERMINAL_PROMPT: '0' };
+
+    const { username, password } = _buildCodeCommitSigV4Password(
+      accessKeyId, secretAccessKey, sessionToken, repo.url,
+    );
+    return buildGitEnv({ username, password }, 'codecommit', repo.url);
+  }
+
+  // GitHub, Bitbucket, and generic git — buildGitEnv knows each provider's header format.
+  return buildGitEnv(creds, conn.provider, repo.url);
+}
+
+/** @internal Exposed for tests and diagnostic scripts — same as getCloneEnv. */
+export const _getCloneEnv = getCloneEnv;
+
 /** Background clone/sync operation. Updates status in the database. */
 async function performSync(repoId: string, projectId: string): Promise<void> {
+  // Prevent concurrent syncs of the same repo
+  if (syncInFlight.has(repoId)) return;
+  syncInFlight.add(repoId);
+
+  // Create a fresh progress tracker and register it before any await
+  const tracker = new ProgressTracker();
+  repoProgress.set(repoId, tracker);
+
   const repo = one<Repository>('SELECT * FROM repositories WHERE id = ? AND project_id = ?', repoId, projectId);
-  if (!repo) return;
+  if (!repo) {
+    syncInFlight.delete(repoId);
+    repoProgress.delete(repoId);
+    return;
+  }
 
   const slug = getProjectSlug(projectId);
-  if (!slug) return;
+  if (!slug) {
+    syncInFlight.delete(repoId);
+    repoProgress.delete(repoId);
+    return;
+  }
 
   const cloneDir = repoCloneDir(slug, repo.name);
+  const cloneEnv = await getCloneEnv(repo);
+  const onChunk = (chunk: Buffer) => tracker.feedChunk(chunk);
 
   try {
     if (fs.existsSync(path.join(cloneDir, '.git'))) {
-      // Already cloned — fetch
-      await spawnGit(['fetch', '--all', '--prune'], cloneDir);
+      // Already cloned — fetch with progress
+      await spawnGitWithProgress(['fetch', '--all', '--prune', '--progress'], cloneDir, cloneEnv, onChunk);
     } else {
-      // Fresh clone
+      // Fresh clone with progress
       await fsp.mkdir(path.dirname(cloneDir), { recursive: true });
-      await spawnGit(['clone', repo.url, cloneDir], path.dirname(cloneDir));
+      await spawnGitWithProgress(['clone', '--progress', repo.url, cloneDir], path.dirname(cloneDir), cloneEnv, onChunk);
     }
+
+    tracker.finalize();
 
     // Detect default branch
     let defaultBranch: string | null = repo.default_branch;
@@ -144,13 +376,30 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
       defaultBranch,
       repoId,
     );
+
+    // Keep progress visible at 100% briefly so pollers catch the finished state
+    setTimeout(() => {
+      repoProgress.delete(repoId);
+    }, 2000);
+
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const raw = e instanceof Error ? e.message : String(e);
+    // Enrich error with the phase context so users know where it failed
+    const snap = tracker.snapshot;
+    const phaseContext =
+      snap.phase !== 'connecting' && snap.phase !== 'finalizing'
+        ? `Failed while ${snap.phaseLabel.toLowerCase()} (${snap.phasePercent ?? '?'}%): `
+        : '';
+    const msg = `${phaseContext}${raw}`.slice(0, 1000);
+
     run(
       `UPDATE repositories SET status = 'error', last_error = ? WHERE id = ?`,
-      msg.slice(0, 1000),
+      msg,
       repoId,
     );
+    repoProgress.delete(repoId);
+  } finally {
+    syncInFlight.delete(repoId);
   }
 }
 
@@ -165,7 +414,7 @@ export function registerRepoRoutes(): void {
       'SELECT * FROM repositories WHERE project_id = ? ORDER BY created_at',
       req.params.id,
     );
-    sendJson(res, 200, { repos });
+    sendJson(res, 200, { repos: repos.map(withProgress) });
   });
 
   // POST /api/projects/:id/repos
@@ -183,6 +432,8 @@ export function registerRepoRoutes(): void {
     }
     if (!url) { sendJson(res, 400, { error: 'url is required' }); return; }
 
+    const connectionId = typeof body.connectionId === 'string' ? body.connectionId.trim() : null;
+
     const id = generateId();
     const ts = now();
 
@@ -192,16 +443,42 @@ export function registerRepoRoutes(): void {
       name,
       url,
       provider,
-      status: 'new',
-      default_branch: null,
+      status: 'cloning',
+      default_branch: typeof body.defaultBranch === 'string' ? body.defaultBranch.trim() : null,
       identity: null,
       last_synced_at: null,
       last_error: null,
       created_at: ts,
+      connection_id: connectionId,
     });
 
     const repo = one<Repository>('SELECT * FROM repositories WHERE id = ?', id);
-    sendJson(res, 201, { repo });
+
+    // Start background clone immediately
+    performSync(id, req.params.id).catch((e: unknown) => {
+      console.error(`[repos] initial sync error for ${id}:`, e);
+    });
+
+    sendJson(res, 201, { repo: repo ? withProgress(repo) : repo });
+  });
+
+  // GET /api/projects/:id/repos/progress
+  // Lightweight polling endpoint — returns only id, status, progress, lastError
+  // for every repo in the project. Must be registered before /:repoId so the
+  // literal segment "progress" is not captured as a repoId.
+  router.get('/api/projects/:id/repos/progress', (req: PortalRequest, res: PortalResponse): void => {
+    if (!requireProjectAccess(req, res, req.params.id)) return;
+    const repos = all<Repository>(
+      'SELECT * FROM repositories WHERE project_id = ? ORDER BY created_at',
+      req.params.id,
+    );
+    const result = repos.map((r) => ({
+      id: r.id,
+      status: r.status,
+      progress: repoProgress.get(r.id)?.snapshot ?? null,
+      lastError: r.last_error,
+    }));
+    sendJson(res, 200, { repos: result });
   });
 
   // GET /api/projects/:id/repos/:repoId
@@ -215,7 +492,7 @@ export function registerRepoRoutes(): void {
     );
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
-    sendJson(res, 200, { repo });
+    sendJson(res, 200, { repo: withProgress(repo) });
   });
 
   // DELETE /api/projects/:id/repos/:repoId
@@ -243,9 +520,22 @@ export function registerRepoRoutes(): void {
     );
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
-    // Set status to cloning immediately
+    // Reject concurrent syncs rather than silently dropping them
+    if (syncInFlight.has(repo.id)) {
+      sendJson(res, 409, { error: 'A sync is already in progress for this repository', status: repo.status });
+      return;
+    }
+
+    // Use 'syncing' for re-fetches so the UI can distinguish from the initial clone
+    const slug = getProjectSlug(req.params.id);
+    const isReclone = slug
+      ? fs.existsSync(path.join(repoCloneDir(slug, repo.name), '.git'))
+      : false;
+    const nextStatus = isReclone ? 'syncing' : 'cloning';
+
     run(
-      `UPDATE repositories SET status = 'cloning', last_error = NULL WHERE id = ?`,
+      `UPDATE repositories SET status = ?, last_error = NULL WHERE id = ?`,
+      nextStatus,
       repo.id,
     );
 
@@ -254,7 +544,7 @@ export function registerRepoRoutes(): void {
       console.error(`[repos] sync error for ${repo.id}:`, e);
     });
 
-    sendJson(res, 202, { ok: true, status: 'cloning' });
+    sendJson(res, 202, { ok: true, status: nextStatus });
   });
 
   // GET /api/projects/:id/repos/:repoId/branches
@@ -311,5 +601,92 @@ export function registerRepoRoutes(): void {
     );
 
     sendJson(res, 200, { ok: true });
+  });
+
+  // POST /api/projects/:id/repos/bulk
+  // Bulk-add repos from a connection, skipping duplicates (by URL).
+  router.post('/api/projects/:id/repos/bulk', (req: PortalRequest, res: PortalResponse): void => {
+    if (!requireProjectAccess(req, res, req.params.id)) return;
+
+    const body = req.body as Record<string, unknown>;
+    const connectionId = typeof body.connectionId === 'string' ? body.connectionId.trim() : '';
+    if (!connectionId) { sendJson(res, 400, { error: 'connectionId is required' }); return; }
+
+    const repoList = Array.isArray(body.repos) ? body.repos as Array<Record<string, unknown>> : [];
+    if (repoList.length === 0) { sendJson(res, 400, { error: 'repos array is required and must not be empty' }); return; }
+    if (repoList.length > 100) { sendJson(res, 400, { error: 'Cannot bulk-add more than 100 repos at once' }); return; }
+
+    // Verify connection exists and is accessible
+    interface ConnRow { provider: string; scope: string; owner_id: string | null }
+    const conn = one<ConnRow>(
+      'SELECT provider, scope, owner_id FROM git_connections_v2 WHERE id = ?',
+      connectionId,
+    );
+    if (!conn) { sendJson(res, 404, { error: 'Connection not found' }); return; }
+
+    // Access check: personal connections only usable by their owner
+    if (conn.scope === 'personal' && !req.user!.is_admin && conn.owner_id !== req.user!.id) {
+      sendJson(res, 403, { error: 'You do not have access to this connection' });
+      return;
+    }
+
+    // Collect existing URLs in this project to detect duplicates
+    const existing = all<{ url: string }>('SELECT url FROM repositories WHERE project_id = ?', req.params.id);
+    const existingUrls = new Set(existing.map((r) => r.url.toLowerCase()));
+
+    const added: Array<Record<string, unknown>> = [];
+    const skipped: Array<{ url: string; reason: string }> = [];
+    const errors: Array<{ url: string; error: string }> = [];
+    const ts = now();
+
+    for (const repoInput of repoList) {
+      const url = typeof repoInput.url === 'string' ? repoInput.url.trim() : '';
+      if (!url) { errors.push({ url: '', error: 'url is required' }); continue; }
+
+      if (existingUrls.has(url.toLowerCase())) {
+        skipped.push({ url, reason: 'already in project' });
+        continue;
+      }
+
+      try {
+        let name = typeof repoInput.name === 'string' ? repoInput.name.trim() : '';
+        if (!name) {
+          // derive name from URL
+          const urlObj = new URL(url);
+          name = urlObj.pathname.replace(/\.git$/, '').split('/').filter(Boolean).pop() ?? 'repo';
+        }
+        const defaultBranch = typeof repoInput.defaultBranch === 'string' ? repoInput.defaultBranch.trim() : null;
+
+        const id = generateId();
+        insert('repositories', {
+          id,
+          project_id: req.params.id,
+          name: name.slice(0, 120),
+          url,
+          provider: conn.provider,
+          status: 'cloning',
+          default_branch: defaultBranch,
+          identity: null,
+          last_synced_at: null,
+          last_error: null,
+          created_at: ts,
+          connection_id: connectionId,
+        });
+        existingUrls.add(url.toLowerCase());
+
+        const repo = one<Repository>('SELECT * FROM repositories WHERE id = ?', id);
+        if (repo) {
+          added.push(withProgress(repo) as unknown as Record<string, unknown>);
+          // Kick off background clone immediately
+          performSync(id, req.params.id).catch((e: unknown) => {
+            console.error(`[repos] bulk sync error for ${id}:`, e);
+          });
+        }
+      } catch (e: unknown) {
+        errors.push({ url, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    sendJson(res, 200, { added, skipped, errors });
   });
 }

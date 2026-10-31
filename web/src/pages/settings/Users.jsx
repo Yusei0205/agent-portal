@@ -116,16 +116,16 @@ function UserRow({ user, onToggleDisabled, onToggleAdmin }) {
       <td>{user.email}</td>
       <td>
         {user.is_admin ? (
-          <span className="badge badge-blue">Admin</span>
+          <span className="badge badge-info">Admin</span>
         ) : (
-          <span className="badge badge-gray">Member</span>
+          <span className="badge badge-neutral">Member</span>
         )}
       </td>
       <td>
         {user.disabled ? (
-          <span className="badge badge-red">Disabled</span>
+          <span className="badge badge-danger">Disabled</span>
         ) : (
-          <span className="badge badge-green">Active</span>
+          <span className="badge badge-ok">Active</span>
         )}
       </td>
       <td className="muted small">{lastActive}</td>

@@ -1,0 +1,1350 @@
+/**
+ * Per-user engine credentials (F4).
+ *
+ * Engines: kiro (api_key | identity_center), claude-code (api_key | subscription_token | bedrock_role).
+ * Secrets are encrypted at rest with server/secrets.ts (AES-256-GCM).
+ *
+ * All routes are browser-only — requests with an Authorization: Bearer header receive 403.
+ *
+ * resolveCredentialEnv() is the public API used by agent engines to obtain run env vars.
+ * Priority: specified credentialId → user's default → portal/project provider.
+ */
+
+import { router, sendJson } from './http.ts';
+import type { PortalRequest, PortalResponse } from './http.ts';
+import { one, all, run as dbRun, insert, getDb, update } from './db.ts';
+import type { Row } from './db.ts';
+import { encrypt, decrypt } from './secrets.ts';
+import { getAgentEnv } from './settings.ts';
+import { config } from './config.ts';
+import { generateId, now, str, badRequest, HttpError } from './util.ts';
+import { appendAudit } from './audit.ts';
+import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
+import type { FetchProfilesResult } from './kiro-idc.ts';
+import type { DatabaseSync } from 'node:sqlite';
+
+// Re-export the profiles fetcher override so tests can mock the API.
+export { setProfilesFetcherOverride };
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type Engine = 'kiro' | 'claude-code';
+export type KiroMode = 'api_key' | 'identity_center';
+export type ClaudeCodeMode = 'api_key' | 'subscription_token' | 'bedrock_role';
+export type CredentialMode = KiroMode | ClaudeCodeMode;
+
+interface CredentialRow extends Row {
+  id: string;
+  user_id: string;
+  engine: string;
+  name: string;
+  mode: string;
+  secret_enc: string | null;
+  extra_config: string;
+  is_default: number;
+  last4: string;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
+  updated_by_name?: string | null;
+}
+
+// ── OIDC client abstraction (injectable for tests) ─────────────────────────────
+
+export interface OIDCClientLike {
+  registerClient(input: {
+    clientName: string;
+    clientType: string;
+    scopes?: string[];
+    grantTypes?: string[];
+  }): Promise<{ clientId: string; clientSecret: string; clientSecretExpiresAt?: number }>;
+  startDeviceAuthorization(input: {
+    clientId: string;
+    clientSecret: string;
+    startUrl: string;
+  }): Promise<{
+    deviceCode: string;
+    userCode: string;
+    verificationUri: string;
+    verificationUriComplete?: string;
+    expiresIn: number;
+    interval: number;
+  }>;
+  createToken(input: {
+    clientId: string;
+    clientSecret: string;
+    deviceCode: string;
+    grantType: string;
+    refreshToken?: string;
+  }): Promise<{ accessToken: string; expiresIn?: number; refreshToken?: string }>;
+}
+
+let _oidcClientFactory: ((region: string) => OIDCClientLike) | null = null;
+
+/** Override the OIDC client factory (call with null to restore real SDK). */
+export function setOIDCClientFactory(fn: ((region: string) => OIDCClientLike) | null): void {
+  _oidcClientFactory = fn;
+}
+
+async function makeOIDCClient(region: string): Promise<OIDCClientLike> {
+  if (_oidcClientFactory) return _oidcClientFactory(region);
+
+  type SSOOIDCModule = {
+    SSOOIDCClient: new (opts: object) => { send(cmd: object): Promise<unknown> };
+    RegisterClientCommand: new (input: object) => object;
+    StartDeviceAuthorizationCommand: new (input: object) => object;
+    CreateTokenCommand: new (input: object) => object;
+  };
+
+  const mod = await (Function('m', 'return import(m)')('@aws-sdk/client-sso-oidc') as Promise<SSOOIDCModule>);
+  const client = new mod.SSOOIDCClient({ region });
+
+  return {
+    registerClient: (input) =>
+      client.send(new mod.RegisterClientCommand(input)) as Promise<{
+        clientId: string; clientSecret: string; clientSecretExpiresAt?: number;
+      }>,
+    startDeviceAuthorization: (input) =>
+      client.send(new mod.StartDeviceAuthorizationCommand(input)) as Promise<{
+        deviceCode: string; userCode: string; verificationUri: string;
+        verificationUriComplete?: string; expiresIn: number; interval: number;
+      }>,
+    createToken: (input) =>
+      client.send(new mod.CreateTokenCommand(input)) as Promise<{ accessToken: string; expiresIn?: number; refreshToken?: string }>,
+  };
+}
+
+/**
+ * Returns true if an AWS SDK error matches any of the given name or message patterns.
+ * Checks `e.name` first (SDK v3 sets the exception class name there), then falls back
+ * to `e.message` for wire-level codes like `authorization_pending`.
+ */
+function matchSdkError(e: unknown, ...patterns: string[]): boolean {
+  const err = e as { name?: string; message?: string } | null;
+  const errName = String(err?.name ?? '');
+  const errMsg = String(err?.message ?? '');
+  return patterns.some((p) => errName === p || errMsg.includes(p));
+}
+
+// ── Bedrock role assumption ────────────────────────────────────────────────────
+
+interface TempCreds {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+}
+
+async function assumeRole(roleArn: string, region: string, externalId?: string): Promise<TempCreds> {
+  type CredProvidersModule = {
+    fromTemporaryCredentials: (opts: {
+      params: { RoleArn: string; RoleSessionName: string; ExternalId?: string };
+      clientConfig?: { region: string };
+    }) => () => Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken?: string }>;
+  };
+
+  const mod = await (Function('m', 'return import(m)')('@aws-sdk/credential-providers') as Promise<CredProvidersModule>);
+  const provider = mod.fromTemporaryCredentials({
+    params: {
+      RoleArn: roleArn,
+      RoleSessionName: `portal-run-${Date.now()}`,
+      ...(externalId ? { ExternalId: externalId } : {}),
+    },
+    clientConfig: { region },
+  });
+  const c = await provider();
+  return {
+    accessKeyId: c.accessKeyId,
+    secretAccessKey: c.secretAccessKey,
+    sessionToken: c.sessionToken ?? '',
+  };
+}
+
+// ── View helper ───────────────────────────────────────────────────────────────
+
+type CredentialStatus = 'ok' | 'expiring' | 'expired' | 'needs_sign_in' | 'pending';
+
+/**
+ * Compute the status and canRefresh flag for a credential row.
+ * For non-identity_center credentials: status='ok', canRefresh=false.
+ * For identity_center: computed from tokenExpiry, refreshTokenEnc, and clientSecretExpiresAt.
+ */
+function computeIdcStatus(row: CredentialRow): { status: CredentialStatus; canRefresh: boolean } {
+  if (String(row.mode) !== 'identity_center') {
+    return { status: 'ok', canRefresh: false };
+  }
+  const extra = safeJson(row.extra_config);
+
+  // Pending: device-code flow not yet complete (no access token stored)
+  if (!row.secret_enc) {
+    return { status: 'pending', canRefresh: false };
+  }
+
+  // Old credential without clientId (created with outdated scopes)
+  if (!extra.clientId) {
+    return { status: 'needs_sign_in', canRefresh: false };
+  }
+
+  const tokenExpiryMs = extra.tokenExpiry ? new Date(String(extra.tokenExpiry)).getTime() : 0;
+  const nowMs = Date.now();
+  const FIVE_MIN_MS = 5 * 60 * 1000;
+
+  const hasRefreshToken = Boolean(extra.refreshTokenEnc);
+  // clientSecretExpiresAt is Unix epoch seconds; 0 means no expiry recorded
+  const clientSecretExpiresAt = Number(extra.clientSecretExpiresAt ?? 0);
+  const clientRegValid = clientSecretExpiresAt === 0 || clientSecretExpiresAt * 1000 > nowMs;
+  const canRefresh = hasRefreshToken && clientRegValid;
+
+  if (!tokenExpiryMs || tokenExpiryMs <= nowMs) {
+    return { status: canRefresh ? 'expired' : 'needs_sign_in', canRefresh };
+  }
+  if (tokenExpiryMs <= nowMs + FIVE_MIN_MS) {
+    return { status: 'expiring', canRefresh };
+  }
+  return { status: 'ok', canRefresh };
+}
+
+function credView(row: CredentialRow) {
+  const rawConfig = safeJson(row.extra_config) as Record<string, unknown>;
+  // Strip pending device-code fields from the response
+  const {
+    pendingClientId: _1, pendingClientSecret: _2,
+    pendingDeviceCode: _3, pendingExpireAt: _4,
+    pendingClientSecretExpiresAt: _5,
+    refreshTokenEnc: _6, clientSecretEnc: _7,
+    availableProfiles: _av,
+    selectedProfileArn: _spa,
+    selectedProfileName: _spn,
+    profileFetchError: _pfe,
+    ...publicConfig
+  } = rawConfig;
+  void _1; void _2; void _3; void _4; void _5; void _6; void _7;
+
+  const { status, canRefresh } = computeIdcStatus(row);
+
+  // Expose profile info to the frontend (for profile picker)
+  const selectedProfile = _spa
+    ? { arn: String(_spa), profileName: String(_spn ?? '') }
+    : null;
+  const profiles = Array.isArray(_av)
+    ? (_av as Array<{ arn: string; profileName: string }>).map((p) => ({
+        arn: String(p.arn ?? ''),
+        profileName: String(p.profileName ?? ''),
+      }))
+    : null;
+
+  return {
+    id: String(row.id),
+    engine: String(row.engine),
+    name: String(row.name),
+    mode: String(row.mode),
+    isDefault: Boolean(row.is_default),
+    last4: String(row.last4 ?? ''),
+    updatedAt: String(row.updated_at),
+    updatedBy: row.updated_by_name ? String(row.updated_by_name) : null,
+    config: publicConfig,
+    status,
+    canRefresh,
+    ...(selectedProfile ? { selectedProfile } : {}),
+    ...(profiles ? { profiles } : {}),
+  };
+}
+
+function safeJson(s: string | null | undefined): Record<string, unknown> {
+  if (!s) return {};
+  try { return JSON.parse(String(s)) as Record<string, unknown>; } catch { return {}; }
+}
+
+// ── Kiro profile management ───────────────────────────────────────────────────
+
+/**
+ * Fetch available Kiro profiles using the stored access token and store the
+ * result in the credential's extra_config.
+ *
+ * - Exactly one profile → auto-select it.
+ * - Multiple profiles   → store all; auto-select the first.
+ * - No profiles         → record a fetch error; caller must surface this.
+ * - Fetch error         → record the sanitised reason in profileFetchError.
+ *
+ * Non-fatal: catches all errors internally, stores a profileFetchError on
+ * failure so the credential's status shows `needs_sign_in`.
+ * Never logs token values.
+ */
+async function fetchAndStoreProfile(credId: string, accessToken: string, region: string): Promise<void> {
+  try {
+    const result: FetchProfilesResult = await fetchKiroProfiles(accessToken, region);
+    const cred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', credId);
+    if (!cred) return;
+    const extra = safeJson(cred.extra_config);
+
+    if (!result.ok) {
+      const newExtra: Record<string, unknown> = {
+        ...extra,
+        profileFetchError: `Profile lookup failed: ${result.reason}`,
+      };
+      delete newExtra.selectedProfileArn;
+      delete newExtra.selectedProfileName;
+      delete newExtra.availableProfiles;
+      dbRun(
+        'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
+        JSON.stringify(newExtra), now(), credId,
+      );
+      return;
+    }
+
+    if (result.profiles.length === 0) {
+      const newExtra: Record<string, unknown> = {
+        ...extra,
+        profileFetchError: 'No Kiro profiles found for this account. Ensure a Kiro profile is assigned in IAM Identity Center.',
+      };
+      delete newExtra.selectedProfileArn;
+      delete newExtra.selectedProfileName;
+      delete newExtra.availableProfiles;
+      dbRun(
+        'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
+        JSON.stringify(newExtra), now(), credId,
+      );
+      return;
+    }
+
+    const selected = result.profiles[0];
+    const newExtra: Record<string, unknown> = {
+      ...extra,
+      selectedProfileArn: selected.arn,
+      selectedProfileName: selected.profileName,
+    };
+    delete newExtra.profileFetchError;
+    if (result.profiles.length > 1) {
+      newExtra.availableProfiles = result.profiles;
+    } else {
+      delete newExtra.availableProfiles;
+    }
+
+    dbRun(
+      'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
+      JSON.stringify(newExtra), now(), credId,
+    );
+  } catch {
+    // Non-fatal: best-effort; user can re-authenticate to retry
+  }
+}
+
+/**
+ * Ensure the credential has a Kiro profile stored; fetch it lazily if not.
+ *
+ * Called in the same place as autoRefreshIdcIfNeeded, before a run or model
+ * listing.  Throws HttpError(400) with a user-actionable message if the
+ * profile cannot be obtained.  The message includes the actual failure reason
+ * from profileFetchError, and recommends "Sign in again" only when that can
+ * actually help (HTTP 4xx auth errors).
+ *
+ * Exported so models.ts can call it before listing models.
+ */
+export async function ensureKiroProfileFetched(credId: string): Promise<void> {
+  const cred = one<CredentialRow>(
+    'SELECT * FROM engine_credentials WHERE id = ? AND mode = ?',
+    credId, 'identity_center',
+  );
+  if (!cred || !cred.secret_enc) return;
+
+  const extra = safeJson(cred.extra_config);
+  if (extra.selectedProfileArn) return; // Already have a profile
+
+  // Try to fetch the profile now
+  let accessToken: string;
+  try { accessToken = decrypt(String(cred.secret_enc), config.secretKey); } catch { return; }
+  if (!accessToken) return;
+
+  const region = String(extra.region ?? 'us-east-1');
+  await fetchAndStoreProfile(credId, accessToken, region);
+
+  // Re-read to check result
+  const updatedCred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', credId);
+  const updatedExtra = safeJson(updatedCred?.extra_config);
+  if (!updatedExtra.selectedProfileArn) {
+    const fetchErr = updatedExtra.profileFetchError ? String(updatedExtra.profileFetchError) : '';
+
+    if (!fetchErr) {
+      // Unexpected — profile was not fetched and no error was recorded
+      throw new HttpError(
+        400,
+        'Kiro profile not found. Open Credentials and click Sign in again.',
+      );
+    }
+
+    // HTTP 4xx auth/client errors: re-signing-in may produce a fresh token that works
+    const isAuthError = /HTTP 40[0-9]/.test(fetchErr);
+    const action = isAuthError
+      ? 'Open Credentials and click Sign in again.'
+      : 'Check your network connectivity or contact your IAM Identity Center administrator.';
+
+    throw new HttpError(400, `Kiro profile lookup failed: ${fetchErr} — ${action}`);
+  }
+}
+
+// ── IDC token refresh ─────────────────────────────────────────────────────────
+
+type RefreshResult = { ok: true } | { ok: false; message: string };
+
+/** Per-credential in-flight refresh promises — prevents concurrent OIDC calls for the same credential. */
+const _refreshPromises = new Map<string, Promise<RefreshResult>>();
+
+const IDC_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Attempt to refresh an identity_center credential's access token using the
+ * stored refresh token and client registration.
+ * Returns { ok: true } on success (DB updated); { ok: false, message } on any failure.
+ * Never logs token values.
+ */
+async function attemptTokenRefresh(cred: CredentialRow): Promise<RefreshResult> {
+  const extra = safeJson(cred.extra_config);
+
+  const clientId = String(extra.clientId ?? '');
+  const clientSecretExpiresAt = Number(extra.clientSecretExpiresAt ?? 0);
+
+  if (!extra.refreshTokenEnc || !clientId || !extra.clientSecretEnc) {
+    return { ok: false, message: "Your sign-in can't be renewed. Sign in again." };
+  }
+  // Client registration expired (epoch seconds; 0 means no expiry recorded)
+  if (clientSecretExpiresAt > 0 && clientSecretExpiresAt * 1000 < Date.now()) {
+    return { ok: false, message: "Your sign-in can't be renewed. Sign in again." };
+  }
+
+  let clientSecret: string;
+  let refreshToken: string;
+  try {
+    clientSecret = decrypt(String(extra.clientSecretEnc), config.secretKey);
+    refreshToken = decrypt(String(extra.refreshTokenEnc), config.secretKey);
+  } catch {
+    return { ok: false, message: "Your sign-in can't be renewed. Sign in again." };
+  }
+
+  const region = String(extra.region ?? 'us-east-1');
+  try {
+    const oidc = await makeOIDCClient(region);
+    const result = await oidc.createToken({
+      clientId,
+      clientSecret,
+      deviceCode: '',
+      grantType: 'refresh_token',
+      refreshToken,
+    });
+
+    const tokenEnc = encrypt(result.accessToken, config.secretKey);
+    const tokenExpiry = result.expiresIn
+      ? new Date(Date.now() + result.expiresIn * 1000).toISOString()
+      : new Date(Date.now() + 28_800_000).toISOString();
+
+    const newExtra: Record<string, unknown> = { ...extra, tokenExpiry };
+    if (result.refreshToken) {
+      newExtra.refreshTokenEnc = encrypt(result.refreshToken, config.secretKey);
+    }
+    // Clear any stale pending fields
+    delete newExtra.pendingClientId;
+    delete newExtra.pendingClientSecret;
+    delete newExtra.pendingDeviceCode;
+    delete newExtra.pendingExpireAt;
+    delete newExtra.pendingClientSecretExpiresAt;
+
+    dbRun(
+      'UPDATE engine_credentials SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ? WHERE id = ?',
+      tokenEnc,
+      JSON.stringify(newExtra),
+      result.accessToken.slice(-4),
+      now(),
+      String(cred.id),
+    );
+    return { ok: true };
+  } catch {
+    return { ok: false, message: "Your sign-in can't be renewed. Sign in again." };
+  }
+}
+
+/**
+ * If the stored access token is expired or expires within 5 minutes, attempt to
+ * refresh it using the stored refresh token.  Deduplicates concurrent refresh
+ * calls for the same credential (only one OIDC round-trip per credential at a time).
+ *
+ * Throws HttpError(400) with "Kiro sign-in expired…" if refresh fails.
+ * Returns immediately when no refresh token is stored or the token is still valid.
+ *
+ * Exported so models.ts can call it before listing models.
+ */
+export async function autoRefreshIdcIfNeeded(credId: string): Promise<void> {
+  const cred = one<CredentialRow>(
+    'SELECT * FROM engine_credentials WHERE id = ? AND mode = ?',
+    credId, 'identity_center',
+  );
+  if (!cred || !cred.secret_enc) return;
+
+  const extra = safeJson(cred.extra_config);
+  if (!extra.refreshTokenEnc) return; // No refresh token; proceed with existing token
+
+  const tokenExpiryMs = extra.tokenExpiry ? new Date(String(extra.tokenExpiry)).getTime() : 0;
+  if (tokenExpiryMs > Date.now() + IDC_EXPIRY_BUFFER_MS) return; // Still valid
+
+  // Deduplicate: if a refresh is already in flight for this credential, await it
+  let promise = _refreshPromises.get(credId);
+  if (!promise) {
+    promise = attemptTokenRefresh(cred).finally(() => {
+      _refreshPromises.delete(credId);
+    });
+    _refreshPromises.set(credId, promise);
+  }
+
+  const result = await promise;
+  if (!result.ok) {
+    throw new HttpError(400, 'Kiro sign-in expired. Open Credentials and click Sign in again.');
+  }
+}
+
+// ── Browser-only guard ────────────────────────────────────────────────────────
+
+/**
+ * Returns true when the request is from a browser session (cookie auth).
+ * Sends 403 for API-token requests, 401 for unauthenticated requests.
+ */
+function requireBrowser(req: PortalRequest, res: PortalResponse): boolean {
+  const authHeader = String(req.headers.authorization ?? '');
+  if (authHeader.startsWith('Bearer ')) {
+    sendJson(res, 403, {
+      error: 'Credentials can only be managed from a signed-in browser, not via API tokens',
+    });
+    return false;
+  }
+  if (!req.user) {
+    sendJson(res, 401, { error: 'Sign in to continue' });
+    return false;
+  }
+  return true;
+}
+
+// ── Ownership check ───────────────────────────────────────────────────────────
+
+function requireOwned(
+  res: PortalResponse,
+  credId: string,
+  userId: string,
+): CredentialRow | null {
+  const cred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', credId);
+  if (!cred || String(cred.user_id) !== userId) {
+    sendJson(res, 404, { error: 'Credential not found' });
+    return null;
+  }
+  return cred;
+}
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+const VALID_MODES: Record<Engine, CredentialMode[]> = {
+  kiro: ['api_key', 'identity_center'],
+  'claude-code': ['api_key', 'subscription_token', 'bedrock_role'],
+};
+
+function validateMode(engine: Engine, mode: string): CredentialMode {
+  const modes = VALID_MODES[engine];
+  if (!modes || !modes.includes(mode as CredentialMode)) {
+    throw badRequest(`Invalid mode "${mode}" for engine "${engine}". Valid: ${modes?.join(', ')}`);
+  }
+  return mode as CredentialMode;
+}
+
+// ── resolveCredentialEnv (public API for engines) ─────────────────────────────
+
+/**
+ * Build the process-environment additions for an agent run.
+ *
+ * Priority:
+ *   1. credentialId row (must be owned by credentialOwnerId)
+ *   2. credentialOwnerId's default credential for the engine
+ *   3. Portal/project provider (getAgentEnv fallback)
+ *
+ * Secrets NEVER enter logs, events or transcripts — they live only in the
+ * returned object which is merged into the child process's env.
+ */
+export async function resolveCredentialEnv(
+  engine: 'kiro' | 'claude-code',
+  credentialOwnerId: string | null,
+  credentialId: string | null,
+  db?: DatabaseSync,
+): Promise<Record<string, string>> {
+  const _db = db ?? getDb();
+
+  let cred: CredentialRow | undefined;
+
+  if (credentialId && credentialOwnerId) {
+    cred = one<CredentialRow>(
+      'SELECT * FROM engine_credentials WHERE id = ? AND user_id = ? AND engine = ?',
+      credentialId, credentialOwnerId, engine,
+    );
+  }
+
+  if (!cred && credentialOwnerId) {
+    cred = one<CredentialRow>(
+      'SELECT * FROM engine_credentials WHERE user_id = ? AND engine = ? AND is_default = 1',
+      credentialOwnerId, engine,
+    );
+  }
+
+  if (!cred) {
+    return await getAgentEnv(_db);
+  }
+
+  return buildEnvFromCred(cred);
+}
+
+/**
+ * Sentinel env-var keys used to pass IDC token and registration data from
+ * credentials.ts to kiro.ts / models.ts.
+ * These are stripped from the child process environment before spawning — they are
+ * never visible in logs or to the engine process itself.
+ */
+export const IDC_TOKEN_KEY = '_PORTAL_IDC_TOKEN';
+export const IDC_REGION_KEY = '_PORTAL_IDC_REGION';
+export const IDC_EXPIRY_KEY = '_PORTAL_IDC_EXPIRY';
+export const IDC_START_URL_KEY = '_PORTAL_IDC_START_URL';
+export const IDC_REFRESH_TOKEN_KEY = '_PORTAL_IDC_REFRESH_TOKEN';
+export const IDC_CLIENT_ID_KEY = '_PORTAL_IDC_CLIENT_ID';
+export const IDC_CLIENT_SECRET_KEY = '_PORTAL_IDC_CLIENT_SECRET';
+export const IDC_CLIENT_SECRET_EXPIRES_AT_KEY = '_PORTAL_IDC_CLIENT_SECRET_EXPIRES_AT';
+
+/** Sentinel env-var key for the user's selected Kiro profile ARN. */
+export const IDC_PROFILE_ARN_KEY = '_PORTAL_IDC_PROFILE_ARN';
+/** Sentinel env-var key for the user's selected Kiro profile name. */
+export const IDC_PROFILE_NAME_KEY = '_PORTAL_IDC_PROFILE_NAME';
+
+/**
+ * Build env vars for an agent run from a specific credential row.
+ *
+ * Throws a clear, secret-free HttpError on ANY failure (missing secret, decrypt
+ * error, failed role assumption).  The caller (resolveCredentialEnv) only falls
+ * back to the portal provider when NO credential row exists for the user; once a
+ * credential is found we must never silently bill the portal provider instead.
+ */
+async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, string>> {
+  const mode = String(cred.mode);
+  const extra = safeJson(cred.extra_config);
+  const label = `"${String(cred.name)}" (${String(cred.engine)}/${mode})`;
+
+  if (String(cred.engine) === 'kiro') {
+    if (mode === 'api_key') {
+      if (!cred.secret_enc) {
+        throw new HttpError(400, `Kiro credential ${label} has no API key stored. Update it in Credentials.`);
+      }
+      let val: string;
+      try { val = decrypt(String(cred.secret_enc), config.secretKey); }
+      catch { throw new HttpError(500, `Could not decrypt Kiro credential ${label}.`); }
+      if (!val) throw new HttpError(400, `Kiro credential ${label} decrypted to an empty value.`);
+      return { KIRO_API_KEY: val };
+    }
+
+    if (mode === 'identity_center') {
+      // IDC access tokens must be delivered via the materialised home dir
+      // (~/.aws/sso/cache/device-sso-lsp-token.json) — not as KIRO_API_KEY.
+      // kiro.ts reads the sentinel keys, writes the cache file, then removes them.
+      if (!cred.secret_enc) {
+        throw new HttpError(400, `Kiro Identity Center credential ${label} has no token yet. Complete the device-code sign-in flow first.`);
+      }
+
+      // Detect credentials created with old scopes (sso:account:access).
+      // These lack clientId in extra_config after sign-in completed.
+      if (!extra.clientId) {
+        throw new HttpError(400,
+          `Kiro Identity Center credential ${label} was created with outdated authentication scopes. ` +
+          `Use Sign in again in Credentials to re-authenticate.`,
+        );
+      }
+
+      // Auto-refresh if token is expired or expiring within 5 minutes.
+      // Throws HttpError(400) with a sign-in prompt if refresh is not possible.
+      await autoRefreshIdcIfNeeded(String(cred.id));
+
+      // Ensure the credential has a Kiro profile; fetch lazily if missing.
+      // Must happen after auto-refresh so the token is fresh.
+      await ensureKiroProfileFetched(String(cred.id));
+
+      // Re-read the credential row in case a refresh occurred.
+      const activeCred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id)) ?? cred;
+      const activeExtra = safeJson(activeCred.extra_config);
+
+      let val: string;
+      try { val = decrypt(String(activeCred.secret_enc ?? ''), config.secretKey); }
+      catch { throw new HttpError(500, `Could not decrypt Kiro Identity Center credential ${label}.`); }
+      if (!val) throw new HttpError(400, `Kiro Identity Center credential ${label} decrypted to an empty value.`);
+
+      const region = String(activeExtra.region ?? 'us-east-1');
+      const expiresAt = activeExtra.tokenExpiry
+        ? String(activeExtra.tokenExpiry)
+        : new Date(Date.now() + 28_800_000).toISOString();
+      const startUrl = String(activeExtra.startUrl ?? '');
+
+      let refreshToken = '';
+      if (activeExtra.refreshTokenEnc && typeof activeExtra.refreshTokenEnc === 'string') {
+        try { refreshToken = decrypt(activeExtra.refreshTokenEnc, config.secretKey); } catch { /* best-effort */ }
+      }
+      let clientSecret = '';
+      if (activeExtra.clientSecretEnc && typeof activeExtra.clientSecretEnc === 'string') {
+        try { clientSecret = decrypt(activeExtra.clientSecretEnc, config.secretKey); } catch { /* best-effort */ }
+      }
+      const clientId = String(activeExtra.clientId ?? '');
+      const clientSecretExpiresAt = String(activeExtra.clientSecretExpiresAt ?? 0);
+      const profileArn = activeExtra.selectedProfileArn ? String(activeExtra.selectedProfileArn) : '';
+      const profileName = activeExtra.selectedProfileName ? String(activeExtra.selectedProfileName) : '';
+
+      const result: Record<string, string> = {
+        [IDC_TOKEN_KEY]: val,
+        [IDC_REGION_KEY]: region,
+        [IDC_EXPIRY_KEY]: expiresAt,
+        [IDC_START_URL_KEY]: startUrl,
+      };
+      if (refreshToken) result[IDC_REFRESH_TOKEN_KEY] = refreshToken;
+      if (clientId) result[IDC_CLIENT_ID_KEY] = clientId;
+      if (clientSecret) result[IDC_CLIENT_SECRET_KEY] = clientSecret;
+      if (clientSecretExpiresAt !== '0') result[IDC_CLIENT_SECRET_EXPIRES_AT_KEY] = clientSecretExpiresAt;
+      if (profileArn) result[IDC_PROFILE_ARN_KEY] = profileArn;
+      if (profileName) result[IDC_PROFILE_NAME_KEY] = profileName;
+      return result;
+    }
+  }
+
+  if (String(cred.engine) === 'claude-code') {
+    if (mode === 'api_key') {
+      if (!cred.secret_enc) {
+        throw new HttpError(400, `Anthropic API key credential ${label} has no secret stored.`);
+      }
+      let val: string;
+      try { val = decrypt(String(cred.secret_enc), config.secretKey); }
+      catch { throw new HttpError(500, `Could not decrypt Anthropic API key credential ${label}.`); }
+      if (!val) throw new HttpError(400, `Anthropic API key credential ${label} decrypted to an empty value.`);
+      return { ANTHROPIC_API_KEY: val };
+    }
+
+    if (mode === 'subscription_token') {
+      if (!cred.secret_enc) {
+        throw new HttpError(400, `Claude subscription token credential ${label} has no secret stored.`);
+      }
+      let val: string;
+      try { val = decrypt(String(cred.secret_enc), config.secretKey); }
+      catch { throw new HttpError(500, `Could not decrypt Claude subscription token credential ${label}.`); }
+      if (!val) throw new HttpError(400, `Claude subscription token credential ${label} decrypted to an empty value.`);
+      return { CLAUDE_CODE_OAUTH_TOKEN: val };
+    }
+
+    if (mode === 'bedrock_role') {
+      const roleArn = String(extra.roleArn ?? '');
+      const region = String(extra.region ?? 'us-east-1');
+      const externalId = extra.externalId ? String(extra.externalId) : undefined;
+      if (!roleArn) {
+        throw new HttpError(400, `Bedrock role credential ${label} has no roleArn configured.`);
+      }
+      try {
+        const tmp = await assumeRole(roleArn, region, externalId);
+        return {
+          CLAUDE_CODE_USE_BEDROCK: '1',
+          AWS_REGION: region,
+          AWS_DEFAULT_REGION: region,
+          AWS_ACCESS_KEY_ID: tmp.accessKeyId,
+          AWS_SECRET_ACCESS_KEY: tmp.secretAccessKey,
+          AWS_SESSION_TOKEN: tmp.sessionToken,
+        };
+      } catch (e: unknown) {
+        const raw = String((e as Error)?.message ?? e);
+        // Strip any embedded credential-looking values (40-char alpha-num strings)
+        const safe = raw.replace(/[A-Za-z0-9+/]{20,}/g, '***');
+        throw new HttpError(502, `Could not assume role ${roleArn}: ${safe}`);
+      }
+    }
+  }
+
+  // Should never reach here with validated data; fail clearly rather than silently billing portal
+  throw new HttpError(500, `Unknown credential type: engine=${String(cred.engine)} mode=${mode}`);
+}
+
+/**
+ * Update an identity_center credential after kiro-cli refreshes the access_token
+ * during a run or model listing. Re-encrypts and saves the new token values.
+ *
+ * Non-fatal: wraps all errors silently. Never logs token values.
+ * Called from kiro.ts and models.ts before the temp auth DB is cleaned up.
+ */
+export async function refreshIdcCredentialToken(
+  credentialId: string,
+  newAccessToken: string,
+  newExpiresAt: string,
+  newRefreshToken: string | undefined,
+): Promise<void> {
+  try {
+    const cred = one<CredentialRow>(
+      'SELECT * FROM engine_credentials WHERE id = ? AND mode = ?',
+      credentialId, 'identity_center',
+    );
+    if (!cred) return;
+    const extra = safeJson(cred.extra_config);
+    const newExtra: Record<string, unknown> = {
+      ...extra,
+      tokenExpiry: newExpiresAt,
+    };
+    if (newRefreshToken) {
+      newExtra.refreshTokenEnc = encrypt(newRefreshToken, config.secretKey);
+    }
+    delete newExtra.pendingClientId;
+    delete newExtra.pendingClientSecret;
+    delete newExtra.pendingDeviceCode;
+    delete newExtra.pendingExpireAt;
+    delete newExtra.pendingClientSecretExpiresAt;
+
+    const tokenEnc = encrypt(newAccessToken, config.secretKey);
+    dbRun(
+      'UPDATE engine_credentials SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ? WHERE id = ?',
+      tokenEnc,
+      JSON.stringify(newExtra),
+      newAccessToken.slice(-4),
+      now(),
+      credentialId,
+    );
+  } catch {
+    // Non-fatal — worst case the user re-authenticates at the next session
+  }
+}
+
+// ── Route registration ────────────────────────────────────────────────────────
+
+export function registerCredentialRoutes(): void {
+
+  // GET /api/credentials — list (browser only)
+  router.get('/api/credentials', (req: PortalRequest, res: PortalResponse): void => {
+    if (!requireBrowser(req, res)) return;
+
+    const rows = all<CredentialRow>(
+      `SELECT ec.*, u.name AS updated_by_name
+       FROM engine_credentials ec
+       LEFT JOIN users u ON u.id = ec.updated_by
+       WHERE ec.user_id = ?
+       ORDER BY ec.engine, ec.is_default DESC, ec.created_at ASC`,
+      req.user!.id,
+    );
+
+    sendJson(res, 200, { credentials: rows.map(credView) });
+  });
+
+  // POST /api/credentials — create (browser only)
+  router.post('/api/credentials', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const engineStr = str(body.engine as string, 'engine');
+    if (engineStr !== 'kiro' && engineStr !== 'claude-code') {
+      throw badRequest('engine must be kiro or claude-code');
+    }
+    const engine = engineStr as Engine;
+    const modeStr = str(body.mode as string, 'mode');
+    const mode = validateMode(engine, modeStr);
+    const name = (str(body.name as string, 'name', { max: 100, optional: true }).trim()) || `${engine} credential`;
+    const isDefault = Boolean(body.isDefault ?? false);
+    const credConfig = ((body.config ?? {}) as Record<string, unknown>);
+
+    const id = generateId();
+    const ts = now();
+
+    // ── identity_center: start device-code flow ────────────────────────────
+    if (mode === 'identity_center') {
+      const startUrl = str(credConfig.startUrl as string, 'config.startUrl');
+      const region = str(credConfig.region as string, 'config.region');
+
+      let deviceChallenge: Record<string, unknown>;
+      let extraForStore: Record<string, unknown>;
+      try {
+        const oidc = await makeOIDCClient(region);
+        const reg = await oidc.registerClient({
+          clientName: 'agent-portal',
+          clientType: 'public',
+          scopes: [...KIRO_IDC_SCOPES],
+          grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
+        });
+        const da = await oidc.startDeviceAuthorization({
+          clientId: reg.clientId,
+          clientSecret: reg.clientSecret,
+          startUrl,
+        });
+        extraForStore = {
+          startUrl,
+          region,
+          pendingClientId: reg.clientId,
+          pendingClientSecret: reg.clientSecret,
+          pendingClientSecretExpiresAt: reg.clientSecretExpiresAt ?? 0,
+          pendingDeviceCode: da.deviceCode,
+          pendingExpireAt: Date.now() + da.expiresIn * 1000,
+        };
+        deviceChallenge = {
+          verificationUri: da.verificationUriComplete ?? da.verificationUri,
+          userCode: da.userCode,
+          expiresIn: da.expiresIn,
+          interval: da.interval,
+        };
+      } catch (e) {
+        throw new HttpError(502, `Failed to start device authorization: ${(e as Error)?.message ?? e}`);
+      }
+
+      if (isDefault) {
+        dbRun(
+          'UPDATE engine_credentials SET is_default = 0 WHERE user_id = ? AND engine = ?',
+          req.user!.id, engine,
+        );
+      }
+      insert('engine_credentials', {
+        id, user_id: req.user!.id, engine, name, mode,
+        secret_enc: null,
+        extra_config: JSON.stringify(extraForStore),
+        is_default: isDefault ? 1 : 0,
+        last4: '',
+        created_at: ts, updated_at: ts, updated_by: req.user!.id,
+      });
+
+      appendAudit(getDb(), req.user!.id, 'credential.create', `credential:${id}`,
+        { engine, mode, name }, req.ip);
+
+      const created = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', id)!;
+      sendJson(res, 201, { credential: credView(created), deviceChallenge });
+      return;
+    }
+
+    // ── bedrock_role: no secret, just config ──────────────────────────────
+    let secretEnc: string | null = null;
+    let last4 = '';
+
+    if (mode === 'bedrock_role') {
+      const roleArn = str(credConfig.roleArn as string, 'config.roleArn');
+      if (!roleArn.startsWith('arn:')) throw badRequest('config.roleArn must be a valid ARN');
+      str(credConfig.region as string, 'config.region'); // validate required
+    } else {
+      // api_key or subscription_token: secret required
+      const secret = str(body.secret as string, 'secret');
+      if (!secret.trim()) throw badRequest('secret is required');
+      secretEnc = encrypt(secret.trim(), config.secretKey);
+      last4 = secret.trim().slice(-4);
+    }
+
+    if (isDefault) {
+      dbRun(
+        'UPDATE engine_credentials SET is_default = 0 WHERE user_id = ? AND engine = ?',
+        req.user!.id, engine,
+      );
+    }
+
+    insert('engine_credentials', {
+      id, user_id: req.user!.id, engine, name, mode,
+      secret_enc: secretEnc,
+      extra_config: JSON.stringify(credConfig),
+      is_default: isDefault ? 1 : 0,
+      last4,
+      created_at: ts, updated_at: ts, updated_by: req.user!.id,
+    });
+
+    appendAudit(getDb(), req.user!.id, 'credential.create', `credential:${id}`,
+      { engine, mode, name }, req.ip);
+
+    const created = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', id)!;
+    sendJson(res, 201, { credential: credView(created) });
+  });
+
+  // PUT /api/credentials/:id — update name or secret (browser only)
+  router.put('/api/credentials/:id', (req: PortalRequest, res: PortalResponse): void => {
+    if (!requireBrowser(req, res)) return;
+    const cred = requireOwned(res, req.params.id, req.user!.id);
+    if (!cred) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const ts = now();
+    const patch: Record<string, string | number | null> = {
+      updated_at: ts,
+      updated_by: req.user!.id,
+    };
+
+    if (typeof body.name === 'string' && body.name.trim()) {
+      patch.name = body.name.trim().slice(0, 100);
+    }
+
+    if (
+      typeof body.secret === 'string' &&
+      body.secret.trim() &&
+      String(cred.mode) !== 'bedrock_role'
+    ) {
+      patch.secret_enc = encrypt(body.secret.trim(), config.secretKey);
+      patch.last4 = body.secret.trim().slice(-4);
+    }
+
+    if (typeof body.config === 'object' && body.config !== null && String(cred.mode) === 'bedrock_role') {
+      patch.extra_config = JSON.stringify(body.config);
+    }
+
+    update('engine_credentials', String(cred.id), patch);
+
+    appendAudit(getDb(), req.user!.id, 'credential.update', `credential:${String(cred.id)}`,
+      { name: patch.name }, req.ip);
+
+    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+    sendJson(res, 200, { credential: credView(updated) });
+  });
+
+  // DELETE /api/credentials/:id (browser only)
+  router.delete('/api/credentials/:id', (req: PortalRequest, res: PortalResponse): void => {
+    if (!requireBrowser(req, res)) return;
+    const cred = requireOwned(res, req.params.id, req.user!.id);
+    if (!cred) return;
+
+    dbRun('DELETE FROM engine_credentials WHERE id = ?', String(cred.id));
+    appendAudit(getDb(), req.user!.id, 'credential.delete', `credential:${String(cred.id)}`,
+      { engine: String(cred.engine), name: String(cred.name) }, req.ip);
+    sendJson(res, 200, { ok: true });
+  });
+
+  // POST /api/credentials/:id/set-default (browser only)
+  router.post('/api/credentials/:id/set-default', (req: PortalRequest, res: PortalResponse): void => {
+    if (!requireBrowser(req, res)) return;
+    const cred = requireOwned(res, req.params.id, req.user!.id);
+    if (!cred) return;
+
+    dbRun(
+      'UPDATE engine_credentials SET is_default = 0 WHERE user_id = ? AND engine = ?',
+      req.user!.id, String(cred.engine),
+    );
+    dbRun(
+      'UPDATE engine_credentials SET is_default = 1, updated_at = ? WHERE id = ?',
+      now(), String(cred.id),
+    );
+
+    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+    sendJson(res, 200, { credential: credView(updated) });
+  });
+
+  // POST /api/credentials/:id/device-poll — poll for SSO token (browser only)
+  router.post('/api/credentials/:id/device-poll', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const cred = requireOwned(res, req.params.id, req.user!.id);
+    if (!cred) return;
+
+    if (String(cred.mode) !== 'identity_center') {
+      sendJson(res, 400, { error: 'Not an identity_center credential' });
+      return;
+    }
+
+    const extra = safeJson(cred.extra_config);
+    const clientId = String(extra.pendingClientId ?? '');
+    const clientSecret = String(extra.pendingClientSecret ?? '');
+    const deviceCode = String(extra.pendingDeviceCode ?? '');
+    const region = String(extra.region ?? 'us-east-1');
+    const pendingExpireAt = Number(extra.pendingExpireAt ?? 0);
+
+    if (!clientId || !clientSecret || !deviceCode) {
+      sendJson(res, 400, { error: 'Device code flow not started or already completed' });
+      return;
+    }
+
+    if (pendingExpireAt && Date.now() > pendingExpireAt) {
+      sendJson(res, 200, { status: 'expired' });
+      return;
+    }
+
+    try {
+      const oidc = await makeOIDCClient(region);
+      const result = await oidc.createToken({
+        clientId,
+        clientSecret,
+        deviceCode,
+        grantType: 'urn:ietf:params:oauth:grant-type:device_code',
+      });
+
+      const tokenEnc = encrypt(result.accessToken, config.secretKey);
+      const tokenExpiry = result.expiresIn
+        ? new Date(Date.now() + result.expiresIn * 1000).toISOString()
+        : null;
+
+      const clientSecretExpiresAt = Number(extra.pendingClientSecretExpiresAt ?? 0);
+
+      const newExtra: Record<string, unknown> = {
+        startUrl: String(extra.startUrl ?? ''),
+        region,
+        tokenExpiry,
+        signedInAt: now(),
+        clientId,
+        clientSecretExpiresAt,
+      };
+      if (clientSecret) {
+        newExtra.clientSecretEnc = encrypt(clientSecret, config.secretKey);
+      }
+      if (result.refreshToken) {
+        newExtra.refreshTokenEnc = encrypt(result.refreshToken, config.secretKey);
+      }
+
+      dbRun(
+        `UPDATE engine_credentials
+            SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ?
+          WHERE id = ?`,
+        tokenEnc,
+        JSON.stringify(newExtra),
+        result.accessToken.slice(-4),
+        now(),
+        String(cred.id),
+      );
+
+      // Fetch and store the user's Kiro profile asynchronously — non-blocking.
+      // If fetch fails, the credential's status will remain OK; profile is
+      // fetched lazily before the first run via ensureKiroProfileFetched().
+      fetchAndStoreProfile(String(cred.id), result.accessToken, region).catch(() => { /* non-fatal */ });
+
+      const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+      sendJson(res, 200, { status: 'complete', credential: credView(updated) });
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      if (matchSdkError(e, 'AuthorizationPendingException', 'authorization_pending')) {
+        sendJson(res, 200, { status: 'pending' });
+      } else if (matchSdkError(e, 'ExpiredTokenException', 'expired_token')) {
+        sendJson(res, 200, { status: 'expired' });
+      } else if (matchSdkError(e, 'SlowDownException', 'slow_down')) {
+        sendJson(res, 200, { status: 'slow_down' });
+      } else {
+        throw new HttpError(502, `Device code poll failed: ${msg}`);
+      }
+    }
+  });
+
+  // POST /api/credentials/:id/refresh — refresh IDC access token via refresh_token grant (browser only)
+  router.post('/api/credentials/:id/refresh', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const cred = requireOwned(res, req.params.id, req.user!.id);
+    if (!cred) return;
+
+    if (String(cred.mode) !== 'identity_center') {
+      sendJson(res, 400, { error: 'Only identity_center credentials support token refresh' });
+      return;
+    }
+
+    const extra = safeJson(cred.extra_config);
+    // Fail fast before attempting OIDC if we know it will be rejected
+    if (!extra.refreshTokenEnc) {
+      sendJson(res, 409, { error: "Your sign-in can't be renewed. Sign in again.", needsSignIn: true });
+      return;
+    }
+    const clientSecretExpiresAt = Number(extra.clientSecretExpiresAt ?? 0);
+    if (clientSecretExpiresAt > 0 && clientSecretExpiresAt * 1000 < Date.now()) {
+      sendJson(res, 409, { error: "Your sign-in can't be renewed. Sign in again.", needsSignIn: true });
+      return;
+    }
+
+    const result = await attemptTokenRefresh(cred);
+    if (!result.ok) {
+      sendJson(res, 409, { error: result.message, needsSignIn: true });
+      return;
+    }
+
+    appendAudit(getDb(), req.user!.id, 'credential.refresh', `credential:${String(cred.id)}`,
+      { name: String(cred.name) }, req.ip);
+
+    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+    sendJson(res, 200, { credential: credView(updated) });
+  });
+
+  // POST /api/credentials/:id/reauth — start a new device-code flow for the same credential (browser only)
+  router.post('/api/credentials/:id/reauth', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const cred = requireOwned(res, req.params.id, req.user!.id);
+    if (!cred) return;
+
+    if (String(cred.mode) !== 'identity_center') {
+      sendJson(res, 400, { error: 'Only identity_center credentials support re-authentication' });
+      return;
+    }
+
+    const extra = safeJson(cred.extra_config);
+    const startUrl = String(extra.startUrl ?? '');
+    const region = String(extra.region ?? 'us-east-1');
+
+    if (!startUrl) {
+      sendJson(res, 400, { error: 'Credential has no startUrl stored; cannot start a new sign-in flow' });
+      return;
+    }
+
+    try {
+      const oidc = await makeOIDCClient(region);
+
+      // Reuse stored client registration if it is still valid (or no expiry recorded).
+      // Otherwise register a new client. Old-scope credentials (no clientId) also
+      // go through re-registration so they get the correct codewhisperer scopes.
+      const storedClientId = String(extra.clientId ?? '');
+      const storedClientSecretExpiresAt = Number(extra.clientSecretExpiresAt ?? 0);
+      const storedClientSecretEnc = extra.clientSecretEnc as string | undefined;
+      const clientRegStillValid =
+        Boolean(storedClientId) &&
+        Boolean(storedClientSecretEnc) &&
+        (storedClientSecretExpiresAt === 0 || storedClientSecretExpiresAt * 1000 > Date.now());
+
+      let clientId: string;
+      let clientSecret: string;
+      let clientSecretExpiresAt: number;
+      let newClientId: string | null = null;
+      let newClientSecretEnc: string | null = null;
+      let newClientSecretExpiresAt: number | null = null;
+
+      if (clientRegStillValid) {
+        let decrypted: string | null = null;
+        try { decrypted = decrypt(storedClientSecretEnc!, config.secretKey); } catch { /* fall through */ }
+        if (decrypted !== null) {
+          clientId = storedClientId;
+          clientSecret = decrypted;
+          clientSecretExpiresAt = storedClientSecretExpiresAt;
+        } else {
+          // Decryption failed — re-register
+          const reg = await oidc.registerClient({
+            clientName: 'agent-portal',
+            clientType: 'public',
+            scopes: [...KIRO_IDC_SCOPES],
+            grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
+          });
+          clientId = reg.clientId;
+          clientSecret = reg.clientSecret;
+          clientSecretExpiresAt = reg.clientSecretExpiresAt ?? 0;
+          newClientId = clientId;
+          newClientSecretEnc = encrypt(clientSecret, config.secretKey);
+          newClientSecretExpiresAt = clientSecretExpiresAt;
+        }
+      } else {
+        const reg = await oidc.registerClient({
+          clientName: 'agent-portal',
+          clientType: 'public',
+          scopes: [...KIRO_IDC_SCOPES],
+          grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
+        });
+        clientId = reg.clientId;
+        clientSecret = reg.clientSecret;
+        clientSecretExpiresAt = reg.clientSecretExpiresAt ?? 0;
+        newClientId = clientId;
+        newClientSecretEnc = encrypt(clientSecret, config.secretKey);
+        newClientSecretExpiresAt = clientSecretExpiresAt;
+      }
+
+      const da = await oidc.startDeviceAuthorization({ clientId, clientSecret, startUrl });
+
+      // Preserve existing completed-auth fields so the credential stays usable while
+      // the re-auth flow is pending. Overwrite pending fields with the new flow.
+      const extraForStore: Record<string, unknown> = {
+        startUrl,
+        region,
+        ...(extra.tokenExpiry ? { tokenExpiry: String(extra.tokenExpiry) } : {}),
+        ...(extra.signedInAt ? { signedInAt: String(extra.signedInAt) } : {}),
+        ...(extra.clientId ? { clientId: String(extra.clientId) } : {}),
+        ...(extra.clientSecretEnc ? { clientSecretEnc: String(extra.clientSecretEnc) } : {}),
+        ...(extra.clientSecretExpiresAt ? { clientSecretExpiresAt: Number(extra.clientSecretExpiresAt) } : {}),
+        ...(extra.refreshTokenEnc ? { refreshTokenEnc: String(extra.refreshTokenEnc) } : {}),
+        // If we re-registered, update the stored client details
+        ...(newClientId ? { clientId: newClientId } : {}),
+        ...(newClientSecretEnc ? { clientSecretEnc: newClientSecretEnc } : {}),
+        ...(newClientSecretExpiresAt !== null ? { clientSecretExpiresAt: newClientSecretExpiresAt } : {}),
+        // New pending device-code fields
+        pendingClientId: clientId,
+        pendingClientSecret: clientSecret,
+        pendingClientSecretExpiresAt: clientSecretExpiresAt,
+        pendingDeviceCode: da.deviceCode,
+        pendingExpireAt: Date.now() + da.expiresIn * 1000,
+      };
+
+      dbRun(
+        'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
+        JSON.stringify(extraForStore),
+        now(),
+        String(cred.id),
+      );
+
+      appendAudit(getDb(), req.user!.id, 'credential.reauth', `credential:${String(cred.id)}`,
+        { name: String(cred.name) }, req.ip);
+
+      const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+      sendJson(res, 200, {
+        credential: credView(updated),
+        deviceChallenge: {
+          verificationUri: da.verificationUriComplete ?? da.verificationUri,
+          userCode: da.userCode,
+          expiresIn: da.expiresIn,
+          interval: da.interval,
+        },
+      });
+    } catch (e) {
+      throw new HttpError(502, `Failed to start re-authentication flow: ${(e as Error)?.message ?? e}`);
+    }
+  });
+
+  // PUT /api/credentials/:id/profile — choose from multiple available profiles (browser only)
+  router.put('/api/credentials/:id/profile', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const cred = requireOwned(res, req.params.id, req.user!.id);
+    if (!cred) return;
+
+    if (String(cred.mode) !== 'identity_center') {
+      sendJson(res, 400, { error: 'Only identity_center credentials support profile selection' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const arn = str(body.arn as string, 'arn');
+    const extra = safeJson(cred.extra_config);
+
+    // Validate: arn must be in the available profiles list (if stored), or any valid ARN
+    const available = Array.isArray(extra.availableProfiles)
+      ? (extra.availableProfiles as Array<{ arn: string; profileName: string }>)
+      : null;
+
+    if (available && !available.some((p) => p.arn === arn)) {
+      sendJson(res, 400, { error: `Profile ARN not in available profiles list: ${arn}` });
+      return;
+    }
+
+    const profileName = available?.find((p) => p.arn === arn)?.profileName ?? '';
+
+    const newExtra = {
+      ...extra,
+      selectedProfileArn: arn,
+      selectedProfileName: profileName,
+    };
+    delete (newExtra as Record<string, unknown>).profileFetchError;
+
+    dbRun(
+      'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
+      JSON.stringify(newExtra), now(), String(cred.id),
+    );
+
+    appendAudit(getDb(), req.user!.id, 'credential.profile', `credential:${String(cred.id)}`,
+      { arn }, req.ip);
+
+    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+    sendJson(res, 200, { credential: credView(updated) });
+  });
+
+  // GET /api/credentials/summary — for the New Session dialog (browser only)
+  router.get('/api/credentials/summary', (req: PortalRequest, res: PortalResponse): void => {
+    if (!requireBrowser(req, res)) return;
+
+    const engines: Engine[] = ['kiro', 'claude-code'];
+    const summary = engines.map((engine) => {
+      const rows = all<CredentialRow>(
+        `SELECT id, name, mode, last4, is_default
+         FROM engine_credentials
+         WHERE user_id = ? AND engine = ?
+         ORDER BY is_default DESC, created_at ASC`,
+        req.user!.id, engine,
+      );
+
+      return {
+        engine,
+        configured: rows.length > 0,
+        credentials: rows.map((r) => ({
+          id: String(r.id),
+          name: String(r.name),
+          mode: String(r.mode),
+          last4: String(r.last4 ?? ''),
+          isDefault: Boolean(r.is_default),
+        })),
+      };
+    });
+
+    sendJson(res, 200, { summary });
+  });
+}

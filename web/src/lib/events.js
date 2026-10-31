@@ -1,22 +1,18 @@
 /**
  * Client-side SSE subscriptions.
  *
- * subscribeProject(projectId, onEvent) — subscribes to project-scoped SSE events.
- * Returns an unsubscribe function that closes the connection.
+ * subscribeProject(projectId, onEvent) — project-scoped SSE stream.
+ * subscribeGlobal(onEvent)             — portal-level SSE stream (no project).
  *
- * The server emits JSON objects as SSE data frames. Each call opens one
- * EventSource connection; multiple components can subscribe independently.
+ * Both return an unsubscribe function that closes the connection.
  */
 
 /**
- * Subscribe to the project's SSE channel.
- *
- * @param {string} projectId
+ * @param {string} url
  * @param {(event: Record<string, unknown>) => void} onEvent
- * @returns {() => void} unsubscribe function
+ * @returns {() => void} unsubscribe
  */
-export function subscribeProject(projectId, onEvent) {
-  const url = `/api/projects/${encodeURIComponent(projectId)}/events`;
+function subscribe(url, onEvent) {
   let es = null;
   let closed = false;
   let retryTimer = null;
@@ -35,15 +31,8 @@ export function subscribeProject(projectId, onEvent) {
     };
 
     es.onerror = () => {
-      // EventSource will auto-retry; we close and re-open ourselves after 3s
-      // to have explicit control.
-      if (es) {
-        es.close();
-        es = null;
-      }
-      if (!closed) {
-        retryTimer = setTimeout(connect, 3000);
-      }
+      if (es) { es.close(); es = null; }
+      if (!closed) retryTimer = setTimeout(connect, 3000);
     };
   }
 
@@ -52,9 +41,31 @@ export function subscribeProject(projectId, onEvent) {
   return function unsubscribe() {
     closed = true;
     clearTimeout(retryTimer);
-    if (es) {
-      es.close();
-      es = null;
-    }
+    if (es) { es.close(); es = null; }
   };
+}
+
+/**
+ * Subscribe to the project's SSE channel.
+ *
+ * @param {string} projectId
+ * @param {(event: Record<string, unknown>) => void} onEvent
+ * @returns {() => void} unsubscribe function
+ */
+export function subscribeProject(projectId, onEvent) {
+  return subscribe(
+    `/api/projects/${encodeURIComponent(projectId)}/events`,
+    onEvent,
+  );
+}
+
+/**
+ * Subscribe to the global (portal-level) SSE channel.
+ * The server sends events like { type: 'theme.changed', etag } here.
+ *
+ * @param {(event: Record<string, unknown>) => void} onEvent
+ * @returns {() => void} unsubscribe function
+ */
+export function subscribeGlobal(onEvent) {
+  return subscribe('/api/events', onEvent);
 }

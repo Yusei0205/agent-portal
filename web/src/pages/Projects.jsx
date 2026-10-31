@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { navigate } from '../lib/router.js';
+import { Icon } from '../components/Icon.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -11,6 +14,13 @@ function formatDate(iso) {
     month: 'short',
     day: 'numeric',
   });
+}
+
+function greeting(name) {
+  const hour = new Date().getHours();
+  const time = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+  const first = (name || '').split(/[\s@]+/)[0] || 'there';
+  return `Good ${time}, ${first} 👋`;
 }
 
 // ── New project modal ─────────────────────────────────────────────────────────
@@ -82,7 +92,7 @@ function NewProjectModal({ onClose, onCreated }) {
 
 // ── Project card ──────────────────────────────────────────────────────────────
 
-function ProjectCard({ project, currentUserId, isAdmin, onArchive }) {
+function ProjectCard({ project, currentUserId, isAdmin, onArchive, requestConfirm, toast }) {
   const isOwner = isAdmin || project.members?.some?.(
     (m) => m.user_id === currentUserId && m.role === 'owner',
   );
@@ -95,12 +105,12 @@ function ProjectCard({ project, currentUserId, isAdmin, onArchive }) {
 
   const handleArchive = async (e) => {
     e.stopPropagation();
-    if (!confirm(`Archive "${project.name}"? It will be hidden from the list.`)) return;
+    if (!await requestConfirm(`Archive "${project.name}"? It will be hidden from the list.`, 'Archive', 'danger')) return;
     try {
       await api.delete(`/api/projects/${project.id}`);
       onArchive(project.id);
     } catch (err) {
-      alert(err.message || 'Failed to archive project');
+      toast(err.message || 'Failed to archive project', 'error');
     }
   };
 
@@ -142,13 +152,15 @@ function ProjectCard({ project, currentUserId, isAdmin, onArchive }) {
 // ── Projects page ─────────────────────────────────────────────────────────────
 
 /**
- * @param {{ user: import('../App.jsx').User }} props
+ * @param {{ user: import('../App.jsx').User, onProjectsChange: () => void }} props
  */
-export function Projects({ user }) {
+export function Projects({ user, onProjectsChange }) {
   const [projects, setProjects] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -168,24 +180,55 @@ export function Projects({ user }) {
   const handleCreated = (project) => {
     setShowModal(false);
     setProjects((prev) => [project, ...(prev || [])]);
+    onProjectsChange?.();
     navigate(`/p/${project.id}/sessions`);
   };
 
   const handleArchive = (id) => {
     setProjects((prev) => (prev || []).filter((p) => p.id !== id));
+    onProjectsChange?.();
   };
+
+  const isEmpty = !loading && !error && projects?.length === 0;
+  const hasList = !loading && projects && projects.length > 0;
 
   return (
     <div className="page">
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
+      {/* ── Greeting header ─────────────────────────────── */}
+      <div className="page-greeting" style={{ marginBottom: 4 }}>
+        <p className="greeting-title">{greeting(user?.name || user?.email)}</p>
+        <p className="greeting-subtitle">Here's what's happening across your projects.</p>
+      </div>
+
+      {/* ── KPI row ─────────────────────────────────────── */}
+      {hasList && (
+        <div className="kpi-row" style={{ marginBottom: 8 }}>
+          <div className="kpi-card">
+            <div className="kpi-icon-tile">
+              <Icon name="projects" size={18} />
+            </div>
+            <div className="kpi-label">Projects</div>
+            <div className="kpi-value">{projects.length}</div>
+            <div className="kpi-delta muted">Active workspaces</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Page header ─────────────────────────────────── */}
       <div className="page-header">
         <h1>Projects</h1>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => setShowModal(true)}
-        >
-          + New project
-        </button>
+        {/* Primary action shown only when there are projects */}
+        {hasList && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShowModal(true)}
+          >
+            + New project
+          </button>
+        )}
       </div>
 
       {loading && (
@@ -198,9 +241,14 @@ export function Projects({ user }) {
         <div className="error-note" role="alert">{error}</div>
       )}
 
-      {!loading && !error && projects?.length === 0 && (
-        <div className="empty-state">
-          <p>No projects yet. Create your first project.</p>
+      {/* Empty state — exactly ONE primary action button */}
+      {isEmpty && (
+        <div className="empty-state empty-state-hero">
+          <div className="empty-state-icon" aria-hidden="true">
+            <Icon name="projects" size={48} />
+          </div>
+          <p className="empty-state-title">No projects yet</p>
+          <p className="empty-state-body">Projects keep your sessions, knowledge base, and team settings together. Create one to get started.</p>
           <button
             type="button"
             className="btn btn-primary"
@@ -211,7 +259,7 @@ export function Projects({ user }) {
         </div>
       )}
 
-      {!loading && projects && projects.length > 0 && (
+      {hasList && (
         <div className="project-grid">
           {projects.map((p) => (
             <ProjectCard
@@ -220,6 +268,8 @@ export function Projects({ user }) {
               currentUserId={user.id}
               isAdmin={Boolean(user.is_admin)}
               onArchive={handleArchive}
+              requestConfirm={requestConfirm}
+              toast={toast}
             />
           ))}
         </div>

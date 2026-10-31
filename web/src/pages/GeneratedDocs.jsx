@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
+import { Icon } from '../components/Icon.jsx';
+import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
+import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar, BulkSelectHint } from '../components/BulkActionBar.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -42,18 +47,27 @@ function NewDocModal({ projectId, onClose, onCreated }) {
   const [audience, setAudience] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [attachmentIds, setAttachmentIds] = useState([]);
+  const [uploadsBusy, setUploadsBusy]     = useState(false);
+
+  const handleAttachments = (ids, uploading) => {
+    setAttachmentIds(ids);
+    setUploadsBusy(uploading);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
+    if (uploadsBusy) return;
     setBusy(true);
     setError(null);
     try {
       const r = await api.post(`/api/projects/${projectId}/generated-docs`, {
-        name: name.trim(),
+        name:          name.trim(),
         docType,
-        audience: audience.trim() || undefined,
-        sources: {},
+        audience:      audience.trim() || undefined,
+        sources:       {},
+        attachmentIds: attachmentIds.length ? attachmentIds : undefined,
       });
       onCreated(r);
     } catch (err) {
@@ -106,15 +120,127 @@ function NewDocModal({ projectId, onClose, onCreated }) {
 
           {error && <p className="error-msg" role="alert">{error}</p>}
 
+          <AttachmentPicker
+            projectId={projectId}
+            onAttachmentsChange={handleAttachments}
+            disabled={busy}
+          />
+
           <div className="modal-footer">
-            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy || uploadsBusy}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>
-              {busy ? 'Creating…' : 'Create'}
+            <button type="submit" className="btn btn-primary" disabled={busy || uploadsBusy || !name.trim()}>
+              {busy ? 'Creating…' : uploadsBusy ? 'Uploading…' : 'Create'}
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Refresh document dialog ───────────────────────────────────────────────────
+
+function RefreshDocDialog({ projectId, doc, onClose, onRefreshed }) {
+  const [busy, setBusy]                   = useState(false);
+  const [error, setError]                 = useState(null);
+  const [attachmentIds, setAttachmentIds] = useState([]);
+  const [uploadsBusy, setUploadsBusy]     = useState(false);
+  const trapRef = useFocusTrap();
+
+  const handleAttachments = (ids, uploading) => {
+    setAttachmentIds(ids);
+    setUploadsBusy(uploading);
+  };
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !busy && !uploadsBusy) onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, busy, uploadsBusy]);
+
+  const submit = async () => {
+    if (busy || uploadsBusy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(
+        `/api/projects/${projectId}/generated-docs/${doc.id}/refresh`,
+        { attachmentIds: attachmentIds.length ? attachmentIds : undefined },
+      );
+      onRefreshed();
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Failed to refresh');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="dialog-overlay"
+      role="presentation"
+      onClick={(e) => { if (e.target === e.currentTarget && !busy && !uploadsBusy) onClose(); }}
+    >
+      <div
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="refresh-doc-title"
+        style={{ maxWidth: 520 }}
+        ref={trapRef}
+      >
+        <div className="dialog-head">
+          <h2 className="dialog-title" id="refresh-doc-title">Refresh document</h2>
+          <button
+            type="button"
+            className="btn-icon"
+            onClick={onClose}
+            disabled={busy || uploadsBusy}
+            aria-label="Close"
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
+        <div className="dialog-body stack">
+          <p className="muted" style={{ fontSize: '0.84rem' }}>
+            Regenerate <strong>{doc.name}</strong>. Attach additional files to supplement
+            or replace the existing source material.
+          </p>
+          <div className="field">
+            <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+            <AttachmentPicker
+              projectId={projectId}
+              initialAttachments={doc.attachments ?? []}
+              onAttachmentsChange={handleAttachments}
+              disabled={busy}
+            />
+          </div>
+          {error && <div className="error-note" role="alert">{error}</div>}
+        </div>
+        <div className="dialog-foot">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onClose}
+            disabled={busy || uploadsBusy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={busy || uploadsBusy}
+          >
+            {busy
+              ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Refreshing…</>
+              : uploadsBusy
+                ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Uploading…</>
+                : <><Icon name="refresh" size={14} /> Refresh</>}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -134,6 +260,9 @@ export function GeneratedDocs({ projectId }) {
   const [showNew, setShowNew] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [refreshingDoc, setRefreshingDoc] = useState(null);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     try {
@@ -154,27 +283,24 @@ export function GeneratedDocs({ projectId }) {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this document and all its versions?')) return;
+    const ok = await requestConfirm('Delete this document and all its versions?', 'Delete', 'danger');
+    if (!ok) return;
     try {
       await api.delete(`/api/projects/${projectId}/generated-docs/${id}`);
       setDocs((prev) => prev.filter((d) => d.id !== id));
       setSelected((prev) => { const s = new Set(prev); s.delete(id); return s; });
     } catch (err) {
-      alert(err.message || 'Failed to delete');
+      toast(err.message || 'Failed to delete', 'error');
     }
   };
 
-  const handleRefresh = async (id) => {
-    try {
-      await api.post(`/api/projects/${projectId}/generated-docs/${id}/refresh`, {});
-      load();
-    } catch (err) {
-      alert(err.message || 'Failed to refresh');
-    }
+  const handleRefresh = (doc) => {
+    setRefreshingDoc(doc);
   };
 
   const handleBulkDelete = async () => {
-    if (!confirm(`Delete ${selected.size} document(s)?`)) return;
+    const ok = await requestConfirm(`Delete ${selected.size} document(s)?`, 'Delete', 'danger');
+    if (!ok) return;
     setBulkBusy(true);
     try {
       for (const id of selected) {
@@ -183,7 +309,7 @@ export function GeneratedDocs({ projectId }) {
       setSelected(new Set());
       load();
     } catch (err) {
-      alert(err.message || 'Failed to delete');
+      toast(err.message || 'Failed to delete', 'error');
     } finally {
       setBulkBusy(false);
     }
@@ -259,7 +385,19 @@ export function GeneratedDocs({ projectId }) {
                       aria-label={`Select ${d.name}`}
                     />
                   </td>
-                  <td className="table-primary">{d.name}</td>
+                  <td className="table-primary">
+                    {d.name}
+                    {d.attachments?.length > 0 && (
+                      <span
+                        className="badge badge-muted"
+                        style={{ marginLeft: 6 }}
+                        title={`${d.attachments.length} attachment${d.attachments.length !== 1 ? 's' : ''}`}
+                      >
+                        <Icon name="attach" size={10} />
+                        {' '}{d.attachments.length}
+                      </span>
+                    )}
+                  </td>
                   <td><DocTypeBadge type={d.doc_type} /></td>
                   <td>
                     <StatusBadge stale={d.stale} hasVersion={Boolean(d.latest_version_id)} />
@@ -288,7 +426,7 @@ export function GeneratedDocs({ projectId }) {
                       <button
                         type="button"
                         className="btn btn-sm btn-ghost"
-                        onClick={() => handleRefresh(d.id)}
+                        onClick={() => handleRefresh(d)}
                         title="Refresh document"
                       >
                         Refresh
@@ -326,6 +464,18 @@ export function GeneratedDocs({ projectId }) {
           onCreated={handleCreated}
         />
       )}
+
+      {refreshingDoc && (
+        <RefreshDocDialog
+          projectId={projectId}
+          doc={refreshingDoc}
+          onClose={() => setRefreshingDoc(null)}
+          onRefreshed={() => { setRefreshingDoc(null); load(); }}
+        />
+      )}
+
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }
