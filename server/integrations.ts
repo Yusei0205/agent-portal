@@ -168,6 +168,26 @@ async function secretMap(id: string): Promise<Record<string, string>> {
   return parseJson<Record<string, string>>(await getSecret(secret(id)), {});
 }
 
+/** The shared "AWS documentation" integration: AWS's public Knowledge MCP server, which searches and reads the AWS
+ * documentation. It needs no AWS account or key. */
+export const BUILTIN_AWS_DOCS_ID = 'in_aws_docs_builtin__v1';
+export const BUILTIN_AWS_DOCS_NAME = 'AWS documentation';
+export const AWS_KNOWLEDGE_MCP_URL = 'https://knowledge-mcp.global.api.aws';
+const AWS_DOCS_SEEDED = 'seed:aws-docs-integration';
+
+/**
+ * Create the shared, read-only "AWS documentation" integration once. A session uses it only when someone attaches it
+ * (the AWS solutions engineer role asks for it). An admin may delete it; it is then not created again.
+ */
+export function ensureBuiltInAwsDocsIntegration(): void {
+  if (one<Row>('SELECT 1 AS x FROM settings WHERE key = ?', AWS_DOCS_SEEDED)) return;
+  exec(
+    'INSERT OR IGNORE INTO integrations (id, name, kind, scope, owner_id, config, allow_writes, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    BUILTIN_AWS_DOCS_ID, BUILTIN_AWS_DOCS_NAME, 'http', 'team', null, JSON.stringify({ url: AWS_KNOWLEDGE_MCP_URL, headerNames: [] }), 0, null, null, now(), now(),
+  );
+  exec('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', AWS_DOCS_SEEDED, JSON.stringify(now()));
+}
+
 /** The well-known id for the shared "Web browser" integration. Stable across restarts. */
 export const BUILTIN_BROWSER_ID = 'in_browser_builtin__v1';
 export const BUILTIN_BROWSER_NAME = 'Web browser';

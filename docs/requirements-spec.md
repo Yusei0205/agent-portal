@@ -137,7 +137,7 @@ Effective project access is the highest of direct membership and all team grants
 | FR-PROV-5 | "Test connection" for portal and project settings. | route | |
 | FR-PROV-6 | Demo mode runs a simulated agent so every feature works without credentials. | code (`agent/demo.ts`) | |
 | FR-PROV-7 | **Tool packs** (off by default): `uv/uvx`, `Kiro CLI`, `Browser MCP`, `Icon diagrams (draw.io)`. Admin installs uv/kiro/drawio from Settings with a live log stream (`POST /api/tools/:id/install`, id `uv`, `kiro` or `drawio`; `GET /api/tool-packs` lists the packs, the Icon diagrams one with `parts` for its two halves); browser runs via compose profile with isolated context per run (max 3 concurrent). | code (`tool-packs.ts`) | |
-| FR-PROV-8 | **Integrations** (MCP servers): portal-level definitions, tested, attached to sessions or workspaces. A built-in "Web browser" integration is created when the browser pack is available, and a built-in "Icon diagrams" integration (kind `drawio`, id `in_drawio_builtin__v1`, team scope, read-only) when the Icon diagrams pack is installed (FR-DIAG-10). | code (`integrations.ts`) | |
+| FR-PROV-8 | **Integrations** (MCP servers): portal-level definitions, tested, attached to sessions or workspaces. A built-in "Web browser" integration is created when the browser pack is available, and a built-in "Icon diagrams" integration (kind `drawio`, id `in_drawio_builtin__v1`, team scope, read-only) when the Icon diagrams pack is installed (FR-DIAG-10). A built-in "AWS documentation" integration (kind `http`, id `in_aws_docs_builtin__v1`, team scope, read-only) points to AWS's public Knowledge MCP server (`https://knowledge-mcp.global.api.aws`, no AWS account needed); it is created once, so an admin can delete it for good. | code (`integrations.ts`) | |
 
 ### 2.6 Knowledge base (KB)
 
@@ -164,6 +164,7 @@ Stored in the project's `.claude/` folder and committed to the project's git rep
 | FR-CC-6 | Import from a `.claude` folder, a zip, or (admin) a server path. Preview shows conflicts, invalid items and missing skills; per-item Overwrite / Skip / Rename. | code (`importer.ts`) | |
 | FR-CC-7 | Describe: draft a new agent or skill from a plain-language description, optionally grounded in project documents. | route | |
 | FR-CC-8 | Claude runs never use Kiro agents. | code (`kiro-agents.ts` header) | |
+| FR-CC-9 | **Open-source roles.** Five roles built from public Agent Skills repositories pinned to reviewed commits (`scripts/build-open-source-roles.mjs` → `server/role-data/roles-opensource.json`): QA automation engineer, Backend engineer, Frontend engineer, Cloud infrastructure engineer and AWS solutions engineer, 50 skills from AWS (Agent Toolkit for AWS), HashiCorp, Microsoft (Playwright), Anthropic and two MIT-licensed collections. A skill template can carry reference files; adding the role or the skill writes them with the skill, plus a `LICENSE.txt` with the licence and origin. Only the name and description of the original frontmatter are kept (no `allowed-tools` or hooks), and scripts and source files are left out. The lead agents are the portal's own. `THIRD_PARTY_SKILLS.md` lists sources, commits and licences. | code (`roles-opensource.ts`, `builder.ts`), test (`test/opensource-roles.test.ts`) | Built |
 
 ### 2.7.1 Kiro agents and skills (KIRO)
 

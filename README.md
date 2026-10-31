@@ -50,7 +50,9 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   (`.md`, `.docx`) and deck (`.pptx`) made on the Create page, latest version only. Runs do not get
   that folder; project owners can turn the copies off on the Create page.
 - **Integrations and connections**: Git connections (GitHub, Bitbucket, CodeCommit, other Git
-  servers), AWS accounts (keys, profiles, SSO), MCP integrations, Jira, and API tokens.
+  servers), AWS accounts (keys, profiles, SSO), MCP integrations, Jira, and API tokens. A shared
+  **AWS documentation** integration (AWS's public Knowledge MCP server, no AWS account needed) is
+  created once; attach it to a session to let agents search and read the AWS documentation.
 - **Insights**: cost, tokens, latency, failures and agent activity, for one project or all of
   them, plus loop metrics and spend per user.
 - **Knowledge**: upload FSD, TSD, specs and notes (Word, PDF, Excel, PowerPoint, Markdown, HTML).
@@ -78,6 +80,15 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   `.kiro` in the project). Claude agents come from role templates, a shared library, import from
   a folder or zip, or a plain-language description. A Kiro session never silently falls back to
   Claude Code.
+- **Open-source roles**: five roles built from public Agent Skills, pinned to reviewed commits:
+  *QA automation engineer* (Microsoft's Playwright skill, end-to-end and unit testing, test-driven
+  development, systematic debugging), *Backend engineer* (API design, architecture, Node.js and
+  FastAPI, PostgreSQL, auth), *Frontend engineer* (Anthropic's frontend-design, React, Next.js,
+  Tailwind, TypeScript, WCAG audits), *Cloud infrastructure engineer* (HashiCorp's Terraform
+  skills, CI/CD, secrets, Kubernetes, Helm, cost) and *AWS solutions engineer* (17 official skills
+  from AWS's Agent Toolkit with their reference guides). Each skill keeps its licence and gets a
+  `LICENSE.txt` in the project; [THIRD_PARTY_SKILLS.md](THIRD_PARTY_SKILLS.md) lists the sources.
+  Rebuild them with `scripts/build-open-source-roles.mjs`.
 - **Documents and decks**: agents can write Word, Excel, CSV and PowerPoint files, and the
   "Document a repository" mode writes cited documentation. Upload a Word or PowerPoint template
   once (per project, with a portal-wide default) and generated files follow it. The documentation
