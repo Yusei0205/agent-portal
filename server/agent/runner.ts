@@ -12,7 +12,7 @@ import { commitAll } from '../git.ts';
 import { blockedCommand, alwaysBlockedCommand, parseTrustedPush, composeLeadAppend, isGitPush, outsideDeleteReason, protectedCommandReason, protectedConfigReason } from '../guardrails.ts';
 import { isReallyInsideDir } from '../real-path.ts';
 import type { CanUseTool, PermissionMode, ProviderRunOptions, SdkMessage } from './types.ts';
-import { sdkRun } from './sdk.ts';
+import { sdkRun } from './sdk.ts';
 import { estimateCost, type Usage } from './pricing.ts';
 import { kiroRun } from './kiro.ts';
 import { demoRun, demoModel } from './demo.ts';
