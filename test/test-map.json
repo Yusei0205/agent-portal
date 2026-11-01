@@ -623,11 +623,30 @@
       "note": "No dedicated smoke section for attachments yet."
     },
     "security": {
-      "description": "Security regression tests — SSRF guard, token scope enforcement, child-session cap (backend-only; sources are shared core files)",
-      "sources": [],
+      "description": "Security regression tests — SSRF guard, token scope enforcement, child-session cap, approval fingerprinting, run limits, config/hook guard (C), credential scrubbing (D)",
+      "sources": [
+        "server/agent/runner.ts",
+        "server/agent/approvals.ts",
+        "server/agent/types.ts",
+        "server/agent/claude-code.ts",
+        "server/agent/demo.ts",
+        "server/agent/kiro.ts",
+        "server/agent/guard.ts",
+        "server/agent/env-scrub.ts",
+        "server/real-path.ts",
+        "server/git.ts",
+        "server/runs.ts",
+        "server/inbox.ts",
+        "server/workflows/crud.ts",
+        "server/settings.ts"
+      ],
       "tests": [
         "test/security-fixes.test.ts",
-        "test/ssrf.test.ts"
+        "test/ssrf.test.ts",
+        "test/approval-binding.test.ts",
+        "test/run-limits.test.ts",
+        "test/config-protection.test.ts",
+        "test/agent-env-scrub.test.ts"
       ],
       "smokeIds": [],
       "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* — all in the shared section. Changes to those shared files already mark this module affected."

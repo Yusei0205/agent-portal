@@ -715,6 +715,73 @@ async function main() {
       await goto(p, '/inbox');
       await assertHeading(p, 'Inbox');
     }, page);
+
+    await test('Inbox: Approve click sends inputHash in request body', async (p) => {
+      const fakeHash   = 'smoke-approval-hash-0000000000000000000000000000000000000000000000000000000000';
+      const fakeId     = 'inbox-smoke-approval-hash-001';
+      const fakeInputId = 'inp-smoke-hash-001';
+
+      const inboxListHandler = (route: import('playwright').Route) => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            items: [{
+              id: fakeId,
+              type: 'approval',
+              project_id: null,
+              project_name: null,
+              workflow_id: null,
+              workflow_goal: 'smoke approval hash test',
+              run_id: null,
+              payload: { inputId: fakeInputId, toolName: 'Bash', inputHash: fakeHash },
+              resolved: false,
+              resolved_by: null,
+              resolved_at: null,
+              created_at: new Date().toISOString(),
+              elapsed_ms: 0,
+            }],
+            total: 1,
+          }),
+        });
+      };
+      const inboxListFilter = (url: URL) => url.pathname === '/api/inbox';
+      await p.route(inboxListFilter, inboxListHandler);
+
+      // Capture the resolve POST body
+      let capturedBody: Record<string, unknown> | null = null;
+      const inboxResolveFilter = (url: URL) => url.pathname === `/api/inbox/${fakeId}/resolve`;
+      const inboxResolveHandler = async (route: import('playwright').Route) => {
+        try { capturedBody = route.request().postDataJSON() as Record<string, unknown>; } catch { /* skip */ }
+        await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+      };
+      await p.route(inboxResolveFilter, inboxResolveHandler);
+
+      // Navigate away first so the Inbox component re-mounts when we go back
+      await goto(p, '/projects', 300);
+      await goto(p, '/inbox', 1200);
+      await assertHeading(p, 'Inbox');
+
+      // Wait for the approval section to appear (verifies mock was applied)
+      await p.waitForSelector('section[aria-label="Approvals"]', { timeout: 8_000 });
+
+      // Find and click the Approve button within the approvals section
+      const approveBtn = p.locator('section[aria-label="Approvals"] button').filter({ hasText: /^approve$/i }).first();
+      await approveBtn.waitFor({ state: 'visible', timeout: 5_000 });
+      await approveBtn.click();
+      await p.waitForTimeout(600);
+
+      // Assert inputHash was forwarded in the POST body
+      if (!capturedBody) throw new Error('No POST body captured for inbox resolve — request not intercepted');
+      const sentHash = (capturedBody as { inputHash?: unknown }).inputHash;
+      if (sentHash !== fakeHash) {
+        throw new Error(`Expected inputHash="${fakeHash}" in POST body, got inputHash="${sentHash}" (body: ${JSON.stringify(capturedBody)})`);
+      }
+
+      // Clean up route handlers
+      await p.unroute(inboxListFilter, inboxListHandler);
+      await p.unroute(inboxResolveFilter, inboxResolveHandler);
+    }, page);
     } // end §9 inbox
 
     // ── 10. Connections (Git tab) ─────────────────────────────────────────

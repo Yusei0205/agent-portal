@@ -52,9 +52,17 @@ export interface ToolCall {
 export interface RunContext {
   run: AgentRun;
   emit: (type: string, payload: object) => void;
-  awaitInput: (toolName: string, toolInput: string) => Promise<'approve' | 'deny'>;
-  /** Tool names that are auto-approved for this run (remember=true). */
-  allowAll: Set<string>;
+  awaitInput: (toolName: string, toolInput: Record<string, unknown>) => Promise<{
+    decision: 'allow' | 'deny';
+    remember: boolean;
+    message: string;
+    expired?: boolean;
+  }>;
+  /**
+   * Keys already allowed for the rest of the run, keyed by rememberKey().
+   * One exact shell command, one web host for WebFetch, or one other tool name.
+   */
+  allowed: Set<string>;
   /** Abort signal for the run; engines must propagate this to child processes and SDK calls. */
   signal: AbortSignal | null;
 }

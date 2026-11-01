@@ -21,7 +21,7 @@ import { getDelegationSettings, createChildSession } from '../delegation.ts';
  * Returns the final result text.
  */
 export async function runDemo(ctx: RunContext): Promise<string> {
-  const { run, emit, awaitInput, allowAll } = ctx;
+  const { run, emit, awaitInput } = ctx;
   const goal = run.goal;
   const shortGoal = goal.replace(/\s+/g, ' ').slice(0, 80);
 
@@ -105,16 +105,16 @@ export async function runDemo(ctx: RunContext): Promise<string> {
 
   if (lsDecision.action === 'block') {
     emit('tool-blocked', { toolName: 'Bash', toolInput: lsInput, reason: lsDecision.reason });
-  } else if (lsDecision.action === 'ask' && !allowAll.has('Bash')) {
+  } else if (lsDecision.action === 'ask') {
     // Request approval
     emit('approval-request', {
       toolName: 'Bash',
       toolInput: lsInput,
       reason: 'This command will list the working directory.',
     });
-    const decision = await awaitInput('Bash', lsInput);
-    emit('approval-response', { toolName: 'Bash', decision });
-    if (decision === 'approve') {
+    const resp = await awaitInput('Bash', { command: JSON.parse(lsInput).command });
+    emit('approval-response', { toolName: 'Bash', decision: resp.decision });
+    if (resp.decision === 'allow') {
       emit('tool-start', { toolName: 'Bash', toolInput: lsInput });
       await pause(300);
       emit('tool-end', { toolName: 'Bash', output: listWorkDir(run.workDir) });
@@ -142,15 +142,15 @@ export async function runDemo(ctx: RunContext): Promise<string> {
   let wroteFile = false;
   if (writeDecision.action === 'block') {
     emit('tool-blocked', { toolName: 'Write', toolInput: writeInput, reason: writeDecision.reason });
-  } else if (writeDecision.action === 'ask' && !allowAll.has('Write')) {
+  } else if (writeDecision.action === 'ask') {
     emit('approval-request', {
       toolName: 'Write',
       toolInput: writeInput,
       reason: `Write AGENT_PLAN.md with the action plan.`,
     });
-    const decision = await awaitInput('Write', writeInput);
-    emit('approval-response', { toolName: 'Write', decision });
-    if (decision === 'approve') {
+    const resp = await awaitInput('Write', { file_path: planRelPath, content: planContent });
+    emit('approval-response', { toolName: 'Write', decision: resp.decision });
+    if (resp.decision === 'allow') {
       writeFileSafe(planAbsPath, planContent);
       emit('tool-start', { toolName: 'Write', toolInput: writeInput });
       await pause(350);

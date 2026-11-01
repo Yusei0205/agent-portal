@@ -25,6 +25,9 @@ import { now, generateId, HttpError } from '../util.ts';
 import { evaluateCommand } from '../guardrails.ts';
 import { getSettings, getAgentEnv } from '../settings.ts';
 import { resolveCredentialEnv } from '../credentials.ts';
+import { guardToolCall } from './guard.ts';
+import { shouldScrubSdkEnv } from './env-scrub.ts';
+import { isReallyInsideDir } from '../real-path.ts';
 import {
   rewritePlaywrightMcpHeadless,
   rewritePlaywrightMcpCdp,
@@ -152,7 +155,7 @@ Only include real findings — an empty array [] is correct when the diff is cle
  * returns the final summary text.
  */
 export async function runClaudeCode(ctx: RunContext): Promise<string> {
-  const { run, emit, awaitInput, allowAll } = ctx;
+  const { run, emit, awaitInput } = ctx;
 
   // ── Pre-flight: credentials check ─────────────────────────────────────────
   // Resolve env from per-user credential, default credential, or portal provider.
@@ -164,6 +167,23 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   // and mcp.json from the materialised directory rather than the portal process home.
   const homeDir = getRunHomeDir(run.runId);
   const sdkEnv: Record<string, string> = { ...(process.env as Record<string, string>), ...agentEnv };
+  // Feature D: Credential scrubbing — keep model keys out of agent shell commands.
+  // CLAUDE_CODE_DISABLE_AUTO_MEMORY and MCP_TOOL_TIMEOUT are already set in agentEnv (via getAgentEnv).
+  // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is safe on Windows; on Linux it activates sandbox mode which
+  // requires bubblewrap+socat. AgentCore containers use scrubEnvForShell() explicitly instead.
+  if (shouldScrubSdkEnv()) {
+    if (sdkEnv.ANTHROPIC_API_KEY || sdkEnv.CLAUDE_CODE_USE_BEDROCK || sdkEnv.CLAUDE_CODE_OAUTH_TOKEN) {
+      sdkEnv.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';
+    }
+  }
+  // Always disable auto-memory (notes would carry across projects unreviewed)
+  sdkEnv.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+  // MCP tool call timeout
+  const _settings = getSettings();
+  const _mcpMinutes = _settings.agents.mcpToolTimeoutMinutes ?? 10;
+  if (_mcpMinutes > 0) {
+    sdkEnv.MCP_TOOL_TIMEOUT = String(_mcpMinutes * 60_000);
+  }
   if (homeDir) {
     sdkEnv.HOME = homeDir;
     if (process.platform === 'win32') {
@@ -229,6 +249,13 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   // ── Model ──────────────────────────────────────────────────────────────────
   const model = resolveModel(run.model);
 
+  // ── Run budget limit (FR-GUARD-10) ─────────────────────────────────────────
+  // Per-workflow override takes priority over the global setting.
+  const wfRow = one<Row>('SELECT budget_usd FROM p6_workflows WHERE id = ?', run.workflowId);
+  const wfBudget = wfRow?.budget_usd != null ? Number(wfRow.budget_usd) : null;
+  const globalBudget = getSettings().agents.maxBudgetUsdPerRun;
+  const maxBudgetUsd = wfBudget ?? globalBudget;
+
   // ── Delegation settings ────────────────────────────────────────────────────
   const delegationSettings = getDelegationSettings();
   const delegationEnabled = delegationSettings.enabled;
@@ -260,18 +287,24 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       return { behavior: 'deny', message: 'Run cancelled.' };
     }
 
-    // Write guard: file writes must stay inside workDir
+    // Write guard: file writes must stay inside workDir; symlinks are followed
     if (WRITE_TOOLS.has(toolName)) {
       const relPath = String(input.file_path ?? input.path ?? input.new_path ?? '');
       if (relPath) {
         const absPath = path.resolve(run.workDir, relPath);
-        const workDirResolved = path.resolve(run.workDir);
-        if (!absPath.startsWith(workDirResolved + path.sep) && absPath !== workDirResolved) {
+        if (!isReallyInsideDir(run.workDir, absPath)) {
           const reason = `Write to "${relPath}" is outside the run working directory.`;
           emit('tool-blocked', { toolName, toolInput: inputStr, reason });
           return { behavior: 'deny', message: reason };
         }
       }
+    }
+
+    // Guard: tool settings, MCP lists, git hooks/config, and Kiro config are protected
+    const guardReason = guardToolCall(toolName, input, run.workDir);
+    if (guardReason) {
+      emit('tool-blocked', { toolName, toolInput: inputStr, reason: guardReason });
+      return { behavior: 'deny', message: guardReason };
     }
 
     // Guardrail evaluation
@@ -288,18 +321,42 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       return { behavior: 'deny', message: reason };
     }
 
-    if (decision.action === 'ask' && !allowAll.has(toolName)) {
+    if (decision.action === 'ask') {
+      // Import rememberKey lazily to avoid circular dependency in tests
+      const { rememberKey, MAX_REVIEWABLE_COMMAND } = await import('./runner.ts');
+      const rk = rememberKey(toolName, input);
+
+      // Check if already allowed for this run
+      if (ctx.allowed.has(rk.key)) {
+        emit('tool-start', { toolName, toolInput: inputStr });
+        return { behavior: 'allow' };
+      }
+
+      // Refuse commands that are too long for a person to review.
+      if (BASH_TOOLS.has(toolName)) {
+        const command = String(input.command ?? input.cmd ?? '');
+        if (command.length > MAX_REVIEWABLE_COMMAND) {
+          const reason = `This command is ${command.length} characters long, too long for a person to review. Write a script file first, or split it into smaller steps.`;
+          emit('tool-blocked', { toolName, toolInput: inputStr, reason });
+          return { behavior: 'deny', message: reason };
+        }
+      }
+
       // Suspend until the user responds
-      let approval: 'approve' | 'deny';
+      let resp: { decision: 'allow' | 'deny'; remember: boolean; message: string; expired?: boolean };
       try {
-        approval = await awaitInput(toolName, inputStr);
+        resp = await ctx.awaitInput(toolName, input);
       } catch {
         // Abort during approval wait
         return { behavior: 'deny', message: 'Run cancelled during approval wait.' };
       }
-      if (approval === 'deny') {
-        emit('tool-blocked', { toolName, toolInput: inputStr, reason: 'Denied by user.' });
-        return { behavior: 'deny', message: 'Denied by user.' };
+      if (resp.decision === 'deny') {
+        const msg = resp.expired ? resp.message : (resp.message ? `The user declined: ${resp.message}` : 'The user declined this action.');
+        emit('tool-blocked', { toolName, toolInput: inputStr, reason: msg });
+        return { behavior: 'deny', message: msg };
+      }
+      if (resp.remember) {
+        ctx.allowed.add(rk.key);
       }
     }
 
@@ -421,6 +478,8 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         settingSources: [],
         // Resume previous session if available (F-SESSION-RESUME)
         ...(resumeId ? { resume: resumeId } : {}),
+        // Per-run spend cap (FR-GUARD-10): subagents inherit this cap.
+        ...(maxBudgetUsd != null && maxBudgetUsd > 0 ? { maxBudgetUsd } : {}),
         // In-process delegation MCP server (F7)
         ...(delegationMcpServers ? { mcpServers: delegationMcpServers as unknown as Record<string, object> } : {}),
       },
@@ -515,6 +574,13 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         const sdkCost = (msg as Record<string, unknown>).total_cost_usd;
         if (typeof sdkCost === 'number' && sdkCost > 0) {
           totalCostUsd = sdkCost;
+        }
+        // Detect budget stop: stop_reason == 'error_max_budget_usd' means the SDK hit the cap.
+        const stopReason = String((msg as Record<string, unknown>).stop_reason ?? '');
+        if (stopReason === 'error_max_budget_usd') {
+          const capLabel = maxBudgetUsd != null ? ` ($${maxBudgetUsd})` : '';
+          dbRun('UPDATE p6_runs SET stop_reason = ? WHERE id = ?', `spend cap reached${capLabel}`, run.runId);
+          emit('status', { text: `Spend cap reached${capLabel}. Run stopped cleanly.` });
         }
         // Capture session_id for conversation continuity (F-SESSION-RESUME)
         const sdkSessionId = (msg as Record<string, unknown>).session_id;

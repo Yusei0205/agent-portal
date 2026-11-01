@@ -489,23 +489,28 @@ function ExpandableToolResult({ toolName, result }) {
 function ApprovalCard({ event, workflowId, projectId, runId, onResolved }) {
   const payload     = event.payload;
   const inputId     = payload.inputId || payload.id || event.id;
+  const inputHash   = payload.inputHash || null;
   const description = payload.description || payload.command || payload.tool || 'Approval required';
   const [busy, setBusy]           = useState(false);
   const [resolved, setResolved]   = useState(false);
   const [resolutionLabel, setResolutionLabel] = useState('');
+  const [error, setError]         = useState('');
 
   const resolve = async (response, allowAll = false) => {
     setBusy(true);
+    setError('');
     try {
       await api.post(`/api/projects/${projectId}/workflows/${workflowId}/runs/${runId}/input`, {
         inputId,
         response,
         allowAll,
+        inputHash,
       });
       setResolved(true);
       setResolutionLabel(response === 'approve' ? (allowAll ? 'Approved all' : 'Approved') : 'Denied');
       if (onResolved) onResolved();
-    } catch {
+    } catch (e) {
+      setError(e?.message || 'Could not submit. Please try again.');
       setBusy(false);
     }
   };
@@ -525,6 +530,15 @@ function ApprovalCard({ event, workflowId, projectId, runId, onResolved }) {
         <Icon name="warning" size={14} />
         <strong>Approval required:</strong> {description}
       </div>
+      {error && (
+        <div className="live-approval-error" role="alert">
+          {error}
+          {' '}
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+        </div>
+      )}
       <div className="live-approval-actions">
         <button type="button" className="btn btn-sm btn-primary" onClick={() => resolve('approve')} disabled={busy}>
           Approve

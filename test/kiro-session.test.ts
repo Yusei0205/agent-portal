@@ -143,8 +143,8 @@ async function makeCtx(
   const ctx: RunContext = {
     run: agentRun,
     emit: (type, payload) => events.push({ type, payload: payload as Record<string, unknown> }),
-    awaitInput: async () => 'approve',
-    allowAll: new Set<string>(),
+    awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+    allowed: new Set<string>(),
     signal: ctrl.signal,
   };
 
@@ -439,8 +439,8 @@ describe('Kiro session — no stored id with prior runs prepends recap', () => {
     const ctx: RunContext = {
       run: agentRun,
       emit: (type, payload) => events.push({ type, payload: payload as Record<string, unknown> }),
-      awaitInput: async () => 'approve',
-      allowAll: new Set<string>(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(),
       signal: new AbortController().signal,
     };
     await runKiro(ctx).catch(() => {});
@@ -493,8 +493,8 @@ describe('Kiro session — no stored id with prior runs prepends recap', () => {
     const ctx: RunContext = {
       run: agentRun,
       emit: (type, payload) => events.push({ type, payload: payload as Record<string, unknown> }),
-      awaitInput: async () => 'approve',
-      allowAll: new Set<string>(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(),
       signal: new AbortController().signal,
     };
     await runKiro(ctx).catch(() => {});

@@ -131,9 +131,9 @@ async function makeCtx(
     emit: (type, payload) => events.push({ type, payload: payload as Record<string, unknown> }),
     awaitInput: async (toolName, toolInput) => {
       approvalCalls.push(toolName);
-      return 'approve';
+      return { decision: 'allow' as const, remember: false, message: '' };
     },
-    allowAll: new Set<string>(),
+    allowed: new Set<string>(),
     signal: ctrl.signal,
   };
 
@@ -432,7 +432,7 @@ describe('Kiro ACP — session/request_permission → deny', () => {
 
   it('sends reject_once when user denies the permission request', async () => {
     const { ctx, events } = await makeCtx(t, { trusted: false });
-    ctx.awaitInput = async () => 'deny'; // always deny
+    ctx.awaitInput = async () => ({ decision: 'deny' as const, remember: false, message: '' }); // always deny
 
     await runKiro(ctx);
     const texts = pick(events, 'assistant-text').map((e) => String(e.payload.text)).join('');

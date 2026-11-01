@@ -307,8 +307,8 @@ describe('runKiro — materialised home dir env vars (Windows guard)', () => {
     const ctx: RunContext = {
       run: agentRun,
       emit: (type, payload) => events.push({ type, payload: payload as Record<string, unknown> }),
-      awaitInput: async () => 'approve',
-      allowAll: new Set<string>(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(),
       signal: abort.signal,
     };
 
@@ -447,8 +447,8 @@ describe('runKiro — KIRO_TEST_DB_PATH injected for identity_center credential'
     const ctx: RunContext = {
       run: agentRun,
       emit: (type, payload) => events.push({ type, payload: payload as Record<string, unknown> }),
-      awaitInput: async () => 'approve',
-      allowAll: new Set<string>(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(),
       signal: abort.signal,
     };
 
@@ -639,8 +639,8 @@ describe('runKiro — IDC materialisation failure → run throws user-actionable
     };
     const abort = new AbortController();
     const ctx: RunContext = {
-      run: agentRun, emit: () => {}, awaitInput: async () => 'approve',
-      allowAll: new Set<string>(), signal: abort.signal,
+      run: agentRun, emit: () => {}, awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(), signal: abort.signal,
     };
 
     let threw = false;
@@ -723,8 +723,8 @@ describe('runKiro — IDC hook ignored → run refused with API-key suggestion',
     };
     const abort = new AbortController();
     const ctx: RunContext = {
-      run: agentRun, emit: () => {}, awaitInput: async () => 'approve',
-      allowAll: new Set<string>(), signal: abort.signal,
+      run: agentRun, emit: () => {}, awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(), signal: abort.signal,
     };
 
     let threw = false;
@@ -918,8 +918,8 @@ describe('runKiro — IDC token write-back when kiro-cli refreshes access_token'
     };
     const abort = new AbortController();
     const ctx: RunContext = {
-      run: agentRun, emit: () => {}, awaitInput: async () => 'approve',
-      allowAll: new Set<string>(), signal: abort.signal,
+      run: agentRun, emit: () => {}, awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(), signal: abort.signal,
     };
 
     await runKiro(ctx);

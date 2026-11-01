@@ -25,7 +25,8 @@ import { emit } from '../events.ts';
 import { shutdownSessionBrowser } from '../agent/browser-manager.ts';
 import { cancelRun } from './controls.ts';
 import { startRun } from './driver.ts';
-import { resolveApproval } from '../agent/runner.ts';
+import { resolveApproval } from '../agent/approvals.ts';
+import { inputFingerprint } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
 import { createChildSession, checkDelegationLimits, getDelegationSettings, stopAndDeleteChildren } from '../delegation.ts';
 import { checkKey, issueDetail, mustMapping } from '../jira.ts';
@@ -246,6 +247,13 @@ export function registerWorkflowRoutes(): void {
     const requestEngine: Engine | null = body.engine ? validateEngine(body.engine) : null;
 
     const trustTools = Boolean(body.trustTools ?? false);
+
+    // Safety: turning on "trust all tools" can only be done from a signed-in browser session
+    // (API tokens should not be able to bypass guardrails on behalf of a user).
+    if (trustTools && req.authViaToken) {
+      sendJson(res, 403, { error: 'API tokens cannot turn on "trust all tools". Do this from a signed-in browser.' });
+      return;
+    }
 
     // Validate leadAgent from request (null = not specified)
     const requestLeadAgent: string | null = body.leadAgent
@@ -600,28 +608,65 @@ export function registerWorkflowRoutes(): void {
     const inputId = str(body.inputId as string, 'inputId');
     const response = body.response;
     const allowAll = Boolean(body.allowAll ?? false);
+    const clientHash = typeof body.inputHash === 'string' ? body.inputHash : null;
 
     if (response !== 'approve' && response !== 'deny' && typeof response !== 'string') {
       sendJson(res, 400, { error: 'response must be "approve", "deny", or a string' });
       return;
     }
 
-    // Persist the response to the input record
-    dbRun(
-      'UPDATE p6_inputs SET response = ?, allow_all = ? WHERE id = ? AND run_id = ?',
+    // Load the input record for fingerprint and status checks.
+    const inputRow = one<Row>('SELECT * FROM p6_inputs WHERE id = ? AND run_id = ?', inputId, String(r.id));
+    if (!inputRow) { sendJson(res, 404, { error: 'Input not found' }); return; }
+
+    // An expired input cannot be answered.
+    if (inputRow.status === 'expired') {
+      sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
+      return;
+    }
+
+    // Fingerprint check: an approval must send back the exact hash the server stored.
+    // This ensures the call that runs is always the one the person reviewed.
+    if (response === 'approve') {
+      let storedHash = (inputRow.input_hash as string | null) ?? null;
+      // If not stored separately, re-derive from payload.
+      if (!storedHash) {
+        try {
+          const p = JSON.parse(inputRow.payload as string ?? '{}');
+          storedHash = p.inputHash ?? null;
+          if (!storedHash && inputRow.tool_input) {
+            const ti = JSON.parse(inputRow.tool_input as string);
+            storedHash = inputFingerprint(inputRow.tool_name as string, ti);
+          }
+        } catch { /* skip */ }
+      }
+      if (storedHash && clientHash !== storedHash) {
+        sendJson(res, 409, { error: 'This is not the tool call you reviewed. Reload the page and review it again.' });
+        return;
+      }
+    }
+
+    // Claim atomically — prevents two simultaneous answers both winning,
+    // and prevents an expiry timer overtaking an in-flight answer.
+    const claimed = dbRun(
+      "UPDATE p6_inputs SET status = 'answered', response = ?, allow_all = ?, answered_by = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
       JSON.stringify(response),
       allowAll ? 1 : 0,
+      req.user?.id ?? null,
+      now(),
       inputId,
-      String(r.id),
     );
-
-    const decision: 'approve' | 'deny' = response === 'approve' ? 'approve' : 'deny';
-    const resolved = resolveApproval(String(r.id), inputId, decision);
-
-    if (!resolved) {
-      // The run may have finished already — that's fine
-      sendJson(res, 200, { ok: true, note: 'Run was not waiting for this input' });
+    if (!claimed.changes) {
+      sendJson(res, 409, { error: 'Someone answered this a moment ago.' });
       return;
+    }
+
+    const decision: 'allow' | 'deny' = response === 'approve' ? 'allow' : 'deny';
+    const message = typeof body.message === 'string' ? body.message.slice(0, 2000) : '';
+    resolveApproval(String(r.id), inputId, decision, { remember: allowAll, message });
+
+    if (w.project_id) {
+      emit(String(w.project_id), { type: 'input.resolved', inputId, status: 'answered' });
     }
 
     sendJson(res, 200, { ok: true });

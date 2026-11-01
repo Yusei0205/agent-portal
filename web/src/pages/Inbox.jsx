@@ -48,7 +48,8 @@ function ApprovalItem({ item, onResolved }) {
   const resolve = async (response) => {
     setBusy(true);
     try {
-      await api.post(`/api/inbox/${item.id}/resolve`, { response });
+      const inputHash = item.payload?.inputHash ?? null;
+      await api.post(`/api/inbox/${item.id}/resolve`, { response, inputHash });
       setResolved(true);
       setResolutionLabel(response === 'approve' ? 'Approved' : 'Denied');
       if (onResolved) onResolved();

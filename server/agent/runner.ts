@@ -14,6 +14,7 @@
  * ALL decisions route through evaluateCommand() from guardrails.ts.
  */
 
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -22,6 +23,7 @@ import type { Row } from '../db.ts';
 import { generateId, now } from '../util.ts';
 import { emit, emitGlobal, publishRunEvent } from '../events.ts';
 import { loadRunPermissions, evaluateCommand } from '../guardrails.ts';
+import { getSettings } from '../settings.ts';
 import { createWorkDir, checkoutRepoToWorkDir } from '../workflows/working-copies.ts';
 import { repoRefDir } from '../repos.ts';
 import { registerRun, deregisterRun } from '../workflows/controls.ts';
@@ -92,35 +94,68 @@ function fireHook(workflowId: string, runId: string, event: 'start' | 'done' | '
   try { _runLifecycleHook(workflowId, runId, event); } catch { /* hook errors must not crash the runner */ }
 }
 
-// ── Pending approval map ──────────────────────────────────────────────────────
+// ── Fingerprinting (FR-GUARD-8) ───────────────────────────────────────────────
 
-interface PendingApproval {
-  resolve: (v: 'approve' | 'deny') => void;
-  reject: (e: unknown) => void;
+/** The fields of a tool call that decide what it does. These are shown whole in the approval, never cut. */
+const DECIDING_FIELDS = new Set(['command', 'url', 'file_path', 'notebook_path', 'path', 'pattern', 'branch']);
+
+/** A shell command longer than this is refused instead of shown to a person: nobody can review it meaningfully. */
+export const MAX_REVIEWABLE_COMMAND = 20_000;
+
+/** JSON with sorted keys so the same tool call always produces the same text. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
 }
 
-/** runId → inputId → resolver */
-const pendingApprovals = new Map<string, Map<string, PendingApproval>>();
+/** SHA-256 fingerprint of one exact tool call. An approval must send it back. */
+export function inputFingerprint(toolName: string, input: unknown): string {
+  return createHash('sha256').update(canonicalJson({ tool: toolName, input })).digest('hex');
+}
 
-// ── Approval resolution (called by the CRUD API when a user responds) ─────────
+/** What an approval shows: deciding fields whole, other long strings cut at 4,000 characters. */
+function approvalView(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) {
+    out[k] = DECIDING_FIELDS.has(k) && typeof v === 'string' ? v : (typeof v === 'string' && v.length > 4000 ? v.slice(0, 4000) + `… (${v.length - 4000} more)` : v);
+  }
+  return out;
+}
 
 /**
- * Resolve a pending approval input.
- * Called from the /runs/:rid/input endpoint.
+ * What "allow for the rest of this run" covers: one exact shell command, one web host for WebFetch,
+ * or one other tool name. This prevents a single approval from covering any later variant.
  */
-export function resolveApproval(
-  runId: string,
-  inputId: string,
-  decision: 'approve' | 'deny',
-): boolean {
-  const runMap = pendingApprovals.get(runId);
-  const pending = runMap?.get(inputId);
-  if (!pending) return false;
-  runMap!.delete(inputId);
-  if (runMap!.size === 0) pendingApprovals.delete(runId);
-  pending.resolve(decision);
-  return true;
+export function rememberKey(toolName: string, input: Record<string, unknown>): { key: string; scope: 'command' | 'host' | 'tool'; label: string } {
+  if (toolName === 'Bash' || toolName === 'bash' || toolName === 'execute_bash' || toolName === 'execute_command') {
+    const command = String(input.command ?? input.cmd ?? '');
+    return { key: `Bash\u0000${command}`, scope: 'command', label: command };
+  }
+  if (toolName === 'WebFetch' || toolName === 'web_fetch') {
+    let host = '';
+    try {
+      host = new URL(String(input.url ?? '')).host.toLowerCase();
+    } catch { /* not a URL — treat as exact */ }
+    return host
+      ? { key: `WebFetch\u0000${host}`, scope: 'host', label: host }
+      : { key: `WebFetch\u0000${String(input.url ?? '')}`, scope: 'command', label: String(input.url ?? '') };
+  }
+  return { key: toolName, scope: 'tool', label: toolName };
 }
+
+// ── Pending approval map ──────────────────────────────────────────────────────
+// Moved to approvals.ts to break the runner→inbox→runner circular import.
+// Re-exported here so existing consumers (crud.ts) can keep their imports.
+
+import type { PendingApproval } from './approvals.ts';
+import { pendingApprovals, resolveApproval } from './approvals.ts';
+export { resolveApproval } from './approvals.ts';
 
 // ── SSE event emission ────────────────────────────────────────────────────────
 
@@ -319,7 +354,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       run: agentRun,
       emit: (type, payload) => emitRunEvent(runId, agentRun.projectId, agentRun.workflowId, type, payload),
       awaitInput: (toolName, toolInput) => awaitApproval(runId, workflowId, agentRun, toolName, toolInput, runApprovals, ctrl.signal),
-      allowAll: new Set<string>(),
+      allowed: new Set<string>(),
       signal: ctrl.signal,
     };
 
@@ -353,17 +388,45 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       agentRun.goal = `${reposLine}\n\n${agentRun.goal}`;
     }
 
+    // ── Run-time limit (FR-GUARD-10) ────────────────────────────────────────
+    // Apply the per-workflow override or the global setting. The timer fires on the
+    // AbortController so the engine sees a standard abort and the finally block
+    // records the stop reason cleanly.
+    const wfTimeoutMinutes = workflow.run_timeout_minutes != null ? Number(workflow.run_timeout_minutes) : null;
+    const settingsTimeoutMinutes = getSettings().agents.runTimeoutMinutes;
+    const effectiveTimeoutMinutes = wfTimeoutMinutes ?? settingsTimeoutMinutes;
+    let timeLimitTimer: ReturnType<typeof setTimeout> | null = null;
+    let _stopReason: string | null = null;
+    if (effectiveTimeoutMinutes != null && effectiveTimeoutMinutes > 0) {
+      const limitAt = new Date(Date.now() + effectiveTimeoutMinutes * 60_000).toISOString();
+      dbRun('UPDATE p6_runs SET time_limit_at = ? WHERE id = ?', limitAt, runId);
+      timeLimitTimer = setTimeout(() => {
+        _stopReason = `time limit reached (${effectiveTimeoutMinutes} minutes)`;
+        ctrl.abort();
+      }, effectiveTimeoutMinutes * 60_000);
+      timeLimitTimer.unref?.();
+    }
+
     // Run the appropriate engine
     let result: string;
-    if (agentRun.engine === 'demo') {
-      result = await runDemo(runContext);
-    } else if (agentRun.engine === 'claude-code') {
-      result = await runClaudeCode(runContext);
-    } else if (agentRun.engine === 'kiro') {
-      result = await runKiro(runContext);
-    } else {
-      // Unknown engine: fail with a clear error (requirement D-12 — no silent fallback)
-      throw new Error(`Unknown engine "${agentRun.engine}". Set the workflow engine to claude-code, kiro, or demo.`);
+    try {
+      if (agentRun.engine === 'demo') {
+        result = await runDemo(runContext);
+      } else if (agentRun.engine === 'claude-code') {
+        result = await runClaudeCode(runContext);
+      } else if (agentRun.engine === 'kiro') {
+        result = await runKiro(runContext);
+      } else {
+        // Unknown engine: fail with a clear error (requirement D-12 — no silent fallback)
+        throw new Error(`Unknown engine "${agentRun.engine}". Set the workflow engine to claude-code, kiro, or demo.`);
+      }
+    } finally {
+      if (timeLimitTimer) clearTimeout(timeLimitTimer);
+    }
+
+    // Record stop_reason if the abort was from a limit (vs user cancel)
+    if (_stopReason) {
+      dbRun('UPDATE p6_runs SET stop_reason = ? WHERE id = ?', _stopReason, runId);
     }
 
     // Success: update run record
@@ -463,6 +526,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     const runApprovals = pendingApprovals.get(runId);
     if (runApprovals) {
       for (const p of runApprovals.values()) {
+        clearTimeout(p.timer);
         p.reject(new DOMException('Run ended', 'AbortError'));
       }
       pendingApprovals.delete(runId);
@@ -489,46 +553,102 @@ async function awaitApproval(
   workflowId: string,
   run: AgentRun,
   toolName: string,
-  toolInput: string,
+  toolInput: Record<string, unknown>,
   runApprovals: Map<string, PendingApproval>,
   signal: AbortSignal,
-): Promise<'approve' | 'deny'> {
+): Promise<{ decision: 'allow' | 'deny'; remember: boolean; message: string; expired?: boolean }> {
   const inputId = generateId();
 
-  // Record in p6_inputs
+  // Fingerprint — the approver must send this back so the call that runs is always the one they saw.
+  const hash = inputFingerprint(toolName, toolInput);
+  const remember = rememberKey(toolName, toolInput);
+  const view = approvalView(toolInput);
+
+  // Expiry: forgotten approvals must not hold a run (and an AgentCore microVM) for ever.
+  const settings = getSettings();
+  const minutes = Number(settings.agents.approvalExpiryMinutes ?? 60);
+  const expiresAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000).toISOString() : null;
+
+  const payload = {
+    toolName,
+    input: view,
+    inputHash: hash,
+    rememberScope: remember.scope,
+    rememberLabel: remember.label.slice(0, 300),
+  };
+
+  // Record in p6_inputs with full status tracking (DB is source of truth for AgentCore polling).
   insert('p6_inputs', {
     id: inputId,
     run_id: runId,
+    project_id: run.projectId,
     tool_name: toolName,
-    tool_input: toolInput,
-    response: null,
+    tool_input: JSON.stringify(toolInput),
+    payload: JSON.stringify(payload),
+    input_hash: hash,
+    type: 'approval',
+    status: 'pending',
     allow_all: 0,
+    expires_at: expiresAt,
     created_at: now(),
   });
 
-  // Create an inbox item for the approval
+  // Create inbox item for UI notification.
   createInboxItem({
     type: 'approval',
-    payload: { inputId, toolName, toolInput: JSON.parse(toolInput.length > 4000 ? toolInput.slice(0, 4000) : toolInput) },
+    payload: { inputId, toolName, toolInput: view, inputHash: hash },
     projectId: run.projectId,
     workflowId,
     runId,
   });
 
-  // Update run to waiting
   dbRun('UPDATE p6_runs SET status = ? WHERE id = ?', 'running', runId);
 
   emitRunEvent(runId, run.projectId, workflowId, 'approval-request', {
     inputId,
     toolName,
-    toolInput,
+    toolInput: JSON.stringify(toolInput),
+    inputHash: hash,
+    expiresAt,
   });
 
-  return new Promise<'approve' | 'deny'>((resolve, reject) => {
-    runApprovals.set(inputId, { resolve, reject });
+  if (run.projectId) {
+    emit(run.projectId, { type: 'input.created', inputId, toolName, expiresAt });
+  }
+
+  return new Promise<{ decision: 'allow' | 'deny'; remember: boolean; message: string; expired?: boolean }>((resolve, reject) => {
+    const pending: PendingApproval = { resolve, reject };
+    runApprovals.set(inputId, pending);
+
+    // Expiry timer: when nobody answers in time, deny the call and record the expiry.
+    if (minutes > 0) {
+      pending.timer = setTimeout(() => {
+        if (runApprovals.get(inputId) !== pending) return; // already answered
+        const claimed = dbRun(
+          "UPDATE p6_inputs SET status = 'expired', answered_at = ? WHERE id = ? AND status = 'pending'",
+          now(),
+          inputId,
+        );
+        if (!claimed.changes) return;
+        runApprovals.delete(inputId);
+        if (run.projectId) emit(run.projectId, { type: 'input.resolved', inputId, status: 'expired' });
+        emitRunEvent(runId, run.projectId, workflowId, 'approval-expired', { inputId, minutes });
+        resolve({
+          decision: 'deny',
+          remember: false,
+          message: `Nobody answered within ${minutes} minutes, so this was declined. Carry on without it, or report blocked and say what you need.`,
+          expired: true,
+        });
+      }, minutes * 60_000);
+      pending.timer.unref?.();
+    }
 
     const onAbort = (): void => {
+      clearTimeout(pending.timer);
+      if (runApprovals.get(inputId) !== pending) return;
       runApprovals.delete(inputId);
+      dbRun("UPDATE p6_inputs SET status = 'cancelled' WHERE id = ? AND status = 'pending'", inputId);
+      if (run.projectId) emit(run.projectId, { type: 'input.resolved', inputId, status: 'cancelled' });
       reject(new DOMException('Run cancelled', 'AbortError'));
     };
 

@@ -138,8 +138,8 @@ async function makeRunContext(
     emit: (type, payload) => {
       events.push({ type, payload: payload as Record<string, unknown> });
     },
-    awaitInput: async () => 'approve',
-    allowAll: new Set<string>(),
+    awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+    allowed: new Set<string>(),
     signal: abort.signal,
   };
 
@@ -301,7 +301,7 @@ describe('Claude Code engine — guardrails', () => {
     process.env.PORTAL_FAKE_SDK_SCENARIO = 'guardrail-ask';
     let approvalCalled = false;
     const { ctx } = await makeRunContext(t, { trusted: false });
-    ctx.awaitInput = async () => { approvalCalled = true; return 'approve'; };
+    ctx.awaitInput = async () => { approvalCalled = true; return { decision: 'allow' as const, remember: false, message: '' }; };
 
     await runClaudeCode(ctx);
     assert.ok(approvalCalled, 'awaitInput should be called for ask-action tool');
@@ -310,7 +310,7 @@ describe('Claude Code engine — guardrails', () => {
   it('emits tool-blocked when user denies an ask-action tool', async () => {
     process.env.PORTAL_FAKE_SDK_SCENARIO = 'guardrail-ask';
     const { ctx, events } = await makeRunContext(t, { trusted: false });
-    ctx.awaitInput = async () => 'deny';
+    ctx.awaitInput = async () => ({ decision: 'deny' as const, remember: false, message: '' });
 
     await runClaudeCode(ctx);
     const blocked = events.filter((e) => e.type === 'tool-blocked');
@@ -321,7 +321,7 @@ describe('Claude Code engine — guardrails', () => {
     process.env.PORTAL_FAKE_SDK_SCENARIO = 'guardrail-ask';
     let approvalCalled = false;
     const { ctx, events } = await makeRunContext(t, { trusted: true });
-    ctx.awaitInput = async () => { approvalCalled = true; return 'approve'; };
+    ctx.awaitInput = async () => { approvalCalled = true; return { decision: 'allow' as const, remember: false, message: '' }; };
 
     await runClaudeCode(ctx);
     assert.ok(!approvalCalled, 'awaitInput should NOT be called for trusted workflow');
@@ -411,8 +411,8 @@ describe('Claude Code engine — credentials and cancellation', () => {
         model: null,
       },
       emit: () => {},
-      awaitInput: async () => 'approve',
-      allowAll: new Set<string>(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(),
       signal: abort.signal,
     };
 
@@ -593,8 +593,8 @@ describe('Kiro engine — failure modes (no fallback)', () => {
         model: null,
       },
       emit: () => {},
-      awaitInput: async () => 'approve',
-      allowAll: new Set<string>(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set<string>(),
       signal: abort.signal,
     };
 

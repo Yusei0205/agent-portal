@@ -178,8 +178,8 @@ describe('Kiro engine — --model flag pass-through', () => {
     const ctx: RunContext = {
       run: agentRun,
       emit: (type, payload) => emitted.push({ type, payload: payload as Record<string, unknown> }),
-      awaitInput: async () => 'approve',
-      allowAll: new Set(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set(),
       signal: null,
     };
 
@@ -228,8 +228,8 @@ describe('Kiro engine — --model flag pass-through', () => {
     const ctx: RunContext = {
       run: agentRun,
       emit: () => {},
-      awaitInput: async () => 'approve',
-      allowAll: new Set(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set(),
       signal: null,
     };
 
@@ -305,8 +305,8 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
     const ctx: RunContext = {
       run: agentRun,
       emit: () => {},
-      awaitInput: async () => 'approve',
-      allowAll: new Set(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set(),
       signal: null,
     };
 
@@ -357,8 +357,8 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
     const ctx: RunContext = {
       run: agentRun,
       emit: () => {},
-      awaitInput: async () => 'approve',
-      allowAll: new Set(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set(),
       signal: null,
     };
 
@@ -409,8 +409,8 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
     const ctx: RunContext = {
       run: agentRun,
       emit: () => {},
-      awaitInput: async () => 'approve',
-      allowAll: new Set(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set(),
       signal: null,
     };
 
@@ -461,8 +461,8 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
     const ctx: RunContext = {
       run: agentRun,
       emit: () => {},
-      awaitInput: async () => 'approve',
-      allowAll: new Set(),
+      awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
+      allowed: new Set(),
       signal: null,
     };
 

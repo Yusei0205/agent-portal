@@ -26,6 +26,9 @@ import type { KiroModelRaw } from './kiro-list-models.ts';
 export type ProviderMode = 'demo' | 'anthropic' | 'bedrock' | 'kiro' | 'litellm';
 export type AwsAuth = 'ambient' | 'profile' | 'keys' | 'bedrock-key' | 'sso';
 
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export const EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
 export interface Settings {
   provider: {
     mode: ProviderMode;
@@ -41,6 +44,19 @@ export interface Settings {
     ssoRegion: string;
     ssoAccountId: string;
     ssoRoleName: string;
+  };
+  /** Agent-run behaviour limits and defaults. */
+  agents: {
+    /** Minutes an agent's question or tool approval waits for a person before the run carries on without it (0 = until the run is stopped). */
+    approvalExpiryMinutes: number;
+    /** Spend cap for one run in USD, subagents included (null = none). */
+    maxBudgetUsdPerRun: number | null;
+    /** Minutes one run may work, not counting time spent waiting for a person (null = no limit). */
+    runTimeoutMinutes: number | null;
+    /** Default thinking effort ('' = the model's own default). */
+    effort: '' | EffortLevel;
+    /** Minutes one MCP tool call (an integration) may take before Claude Code gives up on it. 0 or null = no limit. */
+    mcpToolTimeoutMinutes: number;
   };
   deployTarget: string | null;
   trustProxy: boolean;
@@ -78,6 +94,13 @@ const DEFAULTS: Settings = {
     ssoRegion: '',
     ssoAccountId: '',
     ssoRoleName: '',
+  },
+  agents: {
+    approvalExpiryMinutes: 60,
+    maxBudgetUsdPerRun: 5,
+    runTimeoutMinutes: 60,
+    effort: '',
+    mcpToolTimeoutMinutes: 10,
   },
   deployTarget: null,
   trustProxy: false,
@@ -160,6 +183,32 @@ export function getSettings(db?: DatabaseSync): Settings {
 
   const deployTarget = getSetting(d, 'deploy.target');
   if (deployTarget) out.deployTarget = deployTarget;
+
+  // Agent-run limits
+  const approvalExpiry = getSetting(d, 'agents.approvalExpiryMinutes');
+  if (approvalExpiry !== null) {
+    const v = parseFloat(approvalExpiry);
+    if (!isNaN(v)) out.agents.approvalExpiryMinutes = v;
+  }
+  const maxBudget = getSetting(d, 'agents.maxBudgetUsdPerRun');
+  if (maxBudget !== null) {
+    const v = parseFloat(maxBudget);
+    out.agents.maxBudgetUsdPerRun = isNaN(v) ? null : v;
+  }
+  const runTimeout = getSetting(d, 'agents.runTimeoutMinutes');
+  if (runTimeout !== null) {
+    const v = parseFloat(runTimeout);
+    out.agents.runTimeoutMinutes = isNaN(v) ? null : v;
+  }
+  const effortVal = getSetting(d, 'agents.effort');
+  if (effortVal !== null) out.agents.effort = effortVal as ('' | EffortLevel);
+
+  const mcpTimeout = getSetting(d, 'agents.mcpToolTimeoutMinutes');
+  if (mcpTimeout !== null) {
+    const v = parseInt(mcpTimeout, 10);
+    if (!isNaN(v) && v >= 0) out.agents.mcpToolTimeoutMinutes = v;
+  }
+
 
   const trustProxy = getSetting(d, 'trust.proxy');
   if (trustProxy) out.trustProxy = trustProxy === 'true';
@@ -279,6 +328,12 @@ function publicSettings(db?: DatabaseSync): object {
       model: s.litellm.model,
       showGatewayWarning: s.litellm.showGatewayWarning,
     },
+    agents: {
+      approvalExpiryMinutes: s.agents.approvalExpiryMinutes,
+      maxBudgetUsdPerRun: s.agents.maxBudgetUsdPerRun,
+      runTimeoutMinutes: s.agents.runTimeoutMinutes,
+      effort: s.agents.effort,
+    },
   };
 }
 
@@ -292,6 +347,17 @@ export async function getAgentEnv(db?: DatabaseSync, _projectId?: string): Promi
   const d = db ?? getDb();
   const s = getSettings(d);
   const env: Record<string, string> = {};
+
+  // All Claude runs share one config folder; auto-memory would carry notes across
+  // projects unreviewed. Project knowledge uses CLAUDE.md and the decisions log.
+  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+
+  // MCP (integration) tool calls have no built-in time limit in Claude Code.
+  // A hung integration would hold the run and its slot indefinitely.
+  const mcpMinutes = s.agents.mcpToolTimeoutMinutes ?? 10;
+  if (mcpMinutes > 0) {
+    env.MCP_TOOL_TIMEOUT = String(mcpMinutes * 60_000);
+  }
 
   if (s.provider.mode === 'anthropic' && s.provider.anthropicKeyEnc) {
     try {
@@ -354,6 +420,21 @@ export async function getAgentEnv(db?: DatabaseSync, _projectId?: string): Promi
 
   if (s.headroomProxyUrl) {
     env.ANTHROPIC_BASE_URL = s.headroomProxyUrl;
+  }
+
+  // Credential scrubbing: keep model keys out of the agent's shell commands.
+  // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 makes Claude Code drop *_KEY, *_SECRET, *_TOKEN
+  // vars from the environment it passes to shell commands and MCP servers.
+  // On Windows this only hides the variables. On Linux/macOS it also activates
+  // Claude Code's sandbox mode, which requires bubblewrap+socat; without them every
+  // shell command fails. So on Linux/macOS it is off by default (PORTAL_AGENT_ENV_SCRUB=1
+  // enables it for operators who have set up the sandbox).
+  // server/agent/env-scrub.ts's scrubEnvForShell() is used for AgentCore containers.
+  if (s.provider.mode === 'anthropic' || s.provider.mode === 'bedrock') {
+    const { shouldScrubSdkEnv } = await import('./agent/env-scrub.ts');
+    if (shouldScrubSdkEnv()) {
+      env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';
+    }
   }
 
   return env;
@@ -1250,6 +1331,39 @@ export function registerSettingsRoutes(): void {
       }
       if (typeof ll.model === 'string' && ll.model) {
         setSetting(db, 'litellm.model', JSON.stringify(ll.model.trim()));
+      }
+    }
+
+    // Agent-run limits (FR-GUARD-8, FR-GUARD-10)
+    if (body.agents !== undefined && typeof body.agents === 'object' && body.agents !== null) {
+      const a = body.agents as Record<string, unknown>;
+      if (a.approvalExpiryMinutes !== undefined) {
+        const expiry = Number(a.approvalExpiryMinutes);
+        if (!Number.isFinite(expiry) || expiry < 0 || expiry > 10080) throw badRequest('Minutes a question or approval waits must be from 0 (no limit) to 10080');
+        setSetting(db, 'agents.approvalExpiryMinutes', String(expiry));
+      }
+      if (a.maxBudgetUsdPerRun !== undefined) {
+        if (a.maxBudgetUsdPerRun === null || a.maxBudgetUsdPerRun === '') {
+          setSetting(db, 'agents.maxBudgetUsdPerRun', '');
+        } else {
+          const v = Number(a.maxBudgetUsdPerRun);
+          if (!Number.isFinite(v) || v < 0.01 || v > 1000) throw badRequest('Budget per run must be from $0.01 to $1000, or empty for no limit');
+          setSetting(db, 'agents.maxBudgetUsdPerRun', String(v));
+        }
+      }
+      if (a.runTimeoutMinutes !== undefined) {
+        if (a.runTimeoutMinutes === null || a.runTimeoutMinutes === '') {
+          setSetting(db, 'agents.runTimeoutMinutes', '');
+        } else {
+          const v = Number(a.runTimeoutMinutes);
+          if (!Number.isFinite(v) || v < 0.01 || v > 1440) throw badRequest('Time limit per run must be from 0.01 to 1440 minutes, or empty for no limit');
+          setSetting(db, 'agents.runTimeoutMinutes', String(v));
+        }
+      }
+      if (a.effort !== undefined) {
+        const eff = String(a.effort ?? '');
+        if (eff !== '' && !EFFORT_LEVELS.includes(eff as EffortLevel)) throw badRequest('Thinking effort must be low, medium, high, xhigh, max or empty for model default');
+        setSetting(db, 'agents.effort', eff);
       }
     }
 

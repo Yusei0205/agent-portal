@@ -1,0 +1,57 @@
+# CI for main_v3 — runs on every pull request and on pushes to main_v3.
+#
+# "checks" job: type check, backend tests (affected modules only, --all for
+# shared-core changes), and the production build.  The UI smoke suite is NOT
+# run here — it requires a running server and headed Chromium, which exceeds
+# the ephemeral runner budget for every PR.  Run it locally or on a dedicated
+# self-hosted runner.
+#
+# Make "checks" a required check on main_v3 (Settings › Branches) so nothing
+# merges red.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main_v3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Types, backend tests, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Backend tests (affected modules)
+        # --all so shared-core changes (db.ts, settings.ts, runner.ts …) run everything.
+        # --backend-only skips the UI smoke suite that needs a live browser.
+        run: npm run test:affected -- --backend-only --all
+        timeout-minutes: 20
+
+      - name: Validate test module map
+        run: npm run test:map:check
+
+      - name: Build
+        run: npm run build

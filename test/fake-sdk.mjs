@@ -164,6 +164,99 @@ export async function* query({ prompt, options }) {
     return;
   }
 
+  // ── approvals scenario ──────────────────────────────────────────────────────
+  // Used by approval-binding.test.ts.
+  if (scenario === 'approvals') {
+    globalThis.__fakeSdkCalls = globalThis.__fakeSdkCalls ?? [];
+    const calls = {};
+    globalThis.__fakeSdkCalls.push(calls);
+
+    // 1. A Bash command that is exactly 5005 chars (over 4000, under 20 000)
+    const longCmd = 'x'.repeat(5000) + ' -v';
+    calls.longBash = canUseTool ? await canUseTool('Bash', { command: longCmd }, {}) : { behavior: 'allow' };
+
+    // 2. WebFetch host 1 (should ask, remember=true)
+    calls.fetch1 = canUseTool ? await canUseTool('WebFetch', { url: 'https://docs.example.com/a' }, {}) : { behavior: 'allow' };
+    // 3. WebFetch same host (should be auto-allowed by remember)
+    calls.fetch2 = canUseTool ? await canUseTool('WebFetch', { url: 'https://docs.example.com/b' }, {}) : { behavior: 'allow' };
+    // 4. WebFetch different host (should ask again)
+    calls.fetch3 = canUseTool ? await canUseTool('WebFetch', { url: 'https://evil.example.net/x' }, {}) : { behavior: 'allow' };
+    // 5. Bash command > 20 000 chars (should be auto-denied)
+    const hugeCmd = 'y'.repeat(20_001);
+    calls.huge = canUseTool ? await canUseTool('Bash', { command: hugeCmd }, {}) : { behavior: 'allow' };
+
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Approvals scenario done.' }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    };
+    yield { type: 'result', subtype: 'success', total_cost_usd: 0.001, num_turns: 1, is_error: false, result: 'done', stop_reason: 'end_turn' };
+    return;
+  }
+
+  // ── expiry scenario ──────────────────────────────────────────────────────────
+  // Used by approval-binding.test.ts to verify that unanswered approvals expire.
+  if (scenario === 'expiry') {
+    globalThis.__fakeSdkCalls = globalThis.__fakeSdkCalls ?? [];
+    const calls = {};
+    globalThis.__fakeSdkCalls.push(calls);
+
+    // Bash — will time out (test sets approvalExpiryMinutes very short)
+    const resp = canUseTool ? await canUseTool('Bash', { command: 'ls .' }, {}) : { behavior: 'deny', message: 'none' };
+    calls.expiredBash = resp;
+
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Expiry scenario done.' }],
+        usage: { input_tokens: 5, output_tokens: 3 },
+      },
+    };
+    yield { type: 'result', subtype: 'success', total_cost_usd: 0.001, num_turns: 1, is_error: false, result: 'done', stop_reason: 'end_turn' };
+    return;
+  }
+
+  // ── budget scenario ──────────────────────────────────────────────────────────
+  // Used by run-limits.test.ts. Simulates a run that hits the budget cap.
+  if (scenario === 'budget') {
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Starting work...' }],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    };
+    yield {
+      type: 'result',
+      subtype: 'error_max_budget_usd',
+      stop_reason: 'error_max_budget_usd',
+      total_cost_usd: 5.01,
+      num_turns: 1,
+      is_error: true,
+      result: 'Budget cap reached.',
+    };
+    return;
+  }
+
+  // ── spend-then-hang scenario ─────────────────────────────────────────────────
+  // Used by run-limits.test.ts. Hangs so the time limit fires.
+  if (scenario === 'spend-then-hang') {
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Working...' }],
+        usage: { input_tokens: 50, output_tokens: 20 },
+      },
+    };
+    // Hang until aborted — the runner's time-limit timer will abort the SDK.
+    await new Promise((_r, _j) => {
+      options?.abortController?.signal?.addEventListener('abort', () => _j(new DOMException('Run cancelled', 'AbortError')));
+    });
+    return;
+  }
+
   // Normal scenario: text + tool use + tool result
   const promptStr = typeof prompt === 'string' ? prompt.slice(0, 40) : 'task';
   yield {
@@ -247,3 +340,4 @@ export async function* _sessionScenario({ options }) {
     session_id: 'sdk-session-001',
   };
 }
+

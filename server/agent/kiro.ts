@@ -31,6 +31,7 @@ import { run as dbRun, insert, one, getDb, all } from '../db.ts';
 import type { Row } from '../db.ts';
 import { now, generateId, HttpError } from '../util.ts';
 import { getAgentEnv, getSettings, getSetting } from '../settings.ts';
+import { guardToolCall } from './guard.ts';
 import {
   resolveCredentialEnv,
   IDC_TOKEN_KEY, IDC_REGION_KEY, IDC_EXPIRY_KEY, IDC_START_URL_KEY,
@@ -538,7 +539,21 @@ async function runKiroAcp(
         const toolCall = p?.toolCall ?? {};
         const options = p?.options ?? [];
         const toolName = toolCall.title ?? toolCall.name ?? 'Tool';
-        const toolInput = JSON.stringify(parseRawInput(toolCall.rawInput));
+        const toolInputParsed = parseRawInput(toolCall.rawInput);
+
+        // Guard: check protected files and commands regardless of trust.
+        // NOTE: This only fires for tool calls kiro-cli escalates for permission.
+        // Kiro CLI gap: file writes that kiro-cli performs without asking for
+        // permission (e.g. writes it deems safe) bypass this check. A post-run
+        // verification of .claude/ and .git/ directories would be needed for full
+        // coverage. Pre-run setup can also write-protect these paths at the OS level.
+        const guardReason = guardToolCall(toolName, toolInputParsed, workDir);
+        if (guardReason) {
+          const denyOpt = options.find((o) => o.kind === 'reject_once' || o.kind === 'reject_always');
+          const chosenOptionId = denyOpt?.optionId ?? options[options.length - 1]?.optionId ?? 'reject_once';
+          emit('tool-blocked', { toolName, toolInput: JSON.stringify(toolInputParsed), reason: guardReason });
+          return { optionId: chosenOptionId };
+        }
 
         let chosenOptionId: string;
 
@@ -548,13 +563,14 @@ async function runKiroAcp(
           chosenOptionId = allowOpt?.optionId ?? options[0]?.optionId ?? 'allow_once';
         } else {
           // Untrusted → ask user via approval flow
-          let approval: 'approve' | 'deny';
+          let decision: 'allow' | 'deny';
           try {
-            approval = await ctx.awaitInput(toolName, toolInput);
+            const resp = await ctx.awaitInput(toolName, toolInputParsed);
+            decision = resp.decision;
           } catch {
-            approval = 'deny';
+            decision = 'deny';
           }
-          if (approval === 'approve') {
+          if (decision === 'allow') {
             const allowOpt = options.find((o) => o.kind === 'allow_once' || o.kind === 'allow_always');
             chosenOptionId = allowOpt?.optionId ?? options[0]?.optionId ?? 'allow_once';
           } else {

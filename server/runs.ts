@@ -30,6 +30,8 @@ function runView(r: Row) {
     cost_usd: r.cost_usd ?? 0,
     input_tokens: r.input_tokens ?? 0,
     output_tokens: r.output_tokens ?? 0,
+    stop_reason: (r.stop_reason as string | null) ?? null,
+    time_limit_at: (r.time_limit_at as string | null) ?? null,
     created_at: r.created_at,
   };
 }
@@ -131,6 +133,42 @@ export function registerRunRoutes(): void {
     if (!workflow) return;
     const r = one<Row>('SELECT * FROM p6_runs WHERE id = ?', req.params.id)!;
     sendJson(res, 200, { run: runView(r) });
+  });
+
+  // GET /api/inputs/:id — poll input status (used by AgentCore containers and tests)
+  // Returns the current status and (once answered) the response so a container
+  // can block-poll without an in-memory callback.
+  router.get('/api/inputs/:id', (req: PortalRequest, res: PortalResponse): void => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+    const row = one<Row>('SELECT * FROM p6_inputs WHERE id = ?', req.params.id);
+    if (!row) { sendJson(res, 404, { error: 'Input not found' }); return; }
+    // Access check: must be a member of the input's project (or admin)
+    if (!req.user.is_admin && row.project_id) {
+      const member = one<Row>(
+        'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
+        row.project_id as string,
+        req.user.id as string,
+      );
+      if (!member) { sendJson(res, 403, { error: 'Not a project member' }); return; }
+    }
+    let payload: unknown = {};
+    let response: unknown = null;
+    try { payload = JSON.parse(row.payload as string); } catch { /* keep empty */ }
+    try { if (row.response) response = JSON.parse(row.response as string); } catch { /* keep null */ }
+    sendJson(res, 200, {
+      input: {
+        id: row.id,
+        run_id: row.run_id,
+        type: row.type ?? 'approval',
+        status: row.status ?? 'pending',
+        tool_name: row.tool_name,
+        payload,
+        response,
+        expires_at: row.expires_at ?? null,
+        answered_at: row.answered_at ?? null,
+        created_at: row.created_at,
+      },
+    });
   });
 
   // GET /api/runs/:id/events (SSE stream)

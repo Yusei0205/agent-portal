@@ -13,6 +13,7 @@ import { one, all, insert, run } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, badRequest } from './util.ts';
 import { emit } from './events.ts';
+import { resolveApproval } from './agent/approvals.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -192,6 +193,64 @@ export function registerInboxRoutes(): void {
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const response = body.response ?? null;
+
+    // ── Approval-specific checks (mirrors the fingerprint/expiry/atomic-claim
+    //    logic in crud.ts POST /runs/:rid/input so the two paths cannot drift).
+    if (item.type === 'approval') {
+      const clientHash = typeof body.inputHash === 'string' ? body.inputHash : null;
+      const pl = safeJson(item.payload as string, {}) as Record<string, unknown>;
+      const inputId = typeof pl.inputId === 'string' ? pl.inputId : null;
+      const runId   = item.run_id ? String(item.run_id) : null;
+
+      if (!inputId || !runId) {
+        sendJson(res, 400, { error: 'Inbox item is missing inputId or runId' });
+        return;
+      }
+
+      const inputRow = one<Row>('SELECT * FROM p6_inputs WHERE id = ? AND run_id = ?', inputId, runId);
+      if (!inputRow) {
+        sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
+        return;
+      }
+
+      if (inputRow.status === 'expired') {
+        sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
+        return;
+      }
+
+      if (response === 'approve') {
+        let storedHash = (inputRow.input_hash as string | null) ?? null;
+        if (!storedHash) {
+          try {
+            const ipl = JSON.parse(inputRow.payload as string ?? '{}') as Record<string, unknown>;
+            storedHash = typeof ipl.inputHash === 'string' ? ipl.inputHash : null;
+          } catch { /* skip */ }
+        }
+        if (storedHash && clientHash !== storedHash) {
+          sendJson(res, 409, { error: 'This is not the tool call you reviewed. Reload the page and review it again.' });
+          return;
+        }
+      }
+
+      const claimed = run(
+        "UPDATE p6_inputs SET status = 'answered', response = ?, allow_all = 0, answered_by = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
+        JSON.stringify(response),
+        req.user.id as string,
+        now(),
+        inputId,
+      );
+      if (!claimed.changes) {
+        sendJson(res, 409, { error: 'Someone answered this a moment ago.' });
+        return;
+      }
+
+      const decision: 'allow' | 'deny' = response === 'approve' ? 'allow' : 'deny';
+      resolveApproval(runId, inputId, decision, { remember: false, message: '' });
+
+      if (item.project_id) {
+        emit(String(item.project_id), { type: 'input.resolved', inputId, status: 'answered' });
+      }
+    }
 
     run(
       'UPDATE p6_inbox SET resolved = 1, resolved_by = ?, resolved_at = ? WHERE id = ?',
