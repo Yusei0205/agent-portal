@@ -19,6 +19,7 @@ import { api } from '../../lib/api.js';
 import { navigate, href } from '../../lib/router.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
+import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
 import { fillGoalVars } from './ticketVars.js';
 
@@ -423,9 +424,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     }
   };
 
-  const onOverlayClick = (e) => {
-    if (e.target === e.currentTarget) onClose();
-  };
+  const onOverlayDismiss = useOverlayDismiss(onClose);
 
   // Credentials for the current engine (flattened from summary)
   const engineCreds = credSummary
@@ -436,7 +435,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={onOverlayClick}
+      onMouseDown={onOverlayDismiss.onMouseDown}
+      onClick={onOverlayDismiss.onClick}
       aria-hidden="false"
     >
       <div

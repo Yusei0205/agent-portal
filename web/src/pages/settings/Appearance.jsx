@@ -28,6 +28,7 @@ import {
   setActiveTemplate,
   applyTemplate,
 } from '../../lib/theme.js';
+import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 
 // IDs of templates that are always built-in (shipped with the app).
 // Used to distinguish real built-ins from server-orphaned registry entries.
@@ -1047,11 +1048,14 @@ function GenerateThemeModal({ onGenerated, onClose }) {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="modal-backdrop"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="modal"

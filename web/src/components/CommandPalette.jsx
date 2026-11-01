@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { href, navigate } from '../lib/router.js';
 import { getTheme, setTheme } from '../lib/theme.js';
 import { Icon } from './Icon.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Page catalogue ────────────────────────────────────────────────────────────
 
@@ -190,6 +191,9 @@ export function CommandPalette({ isOpen, onClose, onOpenShortcuts, route, user }
     activeItemRef.current?.scrollIntoView({ block: 'nearest' });
   }, [clampedIdx, isOpen]);
 
+  // Must be before early return — hook cannot be called after conditional return
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   if (!isOpen) return null;
 
   // Build sections (only non-empty)
@@ -227,7 +231,8 @@ export function CommandPalette({ isOpen, onClose, onOpenShortcuts, route, user }
   return (
     <div
       className="palette-backdrop"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
       role="presentation"
     >
       <div

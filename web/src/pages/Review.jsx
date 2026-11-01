@@ -4,6 +4,7 @@ import { navigate, href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── URL hash query helpers ────────────────────────────────────────────────────
 
@@ -186,11 +187,14 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose, { disabled: loading });
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => e.target === e.currentTarget && !loading && onClose()}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

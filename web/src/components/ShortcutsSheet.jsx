@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getShortcutDefs, subscribeShortcuts } from '../lib/shortcuts.js';
 import { Icon } from './Icon.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Focus trap ────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,9 @@ export function ShortcutsSheet({ isOpen, onClose }) {
     }
   }, [isOpen]);
 
+  // Must be before early return — hook cannot be called after conditional return
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   if (!isOpen) return null;
 
   // Group defs
@@ -89,7 +93,8 @@ export function ShortcutsSheet({ isOpen, onClose }) {
   return (
     <div
       className="shortcuts-backdrop"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
       role="presentation"
     >
       <div

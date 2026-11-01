@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { DiagramStyle } from '../components/DiagramStyle.jsx';
 import { MermaidViewer } from '../components/MermaidViewer.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
@@ -246,11 +247,14 @@ function RefreshDiagramDialog({ projectId, diagram, onClose, onRefreshed }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose, { disabled: busy || uploadsBusy });
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget && !busy && !uploadsBusy) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

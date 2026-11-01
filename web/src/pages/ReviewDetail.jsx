@@ -12,6 +12,7 @@ import { api } from '../lib/api.js';
 import { subscribeProject } from '../lib/events.js';
 import { href, navigate } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { formatRelative, formatDate } from '../lib/util.js';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 
@@ -215,13 +216,16 @@ function MergeDialog({ projectId, review, repoName, onClose, onMerged, onRerun }
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Merge pull request"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div className="modal" ref={dialogRef}>
         <div className="modal-header">

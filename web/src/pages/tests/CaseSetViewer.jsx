@@ -29,6 +29,7 @@ import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { formatRelative } from '../../lib/util.js';
 import { GenerationTracker, StepTimeline } from './GenerationTracker.jsx';
 import { buildCurl, prettyBody } from '../../lib/curlBuilder.js';
+import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import './tests-cases.css';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -440,11 +441,14 @@ function EditCaseDialog({ caseRow, onSave, onClose }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"
@@ -578,11 +582,14 @@ function AddCaseDialog({ existingCategories, onAdd, onClose }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

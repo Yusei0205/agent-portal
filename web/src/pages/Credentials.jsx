@@ -17,6 +17,7 @@ import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { AwsRegionSelect } from '../components/AwsRegionSelect.jsx';
 import { DeviceCodeBox } from '../components/DeviceCodeBox.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -221,12 +222,14 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
 
   const engineLabel = engine === 'kiro' ? 'Kiro' : 'Claude Code';
   const isDeviceFlow = deviceChallenge && deviceCredId;
+  const overlayDismiss = useOverlayDismiss(onClose);
 
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         ref={dialogRef}

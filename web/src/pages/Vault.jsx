@@ -7,6 +7,7 @@ import { navigate } from '../lib/router.js';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { buildFolderList } from '../lib/vaultFolders.js';
 
@@ -295,12 +296,14 @@ function MoveFolderDialog({ allFiles, currentFolder, busy, onMove, onClose }) {
   };
 
   const canMove = (custom.trim() !== '' || selected !== null) && !busy;
+  const overlayDismiss = useOverlayDismiss(onClose);
 
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

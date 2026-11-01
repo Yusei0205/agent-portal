@@ -4,6 +4,7 @@ import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -84,9 +85,7 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
     }
   };
 
-  const handleBackdropClick = (e) => {
-    if (e.target === e.currentTarget) onClose();
-  };
+  const overlayDismiss = useOverlayDismiss(onClose);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Escape') onClose();
@@ -96,7 +95,8 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={handleBackdropClick}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
       onKeyDown={handleKeyDown}
     >
       <div

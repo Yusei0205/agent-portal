@@ -22,6 +22,7 @@ import { GenerateCasesDialog } from './GenerateCasesDialog.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
+import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -553,11 +554,14 @@ function GenerateDialog({ testProjectId, projectId, groupId, onClose, onGenerate
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose, { disabled: uploadsBusy });
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget && !uploadsBusy) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"
@@ -681,11 +685,14 @@ function RefineDialog({ testProjectId, projectId, scriptId, onClose, onRefined }
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose, { disabled: uploadsBusy });
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget && !uploadsBusy) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"
@@ -793,11 +800,14 @@ function ImportTestsDialog({ testProjectId, projectId, onClose, onImported }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"
@@ -2407,11 +2417,14 @@ function NewTestProjectDialog({ projectId, repos, onClose, onCreate }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

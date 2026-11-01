@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
+import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 
 // ── Delegate-a-task dialog ────────────────────────────────────────────────────
@@ -72,11 +73,14 @@ function DelegateDialog({ workflowId, projectId, engine, onClose, onDelegated })
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

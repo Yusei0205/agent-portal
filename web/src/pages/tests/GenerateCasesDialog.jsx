@@ -16,6 +16,7 @@ import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { AttachmentPicker } from '../../components/AttachmentPicker.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
+import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 
 export function GenerateCasesDialog({ testProjectId, projectId, onClose, onGenerated }) {
   const [description, setDescription] = useState('');
@@ -61,12 +62,14 @@ export function GenerateCasesDialog({ testProjectId, projectId, onClose, onGener
   };
 
   const canSubmit = description.trim() && !busy && !uploadsBusy;
+  const overlayDismiss = useOverlayDismiss(onClose, { disabled: uploadsBusy });
 
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget && !uploadsBusy) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

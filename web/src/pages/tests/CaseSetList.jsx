@@ -19,6 +19,7 @@ import { formatRelative } from '../../lib/util.js';
 import { GenerationTracker } from './GenerationTracker.jsx';
 import { GenerateCasesDialog } from './GenerateCasesDialog.jsx';
 import { useBulkSelect } from '../../lib/useBulkSelect.js';
+import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { BulkActionBar } from '../../components/BulkActionBar.jsx';
 import './tests-cases.css';
 
@@ -52,11 +53,14 @@ function RenameCaseSetDialog({ caseSet, onSave, onClose }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose);
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

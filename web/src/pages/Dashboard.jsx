@@ -19,6 +19,7 @@ import { subscribeGlobal } from '../lib/events.js';
 import { href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { formatRelative, formatCost } from '../lib/util.js';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 
@@ -658,6 +659,7 @@ function ActiveSessionPanel({ activeSession }) {
 function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
   // Trap focus inside modal on mount
   const modalRef = useRef(null);
+  const overlayDismiss = useOverlayDismiss(onClose);
   useEffect(() => {
     const el = modalRef.current?.querySelector('button, [tabindex="0"]');
     el?.focus();
@@ -672,7 +674,8 @@ function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
       role="dialog"
       aria-modal="true"
       aria-label={`Runs for ${agent}`}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div ref={modalRef} className="modal modal-wide db-drill-modal">
         <div className="modal-header">

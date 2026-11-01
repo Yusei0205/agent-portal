@@ -11,6 +11,7 @@ import { navigate } from '../lib/router.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── URL hash query helpers ────────────────────────────────────────────────────
 
@@ -194,11 +195,14 @@ function NewScanDialog({ projectId, repos, onClose, onCreated }) {
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose, { disabled: loading });
+
   return (
     <div
       className="dialog-overlay"
       role="presentation"
-      onClick={(e) => e.target === e.currentTarget && !loading && onClose()}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div
         className="dialog"

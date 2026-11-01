@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { sanitizeMarkdown } from '../lib/sanitize.js';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── FilePreviewModal ──────────────────────────────────────────────────────────
 //
@@ -12,7 +13,7 @@ export function FilePreviewModal({ file, previewUrl, onClose }) {
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const backdropRef = useRef(null);
+  const overlayDismiss = useOverlayDismiss(onClose);
 
   // Close on Escape key
   useEffect(() => {
@@ -39,18 +40,15 @@ export function FilePreviewModal({ file, previewUrl, onClose }) {
   }, [previewUrl]);
 
   // Close when clicking backdrop (not content)
-  const handleBackdropClick = (e) => {
-    if (e.target === backdropRef.current) onClose();
-  };
 
   return (
     <div
-      ref={backdropRef}
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label={`Preview ${file?.name ?? ''}`}
-      onClick={handleBackdropClick}
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
       <div className="modal modal-preview">
         <div className="modal-header">
