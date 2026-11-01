@@ -61,6 +61,24 @@ const _requestWriteStorage = new AsyncLocalStorage<Set<Promise<unknown>>>();
 /** Fallback global set for writes registered outside request context. */
 const _pendingWrites = new Set<Promise<unknown>>();
 
+// ── Pre-request hook ──────────────────────────────────────────────────────────
+//
+// Called at the start of every API request (before the route handler).
+// Used by the settings snapshot to check for stale data on Lambda.
+// Fails closed: if the hook throws, the request returns 500.
+
+let _preRequestHook: (() => Promise<void>) | null = null;
+
+/**
+ * Register a hook that runs before every API request handler.
+ * Only one hook can be registered; subsequent calls replace the previous.
+ * The hook is called after authentication and route matching but before the
+ * route handler runs.  If it throws, the request fails with a 500 error.
+ */
+export function setPreRequestHook(fn: () => Promise<void>): void {
+  _preRequestHook = fn;
+}
+
 /**
  * Register a background write promise so it completes before the response ends.
  * Tracked per-request when called inside a request handler; falls back to the
@@ -506,6 +524,11 @@ export function createRequestHandler(): (
           );
           return res;
         };
+      }
+
+      // ── Pre-request hook (e.g. settings snapshot freshness check) ──────────
+      if (_preRequestHook) {
+        await _preRequestHook();
       }
 
       await _requestWriteStorage.run(new Set<Promise<unknown>>(), async () => {

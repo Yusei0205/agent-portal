@@ -53,21 +53,40 @@ export function decrypt(ciphertext: string, key: string): string {
 import { one, run as dbRun } from './db.ts';
 import { config } from './config.ts';
 import { now } from './util.ts';
+import { getSettingsRepository } from './repositories/settings.ts';
 
 /** Store an encrypted plaintext value under a named key. */
 export async function setSecret(name: string, value: string): Promise<void> {
   const enc = encrypt(value, config.secretKey);
-  dbRun(
-    'INSERT INTO secrets (name, value, hint, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, hint = excluded.hint, updated_at = excluded.updated_at',
-    name,
-    enc,
-    value.length > 8 ? `…${value.slice(-4)}` : 'set',
-    now(),
-  );
+  const hint = value.length > 8 ? `…${value.slice(-4)}` : 'set';
+  const updatedAt = now();
+  const repo = getSettingsRepository();
+  if (repo) {
+    await repo.setSecret(name, enc, hint, updatedAt);
+  } else {
+    dbRun(
+      'INSERT INTO secrets (name, value, hint, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, hint = excluded.hint, updated_at = excluded.updated_at',
+      name,
+      enc,
+      hint,
+      updatedAt,
+    );
+  }
 }
 
 /** Retrieve and decrypt a value stored by {@link setSecret}. Returns null if not found. */
 export async function getSecret(name: string): Promise<string | null> {
+  const repo = getSettingsRepository();
+  if (repo) {
+    const rec = await repo.getSecret(name);
+    if (!rec) return null;
+    try {
+      return decrypt(rec.value, config.secretKey);
+    } catch {
+      return null;
+    }
+  }
+  // Fallback (pre-startup)
   const row = one<{ value: string }>('SELECT value FROM secrets WHERE name = ?', name);
   if (!row) return null;
   try {
@@ -78,6 +97,11 @@ export async function getSecret(name: string): Promise<string | null> {
 }
 
 /** Delete a secret entry. No-op if it does not exist. */
-export function deleteSecret(name: string): void {
-  dbRun('DELETE FROM secrets WHERE name = ?', name);
+export async function deleteSecret(name: string): Promise<void> {
+  const repo = getSettingsRepository();
+  if (repo) {
+    await repo.deleteSecret(name);
+  } else {
+    dbRun('DELETE FROM secrets WHERE name = ?', name);
+  }
 }

@@ -294,3 +294,66 @@ deletion or update operations, design the interface signature to include the par
 4. **`delegation`** (after api-tokens) — already uses the api-tokens repository.
 
 Harder modules (joins, aggregates, FTS) are documented in `2026-11-02-dynamodb-data-design.md`.
+
+---
+
+## Snapshot / version pattern (settings and future config-like modules)
+
+Settings are global configuration read synchronously by hundreds of call sites
+(`getSetting`, `getSettings`).  Making all of them async would cascade across
+the entire codebase.  The snapshot / version pattern avoids that:
+
+### How it works
+
+1. **At startup** — `initSettingsRepository()` loads all keys and a version
+   counter into an in-memory `Snapshot { version, keys }`.
+2. **Every HTTP request** — a pre-request hook (`refreshSnapshotIfStale()`)
+   reads only the version counter (a single GetItem / SELECT).  If the version
+   has not changed, no further I/O.  If it changed, the full snapshot is
+   reloaded.
+3. **Synchronous reads** — `getSetting(db, key)` and `getSettings()` read from
+   the snapshot with no SQL or network I/O.
+4. **Writes** — callers update the snapshot optimistically (`_updateSnapshotKey`)
+   and fire the repository write.  In SQLite the write is sync-inside-async
+   (effectively instant).  In DynamoDB the write is async and tracked via
+   `registerBackgroundWrite`.
+
+### Version counter
+
+- **SQLite**: a reserved row `key = '_version'` in the settings table.
+  Every `setKey / setKeys / deleteKey` call increments it inside the same
+  transaction.  `loadSnapshot` and `getVersion` exclude `_version` from the
+  key map.
+- **DynamoDB**: `PK=SETTINGS, SK=_VERSION` item with a numeric `version`
+  attribute, incremented via `ADD #v :inc` in the same `TransactWriteItems`
+  call as the data write.
+
+### Multi-key atomic writes
+
+`setKeys(pairs)` writes all pairs **and** the single version bump in one
+transaction / one `TransactWriteItems` call.  The PUT `/api/settings` route
+collects all key-value changes first and calls `repo.setKeys(pairs)` once, so
+the settings update is all-or-nothing on both backends.
+
+### Fail-closed guarantee
+
+- `initSettingsRepository()` must succeed at startup; if it throws the server
+  does not start.
+- `refreshSnapshotIfStale()` throws on version-check or reload errors; the
+  pre-request hook propagates the error so the request returns 500 rather than
+  reading stale or default values.
+- Background timers that read settings must call `refreshSnapshotIfStale()`
+  before reading.
+
+### When to reuse this pattern
+
+Any repository that:
+- has many synchronous callers that cannot easily be made async, AND
+- needs cross-instance freshness on Lambda
+
+should use the same pattern:
+1. Add a version counter to the interface.
+2. Load a snapshot in `initXxxRepository()`.
+3. Register `refreshSnapshotIfStale` (or a module-specific equivalent) as the
+   pre-request hook, or call it explicitly in callers.
+4. Expose synchronous snapshot-read helpers for existing callers.

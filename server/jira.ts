@@ -126,16 +126,16 @@ const saveConn = (projectId: string, c: Conn): Promise<void> => {
 };
 
 /** Drop the Jira connection for a project (tokens only; app config is kept). */
-export const dropJiraConnection = (projectId: string): void => {
+export const dropJiraConnection = async (projectId: string): Promise<void> => {
   invalidateProjectListCache(projectId);
-  deleteSecret(projectSecretKey(projectId));
+  await deleteSecret(projectSecretKey(projectId));
 };
 
 /** Drop everything Jira-related for a project (connection + app config). */
-export function dropJira(projectId: string): void {
+export async function dropJira(projectId: string): Promise<void> {
   invalidateProjectListCache(projectId);
-  deleteSecret(projectSecretKey(projectId));
-  deleteSecret(appSecretKey(projectId));
+  await deleteSecret(projectSecretKey(projectId));
+  await deleteSecret(appSecretKey(projectId));
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
@@ -214,12 +214,12 @@ async function oauthConnection(projectId: string, conn: OAuthConn): Promise<OAut
     if (fresh?.authType === 'oauth' && fresh.expiresAt - Date.now() > 60_000) return fresh;
     const c = fresh?.authType === 'oauth' ? fresh : conn;
     if (!c.refresh) {
-      dropJiraConnection(projectId);
+      await dropJiraConnection(projectId);
       throw new HttpError(401, "This project's Jira connection expired. A project owner needs to connect Jira again.");
     }
     const app = await loadApp(projectId);
     if (!app) {
-      dropJiraConnection(projectId);
+      await dropJiraConnection(projectId);
       throw new HttpError(401, "This project's Jira connection expired. A project owner needs to connect Jira again.");
     }
     try {
@@ -238,7 +238,7 @@ async function oauthConnection(projectId: string, conn: OAuthConn): Promise<OAut
       await saveConn(projectId, next);
       return next;
     } catch {
-      dropJiraConnection(projectId);
+      await dropJiraConnection(projectId);
       throw new HttpError(401, "This project's Jira connection expired. A project owner needs to connect Jira again.");
     }
   });

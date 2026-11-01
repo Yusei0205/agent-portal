@@ -1223,7 +1223,7 @@ export function registerReviewRoutes(): void {
   }));
 
   // ── PUT /api/settings/review (admin only) ─────────────────────────────────
-  router.put('/api/settings/review', requireAuth((req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/settings/review', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireAdmin(req, res)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -1235,7 +1235,7 @@ export function registerReviewRoutes(): void {
         sendJson(res, 400, { error: `mergeThreshold must be one of: ${MERGE_THRESHOLDS.join(', ')}` });
         return;
       }
-      setSetting(db, 'review.mergeThreshold', JSON.stringify(v));
+      await setSetting(db, 'review.mergeThreshold', JSON.stringify(v));
     }
 
     if (body.rateCard !== undefined && typeof body.rateCard === 'object') {
@@ -1252,7 +1252,7 @@ export function registerReviewRoutes(): void {
           updated[key] = v;
         }
       }
-      setSetting(db, 'review.rateCard', JSON.stringify(updated));
+      await setSetting(db, 'review.rateCard', JSON.stringify(updated));
     }
 
     if (body.prCommentMode !== undefined) {
@@ -1261,7 +1261,7 @@ export function registerReviewRoutes(): void {
         sendJson(res, 400, { error: 'prCommentMode must be "manual" or "automatic"' });
         return;
       }
-      setSetting(db, 'review.prCommentMode', JSON.stringify(v));
+      await setSetting(db, 'review.prCommentMode', JSON.stringify(v));
     }
 
     sendJson(res, 200, {

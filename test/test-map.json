@@ -427,6 +427,10 @@
       "description": "Portal settings — AI provider, tools, permissions, code review, appearance",
       "sources": [
         "server/settings.ts",
+        "server/secrets.ts",
+        "server/repositories/settings.ts",
+        "server/repositories/settings-sqlite.ts",
+        "server/repositories/settings-dynamodb.ts",
         "web/src/pages/settings/Appearance.jsx",
         "web/src/pages/settings/Providers.jsx",
         "web/src/pages/settings/Secrets.jsx",
@@ -435,7 +439,8 @@
         "web/src/pages/AdminPanel.jsx"
       ],
       "tests": [
-        "test/settings.test.ts"
+        "test/settings.test.ts",
+        "test/settings-repo.test.ts"
       ],
       "smokeIds": ["settings"]
     },

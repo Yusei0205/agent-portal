@@ -108,8 +108,8 @@ function getFullScanUsers(): string[] {
   return parseJson<string[]>(raw, []);
 }
 
-function setFullScanUsers(users: string[]): void {
-  setSetting(getDb(), 'review.fullScanUsers', JSON.stringify(users));
+async function setFullScanUsers(users: string[]): Promise<void> {
+  await setSetting(getDb(), 'review.fullScanUsers', JSON.stringify(users));
 }
 
 function getRateCardForScan(): RateCard {
@@ -1101,7 +1101,7 @@ export function registerScanRoutes(): void {
   }));
 
   // ── PUT /api/scans/allowlist ──────────────────────────────────────────────
-  router.put('/api/scans/allowlist', requireAuth((req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/scans/allowlist', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireAdmin(req, res)) return;
     const body = req.body as Record<string, unknown>;
     const users = body.users;
@@ -1110,7 +1110,7 @@ export function registerScanRoutes(): void {
       return;
     }
     const ids = users.map((u) => String(u)).filter(Boolean);
-    setFullScanUsers(ids);
+    await setFullScanUsers(ids);
     appendAudit(getDb(), req.user!.id, 'scan.allowlist.update', 'scan:allowlist', { count: ids.length }, req.ip);
     sendJson(res, 200, { users: ids });
   }));

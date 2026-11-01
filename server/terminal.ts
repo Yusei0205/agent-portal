@@ -43,6 +43,8 @@ import type { Row } from './db.ts';
 import { config } from './config.ts';
 import { appendAudit } from './audit.ts';
 import { getDb } from './db.ts';
+import { getSetting } from './settings.ts';
+import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 
@@ -255,9 +257,8 @@ function decrementSession(userId: string): void {
 
 function isTerminalEnabled(): boolean {
   try {
-    const row = one<Row>('SELECT value FROM settings WHERE key = ?', 'terminal.enabled');
-    if (!row) return true; // default: enabled
-    return row.value === 'true';
+    const val = getSetting(getDb(), 'terminal.enabled');
+    return val === null ? true : val === 'true';
   } catch {
     return true;
   }
@@ -731,24 +732,30 @@ export function registerTerminalRoutes(): void {
       sendJson(res, 403, { error: 'Admin access required' });
       return;
     }
-    const row = one<Row>('SELECT value FROM settings WHERE key = ?', 'terminal.enabled');
-    const enabled = row ? row.value === 'true' : true;
+    const val = getSetting(getDb(), 'terminal.enabled');
+    const enabled = val === null ? true : val === 'true';
     sendJson(res, 200, { enabled });
   });
 
   // PUT /api/admin/terminal/settings
-  router.put('/api/admin/terminal/settings', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/admin/terminal/settings', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user?.is_admin) {
       sendJson(res, 403, { error: 'Admin access required' });
       return;
     }
     const body = req.body as Record<string, unknown>;
     const enabled = Boolean(body.enabled ?? true);
-    dbRun(
-      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      'terminal.enabled',
-      enabled ? 'true' : 'false',
-    );
+    const repo = getSettingsRepository();
+    if (repo) {
+      await repo.setKey('terminal.enabled', enabled ? 'true' : 'false');
+      _updateSnapshotKey('terminal.enabled', enabled ? 'true' : 'false');
+    } else {
+      dbRun(
+        'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        'terminal.enabled',
+        enabled ? 'true' : 'false',
+      );
+    }
     sendJson(res, 200, { enabled });
   });
 }

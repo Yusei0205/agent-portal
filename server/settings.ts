@@ -8,7 +8,7 @@
  *   registerSettingsRoutes     — HTTP routes for settings CRUD + connection test
  */
 
-import { router, sendJson, requireAuth } from './http.ts';
+import { router, sendJson, requireAuth, registerBackgroundWrite } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, getDb } from './db.ts';
 import type { DatabaseSync } from 'node:sqlite';
@@ -22,6 +22,14 @@ import { spawn } from 'node:child_process';
 import { resolveKiroCmd } from './kiro-cmd.ts';
 import { spawnKiroListModels } from './kiro-list-models.ts';
 import type { KiroModelRaw } from './kiro-list-models.ts';
+import {
+  getSettingsRepository,
+  getSettingFromSnapshot,
+  isSnapshotReady,
+  _updateSnapshotKey,
+  _updateSnapshotKeys,
+} from './repositories/settings.ts';
+import { usesDynamoDb } from './repositories/backend.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -126,145 +134,221 @@ const DEFAULTS: Settings = {
 
 // ── Low-level key/value helpers ───────────────────────────────────────────────
 
-export function getSetting(db: DatabaseSync, key: string): string | null {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+/**
+ * Get a setting by key.
+ *
+ * DynamoDB mode: reads from the in-memory snapshot (version-checked per
+ * request via refreshSnapshotIfStale) for cross-instance freshness.
+ *
+ * SQLite mode: always reads directly from the database so that any write —
+ * including raw SQL in test setup, migrations, or manual edits — is
+ * immediately visible on the next read.
+ *
+ * The `db` parameter is kept for backward compatibility; it is ignored when
+ * the snapshot is used (DynamoDB mode with the global db).
+ */
+export function getSetting(_db: DatabaseSync, key: string): string | null {
+  // DynamoDB: use snapshot for cross-instance freshness.
+  // SQLite: always read directly — raw-SQL writes must be visible immediately.
+  if (isSnapshotReady() && _db === getDb() && usesDynamoDb()) {
+    return getSettingFromSnapshot(key);
+  }
+  const row = _db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
     | { value: string }
     | undefined;
-  return row ? row.value : null;
+  return row?.value ?? null;
 }
 
-export function setSetting(db: DatabaseSync, key: string, value: string): void {
-  db.prepare(
-    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-  ).run(key, value);
+/**
+ * Set a setting by key.
+ *
+ * Returns a `Promise<void>` that resolves when the write is durable (SQLite:
+ * the transaction is committed; DynamoDB: the TransactWriteItems call
+ * completes).  Callers inside async route handlers should `await` the result
+ * so write failures are surfaced as HTTP errors rather than swallowed.
+ *
+ * When the repository is initialized: updates the snapshot optimistically
+ * (synchronous, visible to the next getSetting call) and fires an async
+ * write through the repository.  The write is also tracked via
+ * registerBackgroundWrite so it completes before the HTTP response is sent.
+ *
+ * When the repository is not yet initialized (pre-startup test setup):
+ * falls back to a direct synchronous SQLite write via `db` and returns a
+ * resolved promise.
+ *
+ * The `db` parameter is kept for backward compatibility; it is ignored when
+ * the repository is active.
+ *
+ * For atomic multi-key writes (e.g. the PUT /api/settings route), prefer
+ * collecting pairs and calling repo.setKeys(pairs) directly.
+ */
+export function setSetting(_db: DatabaseSync, key: string, value: string): Promise<void> {
+  const repo = getSettingsRepository();
+  if (repo) {
+    // Update snapshot optimistically (synchronous, visible to the next getSetting call)
+    _updateSnapshotKey(key, value);
+    // Fire async write through repository (SQLite: effectively sync; DynamoDB: truly async)
+    const p = repo.setKey(key, value);
+    // Register a silenced copy for background-write draining (no unhandled-rejection warning)
+    try { registerBackgroundWrite(p.catch(() => {})); } catch { /* outside request context — best-effort */ }
+    return p; // expose to caller: routes should await this to surface write errors
+  } else {
+    // Repository not yet initialized — direct SQLite fallback for test setup
+    _db.prepare(
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    ).run(key, value);
+    return Promise.resolve();
+  }
 }
 
 // ── Typed settings ────────────────────────────────────────────────────────────
 
-export function getSettings(db?: DatabaseSync): Settings {
-  const d = db ?? getDb();
+/**
+ * Build a typed Settings object.
+ *
+ * When called without a `db` argument (production code), reads from the
+ * in-memory snapshot (no SQL).
+ *
+ * When called with an explicit `db` argument (test helpers that set up state
+ * directly on a fresh in-memory database), reads from `db` to preserve test
+ * isolation.  Pass `db` only in test code; production handlers should call
+ * `getSettings()` without arguments.
+ */
+export function getSettings(_db?: DatabaseSync): Settings {
+  // DynamoDB: use snapshot for cross-instance freshness (no explicit db).
+  // SQLite: always read directly from the database.
+  const useSnapshot = !_db && isSnapshotReady() && usesDynamoDb();
+  const get = (key: string): string | null => {
+    if (useSnapshot) return getSettingFromSnapshot(key);
+    const d = _db ?? getDb();
+    const row = d.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  };
+
   const out: Settings = JSON.parse(JSON.stringify(DEFAULTS));
 
-  const providerMode = getSetting(d, 'provider.mode');
+  const providerMode = get('provider.mode');
   if (providerMode) {
     out.provider.mode = providerMode as ProviderMode;
   }
 
-  const anthropicKeyEnc = getSetting(d, 'anthropic.key.enc');
+  const anthropicKeyEnc = get('anthropic.key.enc');
   if (anthropicKeyEnc) {
     out.provider.hasKey = true;
     out.provider.anthropicKeyEnc = anthropicKeyEnc;
   }
 
-  const bedrockRegion = getSetting(d, 'bedrock.region');
+  const bedrockRegion = get('bedrock.region');
   if (bedrockRegion) out.provider.bedrockRegion = bedrockRegion;
 
-  const bedrockAuth = getSetting(d, 'bedrock.auth');
+  const bedrockAuth = get('bedrock.auth');
   if (bedrockAuth) out.provider.bedrockAuth = bedrockAuth as AwsAuth;
 
-  const bedrockProfile = getSetting(d, 'bedrock.profile');
+  const bedrockProfile = get('bedrock.profile');
   if (bedrockProfile) out.provider.bedrockProfile = bedrockProfile;
 
-  const bedrockAccessKeyId = getSetting(d, 'bedrock.access_key_id');
+  const bedrockAccessKeyId = get('bedrock.access_key_id');
   if (bedrockAccessKeyId) out.provider.bedrockAccessKeyId = bedrockAccessKeyId;
 
-  const bedrockKeyEnc = getSetting(d, 'bedrock.secret_key.enc');
+  const bedrockKeyEnc = get('bedrock.secret_key.enc');
   if (bedrockKeyEnc) out.provider.bedrockKeyEnc = bedrockKeyEnc;
 
-  const ssoStartUrl = getSetting(d, 'bedrock.sso.startUrl');
+  const ssoStartUrl = get('bedrock.sso.startUrl');
   if (ssoStartUrl) out.provider.ssoStartUrl = ssoStartUrl;
 
-  const ssoRegion = getSetting(d, 'bedrock.sso.region');
+  const ssoRegion = get('bedrock.sso.region');
   if (ssoRegion) out.provider.ssoRegion = ssoRegion;
 
-  const ssoAccountId = getSetting(d, 'bedrock.sso.accountId');
+  const ssoAccountId = get('bedrock.sso.accountId');
   if (ssoAccountId) out.provider.ssoAccountId = ssoAccountId;
 
-  const ssoRoleName = getSetting(d, 'bedrock.sso.roleName');
+  const ssoRoleName = get('bedrock.sso.roleName');
   if (ssoRoleName) out.provider.ssoRoleName = ssoRoleName;
 
-  const deployTarget = getSetting(d, 'deploy.target');
+  const deployTarget = get('deploy.target');
   if (deployTarget) out.deployTarget = deployTarget;
 
   // Agent-run limits
-  const approvalExpiry = getSetting(d, 'agents.approvalExpiryMinutes');
+  const approvalExpiry = get('agents.approvalExpiryMinutes');
   if (approvalExpiry !== null) {
     const v = parseFloat(approvalExpiry);
     if (!isNaN(v)) out.agents.approvalExpiryMinutes = v;
   }
-  const maxBudget = getSetting(d, 'agents.maxBudgetUsdPerRun');
+  const maxBudget = get('agents.maxBudgetUsdPerRun');
   if (maxBudget !== null) {
     const v = parseFloat(maxBudget);
     out.agents.maxBudgetUsdPerRun = isNaN(v) ? null : v;
   }
-  const runTimeout = getSetting(d, 'agents.runTimeoutMinutes');
+  const runTimeout = get('agents.runTimeoutMinutes');
   if (runTimeout !== null) {
     const v = parseFloat(runTimeout);
     out.agents.runTimeoutMinutes = isNaN(v) ? null : v;
   }
-  const effortVal = getSetting(d, 'agents.effort');
+  const effortVal = get('agents.effort');
   if (effortVal !== null) out.agents.effort = effortVal as ('' | EffortLevel);
 
-  const mcpTimeout = getSetting(d, 'agents.mcpToolTimeoutMinutes');
+  const mcpTimeout = get('agents.mcpToolTimeoutMinutes');
   if (mcpTimeout !== null) {
     const v = parseInt(mcpTimeout, 10);
     if (!isNaN(v) && v >= 0) out.agents.mcpToolTimeoutMinutes = v;
   }
 
 
-  const trustProxy = getSetting(d, 'trust.proxy');
+  const trustProxy = get('trust.proxy');
   if (trustProxy) out.trustProxy = trustProxy === 'true';
 
-  const cookieSecure = getSetting(d, 'cookie.secure');
+  const cookieSecure = get('cookie.secure');
   if (cookieSecure) out.cookieSecure = cookieSecure;
 
-  const monthlyBudget = getSetting(d, 'budget.monthly_usd');
+  const monthlyBudget = get('budget.monthly_usd');
   if (monthlyBudget !== null) {
     const v = parseFloat(monthlyBudget);
     out.monthlyBudget = isNaN(v) ? null : v;
   }
 
-  const modelSonnet = getSetting(d, 'model.sonnet');
+  const modelSonnet = get('model.sonnet');
   if (modelSonnet) out.models.sonnet = modelSonnet;
 
-  const modelHaiku = getSetting(d, 'model.haiku');
+  const modelHaiku = get('model.haiku');
   if (modelHaiku) out.models.haiku = modelHaiku;
 
-  const modelOpus = getSetting(d, 'model.opus');
+  const modelOpus = get('model.opus');
   if (modelOpus) out.models.opus = modelOpus;
 
   // defaultModel: explicit setting wins, then fall back to legacy model.sonnet for backward compat
-  const defaultModelKey = getSetting(d, 'default.model');
+  const defaultModelKey = get('default.model');
   if (defaultModelKey && defaultModelKey.trim()) {
     out.defaultModel = defaultModelKey.trim();
   } else {
     out.defaultModel = out.models.sonnet;
   }
 
-  const headroomProxyUrl = getSetting(d, 'headroom.proxy_url');
+  const headroomProxyUrl = get('headroom.proxy_url');
   if (headroomProxyUrl) out.headroomProxyUrl = headroomProxyUrl;
 
-  const kiroKeyEnc = getSetting(d, 'kiro.key.enc');
+  const kiroKeyEnc = get('kiro.key.enc');
   if (kiroKeyEnc) {
     out.kiroApiKeySet = true;
     out.kiroApiKeyEnc = kiroKeyEnc;
   }
 
-  const lastChangedAt = getSetting(d, 'settings.last_changed_at');
+  const lastChangedAt = get('settings.last_changed_at');
   if (lastChangedAt) out.lastChangedAt = lastChangedAt;
 
-  const lastChangedBy = getSetting(d, 'settings.last_changed_by');
+  const lastChangedBy = get('settings.last_changed_by');
   if (lastChangedBy) out.lastChangedBy = lastChangedBy;
 
-  const githubOauthClientId = getSetting(d, 'github.oauth.clientId');
+  const githubOauthClientId = get('github.oauth.clientId');
   if (githubOauthClientId) out.githubOauthClientId = githubOauthClientId;
 
   // LiteLLM gateway
-  const litellmBaseUrl = getSetting(d, 'litellm.baseUrl');
+  const litellmBaseUrl = get('litellm.baseUrl');
   if (litellmBaseUrl) out.litellm.baseUrl = litellmBaseUrl;
-  const litellmKeyEnc = getSetting(d, 'litellm.key.enc');
+  const litellmKeyEnc = get('litellm.key.enc');
   if (litellmKeyEnc) out.litellm.hasKey = true;
-  const litellmModel = getSetting(d, 'litellm.model');
+  const litellmModel = get('litellm.model');
   if (litellmModel) {
     try { out.litellm.model = JSON.parse(litellmModel); } catch { /* keep default */ }
   }
@@ -274,8 +358,8 @@ export function getSettings(db?: DatabaseSync): Settings {
 
 // ── Public (safe) settings view ───────────────────────────────────────────────
 
-function publicSettings(db?: DatabaseSync): object {
-  const s = getSettings(db);
+function publicSettings(_db?: DatabaseSync): object {
+  const s = getSettings(_db);
   // Import lazily to avoid circular reference (bedrock-sso imports settings)
   let ssoState: { signedIn: boolean; expiresAt: string | null; accountId: string | null; roleName: string | null } = {
     signedIn: false, expiresAt: null, accountId: null, roleName: null,
@@ -283,13 +367,12 @@ function publicSettings(db?: DatabaseSync): object {
   try {
     // We read directly from the settings table rather than importing bedrock-sso
     // to avoid a circular dependency at module load time.
-    const d = db ?? getDb();
-    const hasToken = Boolean(getSetting(d, 'bedrock.sso.accessToken.enc'));
+    const hasToken = Boolean(getSetting(_db ?? getDb(), 'bedrock.sso.accessToken.enc'));
     ssoState = {
       signedIn: hasToken,
-      expiresAt: getSetting(d, 'bedrock.sso.accessToken.expiry') ?? null,
-      accountId: getSetting(d, 'bedrock.sso.accountId') ?? null,
-      roleName: getSetting(d, 'bedrock.sso.roleName') ?? null,
+      expiresAt: getSetting(_db ?? getDb(), 'bedrock.sso.accessToken.expiry') ?? null,
+      accountId: getSetting(_db ?? getDb(), 'bedrock.sso.accountId') ?? null,
+      roleName: getSetting(_db ?? getDb(), 'bedrock.sso.roleName') ?? null,
     };
   } catch { /* ignore */ }
 
@@ -1147,7 +1230,7 @@ export async function listModelsForProvider(
       return store({ provider, source: 'fallback', error: 'No LiteLLM base URL configured.', groups: LITELLM_FALLBACK });
     }
     try {
-      const keyEncRaw = getSetting(d, 'litellm.key.enc');
+      const keyEncRaw = getSetting(getDb(), 'litellm.key.enc');
       let apiKey = '';
       if (keyEncRaw) {
         try { apiKey = decrypt(keyEncRaw, config.secretKey); } catch { /* ignore */ }
@@ -1203,6 +1286,10 @@ export function registerSettingsRoutes(): void {
     const body = req.body as Record<string, unknown>;
     const db = getDb();
 
+    // Collect all key-value pairs for a single atomic write
+    const pairs: Array<[string, string]> = [];
+    const set = (key: string, value: string) => pairs.push([key, value]);
+
     if (body.provider) {
       const p = body.provider as Record<string, unknown>;
       if (p.mode !== undefined) {
@@ -1210,30 +1297,30 @@ export function registerSettingsRoutes(): void {
         if (!['demo', 'anthropic', 'bedrock', 'kiro', 'litellm'].includes(mode)) {
           throw badRequest('Unknown provider mode');
         }
-        setSetting(db, 'provider.mode', mode);
+        set('provider.mode', mode);
       }
       if (typeof p.anthropicKey === 'string' && p.anthropicKey && p.anthropicKey !== '***') {
         const enc = encrypt(p.anthropicKey.trim(), config.secretKey);
-        setSetting(db, 'anthropic.key.enc', enc);
+        set('anthropic.key.enc', enc);
       }
       if (typeof p.bedrockRegion === 'string' && p.bedrockRegion) {
-        setSetting(db, 'bedrock.region', p.bedrockRegion.trim());
+        set('bedrock.region', p.bedrockRegion.trim());
       }
       if (typeof p.bedrockAuth === 'string' && p.bedrockAuth) {
         if (!['ambient', 'profile', 'keys', 'bedrock-key', 'sso'].includes(p.bedrockAuth)) {
           throw badRequest('Unknown AWS auth method');
         }
-        setSetting(db, 'bedrock.auth', p.bedrockAuth);
+        set('bedrock.auth', p.bedrockAuth);
       }
       if (typeof p.bedrockProfile === 'string') {
-        setSetting(db, 'bedrock.profile', p.bedrockProfile.trim());
+        set('bedrock.profile', p.bedrockProfile.trim());
       }
       if (typeof p.bedrockAccessKeyId === 'string' && p.bedrockAccessKeyId !== '***') {
-        setSetting(db, 'bedrock.access_key_id', p.bedrockAccessKeyId.trim());
+        set('bedrock.access_key_id', p.bedrockAccessKeyId.trim());
       }
       if (typeof p.bedrockKey === 'string' && p.bedrockKey && p.bedrockKey !== '***') {
         const enc = encrypt(p.bedrockKey.trim(), config.secretKey);
-        setSetting(db, 'bedrock.secret_key.enc', enc);
+        set('bedrock.secret_key.enc', enc);
       }
       // SSO config (non-secret; token sign-in happens via separate routes)
       if (typeof p.ssoStartUrl === 'string') {
@@ -1241,40 +1328,40 @@ export function registerSettingsRoutes(): void {
         if (url && !url.startsWith('https://')) {
           throw badRequest('ssoStartUrl must be a valid https URL');
         }
-        setSetting(db, 'bedrock.sso.startUrl', url);
+        set('bedrock.sso.startUrl', url);
       }
       if (typeof p.ssoRegion === 'string') {
-        setSetting(db, 'bedrock.sso.region', p.ssoRegion.trim());
+        set('bedrock.sso.region', p.ssoRegion.trim());
       }
       if (typeof p.ssoAccountId === 'string') {
-        setSetting(db, 'bedrock.sso.accountId', p.ssoAccountId.trim());
+        set('bedrock.sso.accountId', p.ssoAccountId.trim());
       }
       if (typeof p.ssoRoleName === 'string') {
-        setSetting(db, 'bedrock.sso.roleName', p.ssoRoleName.trim());
+        set('bedrock.sso.roleName', p.ssoRoleName.trim());
       }
     }
 
     if (body.deployTarget !== undefined) {
-      setSetting(db, 'deploy.target', body.deployTarget ? String(body.deployTarget) : '');
+      set('deploy.target', body.deployTarget ? String(body.deployTarget) : '');
     }
 
     if (body.trustProxy !== undefined) {
-      setSetting(db, 'trust.proxy', body.trustProxy ? 'true' : 'false');
+      set('trust.proxy', body.trustProxy ? 'true' : 'false');
     }
 
     if (body.cookieSecure !== undefined) {
       const v = String(body.cookieSecure);
       if (!['auto', 'true', 'false'].includes(v)) throw badRequest('cookieSecure must be auto, true or false');
-      setSetting(db, 'cookie.secure', v);
+      set('cookie.secure', v);
     }
 
     if (body.monthlyBudget !== undefined) {
       if (body.monthlyBudget === null) {
-        setSetting(db, 'budget.monthly_usd', '');
+        set('budget.monthly_usd', '');
       } else {
         const v = Number(body.monthlyBudget);
         if (isNaN(v) || v < 0) throw badRequest('monthlyBudget must be a non-negative number');
-        setSetting(db, 'budget.monthly_usd', String(v));
+        set('budget.monthly_usd', String(v));
       }
     }
 
@@ -1286,7 +1373,7 @@ export function registerSettingsRoutes(): void {
           if (m[alias] && !MODEL_RE.test(m[alias] as string)) {
             throw badRequest(`Model ID for ${alias} is not valid`);
           }
-          setSetting(db, `model.${alias}`, (m[alias] as string).trim());
+          set(`model.${alias}`, (m[alias] as string).trim());
         }
       }
     }
@@ -1303,21 +1390,21 @@ export function registerSettingsRoutes(): void {
             'Choose a real Claude model ID (e.g. from the model listing for your provider).',
         );
       }
-      setSetting(db, 'default.model', body.defaultModel.trim());
+      set('default.model', body.defaultModel.trim());
     }
 
     if (typeof body.headroomProxyUrl === 'string') {
-      setSetting(db, 'headroom.proxy_url', body.headroomProxyUrl.trim());
+      set('headroom.proxy_url', body.headroomProxyUrl.trim());
     }
 
     if (typeof body.githubOauthClientId === 'string') {
-      setSetting(db, 'github.oauth.clientId', body.githubOauthClientId.trim());
+      set('github.oauth.clientId', body.githubOauthClientId.trim());
     }
 
     if (body.kiroApiKey !== undefined && typeof body.kiroApiKey === 'string' && body.kiroApiKey !== '***') {
       if (body.kiroApiKey.trim()) {
         const enc = encrypt(body.kiroApiKey.trim(), config.secretKey);
-        setSetting(db, 'kiro.key.enc', enc);
+        set('kiro.key.enc', enc);
       }
     }
 
@@ -1325,14 +1412,14 @@ export function registerSettingsRoutes(): void {
     if (body.litellm !== undefined && typeof body.litellm === 'object' && body.litellm !== null) {
       const ll = body.litellm as Record<string, unknown>;
       if (typeof ll.baseUrl === 'string') {
-        setSetting(db, 'litellm.baseUrl', ll.baseUrl.trim());
+        set('litellm.baseUrl', ll.baseUrl.trim());
       }
       if (typeof ll.apiKey === 'string' && ll.apiKey && ll.apiKey !== '***') {
         const enc = encrypt(ll.apiKey.trim(), config.secretKey);
-        setSetting(db, 'litellm.key.enc', enc);
+        set('litellm.key.enc', enc);
       }
       if (typeof ll.model === 'string' && ll.model) {
-        setSetting(db, 'litellm.model', JSON.stringify(ll.model.trim()));
+        set('litellm.model', JSON.stringify(ll.model.trim()));
       }
     }
 
@@ -1342,38 +1429,52 @@ export function registerSettingsRoutes(): void {
       if (a.approvalExpiryMinutes !== undefined) {
         const expiry = Number(a.approvalExpiryMinutes);
         if (!Number.isFinite(expiry) || expiry < 0 || expiry > 10080) throw badRequest('Minutes a question or approval waits must be from 0 (no limit) to 10080');
-        setSetting(db, 'agents.approvalExpiryMinutes', String(expiry));
+        set('agents.approvalExpiryMinutes', String(expiry));
       }
       if (a.maxBudgetUsdPerRun !== undefined) {
         if (a.maxBudgetUsdPerRun === null || a.maxBudgetUsdPerRun === '') {
-          setSetting(db, 'agents.maxBudgetUsdPerRun', '');
+          set('agents.maxBudgetUsdPerRun', '');
         } else {
           const v = Number(a.maxBudgetUsdPerRun);
           if (!Number.isFinite(v) || v < 0.01 || v > 1000) throw badRequest('Budget per run must be from $0.01 to $1000, or empty for no limit');
-          setSetting(db, 'agents.maxBudgetUsdPerRun', String(v));
+          set('agents.maxBudgetUsdPerRun', String(v));
         }
       }
       if (a.runTimeoutMinutes !== undefined) {
         if (a.runTimeoutMinutes === null || a.runTimeoutMinutes === '') {
-          setSetting(db, 'agents.runTimeoutMinutes', '');
+          set('agents.runTimeoutMinutes', '');
         } else {
           const v = Number(a.runTimeoutMinutes);
           if (!Number.isFinite(v) || v < 0.01 || v > 1440) throw badRequest('Time limit per run must be from 0.01 to 1440 minutes, or empty for no limit');
-          setSetting(db, 'agents.runTimeoutMinutes', String(v));
+          set('agents.runTimeoutMinutes', String(v));
         }
       }
       if (a.effort !== undefined) {
         const eff = String(a.effort ?? '');
         if (eff !== '' && !EFFORT_LEVELS.includes(eff as EffortLevel)) throw badRequest('Thinking effort must be low, medium, high, xhigh, max or empty for model default');
-        setSetting(db, 'agents.effort', eff);
+        set('agents.effort', eff);
       }
     }
 
     // Track who last changed settings (F8)
-    setSetting(db, 'settings.last_changed_at', now());
-    setSetting(db, 'settings.last_changed_by', req.user!.id);
+    set('settings.last_changed_at', now());
+    set('settings.last_changed_by', req.user!.id);
 
-    sendJson(res, 200, publicSettings(db));
+    // Atomic write: all pairs in one transaction / one version bump
+    const repo = getSettingsRepository();
+    if (repo && pairs.length > 0) {
+      await repo.setKeys(pairs);
+      _updateSnapshotKeys(pairs);
+    } else {
+      // Fallback for pre-startup (shouldn't happen in production)
+      for (const [key, value] of pairs) {
+        db.prepare(
+          'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        ).run(key, value);
+      }
+    }
+
+    sendJson(res, 200, publicSettings());
   }));
 
   // GET /api/settings/models — list models for a provider (admin only)

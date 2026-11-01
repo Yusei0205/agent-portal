@@ -350,30 +350,35 @@ export function registerAuthRoutes(): void {
     const deployTarget = body.deployTarget ? String(body.deployTarget) : null;
     const provider = body.provider ? String(body.provider) : 'demo';
 
+    // Collect settings to write atomically via the repository
+    const settingPairs: Array<[string, string]> = [];
+    const addSetting = (key: string, value: string) => settingPairs.push([key, value]);
+
     if (deployTarget) {
-      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
-        'deployTarget',
-        JSON.stringify(deployTarget),
-      );
+      addSetting('deployTarget', JSON.stringify(deployTarget));
     }
 
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
-      'provider',
-      JSON.stringify(provider),
-    );
+    addSetting('provider', JSON.stringify(provider));
 
     // Handle optional provider settings
     if (body.secretKeyArn) {
-      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
-        'aws.secretKeyArn',
-        JSON.stringify(String(body.secretKeyArn)),
-      );
+      addSetting('aws.secretKeyArn', JSON.stringify(String(body.secretKeyArn)));
     }
     if (body.awsRegion) {
-      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
-        'aws.region',
-        JSON.stringify(String(body.awsRegion)),
-      );
+      addSetting('aws.region', JSON.stringify(String(body.awsRegion)));
+    }
+
+    // Write all settings atomically
+    const { getSettingsRepository, _updateSnapshotKeys } = await import('./repositories/settings.ts');
+    const repo = getSettingsRepository();
+    if (repo && settingPairs.length > 0) {
+      await repo.setKeys(settingPairs);
+      _updateSnapshotKeys(settingPairs);
+    } else {
+      // Fallback for pre-repository state (shouldn't happen post-startup)
+      for (const [key, value] of settingPairs) {
+        db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+      }
     }
 
     await startSession(res, user.id, req.secure);

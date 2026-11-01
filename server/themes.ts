@@ -1341,7 +1341,7 @@ export function registerThemeRoutes(): void {
   }));
 
   // ── Admin: POST /api/admin/themes/:id/activate ────────────────────────────
-  router.post('/api/admin/themes/:id/activate', requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+  router.post('/api/admin/themes/:id/activate', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
@@ -1354,7 +1354,7 @@ export function registerThemeRoutes(): void {
     }
 
     const db = getDb();
-    setSetting(db, 'theme.active', JSON.stringify(id));
+    await setSetting(db, 'theme.active', JSON.stringify(id));
     appendAudit(db, req.user!.id, 'theme.activate', `theme:${id}`, {}, req.ip);
     const { etag } = resolveActiveTemplate();
     emitGlobal({ type: 'theme.changed', etag });

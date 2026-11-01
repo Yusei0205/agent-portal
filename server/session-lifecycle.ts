@@ -21,6 +21,8 @@ import { emit } from './events.ts';
 import { appendAudit } from './audit.ts';
 import { checkDelegationChildIdleStop } from './delegation.ts';
 import { getSessionBrowserState, shutdownSessionBrowser } from './agent/browser-manager.ts';
+import { getSetting } from './settings.ts';
+import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 
 // ── Idle stop ─────────────────────────────────────────────────────────────────
 
@@ -33,11 +35,9 @@ let _idleTimer: ReturnType<typeof setInterval> | null = null;
 /** Read the configured idle timeout in minutes from settings. */
 function getIdleTimeoutMinutes(): number {
   try {
-    const row = one<{ value: string }>(
-      "SELECT value FROM settings WHERE key = 'session.idle_timeout_minutes'",
-    );
-    if (!row) return IDLE_MIN_DEFAULT;
-    const v = parseInt(row.value, 10);
+    const val = getSetting(getDb(), 'session.idle_timeout_minutes');
+    if (!val) return IDLE_MIN_DEFAULT;
+    const v = parseInt(val, 10);
     if (!Number.isFinite(v)) return IDLE_MIN_DEFAULT;
     return Math.max(IDLE_MIN_RANGE[0], Math.min(IDLE_MIN_RANGE[1], v));
   } catch {
@@ -513,7 +513,7 @@ export function registerSessionLifecycleRoutes(): void {
 
   router.put(
     '/api/admin/session/idle-timeout',
-    (req: PortalRequest, res: PortalResponse): void => {
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       if (!req.user?.is_admin) {
         sendJson(res, 403, { error: 'Admin access required' });
         return;
@@ -525,13 +525,19 @@ export function registerSessionLifecycleRoutes(): void {
         return;
       }
       const minutes = Math.max(IDLE_MIN_RANGE[0], Math.min(IDLE_MIN_RANGE[1], Math.round(raw)));
-      const db = getDb();
-      db.prepare(
-        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-      ).run('session.idle_timeout_minutes', String(minutes));
+      const repo = getSettingsRepository();
+      if (repo) {
+        await repo.setKey('session.idle_timeout_minutes', String(minutes));
+        _updateSnapshotKey('session.idle_timeout_minutes', String(minutes));
+      } else {
+        const db = getDb();
+        db.prepare(
+          "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ).run('session.idle_timeout_minutes', String(minutes));
+      }
 
       appendAudit(
-        db,
+        getDb(),
         req.user!.id,
         'admin.session.idle-timeout',
         null,

@@ -19,6 +19,7 @@ import { config } from './config.ts';
 import { getDb } from './db.ts';
 import { HttpError, now } from './util.ts';
 import { appendAudit } from './audit.ts';
+import { getSettingsRepository, _updateSnapshotKey, _deleteSnapshotKeys } from './repositories/settings.ts';
 
 // ── Injectable clients (overridden in tests) ──────────────────────────────────
 
@@ -190,12 +191,24 @@ function dbGet(key: string): string | null {
   return getSetting(getDb(), key);
 }
 
-function dbSet(key: string, value: string): void {
-  setSetting(getDb(), key, value);
+async function dbSet(key: string, value: string): Promise<void> {
+  const repo = getSettingsRepository();
+  if (repo) {
+    await repo.setKey(key, value);
+    _updateSnapshotKey(key, value);
+  } else {
+    setSetting(getDb(), key, value);
+  }
 }
 
-function dbDel(key: string): void {
-  getDb().prepare('DELETE FROM settings WHERE key = ?').run(key);
+async function dbDel(key: string): Promise<void> {
+  const repo = getSettingsRepository();
+  if (repo) {
+    await repo.deleteKey(key);
+    _deleteSnapshotKeys([key]);
+  } else {
+    getDb().prepare('DELETE FROM settings WHERE key = ?').run(key);
+  }
 }
 
 function enc(plain: string): string {
@@ -303,9 +316,9 @@ export async function getActiveSsoAccessToken(): Promise<string> {
       ? new Date(Date.now() + result.expiresIn * 1000).toISOString()
       : null;
 
-    dbSet(K.accessTokenEnc, enc(result.accessToken));
-    if (newExpiry) dbSet(K.accessTokenExpiry, newExpiry);
-    if (result.refreshToken) dbSet(K.refreshTokenEnc, enc(result.refreshToken));
+    await dbSet(K.accessTokenEnc, enc(result.accessToken));
+    if (newExpiry) await dbSet(K.accessTokenExpiry, newExpiry);
+    if (result.refreshToken) await dbSet(K.refreshTokenEnc, enc(result.refreshToken));
 
     // Invalidate role credential cache
     _roleCredCache = null;
@@ -466,9 +479,16 @@ export async function listSsoRoles(
 
 // ── Sign-out ──────────────────────────────────────────────────────────────────
 
-export function signOutSso(): void {
-  for (const key of Object.values(K)) {
-    dbDel(key);
+export async function signOutSso(): Promise<void> {
+  const keys = Object.values(K);
+  const repo = getSettingsRepository();
+  if (repo) {
+    await repo.deleteKeys(keys);
+    _deleteSnapshotKeys(keys);
+  } else {
+    for (const key of keys) {
+      getDb().prepare('DELETE FROM settings WHERE key = ?').run(key);
+    }
   }
   _roleCredCache = null;
 }
@@ -529,17 +549,27 @@ export function registerBedrockSsoRoutes(): void {
           startUrl,
         });
 
-        const db = getDb();
-        setSetting(db, 'bedrock.sso.startUrl', startUrl);
-        setSetting(db, 'bedrock.sso.region', region);
-        setSetting(db, K.oidcClientIdEnc, enc(reg.clientId));
-        setSetting(db, K.oidcClientSecretEnc, enc(reg.clientSecret));
-        setSetting(db, K.pendingDeviceCode, da.deviceCode);
-        setSetting(db, K.pendingClientId, reg.clientId);
-        setSetting(db, K.pendingClientSecretEnc, enc(reg.clientSecret));
-        setSetting(db, K.pendingExpireAt, String(Date.now() + da.expiresIn * 1000));
+        const pairsToSet: Array<[string, string]> = [
+          ['bedrock.sso.startUrl', startUrl],
+          ['bedrock.sso.region', region],
+          [K.oidcClientIdEnc, enc(reg.clientId)],
+          [K.oidcClientSecretEnc, enc(reg.clientSecret)],
+          [K.pendingDeviceCode, da.deviceCode],
+          [K.pendingClientId, reg.clientId],
+          [K.pendingClientSecretEnc, enc(reg.clientSecret)],
+          [K.pendingExpireAt, String(Date.now() + da.expiresIn * 1000)],
+        ];
+        const repo = getSettingsRepository();
+        if (repo) {
+          await repo.setKeys(pairsToSet);
+          const { _updateSnapshotKeys } = await import('./repositories/settings.ts');
+          _updateSnapshotKeys(pairsToSet);
+        } else {
+          const db = getDb();
+          for (const [key, value] of pairsToSet) setSetting(db, key, value);
+        }
 
-        appendAudit(db, req.user!.id, 'bedrock-sso.start', null, { startUrl, region }, req.ip);
+        appendAudit(getDb(), req.user!.id, 'bedrock-sso.start', null, { startUrl, region }, req.ip);
 
         sendJson(res, 200, {
           verificationUri: da.verificationUri,
@@ -598,23 +628,33 @@ export function registerBedrockSsoRoutes(): void {
         const expiresIn = result.expiresIn ?? 28800;
         const expiryIso = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-        setSetting(db, K.accessTokenEnc, enc(result.accessToken));
-        setSetting(db, K.accessTokenExpiry, expiryIso);
+        const completePairs: Array<[string, string]> = [
+          [K.accessTokenEnc, enc(result.accessToken)],
+          [K.accessTokenExpiry, expiryIso],
+        ];
         if (result.refreshToken) {
-          setSetting(db, K.refreshTokenEnc, enc(result.refreshToken));
+          completePairs.push([K.refreshTokenEnc, enc(result.refreshToken)]);
         }
-
-        // Clear pending flow data
-        dbDel(K.pendingDeviceCode);
-        dbDel(K.pendingClientId);
-        dbDel(K.pendingClientSecretEnc);
-        dbDel(K.pendingExpireAt);
+        const repo = getSettingsRepository();
+        if (repo) {
+          await repo.setKeys(completePairs);
+          const { _updateSnapshotKeys, _deleteSnapshotKeys: _delKeys } = await import('./repositories/settings.ts');
+          _updateSnapshotKeys(completePairs);
+          const pendingKeys = [K.pendingDeviceCode, K.pendingClientId, K.pendingClientSecretEnc, K.pendingExpireAt];
+          await repo.deleteKeys(pendingKeys);
+          _delKeys(pendingKeys);
+        } else {
+          for (const [key, value] of completePairs) setSetting(db, key, value);
+          for (const key of [K.pendingDeviceCode, K.pendingClientId, K.pendingClientSecretEnc, K.pendingExpireAt]) {
+            db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+          }
+        }
 
         // Invalidate role credential cache
         _roleCredCache = null;
 
         appendAudit(
-          db,
+          getDb(),
           req.user!.id,
           'bedrock-sso.complete',
           null,
@@ -687,10 +727,10 @@ export function registerBedrockSsoRoutes(): void {
   // POST /api/settings/bedrock-sso/sign-out — clear tokens
   router.post(
     '/api/settings/bedrock-sso/sign-out',
-    (req: PortalRequest, res: PortalResponse): void => {
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       if (!requireAdminBrowser(req, res)) return;
 
-      signOutSso();
+      await signOutSso();
 
       appendAudit(getDb(), req.user!.id, 'bedrock-sso.sign-out', null, {}, req.ip);
 
@@ -703,19 +743,18 @@ export function registerBedrockSsoRoutes(): void {
   if (process.env['NODE_ENV'] === 'test') {
     router.post(
       '/api/settings/bedrock-sso/_test_set_signed_in',
-      (req: PortalRequest, res: PortalResponse): void => {
+      async (req: PortalRequest, res: PortalResponse): Promise<void> => {
         if (!requireAdminBrowser(req, res)) return;
-        const db = getDb();
         // Store a plaintext "fake" token encrypted with the portal key.
         const fakeToken = enc('fake-sso-access-token-for-smoke-test');
         const expiry = new Date(Date.now() + 8 * 3600_000).toISOString();
-        dbSet(K.accessTokenEnc, fakeToken);
-        dbSet(K.accessTokenExpiry, expiry);
+        await dbSet(K.accessTokenEnc, fakeToken);
+        await dbSet(K.accessTokenExpiry, expiry);
         // Clear any leftover pending flow data
-        dbDel(K.pendingDeviceCode);
-        dbDel(K.pendingClientId);
-        dbDel(K.pendingClientSecretEnc);
-        dbDel(K.pendingExpireAt);
+        await dbDel(K.pendingDeviceCode);
+        await dbDel(K.pendingClientId);
+        await dbDel(K.pendingClientSecretEnc);
+        await dbDel(K.pendingExpireAt);
         _roleCredCache = null;
         sendJson(res, 200, { ok: true, expiresAt: expiry });
       },
