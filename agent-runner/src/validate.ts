@@ -1,0 +1,191 @@
+/**
+ * Payload validation for POST /invocations.
+ *
+ * Pure module — no imports outside Node.js built-ins.
+ * Shared with test/agent-runner-validation.test.ts.
+ */
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface RepoConfig {
+  /** Public HTTPS clone URL (shallow clone into session work dir). */
+  url: string;
+  branch?: string;
+}
+
+/**
+ * Portal callback stub — populated by the portal when invoking via AgentCore.
+ * Not required for the spike; leave the interface here for part 2.
+ */
+export interface PortalConfig {
+  url: string;
+  runToken: string;
+}
+
+export interface InvocationPayload {
+  /** Unique run ID provided by the caller. */
+  runId: string;
+  prompt: string;
+  /** Bedrock model ID. Defaults to DEFAULT_MODEL. */
+  model?: string;
+  /** Maximum agent turns (default 10). */
+  maxTurns?: number;
+  /** Maximum spend in USD (default 0.50). */
+  maxBudgetUsd?: number;
+  /** Wall-clock timeout in minutes (default 10). */
+  maxMinutes?: number;
+  repo?: RepoConfig;
+  portal?: PortalConfig;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+export const DEFAULT_MODEL = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
+export const DEFAULT_MAX_TURNS = 10;
+export const DEFAULT_MAX_BUDGET_USD = 0.5;
+export const DEFAULT_MAX_MINUTES = 10;
+
+const MAX_PROMPT_LENGTH = 100_000;
+const MAX_REPO_URL_LENGTH = 1_024;
+const MAX_RUN_ID_LENGTH = 256;
+const KNOWN_FIELDS = new Set([
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal',
+]);
+const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
+const KNOWN_PORTAL_FIELDS = new Set(['url', 'runToken']);
+
+// ── Validation result ─────────────────────────────────────────────────────────
+
+export type ValidationOk = { ok: true; payload: InvocationPayload };
+export type ValidationErr = { ok: false; error: string };
+export type ValidationResult = ValidationOk | ValidationErr;
+
+// ── validatePayload ───────────────────────────────────────────────────────────
+
+/**
+ * Validate and normalise the JSON body of POST /invocations.
+ *
+ * Returns { ok: true, payload } on success, or { ok: false, error } on any
+ * validation failure. Unknown or oversized fields are rejected immediately.
+ */
+export function validatePayload(raw: unknown): ValidationResult {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return err('Payload must be a JSON object');
+  }
+  const obj = raw as Record<string, unknown>;
+
+  // Reject unknown top-level fields
+  for (const key of Object.keys(obj)) {
+    if (!KNOWN_FIELDS.has(key)) return err(`Unknown field: "${key}"`);
+  }
+
+  // runId — required string
+  if (typeof obj.runId !== 'string' || !obj.runId.trim()) {
+    return err('"runId" must be a non-empty string');
+  }
+  if (obj.runId.length > MAX_RUN_ID_LENGTH) {
+    return err(`"runId" exceeds maximum length of ${MAX_RUN_ID_LENGTH}`);
+  }
+
+  // prompt — required string
+  if (typeof obj.prompt !== 'string' || !obj.prompt.trim()) {
+    return err('"prompt" must be a non-empty string');
+  }
+  if (obj.prompt.length > MAX_PROMPT_LENGTH) {
+    return err(`"prompt" exceeds maximum length of ${MAX_PROMPT_LENGTH} characters`);
+  }
+
+  // model — optional string
+  if (obj.model !== undefined) {
+    if (typeof obj.model !== 'string' || !obj.model.trim()) {
+      return err('"model" must be a non-empty string when provided');
+    }
+  }
+
+  // maxTurns — optional positive integer
+  if (obj.maxTurns !== undefined) {
+    if (typeof obj.maxTurns !== 'number' || !Number.isInteger(obj.maxTurns) || obj.maxTurns < 1 || obj.maxTurns > 200) {
+      return err('"maxTurns" must be a positive integer ≤ 200');
+    }
+  }
+
+  // maxBudgetUsd — optional positive number
+  if (obj.maxBudgetUsd !== undefined) {
+    if (typeof obj.maxBudgetUsd !== 'number' || obj.maxBudgetUsd <= 0 || obj.maxBudgetUsd > 100) {
+      return err('"maxBudgetUsd" must be a positive number ≤ 100');
+    }
+  }
+
+  // maxMinutes — optional positive number
+  if (obj.maxMinutes !== undefined) {
+    if (typeof obj.maxMinutes !== 'number' || obj.maxMinutes <= 0 || obj.maxMinutes > 480) {
+      return err('"maxMinutes" must be a positive number ≤ 480');
+    }
+  }
+
+  // repo — optional object
+  let repo: RepoConfig | undefined;
+  if (obj.repo !== undefined) {
+    if (typeof obj.repo !== 'object' || obj.repo === null || Array.isArray(obj.repo)) {
+      return err('"repo" must be an object');
+    }
+    const r = obj.repo as Record<string, unknown>;
+    for (const key of Object.keys(r)) {
+      if (!KNOWN_REPO_FIELDS.has(key)) return err(`Unknown field in "repo": "${key}"`);
+    }
+    if (typeof r.url !== 'string' || !r.url.trim()) {
+      return err('"repo.url" must be a non-empty string');
+    }
+    const trimmedUrl = r.url.trim();
+    if (!trimmedUrl.startsWith('https://')) {
+      return err('"repo.url" must be a public HTTPS URL');
+    }
+    if (trimmedUrl.length > MAX_REPO_URL_LENGTH) {
+      return err(`"repo.url" exceeds maximum length of ${MAX_REPO_URL_LENGTH}`);
+    }
+    if (r.branch !== undefined && (typeof r.branch !== 'string' || !r.branch.trim())) {
+      return err('"repo.branch" must be a non-empty string when provided');
+    }
+    repo = {
+      url: trimmedUrl,
+      branch: typeof r.branch === 'string' ? r.branch.trim() : undefined,
+    };
+  }
+
+  // portal — optional object (stub; required fields are url + runToken)
+  let portal: PortalConfig | undefined;
+  if (obj.portal !== undefined) {
+    if (typeof obj.portal !== 'object' || obj.portal === null || Array.isArray(obj.portal)) {
+      return err('"portal" must be an object');
+    }
+    const p = obj.portal as Record<string, unknown>;
+    for (const key of Object.keys(p)) {
+      if (!KNOWN_PORTAL_FIELDS.has(key)) return err(`Unknown field in "portal": "${key}"`);
+    }
+    if (typeof p.url !== 'string' || !p.url.trim()) {
+      return err('"portal.url" must be a non-empty string');
+    }
+    if (typeof p.runToken !== 'string' || !p.runToken.trim()) {
+      return err('"portal.runToken" must be a non-empty string');
+    }
+    portal = { url: p.url.trim(), runToken: p.runToken };
+  }
+
+  return {
+    ok: true,
+    payload: {
+      runId: obj.runId.trim(),
+      prompt: obj.prompt,
+      model: typeof obj.model === 'string' ? obj.model.trim() : undefined,
+      maxTurns: typeof obj.maxTurns === 'number' ? obj.maxTurns : undefined,
+      maxBudgetUsd: typeof obj.maxBudgetUsd === 'number' ? obj.maxBudgetUsd : undefined,
+      maxMinutes: typeof obj.maxMinutes === 'number' ? obj.maxMinutes : undefined,
+      repo,
+      portal,
+    },
+  };
+}
+
+function err(message: string): ValidationErr {
+  return { ok: false, error: message };
+}

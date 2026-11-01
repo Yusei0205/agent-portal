@@ -730,6 +730,17 @@
       ],
       "tests": [],
       "smokeIds": ["tickets"]
+    },
+    "agent-runner": {
+      "description": "AgentCore Runtime container — payload validation (backend-only; no smoke section)",
+      "sources": [
+        "agent-runner/src/validate.ts"
+      ],
+      "tests": [
+        "test/agent-runner-validation.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "Spike A container. run.ts and index.ts are not unit-tested here; the full container is smoke-tested via the local docker run in docs/plans/2026-11-01-spike-a-agentcore-results.md."
     }
   },
 

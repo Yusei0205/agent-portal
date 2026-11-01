@@ -15,3 +15,8 @@ data-playwright-test/
 data-screenshot-test/
 .playwright-mcp/
 test-*.txt
+
+# agent-runner build outputs and local shared copies (populated by Dockerfile COPY)
+agent-runner/node_modules/
+agent-runner/dist/
+agent-runner/shared/
