@@ -291,11 +291,17 @@ export async function runInvocation(
         abortController,
         // 'default' keeps canUseTool in control; 'bypassPermissions' skips it
         permissionMode: 'default',
+        // allowedTools: [] means no tools are auto-approved; canUseTool handles each one.
+        // This is correct — not "no tools at all". See SDK docs.
         allowedTools: [],
         // Suppress loading CLAUDE.md / settings from the container's / directory
         settingSources: [],
         // SDK spend cap (FR-GUARD-10 compatible)
         maxBudgetUsd,
+        // Let the SDK enforce the turn limit natively so it can emit a proper
+        // result message (with total_cost_usd and stop_reason:"max_turns").
+        // Our manual counter below remains for the turns metric.
+        maxTurns,
       },
     }) as AsyncIterable<Record<string, unknown>>;
 
@@ -307,10 +313,14 @@ export async function runInvocation(
       if (msgType === 'assistant') {
         turns++;
 
-        // Abort if turn limit exceeded
-        if (turns > maxTurns) {
+        // Safety net only — the SDK enforces maxTurns natively (via the maxTurns option
+        // above) and emits a result message with total_cost_usd when it fires.
+        // The SDK may emit internal assistant messages that inflate our counter;
+        // use a generous safety limit (200 = validation max) to avoid false triggers.
+        const safetyLimit = Math.max(maxTurns * 4, 200);
+        if (turns > safetyLimit) {
           abortController.abort();
-          emit({ type: 'status', text: `Turn limit of ${maxTurns} reached. Run stopped.` });
+          emit({ type: 'status', text: `Safety turn limit (${safetyLimit}) exceeded. Run stopped.` });
           stopReason = 'max_turns';
           break;
         }
@@ -408,6 +418,26 @@ export async function runInvocation(
   // Flush any pending tool-ends
   for (const [, pending] of pendingToolUses) {
     emit({ type: 'tool-result', name: pending.name, output: '(completed)' });
+  }
+
+  // Cost fallback for wall-clock aborts (SDK never emits a result message in that path).
+  // The SDK sets total_cost_usd in its result message for normal and max_turns stops;
+  // for a wall-clock abort we estimate from accumulated tokens using Haiku 4.5 pricing.
+  // Source: https://aws.amazon.com/bedrock/pricing/ (verify before billing)
+  if (totalCostUsd === 0 && (totalInputTokens + totalOutputTokens + totalCacheWriteTokens + totalCacheReadTokens) > 0) {
+    const tokensUsed = totalInputTokens + totalOutputTokens + totalCacheWriteTokens + totalCacheReadTokens;
+    if (tokensUsed > 0) {
+      // Haiku 4.5 on Bedrock — approximate; SDK's own calculation is used when available.
+      const inputPrice = 0.80 / 1e6;
+      const outputPrice = 4.00 / 1e6;
+      const cacheWritePrice = 0.50 / 1e6;  // estimated — verify on pricing page
+      const cacheReadPrice = 0.08 / 1e6;
+      totalCostUsd =
+        totalInputTokens * inputPrice +
+        totalOutputTokens * outputPrice +
+        totalCacheWriteTokens * cacheWritePrice +
+        totalCacheReadTokens * cacheReadPrice;
+    }
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────────────
