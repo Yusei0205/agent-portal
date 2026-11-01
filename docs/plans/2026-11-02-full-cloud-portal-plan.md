@@ -171,3 +171,27 @@ In the cloud the code that produces an event (an AgentCore run or another Lambda
 4. Auth: keep email + password, or move to Cognito?
 5. Live updates: AppSync Events (recommended) or polling only?
 6. First phase to start: S0 spikes + S1 data layer (recommended), or S5 AgentCore engine first?
+
+## 9. Progress (updated 2026-11-02)
+
+| Phase | Status | Commits |
+|---|---|---|
+| S0 Spike A (AgentCore runner) | Done, deployed | dcefd4a |
+| S0 Spike B (Kiro headless) | Waiting for a Kiro API key | — |
+| S0 Spike C (AppSync Events) | Done, deployed, PASS | 61f3f67 |
+| S1 DynamoDB data design | Done | 836e8de |
+| S1 modules converted | api-tokens, auth (users, sessions, invitations), permissions, audit, delegation settings, settings + secrets, projects + members + teams | c88c001, f993e25, 7ff92db, f982d7c, ac7c5de |
+| S1 remaining | sessions/workflows/runs/events (hot path), inbox, reviews/scans, knowledge/vault/docs/diagrams, learn, testing module, dashboard/insights, repos/workspaces/git connections, integrations, credentials, themes, MCP server | — |
+
+Known callers still on SQLite are marked `S1-TODO(<module>)` in the code: review.ts, learn.ts, jira.ts, mcp-server.ts, session-files.ts, inbox.ts (project membership checks).
+
+### Rules learned during S1 (apply to every remaining module)
+
+- A DynamoDB transaction cannot touch the same item twice. Put guards on the write itself.
+- Uniqueness (email, slug) and one-time claims (first admin, invitations) use conditional writes, never read-then-write.
+- Updates must be conditional on the item existing; plain `UpdateItem` is an upsert.
+- Retry `BatchGetItem` unprocessed keys.
+- Never fail open: authorisation and security settings must throw, not return defaults.
+- Fire-and-forget writes use `registerBackgroundWrite`; the response end waits for them (Lambda freezes after the response).
+- SQLite mode reads the database directly; caches and snapshots are DynamoDB-mode only.
+- Contract tests must run the same assertions on both backends with a fresh store where counts matter, and must never skip their success path. CI runs them with `REQUIRE_DYNAMODB=1`.
