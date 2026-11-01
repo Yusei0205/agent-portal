@@ -21,6 +21,10 @@ import { generateId, now, str, badRequest, HttpError } from './util.ts';
 import { appendAudit } from './audit.ts';
 import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
 import type { FetchProfilesResult } from './kiro-idc.ts';
+import {
+  startAgentCoreLogin,
+  pollAgentCoreLogin,
+} from './agent/kiro-agentcore.ts';
 import type { DatabaseSync } from 'node:sqlite';
 
 // Re-export the profiles fetcher override so tests can mock the API.
@@ -930,36 +934,63 @@ export function registerCredentialRoutes(): void {
 
       let deviceChallenge: Record<string, unknown>;
       let extraForStore: Record<string, unknown>;
-      try {
-        const oidc = await makeOIDCClient(region);
-        const reg = await oidc.registerClient({
-          clientName: 'agent-portal',
-          clientType: 'public',
-          scopes: [...KIRO_IDC_SCOPES],
-          grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
-        });
-        const da = await oidc.startDeviceAuthorization({
-          clientId: reg.clientId,
-          clientSecret: reg.clientSecret,
-          startUrl,
-        });
-        extraForStore = {
-          startUrl,
-          region,
-          pendingClientId: reg.clientId,
-          pendingClientSecret: reg.clientSecret,
-          pendingClientSecretExpiresAt: reg.clientSecretExpiresAt ?? 0,
-          pendingDeviceCode: da.deviceCode,
-          pendingExpireAt: Date.now() + da.expiresIn * 1000,
-        };
-        deviceChallenge = {
-          verificationUri: da.verificationUriComplete ?? da.verificationUri,
-          userCode: da.userCode,
-          expiresIn: da.expiresIn,
-          interval: da.interval,
-        };
-      } catch (e) {
-        throw new HttpError(502, `Failed to start device authorization: ${(e as Error)?.message ?? e}`);
+
+      // ── AgentCore login path ──────────────────────────────────────────────
+      // When configured, kiro-login runs inside the AgentCore runtime.
+      // We start it as a background process, wait for the verification URL,
+      // then return the same deviceChallenge shape to the frontend.
+      const acRuntimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+      if (acRuntimeArn) {
+        try {
+          const challenge = await startAgentCoreLogin(acRuntimeArn, id, startUrl, region);
+          extraForStore = {
+            startUrl,
+            region,
+            pendingDeviceCode: 'agentcore',
+            pendingExpireAt: Date.now() + challenge.expiresIn * 1000,
+          };
+          deviceChallenge = {
+            verificationUri: challenge.verificationUri,
+            userCode: challenge.userCode,
+            expiresIn: challenge.expiresIn,
+            interval: challenge.interval,
+          };
+        } catch (e) {
+          throw new HttpError(502, `Failed to start AgentCore login: ${(e as Error)?.message ?? e}`);
+        }
+      } else {
+        // ── Local OIDC flow (unchanged) ─────────────────────────────────────
+        try {
+          const oidc = await makeOIDCClient(region);
+          const reg = await oidc.registerClient({
+            clientName: 'agent-portal',
+            clientType: 'public',
+            scopes: [...KIRO_IDC_SCOPES],
+            grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
+          });
+          const da = await oidc.startDeviceAuthorization({
+            clientId: reg.clientId,
+            clientSecret: reg.clientSecret,
+            startUrl,
+          });
+          extraForStore = {
+            startUrl,
+            region,
+            pendingClientId: reg.clientId,
+            pendingClientSecret: reg.clientSecret,
+            pendingClientSecretExpiresAt: reg.clientSecretExpiresAt ?? 0,
+            pendingDeviceCode: da.deviceCode,
+            pendingExpireAt: Date.now() + da.expiresIn * 1000,
+          };
+          deviceChallenge = {
+            verificationUri: da.verificationUriComplete ?? da.verificationUri,
+            userCode: da.userCode,
+            expiresIn: da.expiresIn,
+            interval: da.interval,
+          };
+        } catch (e) {
+          throw new HttpError(502, `Failed to start device authorization: ${(e as Error)?.message ?? e}`);
+        }
       }
 
       if (isDefault) {
@@ -1106,13 +1137,80 @@ export function registerCredentialRoutes(): void {
     }
 
     const extra = safeJson(cred.extra_config);
+    const deviceCode = String(extra.pendingDeviceCode ?? '');
+
+    // ── AgentCore login polling ────────────────────────────────────────────
+    // When kiro-login was started via AgentCore, pendingDeviceCode is set to
+    // 'agentcore' as a sentinel.  We check the in-process login state map.
+    if (deviceCode === 'agentcore') {
+      const poll = pollAgentCoreLogin(String(cred.id));
+      if (poll.status === 'pending') {
+        sendJson(res, 200, { status: 'pending' });
+        return;
+      }
+      if (poll.status === 'unknown') {
+        // Map entry expired or was never set — treat as expired
+        sendJson(res, 200, { status: 'expired' });
+        return;
+      }
+      if (poll.status === 'failed') {
+        sendJson(res, 200, { status: 'expired' });
+        return;
+      }
+      // status === 'complete'
+      const tp = poll.tokenPayload;
+      if (!tp) {
+        sendJson(res, 200, { status: 'expired' });
+        return;
+      }
+
+      // Store the token received from AgentCore kiro-login
+      const accessToken = String(tp.access_token ?? '');
+      const tokenEnc = encrypt(accessToken, config.secretKey);
+      const expiresAtStr = String(tp.expires_at ?? '');
+      const tokenExpiry = expiresAtStr || new Date(Date.now() + 28_800_000).toISOString();
+      const clientSecretExpiresAt = Number(extra.pendingClientSecretExpiresAt ?? 0);
+      const clientId = String(extra.pendingClientId ?? extra.clientId ?? '');
+
+      const newExtra: Record<string, unknown> = {
+        startUrl: String(extra.startUrl ?? tp.start_url ?? ''),
+        region: String(extra.region ?? tp.region ?? 'us-east-1'),
+        tokenExpiry,
+        signedInAt: now(),
+        ...(clientId ? { clientId } : {}),
+        ...(clientSecretExpiresAt ? { clientSecretExpiresAt } : {}),
+        ...(extra.clientSecretEnc ? { clientSecretEnc: String(extra.clientSecretEnc) } : {}),
+      };
+      if (tp.refresh_token) {
+        newExtra.refreshTokenEnc = encrypt(tp.refresh_token, config.secretKey);
+      }
+
+      dbRun(
+        `UPDATE engine_credentials
+            SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ?
+          WHERE id = ?`,
+        tokenEnc,
+        JSON.stringify(newExtra),
+        accessToken.slice(-4),
+        now(),
+        String(cred.id),
+      );
+
+      // Fetch profile asynchronously
+      fetchAndStoreProfile(String(cred.id), accessToken, String(newExtra.region)).catch(() => { /* non-fatal */ });
+
+      const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+      sendJson(res, 200, { status: 'complete', credential: credView(updated) });
+      return;
+    }
+
+    // ── Standard local OIDC polling (unchanged) ────────────────────────────
     const clientId = String(extra.pendingClientId ?? '');
     const clientSecret = String(extra.pendingClientSecret ?? '');
-    const deviceCode = String(extra.pendingDeviceCode ?? '');
     const region = String(extra.region ?? 'us-east-1');
     const pendingExpireAt = Number(extra.pendingExpireAt ?? 0);
 
-    if (!clientId || !clientSecret || !deviceCode) {
+    if (!clientId || !clientSecret || !deviceCode || deviceCode === 'agentcore') {
       sendJson(res, 400, { error: 'Device code flow not started or already completed' });
       return;
     }
@@ -1242,6 +1340,48 @@ export function registerCredentialRoutes(): void {
 
     if (!startUrl) {
       sendJson(res, 400, { error: 'Credential has no startUrl stored; cannot start a new sign-in flow' });
+      return;
+    }
+
+    // ── AgentCore login path for reauth ───────────────────────────────────
+    const acRuntimeArnReauth = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+    if (acRuntimeArnReauth) {
+      try {
+        const challenge = await startAgentCoreLogin(acRuntimeArnReauth, String(cred.id), startUrl, region);
+        // Preserve existing completed-auth fields; overwrite pending with agentcore sentinel
+        const extraForStore: Record<string, unknown> = {
+          startUrl,
+          region,
+          ...(extra.tokenExpiry ? { tokenExpiry: String(extra.tokenExpiry) } : {}),
+          ...(extra.signedInAt ? { signedInAt: String(extra.signedInAt) } : {}),
+          ...(extra.clientId ? { clientId: String(extra.clientId) } : {}),
+          ...(extra.clientSecretEnc ? { clientSecretEnc: String(extra.clientSecretEnc) } : {}),
+          ...(extra.clientSecretExpiresAt ? { clientSecretExpiresAt: Number(extra.clientSecretExpiresAt) } : {}),
+          ...(extra.refreshTokenEnc ? { refreshTokenEnc: String(extra.refreshTokenEnc) } : {}),
+          ...(extra.selectedProfileArn ? { selectedProfileArn: String(extra.selectedProfileArn) } : {}),
+          ...(extra.selectedProfileName ? { selectedProfileName: String(extra.selectedProfileName) } : {}),
+          pendingDeviceCode: 'agentcore',
+          pendingExpireAt: Date.now() + challenge.expiresIn * 1000,
+        };
+        dbRun(
+          'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
+          JSON.stringify(extraForStore), now(), String(cred.id),
+        );
+        appendAudit(getDb(), req.user!.id, 'credential.reauth', `credential:${String(cred.id)}`,
+          { name: String(cred.name) }, req.ip);
+        const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+        sendJson(res, 200, {
+          credential: credView(updated),
+          deviceChallenge: {
+            verificationUri: challenge.verificationUri,
+            userCode: challenge.userCode,
+            expiresIn: challenge.expiresIn,
+            interval: challenge.interval,
+          },
+        });
+      } catch (e) {
+        throw new HttpError(502, `Failed to start AgentCore re-authentication: ${(e as Error)?.message ?? e}`);
+      }
       return;
     }
 

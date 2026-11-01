@@ -60,6 +60,11 @@ import {
   shutdownSessionBrowser,
   markAgentActivity,
 } from './browser-manager.ts';
+import {
+  runKiroViaAgentCore,
+  saveRefreshedTokenConditional,
+} from './kiro-agentcore.ts';
+import type { KiroTokenPayload } from './kiro-agentcore.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -886,23 +891,137 @@ Use severities: critical, high, medium, low, info.
 Set confidence 0.0–1.0. Output [] when the diff is clean.
 `.trim();
 
+// ── AgentCore adapter ─────────────────────────────────────────────────────────
+
+/**
+ * Run kiro via the deployed AgentCore runtime instead of the local kiro-cli.
+ * Called from runKiro() when PORTAL_KIRO_AGENTCORE_RUNTIME_ARN is set and the
+ * credential is an Identity Center credential.
+ */
+async function runKiroViaAgentCoreAdapter(
+  ctx: RunContext,
+  runtimeArn: string,
+  childEnv: NodeJS.ProcessEnv,
+): Promise<string> {
+  const { run, emit } = ctx;
+
+  // Extract IDC token from the sentinel env vars built by resolveCredentialEnv()
+  const accessToken = String(childEnv[IDC_TOKEN_KEY] ?? '');
+  const idcRegion = String(childEnv[IDC_REGION_KEY] ?? 'us-east-1');
+  const idcExpiry = String(childEnv[IDC_EXPIRY_KEY] ?? new Date(Date.now() + 28_800_000).toISOString());
+  const idcStartUrl = String(childEnv[IDC_START_URL_KEY] ?? '');
+  const idcRefreshToken = childEnv[IDC_REFRESH_TOKEN_KEY] ? String(childEnv[IDC_REFRESH_TOKEN_KEY]) : undefined;
+  const idcClientId = childEnv[IDC_CLIENT_ID_KEY] ? String(childEnv[IDC_CLIENT_ID_KEY]) : undefined;
+  const idcClientSecret = childEnv[IDC_CLIENT_SECRET_KEY] ? String(childEnv[IDC_CLIENT_SECRET_KEY]) : undefined;
+  const idcClientSecretExpiresAt = childEnv[IDC_CLIENT_SECRET_EXPIRES_AT_KEY]
+    ? Number(childEnv[IDC_CLIENT_SECRET_EXPIRES_AT_KEY]) : undefined;
+  const idcProfileArn = childEnv[IDC_PROFILE_ARN_KEY] ? String(childEnv[IDC_PROFILE_ARN_KEY]) : undefined;
+  const idcProfileName = childEnv[IDC_PROFILE_NAME_KEY] ? String(childEnv[IDC_PROFILE_NAME_KEY]) : undefined;
+
+  // Capture the current stored ciphertext for the conditional token write-back.
+  // If another run saves a newer token before this run finishes, we skip the update.
+  let expectedCiphertext: string | null = null;
+  if (run.credentialId) {
+    try {
+      const credRow = one<{ secret_enc: string | null }>(
+        'SELECT secret_enc FROM engine_credentials WHERE id = ?',
+        run.credentialId,
+      );
+      expectedCiphertext = credRow?.secret_enc ?? null;
+    } catch { /* non-fatal */ }
+  }
+
+  // Build prompt (same logic as the local path)
+  let prompt = run.goal;
+  if (run.kind === 'review') {
+    prompt = `${run.goal}\n\n${REVIEW_INSTRUCTIONS}`;
+  }
+
+  const token: KiroTokenPayload = {
+    accessToken,
+    expiresAt: idcExpiry,
+    region: idcRegion,
+    startUrl: idcStartUrl,
+    ...(idcRefreshToken ? { refreshToken: idcRefreshToken } : {}),
+    ...(idcClientId ? { clientId: idcClientId } : {}),
+    ...(idcClientSecret ? { clientSecret: idcClientSecret } : {}),
+    ...(idcClientSecretExpiresAt ? { clientSecretExpiresAt: idcClientSecretExpiresAt } : {}),
+    ...(idcProfileArn ? { profileArn: idcProfileArn } : {}),
+    ...(idcProfileName ? { profileName: idcProfileName } : {}),
+  };
+
+  const { textParts, credits: kiroCredits } = await runKiroViaAgentCore(ctx, {
+    runtimeArn,
+    runId: run.runId,
+    prompt,
+    token,
+    credentialId: run.credentialId,
+    expectedCiphertext,
+  });
+
+  if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
+
+  // Persist run stats (same as the local path)
+  const approxCostUsd = Number(kiroCredits.toFixed(4));
+  dbRun(
+    `UPDATE p6_runs
+        SET cost_usd = ?, input_tokens = ?, output_tokens = ?,
+            cache_write_tokens = ?, cache_read_tokens = ?,
+            model = ?
+      WHERE id = ?`,
+    approxCostUsd, 0, 0, 0, 0,
+    run.model ?? run.leadAgent ?? 'kiro',
+    run.runId,
+  );
+
+  if (approxCostUsd > 0) {
+    const wfRow = one<Row>('SELECT created_by FROM p6_workflows WHERE id = ?', run.workflowId);
+    insert('budget_usage', {
+      user_id: (wfRow?.created_by as string | null) ?? null,
+      project_id: run.projectId,
+      workflow_id: run.workflowId,
+      run_id: null,
+      cost_usd: approxCostUsd,
+      input_tokens: 0,
+      output_tokens: 0,
+      provider: 'kiro',
+      model: run.leadAgent ?? 'kiro-default',
+      created_at: now(),
+    });
+  }
+
+  const summary = textParts.join('\n').trim() || 'Kiro run complete.';
+  emit('run-complete', { result: summary, cost_usd: approxCostUsd });
+  return summary;
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 /**
  * Run a workflow using kiro-cli (ACP by default, legacy chat fallback).
+ * When PORTAL_KIRO_AGENTCORE_RUNTIME_ARN is set and the credential is an
+ * Identity Center credential, the run goes to AgentCore instead.
  * Emits events via ctx.emit() and returns the final summary text.
  */
 export async function runKiro(ctx: RunContext): Promise<string> {
   const { run, emit } = ctx;
 
+  // ── Build env ──────────────────────────────────────────────────────────────
+  const agentEnv = await resolveCredentialEnv('kiro', run.credentialOwnerId, run.credentialId);
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, ...agentEnv };
+
+  // ── AgentCore path ─────────────────────────────────────────────────────────
+  // When configured and the credential is an Identity Center credential,
+  // route the run through the deployed AgentCore runtime instead of local kiro-cli.
+  const agentCoreRuntimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+  if (agentCoreRuntimeArn && childEnv[IDC_TOKEN_KEY]) {
+    return runKiroViaAgentCoreAdapter(ctx, agentCoreRuntimeArn, childEnv);
+  }
+
   // D-12: fail with a clear error if kiro-cli is not installed.
   if (!process.env.PORTAL_KIRO_FAKE) {
     await assertKiroAvailable();
   }
-
-  // ── Build env ──────────────────────────────────────────────────────────────
-  const agentEnv = await resolveCredentialEnv('kiro', run.credentialOwnerId, run.credentialId);
-  const childEnv: NodeJS.ProcessEnv = { ...process.env, ...agentEnv };
 
   // ── Wire materialised home dir (F5) ────────────────────────────────────────
   const homeDir = getRunHomeDir(run.runId);

@@ -317,7 +317,7 @@ export async function runKiroRun(
       stderrBuf = (stderrBuf + chunk).slice(-4_000);
     });
 
-    const TIMEOUT_MS = 5 * 60_000;
+    const TIMEOUT_MS = 29 * 60_000; // just under the AgentCore maxLifetime (30 min)
     let timedOut = false;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;

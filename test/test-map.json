@@ -468,14 +468,16 @@
       "sources": [
         "server/kiro-cmd.ts",
         "server/kiro-settings.ts",
-        "server/mcp-server.ts"
+        "server/mcp-server.ts",
+        "server/agent/kiro-agentcore.ts"
       ],
       "tests": [
         "test/kiro-cmd.test.ts",
         "test/kiro-mcp-generate.test.ts",
         "test/kiro-models-parser.test.ts",
         "test/kiro-settings.test.ts",
-        "test/kiro-win-env.test.ts"
+        "test/kiro-win-env.test.ts",
+        "test/kiro-agentcore.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
@@ -666,6 +668,7 @@
         "server/agent/claude-code.ts",
         "server/agent/demo.ts",
         "server/agent/kiro.ts",
+        "server/agent/kiro-agentcore.ts",
         "server/agent/guard.ts",
         "server/agent/env-scrub.ts",
         "server/real-path.ts",
@@ -845,6 +848,7 @@
         "server/agent/claude-sessions.ts",
         "server/agent/demo.ts",
         "server/agent/kiro.ts",
+        "server/agent/kiro-agentcore.ts",
         "server/agent/recap.ts",
         "server/agent/browser-headless.ts",
         "server/agent/browser-manager.ts",
