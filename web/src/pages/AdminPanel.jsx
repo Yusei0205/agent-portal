@@ -14,32 +14,77 @@ import UsersPage from './settings/Users.jsx';
 
 function AuditLogTab() {
   const [entries, setEntries] = useState([]);
-  const [total, setTotal] = useState(0);
+  // total is an exact integer on SQLite; null on DynamoDB (no cheap full-count).
+  const [total, setTotal] = useState(/** @type {number | null} */ (null));
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actorId, setActorId] = useState('');
   const [action, setAction] = useState('');
-  const [offset, setOffset] = useState(0);
+  // Cursor-based pagination — works on both SQLite and DynamoDB.
+  // cursor: the cursor sent with the current page request (null = first page).
+  // cursorStack: cursors for each previous page (pop to go back).
+  // nextCursor: cursor returned by the latest response, used for the next page.
+  const [cursor, setCursor] = useState(/** @type {string | null} */ (null));
+  const [cursorStack, setCursorStack] = useState(/** @type {(string | null)[]} */ ([]));
+  const [nextCursor, setNextCursor] = useState(/** @type {string | null} */ (null));
   const limit = 50;
+
+  // 1-based page number derived from how many cursors we've pushed onto the stack.
+  const page = cursorStack.length + 1;
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (cursor) params.set('cursor', cursor);
       if (actorId) params.set('actorId', actorId);
       if (action) params.set('action', action);
       const r = await api.get(`/api/admin/audit-log?${params}`);
       setEntries(r.entries || []);
-      setTotal(r.total || 0);
+      // Preserve null for DynamoDB; use the integer for SQLite.
+      setTotal(typeof r.total === 'number' ? r.total : null);
+      setHasMore(Boolean(r.hasMore));
+      setNextCursor(r.nextCursor ?? null);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [actorId, action, offset]);
+  }, [actorId, action, cursor]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Changing a filter resets to the first page.
+  const handleActorChange = (e) => {
+    setActorId(e.target.value);
+    setCursor(null);
+    setCursorStack([]);
+    setNextCursor(null);
+  };
+
+  const handleActionChange = (e) => {
+    setAction(e.target.value);
+    setCursor(null);
+    setCursorStack([]);
+    setNextCursor(null);
+  };
+
+  const handleNext = () => {
+    if (!nextCursor) return;
+    setCursorStack((prev) => [...prev, cursor]);
+    setCursor(nextCursor);
+  };
+
+  const handlePrev = () => {
+    if (cursorStack.length === 0) return;
+    const prevCursor = cursorStack[cursorStack.length - 1] ?? null;
+    setCursorStack((prev) => prev.slice(0, -1));
+    setCursor(prevCursor);
+  };
+
+  const totalPages = total !== null ? Math.ceil(total / limit) || 1 : null;
 
   return (
     <div>
@@ -47,14 +92,14 @@ function AuditLogTab() {
         <input
           type="text"
           value={actorId}
-          onChange={(e) => { setActorId(e.target.value); setOffset(0); }}
+          onChange={handleActorChange}
           placeholder="Filter by actor ID…"
           style={{ flex: 1, minWidth: 160 }}
         />
         <input
           type="text"
           value={action}
-          onChange={(e) => { setAction(e.target.value); setOffset(0); }}
+          onChange={handleActionChange}
           placeholder="Filter by action…"
           style={{ flex: 1, minWidth: 160 }}
         />
@@ -86,7 +131,8 @@ function AuditLogTab() {
               {entries.map((e) => (
                 <tr key={e.id}>
                   <td style={{ whiteSpace: 'nowrap' }}>{e.ts ? formatRelative(e.ts) : '—'}</td>
-                  <td>{e.actor_name || e.actor_email || e.actor_id || 'system'}</td>
+                  {/* Fall back: actor_name → actor_email → actor_id → "System" (null actor = system event) */}
+                  <td>{e.actor_name || e.actor_email || e.actor_id || 'System'}</td>
                   <td><code style={{ fontSize: '.8rem' }}>{e.action}</code></td>
                   <td className="muted" style={{ fontSize: '.8rem' }}>{e.target || '—'}</td>
                   <td className="muted" style={{ fontSize: '.8rem' }}>{e.ip || '—'}</td>
@@ -95,24 +141,34 @@ function AuditLogTab() {
             </tbody>
           </table>
 
-          {/* Pagination */}
+          {/* Pagination — cursor-based on both backends */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: '.75rem' }}>
-            <span className="muted" style={{ fontSize: '.875rem' }}>
-              {offset + 1}–{Math.min(offset + entries.length, total)} of {total}
+            {/* aria-live announces page changes to screen readers */}
+            <span
+              className="muted"
+              style={{ fontSize: '.875rem' }}
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {total !== null
+                ? `${total} ${total === 1 ? 'entry' : 'entries'} · page ${page} of ${totalPages}`
+                : `Page ${page}`}
             </span>
             <button
               type="button"
               className="btn btn-sm"
-              onClick={() => setOffset(Math.max(0, offset - limit))}
-              disabled={offset === 0}
+              onClick={handlePrev}
+              disabled={cursorStack.length === 0 || loading}
+              aria-label="Previous page"
             >
               ← Prev
             </button>
             <button
               type="button"
               className="btn btn-sm"
-              onClick={() => setOffset(offset + limit)}
-              disabled={offset + entries.length >= total}
+              onClick={handleNext}
+              disabled={!hasMore || loading}
+              aria-label="Next page"
             >
               Next →
             </button>
