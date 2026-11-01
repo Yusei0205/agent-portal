@@ -1853,10 +1853,244 @@ const M34_JIRA = `
   ALTER TABLE p6_workflows ADD COLUMN jira_url TEXT NOT NULL DEFAULT '';
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA];
+/**
+ * Migration 35: Run error storage.
+ *
+ * - p6_runs.error: stores a human-readable failure message when a run ends with
+ *   status 'failed'. The runner's catch block writes the last 2000 characters of
+ *   the error (stderr tail for engine failures, exception message for others).
+ *   Cancelled runs leave this empty. Previously the error was only visible in
+ *   p6_events (run-failed payload) and never queryable on the run row itself.
+ */
+const M35_RUN_ERROR = `
+  ALTER TABLE p6_runs ADD COLUMN error TEXT NOT NULL DEFAULT '';
+`;
 
-// IDs are array positions (1-based): M1_CORE=1, ..., M33_DASHBOARD_INDEXES=32, M34_JIRA=33.
-export const SCHEMA_VERSION = MIGRATIONS.length; // = 33
+/**
+ * Migration 36: Built-in theme overrides.
+ *
+ * - themes.builtin_override: flag indicating this row is an admin-provided
+ *   override for a built-in theme (id matches a BUILTIN_THEMES key).
+ *   0 = custom theme (existing behaviour), 1 = built-in override.
+ *   DEFAULT 0 fills all existing custom rows automatically.
+ */
+const M36_THEMES_BUILTIN_OVERRIDE = `
+  ALTER TABLE themes ADD COLUMN builtin_override INTEGER NOT NULL DEFAULT 0;
+`;
+
+/**
+ * Migration 37: Session output artifacts saved to the Vault.
+ *
+ * - vault_files.folder: nullable folder path for grouping Vault files (e.g.
+ *   "Sessions/My Goal (abc12345)" for session output artifacts). NULL means
+ *   the file sits at the root (existing upload behaviour).
+ * - vault_files.source_workflow_id: the workflow that produced this file,
+ *   used to link session output vault copies back to their session.
+ * - output_files.vault_file_id: FK to the vault_files row holding the
+ *   current Vault copy of this output file, enabling download fallback when
+ *   the on-disk work-dir copy is no longer present.
+ * - output_files.hash: SHA-256 hex digest of the file content at collection
+ *   time, used to skip re-collection when content is unchanged.
+ */
+const M37_SESSION_OUTPUTS = `
+  ALTER TABLE vault_files ADD COLUMN folder TEXT;
+  ALTER TABLE vault_files ADD COLUMN source_workflow_id TEXT;
+  ALTER TABLE output_files ADD COLUMN vault_file_id TEXT;
+  ALTER TABLE output_files ADD COLUMN hash TEXT;
+`;
+
+/**
+ * Migration 38: Engine session persistence (F-SESSION-RESUME).
+ *
+ * - p6_workflows.engine_session_id: the ACP/SDK session ID returned by the
+ *   engine on first run. Passed back on subsequent runs to resume the session
+ *   so the agent retains full conversation context across portal turns.
+ * - p6_workflows.engine_session_engine: records which engine created the
+ *   session ID ('kiro' or 'claude-code') so an ID is never handed to the
+ *   wrong engine.
+ */
+const M38_ENGINE_SESSION = `
+  ALTER TABLE p6_workflows ADD COLUMN engine_session_id TEXT;
+  ALTER TABLE p6_workflows ADD COLUMN engine_session_engine TEXT;
+`;
+
+/**
+ * Migration 39: Workspace default engine, agent, and model.
+ *
+ * - workspaces_v2.default_engine: '' | 'kiro' | 'claude-code' | 'demo'.
+ *   Empty string means no default. A new session created from this workspace
+ *   inherits this engine when the request leaves engine unspecified.
+ * - workspaces_v2.default_agent: trimmed agent name (max 200 chars, same
+ *   character rules as lead_agent on workflows). Empty string means no default.
+ * - workspaces_v2.default_model: trimmed model ID (max 200 chars, MODEL_RE).
+ *   Empty string means no default.
+ *
+ * Fallback order for session creation: request → workspace → project → built-in default.
+ */
+const M39_WORKSPACE_DEFAULTS = `
+  ALTER TABLE workspaces_v2 ADD COLUMN default_engine TEXT NOT NULL DEFAULT '';
+  ALTER TABLE workspaces_v2 ADD COLUMN default_agent TEXT NOT NULL DEFAULT '';
+  ALTER TABLE workspaces_v2 ADD COLUMN default_model TEXT NOT NULL DEFAULT '';
+`;
+
+/**
+ * Migration 40: Test Case Sets (F12d).
+ *
+ * - test_case_sets: async-generated manual QA test case sheets per test project.
+ * - test_cases: individual test case rows within a set, ordered by `ord`.
+ *
+ * Generation is chunked (outline → one call per category) to avoid the
+ * 5-minute Kiro CLI timeout. Progress is stored as a JSON blob.
+ * The `cancelled` column is a cooperative cancellation flag checked between
+ * model calls; the cancel and delete endpoints set it to 1 before marking
+ * status = 'cancelled' or deleting the row.
+ */
+const M40_CASE_SETS = `
+  CREATE TABLE IF NOT EXISTS test_case_sets (
+    id TEXT PRIMARY KEY,
+    test_project_id TEXT NOT NULL REFERENCES test_projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK(status IN ('pending','running','done','failed','cancelled')),
+    progress TEXT NOT NULL DEFAULT '{}',
+    error TEXT,
+    warnings TEXT NOT NULL DEFAULT '[]',
+    created_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT,
+    cancelled INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS test_case_sets_project ON test_case_sets(test_project_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS test_cases (
+    id TEXT PRIMARY KEY,
+    case_set_id TEXT NOT NULL REFERENCES test_case_sets(id) ON DELETE CASCADE,
+    ord REAL NOT NULL DEFAULT 0,
+    test_id TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '',
+    scenario TEXT NOT NULL DEFAULT '',
+    precondition TEXT NOT NULL DEFAULT '',
+    steps TEXT NOT NULL DEFAULT '',
+    expected_result TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '' CHECK(status IN ('','Pass','Fail','Blocked','Not Run')),
+    remarks TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS test_cases_case_set ON test_cases(case_set_id, ord);
+`;
+
+/**
+ * Migration 41: Generation trace steps + request/response on test cases.
+ *
+ * trace_steps: ordered trace of AI operations for case-set and script generations.
+ *   - case_set_id  or generation_id is non-null (polymorphic FK, exactly one set).
+ *   - ON DELETE CASCADE from their respective parent tables handles cleanup.
+ *   - status 'running' means the step is currently in progress.
+ *   - prompt stores {system, user} once per context step; subsequent steps omit
+ *     system to avoid storing the same large attachment text repeatedly.
+ *   - output and prompt fields are capped at 20k chars; output_truncated flags cuts.
+ *
+ * test_cases: two new nullable JSON columns.
+ *   - request: { method, url, headers?, body? } — filled only for API test cases.
+ *   - response: { status?, headers?, body? }    — filled only for API test cases.
+ */
+const M41_TRACE_REQUEST_RESPONSE = `
+  CREATE TABLE IF NOT EXISTS trace_steps (
+    id TEXT PRIMARY KEY,
+    case_set_id TEXT REFERENCES test_case_sets(id) ON DELETE CASCADE,
+    generation_id TEXT REFERENCES test_generations(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running'
+      CHECK(status IN ('running','ok','retry','failed','skipped')),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    detail TEXT NOT NULL DEFAULT '{}',
+    prompt TEXT,
+    output TEXT,
+    output_truncated INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS trace_steps_case_set ON trace_steps(case_set_id, seq);
+  CREATE INDEX IF NOT EXISTS trace_steps_generation ON trace_steps(generation_id, seq);
+
+  ALTER TABLE test_cases ADD COLUMN request TEXT;
+  ALTER TABLE test_cases ADD COLUMN response TEXT;
+`;
+
+/**
+ * Migration 42: Generation progress tracking + cancellation flag (F12c hardening).
+ *
+ * - test_generations.progress: JSON blob tracking generation phase for live UI.
+ *   Shape: { phase, message, percent, stepsSoFar }.
+ *   DEFAULT '{}' fills all existing rows automatically.
+ *
+ * - test_generations.started_at: wall-clock timestamp when runGeneration first
+ *   set status='running', distinct from created_at (which is the POST time).
+ *
+ * - test_generations.cancelled_at: non-null when a user cancel request was
+ *   accepted. The existing CHECK constraint only allows
+ *   'pending'|'running'|'done'|'failed' and cannot be modified via ALTER COLUMN.
+ *   Rather than rebuilding the table — which would require careful PRAGMA work
+ *   to avoid breaking the trace_steps FK that references test_generations (M41)
+ *   — cancellation is stored in this separate column. The API layer derives
+ *   status='cancelled' whenever cancelled_at IS NOT NULL.
+ *
+ *   Startup recovery now excludes cancelled_at IS NOT NULL rows so that a
+ *   mid-cancel process restart does not additionally mark them as failed.
+ */
+const M42_GENERATION_PROGRESS = `
+  ALTER TABLE test_generations ADD COLUMN progress TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE test_generations ADD COLUMN started_at TEXT;
+  ALTER TABLE test_generations ADD COLUMN cancelled_at TEXT;
+`;
+
+/**
+ * Migration 43: Resume/retry support for AI work (F12d-resume, F12c-retry, F8-retry).
+ *
+ * test_case_sets:
+ *   - outline_categories: JSON string[] saved after the outline step so a
+ *     resume knows which categories to skip if they already have cases.
+ *   - attachment_ids: JSON string[]. Attachment IDs are now kept on the row
+ *     (not deleted in the generation finally block) so resume can reuse them.
+ *
+ * test_generations:
+ *   - group_id: target group for 'generate' kind, needed to replay the run.
+ *   - attachment_ids: kept across failure so retry can reuse them.
+ *
+ * generated_docs:
+ *   - workflow_id: FK to p6_workflows — tracks the most-recent generation run.
+ *   - status TEXT DEFAULT 'ready': 'generating' while a workflow is live,
+ *     'ready' on success, 'error' on failure.
+ *   - error TEXT: last failure message.
+ *
+ * presentations:
+ *   - status TEXT DEFAULT 'ready': same three-state pattern.
+ *   - error TEXT: last failure message.
+ *
+ * diagrams: no schema change needed; status/error columns already exist.
+ */
+const M43_RESUME_RETRY = `
+  ALTER TABLE test_case_sets ADD COLUMN outline_categories TEXT;
+  ALTER TABLE test_case_sets ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE test_generations ADD COLUMN group_id TEXT;
+  ALTER TABLE test_generations ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE generated_docs ADD COLUMN workflow_id TEXT REFERENCES p6_workflows(id);
+  ALTER TABLE generated_docs ADD COLUMN status TEXT NOT NULL DEFAULT 'ready';
+  ALTER TABLE generated_docs ADD COLUMN error TEXT;
+  ALTER TABLE presentations ADD COLUMN status TEXT NOT NULL DEFAULT 'ready';
+  ALTER TABLE presentations ADD COLUMN error TEXT;
+`;
+
+const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY];
+
+// IDs are array positions (1-based): M1_CORE=1, ..., M42_GENERATION_PROGRESS=41, M43_RESUME_RETRY=42.
+export const SCHEMA_VERSION = MIGRATIONS.length; // = 42
 
 // ── Database singleton ─────────────────────────────────────────────────────────
 
@@ -1947,8 +2181,37 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
     UPDATE test_generations
        SET status = 'failed',
            error = 'Interrupted by a server restart. Start the generation again.',
+           finished_at = datetime('now'),
+           progress = '{}'
+     WHERE status IN ('pending', 'running') AND cancelled_at IS NULL;
+
+    UPDATE test_case_sets
+       SET status = 'failed',
+           error = 'Interrupted by server restart',
            finished_at = datetime('now')
      WHERE status IN ('pending', 'running');
+
+    UPDATE trace_steps
+       SET status = 'failed',
+           error = 'Interrupted by server restart',
+           finished_at = datetime('now'),
+           duration_ms = NULL
+     WHERE status = 'running';
+
+    UPDATE diagrams
+       SET status = 'error',
+           error = 'Interrupted by server restart'
+     WHERE status = 'generating';
+
+    UPDATE generated_docs
+       SET status = 'failed',
+           error = 'Interrupted by server restart'
+     WHERE status = 'generating';
+
+    UPDATE presentations
+       SET status = 'failed',
+           error = 'Interrupted by server restart'
+     WHERE status = 'generating';
   `);
 
   return db;

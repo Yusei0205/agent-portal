@@ -127,13 +127,62 @@
   line-height: 1;
 }
 
-/* ── Session row extensions ──────────────────────────────────── */
-.session-row-checkbox {
-  transition: opacity 0.1s;
+/* ── Session row — dot/checkbox leading cell ─────────────────────── */
+/*
+ * The leading cell holds both the status dot and the bulk-select
+ * checkbox, stacked on top of each other.
+ */
+.session-row-leading {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
   display: flex;
-  align-items: flex-start;
-  padding-top: 3px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 3px;
 }
+.session-row-leading .dot {
+  position: absolute;
+  transition: opacity 0.1s;
+}
+.session-row-leading .session-row-check {
+  position: absolute !important;
+  margin: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+
+/* Show checkbox + hide dot: hover, focus-within, selection mode */
+.ws-item:hover .session-row-leading .dot,
+.session-row-leading:focus-within .dot,
+.ws-item.is-selection-mode .session-row-leading .dot {
+  opacity: 0;
+}
+.ws-item:hover .session-row-leading .session-row-check,
+.session-row-leading:focus-within .session-row-check,
+.ws-item.is-selection-mode .session-row-leading .session-row-check {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch: always show checkbox, hide dot */
+@media (hover: none) {
+  .session-row-leading .dot { opacity: 0; }
+  .session-row-leading .session-row-check {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Selected row — accent wash + left inset border */
+.ws-item.is-selected {
+  background: color-mix(in srgb, var(--accent) 8%, transparent) !important;
+  box-shadow: inset 2px 0 0 var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
 .session-row-link {
   transition: none;
 }
@@ -414,17 +463,75 @@
   border-top: 1px solid var(--line);
   flex-shrink: 0;
   background: var(--panel);
+  position: relative; /* anchor for the absolutely-positioned handle */
+}
+/* Manual-height mode: flex column so the row can fill remaining space */
+.ws-composer--manual {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Drag handle — sits over the top edge of the composer */
+.ws-composer-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  z-index: 10;
+  touch-action: none;   /* prevent scroll hijack on touch */
+  outline: none;
+  transition: background 0.12s;
+}
+.ws-composer-handle:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.ws-composer-handle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 65%, transparent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .ws-composer-row {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 6px;
+}
+/* In manual mode the row fills the remaining height */
+.ws-composer--manual .ws-composer-row {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+/* Buttons stay pinned to the bottom in manual mode */
+.ws-composer--manual .ws-composer-row > .btn-icon,
+.ws-composer--manual .ws-composer-actions {
+  align-self: flex-end;
 }
 .ws-composer-input {
   flex: 1;
   font-size: 0.84rem;
   min-height: 32px;
   padding: 5px 9px;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.5;
+  max-height: min(40vh, 240px);
+}
+/* In manual mode the textarea fills the row height and scrolls */
+.ws-composer--manual .ws-composer-input {
+  flex: 1;
+  align-self: stretch;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+.ws-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 /* ── Inbox page ──────────────────────────────────────────────── */
@@ -473,4 +580,417 @@
   gap: 6px;
   font-size: 0.82rem;
   color: var(--ok);
+}
+
+/* ── Thinking indicator ──────────────────────────────────────────────────────── */
+.live-thinking {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.live-thinking-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+.live-thinking-dots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.live-thinking-dots span {
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: live-dot-bounce 1.2s ease-in-out infinite;
+}
+.live-thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.live-thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes live-dot-bounce {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50%       { opacity: 1;   transform: translateY(-3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-thinking-dots span { animation: none; opacity: 0.6; }
+}
+
+.live-thinking-elapsed {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.live-thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.live-thinking-toggle:hover { color: var(--ink); background: var(--canvas); }
+.live-thoughts {
+  padding: 6px 10px;
+  background: var(--canvas);
+  border-left: 2px solid var(--line);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-top: 2px;
+}
+.live-thought-text {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  font-style: italic;
+  margin: 2px 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Plan checklist ──────────────────────────────────────────────────────────── */
+.live-plan {
+  padding: 6px 12px;
+  margin: 4px 0;
+}
+.live-plan-header {
+  font-size: 0.72rem;
+  font-weight: 660;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.live-plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.live-plan-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.live-plan-check {
+  flex-shrink: 0;
+  width: 14px;
+  font-size: 0.8rem;
+  margin-top: 1px;
+  color: var(--ink-3);
+}
+.live-plan-item--done    .live-plan-check { color: var(--ok); }
+.live-plan-item--failed  .live-plan-check { color: var(--danger); }
+.live-plan-item--done > span:last-child   { text-decoration: line-through; color: var(--ink-3); }
+
+/* ── Tool call (paired start+end) ────────────────────────────────────────────── */
+.live-tool-call {
+  padding: 2px 12px;
+  font-size: 0.8rem;
+}
+.live-tool-call-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  color: var(--ink-2);
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+.live-tool-call-row:hover { color: var(--ink); }
+.live-tool-status-icon {
+  flex-shrink: 0;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+}
+.live-tool-status-icon .spinner { width: 10px; height: 10px; }
+.live-tool-status-ok   { color: var(--ok); }
+.live-tool-status-fail { color: var(--danger); }
+
+/* ── Status text pill ────────────────────────────────────────────────────────── */
+.live-status-text {
+  padding: 3px 12px;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+/* ── Pending message variants ────────────────────────────────────────────────── */
+.live-pending-message {
+  padding: 6px 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.live-pending-message-wrap {
+  max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.live-user-bubble--sending {
+  opacity: 0.65;
+}
+.live-pending-label {
+  font-size: 0.69rem;
+  color: var(--ink-3);
+  text-align: right;
+}
+.live-pending-error {
+  font-size: 0.75rem;
+  color: var(--danger);
+  text-align: right;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* ── Output file links inside agent markdown messages ────────────────────── */
+.output-file-link {
+  display: inline;
+  background: none;
+  border: none;
+  padding: 0 1px;
+  margin: 0;
+  font: inherit;
+  font-size: inherit;
+  color: var(--link, var(--accent));
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  cursor: pointer;
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--code-bg, #f1f3f7);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.output-file-link:hover {
+  text-decoration-style: solid;
+  background: color-mix(in srgb, var(--accent) 15%, var(--code-bg, #f1f3f7));
+}
+.output-file-link:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 1px;
+}
+
+/* ── Live scroll container ───────────────────────────────────────────────────── */
+/* min-height: 0 allows the flex item to shrink below its content height,
+   which is required for the scroll-inside-flex-column pattern to work. */
+.live-scroll {
+  min-height: 0;
+}
+
+/* ── Mobile: New Session dialog as bottom sheet ──────────────────────────── */
+@media (max-width: 600px) {
+  .dialog-overlay {
+    align-items: flex-end;
+    padding: 0;
+    padding-top: 56px;
+  }
+  .dialog {
+    /* Override inline maxWidth (580px) and maxHeight ('90vh') from NewSessionDialog */
+    max-width: 100vw !important;
+    width: 100% !important;
+    max-height: calc(100vh - 56px) !important;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+  }
+}
+
+/* ── Mobile: touch targets for session controls ──────────────────────────── */
+@media (max-width: 900px) {
+  .sessions-list-panel .btn-sm {
+    padding: 8px 12px;
+    font-size: 0.84rem;
+  }
+  .sessions-list-panel .ws-header {
+    min-height: 52px;
+  }
+  /* Safe-area inset for notched iPhones: add the inset on top of the existing
+     8 px bottom padding so the composer clears the home indicator. */
+  .ws-composer {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ── IDE Workspace: mobile layout overrides (≤900 px) ─────────────────────── */
+/*
+ * These overrides fix the three symptoms visible on a phone (390–590 px):
+ *
+ *  1. Dark empty rectangle on the right half, from the header down.
+ *     Root cause: localStorage saves editorPanelOpen=true, which renders
+ *     an ide-editor-area with an inline width of 460 px (dark-canvas empty
+ *     placeholder).  Fix: hide the editor area entirely on mobile.
+ *
+ *  2. Chat bubbles and tool lines clipped at ~270 px from the left.
+ *     Root cause: the ide-sidebar (default 240 px inline-style width) was
+ *     a flex flow child, consuming width and leaving only ~50 px for the
+ *     agent panel.  Fix: detach the sidebar from flow (position: absolute)
+ *     so it overlays content without consuming width.
+ *
+ *  3. Header actions in the middle instead of on the right edge.
+ *     Root cause: the grid track for sessions-detail-panel used plain 1fr
+ *     (= minmax(auto, 1fr)), which allowed the track to expand to the
+ *     IDE body's min-content size; ide-workspace then exceeded the
+ *     viewport, and the flex-row inside the header could not constrain
+ *     its title-wrap.  Fix: changed sessions-shell to minmax(0,1fr) in
+ *     layout.css, plus guard rules below.
+ *
+ * Selector specificity: all IDE rules are scoped under .ide-workspace so
+ * they beat the flat class selectors in ide.css.  !important is used only
+ * where necessary to override JSX inline styles (style={{ … }}).
+ */
+@media (max-width: 900px) {
+
+  /* Guard: ensure the sessions detail cell can never expand beyond viewport */
+  .sessions-detail-panel {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* ── Body: positioning context for the overlay sidebar ──────────── */
+  .ide-workspace .ide-body {
+    position: relative;
+  }
+
+  /* ── Sidebar: pull out of flex flow → overlay ───────────────────── */
+  /* Detaching from flow is the key fix for symptom #2.  The sidebar
+     still appears when a panel is active, now as a slide-over overlay. */
+  .ide-workspace .ide-sidebar {
+    position: absolute !important; /* overrides display:flex flow */
+    left: 40px;                    /* right-flush with the activity bar */
+    top: 0;
+    bottom: 0;
+    z-index: 10;
+    /* !important overrides the inline style={{ width: sidebarW }} */
+    width: min(280px, calc(100vw - 40px)) !important;
+    max-width: calc(100vw - 40px) !important;
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.22);
+  }
+
+  /* ── Editor area: hidden on mobile (fix for symptom #1) ─────────── */
+  .ide-workspace .ide-editor-area {
+    display: none !important;
+  }
+
+  /* ── Editor toggle strip: hidden on mobile ──────────────────────── */
+  /* The 14 px toggle strip has no utility on narrow screens and
+     consumes space between the (hidden) editor area and the agent panel. */
+  .ide-workspace .ide-editor-toggle-strip {
+    display: none !important;
+  }
+
+  /* ── Agent panel: fill all remaining width ──────────────────────── */
+  /* !important overrides the inline style={{ minWidth: 280 }}.          */
+  .ide-workspace .ide-agent-panel {
+    flex: 1 1 0% !important;  /* grow:1 shrink:1 basis:0 → no intrinsic minimum */
+    min-width: 0 !important;
+    max-width: 100% !important;
+    width: 0 !important;      /* flex-basis:0 via width forces shrink below content size */
+  }
+
+  /* ── Main content area: prevent any residual overflow ───────────── */
+  .ide-workspace .ide-main {
+    overflow: hidden;
+    min-width: 0;
+  }
+  .ide-workspace .ide-main-row {
+    overflow: hidden;
+    min-width: 0;             /* allow the row itself to shrink below content width */
+  }
+
+  /* ── Header: title truncates; actions stay on the right edge ─────── */
+  /* Keep overflow:visible so the More-actions dropdown isn't clipped.
+     The guards below ensure title-wrap shrinks and actions don't wrap. */
+  .ide-workspace .ide-header-title-wrap {
+    min-width: 0;
+    flex: 1 1 0%;
+    overflow: hidden;
+  }
+  .ide-workspace .ide-header-actions {
+    flex-shrink: 0;
+  }
+
+  /* ── Live tool-call rows: long paths ellipsize ───────────────────── */
+  /* flex:1 + min-width:0 allows the arg span to shrink and clip.
+     overflow/text-overflow/white-space are already set in sessions.css
+     above; this just adds the flex sizing needed inside the flex row. */
+  .live-tool-arg {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* ── User/pending bubbles: cap at viewport width ─────────────────── */
+  .live-user-message-wrap,
+  .live-pending-message-wrap {
+    max-width: calc(100vw - 80px);
+  }
+
+  /* ── Code blocks inside agent messages: horizontal-scroll only ────── */
+  .live-markdown-body pre {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+} /* end @media (max-width: 900px) */
+
+/* ── IDE Workspace: all-viewport overrides ────────────────────────────────── */
+/*
+ * These rules apply at ALL viewport widths (including desktop).
+ *
+ * Root cause at non-mobile (>900 px):
+ *   ide-agent-panel has flex-shrink:0 and min-width:280px in ide.css.
+ *   When the sessions-detail panel is narrow (e.g. 1000 px total viewport),
+ *   the sidebar can consume enough width that ide-main-row has less than 280 px
+ *   for the agent panel.  Because flex-shrink:0 prevents shrinking, the agent
+ *   panel overflows ide-main-row (which has overflow:hidden), so its content
+ *   is clipped.
+ *
+ * Fix:
+ *   Higher-specificity selectors (.ide-workspace .ide-agent-panel) override
+ *   ide.css without needing !important.  Allowing the panel to shrink (and
+ *   lowering min-width) prevents overflow/clipping at intermediate viewport
+ *   sizes.  The mobile @media block above overrides these further with
+ *   !important to fully reset widths at ≤900 px.
+ */
+
+/* Allow the agent panel to shrink when the sidebar takes significant width */
+.ide-workspace .ide-agent-panel {
+  flex-shrink: 1;    /* was 0 in ide.css — let it shrink rather than overflow */
+  min-width: 160px;  /* absolute minimum for a usable chat column */
+}
+
+/* Ensure ide-main-row can always shrink (prevents min-content blowout) */
+.ide-workspace .ide-main-row {
+  min-width: 0;
+}
+
+/* Resize handle: keep it visible and hittable inside the sidebar */
+.ide-workspace .ide-sidebar .ide-resize-handle-x {
+  right: -2px; /* straddle the border so it's always on the right edge */
 }

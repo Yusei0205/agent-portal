@@ -307,4 +307,81 @@ export function handleReviewLifecycle(
 }
 
 // Register hook when this module is imported
-setRunLifecycleHook(handleReviewLifecycle);
+setRunLifecycleHook((workflowId, runId, event) => {
+  handleReviewLifecycle(workflowId, runId, event);
+  handleArtifactLifecycle(workflowId, event);
+});
+
+// ── Artifact lifecycle (diagrams / generated-docs / presentations) ────────────
+
+/**
+ * On workflow done/failed/cancelled, update the status of any artifact
+ * (diagram, generated_doc, presentation) that references this workflow.
+ * This runs fire-and-forget so it never blocks the runner.
+ */
+function handleArtifactLifecycle(
+  workflowId: string,
+  event: 'start' | 'done' | 'failed' | 'cancelled',
+): void {
+  if (event === 'start') return;
+
+  const wf = one<Row>('SELECT work_dir FROM p6_workflows WHERE id = ?', workflowId);
+  const workDir = wf ? String(wf.work_dir ?? '') : '';
+
+  if (event === 'done') {
+    // Diagrams
+    const diagram = one<Row>(
+      'SELECT id FROM diagrams WHERE pending_workflow_id = ?',
+      workflowId,
+    );
+    if (diagram) {
+      import('./diagrams.ts').then(({ processDiagramOutput }) => {
+        const runRow = one<Row>('SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1', workflowId);
+        const runId = runRow ? String(runRow.id) : '';
+        processDiagramOutput(workflowId, runId, workDir).catch(() => { /* best effort */ });
+      }).catch(() => { /* best effort */ });
+    }
+
+    // Generated docs (linked by workflow_id column added in M43)
+    const gdoc = one<Row>(
+      "SELECT id FROM generated_docs WHERE workflow_id = ? AND status = 'generating'",
+      workflowId,
+    );
+    if (gdoc) {
+      import('./generated-docs.ts').then(({ processDocOutput }) => {
+        const runRow = one<Row>('SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1', workflowId);
+        const runId = runRow ? String(runRow.id) : '';
+        processDocOutput(workflowId, runId, workDir).catch(() => { /* best effort */ });
+      }).catch(() => { /* best effort */ });
+    }
+
+    // Presentations
+    const pres = one<Row>(
+      'SELECT id FROM presentations WHERE workflow_id = ?',
+      workflowId,
+    );
+    if (pres) {
+      import('./presentations.ts').then(({ processPresentationOutput }) => {
+        const runRow = one<Row>('SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1', workflowId);
+        const runId = runRow ? String(runRow.id) : '';
+        processPresentationOutput(workflowId, runId, workDir).catch(() => { /* best effort */ });
+      }).catch(() => { /* best effort */ });
+    }
+  } else {
+    // failed or cancelled — mark artifacts as failed
+    try {
+      dbRun(
+        "UPDATE diagrams SET status = 'error', error = 'Generation failed', pending_workflow_id = NULL WHERE pending_workflow_id = ?",
+        workflowId,
+      );
+      dbRun(
+        "UPDATE generated_docs SET status = 'failed', error = 'Generation failed' WHERE workflow_id = ? AND status = 'generating'",
+        workflowId,
+      );
+      dbRun(
+        "UPDATE presentations SET status = 'failed', error = 'Generation failed' WHERE workflow_id = ? AND status = 'generating'",
+        workflowId,
+      );
+    } catch { /* best effort */ }
+  }
+}

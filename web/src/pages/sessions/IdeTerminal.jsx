@@ -1,5 +1,12 @@
 /**
  * Terminal panel — lazy-loads xterm.js on first open.
+ *
+ * Layout fix: the outer container uses flex:1 to fill whatever height the
+ * parent panel flex-column gives it, rather than computing an explicit pixel
+ * height.  The old `height - 32` arithmetic was double-subtracting 32 px
+ * (the panel header had already been excluded by the parent before passing the
+ * prop), leaving the terminal 32 px shorter than its allocated space and making
+ * FitAddon miscalculate the available rows.
  */
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
@@ -21,10 +28,10 @@ function loadTerminalModule() {
 /**
  * @param {{
  *   workflowId: string,
- *   height: number,
+ *   height?: number,  // kept for API compat; no longer used for sizing
  * }} props
  */
-export function IdeTerminal({ workflowId, height }) {
+export function IdeTerminal({ workflowId }) {
   const [capability, setCapability] = useState(null);
   const [TermComponent, setTermComponent] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -43,11 +50,20 @@ export function IdeTerminal({ workflowId, height }) {
       .catch((e) => setLoadError(e.message));
   }, [capability?.available]);
 
-  const innerStyle = { height: height - 32, minHeight: 80, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
+  // Fill remaining space in the ide-terminal-panel flex column.
+  // position:relative anchors the absolutely-positioned reconnect button.
+  const outerStyle = {
+    flex: 1,
+    minHeight: 80,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    position: 'relative',
+  };
 
   if (!capability) {
     return (
-      <div style={innerStyle}>
+      <div style={outerStyle}>
         <div style={{ display: 'grid', placeItems: 'center', flex: 1 }}>
           <div className="spinner" aria-label="Checking terminal availability…" />
         </div>
@@ -57,7 +73,7 @@ export function IdeTerminal({ workflowId, height }) {
 
   if (!capability.available) {
     return (
-      <div style={innerStyle}>
+      <div style={outerStyle}>
         <div className="ws-placeholder" style={{ padding: '16px', gap: 6 }}>
           <Icon name="terminal" size={28} />
           <p style={{ fontSize: '0.84rem' }}>{capability.reason ?? 'Terminal disabled'}</p>
@@ -68,10 +84,15 @@ export function IdeTerminal({ workflowId, height }) {
 
   if (loadError) {
     return (
-      <div style={innerStyle}>
+      <div style={outerStyle}>
         <div className="error-note" style={{ margin: 12 }} role="alert">
           Failed to load terminal: {loadError}
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => { _loadingMod = null; _termMod = null; setTermComponent(null); setLoadError(null); }} style={{ marginLeft: 8 }}>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={() => { _loadingMod = null; _termMod = null; setTermComponent(null); setLoadError(null); }}
+            style={{ marginLeft: 8 }}
+          >
             Retry
           </button>
         </div>
@@ -81,7 +102,7 @@ export function IdeTerminal({ workflowId, height }) {
 
   if (!TermComponent) {
     return (
-      <div style={innerStyle}>
+      <div style={outerStyle}>
         <div style={{ display: 'grid', placeItems: 'center', flex: 1 }}>
           <div className="spinner" aria-label="Loading terminal…" />
         </div>
@@ -90,7 +111,7 @@ export function IdeTerminal({ workflowId, height }) {
   }
 
   return (
-    <div style={innerStyle}>
+    <div style={outerStyle}>
       <TermComponent
         key={key}
         workflowId={workflowId}

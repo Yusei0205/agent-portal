@@ -305,7 +305,7 @@ describe('AI generation resilience — retry and partial success', () => {
     const gen = await pollGeneration(baseUrl, adminCookie, projectId, tpId, genId);
 
     assert.equal(gen.status, 'failed', `Expected failed status`);
-    assert.ok(String(gen.error).includes('invalid steps'), `Expected 'invalid steps' in error: ${gen.error}`);
+    assert.ok(String(gen.error).includes('no usable steps') || String(gen.error).includes('invalid steps'), `Expected error about unusable steps: ${gen.error}`);
   });
 
   it('non-array model output → failed immediately (no retry)', async () => {

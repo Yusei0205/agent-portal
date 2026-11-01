@@ -6,6 +6,10 @@ import { DeviceCodeBox } from '../components/DeviceCodeBox.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { parseAwsCredentials } from '../lib/awsCredParser.js';
 import { AwsRegionSelect } from '../components/AwsRegionSelect.jsx';
+import { useBulkSelect } from '../lib/useBulkSelect.js';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1049,6 +1053,10 @@ export function Connections({ user }) {
   const [githubDeviceFlowEnabled, setGithubDeviceFlowEnabled] = useState(false);
   const [ssoSettings, setSsoSettings] = useState(null);
   const [testUrls, setTestUrls] = useState({}); // id → url string for generic git tests
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
+  const bulk = useBulkSelect(connections);
 
   const isAdmin = Boolean(user?.is_admin);
 
@@ -1098,6 +1106,28 @@ export function Connections({ user }) {
     }
   };
 
+  const handleBulkDelete = async () => {
+    const n = bulk.selected.size;
+    if (!await requestConfirm(
+      `Delete ${n} connection${n === 1 ? '' : 's'}? This cannot be undone.`,
+      'Delete', 'danger',
+    )) return;
+    setBulkBusy(true);
+    const ids = [...bulk.selected];
+    const failed = [];
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await api.delete(`/api/git-connections/${id}`);
+      } catch {
+        failed.push(id);
+      }
+    }));
+    setConnections((prev) => prev.filter((c) => !ids.includes(c.id) || failed.includes(c.id)));
+    bulk.clearAll();
+    if (failed.length > 0) toast(`${failed.length} connection${failed.length === 1 ? '' : 's'} could not be deleted.`, 'error');
+    setBulkBusy(false);
+  };
+
   const handleSave = (saved) => {
     setConnections((prev) => {
       const idx = prev.findIndex((c) => c.id === saved.id);
@@ -1113,6 +1143,8 @@ export function Connections({ user }) {
 
   return (
     <>
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       <div className="page-actions" style={{ marginBottom: '0.5rem' }}>
         <button
           type="button"
@@ -1151,23 +1183,42 @@ export function Connections({ user }) {
       )}
 
       {!loading && connections.length > 0 && (
-        <table className="data-table" aria-label="Git connections">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Provider</th>
-              <th>Scope</th>
-              <th>Account</th>
-              <th>Created</th>
-              <th><span className="sr-only">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {connections.map((conn) => {
-              const result  = testResults[conn.id];
-              const account = result?.account;
-              return (
-                <tr key={conn.id}>
+        <div style={{ position: 'relative' }}>
+          <table className="data-table" aria-label="Git connections">
+            <thead>
+              <tr>
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all connections"
+                    checked={bulk.allSelected}
+                    ref={(el) => { if (el) el.indeterminate = bulk.someSelected; }}
+                    onChange={bulk.toggleAll}
+                  />
+                </th>
+                <th>Name</th>
+                <th>Provider</th>
+                <th>Scope</th>
+                <th>Account</th>
+                <th>Created</th>
+                <th><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {connections.map((conn) => {
+                const result  = testResults[conn.id];
+                const account = result?.account;
+                return (
+                  <tr key={conn.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${conn.name}`}
+                        checked={bulk.selected.has(conn.id)}
+                        onChange={() => bulk.toggle(conn.id)}
+                      />
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{conn.name}</td>
                   <td style={{ fontWeight: 600 }}>{conn.name}</td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1281,6 +1332,14 @@ export function Connections({ user }) {
             })}
           </tbody>
         </table>
+        <BulkActionBar
+          selected={bulk.selected}
+          onDelete={handleBulkDelete}
+          onClear={bulk.clearAll}
+          busy={bulkBusy}
+          noun="connection"
+        />
+        </div>
       )}
 
       {modal && (

@@ -5,7 +5,7 @@ import { useBulkSelect } from '../../lib/useBulkSelect.js';
 import { formatRelative, formatDate } from '../../lib/util.js';
 import { navigate, href } from '../../lib/router.js';
 import { Icon } from '../../components/Icon.jsx';
-import { BulkActionBar, BulkSelectHint } from '../../components/BulkActionBar.jsx';
+import { BulkActionBar } from '../../components/BulkActionBar.jsx';
 import { NewSessionDialog } from './NewSessionDialog.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
@@ -77,12 +77,11 @@ function groupWorkflows(workflows) {
 
 // ── Session row ────────────────────────────────────────────────────────────────
 
-function SessionRow({ w, projectName, active, checked, onCheck, onRename }) {
+function SessionRow({ w, projectName, active, checked, onCheck, onRename, selectionMode }) {
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
-  const showCheckbox = hovered || active || checked;
 
   const title = (w.title || w.goal)
     ? ((w.title || w.goal).length > 60 ? (w.title || w.goal).slice(0, 59) + '…' : (w.title || w.goal))
@@ -115,22 +114,34 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename }) {
     finally { setRenameBusy(false); }
   };
 
+  const wsItemClass = [
+    'ws-item',
+    active       ? 'is-active'        : '',
+    checked      ? 'is-selected'      : '',
+    selectionMode ? 'is-selection-mode' : '',
+  ].filter(Boolean).join(' ');
+
   return (
     <div
-      className={`ws-item${active ? ' is-active' : ''}`}
+      className={wsItemClass}
       role="row"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Checkbox */}
-      <div className="session-row-checkbox" style={{ opacity: showCheckbox ? 1 : 0, width: 18, flexShrink: 0 }}>
+      {/* Leading cell: dot or checkbox, same slot — no layout shift */}
+      <div className="session-row-leading">
+        <span
+          className={`dot ${dotClass(w.status)}`}
+          title={w.status}
+          aria-label={w.status}
+        />
         <input
           type="checkbox"
+          className="session-row-check"
           aria-label={`Select session: ${title}`}
           checked={checked}
           onChange={(e) => { e.stopPropagation(); onCheck(w.id); }}
           onClick={(e) => e.stopPropagation()}
-          style={{ cursor: 'pointer' }}
         />
       </div>
 
@@ -155,14 +166,13 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename }) {
         </form>
       ) : (
         <>
-          {/* Clickable row body */}
+          {/* Clickable row body — dot has moved to the leading cell */}
           <a
             href={href(w.project_id, 'sessions', w.id)}
             className="session-row-link"
             aria-current={active ? 'page' : undefined}
             style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 8, textDecoration: 'none', color: 'inherit' }}
           >
-            <span className={`dot ${dotClass(w.status)}`} title={w.status} style={{ marginTop: 4, flexShrink: 0 }} aria-label={w.status} />
             <div className="ws-item-body">
               <span className="ws-item-title">{title}</span>
               <div className="ws-item-sub">
@@ -444,10 +454,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
         )}
       </div>
 
-      {/* Bulk select hint */}
-      <div style={{ padding: '4px 8px', borderBottom: '1px solid var(--line-2)' }}>
-        <BulkSelectHint />
-      </div>
+      {/* Bulk select hint removed — checkboxes appear on hover */}
 
       {/* List body */}
       <div className="ws-list-body">
@@ -494,6 +501,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
                   active={w.id === selectedId}
                   checked={bulk.selected.has(w.id)}
                   onCheck={bulk.toggle}
+                  selectionMode={bulk.selected.size > 0}
                   onRename={(id, title) => {
                     setWorkflows((prev) => prev
                       ? prev.map((wf) => wf.id === id ? { ...wf, title } : wf)

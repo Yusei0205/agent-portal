@@ -20,6 +20,7 @@ import { now } from './util.ts';
 import { emit } from './events.ts';
 import { appendAudit } from './audit.ts';
 import { checkDelegationChildIdleStop } from './delegation.ts';
+import { getSessionBrowserState, shutdownSessionBrowser } from './agent/browser-manager.ts';
 
 // ── Idle stop ─────────────────────────────────────────────────────────────────
 
@@ -93,6 +94,9 @@ export function checkIdleSessions(): void {
         { timeoutMinutes },
         null,
       );
+
+      // Shut down the live browser for this session (fire-and-forget)
+      shutdownSessionBrowser(wid).catch(() => {/* non-fatal */});
 
       if (projectId) {
         emit(projectId, {
@@ -354,10 +358,22 @@ export function registerSessionLifecycleRoutes(): void {
         if (lastUrl && lastScreenshot) break;
       }
 
+      // Prefer the live manager frame over event-sourced screenshot
+      const liveBrowser = getSessionBrowserState(String(wf.id));
+      if (liveBrowser?.latestFrame) {
+        const lf = liveBrowser.latestFrame;
+        if (!lastScreenshot) lastScreenshot = lf.dataBase64;
+        if (!lastUrl) lastUrl = lf.url || null;
+        if (!recordedAt) recordedAt = new Date(lf.ts).toISOString();
+      }
+
       sendJson(res, 200, {
         url: lastUrl,
         screenshotBase64: lastScreenshot,
         recordedAt,
+        sessionBrowser: liveBrowser
+          ? { running: true, control: liveBrowser.controlEnabled }
+          : { running: false, control: false },
       });
     },
   );

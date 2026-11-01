@@ -54,6 +54,14 @@ export function setBedrockClientFactory(fn: BedrockClientFactory | null): void {
   _bedrockClientFactory = fn;
 }
 
+/** Override callTextModel entirely for tests. Pass null to restore. */
+let _callTextModelOverride: ((sys: string, usr: string, opts: CallTextModelOptions) => Promise<string>) | null = null;
+export function setCallTextModelOverride(
+  fn: ((sys: string, usr: string, opts: CallTextModelOptions) => Promise<string>) | null,
+): void {
+  _callTextModelOverride = fn;
+}
+
 async function makeBedrockClient(
   region: string,
   credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string },
@@ -98,6 +106,7 @@ export async function callTextModel(
   userMessage: string,
   opts: CallTextModelOptions = {},
 ): Promise<string> {
+  if (_callTextModelOverride) return _callTextModelOverride(systemPrompt, userMessage, opts);
   const { maxTokens = 4096, createdBy = null, images = [] } = opts;
 
   const { getSettings } = await import('../settings.ts');

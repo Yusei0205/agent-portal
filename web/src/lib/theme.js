@@ -18,9 +18,10 @@
  *   portal-theme-cached — JSON of last /api/theme payload
  */
 
-import { registerTemplate, getTemplate, getTemplates, normaliseTemplate } from './templates/index.js';
+import { useState, useEffect } from 'react';
+import { registerTemplate, getTemplate, getTemplates, normaliseTemplate, unregisterTemplate } from './templates/index.js';
 
-export { registerTemplate, getTemplate, getTemplates, normaliseTemplate };
+export { registerTemplate, getTemplate, getTemplates, normaliseTemplate, unregisterTemplate };
 
 const LS_TEMPLATE = 'portal-template-id';
 const LS_MODE     = 'portal-mode';
@@ -209,4 +210,29 @@ export async function fetchAndApplyTheme() {
   } catch {
     // Network error → keep current template
   }
+}
+
+// ── React hook ───────────────────────────────────────────────────────────────
+
+/**
+ * React hook that returns the active template and re-renders whenever
+ * 'portal-theme-changed' fires (e.g. after activating, editing, or receiving
+ * a theme.changed SSE from another tab).
+ *
+ * Usage:
+ *   const tmpl = useActiveTemplate();
+ *   const name = tmpl?.brand?.productName || 'Agent Portal';
+ */
+export function useActiveTemplate() {
+  const [tmpl, setTmpl] = useState(() => getTemplate(getActiveTemplateId()));
+
+  useEffect(() => {
+    const onChanged = () => {
+      setTmpl(getTemplate(getActiveTemplateId()));
+    };
+    document.addEventListener('portal-theme-changed', onChanged);
+    return () => document.removeEventListener('portal-theme-changed', onChanged);
+  }, []);
+
+  return tmpl;
 }

@@ -7,16 +7,35 @@
  */
 import aethrixNightJson from '../../../../shared/themes/aethrix-night.json';
 import classicTealJson  from '../../../../shared/themes/classic-teal.json';
+import cloviJson        from '../../../../shared/themes/clovi.json';
+import nebulaJson       from '../../../../shared/themes/nebula.json';
+import auroraGlassJson  from '../../../../shared/themes/aurora-glass.json';
+import cyberHudJson     from '../../../../shared/themes/cyber-hud.json';
+import twilightJson     from '../../../../shared/themes/twilight.json';
+import terminalJson     from '../../../../shared/themes/terminal.json';
+import kiroIdeJson      from '../../../../shared/themes/kiro-ide.json';
 
 // ── Font family name → full CSS stack ────────────────────────────────────────
 // Covers every name in the server validator allow-list.
 // "Bundled" means the woff2 files are included via @fontsource-variable in main.jsx.
 const FONT_STACKS = {
-  'Space Grotesk':  "'Space Grotesk Variable','Space Grotesk',system-ui,sans-serif",
-  'Inter':          "'Inter Variable','Inter',system-ui,sans-serif",
-  'JetBrains Mono': "'JetBrains Mono Variable','JetBrains Mono','SF Mono',Consolas,monospace",
-  'system-ui':      "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
-  'ui-monospace':   "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",
+  'Space Grotesk':     "'Space Grotesk Variable','Space Grotesk',system-ui,sans-serif",
+  'Quicksand':         "'Quicksand Variable','Quicksand',system-ui,sans-serif",
+  'Inter':             "'Inter Variable','Inter',system-ui,sans-serif",
+  'Geist Sans':        "'Geist Sans',system-ui,sans-serif",
+  'JetBrains Mono':    "'JetBrains Mono Variable','JetBrains Mono','SF Mono',Consolas,monospace",
+  'Outfit':            "'Outfit Variable','Outfit',system-ui,sans-serif",
+  'Plus Jakarta Sans': "'Plus Jakarta Sans Variable','Plus Jakarta Sans',system-ui,sans-serif",
+  'Orbitron':          "'Orbitron',system-ui,sans-serif",
+  'Exo 2':             "'Exo 2 Variable','Exo 2',system-ui,sans-serif",
+  'system-ui':         "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
+  'ui-monospace':      "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",
+  'ui-sans-serif':     "ui-sans-serif,system-ui,sans-serif",
+  'ui-serif':          "ui-serif,Georgia,serif",
+  'serif':             "Georgia,'Times New Roman',serif",
+  'sans-serif':        "Arial,Helvetica,sans-serif",
+  'monospace':         "Consolas,'Courier New',monospace",
+  '-apple-system':     "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
 };
 
 /** Names of fonts whose woff2 files are bundled in the app. */
@@ -24,6 +43,12 @@ export const BUNDLED_FONT_NAMES = new Set([
   'Space Grotesk',
   'Inter',
   'JetBrains Mono',
+  'Quicksand',
+  'Geist Sans',
+  'Outfit',
+  'Plus Jakarta Sans',
+  'Orbitron',
+  'Exo 2',
 ]);
 
 function resolveFontStack(name) {
@@ -106,6 +131,22 @@ export function getTemplate(id) {
   return registry.get(id) || registry.get('aethrix-night');
 }
 
+/**
+ * Remove a template from the registry by id.
+ * No-op if the id is not registered.
+ * @param {string} id
+ */
+export function unregisterTemplate(id) {
+  registry.delete(id);
+}
+
 // Register built-ins (from canonical shared/themes/*.json)
 registerTemplate(aethrixNightJson);
 registerTemplate(classicTealJson);
+registerTemplate(cloviJson);
+registerTemplate(nebulaJson);
+registerTemplate(auroraGlassJson);
+registerTemplate(cyberHudJson);
+registerTemplate(twilightJson);
+registerTemplate(terminalJson);
+registerTemplate(kiroIdeJson);

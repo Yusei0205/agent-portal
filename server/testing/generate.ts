@@ -9,6 +9,7 @@
  *   POST /api/projects/:pid/tests/:tpid/scripts/:sid/refine   — refine script (async)
  *   GET  /api/projects/:pid/tests/:tpid/generate/:genId       — get generation status
  *   POST /api/projects/:pid/tests/:tpid/import                — import from spreadsheet/doc
+ *   GET  /api/projects/:pid/tests/:tpid/generations/:gid/trace — generation trace steps
  */
 
 import fs from 'node:fs';
@@ -84,11 +85,11 @@ ${attachmentNote ? `\n${attachmentNote}` : ''}
 Output ONLY a valid JSON array. Do NOT include any text, explanation, or markdown outside the JSON array.
 
 CRITICAL LOCATOR RULE: Every step that uses a locator MUST include exactly one of these locator shapes — no other keys are valid:
-  { "role": "button", "name": "Submit" }   ← ARIA role + accessible name
-  { "label": "Email" }                      ← form label text
-  { "text": "Click here" }                  ← visible text on page
-  { "testId": "submit-btn" }                ← data-testid attribute
-  { "css": "#submit" }                      ← CSS selector
+  { "role": "button", "name": "Submit" }   ← ARIA role + accessible name
+  { "label": "Email" }                      ← form label text
+  { "text": "Click here" }                  ← visible text on page
+  { "testId": "submit-btn" }                ← data-testid attribute
+  { "css": "#submit" }                      ← CSS selector
 
 Step schemas (kind field is required for every step):
   goto:           { "kind": "goto", "path": "/path" }
@@ -120,6 +121,22 @@ ${existingSteps ? `Existing steps to refine:\n${JSON.stringify(existingSteps, nu
 
 // ── JSON extraction ────────────────────────────────────────────────────────────
 
+/** Broader ANSI stripper — catches cursor-movement and mode sequences missed by model-provider. */
+const EXTRACT_ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-9;?]*[A-Za-z])/g;
+
+/**
+ * If `parsed` is a plain object with a `steps` array (e.g. Kiro CLI may return
+ * `{"steps":[...]}` instead of a bare array), extract and return the array.
+ * Otherwise return `parsed` unchanged.
+ */
+function unwrapSteps(parsed: unknown): unknown {
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const p = parsed as Record<string, unknown>;
+    if (Array.isArray(p.steps)) return p.steps;
+  }
+  return parsed;
+}
+
 /**
  * Extract a JSON value from model output text.
  *
@@ -127,25 +144,52 @@ ${existingSteps ? `Existing steps to refine:\n${JSON.stringify(existingSteps, nu
  *   - Fenced ```json ... ``` or ``` ... ``` blocks (Kiro CLI wraps output this way)
  *   - Leading / trailing prose before/after the JSON
  *   - Plain JSON with no extra text
+ *   - Object wrapper `{ "steps": [...] }` returned by some models instead of a bare array
+ *   - ANSI escape sequences (stripped before parsing)
  *
  * Throws if no parseable JSON array can be found.
  */
-export function extractJsonArray(text: string): unknown {
+export function extractJsonArray(rawText: string): unknown {
+  // Strip ANSI codes that may leak through from interactive CLIs.
+  const text = rawText.replace(EXTRACT_ANSI_RE, '');
+
   // 1. Fenced code block — ```json ... ``` or ``` ... ```
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) {
     const inner = fenced[1].trim();
-    try { return JSON.parse(inner); } catch { /* fall through */ }
+    try { return unwrapSteps(JSON.parse(inner)); } catch { /* fall through */ }
   }
 
-  // 2. JSON array embedded in surrounding text
+  // 2. JSON array embedded in surrounding text (handles {steps:[...]}, non-empty)
   const arr = text.match(/\[[\s\S]*\]/);
   if (arr) {
     try { return JSON.parse(arr[0]); } catch { /* fall through */ }
   }
 
-  // 3. Whole text as JSON (no fences, no chatter)
-  try { return JSON.parse(text.trim()); } catch { /* fall through */ }
+  // 3. Bare JSON object with a steps array (e.g. model returned {"steps":[]} with empty array,
+  //    so step 2 found no array span, but step 3 can parse and unwrap it)
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    try {
+      const unwrapped = unwrapSteps(JSON.parse(objMatch[0]));
+      if (Array.isArray(unwrapped)) return unwrapped;
+    } catch { /* fall through */ }
+  }
+
+  // 4. Whole text as JSON (no fences, no chatter)
+  try { return unwrapSteps(JSON.parse(text.trim())); } catch { /* fall through */ }
+
+  // 5. Truncated JSON array recovery — handles Kiro CLI output cut off mid-element
+  const openBracket = text.indexOf('[');
+  if (openBracket >= 0) {
+    const lastClose = text.lastIndexOf('}');
+    if (lastClose > openBracket) {
+      try {
+        const recovered = JSON.parse(text.slice(openBracket, lastClose + 1) + ']');
+        if (Array.isArray(recovered)) return recovered;
+      } catch { /* fall through */ }
+    }
+  }
 
   throw new Error('Model output did not contain a JSON array');
 }
@@ -173,6 +217,32 @@ function salvagePartialOutput(raw: unknown[]): { steps: Step[]; warnings: string
   }
 
   return { steps, warnings };
+}
+
+// ── Cancellation registry ──────────────────────────────────────────────────────
+
+/**
+ * In-memory set of generation IDs that have been cancelled by the cancel endpoint
+ * before the background `runGeneration` task completes. The task checks this set
+ * before persisting its result.
+ */
+const cancelledGenerations = new Set<string>();
+
+// ── Progress tracking ──────────────────────────────────────────────────────────
+
+type ProgressPhase = 'preparing' | 'calling' | 'retrying' | 'parsing' | 'saving' | 'done';
+
+function setProgress(
+  genId: string,
+  phase: ProgressPhase,
+  message: string,
+  percent: number,
+  stepsSoFar = 0,
+): void {
+  try {
+    run('UPDATE test_generations SET progress = ? WHERE id = ?',
+      JSON.stringify({ phase, message, percent, stepsSoFar }), genId);
+  } catch { /* DB closed — best effort */ }
 }
 
 // ── Retry prompt ───────────────────────────────────────────────────────────────
@@ -230,7 +300,7 @@ const ATTACHMENT_TEXT_BUDGET = 50_000;
  * Returns both the text block (to append to the system prompt) and the image list
  * (to pass as multi-modal inputs to callTextModel).
  */
-async function buildAttachmentContext(
+export async function buildAttachmentContext(
   attachmentRows: Row[],
 ): Promise<{
   textBlock: string;
@@ -284,6 +354,8 @@ async function buildAttachmentContext(
   return { textBlock, images };
 }
 
+import { startStep, finishStep, getGenerationTrace } from './trace.ts';
+
 // ── Core generation logic ──────────────────────────────────────────────────────
 
 export async function runGeneration(
@@ -295,8 +367,23 @@ export async function runGeneration(
   createdBy: string,
   attachmentIds: string[] = [],
 ): Promise<void> {
-  try { run('UPDATE test_generations SET status = ? WHERE id = ?', 'running', genId); }
+  // ── Local trace helpers ─────────────────────────────────────────────────
+  let seq = 0;
+  let _failureStepAdded = false;
+  const mk = (kind: string, label: string, detail?: Record<string, unknown>) =>
+    startStep({ parentKind: 'generation', parentId: genId, seq: ++seq, kind, label, detail });
+  const fin = finishStep;
+  const traceFail = (error: string) => {
+    if (_failureStepAdded) return;
+    _failureStepAdded = true;
+    const s = mk('failure', 'Generation failed');
+    fin(s.id, s.startedAt, { status: 'failed', error });
+  };
+
+  try { run('UPDATE test_generations SET status = ?, started_at = ? WHERE id = ?', 'running', now(), genId); }
   catch { return; } // DB closed
+
+  setProgress(genId, 'preparing', 'Loading context and attachments', 10);
 
   try {
     const existingSteps = existingScriptId
@@ -307,11 +394,16 @@ export async function runGeneration(
         })()
       : undefined;
 
+    // ── Trace: context step ───────────────────────────────────────────────
+    const ctxStep = mk('context', 'Building context');
+
     // Load and process attachments (single-use: cleaned up after generation)
     let attachmentRows: Row[] = [];
+    let attachmentNames: string[] = [];
     if (attachmentIds.length > 0) {
       const { rows } = validateAttachmentIds(tp.project_id, attachmentIds);
       attachmentRows = rows ?? [];
+      attachmentNames = attachmentRows.map((r) => String(r.filename));
     }
 
     const { textBlock, images } = await buildAttachmentContext(attachmentRows);
@@ -327,6 +419,13 @@ export async function runGeneration(
 
     const systemPrompt = buildSystemPrompt(tp, existingSteps, attachmentNote);
     const userPrompt = description;
+
+    // Store system prompt once on the context step (vault refs only resolved at execution time).
+    fin(ctxStep.id, ctxStep.startedAt, {
+      status: 'ok',
+      detail: { attachmentNames, textChars: textBlock.length, imageCount: images.length },
+      prompt: { system: systemPrompt + textBlock },
+    });
 
     // ── Helper: invoke the model and return parsed output ──────────────────
     const callModel = async (userMsg: string, validationErrors?: string[]): Promise<unknown> => {
@@ -349,19 +448,55 @@ export async function runGeneration(
       return extractJsonArray(text);
     };
 
-    // ── First model call ───────────────────────────────────────────────────
-    const modelOutput = await callModel(userPrompt);
+    setProgress(genId, 'calling', existingScriptId ? 'Refining existing script' : 'Calling the AI model', 30);
+
+    // ── Trace: first model call ────────────────────────────────────────────
+    const callStep = mk('call', existingScriptId ? 'Refining existing script' : 'Generating test steps');
+
+    let modelOutput: unknown;
+    try {
+      modelOutput = await callModel(userPrompt);
+    } catch (callErr) {
+      fin(callStep.id, callStep.startedAt, {
+        status: 'failed',
+        error: String((callErr as Error).message ?? callErr),
+        prompt: { user: userPrompt },
+      });
+      throw callErr;
+    }
 
     if (!Array.isArray(modelOutput)) {
+      fin(callStep.id, callStep.startedAt, {
+        status: 'failed',
+        error: 'Model output must be a JSON array of steps',
+        output: JSON.stringify(modelOutput),
+        prompt: { user: userPrompt },
+      });
       throw new Error('Model output must be a JSON array of steps');
     }
+
+    fin(callStep.id, callStep.startedAt, {
+      status: 'ok',
+      detail: { stepCount: (modelOutput as unknown[]).length },
+      output: JSON.stringify(modelOutput),
+      prompt: { user: userPrompt },
+    });
 
     // ── Validate — retry once on failure ───────────────────────────────────
     const genWarnings: string[] = [];
     let validatedSteps: Step[];
 
+    // ── Trace: validate step ───────────────────────────────────────────────
+    const validateStep2 = mk('validate', 'Validating generated steps');
+
     try {
       validatedSteps = validateSteps(modelOutput);
+      // Empty array → no usable steps; trigger the retry path instead of saving an empty script
+      if (validatedSteps.length === 0) throw new Error('no usable steps');
+      fin(validateStep2.id, validateStep2.startedAt, {
+        status: 'ok',
+        detail: { stepCount: validatedSteps.length, passed: true },
+      });
     } catch (firstErr) {
       // Collect per-step errors to include in retry prompt
       const stepErrors: string[] = [];
@@ -370,11 +505,35 @@ export async function runGeneration(
         catch (e) { stepErrors.push((e as Error).message); }
       }
 
-      // Retry once with error feedback
+      fin(validateStep2.id, validateStep2.startedAt, {
+        status: 'retry',
+        detail: { stepCount: (modelOutput as unknown[]).length, passed: false, errorCount: stepErrors.length },
+        error: (firstErr as Error).message,
+      });
+
+      setProgress(genId, 'retrying', 'Retrying with validation feedback', 50);
+
+      // ── Trace: retry call ─────────────────────────────────────────────────
+      const retryStep = mk('retry', 'Retrying with validation feedback');
+      const retryPrompt = buildRetryPrompt(userPrompt, stepErrors);
+
       let retryOutput: unknown = null;
       try {
-        retryOutput = await callModel(buildRetryPrompt(userPrompt, stepErrors), stepErrors);
-      } catch { /* retry call itself failed — proceed to salvage original */ }
+        retryOutput = await callModel(retryPrompt, stepErrors);
+        fin(retryStep.id, retryStep.startedAt, {
+          status: 'ok',
+          detail: { stepCount: Array.isArray(retryOutput) ? (retryOutput as unknown[]).length : 0 },
+          output: JSON.stringify(retryOutput),
+          prompt: { user: retryPrompt },
+        });
+      } catch (retryErr) {
+        fin(retryStep.id, retryStep.startedAt, {
+          status: 'failed',
+          error: String((retryErr as Error).message ?? retryErr),
+          prompt: { user: retryPrompt },
+        });
+        /* retry call itself failed — proceed to salvage original */
+      }
 
       // Choose which output to proceed with
       const outputToSalvage = Array.isArray(retryOutput) ? retryOutput as unknown[] : modelOutput as unknown[];
@@ -396,13 +555,35 @@ export async function runGeneration(
         genWarnings.push(...salvaged.warnings);
       }
 
+      // Record salvage warnings in a trace step if any
+      if (genWarnings.length > 0) {
+        const salvageStep = mk('salvage', `Salvaged ${validatedSteps.length} of ${outputToSalvage.length} steps`);
+        fin(salvageStep.id, salvageStep.startedAt, {
+          status: 'ok',
+          detail: { kept: validatedSteps.length, dropped: genWarnings.filter((w) => w.includes('dropped')).length, repaired: genWarnings.filter((w) => w.includes('repaired')).length },
+        });
+      }
+
       // If salvage produced no usable steps at all, fail the generation
       if (validatedSteps.length === 0) {
-        throw new Error(`Model output contains invalid steps: ${(firstErr as Error).message}`);
+        const NO_STEPS_MSG =
+          'The model returned no usable steps. Try a more specific description, or use Generate test cases for scenario-level test cases.';
+        traceFail(NO_STEPS_MSG);
+        throw new Error(NO_STEPS_MSG);
       }
     }
 
+    setProgress(genId, 'parsing', 'Validating steps', 70, validatedSteps.length);
+
+    // Check if cancelled before saving — do not create/update script
+    if (cancelledGenerations.has(genId)) {
+      cancelledGenerations.delete(genId);
+      return;
+    }
+
     // ── Create or update script ────────────────────────────────────────────
+    setProgress(genId, 'saving', existingScriptId ? 'Updating test script' : 'Saving test script', 85, validatedSteps.length);
+    const saveStep = mk('save', existingScriptId ? 'Updating script' : 'Creating script');
     const ts = now();
     let scriptId: string;
 
@@ -425,22 +606,38 @@ export async function runGeneration(
       });
     }
 
+    fin(saveStep.id, saveStep.startedAt, {
+      status: 'ok',
+      detail: { scriptId, stepCount: validatedSteps.length },
+    });
+
+    // ── Done step ─────────────────────────────────────────────────────────
+    const doneStep = mk('done', 'Generation complete');
+
+    setProgress(genId, 'done', 'Generation complete', 100, validatedSteps.length);
     try {
       run(
         'UPDATE test_generations SET status = ?, result_script_ids = ?, finished_at = ?, warnings = ? WHERE id = ?',
         'done', JSON.stringify([scriptId]), ts, JSON.stringify(genWarnings), genId,
       );
     } catch { /* DB closed */ }
+
+    fin(doneStep.id, doneStep.startedAt, {
+      status: 'ok',
+      detail: { scriptId, warningsCount: genWarnings.length },
+    });
+
+    // Delete attachments on success (single-use)
+    if (attachmentIds.length > 0) {
+      try { deleteAttachmentsByIds(attachmentIds); } catch { /* best effort */ }
+    }
   } catch (err) {
+    traceFail(String((err as Error).message ?? err));
     try {
       run('UPDATE test_generations SET status = ?, error = ?, finished_at = ? WHERE id = ?',
         'failed', String((err as Error).message ?? err), now(), genId);
     } catch { /* DB closed */ }
-  } finally {
-    // Single-use: always clean up test attachments after generation (success or failure)
-    if (attachmentIds.length > 0) {
-      try { deleteAttachmentsByIds(attachmentIds); } catch { /* best effort */ }
-    }
+    // Attachments are NOT deleted on failure — kept for retry
   }
 }
 
@@ -489,10 +686,12 @@ export function registerGenerateRoutes(): void {
       script_id: null,
       kind: 'generate',
       description,
+      group_id: effectiveGroupId,
       status: 'pending',
       error: null,
       result_script_ids: '[]',
       warnings: '[]',
+      attachment_ids: JSON.stringify(rawAttachmentIds),
       created_by: req.user!.id,
       created_at: ts,
       finished_at: null,
@@ -533,10 +732,12 @@ export function registerGenerateRoutes(): void {
       script_id: script.id,
       kind: 'refine',
       description: instruction,
+      group_id: String(script.test_group_id),
       status: 'pending',
       error: null,
       result_script_ids: '[]',
       warnings: '[]',
+      attachment_ids: JSON.stringify(rawAttachmentIds),
       created_by: req.user!.id,
       created_at: ts,
       finished_at: null,
@@ -577,21 +778,30 @@ export function registerGenerateRoutes(): void {
       let resultScriptIds: string[] = [];
       try { resultScriptIds = JSON.parse(String(gen.result_script_ids || '[]')) as string[]; } catch { resultScriptIds = []; }
 
+      let progress: Record<string, unknown> = {};
+      try { progress = JSON.parse(String(gen.progress || '{}')) as Record<string, unknown>; } catch { progress = {}; }
+
       const desc = gen.description ?? null;
       const description = desc !== null && desc.length > 200 ? desc.slice(0, 200) : desc;
+
+      const status = gen.cancelled_at ? 'cancelled' : gen.status;
+      const retryable = gen.status === 'failed' && !gen.cancelled_at;
 
       return {
         id: gen.id,
         kind: gen.kind,
         description,
-        status: gen.status,
+        status,
         error: gen.error ?? null,
         warnings,
         scriptId: gen.script_id ?? null,
         resultScriptIds,
         createdBy: gen.created_by ?? null,
         createdAt: gen.created_at,
+        startedAt: gen.started_at ?? null,
         finishedAt: gen.finished_at ?? null,
+        progress,
+        retryable,
       };
     });
 
@@ -629,6 +839,8 @@ export function registerGenerateRoutes(): void {
     let warnings: string[] = [];
     try { warnings = JSON.parse(String(gen.warnings || '[]')) as string[]; } catch { warnings = []; }
 
+    const retryable = gen.status === 'failed' && !gen.cancelled_at;
+
     sendJson(res, 200, {
       generation: {
         id: gen.id,
@@ -637,6 +849,7 @@ export function registerGenerateRoutes(): void {
         status: gen.status,
         error: gen.error ?? null,
         warnings,
+        retryable,
         createdAt: gen.created_at,
         finishedAt: gen.finished_at ?? null,
       },
@@ -721,5 +934,154 @@ export function registerGenerateRoutes(): void {
     }
 
     sendJson(res, 202, { generationIds: genIds, errors });
+  });
+
+  // POST /api/projects/:pid/tests/:tpid/generations/:gid/cancel — cancel a generation
+  router.post('/api/projects/:pid/tests/:tpid/generations/:gid/cancel', (req: PortalRequest, res: PortalResponse): void => {
+    if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
+    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    if (!tp) return;
+
+    const gen = one<TestGeneration>(
+      'SELECT * FROM test_generations WHERE id = ? AND test_project_id = ?',
+      req.params.gid, tp.id,
+    );
+    if (!gen) { sendJson(res, 404, { error: 'Generation not found' }); return; }
+
+    const currentStatus = gen.cancelled_at ? 'cancelled' : gen.status;
+
+    // Already finished — no-op, return current state
+    if (currentStatus === 'done' || currentStatus === 'failed' || currentStatus === 'cancelled') {
+      let warnings: string[] = [];
+      try { warnings = JSON.parse(String(gen.warnings || '[]')) as string[]; } catch { warnings = []; }
+      let resultScriptIds: string[] = [];
+      try { resultScriptIds = JSON.parse(String(gen.result_script_ids || '[]')) as string[]; } catch { resultScriptIds = []; }
+      let progress: Record<string, unknown> = {};
+      try { progress = JSON.parse(String(gen.progress || '{}')) as Record<string, unknown>; } catch { progress = {}; }
+      sendJson(res, 200, {
+        generation: {
+          id: gen.id, kind: gen.kind, description: gen.description ?? null,
+          status: currentStatus, error: gen.error ?? null, warnings,
+          scriptId: gen.script_id ?? null, resultScriptIds,
+          createdBy: gen.created_by ?? null, createdAt: gen.created_at,
+          startedAt: gen.started_at ?? null, finishedAt: gen.finished_at ?? null,
+          progress,
+        },
+      });
+      return;
+    }
+
+    // Mark cancelled in DB and signal runGeneration to abort before saving
+    const ts = now();
+    try {
+      run('UPDATE test_generations SET cancelled_at = ?, finished_at = ? WHERE id = ?', ts, ts, gen.id);
+    } catch { /* DB closed */ }
+    cancelledGenerations.add(gen.id);
+
+    sendJson(res, 200, {
+      generation: {
+        id: gen.id, kind: gen.kind, description: gen.description ?? null,
+        status: 'cancelled', error: null, warnings: [],
+        scriptId: gen.script_id ?? null, resultScriptIds: [],
+        createdBy: gen.created_by ?? null, createdAt: gen.created_at,
+        startedAt: gen.started_at ?? null, finishedAt: ts,
+        progress: { phase: 'done', message: 'Cancelled', percent: 0, stepsSoFar: 0 },
+      },
+    });
+  });
+
+  // GET /api/projects/:pid/tests/:tpid/generations/:gid/trace — generation trace steps
+  router.get('/api/projects/:pid/tests/:tpid/generations/:gid/trace', (req: PortalRequest, res: PortalResponse): void => {
+    if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
+    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
+    if (!tp) return;
+
+    const gen = one<{ id: string }>(
+      'SELECT id FROM test_generations WHERE id = ? AND test_project_id = ?',
+      req.params.gid, tp.id,
+    );
+    if (!gen) { sendJson(res, 404, { error: 'Generation not found' }); return; }
+
+    const steps = getGenerationTrace(gen.id);
+    sendJson(res, 200, { steps });
+  });
+
+  // POST /api/projects/:pid/tests/:tpid/generations/:gid/retry — retry a failed generation
+  router.post('/api/projects/:pid/tests/:tpid/generations/:gid/retry', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
+    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    if (!tp) return;
+
+    const original = one<TestGeneration>(
+      'SELECT * FROM test_generations WHERE id = ? AND test_project_id = ?',
+      req.params.gid, tp.id,
+    );
+    if (!original) { sendJson(res, 404, { error: 'Generation not found' }); return; }
+
+    const currentStatus = original.cancelled_at ? 'cancelled' : String(original.status);
+    if (currentStatus !== 'failed') {
+      sendJson(res, 409, { error: 'Generation is not in a failed state' });
+      return;
+    }
+
+    // For 'refine' kind, verify the script still exists
+    if (original.kind === 'refine' && original.script_id) {
+      const script = one<{ id: string }>('SELECT id FROM test_scripts WHERE id = ? AND test_project_id = ?',
+        String(original.script_id), tp.id);
+      if (!script) { sendJson(res, 404, { error: 'Original script no longer exists' }); return; }
+    }
+
+    // Reuse stored attachment IDs (kept on failure intentionally)
+    let attachmentIds: string[] = [];
+    try { attachmentIds = JSON.parse(String(original.attachment_ids || '[]')) as string[]; } catch { attachmentIds = []; }
+
+    if (attachmentIds.length > 0) {
+      const { error } = validateAttachmentIds(req.params.pid, attachmentIds);
+      if (error) attachmentIds = [];
+    }
+
+    const groupId = original.group_id
+      ? String(original.group_id)
+      : (() => {
+          const g = one<Row>('SELECT id FROM test_groups WHERE test_project_id = ? ORDER BY sort_order LIMIT 1', tp.id);
+          return g ? String(g.id) : null;
+        })();
+    if (!groupId) { sendJson(res, 400, { error: 'No group found for retry' }); return; }
+
+    const genId = generateId();
+    const ts = now();
+    insert('test_generations', {
+      id: genId,
+      test_project_id: tp.id,
+      script_id: original.script_id ?? null,
+      kind: original.kind,
+      description: original.description,
+      group_id: groupId,
+      status: 'pending',
+      error: null,
+      result_script_ids: '[]',
+      warnings: '[]',
+      attachment_ids: JSON.stringify(attachmentIds),
+      created_by: req.user!.id,
+      created_at: ts,
+      finished_at: null,
+    });
+
+    auditRaw(req.user!.id, 'test_generation.retry', `test_generation:${genId}`, {
+      originalId: original.id,
+      kind: original.kind,
+    });
+
+    runGeneration(
+      genId,
+      tp,
+      String(original.description ?? ''),
+      groupId,
+      original.kind === 'refine' ? (original.script_id ? String(original.script_id) : null) : null,
+      req.user!.id,
+      attachmentIds,
+    ).catch(() => {});
+
+    sendJson(res, 202, { generationId: genId });
   });
 }

@@ -3,7 +3,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
-import { BulkActionBar, BulkSelectHint } from '../components/BulkActionBar.jsx';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { DiagramStyle } from '../components/DiagramStyle.jsx';
 import { MermaidViewer } from '../components/MermaidViewer.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
@@ -317,8 +317,21 @@ function RefreshDiagramDialog({ projectId, diagram, onClose, onRefreshed }) {
 
 // ── Diagram row ───────────────────────────────────────────────────────────────
 
-function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onDelete, onView, requestConfirm, toast }) {
+function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onDelete, onView, requestConfirm, toast, onRetried }) {
   const [deleting, setDeleting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const r = await api.post(`/api/projects/${diagram.project_id}/diagrams/${diagram.id}/retry`, {});
+      onRetried(r.diagram);
+    } catch (err) {
+      toast(err.message || 'Failed to retry', 'error');
+      setRetrying(false);
+    }
+  };
 
   const handleDelete = async () => {
     const ok = await requestConfirm(`Delete diagram "${diagram.title}"?`, 'Delete', 'danger');
@@ -338,8 +351,8 @@ function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onD
     : null;
 
   return (
-    <tr>
-      <td>
+    <tr className={selected ? 'is-selected' : ''}>
+      <td className="sel-col">
         <input
           type="checkbox"
           checked={selected}
@@ -365,6 +378,9 @@ function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onD
           <span>{diagram.kind_label}</span>
           {diagram.cloud_label && <><span>·</span><span>{diagram.cloud_label}</span></>}
         </div>
+        {diagram.status === 'error' && diagram.error && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>{diagram.error}</div>
+        )}
       </td>
       <td>
         <span className="badge badge-muted">{diagram.style_label?.split(' ')[0] ?? diagram.style}</span>
@@ -393,6 +409,18 @@ function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onD
             >
               <Icon name="download" size={13} />
             </a>
+          )}
+          {diagram.status === 'error' && diagram.retryable && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={handleRetry}
+              disabled={retrying || diagram.status === 'generating'}
+              aria-label={`Retry ${diagram.title}`}
+              title="Retry diagram"
+            >
+              {retrying ? 'Retrying\u2026' : 'Retry'}
+            </button>
           )}
           <button
             type="button"
@@ -521,11 +549,10 @@ export function Diagrams({ projectId }) {
 
       {diagrams.length > 0 && (
         <div className="table-wrap" style={{ position: 'relative' }}>
-          <BulkSelectHint />
-          <table className="table">
+          <table className="table" data-has-sel={selected.size > 0 ? '' : undefined}>
             <thead>
               <tr>
-                <th style={{ width: 32 }}>
+                <th className="sel-col" style={{ width: 32 }}>
                   <span className="sr-only">Select</span>
                 </th>
                 <th>Name</th>
@@ -548,6 +575,7 @@ export function Diagrams({ projectId }) {
                   }}
                   onRefreshWithAttachments={setRefreshingDiagram}
                   onView={setViewingDiagram}
+                  onRetried={(updated) => setDiagrams((prev) => prev.map((x) => x.id === updated.id ? { ...x, ...updated } : x))}
                   requestConfirm={requestConfirm}
                   toast={toast}
                 />

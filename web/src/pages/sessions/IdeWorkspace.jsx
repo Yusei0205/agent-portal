@@ -27,6 +27,8 @@ import { IdeBrowser } from './IdeBrowser.jsx';
 import { IdeAgents } from './IdeAgents.jsx';
 import { IdeSessionPanel } from './IdeSessionPanel.jsx';
 import { IdeStatusBar } from './IdeStatusBar.jsx';
+import { IdeOutputs } from './IdeOutputs.jsx';
+import { OutputFilePreview } from './OutputFilePreview.jsx';
 
 // Pre-register workspace shortcuts so the palette / sheet always knows them
 registerShortcuts([
@@ -44,7 +46,21 @@ const LS_KEY = 'ide_layout';
 function loadLayout() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    // Clamp persisted sidebar/editor widths to sensible bounds for the current
+    // viewport.  A value saved on a wide desktop could leave almost no room for
+    // the agent panel on a narrow screen.  The CSS mobile overrides also guard
+    // against this, but JavaScript clamping prevents the flash of a mis-sized
+    // layout before the first paint.
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    if (parsed.sidebarW != null) {
+      parsed.sidebarW = Math.max(140, Math.min(parsed.sidebarW, Math.floor((vw - 40) * 0.45)));
+    }
+    if (parsed.editorW != null) {
+      parsed.editorW = Math.max(200, Math.min(parsed.editorW, Math.floor((vw - 40) * 0.6)));
+    }
+    return parsed;
   } catch { return {}; }
 }
 
@@ -128,67 +144,272 @@ function useResizeY(initial, min, max, onEnd) {
 
 // ── Activity bar button ───────────────────────────────────────────────────────
 
-function ActivityBtn({ icon, label, active, onClick }) {
+function ActivityBtn({ icon, label, active, onClick, badge, flash }) {
   return (
     <button
       type="button"
-      className={`ide-activity-btn${active ? ' is-active' : ''}`}
+      className={`ide-activity-btn${active ? ' is-active' : ''}${flash && !active ? ' ide-activity-btn--flash' : ''}`}
       onClick={onClick}
-      aria-label={label}
+      aria-label={badge ? `${label} (${badge})` : label}
       aria-pressed={active}
       title={label}
     >
       <Icon name={icon} size={17} />
+      {badge > 0 && (
+        <span className="ide-activity-badge" aria-hidden="true">{badge > 99 ? '99+' : badge}</span>
+      )}
     </button>
   );
 }
 
+// ── Composer localStorage keys / resize ──────────────────────────────────────
+
+const LS_COMPOSER_HEIGHT = 'ide_composer_height';
+
+/** Smallest composer height: one text line (32px) plus the composer's 16px padding. */
+const COMPOSER_MIN_H = 48;
+
+/** Clamp a composer height: one line minimum, max 70 % of the viewport. */
+function clampComposerH(h) {
+  return Math.min(Math.floor(window.innerHeight * 0.7), Math.max(COMPOSER_MIN_H, h));
+}
+
+function loadComposerH() {
+  try {
+    const raw = localStorage.getItem(LS_COMPOSER_HEIGHT);
+    if (!raw) return null;
+    const h = Number(raw);
+    return isNaN(h) ? null : clampComposerH(h);
+  } catch { return null; }
+}
+
+function saveComposerH(h) {
+  try {
+    if (h == null) { localStorage.removeItem(LS_COMPOSER_HEIGHT); }
+    else           { localStorage.setItem(LS_COMPOSER_HEIGHT, String(h)); }
+  } catch { /* ignore */ }
+}
+
 // ── Composer bar ──────────────────────────────────────────────────────────────
 
-function ComposerBar({ workflow, projectId, onSent, idleStopped, onDismissIdle }) {
+function ComposerBar({
+  workflow,
+  projectId,
+  onSent,
+  idleStopped,
+  onDismissIdle,
+  onOptimisticSend,
+  onSendSuccess,
+  onSendError,
+}) {
   const [message, setMessage] = useState('');
   const [busy, setBusy]       = useState(false);
-  const [error, setError]     = useState(null);
+  // Resume state — shown when workflow.resumable and not running
+  const [resuming, setResuming]       = useState(false);
+  const [resumeError, setResumeError] = useState(null);
+  // null = auto-grow with content; number = manually set height in pixels
+  const [composerH, setComposerH] = useState(() => loadComposerH());
+  const textareaRef = useRef(null);
+  const composerRef = useRef(null);
+  const isDragging  = useRef(false);
+  const dragStartY  = useRef(0);
+  const dragStartH  = useRef(0);
+
   const isRunning = workflow?.status === 'running' || workflow?.status === 'pending';
 
   const enginePlaceholder =
     workflow?.engine === 'kiro'
-      ? 'Ask Kiro to change something… (Ctrl+Enter to send)'
+      ? 'Ask Kiro to change something… (Enter to send, Shift+Enter for new line)'
       : workflow?.engine === 'claude-code'
-      ? 'Ask Claude to change something… (Ctrl+Enter to send)'
-      : 'Send a message… (Ctrl+Enter)';
+      ? 'Ask Claude to change something… (Enter to send, Shift+Enter for new line)'
+      : 'Send a message… (Enter to send, Shift+Enter for new line)';
 
   const showSlashHint = message.startsWith('/');
+
+  // Auto-resize textarea height when in auto-grow mode
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (composerH !== null) {
+      el.style.height = ''; // manual mode: CSS (flex) drives the height
+    } else {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    }
+  }, [message, composerH]);
+
+  // Clamp the persisted height whenever the viewport resizes
+  useEffect(() => {
+    const onResize = () => setComposerH((h) => (h == null ? null : clampComposerH(h)));
+    window.addEventListener('resize', onResize, { passive: true });
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // ── Drag-handle pointer events (pointer capture → no text selection) ─────
+
+  const onHandlePointerDown = (e) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    isDragging.current = true;
+    dragStartY.current = e.clientY;
+    // Start from measured height when still in auto-grow mode
+    dragStartH.current = composerH !== null
+      ? composerH
+      : (composerRef.current?.offsetHeight ?? 80);
+  };
+
+  const onHandlePointerMove = (e) => {
+    if (!isDragging.current) return;
+    const delta = dragStartY.current - e.clientY; // drag up → taller
+    setComposerH(clampComposerH(dragStartH.current + delta));
+  };
+
+  const onHandlePointerUp = (e) => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+    const delta = dragStartY.current - e.clientY;
+    const newH  = clampComposerH(dragStartH.current + delta);
+    setComposerH(newH);
+    saveComposerH(newH);
+  };
+
+  // Drag interrupted (touch cancel, capture lost): keep and save the height reached so far.
+  const onHandlePointerCancel = () => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+    setComposerH((h) => { saveComposerH(h); return h; });
+  };
+
+  // Double-click the handle → reset to auto-grow and clear saved height
+  const onHandleDoubleClick = () => {
+    setComposerH(null);
+    saveComposerH(null);
+  };
+
+  // Keyboard resize: Arrow ±16 px (Shift ±64 px), Home → min, End → max
+  const onHandleKeyDown = (e) => {
+    const SMALL = 16;
+    const LARGE = 64;
+    const maxH  = Math.floor(window.innerHeight * 0.7);
+    let handled = true;
+    if (e.key === 'ArrowUp') {
+      const step    = e.shiftKey ? LARGE : SMALL;
+      const current = composerH ?? (composerRef.current?.offsetHeight ?? 80);
+      const newH    = clampComposerH(current + step);
+      setComposerH(newH);
+      saveComposerH(newH);
+    } else if (e.key === 'ArrowDown') {
+      if (composerH != null) {
+        const step = e.shiftKey ? LARGE : SMALL;
+        const newH = clampComposerH(composerH - step);
+        setComposerH(newH);
+        saveComposerH(newH);
+      }
+    } else if (e.key === 'Home') {
+      setComposerH(COMPOSER_MIN_H);
+      saveComposerH(COMPOSER_MIN_H);
+    } else if (e.key === 'End') {
+      setComposerH(maxH);
+      saveComposerH(maxH);
+    } else {
+      handled = false;
+    }
+    if (handled) e.preventDefault();
+  };
+
+  const handleResume = async () => {
+    if (resuming || !workflow) return;
+    setResuming(true);
+    setResumeError(null);
+    try {
+      await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/resume`, {});
+      if (onSent) onSent();
+    } catch (e) {
+      setResumeError(e.message);
+    } finally {
+      setResuming(false);
+    }
+  };
 
   const send = async () => {
     const text = message.trim();
     if (!text || busy) return;
+    const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    // Optimistic: show bubble immediately + clear composer
+    if (onOptimisticSend) onOptimisticSend(clientId, text);
+    setMessage('');
+    // Reset textarea to one line after send
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setBusy(true);
-    setError(null);
+
     if (idleStopped && onDismissIdle) onDismissIdle();
     try {
       const res = await api.post(
         `/api/projects/${projectId}/workflows/${workflow.id}/message`,
         { message: text },
       );
-      // Only call /start if the session is not running and was not resumed by the
-      // /message endpoint itself (avoid double-start on idempotent /start).
+      // Only call /start if not already running and not resumed by /message
       if (!isRunning && !res?.resumed) {
         await api.post(
           `/api/projects/${projectId}/workflows/${workflow.id}/start`,
         ).catch(() => {});
       }
-      setMessage('');
+      if (onSendSuccess) onSendSuccess(clientId);
       if (onSent) onSent();
     } catch (e) {
-      setError(e.message);
+      if (onSendError) onSendError(clientId, e.message);
     } finally {
       setBusy(false);
     }
   };
 
+  const handleKeyDown = (e) => {
+    // Skip during IME composition (Chinese, Japanese, Korean, etc.)
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    // Ctrl/Cmd+Enter → send (preserves old habit)
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      send();
+      return;
+    }
+    // Plain Enter (no Shift) → send
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+      return;
+    }
+    // Shift+Enter → new line (textarea default behaviour, no preventDefault)
+  };
+
+  const maxH         = Math.floor(window.innerHeight * 0.7);
+  const ariaValueNow = composerH ?? (composerRef.current?.offsetHeight ?? 80);
+
   return (
-    <div className="ws-composer">
+    <div
+      ref={composerRef}
+      className={`ws-composer${composerH !== null ? ' ws-composer--manual' : ''}`}
+      style={composerH !== null ? { height: composerH } : undefined}
+    >
+      {/* Drag handle — top edge. Drag up to grow, drag down to shrink.
+          Double-click resets to auto-grow. */}
+      <div
+        className="ws-composer-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize message box"
+        aria-valuenow={ariaValueNow}
+        aria-valuemin={COMPOSER_MIN_H}
+        aria-valuemax={maxH}
+        tabIndex={0}
+        onPointerDown={onHandlePointerDown}
+        onPointerMove={onHandlePointerMove}
+        onPointerUp={onHandlePointerUp}
+        onPointerCancel={onHandlePointerCancel}
+        onLostPointerCapture={onHandlePointerCancel}
+        onDoubleClick={onHandleDoubleClick}
+        onKeyDown={onHandleKeyDown}
+      />
       {idleStopped && (
         <div className="ide-idle-banner" role="alert">
           <Icon name="idle-stop" size={15} />
@@ -205,9 +426,26 @@ function ComposerBar({ workflow, projectId, onSent, idleStopped, onDismissIdle }
           </button>
         </div>
       )}
-      {error && (
-        <div className="error-note" style={{ margin: '0 0 6px' }} role="alert">
-          {error}
+      {workflow?.resumable && !isRunning && (
+        <div className="ide-idle-banner" role="status">
+          <span className="ide-idle-banner-msg">
+            Continues the same conversation.
+          </span>
+          {resumeError && (
+            <span role="alert" style={{ fontSize: '0.78rem', color: 'var(--danger)', marginLeft: 4 }}>
+              {resumeError}
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={handleResume}
+            disabled={resuming}
+            aria-label={`Resume session${workflow.title ? ': ' + workflow.title : ''}`}
+            style={{ marginLeft: 'auto', flexShrink: 0 }}
+          >
+            {resuming ? 'Resuming\u2026' : 'Resume'}
+          </button>
         </div>
       )}
       {showSlashHint && (
@@ -235,33 +473,31 @@ function ComposerBar({ workflow, projectId, onSent, idleStopped, onDismissIdle }
         >
           <Icon name="attach" size={16} />
         </button>
-        <input
-          type="text"
+        <textarea
+          ref={textareaRef}
+          rows={1}
           className="ws-composer-input"
           placeholder={enginePlaceholder}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          disabled={busy || !workflow}
+          onKeyDown={handleKeyDown}
+          disabled={!workflow}
           aria-label="Message"
         />
-        <button
-          type="button"
-          className="btn btn-sm btn-primary"
-          onClick={send}
-          disabled={busy || !message.trim() || !workflow}
-          aria-label="Send (Ctrl+Enter)"
-          title="Send (Ctrl+Enter)"
-        >
-          {busy
-            ? <span className="spinner" style={{ width: 14, height: 14 }} />
-            : <Icon name="send" size={14} />}
-        </button>
+        <div className="ws-composer-actions">
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={send}
+            disabled={busy || !message.trim() || !workflow}
+            aria-label="Send (Enter)"
+            title="Send (Enter)"
+          >
+            {busy
+              ? <span className="spinner" style={{ width: 14, height: 14 }} />
+              : <Icon name="send" size={14} />}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -282,6 +518,26 @@ export function IdeWorkspace({ id, project }) {
   const [title, setTitle]       = useState(null); // inline rename override
   const [idleStopped, setIdleStopped] = useState(null); // minutes, or null
   const timerRef = useRef(null);
+
+  // Optimistic send — messages sent but not yet confirmed by the stream
+  const [pendingMessages, setPendingMessages] = useState([]);
+
+  // Browser panel live state (updated from stream events)
+  const [browserLiveData, setBrowserLiveData] = useState(null);
+  const [browserPopped, setBrowserPopped] = useState(false); // pop-out to main area
+  const browserAutoOpenedRef = useRef(false);
+  // Ref used by handleRemovePending to avoid double-removal
+  const matchedPendingRef = useRef(new Set());
+
+  // Output files state
+  const [outputFiles, setOutputFiles] = useState([]);
+  const [outputFilesLoading, setOutputFilesLoading] = useState(false);
+  const [outputVaultFolder, setOutputVaultFolder] = useState(null);
+  // File being previewed via the Outputs panel "eye" button
+  const [previewOutputFile, setPreviewOutputFile] = useState(null);
+  // Briefly true after output-files.updated fires — flashes the Outputs activity button.
+  const [outputsHighlight, setOutputsHighlight] = useState(false);
+  const outputsHighlightTimer = useRef(null);
 
   // ── Panel state ──────────────────────────────────────────────────────────
 
@@ -325,6 +581,17 @@ export function IdeWorkspace({ id, project }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFile]);
 
+  // Clamp sidebarW whenever the viewport resizes so a value saved from a
+  // wide desktop session can't leave the chat invisible on a narrow screen.
+  useEffect(() => {
+    const clamp = () => {
+      const maxW = Math.max(140, Math.floor((window.innerWidth - 40) * 0.45));
+      setSidebarW((w) => (w > maxW ? maxW : w));
+    };
+    window.addEventListener('resize', clamp, { passive: true });
+    return () => window.removeEventListener('resize', clamp);
+  }, []);
+
   // ── Data loading ─────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
@@ -341,13 +608,113 @@ export function IdeWorkspace({ id, project }) {
     }
   }, [id, project.id]);
 
+  // Fetch session output files
+  const loadOutputFiles = useCallback(async () => {
+    setOutputFilesLoading(true);
+    try {
+      const res = await api.get(`/api/workflows/${encodeURIComponent(id)}/output-files`);
+      setOutputFiles(res.files ?? []);
+      setOutputVaultFolder(res.vaultFolder ?? null);
+    } catch {
+      // Non-fatal: outputs panel shows empty state
+    } finally {
+      setOutputFilesLoading(false);
+    }
+  }, [id]);
+
+  // Optimistic-send handlers
+  const handleOptimisticSend = useCallback((clientId, text) => {
+    setPendingMessages((prev) => [
+      ...prev,
+      { clientId, text, status: 'sending', sentAt: Date.now() },
+    ]);
+  }, []);
+
+  const handleSendSuccess = useCallback((clientId) => {
+    setPendingMessages((prev) =>
+      prev.map((m) => m.clientId === clientId ? { ...m, status: 'sent' } : m),
+    );
+  }, []);
+
+  const handleSendError = useCallback((clientId, errMsg) => {
+    setPendingMessages((prev) =>
+      prev.map((m) =>
+        m.clientId === clientId ? { ...m, status: 'error', error: errMsg } : m,
+      ),
+    );
+  }, []);
+
+  const handleRemovePending = useCallback((clientId) => {
+    setPendingMessages((prev) => prev.filter((m) => m.clientId !== clientId));
+    matchedPendingRef.current?.delete(clientId);
+  }, []);
+
+  // Retry a failed pending message
+  const handleRetryPending = useCallback(async (clientId) => {
+    const msg = pendingMessages.find((m) => m.clientId === clientId);
+    if (!msg) return;
+    const wf = data?.workflow;
+    if (!wf) return;
+    const isRunning = wf.status === 'running' || wf.status === 'pending';
+
+    setPendingMessages((prev) =>
+      prev.map((m) =>
+        m.clientId === clientId ? { ...m, status: 'sending', error: undefined } : m,
+      ),
+    );
+    try {
+      const res = await api.post(
+        `/api/projects/${project.id}/workflows/${wf.id}/message`,
+        { message: msg.text },
+      );
+      if (!isRunning && !res?.resumed) {
+        await api.post(`/api/projects/${project.id}/workflows/${wf.id}/start`).catch(() => {});
+      }
+      setPendingMessages((prev) =>
+        prev.map((m) => m.clientId === clientId ? { ...m, status: 'sent' } : m),
+      );
+      load();
+    } catch (e) {
+      setPendingMessages((prev) =>
+        prev.map((m) =>
+          m.clientId === clientId ? { ...m, status: 'error', error: e.message } : m,
+        ),
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingMessages, data, project.id, load]);
+
+  // Browser event handler — updates live browser state and auto-opens panel once
+  const handleBrowserEvent = useCallback((ev) => {
+    setBrowserLiveData((prev) => {
+      if (ev.type === 'browser-navigate') {
+        return { ...prev, url: ev.payload?.url || prev?.url, recordedAt: new Date().toISOString() };
+      }
+      if (ev.type === 'browser-screenshot') {
+        return {
+          ...prev,
+          url:              ev.payload?.url || prev?.url,
+          screenshotBase64: ev.payload?.screenshotBase64 || prev?.screenshotBase64,
+          recordedAt:       new Date().toISOString(),
+        };
+      }
+      return prev;
+    });
+    // Open browser panel once on first browser event for this page visit
+    if (!browserAutoOpenedRef.current) {
+      browserAutoOpenedRef.current = true;
+      setSidebarPanel('browser');
+    }
+  }, []);
+
   useEffect(() => {
     setLoading(true);
     setData(null);
     setTitle(null);
     setIdleStopped(null);
     load();
-  }, [load]);
+    loadOutputFiles();
+  }, [load, loadOutputFiles]);
 
   // SSE project events
   useEffect(() => {
@@ -365,10 +732,20 @@ export function IdeWorkspace({ id, project }) {
       ) {
         clearTimeout(timerRef.current);
         timerRef.current = setTimeout(load, 300);
+        // Also refresh output files when a run completes / updates
+        loadOutputFiles();
+      }
+      // Refresh output files when the backend signals new outputs for this workflow
+      if (event.type === 'output-files.updated' && event.workflowId === id) {
+        loadOutputFiles();
+        // Briefly highlight the Outputs activity button — don't steal focus.
+        setOutputsHighlight(true);
+        clearTimeout(outputsHighlightTimer.current);
+        outputsHighlightTimer.current = setTimeout(() => setOutputsHighlight(false), 2000);
       }
     });
-    return () => { unsub(); clearTimeout(timerRef.current); };
-  }, [project.id, id, load]);
+    return () => { unsub(); clearTimeout(timerRef.current); clearTimeout(outputsHighlightTimer.current); };
+  }, [project.id, id, load, loadOutputFiles]);
 
   // ── Keyboard shortcuts — via registry only (no duplicate raw listeners) ────
 
@@ -452,6 +829,15 @@ export function IdeWorkspace({ id, project }) {
             active={sidebarPanel === 'agents'}
             onClick={() => setSidebarPanel((p) => p === 'agents' ? null : 'agents')}
           />
+          {/* Outputs panel — session artifacts */}
+          <ActivityBtn
+            icon="file"
+            label="Outputs"
+            active={sidebarPanel === 'outputs'}
+            badge={outputFiles.length}
+            flash={outputsHighlight}
+            onClick={() => setSidebarPanel((p) => p === 'outputs' ? null : 'outputs')}
+          />
           {/* Session panel — Activity / Context / Settings (re-homed from old SessionWorkspace) */}
           <ActivityBtn
             icon="history"
@@ -477,6 +863,7 @@ export function IdeWorkspace({ id, project }) {
               sidebarPanel === 'source'   ? 'Source control' :
               sidebarPanel === 'browser'  ? 'Browser' :
               sidebarPanel === 'agents'   ? 'Agents activity' :
+              sidebarPanel === 'outputs'  ? 'Outputs' :
               sidebarPanel === 'session'  ? 'Session' :
               'Sidebar'
             }
@@ -487,6 +874,7 @@ export function IdeWorkspace({ id, project }) {
                  sidebarPanel === 'source'   ? 'Source Control' :
                  sidebarPanel === 'browser'  ? 'Browser' :
                  sidebarPanel === 'agents'   ? 'Agents Activity' :
+                 sidebarPanel === 'outputs'  ? 'Outputs' :
                  sidebarPanel === 'session'  ? 'Session' :
                  'Panel'}
               </span>
@@ -515,11 +903,38 @@ export function IdeWorkspace({ id, project }) {
             {sidebarPanel === 'source' && (
               <IdeSourceControl workflowId={id} />
             )}
-            {sidebarPanel === 'browser' && (
-              <IdeBrowser workflowId={id} />
+            {sidebarPanel === 'browser' && !browserPopped && (
+              <IdeBrowser
+                workflowId={id}
+                liveData={browserLiveData}
+                onPopOut={() => setBrowserPopped(true)}
+              />
+            )}
+            {sidebarPanel === 'browser' && browserPopped && (
+              <div className="idb-sidebar-popped-note">
+                <Icon name="external" size={16} />
+                <p>Browser is open in the main area</p>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => setBrowserPopped(false)}
+                >
+                  Collapse
+                </button>
+              </div>
             )}
             {sidebarPanel === 'agents' && (
               <IdeAgents workflowId={id} projectId={project.id} />
+            )}
+            {sidebarPanel === 'outputs' && (
+              <IdeOutputs
+                outputFiles={outputFiles}
+                loading={outputFilesLoading}
+                workflowId={id}
+                projectId={project.id}
+                vaultFolder={outputVaultFolder}
+                onPreview={(file) => setPreviewOutputFile(file)}
+              />
             )}
             {sidebarPanel === 'session' && (
               <IdeSessionPanel
@@ -546,7 +961,7 @@ export function IdeWorkspace({ id, project }) {
         )}
 
         {/* Main content */}
-        <div className="ide-main">
+        <div className="ide-main" style={{ position: 'relative' }}>
           <div className="ide-main-row">
             {/* Editor panel — conditionally rendered; auto-expands on file open */}
             {editorPanelOpen && (
@@ -591,7 +1006,7 @@ export function IdeWorkspace({ id, project }) {
             {/* Agent conversation panel — takes all remaining width */}
             <div
               className="ide-agent-panel"
-              style={{ flex: 1, minWidth: 280, borderLeft: 'none' }}
+              style={{ flex: 1, borderLeft: 'none' }}
               aria-label="Agent conversation"
             >
               <SessionLive
@@ -599,6 +1014,12 @@ export function IdeWorkspace({ id, project }) {
                 workflowId={id}
                 projectId={project.id}
                 workflow={workflow}
+                pendingMessages={pendingMessages}
+                onRemovePending={handleRemovePending}
+                onRetryPending={handleRetryPending}
+                onBrowserEvent={handleBrowserEvent}
+                outputFiles={outputFiles}
+                vaultFolder={outputVaultFolder}
               />
             </div>
           </div>
@@ -640,6 +1061,18 @@ export function IdeWorkspace({ id, project }) {
               <IdeTerminal workflowId={id} height={terminalH - 32} />
             </div>
           )}
+
+          {/* Browser pop-out overlay — rendered in the main area */}
+          {browserPopped && (
+            <div className="idb-main-overlay" aria-label="Browser (expanded)">
+              <IdeBrowser
+                workflowId={id}
+                liveData={browserLiveData}
+                onPopIn={() => setBrowserPopped(false)}
+                isPopped
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -653,7 +1086,22 @@ export function IdeWorkspace({ id, project }) {
         onSent={load}
         idleStopped={idleStopped}
         onDismissIdle={() => setIdleStopped(null)}
+        onOptimisticSend={handleOptimisticSend}
+        onSendSuccess={handleSendSuccess}
+        onSendError={handleSendError}
       />
+
+      {/* Output file preview modal (opened from Outputs panel) */}
+      {previewOutputFile && (
+        <OutputFilePreview
+          key={previewOutputFile.id}
+          file={previewOutputFile}
+          files={outputFiles}
+          projectId={project.id}
+          vaultFolder={outputVaultFolder}
+          onClose={() => setPreviewOutputFile(null)}
+        />
+      )}
     </div>
   );
 }

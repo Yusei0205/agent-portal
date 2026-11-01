@@ -5,6 +5,8 @@ import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { AwsRegionSelect } from '../components/AwsRegionSelect.jsx';
+import { useBulkSelect } from '../lib/useBulkSelect.js';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
 
 const AUTH_METHODS = [
   { value: 'keys',          label: 'Access keys' },
@@ -206,8 +208,10 @@ export function AwsAccounts({ projectId, currentProject }) {
   const [modal, setModal]             = useState(null); // null | 'new' | { account }
   const [testResults, setTestResults] = useState({}); // id → { ok, identity?, note?, error? }
   const [testing, setTesting]         = useState({}); // id → bool
+  const [bulkBusy, setBulkBusy]       = useState(false);
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
+  const bulk = useBulkSelect(accounts);
 
   const load = useCallback(async () => {
     if (!projectId) { setLoading(false); return; }
@@ -246,6 +250,28 @@ export function AwsAccounts({ projectId, currentProject }) {
     } catch (e) {
       toast(e.message, 'error');
     }
+  };
+
+  const handleBulkDelete = async () => {
+    const n = bulk.selected.size;
+    if (!await requestConfirm(
+      `Remove ${n} AWS account${n === 1 ? '' : 's'}? This cannot be undone.`,
+      'Remove', 'danger',
+    )) return;
+    setBulkBusy(true);
+    const ids = [...bulk.selected];
+    const failed = [];
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await api.delete(`/api/projects/${projectId}/aws-accounts/${id}`);
+      } catch {
+        failed.push(id);
+      }
+    }));
+    setAccounts((prev) => prev.filter((a) => !ids.includes(a.id) || failed.includes(a.id)));
+    bulk.clearAll();
+    if (failed.length > 0) toast(`${failed.length} account${failed.length === 1 ? '' : 's'} could not be removed.`, 'error');
+    setBulkBusy(false);
   };
 
   const handleSave = (saved) => {
@@ -314,54 +340,81 @@ export function AwsAccounts({ projectId, currentProject }) {
           )}
 
           {!loading && accounts.length > 0 && (
-            <table className="data-table" aria-label="AWS accounts">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Auth method</th>
-                  <th>Region</th>
-                  <th>Added</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.map((acct) => (
-                  <tr key={acct.id}>
-                    <td>{acct.name}</td>
-                    <td>
-                      <span className={METHOD_BADGE_CLASS[acct.auth_method] || 'badge badge-neutral'}>
-                        {AUTH_METHODS.find((m) => m.value === acct.auth_method)?.label ?? acct.auth_method}
-                      </span>
-                    </td>
-                    <td className="muted">{acct.region || '—'}</td>
-                    <td className="muted">{formatRelative(acct.created_at)}</td>
-                    <td>
-                      <div className="row">
-                        {renderTestResult(testResults[acct.id])}
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          onClick={() => testAccount(acct)}
-                          disabled={testing[acct.id]}
-                          aria-label={`Test ${acct.name}`}
-                        >
-                          {testing[acct.id] ? 'Testing…' : 'Test'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-icon"
-                          title="Delete"
-                          aria-label={`Delete ${acct.name}`}
-                          onClick={() => deleteAccount(acct)}
-                        >
-                          <Icon name="trash" size={14} />
-                        </button>
-                      </div>
-                    </td>
+            <div style={{ position: 'relative' }}>
+              <table className="data-table" aria-label="AWS accounts">
+                <thead>
+                  <tr>
+                    <th style={{ width: 32 }}>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all AWS accounts"
+                        checked={bulk.allSelected}
+                        ref={(el) => { if (el) el.indeterminate = bulk.someSelected; }}
+                        onChange={bulk.toggleAll}
+                      />
+                    </th>
+                    <th>Name</th>
+                    <th>Auth method</th>
+                    <th>Region</th>
+                    <th>Added</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {accounts.map((acct) => (
+                    <tr key={acct.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${acct.name}`}
+                          checked={bulk.selected.has(acct.id)}
+                          onChange={() => bulk.toggle(acct.id)}
+                        />
+                      </td>
+                      <td>{acct.name}</td>
+                      <td>
+                        <span className={METHOD_BADGE_CLASS[acct.auth_method] || 'badge badge-neutral'}>
+                          {AUTH_METHODS.find((m) => m.value === acct.auth_method)?.label ?? acct.auth_method}
+                        </span>
+                      </td>
+                      <td className="muted">{acct.region || '—'}</td>
+                      <td className="muted">{formatRelative(acct.created_at)}</td>
+                      <td>
+                        <div className="row">
+                          {renderTestResult(testResults[acct.id])}
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={() => testAccount(acct)}
+                            disabled={testing[acct.id]}
+                            aria-label={`Test ${acct.name}`}
+                          >
+                            {testing[acct.id] ? 'Testing…' : 'Test'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-icon"
+                            title="Delete"
+                            aria-label={`Delete ${acct.name}`}
+                            onClick={() => deleteAccount(acct)}
+                          >
+                            <Icon name="trash" size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <BulkActionBar
+                selected={bulk.selected}
+                onDelete={handleBulkDelete}
+                onClear={bulk.clearAll}
+                busy={bulkBusy}
+                noun="account"
+                deleteLabel="Remove"
+              />
+            </div>
           )}
         </>
       )}

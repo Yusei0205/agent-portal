@@ -5,10 +5,11 @@
 //   whoami    → login status check (new)
 //   login     → device-flow login (new)
 //   logout    → sign out (new)
+//   acp       → ACP JSON-RPC 2.0 server (new)
 //
 // Scenario controlled via PORTAL_FAKE_KIRO_SCENARIO env var.
 
-const subCommand = process.argv[2]; // '--version', 'chat', 'whoami', 'login', 'logout'
+const subCommand = process.argv[2]; // '--version', 'chat', 'whoami', 'login', 'logout', 'acp'
 const scenario = process.env.PORTAL_FAKE_KIRO_SCENARIO || 'normal';
 
 // ── --version ─────────────────────────────────────────────────────────────────
@@ -117,6 +118,481 @@ if (subCommand === 'login') {
 // ── logout ────────────────────────────────────────────────────────────────────
 
 if (subCommand === 'logout') {
+  process.exit(0);
+}
+
+// ── acp (ACP JSON-RPC 2.0 server) ────────────────────────────────────────────
+//
+// Implements the subset of ACP used by the portal:
+//   initialize          → returns server capabilities
+//   session/new         → returns a fake sessionId
+//   session/prompt      → streams session/update notifications then responds
+//   session/request_permission → requests permission from client
+//
+// ACP scenarios (PORTAL_FAKE_KIRO_SCENARIO):
+//   acp-normal          → streams agent_message_chunk + tool_call/update, completes
+//   acp-thought         → includes an agent_thought_chunk
+//   acp-tool            → streams tool_call and tool_call_update with image content
+//   acp-browser         → browser tool with URL in rawInput + image content
+//   acp-permission      → emits a session/request_permission request mid-run
+//   acp-plan            → emits a plan update
+//   acp-usage           → emits a usage_update with cost
+//   acp-error           → exits with non-zero code immediately
+//   acp-slow            → pauses before completing (for heartbeat tests)
+//   acp-permission-deny → emits permission request expecting a deny response
+
+if (subCommand === 'acp') {
+  if (scenario === 'acp-error') {
+    process.stderr.write('kiro-cli acp: fatal error\n');
+    process.exit(1);
+  }
+
+  let inputBuf = '';
+  let nextId = 1;
+  // Session-resume tracking (for assertion in tests)
+  let sessionNewCalled = false;
+  let lastLoadedSessionId = null;
+
+  function writeLine(obj) {
+    process.stdout.write(JSON.stringify(obj) + '\n');
+  }
+
+  function notification(method, params) {
+    // Match real kiro-cli 2.37 wire shapes (acp-server.js):
+    //   agent_message_chunk / agent_thought_chunk → content is a SINGLE block {type:'text', text}
+    //   tool_call_update content → array of wrapped blocks {type:'content', content:{type, …}}
+    // Scenarios below are written with plain arrays for brevity; normalise here so
+    // tests exercise the same shapes the portal receives in production.
+    const u = params && params.update;
+    if (u && Array.isArray(u.content)) {
+      if (u.sessionUpdate === 'agent_message_chunk' || u.sessionUpdate === 'agent_thought_chunk') {
+        u.content = u.content[0];
+      } else if (u.sessionUpdate === 'tool_call_update' || u.sessionUpdate === 'tool_call') {
+        u.content = u.content.map((c) => (c && c.type === 'content' ? c : { type: 'content', content: c }));
+      }
+    }
+    writeLine({ jsonrpc: '2.0', method, params });
+  }
+
+  function response(id, result) {
+    writeLine({ jsonrpc: '2.0', id, result });
+  }
+
+  function serverRequest(method, params) {
+    const id = nextId++;
+    writeLine({ jsonrpc: '2.0', id, method, params });
+    return new Promise((resolve, reject) => {
+      // Wait for the client to respond on stdin
+      pendingServerRequests.set(id, { resolve, reject });
+    });
+  }
+
+  const pendingServerRequests = new Map();
+
+  async function handleLine(line) {
+    if (!line.trim()) return;
+    let msg;
+    try { msg = JSON.parse(line); } catch { return; }
+
+    const id = msg.id;
+    const method = msg.method;
+
+    // Check if this is a response to one of our server requests
+    if (id !== undefined && !method && ('result' in msg || 'error' in msg)) {
+      const pending = pendingServerRequests.get(id);
+      if (pending) {
+        pendingServerRequests.delete(id);
+        if (msg.error) pending.reject(new Error(msg.error.message));
+        else pending.resolve(msg.result);
+      }
+      return;
+    }
+
+    if (method === 'initialize') {
+      // Match real kiro-cli 2.37.0 format: agentCapabilities at top level of result.
+      response(id, {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true },
+        serverInfo: { name: 'fake-kiro', version: process.env.PORTAL_FAKE_KIRO_VERSION || '2.37.0-fake' },
+      });
+      return;
+    }
+
+    if (method === 'notifications/initialized') {
+      // Just acknowledge — no response needed for notifications
+      return;
+    }
+
+    if (method === 'session/new') {
+      // Track whether session/new was called (for session-resume assertion tests)
+      sessionNewCalled = true;
+      response(id, { sessionId: 'fake-session-001' });
+      return;
+    }
+
+    if (method === 'session/load') {
+      const loadedId = msg.params?.sessionId;
+      lastLoadedSessionId = loadedId;
+
+      if (scenario === 'acp-session-load-fail') {
+        // Return error to trigger fallback path (matches real kiro-cli error shape)
+        writeLine({ jsonrpc: '2.0', id, error: { code: -32603, message: 'Internal error', data: `Failed to start session: Session not found: ${loadedId}` } });
+        return;
+      }
+
+      // Emit a replay notification (should be suppressed by portal's isReplaying flag)
+      notification('session/update', {
+        sessionId: loadedId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: [{ type: 'text', text: 'REPLAY_TEXT_SHOULD_NOT_APPEAR' }],
+        },
+      });
+
+      // Respond with the session ID (load succeeded)
+      response(id, { sessionId: loadedId });
+      return;
+    }
+
+    if (method === 'session/prompt') {
+      const sessionId = msg.params?.sessionId ?? 'fake-session-001';
+      // Capture prompt text for echo-prompt tests
+      const promptText = msg.params?.prompt?.[0]?.text ?? '';
+
+      // Emit updates based on scenario
+      if (scenario === 'acp-slow') {
+        const delayMs = Number(process.env.PORTAL_FAKE_KIRO_SLOW_MS) || 300;
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+
+      // Session-resume scenario: emit whether session was loaded or new was used
+      if (scenario === 'acp-session-resume' || scenario === 'acp-session-load-fail') {
+        const marker = sessionNewCalled
+          ? `session_new_was_called:${sessionId}`
+          : `resumed:${lastLoadedSessionId ?? 'unknown'}`;
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: marker }],
+          },
+        });
+        // For load-fail: echo part of the prompt so tests can verify recap contents
+        if (scenario === 'acp-session-load-fail' && promptText.length > 0) {
+          notification('session/update', {
+            sessionId,
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: [{ type: 'text', text: `\nPROMPT_EXCERPT:${promptText.slice(0, 300)}` }],
+            },
+          });
+        }
+        response(id, {});
+        return;
+      }
+
+      if (scenario === 'acp-thought' || scenario === 'acp-normal' || scenario === 'normal' || !scenario || scenario === 'acp-slow') {
+        if (scenario === 'acp-thought') {
+          notification('session/update', {
+            sessionId,
+            update: {
+              sessionUpdate: 'agent_thought_chunk',
+              content: [{ type: 'text', text: 'Thinking about the task…' }],
+            },
+          });
+        }
+
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: 'Kiro is analyzing the task.' }],
+          },
+        });
+
+        // Echo --model arg so model-passthrough tests can verify it was passed
+        const modelIdx = process.argv.indexOf('--model');
+        if (modelIdx >= 0 && process.argv[modelIdx + 1]) {
+          notification('session/update', {
+            sessionId,
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: [{ type: 'text', text: `\nmodel=${process.argv[modelIdx + 1]}` }],
+            },
+          });
+        }
+
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: '\nTask complete.' }],
+          },
+        });
+      }
+
+      if (scenario === 'acp-tool' || scenario === 'acp-browser') {
+        const isBrowser = scenario === 'acp-browser';
+        const toolName = isBrowser ? 'browser_navigate' : 'Read';
+        const rawInput = isBrowser
+          ? { url: 'https://example.com' }
+          : { file_path: 'README.md' };
+
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tc-001',
+            title: toolName,
+            name: toolName,
+            kind: isBrowser ? 'fetch' : 'read',
+            status: 'in_progress',
+            rawInput,
+          },
+        });
+
+        // Simulate small delay
+        await new Promise((r) => setTimeout(r, 10));
+
+        const updateContent = isBrowser
+          ? [{ type: 'image', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', mimeType: 'image/png' }]
+          : [{ type: 'content', content: '# README content' }];
+
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tc-001',
+            title: toolName,
+            name: toolName,
+            status: 'completed',
+            rawOutput: isBrowser ? 'Navigated to https://example.com' : '# README',
+            content: updateContent,
+          },
+        });
+
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: isBrowser ? 'Browser opened.' : 'File read.' }],
+          },
+        });
+      }
+
+      if (scenario === 'json') {
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: 'Kiro is running.' }],
+          },
+        });
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tc-json-001',
+            title: 'Read',
+            name: 'Read',
+            kind: 'read',
+            status: 'in_progress',
+            rawInput: { file_path: 'README.md' },
+          },
+        });
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tc-json-001',
+            title: 'Read',
+            name: 'Read',
+            status: 'completed',
+            rawOutput: '# README',
+          },
+        });
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: 'Task complete.' }],
+          },
+        });
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'usage_update', used: 50, size: 500, cost: { amount: 0.5, currency: 'credits' } },
+        });
+      }
+
+      if (scenario === 'acp-plan') {
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'plan',
+            entries: [
+              { content: 'Analyze codebase', priority: 'high', status: 'completed' },
+              { content: 'Implement changes', priority: 'high', status: 'in_progress' },
+            ],
+          },
+        });
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: 'Plan created.' }],
+          },
+        });
+      }
+
+      if (scenario === 'acp-usage') {
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'usage_update',
+            used: 150,
+            size: 1000,
+            cost: { amount: 0.75, currency: 'credits' },
+          },
+        });
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: 'Done.' }],
+          },
+        });
+      }
+
+      if (scenario === 'acp-permission' || scenario === 'acp-permission-deny') {
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: 'About to run a tool…' }],
+          },
+        });
+
+        // Issue a server-side permission request
+        const permResult = await serverRequest('session/request_permission', {
+          sessionId,
+          toolCall: {
+            toolCallId: 'tc-perm-001',
+            title: 'Bash',
+            name: 'Bash',
+            kind: 'execute',
+            rawInput: { command: 'ls -la' },
+          },
+          options: [
+            { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+            { optionId: 'reject_once', name: 'Deny', kind: 'reject_once' },
+          ],
+        }).catch(() => ({ optionId: 'reject_once' }));
+
+        const allowed = permResult?.optionId === 'allow_once' || permResult?.optionId === 'allow_always';
+
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: allowed ? 'Tool executed.' : 'Tool denied.' }],
+          },
+        });
+      }
+
+      if (scenario === 'review') {
+        notification('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: [{ type: 'text', text: 'Reviewing the diff...\nReview Findings\n\n```json\n[{"file":"src/app.ts","line":10,"severity":"high","title":"Issue","body":"desc","confidence":0.9}]\n```\n' }],
+          },
+        });
+      }
+
+      if (scenario === 'home-check') {
+        const homeVal = process.env.HOME ?? process.env.USERPROFILE ?? 'not-set';
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `HOME=${homeVal}` }] },
+        });
+      }
+
+      if (scenario === 'home-env-check') {
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `HOME=${process.env.HOME ?? 'not-set'}` }] },
+        });
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `USERPROFILE=${process.env.USERPROFILE ?? 'not-set'}` }] },
+        });
+      }
+
+      if (scenario === 'kiro-test-db-check') {
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `KIRO_TEST_DB_PATH=${process.env.KIRO_TEST_DB_PATH ?? 'not-set'}` }] },
+        });
+      }
+
+      if (scenario === 'kiro-test-db-writeback') {
+        const dbPath = process.env.KIRO_TEST_DB_PATH;
+        if (dbPath) {
+          const { DatabaseSync } = await import('node:sqlite');
+          const db = new DatabaseSync(dbPath, { open: true });
+          try {
+            const row = db.prepare('SELECT value FROM auth_kv WHERE key = ?').get('kirocli:odic:token');
+            if (row) {
+              const parsed = JSON.parse(row.value);
+              parsed.access_token = 'refreshed-access-token-by-kiro-run';
+              parsed.expires_at = new Date(Date.now() + 7_200_000).toISOString();
+              parsed.refresh_token = 'refreshed-refresh-token-by-kiro-run';
+              db.prepare('INSERT OR REPLACE INTO auth_kv (key, value) VALUES (?, ?)').run('kirocli:odic:token', JSON.stringify(parsed));
+            }
+          } finally {
+            db.close();
+          }
+        }
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: 'token refreshed by kiro' }] },
+        });
+      }
+
+      // Complete the session/prompt request
+      response(id, {});
+      return;
+    }
+
+    // session/cancel: acknowledge gracefully
+    if (method === 'session/cancel') {
+      if (id !== undefined) response(id, {});
+      return;
+    }
+
+    // Default: method not found
+    if (id !== undefined) {
+      writeLine({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } });
+    }
+  }
+
+  // Read stdin line-by-line
+  process.stdin.setEncoding('utf8');
+  let acpBuf = '';
+  process.stdin.on('data', (chunk) => {
+    acpBuf += chunk;
+    let nl;
+    while ((nl = acpBuf.indexOf('\n')) >= 0) {
+      const line = acpBuf.slice(0, nl).trimEnd();
+      acpBuf = acpBuf.slice(nl + 1);
+      handleLine(line).catch((e) => {
+        process.stderr.write(`[fake-kiro acp] ${e.message}\n`);
+      });
+    }
+  });
+
+  // Keep alive until stdin closes
+  await new Promise((r) => process.stdin.once('end', r));
   process.exit(0);
 }
 
@@ -320,6 +796,17 @@ if (scenario === 'json') {
   process.stdout.write(JSON.stringify({ type: 'tool_end', tool: 'Read', toolOutput: '# README' }) + '\n');
   process.stdout.write(JSON.stringify({ type: 'text', text: 'Task complete.' }) + '\n');
   process.stdout.write(JSON.stringify({ type: 'result', credits: 0.5 }) + '\n');
+  process.exit(0);
+}
+
+if (scenario === 'slow') {
+  // Pause for a configurable delay before completing.
+  // Used in heartbeat tests: PORTAL_KIRO_HEARTBEAT_MS sets the timer interval,
+  // PORTAL_FAKE_KIRO_SLOW_MS controls how long this process sleeps (default 300 ms).
+  process.stdout.write('Starting task...\n');
+  const delayMs = Number(process.env.PORTAL_FAKE_KIRO_SLOW_MS) || 300;
+  await new Promise((r) => setTimeout(r, delayMs));
+  process.stdout.write('Task complete.\n');
   process.exit(0);
 }
 

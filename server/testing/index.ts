@@ -9,6 +9,7 @@ import { registerTestVaultRoutes } from './vault.ts';
 import { registerScriptRoutes } from './scripts.ts';
 import { registerRunRoutes } from './runner.ts';
 import { registerGenerateRoutes } from './generate.ts';
+import { registerCaseSetRoutes } from './case-sets.ts';
 
 export { setModelCallFn } from './generate.ts';
 export { extractJsonArray } from './generate.ts';
@@ -25,6 +26,7 @@ export function registerTestingRoutes(): void {
   registerScriptRoutes();
   registerRunRoutes();
   registerGenerateRoutes();
+  registerCaseSetRoutes();
 }
 
 // ── M25 migration SQL ──────────────────────────────────────────────────────────
@@ -149,3 +151,7 @@ export const M25_TESTS_MODULE = `
 
   INSERT OR IGNORE INTO settings (key, value) VALUES ('test.run_concurrency', '2');
 `;
+
+// ── M40 migration SQL (reference copy — actual migration lives in server/db.ts) ──
+
+export { M40_CASE_SETS } from './case-sets.ts';

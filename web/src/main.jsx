@@ -2,6 +2,13 @@
 import '@fontsource-variable/inter/index.css';
 import '@fontsource-variable/space-grotesk/index.css';
 import '@fontsource-variable/jetbrains-mono/index.css';
+import '@fontsource-variable/quicksand/index.css';
+import '@fontsource/geist-sans/index.css';
+import '@fontsource-variable/outfit/index.css';
+import '@fontsource-variable/plus-jakarta-sans/index.css';
+import '@fontsource-variable/exo-2/index.css';
+import '@fontsource/orbitron/400.css';
+import '@fontsource/orbitron/700.css';
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';

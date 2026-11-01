@@ -31,6 +31,12 @@ export interface AgentRun {
    * set model in the SDK options (claude-code).
    */
   model: string | null;
+  /**
+   * Engine session ID stored from the previous run (F-SESSION-RESUME).
+   * Kiro: passed to session/load; Claude Code: passed as SDK resume option.
+   * Null on first run or after /clear.
+   */
+  engineSessionId: string | null;
 }
 
 // ── Tool call ─────────────────────────────────────────────────────────────────

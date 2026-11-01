@@ -4,6 +4,9 @@ import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Learn } from './Learn.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useBulkSelect } from '../lib/useBulkSelect.js';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -26,8 +29,11 @@ function DocumentsTab({ projectId }) {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const fileRef = useRef(null);
   const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
+  const bulk = useBulkSelect(docs);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,9 +82,34 @@ function DocumentsTab({ projectId }) {
     try {
       await api.delete(`/api/projects/${projectId}/knowledge/${docId}`);
       setDocs((d) => d.filter((x) => x.id !== docId));
+      bulk.clearAll();
     } catch (err) {
       setError(err.message);
     }
+  };
+
+  const handleBulkDelete = async () => {
+    const n = bulk.selected.size;
+    if (!await requestConfirm(
+      `Delete ${n} document${n === 1 ? '' : 's'}? This cannot be undone.`,
+      'Delete', 'danger',
+    )) return;
+    setBulkBusy(true);
+    const ids = [...bulk.selected];
+    const failed = [];
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await api.delete(`/api/projects/${projectId}/knowledge/${id}`);
+      } catch {
+        failed.push(id);
+      }
+    }));
+    setDocs((d) => d.filter((x) => !ids.includes(x.id) || failed.includes(x.id)));
+    bulk.clearAll();
+    if (failed.length > 0) {
+      toast(`${failed.length} document${failed.length === 1 ? '' : 's'} could not be deleted.`, 'error');
+    }
+    setBulkBusy(false);
   };
 
   if (loading) return <p className="muted">Loading…</p>;
@@ -86,6 +117,7 @@ function DocumentsTab({ projectId }) {
   return (
     <div className="stack">
       <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       {error && <p className="error-note" role="alert">{error}</p>}
 
       <div className="actions-row">
@@ -109,40 +141,66 @@ function DocumentsTab({ projectId }) {
           <p>No documents yet. Upload a PDF, Word, Excel, PowerPoint or text file.</p>
         </div>
       ) : (
-        <table className="data-table" aria-label="Knowledge documents">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Size</th>
-              <th>Status</th>
-              <th>Uploaded</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {docs.map((doc) => (
-              <tr key={doc.id}>
-                <td>{doc.name}</td>
-                <td><span className="muted">{doc.mime_type || '—'}</span></td>
-                <td>{formatBytes(doc.size_bytes)}</td>
-                <td><StatusBadge status={doc.status} /></td>
-                <td className="muted">{formatRelative(doc.created_at)}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="btn-icon"
-                    onClick={() => deleteDoc(doc.id)}
-                    aria-label={`Delete ${doc.name}`}
-                    title="Delete"
-                  >
-                    <Icon name="trash" size={14} />
-                  </button>
-                </td>
+        <div style={{ position: 'relative' }}>
+          <table className="data-table" aria-label="Knowledge documents">
+            <thead>
+              <tr>
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all documents"
+                    checked={bulk.allSelected}
+                    ref={(el) => { if (el) el.indeterminate = bulk.someSelected; }}
+                    onChange={bulk.toggleAll}
+                  />
+                </th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Status</th>
+                <th>Uploaded</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {docs.map((doc) => (
+                <tr key={doc.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${doc.name}`}
+                      checked={bulk.selected.has(doc.id)}
+                      onChange={() => bulk.toggle(doc.id)}
+                    />
+                  </td>
+                  <td>{doc.name}</td>
+                  <td><span className="muted">{doc.mime_type || '—'}</span></td>
+                  <td>{formatBytes(doc.size_bytes)}</td>
+                  <td><StatusBadge status={doc.status} /></td>
+                  <td className="muted">{formatRelative(doc.created_at)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => deleteDoc(doc.id)}
+                      aria-label={`Delete ${doc.name}`}
+                      title="Delete"
+                    >
+                      <Icon name="trash" size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <BulkActionBar
+            selected={bulk.selected}
+            onDelete={handleBulkDelete}
+            onClear={bulk.clearAll}
+            busy={bulkBusy}
+            noun="document"
+          />
+        </div>
       )}
     </div>
   );

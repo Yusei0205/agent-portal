@@ -92,15 +92,48 @@ async function loadConn(projectId: string): Promise<Conn | null> {
   return raw ? parseJson<Conn | null>(raw, null) : null;
 }
 
-const saveConn = (projectId: string, c: Conn) =>
-  setSecret(projectSecretKey(projectId), JSON.stringify(c));
+// ── Project-list in-memory cache ──────────────────────────────────────────────
+
+const PROJECT_LIST_TTL_MS = 5 * 60 * 1000;
+const PROJECT_LIST_CAP = 2_000;
+
+interface ProjectListEntry {
+  key: string;
+  name: string;
+  avatarUrl: string;
+  type: string;
+}
+
+interface ProjectListCacheEntry {
+  projects: ProjectListEntry[];
+  total: number;
+  truncated: boolean;
+  cachedAt: number;
+}
+
+/** Cache keyed by portalProjectId → (jiraQuery → entry). */
+const projectListCache = new Map<string, Map<string, ProjectListCacheEntry>>();
+
+function invalidateProjectListCache(projectId: string): void {
+  projectListCache.delete(projectId);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const saveConn = (projectId: string, c: Conn): Promise<void> => {
+  invalidateProjectListCache(projectId);
+  return setSecret(projectSecretKey(projectId), JSON.stringify(c));
+};
 
 /** Drop the Jira connection for a project (tokens only; app config is kept). */
-export const dropJiraConnection = (projectId: string): void =>
+export const dropJiraConnection = (projectId: string): void => {
+  invalidateProjectListCache(projectId);
   deleteSecret(projectSecretKey(projectId));
+};
 
 /** Drop everything Jira-related for a project (connection + app config). */
 export function dropJira(projectId: string): void {
+  invalidateProjectListCache(projectId);
   deleteSecret(projectSecretKey(projectId));
   deleteSecret(appSecretKey(projectId));
 }
@@ -871,24 +904,55 @@ export function registerJiraRoutes(): void {
     if (!p) return;
     const projectId = String(p.id);
 
-    const startAt = Number(req.query.get('startAt') ?? 0);
-    const qs = new URLSearchParams({ startAt: String(startAt), maxResults: '50', orderBy: 'name' });
-    const data = await jira(projectId, `/project/search?${qs}`);
-    const items = ((data as any).values ?? []) as any[];
+    const q = (req.query.get('q') ?? '').trim();
+    const refresh = req.query.get('refresh') === '1';
 
-    sendJson(res, 200, {
-      projects: items.map((proj) => ({
-        key: proj.key as string,
-        name: proj.name as string,
-        avatarUrl: (proj.avatarUrls?.['48x48'] ?? '') as string,
-        type: (proj.projectTypeKey ?? '') as string,
-      })),
-      total: (data as any).total ?? items.length,
-      nextStartAt:
-        startAt + items.length < ((data as any).total ?? 0)
-          ? startAt + items.length
-          : null,
-    });
+    if (!refresh) {
+      const cached = projectListCache.get(projectId)?.get(q);
+      if (cached && Date.now() - cached.cachedAt < PROJECT_LIST_TTL_MS) {
+        sendJson(res, 200, { projects: cached.projects, total: cached.total, truncated: cached.truncated });
+        return;
+      }
+    }
+
+    const allProjects: ProjectListEntry[] = [];
+    let startAt = 0;
+    let truncated = false;
+    let jiraTotal = 0;
+
+    for (;;) {
+      const qs = new URLSearchParams({ startAt: String(startAt), maxResults: '50', orderBy: 'name' });
+      if (q) qs.set('query', q);
+      const data = await jira(projectId, `/project/search?${qs}`);
+      const items = ((data as any).values ?? []) as any[];
+      jiraTotal = (data as any).total ?? (startAt + items.length);
+
+      for (const proj of items) {
+        allProjects.push({
+          key: proj.key as string,
+          name: proj.name as string,
+          avatarUrl: (proj.avatarUrls?.['48x48'] ?? '') as string,
+          type: (proj.projectTypeKey ?? '') as string,
+        });
+      }
+
+      startAt += items.length;
+      const isLast: boolean = (data as any).isLast ?? (startAt >= jiraTotal);
+      if (isLast || items.length === 0) break;
+      if (allProjects.length >= PROJECT_LIST_CAP) {
+        allProjects.splice(PROJECT_LIST_CAP);
+        truncated = true;
+        break;
+      }
+    }
+
+    allProjects.sort((a, b) => a.name.localeCompare(b.name));
+
+    const cacheEntry: ProjectListCacheEntry = { projects: allProjects, total: jiraTotal, truncated, cachedAt: Date.now() };
+    if (!projectListCache.has(projectId)) projectListCache.set(projectId, new Map());
+    projectListCache.get(projectId)!.set(q, cacheEntry);
+
+    sendJson(res, 200, { projects: allProjects, total: jiraTotal, truncated });
   });
 
   // ---- PUT /api/projects/:pid/jira — update project-key mapping ----

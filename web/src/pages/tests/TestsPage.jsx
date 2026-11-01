@@ -2,10 +2,11 @@
  * Tests module (F12) — AI-assisted end-to-end and API testing.
  *
  * Routing via route.rest:
- *   []                       → test project list
- *   [tpid]                   → test project detail (tab: scripts)
- *   [tpid, tab]              → test project detail with selected tab
- *   [tpid, 'scripts', sid]   → script editor
+ *   []                          → test project list
+ *   [tpid]                      → test project detail (tab: scripts)
+ *   [tpid, tab]                 → test project detail with selected tab
+ *   [tpid, 'scripts', sid]      → script editor
+ *   [tpid, 'cases', csid]       → case set viewer
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -14,6 +15,10 @@ import { navigate, href } from '../../lib/router.js';
 import { Icon } from '../../components/Icon.jsx';
 import { AttachmentPicker } from '../../components/AttachmentPicker.jsx';
 import { formatRelative, formatDate } from '../../lib/util.js';
+import { GenerationTracker } from './GenerationTracker.jsx';
+import { CaseSetList } from './CaseSetList.jsx';
+import { CaseSetViewer } from './CaseSetViewer.jsx';
+import { GenerateCasesDialog } from './GenerateCasesDialog.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
@@ -573,6 +578,18 @@ function GenerateDialog({ testProjectId, projectId, groupId, onClose, onGenerate
             Describe a test scenario. Attach requirement docs, screenshots or architecture
             diagrams and the AI will use them to generate steps.
             Generation runs in the background — you can continue working while it completes.
+          </p>
+          <p className="muted" style={{ fontSize: '0.8rem', marginTop: -2 }}>
+            This generates <strong>automation steps</strong> (Playwright/API actions).{' '}
+            <button
+              type="button"
+              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent, #6366f1)', cursor: 'pointer', fontSize: 'inherit', textDecoration: 'underline' }}
+              onClick={onClose}
+              aria-label="Switch to test cases dialog"
+            >
+              Need a test case sheet?
+            </button>
+            {' '}Go to the <strong>Test cases</strong> tab instead.
           </p>
           <div className="field">
             <label htmlFor="gen-desc">Test description <span aria-hidden="true">*</span></label>
@@ -1152,7 +1169,7 @@ function GenerationsIndicator({ jobs, onDismiss }) {
 
 // ── Scripts tab ───────────────────────────────────────────────────────────────
 
-function ScriptsTab({ testProject, projectId, onOpenScript }) {
+function ScriptsTab({ testProject, projectId, onOpenScript, onOpenCasesDialog }) {
   const [groups, setGroups]       = useState([]);
   const [scripts, setScripts]     = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -1220,21 +1237,35 @@ function ScriptsTab({ testProject, projectId, onOpenScript }) {
             toast(msg, 'ok');
             setGenJobs((prev) => prev.filter((j) => j.id !== job.id));
           } else if (gen.status === 'failed') {
-            toast(`Generation failed: ${gen.error || 'Unknown error'}`, 'error', 0);
+            const ws = Array.isArray(gen.warnings) ? gen.warnings : [];
             setGenJobs((prev) => prev.map((j) =>
               j.id === job.id
-                ? { ...j, status: 'failed', error: gen.error || 'Unknown error' }
+                ? { ...j, status: 'failed', error: gen.error || 'Unknown error', warnings: ws }
                 : j,
             ));
           } else {
             setGenJobs((prev) => prev.map((j) =>
-              j.id === job.id ? { ...j, status: gen.status } : j,
+              j.id === job.id
+                ? { ...j, status: gen.status, progress: gen.progress, startedAt: gen.startedAt }
+                : j,
             ));
           }
         } catch { /* ignore transient poll errors */ }
       }
-    }, 2000);
+    }, 2500);
   }, [projectId, testProject.id, reload, toast, setGenJobs]);
+
+  const cancelGenJob = useCallback(async (id) => {
+    try {
+      await api.post(
+        `/api/projects/${projectId}/tests/${testProject.id}/generations/${id}/cancel`,
+        {},
+      );
+      setGenJobs((prev) => prev.map((j) => j.id === id ? { ...j, status: 'cancelled' } : j));
+    } catch (e) {
+      toast(`Cancel failed: ${e.message}`, 'error');
+    }
+  }, [projectId, testProject.id, toast, setGenJobs]);
 
   const addGenJob = useCallback((job) => {
     setGenJobs((prev) => [
@@ -1247,6 +1278,24 @@ function ScriptsTab({ testProject, projectId, onOpenScript }) {
   const dismissGenJob = useCallback((id) => {
     setGenJobs((prev) => prev.filter((j) => j.id !== id));
   }, [setGenJobs]);
+
+  const handleRetryGen = useCallback(async (job) => {
+    try {
+      const data = await api.post(
+        `/api/projects/${projectId}/tests/${testProject.id}/generations/${job.id}/retry`,
+        {},
+      );
+      const newId = data.generationId;
+      setGenJobs((prev) => [
+        ...prev.filter((j) => j.id !== job.id),
+        { id: newId, kind: job.kind, description: job.description, status: 'pending' },
+      ]);
+      startGenPoll();
+    } catch (e) {
+      toast(`Retry failed: ${e.message}`, 'error');
+      throw e; // re-throw so JobRow can reset its retrying state
+    }
+  }, [projectId, testProject.id, setGenJobs, startGenPoll, toast]);
 
   // Load any already-running generations on mount (survives reload / navigation).
   useEffect(() => {
@@ -1383,7 +1432,15 @@ function ScriptsTab({ testProject, projectId, onOpenScript }) {
         </button>
       </div>
 
-      <GenerationsIndicator jobs={genJobs} onDismiss={dismissGenJob} />
+      <GenerationTracker
+        jobs={genJobs}
+        onDismiss={dismissGenJob}
+        onCancel={cancelGenJob}
+        onRetry={handleRetryGen}
+        onOpenCasesDialog={onOpenCasesDialog}
+        projectId={projectId}
+        tpId={testProject.id}
+      />
 
       {addingGroup && (
         <form onSubmit={createGroup} style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -2162,6 +2219,7 @@ function SettingsTab({ testProject, projectId, onUpdated }) {
 
 const TP_TABS = [
   { id: 'scripts',  label: 'Scripts' },
+  { id: 'cases',    label: 'Test cases' },
   { id: 'runs',     label: 'Runs' },
   { id: 'vault',    label: 'Vault' },
   { id: 'settings', label: 'Settings' },
@@ -2172,12 +2230,14 @@ function TestProjectDetail({ testProjectId, activeTab, projectId, route, onBack 
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
   const [tab, setTab]                 = useState(activeTab || 'scripts');
-  // Script/run IDs come from route props (URL-driven) to avoid stale state
-  const openScriptId = route?.scriptId ?? null;
-  const openRunId    = route?.runId    ?? null;
+  // Script/run/case-set IDs come from route props (URL-driven) to avoid stale state
+  const openScriptId  = route?.scriptId  ?? null;
+  const openRunId     = route?.runId     ?? null;
+  const openCaseSetId = route?.caseSetId ?? null;
 
-  const openScript = (sid) => navigate(href(projectId, 'tests', testProjectId, 'scripts', sid));
-  const openRun    = (rid) => navigate(href(projectId, 'tests', testProjectId, 'runs', rid));
+  const openScript  = (sid)  => navigate(href(projectId, 'tests', testProjectId, 'scripts', sid));
+  const openRun     = (rid)  => navigate(href(projectId, 'tests', testProjectId, 'runs', rid));
+  const openCaseSet = (csid) => navigate(href(projectId, 'tests', testProjectId, 'cases', csid));
 
   const load = useCallback(async () => {
     setError(null);
@@ -2223,6 +2283,17 @@ function TestProjectDetail({ testProjectId, activeTab, projectId, route, onBack 
     );
   }
 
+  if (openCaseSetId) {
+    return (
+      <CaseSetViewer
+        caseSetId={openCaseSetId}
+        testProject={testProject}
+        projectId={projectId}
+        onBack={() => navigate(href(projectId, 'tests', testProjectId, 'cases'))}
+      />
+    );
+  }
+
   return (
     <div className="page">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
@@ -2256,6 +2327,14 @@ function TestProjectDetail({ testProjectId, activeTab, projectId, route, onBack 
             testProject={testProject}
             projectId={projectId}
             onOpenScript={openScript}
+            onOpenCasesDialog={() => setTab('cases')}
+          />
+        )}
+        {tab === 'cases' && (
+          <CaseSetList
+            testProject={testProject}
+            projectId={projectId}
+            onOpenCaseSet={openCaseSet}
           />
         )}
         {tab === 'runs' && (
@@ -2542,9 +2621,10 @@ export function TestsPage({ projectId, route }) {
     return <TestProjectList projectId={projectId} onSelect={handleSelect} />;
   }
 
-  // Derive scriptId/runId from URL so state is URL-driven
-  const scriptId = activeTab === 'scripts' && subId ? subId : null;
-  const runId    = activeTab === 'runs'    && subId ? subId : null;
+  // Derive scriptId/runId/caseSetId from URL so state is URL-driven
+  const scriptId  = activeTab === 'scripts' && subId ? subId : null;
+  const runId     = activeTab === 'runs'    && subId ? subId : null;
+  const caseSetId = activeTab === 'cases'   && subId ? subId : null;
 
   // Use full route path as key so component remounts when navigation changes (avoids stale state)
   const routeKey = rest.join('/');
@@ -2553,9 +2633,9 @@ export function TestsPage({ projectId, route }) {
     <TestProjectDetail
       key={routeKey}
       testProjectId={testProjectId}
-      activeTab={scriptId || runId ? activeTab : (activeTab || 'scripts')}
+      activeTab={scriptId || runId || caseSetId ? activeTab : (activeTab || 'scripts')}
       projectId={projectId}
-      route={{ scriptId, runId }}
+      route={{ scriptId, runId, caseSetId }}
       onBack={handleBack}
     />
   );

@@ -41,6 +41,18 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
 
       {/* Right panel — Detail / empty state */}
       <div className="sessions-detail-panel">
+        {/* Mobile back button — CSS hides this on desktop (≥900 px) */}
+        {selectedId && (
+          <button
+            type="button"
+            className="sessions-back-btn"
+            onClick={() => navigate(href(projectId, 'sessions'))}
+            aria-label="Back to sessions list"
+          >
+            <Icon name="chevron-left" size={16} />
+            Sessions
+          </button>
+        )}
         {selectedId ? (
           <SessionWorkspace id={selectedId} project={proj} />
         ) : (

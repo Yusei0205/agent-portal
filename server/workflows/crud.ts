@@ -22,6 +22,7 @@ import type { Row } from '../db.ts';
 import { generateId, now, str, int, badRequest } from '../util.ts';
 import { subscribe, addLiveSubscriber } from '../events.ts';
 import { emit } from '../events.ts';
+import { shutdownSessionBrowser } from '../agent/browser-manager.ts';
 import { cancelRun } from './controls.ts';
 import { startRun } from './driver.ts';
 import { resolveApproval } from '../agent/runner.ts';
@@ -62,6 +63,7 @@ function workflowView(w: Row) {
     last_turn_at: w.last_turn_at ?? null,
     credential_id: w.credential_id ?? null,
     model: (w.model as string | undefined) ?? '',
+    engineSessionId: (w.engine_session_id as string | undefined) ?? null,
     created_by: w.created_by ?? null,
     created_at: w.created_at,
     updated_at: w.updated_at,
@@ -71,11 +73,13 @@ function workflowView(w: Row) {
     jira_key: (w.jira_key as string | undefined) ?? '',
     jira_summary: (w.jira_summary as string | undefined) ?? '',
     jira_url: (w.jira_url as string | undefined) ?? '',
+    resumable: Boolean(w.resumable),
+    lastRunStatus: (w.lastRunStatus as string | undefined) ?? null,
   };
 }
 
 /**
- * Enrich a single workflow row with parent_title and child_count.
+ * Enrich a single workflow row with parent_title, child_count, resumable, and lastRunStatus.
  * Two bounded queries — safe for detail endpoints (not N+1).
  */
 function enrichWorkflowRow(w: Row): Row {
@@ -95,7 +99,22 @@ function enrichWorkflowRow(w: Row): Row {
       'SELECT COUNT(*) AS n FROM p6_workflows WHERE parent_id = ?',
       String(w.id),
     )?.n) ?? 0;
-  return { ...w, parent_title: parentTitle, child_count: childCount };
+
+  // Compute resumable: allowed when workflow status is failed/paused/stopped/cancelled
+  // OR when the latest run is failed/cancelled (workflow in any terminal state with failed/cancelled last run).
+  const wfStatus = String(w.status ?? '');
+  const latestRun = one<{ status: string }>(
+    'SELECT status FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1',
+    String(w.id),
+  );
+  const lastRunStatus = latestRun?.status ?? null;
+  const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
+  const resumableRunStatuses = new Set(['failed', 'cancelled']);
+  const resumable =
+    resumableStatuses.has(wfStatus) ||
+    (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus));
+
+  return { ...w, parent_title: parentTitle, child_count: childCount, resumable, lastRunStatus };
 }
 
 function runView(r: Row) {
@@ -223,9 +242,27 @@ export function registerWorkflowRoutes(): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
 
-    const engine = validateEngine(body.engine);
+    // Validate engine from request (null = not specified, will use workspace/project/built-in default)
+    const requestEngine: Engine | null = body.engine ? validateEngine(body.engine) : null;
+
     const trustTools = Boolean(body.trustTools ?? false);
-    const leadAgent = body.leadAgent ? str(body.leadAgent as string, 'leadAgent', { max: 200, optional: true }) : null;
+
+    // Validate leadAgent from request (null = not specified)
+    const requestLeadAgent: string | null = body.leadAgent
+      ? (str(body.leadAgent as string, 'leadAgent', { max: 200, optional: true }).trim() || null)
+      : null;
+
+    // Validate model ID from request (null = not specified, will use workspace/project default)
+    let requestModel: string | null = null;
+    if (body.model && typeof body.model === 'string' && body.model.trim()) {
+      const modelStr = body.model.trim();
+      if (!MODEL_RE.test(modelStr)) {
+        sendJson(res, 400, { error: 'model is not a valid model ID (allowed: A-Z a-z 0-9 . _ : / @ -)' });
+        return;
+      }
+      requestModel = modelStr;
+    }
+
     const workspaceId = body.workspaceId ? str(body.workspaceId as string, 'workspaceId', { max: 200, optional: true }) : null;
     const outputFiles = Boolean(body.outputFiles ?? false);
     const maxIterations = int(body.maxIterations, 'maxIterations', 10, 1, 100);
@@ -256,9 +293,14 @@ export function registerWorkflowRoutes(): void {
     const explicitRepoIds = Array.isArray(body.repoIds) ? body.repoIds.map(String) : [];
     let repoIds: string[];
 
+    // Workspace defaults (engine, agent, model) populated when the workspace is loaded
+    let wsDefaultEngine: Engine | null = null;
+    let wsDefaultAgent: string | null = null;
+    let wsDefaultModel: string | null = null;
+
     if (workspaceId) {
-      const ws = one<{ repo_ids: string | null }>(
-        'SELECT repo_ids FROM workspaces_v2 WHERE id = ? AND project_id = ?',
+      const ws = one<{ repo_ids: string | null; default_engine: string; default_agent: string; default_model: string }>(
+        'SELECT repo_ids, default_engine, default_agent, default_model FROM workspaces_v2 WHERE id = ? AND project_id = ?',
         workspaceId,
         projectId,
       );
@@ -266,6 +308,11 @@ export function registerWorkflowRoutes(): void {
         sendJson(res, 400, { error: 'Workspace not found' });
         return;
       }
+      // Capture workspace defaults (empty string = no default)
+      wsDefaultEngine = ws.default_engine ? validateEngine(ws.default_engine) : null;
+      wsDefaultAgent = ws.default_agent?.trim() || null;
+      wsDefaultModel = ws.default_model?.trim() || null;
+
       const wsRepoIds = safeJson(ws.repo_ids, []) as string[];
       const combined = [...new Set([...wsRepoIds, ...explicitRepoIds])];
       if (combined.length > 0) {
@@ -283,16 +330,28 @@ export function registerWorkflowRoutes(): void {
       repoIds = explicitRepoIds;
     }
 
-    // Validate model ID if provided
-    let model = '';
-    if (body.model && typeof body.model === 'string' && body.model.trim()) {
-      const modelStr = body.model.trim();
-      if (!MODEL_RE.test(modelStr)) {
-        sendJson(res, 400, { error: 'model is not a valid model ID (allowed: A-Z a-z 0-9 . _ : / @ -)' });
-        return;
-      }
-      model = modelStr;
-    }
+    // ── Apply fallback chain: request → workspace → project → built-in default ──
+
+    // Engine: request → workspace default → 'demo' (no project-level engine default)
+    const engine: Engine = requestEngine
+      ?? wsDefaultEngine
+      ?? 'demo';
+
+    // Workspace agent/model only apply when the workspace has no default_engine,
+    // or its default_engine matches the session's final engine.
+    const wsEngineMatches = wsDefaultEngine === null || wsDefaultEngine === engine;
+
+    // Lead agent: request → workspace default (if engine matches) → project default → null
+    const projectDefaultAgent = typeof project.default_lead_agent === 'string' && project.default_lead_agent
+      ? project.default_lead_agent
+      : null;
+    const leadAgent: string | null = requestLeadAgent ?? (wsEngineMatches ? wsDefaultAgent : null) ?? projectDefaultAgent;
+
+    // Model: request → workspace default (if engine matches) → project default → ''
+    const projectDefaultModel = typeof project.default_model === 'string' && project.default_model
+      ? project.default_model
+      : null;
+    const model: string = requestModel ?? (wsEngineMatches ? wsDefaultModel : null) ?? projectDefaultModel ?? '';
 
     const id = generateId();
     const ts = now();
@@ -361,6 +420,9 @@ export function registerWorkflowRoutes(): void {
 
     // Stop and delete child sessions recursively (F7)
     stopAndDeleteChildren(String(w.id));
+
+    // Close the session's live browser, if one is running
+    shutdownSessionBrowser(String(w.id)).catch(() => {/* non-fatal */});
 
     dbRun('DELETE FROM p6_workflows WHERE id = ?', String(w.id));
     emit(String(project.id), { type: 'workflow.deleted', workflowId: String(w.id) });
@@ -595,6 +657,77 @@ export function registerWorkflowRoutes(): void {
     sendJson(res, 200, { ok: true });
   });
 
+  // POST /api/projects/:id/workflows/:wid/resume — resume a failed/paused/stopped/cancelled workflow
+  router.post('/api/projects/:id/workflows/:wid/resume', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
+    const project = requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const w = requireWorkflow(res, req.params.id, req.params.wid);
+    if (!w) return;
+
+    // Idempotent: if a run is already active, return 200 with alreadyRunning: true
+    const existingRun = one<Row>(
+      "SELECT * FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
+      String(w.id),
+    );
+    if (existingRun) {
+      sendJson(res, 200, { runId: String(existingRun.id), run: runView(existingRun), alreadyRunning: true });
+      return;
+    }
+
+    // Check that the workflow is in a resumable state
+    const wfStatus = String(w.status ?? '');
+    const latestRun = one<{ status: string }>(
+      'SELECT status FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1',
+      String(w.id),
+    );
+    const lastRunStatus = latestRun?.status ?? null;
+    const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
+    const resumableRunStatuses = new Set(['failed', 'cancelled']);
+    const isResumable =
+      resumableStatuses.has(wfStatus) ||
+      (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus));
+
+    if (!isResumable) {
+      sendJson(res, 409, { error: 'Workflow is not in a resumable state' });
+      return;
+    }
+
+    // Queue a visible human message so the transcript shows the resume context
+    const resumeMessage = 'Continue where you left off. The previous run was interrupted.';
+    insert('p6_workflow_events', {
+      workflow_id: String(w.id),
+      kind: 'human',
+      body: resumeMessage,
+      data: JSON.stringify({ by: req.user!.id, resume: true }),
+      created_at: now(),
+    });
+
+    // Track last user interaction
+    dbRun(
+      'UPDATE p6_workflows SET last_turn_at = ?, stop_reason = \'\', updated_at = ? WHERE id = ?',
+      now(), now(), String(w.id),
+    );
+
+    if (w.project_id) {
+      emit(String(w.project_id), {
+        type: 'workflow.message',
+        workflowId: String(w.id),
+        body: resumeMessage,
+        by: req.user!.id,
+      });
+    }
+
+    try {
+      const runId = await startRun(String(w.id));
+      const run = one<Row>('SELECT * FROM p6_runs WHERE id = ?', runId)!;
+      sendJson(res, 201, { runId, run: runView(run) });
+    } catch (e: unknown) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      sendJson(res, 429, { error: msg });
+    }
+  });
+
   // POST /api/projects/:id/workflows/:wid/message
   router.post('/api/projects/:id/workflows/:wid/message', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
@@ -640,10 +773,16 @@ export function registerWorkflowRoutes(): void {
     }
 
     // For kiro/claude-code engines, /clear is handled server-side:
-    // mark all pending unconsumed messages consumed so the next run starts fresh.
+    // mark all pending unconsumed messages consumed so the next run starts fresh,
+    // and clear the engine session ID so the next run begins a new conversation.
     if (isCommand && message.toLowerCase().trim() === '/clear' && String(w.engine) !== 'demo') {
       dbRun(
         'UPDATE p6_workflow_events SET consumed = 1 WHERE workflow_id = ? AND consumed = 0 AND kind IN (\'human\', \'command\')',
+        String(w.id),
+      );
+      dbRun(
+        'UPDATE p6_workflows SET engine_session_id = NULL, engine_session_engine = NULL, updated_at = ? WHERE id = ?',
+        now(),
         String(w.id),
       );
     }

@@ -196,3 +196,40 @@ export function addLiveSubscriber(
   res.on('close', unsubscribe);
   return unsubscribe;
 }
+
+// ── Per-run event listeners ──────────────────────────────────────────────────
+// Used by GET /api/runs/:id/events so a client watching one run receives that
+// run's new events in the same shape as the replayed history.
+
+export interface RunEventRow {
+  id: number;
+  run_id: string;
+  type: string;
+  payload: unknown;
+  created_at: string;
+}
+
+type RunListener = (ev: RunEventRow) => void;
+const runListeners = new Map<string, Set<RunListener>>();
+
+/** Listen for new events on one run. Returns an unsubscribe function. */
+export function subscribeRun(runId: string, fn: RunListener): () => void {
+  let set = runListeners.get(runId);
+  if (!set) { set = new Set(); runListeners.set(runId, set); }
+  set.add(fn);
+  return () => {
+    const s = runListeners.get(runId);
+    if (!s) return;
+    s.delete(fn);
+    if (s.size === 0) runListeners.delete(runId);
+  };
+}
+
+/** Deliver a newly stored run event to listeners of that run. */
+export function publishRunEvent(ev: RunEventRow): void {
+  const set = runListeners.get(ev.run_id);
+  if (!set) return;
+  for (const fn of [...set]) {
+    try { fn(ev); } catch { /* a broken listener must not affect the run */ }
+  }
+}

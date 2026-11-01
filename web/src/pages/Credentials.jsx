@@ -494,6 +494,7 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
       onRefresh();
     } catch (e) {
       toast(e.message, 'error');
+    } finally {
       setSettingDefault(false);
     }
   };
@@ -514,6 +515,7 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
       } else {
         setRefreshError(err.message);
       }
+    } finally {
       setRefreshBusy(false);
     }
   };

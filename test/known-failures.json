@@ -10,43 +10,11 @@
       "addedAt": "2026-10-31"
     },
     {
-      "module": "repos",
-      "part": "backend",
-      "file": "test/repos.test.ts",
-      "testName": "__process_timeout__",
-      "reason": "repos.test.ts: createTestServer() background git clone subprocess keeps the event loop alive after tests complete; process killed after 3 minutes",
-      "addedAt": "2026-10-31"
-    },
-    {
-      "module": "repos",
-      "part": "backend",
-      "file": "test/repos.test.ts",
-      "testName": "Repositories API > POST .../sync changes status to \"cloning\"",
-      "reason": "Background performSync from POST /repos sets syncInFlight before the sync-status test fires, returning 409 instead of 202",
-      "addedAt": "2026-10-31"
-    },
-    {
-      "module": "repos",
-      "part": "backend",
-      "file": "test/repos-progress.test.ts",
-      "testName": "__process_timeout__",
-      "reason": "repos-progress.test.ts: createTestServer() in before() hook hangs; background git clone subprocess never terminates",
-      "addedAt": "2026-10-31"
-    },
-    {
       "module": "attachments",
       "part": "backend",
       "file": "test/ai-attachments.test.ts",
       "testName": "__process_timeout__",
       "reason": "test/ai-attachments.test.ts: generate-based tests spin up a server that keeps the event loop alive past the runner timeout",
-      "addedAt": "2026-10-31"
-    },
-    {
-      "module": "repos",
-      "part": "ui",
-      "sectionId": "repos",
-      "testName": "Repo with in-progress clone renders [role=progressbar]",
-      "reason": "Clone progress indicator not rendering in repos list during an active clone",
       "addedAt": "2026-10-31"
     },
     {
@@ -64,6 +32,22 @@
       "testName": "Async generate: dialog closes, indicator appears, done clears it and shows toast",
       "reason": "Async generate flow: dialog-close and indicator-appear state transitions do not fire in the expected order",
       "addedAt": "2026-10-31"
+    },
+    {
+      "module": "dashboard",
+      "part": "ui",
+      "sectionId": "dashboard",
+      "testName": "Agent Network single node sits at SVG centre, not at top-left corner",
+      "reason": "Agent Network panel was redesigned from SVG radial graph to HTML agent cards; .db-network-svg no longer exists",
+      "addedAt": "2026-11-01"
+    },
+    {
+      "module": "dashboard",
+      "part": "ui",
+      "sectionId": "dashboard",
+      "testName": "Zoom toolbar visible; zoom in and reset view work without errors",
+      "reason": "Zoom/pan toolbar was removed as part of the Agent Network redesign to card-based layout",
+      "addedAt": "2026-11-01"
     }
   ]
 }

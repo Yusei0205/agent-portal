@@ -32,7 +32,8 @@
     "api-tokens": {
       "description": "API token management and token scope enforcement",
       "sources": [
-        "server/api-tokens.ts"
+        "server/api-tokens.ts",
+        "web/src/pages/ApiAccess.jsx"
       ],
       "tests": [
         "test/api-tokens.test.ts",
@@ -88,11 +89,14 @@
       "description": "Workspace management per project",
       "sources": [
         "server/workspaces.ts",
+        "server/workflows/crud.ts",
         "web/src/pages/Workspaces.jsx",
         "web/src/components/WorkspaceHeader.jsx",
         "web/src/styles/workspace.css"
       ],
-      "tests": [],
+      "tests": [
+        "test/workspaces.test.ts"
+      ],
       "smokeIds": ["workspaces"]
     },
     "sessions": {
@@ -112,13 +116,17 @@
         "web/src/pages/sessions/NewSessionDialog.jsx",
         "web/src/lib/useRunStream.js",
         "web/src/lib/mergeEvents.js",
+        "web/src/lib/outputFileMatch.js",
+        "web/src/lib/outputFileUtils.js",
         "web/src/styles/sessions.css"
       ],
       "tests": [
         "test/session-lifecycle.test.ts",
         "test/session-context.test.ts",
         "test/session-files.test.ts",
-        "test/sanitize-merge.test.ts"
+        "test/sanitize-merge.test.ts",
+        "test/output-files-match.test.ts",
+        "test/output-file-utils.test.ts"
       ],
       "smokeIds": ["sessions"]
     },
@@ -129,34 +137,48 @@
         "server/workflows/controls.ts",
         "server/workflows/driver.ts",
         "server/workflows/working-copies.ts",
-        "server/tool-packs.ts"
+        "server/tool-packs.ts",
+        "server/review-lifecycle.ts"
       ],
       "tests": [
         "test/workflows.test.ts",
-        "test/session-sse.test.ts"
+        "test/session-sse.test.ts",
+        "test/run-events-sse.test.ts",
+        "test/working-copies.test.ts",
+        "test/resume-retry.test.ts"
       ],
       "smokeIds": ["sessions"],
       "note": "No dedicated smoke section. Session creation (section 31) exercises workflow engine; use sessions smoke ID."
     },
     "ide": {
-      "description": "In-browser IDE workspace — editor, explorer, terminal, source control",
+      "description": "In-browser IDE workspace — editor, explorer, terminal, source control, live browser",
       "sources": [
         "server/terminal.ts",
+        "server/browser-live.ts",
         "web/src/pages/sessions/IdeAgents.jsx",
         "web/src/pages/sessions/IdeBrowser.jsx",
         "web/src/pages/sessions/IdeEditor.jsx",
         "web/src/pages/sessions/IdeExplorer.jsx",
         "web/src/pages/sessions/IdeHeader.jsx",
+        "web/src/pages/sessions/IdeOutputs.jsx",
         "web/src/pages/sessions/IdeSessionPanel.jsx",
         "web/src/pages/sessions/IdeSourceControl.jsx",
         "web/src/pages/sessions/IdeStatusBar.jsx",
         "web/src/pages/sessions/IdeTerminal.jsx",
         "web/src/pages/sessions/IdeWorkspace.jsx",
+        "web/src/pages/sessions/OutputFilePreview.jsx",
+        "web/src/pages/sessions/RunOutputsCard.jsx",
         "web/src/pages/sessions/codemirror-editor.jsx",
         "web/src/pages/sessions/xterm-terminal.jsx",
+        "web/src/lib/outputFileUtils.js",
+        "web/src/lib/terminal-pipe.js",
         "web/src/styles/ide.css"
       ],
-      "tests": [],
+      "tests": [
+        "test/browser-live.test.ts",
+        "test/terminal.test.ts",
+        "test/terminal-pipe.test.ts"
+      ],
       "smokeIds": ["ide"]
     },
     "dashboard": {
@@ -209,7 +231,8 @@
         "web/src/components/MermaidViewer.jsx"
       ],
       "tests": [
-        "test/diagrams.test.ts"
+        "test/diagrams.test.ts",
+        "test/resume-retry.test.ts"
       ],
       "smokeIds": ["create"],
       "note": "Section 5 (Create) covers the Diagrams tab. No standalone diagrams smoke section."
@@ -230,7 +253,8 @@
         "web/src/pages/GeneratedDocs.jsx"
       ],
       "tests": [
-        "test/generated-docs.test.ts"
+        "test/generated-docs.test.ts",
+        "test/resume-retry.test.ts"
       ],
       "smokeIds": ["create"],
       "note": "Section 5 (Create) covers the Documents tab. No standalone generated-docs smoke section."
@@ -245,7 +269,8 @@
         "web/src/pages/Presentations.jsx"
       ],
       "tests": [
-        "test/presentations.test.ts"
+        "test/presentations.test.ts",
+        "test/resume-retry.test.ts"
       ],
       "smokeIds": ["create"],
       "note": "Section 5 (Create) covers the Decks tab. No standalone presentations smoke section."
@@ -256,10 +281,13 @@
         "server/vault.ts",
         "server/vault-generated.ts",
         "server/secrets.ts",
-        "web/src/pages/Vault.jsx"
+        "web/src/pages/Vault.jsx",
+        "web/src/lib/vaultFolders.js",
+        "web/src/styles/components.css"
       ],
       "tests": [
-        "test/vault.test.ts"
+        "test/vault.test.ts",
+        "test/vault-folders.test.ts"
       ],
       "smokeIds": ["vault"]
     },
@@ -462,8 +490,17 @@
         "server/testing/totp.ts",
         "server/testing/types.ts",
         "server/testing/vault.ts",
+        "server/testing/case-sets.ts",
+        "server/testing/curl.ts",
+        "server/testing/trace.ts",
         "server/mcp-routes.ts",
-        "web/src/pages/tests/TestsPage.jsx"
+        "web/src/pages/tests/TestsPage.jsx",
+        "web/src/pages/tests/GenerationTracker.jsx",
+        "web/src/pages/tests/CaseSetList.jsx",
+        "web/src/pages/tests/CaseSetViewer.jsx",
+        "web/src/pages/tests/GenerateCasesDialog.jsx",
+        "web/src/pages/tests/tests-cases.css",
+        "web/src/lib/curlBuilder.js"
       ],
       "tests": [
         "test/testing.test.ts",
@@ -471,7 +508,12 @@
         "test/testing-generate.test.ts",
         "test/testing-bedrock.test.ts",
         "test/testing-kiro-provider.test.ts",
-        "test/mcp-tests-scope.test.ts"
+        "test/mcp-tests-scope.test.ts",
+        "test/testing-case-sets.test.ts",
+        "test/curl-builder.test.ts",
+        "test/testing-trace.test.ts",
+        "test/testing-generation-progress.test.ts",
+        "test/resume-retry.test.ts"
       ],
       "smokeIds": ["testing-module"]
     },
@@ -500,13 +542,16 @@
       "description": "AI engine and model configuration, listing, and passthrough",
       "sources": [
         "server/models.ts",
-        "server/kiro-list-models.ts"
+        "server/kiro-list-models.ts",
+        "server/user-config.ts"
       ],
       "tests": [
         "test/engines.test.ts",
         "test/engine-models.test.ts",
         "test/engine-model-passthrough.test.ts",
-        "test/model-listing.test.ts"
+        "test/model-listing.test.ts",
+        "test/kiro-acp.test.ts",
+        "test/kiro-session.test.ts"
       ],
       "smokeIds": ["engines"]
     },
@@ -534,10 +579,29 @@
       "description": "Theme system — theme cycling, persistence, and custom CSS templates",
       "sources": [
         "server/themes.ts",
+        "server/testing/model-provider.ts",
         "web/src/lib/theme.js",
         "web/src/lib/shortcuts.js",
         "web/src/styles/aethrix.css",
-        "web/theme-init.js"
+        "web/src/styles/clovi.css",
+        "web/src/styles/nebula.css",
+        "web/src/styles/aurora-glass.css",
+        "web/src/styles/cyber-hud.css",
+        "web/src/styles/twilight.css",
+        "web/src/styles/terminal.css",
+        "web/src/styles/kiro-ide.css",
+        "web/theme-init.js",
+        "shared/themes/aethrix-night.json",
+        "shared/themes/classic-teal.json",
+        "shared/themes/clovi.json",
+        "shared/themes/nebula.json",
+        "shared/themes/aurora-glass.json",
+        "shared/themes/cyber-hud.json",
+        "shared/themes/twilight.json",
+        "shared/themes/terminal.json",
+        "shared/themes/kiro-ide.json",
+        "web/src/pages/settings/Appearance.jsx",
+        "web/src/components/Rail.jsx"
       ],
       "tests": [
         "test/themes.test.ts"
@@ -585,7 +649,8 @@
       "description": "SQLite database recovery and migration tests (backend-only; server/db.ts is shared core)",
       "sources": [],
       "tests": [
-        "test/db-recovery.test.ts"
+        "test/db-recovery.test.ts",
+        "test/resume-retry.test.ts"
       ],
       "smokeIds": [],
       "note": "server/db.ts is in the shared section (affects: *). Changes to db.ts already mark this module affected."
@@ -611,12 +676,16 @@
       "smokeIds": []
     },
     "output-files": {
-      "description": "Session output file management",
+      "description": "Session output file management — collection, versioning, Vault copy, and routes",
       "sources": [
-        "server/output-files.ts"
+        "server/output-files.ts",
+        "web/src/lib/outputFileMatch.js",
+        "web/src/lib/outputFileUtils.js"
       ],
       "tests": [
-        "test/output-files.test.ts"
+        "test/output-files.test.ts",
+        "test/output-files-match.test.ts",
+        "test/output-file-utils.test.ts"
       ],
       "smokeIds": []
     },
@@ -695,14 +764,18 @@
       "sources": [
         "server/agent/runner.ts",
         "server/agent/claude-code.ts",
+        "server/agent/claude-sessions.ts",
         "server/agent/demo.ts",
         "server/agent/kiro.ts",
+        "server/agent/recap.ts",
+        "server/agent/browser-headless.ts",
+        "server/agent/browser-manager.ts",
         "server/agent/litellm.ts",
         "server/agent/pricing.ts",
         "server/agent/types.ts"
       ],
-      "affects": ["sessions", "workflows", "reviews", "branch-scans", "testing-module"],
-      "rationale": "The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction."
+      "affects": ["sessions", "workflows", "reviews", "branch-scans", "testing-module", "engines", "ide"],
+      "rationale": "The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. browser-headless.ts rewrites Playwright MCP entries; browser-manager.ts provides the per-session live browser. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction."
     },
     {
       "description": "Core web app infrastructure — routing, API client, event system, global styles",

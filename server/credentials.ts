@@ -73,7 +73,7 @@ export interface OIDCClientLike {
   createToken(input: {
     clientId: string;
     clientSecret: string;
-    deviceCode: string;
+    deviceCode?: string;
     grantType: string;
     refreshToken?: string;
   }): Promise<{ accessToken: string; expiresIn?: number; refreshToken?: string }>;
@@ -84,6 +84,40 @@ let _oidcClientFactory: ((region: string) => OIDCClientLike) | null = null;
 /** Override the OIDC client factory (call with null to restore real SDK). */
 export function setOIDCClientFactory(fn: ((region: string) => OIDCClientLike) | null): void {
   _oidcClientFactory = fn;
+}
+
+/**
+ * Injectable timeout (ms) for OIDC calls — used by tests to avoid waiting the
+ * full production timeout.  null means no injected timeout (SDK handles it).
+ */
+let _oidcCallTimeoutMs: number | null = null;
+
+/** Override the OIDC call timeout (pass null to remove override). Tests only. */
+export function setOIDCCallTimeoutMs(ms: number | null): void {
+  _oidcCallTimeoutMs = ms;
+}
+
+/** Thrown when an OIDC call exceeds the injected test timeout. */
+class OIDCTimeoutError extends Error {
+  constructor() {
+    super('OIDC_TIMEOUT');
+    this.name = 'OIDCTimeoutError';
+  }
+}
+
+/**
+ * Races the given promise against an optional injected timeout.
+ * When _oidcCallTimeoutMs is null the promise is returned as-is; the SDK's
+ * own requestTimeout handles the production bound.
+ */
+function withOIDCTimeout<T>(promise: Promise<T>): Promise<T> {
+  const ms = _oidcCallTimeoutMs;
+  if (ms === null) return promise;
+  let timer: ReturnType<typeof setTimeout>;
+  const timeoutP = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new OIDCTimeoutError()), ms);
+  });
+  return Promise.race([promise, timeoutP]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
 async function makeOIDCClient(region: string): Promise<OIDCClientLike> {
@@ -97,7 +131,15 @@ async function makeOIDCClient(region: string): Promise<OIDCClientLike> {
   };
 
   const mod = await (Function('m', 'return import(m)')('@aws-sdk/client-sso-oidc') as Promise<SSOOIDCModule>);
-  const client = new mod.SSOOIDCClient({ region });
+  const client = new mod.SSOOIDCClient({
+    region,
+    requestHandler: {
+      connectionTimeout: 3_000,
+      requestTimeout: 12_000,
+      throwOnRequestTimeout: true,
+    },
+    maxAttempts: 2,
+  });
 
   return {
     registerClient: (input) =>
@@ -383,12 +425,36 @@ export async function ensureKiroProfileFetched(credId: string): Promise<void> {
 
 // ── IDC token refresh ─────────────────────────────────────────────────────────
 
-type RefreshResult = { ok: true } | { ok: false; message: string };
+type RefreshResult = { ok: true } | { ok: false; transient?: boolean; message: string };
 
 /** Per-credential in-flight refresh promises — prevents concurrent OIDC calls for the same credential. */
 const _refreshPromises = new Map<string, Promise<RefreshResult>>();
 
 const IDC_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Classify a createToken error into one of three buckets:
+ * - 'transient': retryable (SDK timeout, network failure, AWS throttling/5xx) → 504, no needsSignIn
+ * - 'auth': AWS auth rejection → 409 + needsSignIn
+ * - 'unknown': anything else → 409 + needsSignIn (caller logs name/code only)
+ */
+function classifyOidcError(e: unknown): 'transient' | 'auth' | 'unknown' {
+  if (e instanceof OIDCTimeoutError) return 'transient';
+
+  if (matchSdkError(e, 'TimeoutError', 'RequestTimeout')) return 'transient';
+
+  const code = String((e as { code?: string })?.code ?? '');
+  if (['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)) return 'transient';
+
+  if (matchSdkError(e, 'InternalServerException', 'SlowDownException')) return 'transient';
+  const httpStatus = (e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+  if (typeof httpStatus === 'number' && httpStatus >= 500) return 'transient';
+
+  if (matchSdkError(e, 'InvalidGrantException', 'ExpiredTokenException', 'InvalidClientException',
+      'UnauthorizedClientException', 'AccessDeniedException')) return 'auth';
+
+  return 'unknown';
+}
 
 /**
  * Attempt to refresh an identity_center credential's access token using the
@@ -422,13 +488,12 @@ async function attemptTokenRefresh(cred: CredentialRow): Promise<RefreshResult> 
   const region = String(extra.region ?? 'us-east-1');
   try {
     const oidc = await makeOIDCClient(region);
-    const result = await oidc.createToken({
+    const result = await withOIDCTimeout(oidc.createToken({
       clientId,
       clientSecret,
-      deviceCode: '',
       grantType: 'refresh_token',
       refreshToken,
-    });
+    }));
 
     const tokenEnc = encrypt(result.accessToken, config.secretKey);
     const tokenExpiry = result.expiresIn
@@ -455,7 +520,16 @@ async function attemptTokenRefresh(cred: CredentialRow): Promise<RefreshResult> 
       String(cred.id),
     );
     return { ok: true };
-  } catch {
+  } catch (e) {
+    const errClass = classifyOidcError(e);
+    if (errClass === 'transient') {
+      return { ok: false, transient: true, message: "AWS sign-in service didn't respond. Try again." };
+    }
+    if (errClass === 'unknown') {
+      const errName = String((e as { name?: string })?.name ?? 'unknown');
+      const errCode = String((e as { code?: string })?.code ?? '');
+      console.error(`[credentials] OIDC createToken unexpected error: name=${errName}${errCode ? ` code=${errCode}` : ''}`);
+    }
     return { ok: false, message: "Your sign-in can't be renewed. Sign in again." };
   }
 }
@@ -494,6 +568,9 @@ export async function autoRefreshIdcIfNeeded(credId: string): Promise<void> {
 
   const result = await promise;
   if (!result.ok) {
+    if (result.transient) {
+      throw new HttpError(504, "AWS sign-in service didn't respond. Try again.");
+    }
     throw new HttpError(400, 'Kiro sign-in expired. Open Credentials and click Sign in again.');
   }
 }
@@ -1133,7 +1210,11 @@ export function registerCredentialRoutes(): void {
 
     const result = await attemptTokenRefresh(cred);
     if (!result.ok) {
-      sendJson(res, 409, { error: result.message, needsSignIn: true });
+      if (result.transient) {
+        sendJson(res, 504, { error: "AWS sign-in service didn't respond. Try again." });
+      } else {
+        sendJson(res, 409, { error: result.message, needsSignIn: true });
+      }
       return;
     }
 

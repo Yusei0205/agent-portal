@@ -20,9 +20,10 @@ import fsp from 'node:fs/promises';
 import { one, all, run as dbRun, insert } from '../db.ts';
 import type { Row } from '../db.ts';
 import { generateId, now } from '../util.ts';
-import { emit, emitGlobal } from '../events.ts';
+import { emit, emitGlobal, publishRunEvent } from '../events.ts';
 import { loadRunPermissions, evaluateCommand } from '../guardrails.ts';
-import { createWorkDir } from '../workflows/working-copies.ts';
+import { createWorkDir, checkoutRepoToWorkDir } from '../workflows/working-copies.ts';
+import { repoRefDir } from '../repos.ts';
 import { registerRun, deregisterRun } from '../workflows/controls.ts';
 import { createInboxItem } from '../inbox.ts';
 import { config } from '../config.ts';
@@ -31,6 +32,7 @@ import { runDemo } from './demo.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { runKiro } from './kiro.ts';
 import { materialiseForRun, cleanupRunHome } from '../user-config.ts';
+import { collectOutputFiles } from '../output-files.ts';
 import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
 import { ticketMarkdown, composeRunPrompt } from '../jira-text.ts';
@@ -128,12 +130,17 @@ export function resolveApproval(
  * to a specific workflow without a separate lookup.
  */
 export function emitRunEvent(runId: string, projectId: string | null, workflowId: string | null, type: string, payload: object): void {
+  const createdAt = now();
   insert('p6_events', {
     run_id: runId,
     type,
     payload: JSON.stringify(payload),
-    created_at: now(),
+    created_at: createdAt,
   });
+  // Same row shape as the history replayed by GET /api/runs/:id/events, so the
+  // session view can show live events and de-duplicate them by id.
+  const idRow = one<{ id: number }>('SELECT last_insert_rowid() AS id');
+  publishRunEvent({ id: Number(idRow?.id ?? 0), run_id: runId, type, payload, created_at: createdAt });
   // Publish to project SSE channel so connected UIs see it live
   if (projectId) {
     emit(projectId, { type: 'run.event', runId, workflowId, eventType: type, payload });
@@ -166,7 +173,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   // Each workflow gets ONE working copy for its entire lifetime so file
   // artefacts (repos, generated files, agent configs) survive across runs.
   // The path is stored in p6_workflows.work_dir after the first run creates it.
-  let workDir: string;
+  let workDir = ''; // assigned below before try block; must be '' not undefined for finally guard
   if (workflow.work_dir) {
     workDir = String(workflow.work_dir);
     // Ensure the directory exists (defensive; it should already)
@@ -301,6 +308,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       credentialId: workflow.credential_id ? String(workflow.credential_id) : null,
       credentialOwnerId: workflow.created_by ? String(workflow.created_by) : null,
       model: workflow.model && String(workflow.model).trim() ? String(workflow.model).trim() : null,
+      engineSessionId: workflow.engine_session_id ? String(workflow.engine_session_id) : null,
     };
 
     // Set up the run's approval map
@@ -321,6 +329,28 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         // Non-fatal: log but continue; the engine may still work from the goal text
         console.warn(`[runner] Review workDir prep failed for ${runId}:`, e);
       });
+    }
+
+    // ── Populate repo working copies (idempotent, runs every start) ──────────
+    //
+    // For each ready repo in the workflow, create an independent git working copy
+    // under workDir/repos/<repo.name>/ so the agent can edit, commit, and branch
+    // without touching the shared reference clone.  Repos that are still cloning
+    // or have errors emit a visible status event; the run continues without them.
+    const availableRepoNames = await populateRepoWorkDirs(
+      agentRun.repoIds,
+      agentRun.projectId,
+      workDir,
+      (type, payload) => emitRunEvent(runId, agentRun.projectId, workflowId, type, payload),
+    );
+
+    // Prepend a repo-location hint so the agent knows where to find the code.
+    // This complements any Jira-ticket context already in agentRun.goal.
+    if (availableRepoNames.length > 0) {
+      const reposLine = availableRepoNames.length === 1
+        ? `The repository code is available at repos/${availableRepoNames[0]}/.`
+        : `Repository code is available at: ${availableRepoNames.map((n) => `repos/${n}/`).join(', ')}`;
+      agentRun.goal = `${reposLine}\n\n${agentRun.goal}`;
     }
 
     // Run the appropriate engine
@@ -387,9 +417,10 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     }
 
     dbRun(
-      'UPDATE p6_runs SET status = ?, finished_at = ? WHERE id = ?',
+      'UPDATE p6_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?',
       aborted ? 'cancelled' : 'failed',
       now(),
+      aborted ? '' : msg.slice(0, 2000),
       runId,
     );
 
@@ -437,6 +468,14 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       pendingApprovals.delete(runId);
     }
     deregisterRun(runId);
+    // Collect output files produced by this run (best effort — must never affect run status)
+    if (workDir) {
+      try {
+        const runRow = one<{ started_at: string | null }>('SELECT started_at FROM p6_runs WHERE id = ?', runId);
+        const startedAt = String(runRow?.started_at ?? new Date(0).toISOString());
+        await collectOutputFiles(runId, workflowId, workDir, startedAt);
+      } catch { /* non-fatal */ }
+    }
     // Delete the materialised home directory (contains decrypted ~/.aws and SSO tokens).
     // workDir itself is intentionally kept so session artefacts survive across runs.
     await cleanupRunHome(runId);
@@ -512,6 +551,79 @@ function parseJsonArray(s: string): string[] {
   }
 }
 
+// ── Repo working-copy population ─────────────────────────────────────────────
+
+/**
+ * For each repo in `repoIds` that belongs to `projectId` and has a ready reference
+ * clone, create an independent git working copy under `workDir/repos/<repo.name>/`.
+ *
+ * Rules:
+ *  - Repos from a different project are silently ignored.
+ *  - Repos whose status is not 'ready' or whose reference clone is missing emit a
+ *    visible status event and are skipped; the run continues.
+ *  - Already-checked-out repos are skipped (idempotent across runs).
+ *
+ * Returns the names of repos that are now available in workDir/repos/.
+ */
+async function populateRepoWorkDirs(
+  repoIds: string[],
+  projectId: string | null,
+  workDir: string,
+  emitEvent: (type: string, payload: object) => void,
+): Promise<string[]> {
+  if (!repoIds.length || !projectId) return [];
+
+  const projectRow = one<Row>('SELECT slug FROM projects WHERE id = ?', projectId);
+  if (!projectRow) return [];
+  const slug = String(projectRow.slug ?? 'unknown');
+
+  const available: string[] = [];
+
+  for (const repoId of repoIds) {
+    const repo = one<Row>('SELECT * FROM repositories WHERE id = ?', repoId);
+    if (!repo) continue;
+    if (String(repo.project_id) !== projectId) continue;  // wrong project — skip silently
+
+    const repoName = String(repo.name ?? '');
+    const refCloneDir = repoRefDir(slug, repoName);
+
+    if (String(repo.status) !== 'ready' || !fs.existsSync(path.join(refCloneDir, '.git'))) {
+      emitEvent('status', {
+        text: `Repository "${repoName}" is not ready yet (status: ${repo.status}); the session started without it.`,
+      });
+      continue;
+    }
+
+    try {
+      await checkoutRepoToWorkDir(
+        refCloneDir,
+        workDir,
+        repoName,
+        String(repo.url ?? ''),
+        repo.default_branch ? String(repo.default_branch) : null,
+      );
+      available.push(repoName);
+    } catch (e: unknown) {
+      const fullMsg = String((e as { message?: string })?.message ?? e);
+      // Keep the last non-empty line of the git error — git prints the actual failure
+      // at the end of stderr (e.g. "unable to create file … Filename too long"), while
+      // earlier lines are just progress ("Cloning into...", "done.").
+      const lines = fullMsg.split('\n').map((l) => l.trim()).filter(Boolean);
+      const errorSnippet = (lines[lines.length - 1] ?? fullMsg).slice(0, 500);
+      emitEvent('status', {
+        text: `Could not create working copy of "${repoName}": ${errorSnippet}`,
+      });
+    }
+  }
+
+  if (available.length > 0) {
+    const list = available.map((n) => `repos/${n}/`).join(', ');
+    emitEvent('status', { text: `Repositories available at: ${list}` });
+  }
+
+  return available;
+}
+
 // ── Review work directory prep ─────────────────────────────────────────────────
 
 /**
@@ -545,9 +657,8 @@ async function prepareReviewWorkDir(agentRun: AgentRun, workDir: string): Promis
     : null;
   const slug = String(projectRow?.slug ?? 'unknown');
 
-  // Derive the clone directory (same logic as repos.ts repoDir)
-  const repoName = String(repo.name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const cloneDir = path.join(config.dataDir, 'projects', slug, 'repos', repoName);
+  // Derive the clone directory using the canonical path helper (raw repo name, no slugification)
+  const cloneDir = repoRefDir(slug, String(repo.name ?? ''));
 
   if (!fs.existsSync(cloneDir)) return;
 

@@ -83,8 +83,14 @@ fs.copyFileSync(path.join(root, 'web/favicon.svg'), path.join(webOut, 'favicon.s
 
 const FONT_STACKS = {
   'Space Grotesk':  "'Space Grotesk Variable','Space Grotesk',system-ui,sans-serif",
+  'Quicksand':      "'Quicksand Variable','Quicksand',system-ui,sans-serif",
   'Inter':          "'Inter Variable','Inter',system-ui,sans-serif",
+  'Geist Sans':     "'Geist Sans',system-ui,sans-serif",
   'JetBrains Mono': "'JetBrains Mono Variable','JetBrains Mono','SF Mono',Consolas,monospace",
+  'Outfit':         "'Outfit Variable','Outfit',system-ui,sans-serif",
+  'Plus Jakarta Sans': "'Plus Jakarta Sans Variable','Plus Jakarta Sans',system-ui,sans-serif",
+  'Orbitron':       "'Orbitron',system-ui,sans-serif",
+  'Exo 2':          "'Exo 2 Variable','Exo 2',system-ui,sans-serif",
   'system-ui':      "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
   'ui-monospace':   "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",
 };
@@ -116,9 +122,23 @@ function normaliseForInit(raw) {
 
 const aethrixJson    = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/aethrix-night.json'), 'utf8'));
 const classicJson    = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/classic-teal.json'),  'utf8'));
+const cloviJson      = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/clovi.json'),         'utf8'));
+const nebulaJson     = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/nebula.json'),        'utf8'));
+const auroraGlassJson = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/aurora-glass.json'), 'utf8'));
+const cyberHudJson   = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/cyber-hud.json'),     'utf8'));
+const twilightJson   = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/twilight.json'),      'utf8'));
+const terminalJson   = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/terminal.json'),      'utf8'));
+const kiroIdeJson    = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/kiro-ide.json'),      'utf8'));
 const bundledThemes  = {
   'aethrix-night': normaliseForInit(aethrixJson),
   'classic-teal':  normaliseForInit(classicJson),
+  'clovi':         normaliseForInit(cloviJson),
+  'nebula':        normaliseForInit(nebulaJson),
+  'aurora-glass':  normaliseForInit(auroraGlassJson),
+  'cyber-hud':     normaliseForInit(cyberHudJson),
+  'twilight':      normaliseForInit(twilightJson),
+  'terminal':      normaliseForInit(terminalJson),
+  'kiro-ide':      normaliseForInit(kiroIdeJson),
 };
 
 const themeInitSrc = fs.readFileSync(path.join(root, 'web/theme-init.js'), 'utf8');

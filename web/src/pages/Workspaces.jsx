@@ -13,6 +13,53 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
+  // Session defaults
+  const [defaultEngine, setDefaultEngine] = useState(workspace?.default_engine ?? '');
+  const [defaultAgent, setDefaultAgent] = useState(workspace?.default_agent ?? '');
+  const [defaultModel, setDefaultModel] = useState(workspace?.default_model ?? '');
+  const [agentList, setAgentList] = useState(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [modelList, setModelList] = useState([]);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelError, setModelError] = useState(null);
+
+  // Load agents when default engine changes
+  useEffect(() => {
+    if (!defaultEngine) { setAgentList(null); return; }
+    setAgentLoading(true);
+    api.get(`/api/user-config/agents?engine=${encodeURIComponent(defaultEngine)}`)
+      .then((r) => setAgentList(r.agents || []))
+      .catch(() => setAgentList([]))
+      .finally(() => setAgentLoading(false));
+  }, [defaultEngine]);
+
+  // Load models when default engine changes
+  const loadModels = useCallback(async (forceRefresh = false) => {
+    if (!defaultEngine) { setModelList([]); setModelError(null); return; }
+    setModelLoading(true);
+    setModelError(null);
+    try {
+      const qs = forceRefresh ? '?refresh=1' : '';
+      const data = await api.get(`/api/engines/${encodeURIComponent(defaultEngine)}/models${qs}`);
+      setModelList(data.models || []);
+      if (data.error) setModelError(data.error);
+    } catch (e) {
+      setModelList([]);
+      setModelError(e.message || 'Failed to load models');
+    } finally {
+      setModelLoading(false);
+    }
+  }, [defaultEngine]);
+
+  useEffect(() => { loadModels(false); }, [loadModels]);
+
+  // Changing engine clears agent and model that no longer fit
+  const handleEngineChange = (eng) => {
+    setDefaultEngine(eng);
+    setDefaultAgent('');
+    setDefaultModel('');
+  };
+
   const toggleRepo = (id) => {
     setSelectedRepos((prev) =>
       prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id],
@@ -29,12 +76,18 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
         const r = await api.put(`/api/projects/${projectId}/workspaces/${workspace.id}`, {
           name: name.trim(),
           repoIds: selectedRepos,
+          defaultEngine,
+          defaultAgent,
+          defaultModel,
         });
         onSave(r.workspace);
       } else {
         const r = await api.post(`/api/projects/${projectId}/workspaces`, {
           name: name.trim(),
           repoIds: selectedRepos,
+          defaultEngine,
+          defaultAgent,
+          defaultModel,
         });
         onSave(r.workspace);
       }
@@ -94,6 +147,91 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
                 </p>
               </div>
             )}
+            {/* Session defaults */}
+            <div className="field">
+              <label style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: 4, display: 'block' }}>
+                Session defaults
+              </label>
+              <p className="field-hint" style={{ marginBottom: 8 }}>
+                Pre-fill engine, agent, and model when this workspace is selected in new sessions.
+              </p>
+              <div className="stack" style={{ gap: 8 }}>
+                <div className="field">
+                  <label htmlFor="ws-def-engine">Default engine</label>
+                  <select
+                    id="ws-def-engine"
+                    value={defaultEngine}
+                    onChange={(e) => handleEngineChange(e.target.value)}
+                  >
+                    <option value="">None</option>
+                    <option value="kiro">Kiro</option>
+                    <option value="claude-code">Claude Code</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="ws-def-agent">Default agent</label>
+                  {agentLoading ? (
+                    <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading agents…" />
+                  ) : (
+                    <select
+                      id="ws-def-agent"
+                      value={defaultAgent}
+                      onChange={(e) => setDefaultAgent(e.target.value)}
+                      disabled={!defaultEngine}
+                    >
+                      <option value="">None</option>
+                      {(agentList || []).map((a) => (
+                        <option key={a.name} value={a.name}>
+                          {a.name}{a.description ? ` — ${a.description.slice(0, 50)}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <div className="field">
+                  <label htmlFor="ws-def-model">Default model</label>
+                  {modelLoading ? (
+                    <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading models…" />
+                  ) : modelError ? (
+                    <>
+                      <input
+                        id="ws-def-model"
+                        type="text"
+                        value={defaultModel}
+                        onChange={(e) => setDefaultModel(e.target.value)}
+                        placeholder="Enter model ID (e.g. claude-sonnet-4-5)"
+                        disabled={!defaultEngine}
+                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                        <p className="field-hint" style={{ color: 'var(--danger)', flex: 1, margin: 0 }}>
+                          {modelError}
+                        </p>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => loadModels(true)}
+                          aria-label="Retry loading models"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <select
+                      id="ws-def-model"
+                      value={defaultModel}
+                      onChange={(e) => setDefaultModel(e.target.value)}
+                      disabled={!defaultEngine}
+                    >
+                      <option value="">Engine default</option>
+                      {modelList.map((m) => (
+                        <option key={m.id} value={m.id}>{m.label || m.id}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+            </div>
             {error && <p className="error-note" role="alert">{error}</p>}
           </div>
           <div className="modal-footer">
@@ -231,7 +369,18 @@ export function Workspaces({ projectId }) {
           <tbody>
             {workspaces.map((ws) => (
               <tr key={ws.id}>
-                <td>{ws.name}</td>
+                <td>
+                  <div>{ws.name}</div>
+                  {(ws.default_engine || ws.default_agent || ws.default_model) && (
+                    <div className="muted" style={{ fontSize: '0.78rem', marginTop: 2 }}>
+                      {[
+                        ws.default_engine === 'kiro' ? 'Kiro' : ws.default_engine === 'claude-code' ? 'Claude Code' : ws.default_engine,
+                        ws.default_agent,
+                        ws.default_model,
+                      ].filter(Boolean).join(' · ')}
+                    </div>
+                  )}
+                </td>
                 <td>
                   <span className="badge">
                     {(ws.repo_ids || []).length} repo{(ws.repo_ids || []).length !== 1 ? 's' : ''}

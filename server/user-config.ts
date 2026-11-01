@@ -1,4 +1,4 @@
-/**
+﻿/**
  * F5 — Personal configuration editor (~/.kiro, ~/.claude, ~/.aws).
  *
  * Storage layout (disk):
@@ -27,12 +27,14 @@
  *   POST /api/user-config/:folder/reset            — reset to team version
  *   GET  /api/user-config/:folder/export           — download zip
  *   POST /api/user-config/:folder/import           — import zip
+ *   POST /api/user-config/:folder/import-local     — import from OS home dir (localhost only)
  *   POST /api/admin/user-config/:folder/publish    — publish team default (admin)
  */
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 import { router, sendJson, requireAuth } from './http.ts';
@@ -429,6 +431,409 @@ async function parseImportZip(
   return result;
 }
 
+// ── Local import ─────────────────────────────────────────────────────────────
+//
+// Copies setup files from the OS user's home directory (.kiro or .claude)
+// into the portal's per-user configuration storage.
+//
+// Include rules:
+//   kiro   — agents/, skills/, steering/, hooks/, settings/, prompts/,
+//            design-skills/
+//   claude — agents/, skills/, commands/, hooks/, rules/, steering/,
+//            design-skills/, output-styles/, plus root-level CLAUDE.md and
+//            settings.json
+//
+// Exclude rules (applied within included dirs):
+//   dirs:  sessions/, projects/, todos/, shell-snapshots/, statsig/, state/,
+//          backups/, logs/, cache/, ide/, node_modules/, .git/, .trash/
+//   files: .credentials.json, *credential*, *token*, *.sqlite*, history.jsonl,
+//          .last-cleanup, mcp-needs-auth-cache*, *.bak*, *.lock, .DS_Store
+//   size:  files over MAX_FILE_BYTES (1 MB)
+//   links: symbolic links are always skipped
+//
+// JSON secret redaction:
+//   env objects: keys matching KEY|TOKEN|SECRET|PASSWORD → "<set-in-vault>"
+//   headers objects: Authorization, X-Api-Key, X-Goog-Api-Key, or any key
+//     matching key|token|secret|auth → "<set-in-vault>"
+
+/** Max size for a single file imported from the local OS home. */
+const LOCAL_MAX_FILE_BYTES = MAX_FILE_BYTES; // 1 MB
+
+/** Top-level directories included in kiro local imports. */
+const KIRO_INCLUDE_DIRS = new Set([
+  'agents', 'skills', 'steering', 'hooks', 'settings', 'prompts', 'design-skills',
+]);
+
+/** Top-level directories included in claude local imports. */
+const CLAUDE_INCLUDE_DIRS = new Set([
+  'agents', 'skills', 'commands', 'hooks', 'rules', 'steering', 'design-skills', 'output-styles',
+]);
+
+/** Root-level files included from the .claude folder (lower-cased). */
+const CLAUDE_ROOT_FILES = new Set(['claude.md', 'settings.json']);
+
+/** Directory segment names that trigger exclusion when found anywhere in a path. */
+const LOCAL_EXCLUDED_DIR_SEGS = new Set([
+  'sessions', 'projects', 'todos', 'shell-snapshots', 'statsig', 'state',
+  'backups', 'logs', 'cache', 'ide', 'node_modules', '.git', '.trash', 'browser',
+]);
+
+/** Exact base-name matches (lower-cased) that are always excluded. */
+const LOCAL_EXCLUDED_NAMES = new Set([
+  '.credentials.json', 'history.jsonl', '.last-cleanup', '.ds_store', '.gitkeep',
+]);
+
+/** Regexes tested against the lower-cased base name. */
+const LOCAL_EXCLUDED_RES: RegExp[] = [
+  /credential/i,
+  /\btoken\b/i,
+  /\.sqlite/i,
+  /^mcp-needs-auth-cache/i,
+  /\.bak(\.|$|-)/i,
+  /\.lock$/i,
+];
+
+/**
+ * Decide whether a file from the OS home .kiro or .claude should be included
+ * in a portal config import.
+ *
+ * @param folder    'kiro' | 'claude'
+ * @param relPath   Forward-slash path relative to .kiro or .claude root
+ * @param sizeBytes File size in bytes
+ */
+export function shouldIncludeLocalFile(
+  folder: 'kiro' | 'claude',
+  relPath: string,
+  sizeBytes: number,
+): { include: boolean; reason?: string } {
+  const p = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!p) return { include: false, reason: 'empty path' };
+
+  const parts = p.split('/');
+  const base = parts[parts.length - 1];
+  const baseLower = base.toLowerCase();
+  const topDir = parts[0];
+  const isRoot = parts.length === 1;
+
+  // 1. Per-folder top-level include guard
+  if (folder === 'kiro') {
+    if (!KIRO_INCLUDE_DIRS.has(topDir)) {
+      return { include: false, reason: `not in an included kiro directory (${topDir})` };
+    }
+  } else {
+    if (isRoot) {
+      if (!CLAUDE_ROOT_FILES.has(baseLower)) {
+        return { include: false, reason: `root-level file not in include list (${base})` };
+      }
+    } else if (!CLAUDE_INCLUDE_DIRS.has(topDir)) {
+      return { include: false, reason: `not in an included claude directory (${topDir})` };
+    }
+  }
+
+  // 2. Excluded directory segments anywhere in the path (not the file name itself)
+  for (const seg of parts.slice(0, -1)) {
+    if (LOCAL_EXCLUDED_DIR_SEGS.has(seg.toLowerCase())) {
+      return { include: false, reason: `in excluded directory (${seg})` };
+    }
+  }
+
+  // 3. Excluded exact file names
+  if (LOCAL_EXCLUDED_NAMES.has(baseLower)) {
+    return { include: false, reason: `excluded file name (${base})` };
+  }
+
+  // 4. Excluded name patterns
+  for (const re of LOCAL_EXCLUDED_RES) {
+    if (re.test(baseLower)) {
+      return { include: false, reason: `excluded by name pattern (${base})` };
+    }
+  }
+
+  // 5. Size limit
+  if (sizeBytes > LOCAL_MAX_FILE_BYTES) {
+    return { include: false, reason: `file too large (${sizeBytes} bytes)` };
+  }
+
+  return { include: true };
+}
+
+/** Env-key regex for secret redaction. */
+const REDACT_ENV_KEY_RE = /KEY|TOKEN|SECRET|PASSWORD/i;
+/** Exact lower-cased header names to redact. */
+const REDACT_HEADER_EXACT = new Set(['authorization', 'x-api-key', 'x-goog-api-key']);
+/** Regex for any other header key that looks like a credential. */
+const REDACT_HEADER_RE = /key|token|secret|auth/i;
+const REDACT_PLACEHOLDER = '<set-in-vault>';
+
+export interface RedactResult {
+  content: string;
+  redacted: string[];
+}
+
+/**
+ * Parse a JSON file's content, replace obvious secret values with
+ * REDACT_PLACEHOLDER, and return the (possibly modified) content plus a list
+ * of the key paths that were redacted.  Non-JSON files are returned unchanged.
+ */
+export function redactJsonSecrets(relPath: string, content: string): RedactResult {
+  if (!relPath.endsWith('.json') && !relPath.endsWith('.jsonc')) {
+    return { content, redacted: [] };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return { content, redacted: [] };
+  }
+
+  const redacted: string[] = [];
+
+  function visit(node: unknown, keyPath: string): void {
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) return;
+    const obj = node as Record<string, unknown>;
+    for (const key of Object.keys(obj)) {
+      const childPath = keyPath ? `${keyPath}.${key}` : key;
+      const val = obj[key];
+
+      if (key === 'env' && typeof val === 'object' && val !== null && !Array.isArray(val)) {
+        const envObj = val as Record<string, unknown>;
+        for (const envKey of Object.keys(envObj)) {
+          if (
+            REDACT_ENV_KEY_RE.test(envKey) &&
+            typeof envObj[envKey] === 'string' &&
+            (envObj[envKey] as string).length > 0 &&
+            envObj[envKey] !== REDACT_PLACEHOLDER
+          ) {
+            redacted.push(`${childPath}.${envKey}`);
+            envObj[envKey] = REDACT_PLACEHOLDER;
+          }
+        }
+      } else if (key === 'headers' && typeof val === 'object' && val !== null && !Array.isArray(val)) {
+        const hObj = val as Record<string, unknown>;
+        for (const hKey of Object.keys(hObj)) {
+          const hLower = hKey.toLowerCase();
+          if (
+            (REDACT_HEADER_EXACT.has(hLower) || REDACT_HEADER_RE.test(hLower)) &&
+            typeof hObj[hKey] === 'string' &&
+            (hObj[hKey] as string).length > 0 &&
+            hObj[hKey] !== REDACT_PLACEHOLDER
+          ) {
+            redacted.push(`${childPath}.${hKey}`);
+            hObj[hKey] = REDACT_PLACEHOLDER;
+          }
+        }
+      } else if (typeof val === 'object') {
+        visit(val, childPath);
+      }
+    }
+  }
+
+  visit(parsed, '');
+
+  return {
+    content: redacted.length > 0 ? JSON.stringify(parsed, null, 2) : content,
+    redacted,
+  };
+}
+
+export interface LocalImportSummary {
+  /** Files imported, grouped by top-level directory (or root file name). */
+  imported: Record<string, string[]>;
+  /** Files that were skipped, with the reason each was excluded. */
+  skipped: Array<{ path: string; reason: string }>;
+  /** JSON key paths whose values were replaced with '<set-in-vault>'. */
+  valuesRedacted: string[];
+  /** Absolute path of the backup taken before writing, or null if there was nothing to back up. */
+  backupPath: string | null;
+}
+
+/**
+ * Back up the user's current portal config folder to data/backups/ if it
+ * contains any files.  Returns the backup path, or null if the folder was
+ * empty or non-existent.
+ */
+export async function backupUserConfigFolder(
+  userId: string,
+  folder: ConfigFolder,
+  dataDir: string,
+): Promise<string | null> {
+  const root = userConfigRoot(userId, folder);
+  if (!fs.existsSync(root)) return null;
+
+  // Quick check for any file in the tree
+  let hasFiles = false;
+  const scan = (dir: string): void => {
+    if (hasFiles) return;
+    try {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.isFile()) { hasFiles = true; return; }
+        if (e.isDirectory()) scan(path.join(dir, e.name));
+      }
+    } catch { /* ignore */ }
+  };
+  scan(root);
+  if (!hasFiles) return null;
+
+  const ts = new Date()
+    .toISOString()
+    .replace(/[:.]/g, '-')
+    .replace('T', '_')
+    .slice(0, 19); // 2026-11-01_14-30-00
+  const backupDir = path.join(
+    dataDir, 'backups', `user-config-${userId}-${folder}-${ts}`,
+  );
+  await fsp.mkdir(backupDir, { recursive: true });
+
+  const copyDir = async (src: string, dst: string): Promise<void> => {
+    await fsp.mkdir(dst, { recursive: true });
+    for (const e of await fsp.readdir(src, { withFileTypes: true })) {
+      const srcP = path.join(src, e.name);
+      const dstP = path.join(dst, e.name);
+      if (e.isDirectory()) {
+        await copyDir(srcP, dstP);
+      } else if (e.isFile()) {
+        await fsp.copyFile(srcP, dstP);
+      }
+    }
+  };
+  await copyDir(root, backupDir);
+  return backupDir;
+}
+
+/**
+ * Import setup files from the OS user's home directory (homeDir/.kiro or
+ * homeDir/.claude) into the portal's per-user config storage for `folder`.
+ *
+ * - Only copies files that pass shouldIncludeLocalFile.
+ * - Redacts obvious secret values in JSON files before writing.
+ * - Backs up the existing portal config (if any) to data/backups/ first.
+ * - Marks the user's config as customised (following = false).
+ *
+ * @param userId  Portal user ID.
+ * @param folder  'kiro' | 'claude'.
+ * @param homeDir OS home directory (defaults to os.homedir()).
+ */
+export async function importLocalConfig(
+  userId: string,
+  folder: 'kiro' | 'claude',
+  homeDir?: string,
+): Promise<LocalImportSummary> {
+  const home = homeDir ?? os.homedir();
+  const srcRoot = path.join(home, folder === 'kiro' ? '.kiro' : '.claude');
+  const destRoot = userConfigRoot(userId, folder);
+
+  // Back up existing portal config before touching anything
+  const backupPath = await backupUserConfigFolder(userId, folder, config.dataDir);
+
+  const importedByTop: Record<string, string[]> = {};
+  const skipped: Array<{ path: string; reason: string }> = [];
+  const allRedacted: string[] = [];
+
+  const walkDir = async (srcDir: string, relBase: string): Promise<void> => {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(srcDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const e of entries) {
+      const relPath = relBase ? `${relBase}/${e.name}` : e.name;
+
+      if (e.isSymbolicLink()) {
+        skipped.push({ path: relPath, reason: 'symbolic link skipped' });
+        continue;
+      }
+
+      if (e.isDirectory()) {
+        await walkDir(path.join(srcDir, e.name), relPath);
+        continue;
+      }
+
+      if (!e.isFile()) continue;
+
+      let sizeBytes = 0;
+      try {
+        const stat = await fsp.stat(path.join(srcDir, e.name));
+        sizeBytes = stat.size;
+      } catch {
+        skipped.push({ path: relPath, reason: 'could not stat file' });
+        continue;
+      }
+
+      const check = shouldIncludeLocalFile(folder, relPath, sizeBytes);
+      if (!check.include) {
+        skipped.push({ path: relPath, reason: check.reason ?? 'excluded' });
+        continue;
+      }
+
+      let content: string;
+      try {
+        content = await fsp.readFile(path.join(srcDir, e.name), 'utf8');
+      } catch {
+        skipped.push({ path: relPath, reason: 'unreadable (binary or permission denied)' });
+        continue;
+      }
+
+      // Redact obvious secrets in JSON
+      const { content: clean, redacted } = redactJsonSecrets(relPath, content);
+      content = clean;
+      if (redacted.length > 0) allRedacted.push(...redacted);
+
+      // Path-containment: destination must stay inside destRoot
+      let destPath: string;
+      try {
+        destPath = safeJoin(destRoot, relPath);
+      } catch {
+        skipped.push({ path: relPath, reason: 'path traversal detected' });
+        continue;
+      }
+
+      try {
+        await fsp.mkdir(path.dirname(destPath), { recursive: true });
+        await fsp.writeFile(destPath, content, 'utf8');
+      } catch (e2: unknown) {
+        skipped.push({
+          path: relPath,
+          reason: `write failed: ${String((e2 as Error)?.message ?? e2)}`,
+        });
+        continue;
+      }
+
+      const topLevel = relPath.split('/')[0];
+      (importedByTop[topLevel] ??= []).push(relPath);
+    }
+  };
+
+  if (fs.existsSync(srcRoot)) {
+    await walkDir(srcRoot, '');
+  }
+
+  // Mark config as customised (following = false)
+  const ts = now();
+  const stateRow = one<Row>(
+    'SELECT user_id FROM user_config_state WHERE user_id = ? AND folder = ?',
+    userId,
+    folder,
+  );
+  if (stateRow) {
+    dbRun(
+      'UPDATE user_config_state SET following = 0, customised_at = ? WHERE user_id = ? AND folder = ?',
+      ts, userId, folder,
+    );
+  } else {
+    insert('user_config_state', {
+      user_id: userId,
+      folder,
+      following: 0,
+      customised_at: ts,
+      team_version_id: null,
+    });
+  }
+
+  return { imported: importedByTop, skipped, valuesRedacted: allRedacted, backupPath };
+}
+
 // ── Run home directory registry ───────────────────────────────────────────────
 // Stores workDir/home paths keyed by runId so engines can optionally set HOME.
 
@@ -437,6 +842,12 @@ const _runHomeDirs = new Map<string, string>();
 export function getRunHomeDir(runId: string): string | null {
   return _runHomeDirs.get(runId) ?? null;
 }
+
+// NOTE: kiro-cli ACP saves sessions to the REAL user profile at
+// %USERPROFILE%\.kiro\sessions\cli\ regardless of where HOME is pointed.
+// The materialised temp HOME never contains Kiro session data, so no
+// copy/restore step is needed (the previous preserve/restoreKiroSessions
+// functions were dead code built on a wrong assumption).
 
 /**
  * Delete the materialised home directory for a run and remove it from the registry.
@@ -1217,5 +1628,53 @@ export function registerUserConfigRoutes(): void {
 
     appendAudit(getDb(), req.user.id, 'user-config.publish', `team:${folder}`, { folder, versionId, fileCount: entries.length }, req.ip);
     sendJson(res, 201, { ok: true, versionId, publishedAt: ts, fileCount: entries.length });
+  }));
+
+  // ── Local import (localhost-only, browser session only) ────────────────────
+
+  // POST /api/user-config/:folder/import-local
+  // Copies setup files from os.homedir()/.kiro or .claude into the portal
+  // config for the signed-in user.  Only allowed when the portal is bound to
+  // localhost (single-user mode); on a shared server this would expose another
+  // user's home directory, so the route returns 403.
+  router.post('/api/user-config/:folder/import-local', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const folder = validateFolder(req, res);
+    if (!folder) return;
+
+    if (folder === 'aws') {
+      sendJson(res, 400, { error: 'Local import is not available for the aws folder' }); return;
+    }
+
+    // Browser session only — API tokens must not be able to trigger home-dir reads
+    if (isTokenAuth(req)) {
+      sendJson(res, 403, { error: 'Local import is only available from a browser session' }); return;
+    }
+
+    // Localhost guard — on a shared server, os.homedir() is the server process
+    // owner's home, not the signed-in portal user's home.
+    const boundHost = config.host;
+    if (boundHost !== '127.0.0.1' && boundHost !== 'localhost' && boundHost !== '::1') {
+      sendJson(res, 403, {
+        error:
+          'Local import is only allowed when the portal is bound to localhost. ' +
+          "On a shared server the portal's home directory is not the signed-in user's.",
+      }); return;
+    }
+
+    const userId = req.user!.id;
+    let summary: LocalImportSummary;
+    try {
+      summary = await importLocalConfig(userId, folder as 'kiro' | 'claude');
+    } catch (e: unknown) {
+      sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;
+    }
+
+    const totalImported = Object.values(summary.imported).flat().length;
+    appendAudit(
+      getDb(), userId, 'user-config.import-local', `user:${userId}:${folder}`,
+      { folder, fileCount: totalImported, skippedCount: summary.skipped.length, redactedCount: summary.valuesRedacted.length },
+      req.ip,
+    );
+    sendJson(res, 200, { ok: true, ...summary });
   }));
 }

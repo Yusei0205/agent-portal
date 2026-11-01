@@ -454,3 +454,45 @@
   background: var(--line);
   margin: 2px 0;
 }
+
+/* ── App header: collapse palette trigger to icon-only on mobile ──── */
+@media (max-width: 768px) {
+  /* Hide the "Jump to…" text and the [Ctrl][K] kbd hints
+     (second span has inline display:flex — !important overrides it) */
+  .palette-trigger-btn span {
+    display: none !important;
+  }
+  /* Make it an icon button so the breadcrumb gets more room.
+     !important on min-width and width beats theme overrides such as
+     [data-template=aethrix-night] which set min-width:180px with
+     specificity (0,2,0) — higher than this rule's (0,1,0). */
+  .palette-trigger-btn {
+    padding: 4px 7px;
+    justify-content: center;
+    gap: 0;
+    min-width: 0 !important;
+    width: 32px !important;
+    height: 32px;
+  }
+  /* Breadcrumb: prevent wrapping so app-header stays 44 px tall */
+  .app-header-breadcrumb nav ol {
+    flex-wrap: nowrap !important;
+    overflow: hidden;
+  }
+  .app-header-breadcrumb nav ol li {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .app-header-breadcrumb nav ol li:last-child {
+    flex-shrink: 0;
+  }
+  .app-header-breadcrumb nav ol li a,
+  .app-header-breadcrumb nav ol li span {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}

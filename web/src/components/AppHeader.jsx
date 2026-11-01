@@ -7,6 +7,7 @@ import { getTheme, setTheme } from '../lib/theme.js';
 // ── Breadcrumb derivation ─────────────────────────────────────────────────────
 
 const PAGE_NAMES = {
+  dashboard:    'Dashboard',
   sessions:     'Sessions',
   workspaces:   'Workspaces',
   reviews:      'Reviews',
@@ -23,8 +24,18 @@ const PAGE_NAMES = {
   users:        'Users',
   settings:     'Settings',
   tests:        'Tests',
+  tickets:      'Tickets',
+  credentials:  'Credentials',
+  config:       'Configuration',
   'loop-specs': 'Loop specs',
 };
+
+/** Converts a route tab slug to title case: "loop-specs" → "Loop specs" */
+function toTitleCase(str) {
+  if (!str) return '';
+  const s = str.replace(/-/g, ' ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 function deriveBreadcrumb(route, projects) {
   const parts = [];
@@ -36,10 +47,10 @@ function deriveBreadcrumb(route, projects) {
       href: href(route.projectId, 'sessions'),
     });
     if (route.tab) {
-      parts.push({ label: PAGE_NAMES[route.tab] ?? route.tab });
+      parts.push({ label: PAGE_NAMES[route.tab] ?? toTitleCase(route.tab) });
     }
   } else if (route.tab) {
-    parts.push({ label: PAGE_NAMES[route.tab] ?? route.tab });
+    parts.push({ label: PAGE_NAMES[route.tab] ?? toTitleCase(route.tab) });
   }
 
   return parts;

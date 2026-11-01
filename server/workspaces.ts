@@ -21,7 +21,15 @@ export interface Workspace {
   name: string;
   repo_ids: string; // JSON array stored as TEXT
   created_at: string;
+  default_engine: string;
+  default_agent: string;
+  default_model: string;
 }
+
+// ── Validation constants ───────────────────────────────────────────────────────
+
+const VALID_ENGINES = ['claude-code', 'kiro', 'demo'] as const;
+const MODEL_RE = /^[A-Za-z0-9._:/@-]{0,200}$/;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -65,6 +73,31 @@ export function registerWorkspaceRoutes(): void {
     const name = str(body.name, 'name', { max: 120 }).trim();
     const repoIds: string[] = Array.isArray(body.repoIds) ? (body.repoIds as string[]) : [];
 
+    // defaultEngine: '' or a known engine id
+    const rawDefaultEngine = body.defaultEngine !== undefined
+      ? str(body.defaultEngine, 'defaultEngine', { max: 30, optional: true }).trim()
+      : '';
+    if (rawDefaultEngine && !(VALID_ENGINES as readonly string[]).includes(rawDefaultEngine)) {
+      sendJson(res, 400, { error: `defaultEngine must be '' or one of: ${VALID_ENGINES.join(', ')}` });
+      return;
+    }
+    const defaultEngine: string = rawDefaultEngine;
+
+    // defaultAgent: trimmed string, max 200 chars (same rules as lead_agent)
+    const defaultAgent: string = body.defaultAgent !== undefined
+      ? str(body.defaultAgent, 'defaultAgent', { max: 200, optional: true }).trim()
+      : '';
+
+    // defaultModel: trimmed model ID matching MODEL_RE, max 200 chars
+    const rawDefaultModel = body.defaultModel !== undefined
+      ? str(body.defaultModel, 'defaultModel', { max: 200, optional: true }).trim()
+      : '';
+    if (rawDefaultModel && !MODEL_RE.test(rawDefaultModel)) {
+      sendJson(res, 400, { error: 'defaultModel is not a valid model ID (allowed: A-Z a-z 0-9 . _ : / @ -)' });
+      return;
+    }
+    const defaultModel: string = rawDefaultModel;
+
     const id = generateId();
     const ts = now();
 
@@ -73,6 +106,9 @@ export function registerWorkspaceRoutes(): void {
       project_id: req.params.id,
       name,
       repo_ids: JSON.stringify(repoIds),
+      default_engine: defaultEngine,
+      default_agent: defaultAgent,
+      default_model: defaultModel,
       created_at: ts,
     });
 
@@ -97,6 +133,28 @@ export function registerWorkspaceRoutes(): void {
     if (body.repoIds !== undefined) {
       const ids = Array.isArray(body.repoIds) ? (body.repoIds as string[]) : [];
       patch.repo_ids = JSON.stringify(ids);
+    }
+
+    if (body.defaultEngine !== undefined) {
+      const rawDE = str(body.defaultEngine, 'defaultEngine', { max: 30, optional: true }).trim();
+      if (rawDE && !(VALID_ENGINES as readonly string[]).includes(rawDE)) {
+        sendJson(res, 400, { error: `defaultEngine must be '' or one of: ${VALID_ENGINES.join(', ')}` });
+        return;
+      }
+      patch.default_engine = rawDE;
+    }
+
+    if (body.defaultAgent !== undefined) {
+      patch.default_agent = str(body.defaultAgent, 'defaultAgent', { max: 200, optional: true }).trim();
+    }
+
+    if (body.defaultModel !== undefined) {
+      const rawDM = str(body.defaultModel, 'defaultModel', { max: 200, optional: true }).trim();
+      if (rawDM && !MODEL_RE.test(rawDM)) {
+        sendJson(res, 400, { error: 'defaultModel is not a valid model ID (allowed: A-Z a-z 0-9 . _ : / @ -)' });
+        return;
+      }
+      patch.default_model = rawDM;
     }
 
     if (Object.keys(patch).length === 0) {

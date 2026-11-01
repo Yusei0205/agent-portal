@@ -3,6 +3,13 @@
 @import './styles/base.css';
 @import './styles/tokens.css';
 @import './styles/aethrix.css';
+@import './styles/clovi.css';
+@import './styles/nebula.css';
+@import './styles/aurora-glass.css';
+@import './styles/cyber-hud.css';
+@import './styles/twilight.css';
+@import './styles/terminal.css';
+@import './styles/kiro-ide.css';
 @import './styles/layout.css';
 @import './styles/components.css';
 @import './styles/palette.css';

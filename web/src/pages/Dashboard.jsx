@@ -1,5 +1,5 @@
 /**
- * Dashboard page â€” portal-wide operations overview.
+ * Dashboard page — portal-wide operations overview.
  *
  * Panels:
  *  1. Greeting header + controls (period, project, refresh, animation toggle)
@@ -20,29 +20,29 @@ import { href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { formatRelative, formatCost } from '../lib/util.js';
 
-// â”€â”€ Format helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Format helpers ────────────────────────────────────────────────────────────
 
 function fmt(n) {
-  if (n === null || n === undefined) return 'â€”';
+  if (n === null || n === undefined) return '—';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(Math.round(n));
 }
 
 function fmtPct(n) {
-  if (n === null || n === undefined) return 'â€”';
+  if (n === null || n === undefined) return '—';
   return `${(Number(n) * 100).toFixed(1)}%`;
 }
 
 function fmtMs(ms) {
-  if (!ms) return 'â€”';
+  if (!ms) return '—';
   if (ms < 1_000) return `${Math.round(ms)}ms`;
   if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
   return `${(ms / 60_000).toFixed(1)}m`;
 }
 
 function fmtTokens(n) {
-  if (n === null || n === undefined) return 'â€”';
+  if (n === null || n === undefined) return '—';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(Math.round(n));
@@ -55,7 +55,7 @@ function greeting(name) {
   return `${salutation}, ${first}`;
 }
 
-// â”€â”€ Animation hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Animation hook ────────────────────────────────────────────────────────────
 
 /**
  * Persisted animation preference.
@@ -82,7 +82,7 @@ function useAnimations() {
   return { animated: on, toggleAnimated: toggle };
 }
 
-// â”€â”€ CountUpNumber â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── CountUpNumber ─────────────────────────────────────────────────────────────
 // Isolated so re-renders from rAF don't bubble up to parent.
 
 function CountUpNumber({ value, enabled }) {
@@ -120,7 +120,7 @@ function CountUpNumber({ value, enabled }) {
   return displayed;
 }
 
-// â”€â”€ AnimToggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── AnimToggle ────────────────────────────────────────────────────────────────
 
 function AnimToggle({ animated, onToggle }) {
   return (
@@ -140,7 +140,7 @@ function AnimToggle({ animated, onToggle }) {
   );
 }
 
-// â”€â”€ StatCard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── StatCard ──────────────────────────────────────────────────────────────────
 
 function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, deltaLabel, deltaDir, animated, style: cardStyle }) {
   return (
@@ -160,7 +160,7 @@ function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, de
           ? (animated && typeof rawValue === 'number' && isFinite(rawValue)
             ? <CountUpNumber value={rawValue} enabled={animated} />
             : value)
-          : 'â€”'}
+          : '—'}
       </div>
       {sub && <div style={{ fontSize: '0.78rem', color: 'var(--ink-3)' }}>{sub}</div>}
       {deltaLabel !== undefined && (
@@ -174,51 +174,151 @@ function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, de
   );
 }
 
-// â”€â”€ Agent Network â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Agent Network ─────────────────────────────────────────────────────────────
 
-const NODE_R = 26;
 const MAX_GRAPH_NODES = 12;
+// Card width (px) must match the CSS `.db-agent-card { width: }` value so the
+// delegation-connector SVG aligns with the children flex row.
+const AGENT_CARD_W   = 164;
+const AGENT_CARD_GAP = 12;
 
-function computeNetworkLayout(nodes, edges) {
-  if (nodes.length === 0) return {};
-  const degree = {};
-  for (const n of nodes) degree[n.id] = 0;
-  for (const e of edges) {
-    if (e.source in degree) degree[e.source] += (e.count || 1);
-    if (e.target in degree) degree[e.target] += (e.count || 1);
-  }
-  const sorted = [...nodes].sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0));
-  const cx = 280, cy = 140;
-  const positions = {};
-  if (sorted.length === 1) {
-    positions[sorted[0].id] = { x: cx, y: cy };
-    return positions;
-  }
-  positions[sorted[0].id] = { x: cx, y: cy };
-  const ring = sorted.slice(1);
-  const r = ring.length <= 4 ? 110 : ring.length <= 7 ? 130 : 148;
-  ring.forEach((n, i) => {
-    const angle = (2 * Math.PI * i) / ring.length - Math.PI / 2;
-    positions[n.id] = { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
-  });
-  return positions;
+/**
+ * Compact agent card.
+ *
+ * NOTE: `role="button"` is set explicitly (redundant on <button> but required
+ * for the smoke-test attribute selector `[role="button"][aria-label^="…"]`).
+ *
+ * `.db-node-glow` is kept on the running-state ring so the smoke test that
+ * verifies "no animation when toggle is off" can query its animationName.
+ */
+function AgentCard({ node, animated, onClick }) {
+  const successPct = node.successRate != null ? Math.round(node.successRate * 100) : null;
+  const ariaLabel = [
+    node.label,
+    node.running ? 'running' : 'idle',
+    `${node.runs} run${node.runs !== 1 ? 's' : ''}`,
+    successPct !== null ? `${successPct}% success` : null,
+  ].filter(Boolean).join(', ');
+
+  return (
+    <button
+      type="button"
+      role="button"
+      className={`db-agent-card${node.running ? ' is-running' : ''}`}
+      aria-label={ariaLabel}
+      onClick={onClick}
+    >
+      {/* Pulsing glow ring — only rendered for running nodes.
+          .db-node-glow is queried by smoke tests for animation verification. */}
+      {node.running && (
+        <span className="db-card-glow db-node-glow" aria-hidden="true" />
+      )}
+      <div className="db-card-avatar" aria-hidden="true">
+        <Icon name="agents" size={18} />
+      </div>
+      <div className="db-card-body">
+        <span className="db-card-name" title={node.label}>
+          {node.label.length > 16 ? node.label.slice(0, 15) + '\u2026' : node.label}
+        </span>
+        <span className={`db-card-status${node.running ? ' is-running' : ''}`}>
+          <span
+            className={`dot dot-${node.running ? 'running' : 'stopped'}`}
+            aria-hidden="true"
+          />
+          {node.running ? 'Running' : 'Idle'}
+        </span>
+        <div className="db-card-stats">
+          <span>{fmt(node.runs)} run{node.runs !== 1 ? 's' : ''}</span>
+          {successPct !== null && (
+            <span style={{
+              color: successPct >= 90 ? 'var(--ok)' : successPct >= 70 ? 'var(--warn)' : 'var(--danger)',
+            }}>
+              {successPct}%
+            </span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
 }
 
-function edgeTrim(sx, sy, tx, ty, r) {
-  const dx = tx - sx, dy = ty - sy;
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  const ux = dx / len, uy = dy / len;
-  return { x1: sx + ux * r, y1: sy + uy * r, x2: tx - ux * r, y2: ty - uy * r };
+/**
+ * SVG tree-connector drawn between the lead card and the children row.
+ * The SVG width matches the children flex row exactly (same card width + gap
+ * arithmetic), so `margin: 0 auto` aligns both correctly.
+ */
+function DelegationConnector({ childNodes, animated }) {
+  const n = childNodes.length;
+  if (n === 0) return null;
+  const totalW  = n * AGENT_CARD_W + (n - 1) * AGENT_CARD_GAP;
+  const midX    = totalW / 2;
+  const H       = 28;
+  const busY    = 13;
+  const childXs = childNodes.map((_, i) => i * (AGENT_CARD_W + AGENT_CARD_GAP) + AGENT_CARD_W / 2);
+
+  return (
+    <svg
+      aria-hidden="true"
+      width={totalW}
+      height={H}
+      style={{ display: 'block', margin: '0 auto' }}
+    >
+      {/* Vertical drop from lead centre */}
+      <line x1={midX} y1={0} x2={midX} y2={busY}
+        stroke="var(--line)" strokeWidth={1.5} strokeOpacity={0.5} />
+      {/* Horizontal bus spanning first-to-last child */}
+      {n > 1 && (
+        <line x1={childXs[0]} y1={busY} x2={childXs[n - 1]} y2={busY}
+          stroke="var(--line)" strokeWidth={1.5} strokeOpacity={0.5} />
+      )}
+      {/* Vertical drops to each child — animated dash when child is running */}
+      {childXs.map((x, i) => {
+        const isRunning = childNodes[i]?.running;
+        return (
+          <line
+            key={i}
+            x1={x} y1={busY} x2={x} y2={H}
+            stroke={isRunning ? 'var(--ok)' : 'var(--line)'}
+            strokeWidth={isRunning ? 2 : 1.5}
+            strokeOpacity={isRunning ? 0.75 : 0.5}
+            className={isRunning && animated ? 'db-edge-running' : undefined}
+          />
+        );
+      })}
+    </svg>
+  );
 }
 
 function AgentNetworkPanel({ nodes: rawNodes, edges, onNodeClick, animated }) {
-  const nodes = rawNodes.slice(0, MAX_GRAPH_NODES);
+  // All hooks before any early return
+  const nodes = useMemo(() => rawNodes.slice(0, MAX_GRAPH_NODES), [rawNodes]);
   const nodeIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
   const validEdges = useMemo(
     () => edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target) && e.source !== e.target),
     [edges, nodeIds],
   );
-  const positions = useMemo(() => computeNetworkLayout(nodes, validEdges), [nodes, validEdges]);
+
+  // Determine delegation hierarchy: lead (most outgoing edges) + direct children
+  const { leadNode, childNodes, orphanNodes } = useMemo(() => {
+    if (validEdges.length === 0) return { leadNode: null, childNodes: [], orphanNodes: nodes };
+    const outDeg = {};
+    for (const n of nodes) outDeg[n.id] = 0;
+    for (const e of validEdges) { outDeg[e.source] = (outDeg[e.source] || 0) + 1; }
+    const sorted = [...nodes].sort((a, b) => (outDeg[b.id] || 0) - (outDeg[a.id] || 0));
+    const lead = sorted[0];
+    const childIds = new Set(
+      validEdges.filter((e) => e.source === lead.id).map((e) => e.target),
+    );
+    return {
+      leadNode: lead,
+      childNodes: nodes.filter((n) => childIds.has(n.id)),
+      orphanNodes: nodes.filter((n) => n.id !== lead.id && !childIds.has(n.id)),
+    };
+  }, [nodes, validEdges]);
+
+  const hasDelegation = leadNode !== null && childNodes.length > 0;
+  // Use tree layout only when children fit in one row without wrapping (≤ 8)
+  const useTree = hasDelegation && childNodes.length <= 8;
 
   if (nodes.length === 0) {
     return (
@@ -235,8 +335,6 @@ function AgentNetworkPanel({ nodes: rawNodes, edges, onNodeClick, animated }) {
     );
   }
 
-  const maxEdgeCount = Math.max(...validEdges.map((e) => e.count || 1), 1);
-
   return (
     <section className="panel db-network" aria-label="Agent Network">
       <h2 className="db-panel-title">
@@ -248,138 +346,105 @@ function AgentNetworkPanel({ nodes: rawNodes, edges, onNodeClick, animated }) {
           </span>
         )}
       </h2>
-      <svg
-        viewBox="0 0 560 280"
-        width="100%"
-        className="db-network-svg"
-        role="img"
-        aria-label={`Agent network graph with ${nodes.length} agent${nodes.length !== 1 ? 's' : ''} and ${validEdges.length} delegation${validEdges.length !== 1 ? 's' : ''}`}
-      >
-        <title>Agent delegation network</title>
-        <desc>
-          {`${nodes.length} agents connected by ${validEdges.length} delegation edges. See Agent Performance table below for full data.`}
-        </desc>
-        <defs>
-          <marker id="db-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-            <polygon points="0 0,8 3,0 6" fill="var(--ink-3)" opacity="0.6" />
-          </marker>
-          <marker id="db-arrow-run" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-            <polygon points="0 0,8 3,0 6" fill="var(--ok)" opacity="0.8" />
-          </marker>
-        </defs>
 
-        {/* Edges */}
-        {validEdges.map((e) => {
-          const sp = positions[e.source], tp = positions[e.target];
-          if (!sp || !tp) return null;
-          const { x1, y1, x2, y2 } = edgeTrim(sp.x, sp.y, tp.x, tp.y, NODE_R);
-          const isRunning = nodes.find((n) => n.id === e.source)?.running || nodes.find((n) => n.id === e.target)?.running;
-          const strokeW = 1 + Math.round(((e.count || 1) / maxEdgeCount) * 2);
-          return (
-            <line
-              key={`${e.source}-${e.target}`}
-              x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke={isRunning ? 'var(--ok)' : 'var(--ink-3)'}
-              strokeWidth={strokeW}
-              strokeOpacity={isRunning ? 0.7 : 0.4}
-              markerEnd={isRunning ? 'url(#db-arrow-run)' : 'url(#db-arrow)'}
-              className={isRunning ? 'db-edge-running' : ''}
-            />
-          );
-        })}
-
-        {/* Nodes */}
-        {nodes.map((node) => {
-          const pos = positions[node.id];
-          if (!pos) return null;
-          const isRunning = node.running;
-          const successPct = node.successRate != null ? Math.round(node.successRate * 100) : null;
-          const shortLabel = node.label.length > 11 ? node.label.slice(0, 10) + 'â€¦' : node.label;
-
-          return (
-            <g
-              key={node.id}
-              transform={`translate(${pos.x},${pos.y})`}
-              style={{ cursor: 'pointer' }}
-              role="button"
-              tabIndex={0}
-              aria-label={`${node.label}, ${node.runs} runs, ${successPct !== null ? `${successPct}% success` : 'no data'}${isRunning ? ', currently running' : ''}`}
-              onClick={() => onNodeClick(node.id)}
-              onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onNodeClick(node.id); } }}
-            >
-              {/* Glow ring for running nodes */}
-              {isRunning && (
-                <circle
-                  r={NODE_R + 8}
-                  fill="none"
-                  stroke="var(--ok)"
-                  strokeWidth={2}
-                  strokeOpacity={0.4}
-                  className="db-node-glow"
-                />
-              )}
-              {/* Node body */}
-              <circle
-                r={NODE_R}
-                fill={isRunning ? 'var(--ok-wash)' : 'var(--panel)'}
-                stroke={isRunning ? 'var(--ok)' : 'var(--line)'}
-                strokeWidth={isRunning ? 2 : 1.5}
+      <div className="db-agent-net">
+        {useTree ? (
+          /* Tree layout: lead card on top, connector SVG, children row below */
+          <>
+            <div className="db-agent-net-lead-row">
+              <AgentCard
+                node={leadNode}
+                animated={animated}
+                onClick={() => onNodeClick(leadNode.id)}
               />
-              {/* Run count inside circle */}
-              <text
-                textAnchor="middle"
-                dominantBaseline="central"
-                y={-3}
-                fontSize={13}
-                fontWeight={700}
-                fill={isRunning ? 'var(--ok)' : 'var(--ink)'}
-                style={{ fontVariantNumeric: 'tabular-nums' }}
-              >
-                {fmt(node.runs)}
-              </text>
-              {/* Success rate sub-label inside circle */}
-              {successPct !== null && (
-                <text
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  y={9}
-                  fontSize={9}
-                  fill={isRunning ? 'var(--ok)' : 'var(--ink-3)'}
-                >
-                  {successPct}%
-                </text>
-              )}
-              {/* Agent name below circle */}
-              <text
-                textAnchor="middle"
-                y={NODE_R + 14}
-                fontSize={11}
-                fill="var(--ink-2)"
-                fontWeight={500}
-              >
-                {shortLabel}
-              </text>
-              {/* Running indicator dot */}
-              {isRunning && (
-                <circle
-                  r={5}
-                  cx={NODE_R - 4}
-                  cy={-(NODE_R - 4)}
-                  fill="var(--ok)"
-                  className="db-node-running-dot"
+            </div>
+            <DelegationConnector childNodes={childNodes} animated={animated} />
+            <div className="db-agent-net-children-row">
+              {childNodes.map((node) => (
+                <AgentCard
+                  key={node.id}
+                  node={node}
+                  animated={animated}
+                  onClick={() => onNodeClick(node.id)}
                 />
-              )}
-            </g>
-          );
-        })}
-      </svg>
+              ))}
+            </div>
+            {orphanNodes.length > 0 && (
+              <div className="db-agent-card-grid" style={{ marginTop: 12 }}>
+                {orphanNodes.map((node) => (
+                  <AgentCard
+                    key={node.id}
+                    node={node}
+                    animated={animated}
+                    onClick={() => onNodeClick(node.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          /* Flat grid layout — no delegation or > 8 children */
+          <>
+            {leadNode && (
+              <div className="db-agent-net-lead-row" style={{ marginBottom: 12 }}>
+                <AgentCard
+                  node={leadNode}
+                  animated={animated}
+                  onClick={() => onNodeClick(leadNode.id)}
+                />
+              </div>
+            )}
+            <div className="db-agent-card-grid">
+              {[...childNodes, ...orphanNodes].map((node) => (
+                <AgentCard
+                  key={node.id}
+                  node={node}
+                  animated={animated}
+                  onClick={() => onNodeClick(node.id)}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Single-agent hint */}
+        {nodes.length === 1 && (
+          <p className="db-agent-net-hint">
+            Delegated agents appear here when the lead agent hands off work.
+          </p>
+        )}
+
+        {/* Legend */}
+        {nodes.length > 1 && (
+          <div className="db-net-legend-bar" aria-hidden="true">
+            <span className="db-net-legend-item">
+              <span className="dot dot-running" style={{ width: 8, height: 8, flexShrink: 0 }} />
+              Running
+            </span>
+            <span className="db-net-legend-item">
+              <span className="dot dot-stopped" style={{ width: 8, height: 8, flexShrink: 0 }} />
+              Idle
+            </span>
+            {hasDelegation && (
+              <span className="db-net-legend-item">
+                <svg aria-hidden="true" width={20} height={8} style={{ flexShrink: 0 }}>
+                  <line x1={0} y1={4} x2={14} y2={4}
+                    stroke="var(--ink-3)" strokeWidth={1.5} strokeOpacity={0.6} />
+                  <polygon points="12,1 16,4 12,7" fill="var(--ink-3)" opacity={0.6} />
+                </svg>
+                Delegation
+              </span>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
 
-// â”€â”€ Recent Sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Recent Sessions ───────────────────────────────────────────────────────────
 
-// fix 3: done â†’ success pill; cover all real run/session statuses
+// fix 3: done → success pill; cover all real run/session statuses
 function statusPillClass(status) {
   if (status === 'running')                          return 'pill pill-running';
   if (status === 'done' || status === 'completed')   return 'pill pill-completed';
@@ -454,12 +519,12 @@ function RecentSessionsPanel({ sessions }) {
                   className="db-session-title"
                   title={title}
                 >
-                  {title.length > 55 ? title.slice(0, 54) + 'â€¦' : title}
+                  {title.length > 55 ? title.slice(0, 54) + '…' : title}
                 </a>
                 <div className="db-session-meta">
                   {agents.length > 0 && (
-                    <span className="db-session-agents" aria-label={`Agent chain: ${agents.join(' â†’ ')}`}>
-                      {agents.slice(0, 3).join(' â†’ ')}{agents.length > 3 ? ' +' + (agents.length - 3) : ''}
+                    <span className="db-session-agents" aria-label={`Agent chain: ${agents.join(' → ')}`}>
+                      {agents.slice(0, 3).join(' → ')}{agents.length > 3 ? ' +' + (agents.length - 3) : ''}
                     </span>
                   )}
                   {s.projectName && (
@@ -484,7 +549,7 @@ function RecentSessionsPanel({ sessions }) {
   );
 }
 
-// â”€â”€ Active Session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Active Session ────────────────────────────────────────────────────────────
 
 function ActiveSessionPanel({ activeSession }) {
   if (!activeSession) {
@@ -518,7 +583,7 @@ function ActiveSessionPanel({ activeSession }) {
       </div>
       {title && (
         <p className="muted db-active-title" title={title}>
-          {title.length > 50 ? title.slice(0, 49) + 'â€¦' : title}
+          {title.length > 50 ? title.slice(0, 49) + '…' : title}
         </p>
       )}
       {agent && (
@@ -528,7 +593,7 @@ function ActiveSessionPanel({ activeSession }) {
         </div>
       )}
       {steps.length === 0 ? (
-        <p className="muted" style={{ fontSize: '0.82rem' }}>Startingâ€¦</p>
+        <p className="muted" style={{ fontSize: '0.82rem' }}>Starting…</p>
       ) : (
         <ol className="db-timeline" aria-label="Session steps">
           {steps.map((step, i) => {
@@ -587,7 +652,7 @@ function ActiveSessionPanel({ activeSession }) {
   );
 }
 
-// â”€â”€ Agent Drill-down Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Agent Drill-down Modal ────────────────────────────────────────────────────
 
 // fix 4: accepts optional agentStats (node stats) to show at the top of the modal
 function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
@@ -614,7 +679,7 @@ function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
           <h2 id="drill-title">
             <Icon name="agents" size={16} aria-hidden="true" style={{ marginRight: 6 }} />
             {agent}
-            <span className="muted" style={{ fontWeight: 400, marginLeft: 6 }}>â€” recent runs</span>
+            <span className="muted" style={{ fontWeight: 400, marginLeft: 6 }}>— recent runs</span>
           </h2>
           <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">
             <Icon name="x" size={16} />
@@ -642,7 +707,7 @@ function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
 
         {loading && (
           <div className="spinner-wrap">
-            <div className="spinner" aria-label="Loading runsâ€¦" />
+            <div className="spinner" aria-label="Loading runs…" />
           </div>
         )}
         {error && <p className="error-note" role="alert">{error}</p>}
@@ -680,16 +745,16 @@ function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
                       </span>
                     </td>
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtMs(r.durationMs)}</td>
-                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{r.costUsd != null ? formatCost(r.costUsd) : 'â€”'}</td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{r.costUsd != null ? formatCost(r.costUsd) : '—'}</td>
                     {/* fix 2: tokens is {input, output}; display total with tooltip for split */}
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>
                       {r.tokens != null
                         ? <span title={`In: ${fmtTokens(r.tokens.input)} / Out: ${fmtTokens(r.tokens.output)}`}>
                             {fmtTokens((r.tokens.input ?? 0) + (r.tokens.output ?? 0))}
                           </span>
-                        : 'â€”'}
+                        : '—'}
                     </td>
-                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{r.toolCalls ?? 'â€”'}</td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{r.toolCalls ?? '—'}</td>
                     <td className="muted" style={{ fontSize: '0.79rem', whiteSpace: 'nowrap' }}>
                       {formatRelative(r.createdAt)}
                     </td>
@@ -704,7 +769,7 @@ function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
   );
 }
 
-// â”€â”€ Agent Performance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Agent Performance ─────────────────────────────────────────────────────────
 
 const PERF_COLS = [
   { key: 'agent',          label: 'Agent',       numeric: false },
@@ -833,13 +898,13 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p50DurationMs)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p95DurationMs)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.avgDurationMs)}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row._avgCost > 0 ? formatCost(row._avgCost) : 'â€”'}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row._totalCost > 0 ? formatCost(row._totalCost) : 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row._avgCost > 0 ? formatCost(row._avgCost) : '—'}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row._totalCost > 0 ? formatCost(row._totalCost) : '—'}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtTokens(row._totalTokens)}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.toolCalls ?? 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.toolCalls ?? '—'}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                   <span style={{ color: row.toolErrors > 0 ? 'var(--danger)' : 'inherit' }}>
-                    {row.toolErrors ?? 'â€”'}
+                    {row.toolErrors ?? '—'}
                   </span>
                 </td>
                 <td className="muted" style={{ fontSize: '0.79rem', whiteSpace: 'nowrap' }}>
@@ -854,7 +919,7 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
   );
 }
 
-// â”€â”€ Dashboard (main export) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Dashboard (main export) ───────────────────────────────────────────────────
 
 export function Dashboard({ user, projects }) {
   const [data, setData] = useState(null);
@@ -943,7 +1008,7 @@ export function Dashboard({ user, projects }) {
   }, []);
 
   const greetText = greeting(user?.name || user?.email);
-  const sub = data ? `${data.summary?.activeAgents ?? 0} agents active Â· Updated ${formatRelative(data.generatedAt)}` : 'Loadingâ€¦';
+  const sub = data ? `${data.summary?.activeAgents ?? 0} agents active · Updated ${formatRelative(data.generatedAt)}` : 'Loading…';
 
   // Derived KPI values
   const summary = data?.summary ?? {};
@@ -977,7 +1042,7 @@ export function Dashboard({ user, projects }) {
       className={`page wide db-root${animated ? ' db-anim' : ''}`}
       aria-label="Dashboard"
     >
-      {/* â”€â”€ Header â”€â”€ */}
+      {/* ── Header ── */}
       <section className="db-header" aria-label="Dashboard header">
         <div>
           <h1 className="db-greeting">{greetText}</h1>
@@ -1032,15 +1097,15 @@ export function Dashboard({ user, projects }) {
         </div>
       </section>
 
-      {/* â”€â”€ Error â”€â”€ */}
+      {/* ── Error ── */}
       {error && (
         <p className="error-note" role="alert">
-          {error} â€”{' '}
+          {error} —{' '}
           <button type="button" className="btn-link" onClick={load}>Retry</button>
         </p>
       )}
 
-      {/* â”€â”€ KPI cards â”€â”€ */}
+      {/* ── KPI cards ── */}
       <div className="db-kpis" aria-label="Summary statistics">
         {loading && !data ? (
           <>
@@ -1100,7 +1165,7 @@ export function Dashboard({ user, projects }) {
         )}
       </div>
 
-      {/* â”€â”€ Main grid: Network | Active Session â”€â”€ */}
+      {/* ── Main grid: Network | Active Session ── */}
       <div className="db-main-grid">
         {loading && !data ? (
           <>
@@ -1125,7 +1190,7 @@ export function Dashboard({ user, projects }) {
         )}
       </div>
 
-      {/* â”€â”€ Bottom grid: Recent Sessions | Agent Performance â”€â”€ */}
+      {/* ── Bottom grid: Recent Sessions | Agent Performance ── */}
       <div className="db-bottom-grid">
         {loading && !data ? (
           <>
@@ -1153,7 +1218,7 @@ export function Dashboard({ user, projects }) {
         )}
       </div>
 
-      {/* â”€â”€ fix 4: shared drill-down modal used by both network-node clicks and table row clicks â”€â”€ */}
+      {/* ── fix 4: shared drill-down modal used by both network-node clicks and table row clicks ── */}
       {drillAgent && (
         <DrillModal
           agent={drillAgent}

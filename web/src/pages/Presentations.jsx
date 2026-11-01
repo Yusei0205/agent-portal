@@ -3,7 +3,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
-import { BulkActionBar, BulkSelectHint } from '../components/BulkActionBar.jsx';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 
@@ -14,8 +14,9 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-function StatusBadge({ stale, hasPptx }) {
+function StatusBadge({ stale, hasPptx, status }) {
   if (stale) return <span className="badge badge-warn">Stale</span>;
+  if (status === 'failed') return <span className="badge badge-error">Failed</span>;
   if (hasPptx) return <span className="badge badge-ok">Ready</span>;
   return <span className="badge badge-info">Generating…</span>;
 }
@@ -338,6 +339,7 @@ export function Presentations({ projectId }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [preview, setPreview] = useState(null); // { name, slides }
   const [refreshingPres, setRefreshingPres] = useState(null);
+  const [retryingIds, setRetryingIds] = useState(new Set());
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
 
@@ -375,18 +377,33 @@ export function Presentations({ projectId }) {
     setRefreshingPres(presentation);
   };
 
+  const handleRetryPres = async (id) => {
+    setRetryingIds((prev) => { const s = new Set(prev); s.add(id); return s; });
+    try {
+      const r = await api.post(`/api/projects/${projectId}/presentations/${id}/retry`, {});
+      setPresentations((prev) => prev.map((p) => p.id === id ? { ...p, ...(r.presentation ?? {}) } : p));
+    } catch (err) {
+      toast(err.message || 'Failed to retry', 'error');
+    } finally {
+      setRetryingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  };
+
   const handleBulkDelete = async () => {
     const ok = await requestConfirm(`Delete ${selected.size} presentation(s)?`, 'Delete', 'danger');
     if (!ok) return;
     setBulkBusy(true);
     try {
-      for (const id of selected) {
-        await api.delete(`/api/projects/${projectId}/presentations/${id}`);
-      }
+      const toDelete = new Set(selected); // capture before state changes
+      await Promise.all([...toDelete].map((id) =>
+        api.delete(`/api/projects/${projectId}/presentations/${id}`)
+      ));
+      // Remove deleted items from state immediately — no reload delay.
+      setPresentations((prev) => prev.filter((p) => !toDelete.has(p.id)));
       setSelected(new Set());
-      load();
     } catch (err) {
       toast(err.message || 'Failed to delete', 'error');
+      load(); // re-sync with server on partial failure
     } finally {
       setBulkBusy(false);
     }
@@ -431,12 +448,11 @@ export function Presentations({ projectId }) {
         </div>
       ) : (
         <>
-          <BulkSelectHint selected={selected.size} total={presentations.length} />
 
-          <table className="data-table" aria-label="Presentations">
+          <table className="data-table" aria-label="Presentations" data-has-sel={selected.size > 0 ? '' : undefined}>
             <thead>
               <tr>
-                <th>
+                <th className="sel-col">
                   <input
                     type="checkbox"
                     checked={selected.size === presentations.length && presentations.length > 0}
@@ -454,8 +470,8 @@ export function Presentations({ projectId }) {
             </thead>
             <tbody>
               {presentations.map((p) => (
-                <tr key={p.id}>
-                  <td>
+                <tr key={p.id} className={selected.has(p.id) ? 'is-selected' : ''}>
+                  <td className="sel-col">
                     <input
                       type="checkbox"
                       checked={selected.has(p.id)}
@@ -475,6 +491,9 @@ export function Presentations({ projectId }) {
                         {' '}{p.attachments.length}
                       </span>
                     )}
+                    {p.status === 'failed' && p.error && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>{p.error}</div>
+                    )}
                   </td>
                   <td className="table-muted">
                     {p.source_kind === 'topic' ? (
@@ -485,7 +504,7 @@ export function Presentations({ projectId }) {
                   </td>
                   <td>{p.slide_count}</td>
                   <td>
-                    <StatusBadge stale={p.stale} hasPptx={Boolean(p.pptx_path)} />
+                    <StatusBadge stale={p.stale} hasPptx={Boolean(p.pptx_path)} status={p.status} />
                   </td>
                   <td className="table-muted">{formatDate(p.updated_at)}</td>
                   <td>
@@ -506,6 +525,17 @@ export function Presentations({ projectId }) {
                           onClick={() => setPreview({ name: p.name, slides: p.preview_json })}
                         >
                           View slides
+                        </button>
+                      )}
+                      {p.status === 'failed' && p.retryable && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => handleRetryPres(p.id)}
+                          disabled={retryingIds.has(p.id)}
+                          aria-label={`Retry ${p.name}`}
+                        >
+                          {retryingIds.has(p.id) ? 'Retrying\u2026' : 'Retry'}
                         </button>
                       )}
                       <button
@@ -533,7 +563,7 @@ export function Presentations({ projectId }) {
 
           {selected.size > 0 && (
             <BulkActionBar
-              count={selected.size}
+              selected={selected}
               busy={bulkBusy}
               onDelete={handleBulkDelete}
               onClear={() => setSelected(new Set())}

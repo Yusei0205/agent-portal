@@ -18,7 +18,7 @@ import createDOMPurify from 'dompurify';
 
 // ── Import the pure merge helper directly ────────────────────────────────────
 // @ts-expect-error — plain-JS module without types
-import { mergeConsecutiveAssistantText } from '../web/src/lib/mergeEvents.js';
+import { mergeConsecutiveAssistantText, collectThoughtParagraphs } from '../web/src/lib/mergeEvents.js';
 
 // ── Replicate sanitize.js configuration with a JSDOM window ─────────────────
 // We cannot import web/src/lib/sanitize.js in Node.js because DOMPurify's
@@ -129,6 +129,22 @@ describe('mergeConsecutiveAssistantText — newline separator', () => {
     const [merged] = mergeConsecutiveAssistantText(events);
     // Empty chunk is skipped; separator is still inserted before 'world'
     assert.equal(merged.payload.text, 'hello\nworld');
+  });
+
+  it('joins streamed chunks as-is, even mid-word and mid-markdown', () => {
+    const s = (text: string, id: string) => ({ type: 'assistant-text', id, payload: { text, stream: true } });
+    const events = [s("I haven't tested an", '1'), s('ything yet. **What', '2'), s("'s at the URL:**", '3')];
+    const [merged] = mergeConsecutiveAssistantText(events);
+    assert.equal(merged.payload.text, "I haven't tested anything yet. **What's at the URL:**");
+  });
+
+  it('still separates a non-streamed chunk that follows a streamed one', () => {
+    const events = [
+      { type: 'assistant-text', id: '1', payload: { text: 'streamed', stream: true } },
+      makeTextEvent('plain', '2'),
+    ];
+    const [merged] = mergeConsecutiveAssistantText(events);
+    assert.equal(merged.payload.text, 'streamed\nplain');
   });
 });
 
@@ -299,5 +315,236 @@ describe('sanitizeMarkdown — link target hook', () => {
     const out = sanitize('<a href="https://example.com" rel="follow">link</a>');
     assert.ok(out.includes('rel="noopener noreferrer"'), `rel not replaced: ${out}`);
     assert.ok(!out.includes('rel="follow"'), `old rel not removed: ${out}`);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// collectThoughtParagraphs
+// ══════════════════════════════════════════════════════════════════════════════
+
+describe('collectThoughtParagraphs', () => {
+  const thought = (text: string) => ({ type: 'agent-thought', payload: { text } });
+
+  it('joins streamed reasoning chunks as sent, even mid-word', () => {
+    const events = [
+      thought('I'), thought(' need to figure out what'), thought(' ISD'), thought(' ref'),
+      thought('ers to in this cod'), thought('ebase before writing the sp'), thought('ec.'),
+    ];
+    assert.deepEqual(collectThoughtParagraphs(events), [
+      'I need to figure out what ISD refers to in this codebase before writing the spec.',
+    ]);
+  });
+
+  it('starts a new paragraph when a tool call sits between thoughts', () => {
+    const events = [
+      thought('First I search'), thought(' the repo.'),
+      { type: 'tool-start', payload: { toolName: 'grep' } },
+      { type: 'tool-end', payload: {} },
+      thought('Now I read'), thought(' the results.'),
+    ];
+    assert.deepEqual(collectThoughtParagraphs(events), [
+      'First I search the repo.',
+      'Now I read the results.',
+    ]);
+  });
+
+  it('ignores empty chunks and returns nothing when there are no thoughts', () => {
+    assert.deepEqual(collectThoughtParagraphs([thought(''), thought('  ')]), []);
+    assert.deepEqual(collectThoughtParagraphs([{ type: 'assistant-text', payload: { text: 'hi' } }]), []);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// mergeEventLists
+// ══════════════════════════════════════════════════════════════════════════════
+
+// @ts-expect-error — plain-JS module without types
+import { mergeEventLists } from '../web/src/lib/mergeEvents.js';
+
+/** Build a transcript-style run event (src='r') with the given timestamp. */
+function makeRunEvent(
+  id: number,
+  type: string,
+  createdAt: string,
+  runId = 'run-1',
+) {
+  return { src: 'r' as const, id, type, created_at: createdAt, run_id: runId, payload: {} };
+}
+
+/** Build a transcript-style workflow event (src='w') — e.g. a human message. */
+function makeWorkflowEvent(id: number, type: string, createdAt: string) {
+  return { src: 'w' as const, id, type, created_at: createdAt, run_id: null, payload: {} };
+}
+
+/** Build a stream event (no src field — treated as 'r' by mergeEventLists). */
+function makeStreamEvent(id: number, type: string, createdAt: string, runId = 'run-1') {
+  return { id, type, created_at: createdAt, run_id: runId, payload: {} };
+}
+
+// ── Snapshot-then-stream (the primary bug regression) ─────────────────────────
+
+describe('mergeEventLists — snapshot-then-stream', () => {
+  it('produces one ordered copy when the snapshot holds only the tail and the stream has the full run', () => {
+    // Simulate 5 events from run-1. The transcript snapshot captured only the
+    // last 3 (the agent was already mid-response when the 50-event page filled).
+    const snapshotTail = [
+      makeRunEvent(3, 'assistant-text', '2024-01-01T00:00:03Z'),
+      makeRunEvent(4, 'tool-start',     '2024-01-01T00:00:04Z'),
+      makeRunEvent(5, 'run-complete',   '2024-01-01T00:00:05Z'),
+    ];
+    // The full stream copy has all 5.
+    const streamFull = [
+      makeStreamEvent(1, 'human',          '2024-01-01T00:00:01Z'),
+      makeStreamEvent(2, 'assistant-text', '2024-01-01T00:00:02Z'),
+      makeStreamEvent(3, 'assistant-text', '2024-01-01T00:00:03Z'),
+      makeStreamEvent(4, 'tool-start',     '2024-01-01T00:00:04Z'),
+      makeStreamEvent(5, 'run-complete',   '2024-01-01T00:00:05Z'),
+    ];
+
+    const merged = mergeEventLists(snapshotTail, streamFull);
+
+    assert.equal(merged.length, 5, 'all 5 events, no duplicates');
+
+    // Must be in chronological order
+    const ids = merged.map((e: { id: number }) => e.id);
+    assert.deepEqual(ids, [1, 2, 3, 4, 5], 'events sorted oldest-first');
+  });
+
+  it('uses the stream version of an event when both snapshot and stream carry it', () => {
+    // Both contain id=3 as 'r' source (stream has no src field, treated as 'r').
+    const snapshot = [makeRunEvent(3, 'assistant-text', '2024-01-01T00:00:03Z')];
+    const stream   = [makeStreamEvent(3, 'assistant-text', '2024-01-01T00:00:03Z')];
+
+    const merged = mergeEventLists(snapshot, stream);
+
+    assert.equal(merged.length, 1, 'deduplicated to one event');
+    // stream (b) should win — it has no src field
+    assert.equal(merged[0].src, undefined, 'stream version kept (no src field)');
+  });
+
+  it('combines head-only-in-stream with tail-only-in-snapshot in correct order', () => {
+    // Snapshot: only events 3–5 (ids in created_at order)
+    const snapshot = [
+      makeRunEvent(3, 'assistant-text', '2024-01-01T00:00:03Z'),
+      makeRunEvent(4, 'tool-start',     '2024-01-01T00:00:04Z'),
+      makeRunEvent(5, 'run-complete',   '2024-01-01T00:00:05Z'),
+    ];
+    // Stream: all 5; events 3–5 duplicate the snapshot.
+    const stream = [
+      makeStreamEvent(1, 'human',          '2024-01-01T00:00:01Z'),
+      makeStreamEvent(2, 'assistant-text', '2024-01-01T00:00:02Z'),
+      makeStreamEvent(3, 'assistant-text', '2024-01-01T00:00:03Z'),
+      makeStreamEvent(4, 'tool-start',     '2024-01-01T00:00:04Z'),
+      makeStreamEvent(5, 'run-complete',   '2024-01-01T00:00:05Z'),
+    ];
+
+    const merged = mergeEventLists(snapshot, stream);
+    assert.equal(merged.length, 5);
+    assert.deepEqual(
+      merged.map((e: { id: number }) => e.id),
+      [1, 2, 3, 4, 5],
+    );
+  });
+});
+
+// ── r/w id collisions ─────────────────────────────────────────────────────────
+
+describe('mergeEventLists — r/w id collision', () => {
+  it('keeps both r:5 and w:5 as separate events', () => {
+    const rEvent = makeRunEvent(5, 'assistant-text', '2024-01-01T00:00:05Z');
+    const wEvent = makeWorkflowEvent(5, 'human',         '2024-01-01T00:00:05Z');
+
+    const merged = mergeEventLists([rEvent], [wEvent]);
+
+    assert.equal(merged.length, 2, 'both events kept');
+    const srcs = merged.map((e: { src: string }) => e.src).sort();
+    assert.deepEqual(srcs, ['r', 'w']);
+  });
+
+  it('deduplicates r:5 when the same event appears in both lists as src=r', () => {
+    const a = makeRunEvent(5, 'assistant-text', '2024-01-01T00:00:05Z');
+    const b = makeStreamEvent(5, 'assistant-text', '2024-01-01T00:00:05Z'); // no src → 'r'
+
+    const merged = mergeEventLists([a], [b]);
+    assert.equal(merged.length, 1, 'r:5 deduplicated to one entry');
+  });
+});
+
+// ── Same-timestamp ordering ───────────────────────────────────────────────────
+
+describe('mergeEventLists — same-timestamp ordering', () => {
+  it("places src='r' before src='w' at the same created_at", () => {
+    const ts = '2024-01-01T00:00:01Z';
+    // Pass w first to ensure the sort, not insertion order, determines position.
+    const wEv = makeWorkflowEvent(10, 'human', ts);
+    const rEv = makeRunEvent(10, 'assistant-text', ts); // same id, different src → different key
+
+    const merged = mergeEventLists([wEv], [rEv]);
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0].src, 'r', "'r' comes first at same timestamp");
+    assert.equal(merged[1].src, 'w', "'w' comes second at same timestamp");
+  });
+
+  it('sorts by id within the same timestamp and src', () => {
+    const ts = '2024-01-01T00:00:01Z';
+    const e1 = makeRunEvent(20, 'assistant-text', ts);
+    const e2 = makeRunEvent(10, 'assistant-text', ts);
+    const merged = mergeEventLists([e1], [e2]);
+    assert.deepEqual(merged.map((e: { id: number }) => e.id), [10, 20]);
+  });
+});
+
+// ── Load-earlier prepending ────────────────────────────────────────────────────
+
+describe('mergeEventLists — load-earlier prepending', () => {
+  it('places older events before newer events regardless of argument order', () => {
+    const older = [
+      makeRunEvent(1, 'human',          '2024-01-01T00:00:01Z'),
+      makeRunEvent(2, 'assistant-text', '2024-01-01T00:00:02Z'),
+    ];
+    const newer = [
+      makeRunEvent(3, 'human',          '2024-01-01T00:00:03Z'),
+      makeRunEvent(4, 'assistant-text', '2024-01-01T00:00:04Z'),
+    ];
+
+    // mergeEventLists(older, newer) and mergeEventLists(newer, older) should
+    // produce the same chronological result.
+    const fwd = mergeEventLists(older, newer);
+    const rev = mergeEventLists(newer, older);
+    const expectedIds = [1, 2, 3, 4];
+    assert.deepEqual(fwd.map((e: { id: number }) => e.id), expectedIds);
+    assert.deepEqual(rev.map((e: { id: number }) => e.id), expectedIds);
+  });
+
+  it('deduplicates events that appear in both the earlier page and the existing list', () => {
+    // This happens when the auto-initial-load already fetched page 2 but the
+    // user then also clicks "Load earlier" and gets some of the same events.
+    const existing = [
+      makeRunEvent(1, 'human',          '2024-01-01T00:00:01Z'),
+      makeRunEvent(2, 'assistant-text', '2024-01-01T00:00:02Z'),
+      makeRunEvent(3, 'run-complete',   '2024-01-01T00:00:03Z'),
+    ];
+    const loadedPage = [
+      makeRunEvent(0, 'human',          '2024-01-01T00:00:00Z'),
+      makeRunEvent(1, 'human',          '2024-01-01T00:00:01Z'), // duplicate
+    ];
+
+    const merged = mergeEventLists(loadedPage, existing);
+    assert.equal(merged.length, 4, 'duplicate id=1 removed');
+    assert.deepEqual(
+      merged.map((e: { id: number }) => e.id),
+      [0, 1, 2, 3],
+    );
+  });
+});
+
+// ── Events without id ─────────────────────────────────────────────────────────
+
+describe('mergeEventLists — events without id', () => {
+  it('includes id-less events from both lists without deduplication', () => {
+    const a = [{ type: 'status', created_at: '2024-01-01T00:00:01Z', payload: {} }];
+    const b = [{ type: 'status', created_at: '2024-01-01T00:00:02Z', payload: {} }];
+    const merged = mergeEventLists(a, b);
+    assert.equal(merged.length, 2);
   });
 });

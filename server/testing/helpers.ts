@@ -98,7 +98,10 @@ export interface TestGeneration extends Row {
   warnings: string;
   created_by: string | null;
   created_at: string;
+  started_at: string | null;
   finished_at: string | null;
+  progress: string;
+  cancelled_at: string | null;
 }
 
 // ── Scope helpers ──────────────────────────────────────────────────────────────

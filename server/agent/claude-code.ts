@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Claude Code engine — runs agent workflows via the @anthropic-ai/claude-agent-sdk.
  *
  * Supports providers:
@@ -18,16 +18,29 @@
  */
 
 import path from 'node:path';
+import fs from 'node:fs';
 import { one, run as dbRun, insert } from '../db.ts';
 import type { Row } from '../db.ts';
 import { now, generateId, HttpError } from '../util.ts';
 import { evaluateCommand } from '../guardrails.ts';
 import { getSettings, getAgentEnv } from '../settings.ts';
 import { resolveCredentialEnv } from '../credentials.ts';
+import {
+  rewritePlaywrightMcpHeadless,
+  rewritePlaywrightMcpCdp,
+  hasPlaywrightMcpEntry,
+} from './browser-headless.ts';
+import { launchSessionBrowser } from './browser-manager.ts';
 import { getRunHomeDir } from '../user-config.ts';
 import { estimateCost } from './pricing.ts';
 import type { RunContext } from './types.ts';
 import { getDelegationSettings, createChildSession } from '../delegation.ts';
+import { buildConversationRecap } from './recap.ts';
+import {
+  persistClaudeTranscripts,
+  restoreClaudeTranscripts,
+  claudeProjectDirName,
+} from './claude-sessions.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -156,6 +169,27 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     if (process.platform === 'win32') {
       sdkEnv.USERPROFILE = homeDir;
     }
+    // Set a stable project dir name so transcripts land at a predictable path:
+    // <homeDir>/.claude/projects/<workflowId-slug>/<sessionId>.jsonl
+    sdkEnv.CLAUDE_CODE_PROJECT_DIR_NAME = claudeProjectDirName(run.workflowId);
+    // Restore transcript files from previous runs before the engine starts
+    await restoreClaudeTranscripts(run.workDir, homeDir);
+    // Playwright MCP: connect to the portal's live session browser when possible
+    // (same as Kiro), otherwise run headless with output in workDir/.browser/.
+    const claudeSettingsPath = path.join(homeDir, '.claude', 'settings.json');
+    let live = false;
+    if (await hasPlaywrightMcpEntry(claudeSettingsPath)) {
+      try {
+        const cdpEndpoint = await launchSessionBrowser(run.workflowId, run.workDir);
+        live = await rewritePlaywrightMcpCdp(claudeSettingsPath, run.workDir, cdpEndpoint);
+        if (!live) emit('status', { text: 'Live browser rewrite failed. Falling back to headless.' });
+      } catch (launchErr: unknown) {
+        emit('status', {
+          text: `Live browser unavailable — ${String((launchErr as Error)?.message ?? launchErr)}. Falling back to headless.`,
+        });
+      }
+    }
+    if (!live) await rewritePlaywrightMcpHeadless(claudeSettingsPath, run.workDir);
   }
 
   if (!sdkEnv.ANTHROPIC_API_KEY && !sdkEnv.CLAUDE_CODE_USE_BEDROCK && !sdkEnv.CLAUDE_CODE_OAUTH_TOKEN) {
@@ -279,6 +313,17 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     prompt = `${run.goal}\n\n${REVIEW_SYSTEM_APPEND}`;
   }
 
+  // ── Prepend recap for sessions without a stored id ─────────────────────────
+  // When there's no engine_session_id but there are prior completed runs
+  // (and no /clear since the last one), give the engine a context recap.
+  if (!run.engineSessionId) {
+    const recap = buildConversationRecap(run.workflowId, run.runId);
+    if (recap) {
+      prompt = recap + prompt;
+      emit('status', { text: 'Started a new session with a recap of earlier turns' });
+    }
+  }
+
   // ── In-process MCP server for delegation (F7) ─────────────────────────────
   // Expose delegate_session as a custom tool when delegation is enabled and
   // the workflow has an owner. The tool creates a child session immediately and
@@ -348,9 +393,19 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     }
   }
 
-  try {
+  // Emit continuity status when resuming a known session
+  if (run.engineSessionId) {
+    emit('status', { text: 'Continuing the previous Claude Code session' });
+  }
+
+  // Active prompt may be rebuilt on retry (recap prepended)
+  let activePrompt = prompt;
+  let resumeId: string | null = run.engineSessionId;
+  let didRetryWithoutResume = false;
+
+  const runSdkQuery = async (): Promise<void> => {
     const q = sdk.query({
-      prompt,
+      prompt: activePrompt,
       options: {
         cwd: run.workDir,
         model,
@@ -364,6 +419,8 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         allowedTools: [],
         // Suppress CLAUDE.md system prompt loading from PORTAL's cwd (not the run's cwd)
         settingSources: [],
+        // Resume previous session if available (F-SESSION-RESUME)
+        ...(resumeId ? { resume: resumeId } : {}),
         // In-process delegation MCP server (F7)
         ...(delegationMcpServers ? { mcpServers: delegationMcpServers as unknown as Record<string, object> } : {}),
       },
@@ -410,7 +467,6 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
               runningSubagents++;
               if (!nudgeFired && nudgeThreshold > 0 && runningSubagents >= nudgeThreshold) {
                 nudgeFired = true;
-                // Record nudge event via ctx.emit (writes to p6_events + SSE)
                 emit('subagent-nudge', {
                   runningSubagents,
                   threshold: nudgeThreshold,
@@ -460,18 +516,62 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         if (typeof sdkCost === 'number' && sdkCost > 0) {
           totalCostUsd = sdkCost;
         }
+        // Capture session_id for conversation continuity (F-SESSION-RESUME)
+        const sdkSessionId = (msg as Record<string, unknown>).session_id;
+        if (typeof sdkSessionId === 'string' && sdkSessionId) {
+          dbRun(
+            'UPDATE p6_workflows SET engine_session_id = ?, engine_session_engine = ?, updated_at = ? WHERE id = ?',
+            sdkSessionId, 'claude-code', now(), run.workflowId,
+          );
+        }
       }
     }
+  };
+
+  try {
+    await runSdkQuery();
   } catch (e: unknown) {
     const isAbort =
       (e as { name?: string })?.name === 'AbortError' || abortController.signal.aborted;
     if (isAbort) {
       throw new DOMException('Run cancelled', 'AbortError');
     }
-    throw e;
+
+    // If we tried to resume and it failed, retry once without resume
+    if (resumeId && !didRetryWithoutResume) {
+      const reason = String((e as Error)?.message ?? e).slice(0, 200);
+      const recap = buildConversationRecap(run.workflowId, run.runId);
+      const basePrompt = run.kind === 'review' ? `${run.goal}\n\n${REVIEW_SYSTEM_APPEND}` : run.goal;
+      activePrompt = recap ? recap + basePrompt : basePrompt;
+      emit('status', {
+        text: `Started a new session with a recap of earlier turns (could not resume: ${reason})`,
+      });
+      resumeId = null;
+      didRetryWithoutResume = true;
+      // Reset per-attempt state before retry
+      textParts.length = 0;
+      totalInputTokens = 0; totalOutputTokens = 0;
+      totalCacheWriteTokens = 0; totalCacheReadTokens = 0;
+      totalCostUsd = 0;
+      pendingToolUses.clear();
+      try {
+        await runSdkQuery();
+      } catch (e2: unknown) {
+        const isAbort2 =
+          (e2 as { name?: string })?.name === 'AbortError' || abortController.signal.aborted;
+        if (isAbort2) throw new DOMException('Run cancelled', 'AbortError');
+        throw e2;
+      }
+    } else {
+      throw e;
+    }
   } finally {
     if (ctx.signal) {
       ctx.signal.removeEventListener('abort', onAbort);
+    }
+    // Persist Claude transcripts before cleanupRunHome deletes the temp home
+    if (homeDir) {
+      await persistClaudeTranscripts(homeDir, run.workDir).catch(() => {});
     }
   }
 

@@ -2,6 +2,11 @@
  * Test fixtures and helpers for P0 foundation tests.
  */
 
+// Prevent background git operations from spawning real subprocesses.
+// Without this, every repo POST triggers a git clone that keeps the event
+// loop alive well past server close, causing the per-file kill timeout.
+process.env.PORTAL_DISABLE_GIT_SYNC = '1';
+
 import type { DatabaseSync } from 'node:sqlite';
 import { openDb, closeDb, isDbOpen } from '../server/db.ts';
 import { setConfig } from '../server/config.ts';
@@ -131,6 +136,9 @@ export async function fetchJson(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Requested-With': 'agent-portal',
+    // Prevent keep-alive connections so the event loop drains cleanly after
+    // cleanup() closes the server — otherwise undici's pool lingers for seconds.
+    'Connection': 'close',
     ...opts.headers,
   };
   if (opts.cookie) headers['Cookie'] = opts.cookie;

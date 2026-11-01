@@ -15,7 +15,8 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all } from './db.ts';
 import type { Row } from './db.ts';
 import { config } from './config.ts';
-import { addLiveSubscriber } from './events.ts';
+import { subscribeRun } from './events.ts';
+import type { RunEventRow } from './events.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -134,16 +135,30 @@ export function registerRunRoutes(): void {
 
   // GET /api/runs/:id/events (SSE stream)
   router.sse('/api/runs/:id/events', (req: PortalRequest, res: PortalResponse): void => {
-    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
-    const r = one<Row>('SELECT * FROM p6_runs WHERE id = ?', req.params.id);
-    if (!r) { sendJson(res, 404, { error: 'Run not found' }); return; }
-    const workflow = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', r.workflow_id as string);
-    if (!workflow) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    // Same project-membership check as the other run routes.
+    const workflow = requireRunAccess(req, res, req.params.id);
+    if (!workflow) return;
+    const runId = req.params.id;
 
-    // Replay past events first, then subscribe for new ones
+    // Listen before reading history so an event stored in between isn't lost.
+    // Events seen in the replay are skipped by id.
+    const queued: RunEventRow[] = [];
+    let replayed = false;
+    let lastId = 0;
+    const send = (ev: { id: unknown }): void => {
+      if (res.writableEnded) return;
+      res.write(`data: ${JSON.stringify({ type: 'event', event: ev })}\n\n`);
+    };
+    const unsubscribeRun = subscribeRun(runId, (ev) => {
+      if (!replayed) { queued.push(ev); return; }
+      if (ev.id <= lastId) return;
+      lastId = ev.id;
+      send(ev);
+    });
+
     const past = all<Row>(
       'SELECT * FROM p6_events WHERE run_id = ? ORDER BY id ASC',
-      req.params.id,
+      runId,
     );
 
     // Write SSE headers
@@ -155,18 +170,24 @@ export function registerRunRoutes(): void {
     });
     res.write(': connected\n\n');
 
-    // Replay historical events
+    // Replay historical events, then anything that arrived meanwhile
     for (const e of past) {
-      const data = JSON.stringify({ type: 'event', event: eventView(e) });
-      if (!res.writableEnded) res.write(`data: ${data}\n\n`);
+      lastId = Math.max(lastId, Number(e.id));
+      send(eventView(e));
+    }
+    replayed = true;
+    for (const ev of queued) {
+      if (ev.id > lastId) { lastId = ev.id; send(ev); }
     }
 
-    // Subscribe to live events for this project
-    if (workflow.project_id) {
-      // addLiveSubscriber does NOT write headers (they are already sent above),
-      // but sets up the keep-alive heartbeat and auto-cleanup on close.
-      addLiveSubscriber(String(workflow.project_id), res);
-    }
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, 25_000);
+    heartbeat.unref();
+    res.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribeRun();
+    });
   });
 
   // GET /api/runs/:id/files

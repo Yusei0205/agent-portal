@@ -18,8 +18,19 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
+import os from 'node:os';
+import { createTestServer, createTestConfig, cleanup, fetchJson } from './fixtures.ts';
+import { setConfig } from '../server/config.ts';
+import { openDb, closeDb, isDbOpen, run as dbRun } from '../server/db.ts';
+import { startServer } from '../server/index.ts';
+import {
+  shouldIncludeLocalFile,
+  redactJsonSecrets,
+  importLocalConfig,
+  backupUserConfigFolder,
+} from '../server/user-config.ts';
 
 // ── Multipart zip helper ──────────────────────────────────────────────────────
 
@@ -748,5 +759,601 @@ describe('User Config API token write scope', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(r.status, 403, 'read-scope token must not write');
+  });
+});
+
+// ── shouldIncludeLocalFile — include/exclude rules ────────────────────────────
+
+describe('shouldIncludeLocalFile — include/exclude rules', () => {
+  // kiro — included paths
+  it('kiro: agents/backend-agent.json → included', () => {
+    const r = shouldIncludeLocalFile('kiro', 'agents/backend-agent.json', 100);
+    assert.equal(r.include, true);
+  });
+
+  it('kiro: skills/backend-patterns/skill.md → included', () => {
+    const r = shouldIncludeLocalFile('kiro', 'skills/backend-patterns/skill.md', 200);
+    assert.equal(r.include, true);
+  });
+
+  it('kiro: steering/rules.md → included', () => {
+    const r = shouldIncludeLocalFile('kiro', 'steering/rules.md', 50);
+    assert.equal(r.include, true);
+  });
+
+  it('kiro: hooks/pre-run.sh → included', () => {
+    const r = shouldIncludeLocalFile('kiro', 'hooks/pre-run.sh', 80);
+    assert.equal(r.include, true);
+  });
+
+  it('kiro: settings/mcp.json → included', () => {
+    const r = shouldIncludeLocalFile('kiro', 'settings/mcp.json', 500);
+    assert.equal(r.include, true);
+  });
+
+  it('kiro: settings/cli.json → included', () => {
+    const r = shouldIncludeLocalFile('kiro', 'settings/cli.json', 100);
+    assert.equal(r.include, true);
+  });
+
+  // kiro — excluded: not in included dirs
+  it('kiro: sessions/abc.json → excluded (not in included dir)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'sessions/abc.json', 100);
+    assert.equal(r.include, false);
+    assert.ok(r.reason?.includes('sessions'));
+  });
+
+  it('kiro: secrets.json → excluded (root-level file)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'secrets.json', 50);
+    assert.equal(r.include, false);
+  });
+
+  it('kiro: brain/data.json → excluded (not in included dir)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'brain/data.json', 50);
+    assert.equal(r.include, false);
+  });
+
+  it('kiro: argv.json → excluded (root-level file)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'argv.json', 50);
+    assert.equal(r.include, false);
+  });
+
+  // kiro — excluded: excluded dir segments
+  it('kiro: agents/cache/data.json → excluded (cache dir)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'agents/cache/data.json', 100);
+    assert.equal(r.include, false);
+    assert.ok(r.reason?.includes('cache'));
+  });
+
+  it('kiro: skills/state/x.md → excluded (state dir)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'skills/state/x.md', 100);
+    assert.equal(r.include, false);
+  });
+
+  // kiro — excluded: file name patterns
+  it('kiro: agents/.credentials.json → excluded (name)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'agents/.credentials.json', 50);
+    assert.equal(r.include, false);
+  });
+
+  it('kiro: settings/mcp-needs-auth-cache.json → excluded (name pattern)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'settings/mcp-needs-auth-cache.json', 50);
+    assert.equal(r.include, false);
+  });
+
+  it('kiro: agents/backend-agent.json.bak → excluded (bak pattern)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'agents/backend-agent.json.bak', 50);
+    assert.equal(r.include, false);
+  });
+
+  it('kiro: settings/cli.json.lock → excluded (lock pattern)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'settings/cli.json.lock', 10);
+    assert.equal(r.include, false);
+  });
+
+  it('kiro: agents/.DS_Store → excluded (name)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'agents/.DS_Store', 6);
+    assert.equal(r.include, false);
+  });
+
+  it('kiro: agents/db.sqlite3 → excluded (sqlite pattern)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'agents/db.sqlite3', 200);
+    assert.equal(r.include, false);
+  });
+
+  // kiro — excluded: size limit
+  it('kiro: agents/big.md (2 MB) → excluded (too large)', () => {
+    const r = shouldIncludeLocalFile('kiro', 'agents/big.md', 2 * 1024 * 1024);
+    assert.equal(r.include, false);
+    assert.ok(r.reason?.includes('large'));
+  });
+
+  // claude — included
+  it('claude: CLAUDE.md → included (root file)', () => {
+    const r = shouldIncludeLocalFile('claude', 'CLAUDE.md', 500);
+    assert.equal(r.include, true);
+  });
+
+  it('claude: settings.json → included (root file)', () => {
+    const r = shouldIncludeLocalFile('claude', 'settings.json', 300);
+    assert.equal(r.include, true);
+  });
+
+  it('claude: agents/backend-agent.md → included', () => {
+    const r = shouldIncludeLocalFile('claude', 'agents/backend-agent.md', 200);
+    assert.equal(r.include, true);
+  });
+
+  it('claude: skills/backend-cdk/skill.md → included', () => {
+    const r = shouldIncludeLocalFile('claude', 'skills/backend-cdk/skill.md', 200);
+    assert.equal(r.include, true);
+  });
+
+  it('claude: hooks/pre-run.sh → included', () => {
+    const r = shouldIncludeLocalFile('claude', 'hooks/pre-run.sh', 50);
+    assert.equal(r.include, true);
+  });
+
+  // claude — excluded
+  it('claude: .credentials.json → excluded (root-level name)', () => {
+    const r = shouldIncludeLocalFile('claude', '.credentials.json', 50);
+    assert.equal(r.include, false);
+  });
+
+  it('claude: history.jsonl → excluded (root-level name)', () => {
+    const r = shouldIncludeLocalFile('claude', 'history.jsonl', 50);
+    assert.equal(r.include, false);
+  });
+
+  it('claude: projects/my-project/CLAUDE.md → excluded (projects dir)', () => {
+    const r = shouldIncludeLocalFile('claude', 'projects/my-project/CLAUDE.md', 100);
+    assert.equal(r.include, false);
+  });
+
+  it('claude: sessions/abc/x.json → excluded (sessions dir)', () => {
+    const r = shouldIncludeLocalFile('claude', 'sessions/abc/x.json', 100);
+    assert.equal(r.include, false);
+  });
+
+  it('claude: skills/.trash/deleted.md → excluded (.trash dir)', () => {
+    const r = shouldIncludeLocalFile('claude', 'skills/.trash/deleted.md', 100);
+    assert.equal(r.include, false);
+  });
+
+  it('claude: plugins/cache/abc.json → excluded (cache dir)', () => {
+    const r = shouldIncludeLocalFile('claude', 'plugins/cache/abc.json', 100);
+    assert.equal(r.include, false);
+  });
+
+  it('claude: daemon/daemon.log → excluded (not in included dir)', () => {
+    const r = shouldIncludeLocalFile('claude', 'daemon/daemon.log', 100);
+    assert.equal(r.include, false);
+  });
+});
+
+// ── redactJsonSecrets — secret redaction ──────────────────────────────────────
+
+describe('redactJsonSecrets — secret redaction', () => {
+  it('non-JSON file returned unchanged', () => {
+    const content = '# Hello\nsome markdown';
+    const r = redactJsonSecrets('readme.md', content);
+    assert.equal(r.content, content);
+    assert.deepEqual(r.redacted, []);
+  });
+
+  it('invalid JSON returned unchanged (no parse error thrown)', () => {
+    const content = '{broken json}';
+    const r = redactJsonSecrets('settings.json', content);
+    assert.equal(r.content, content);
+    assert.deepEqual(r.redacted, []);
+  });
+
+  it('env key matching TOKEN is redacted', () => {
+    const content = JSON.stringify({
+      mcpServers: {
+        jira: {
+          env: { JIRA_API_TOKEN: 'super-secret-value' },
+        },
+      },
+    });
+    const r = redactJsonSecrets('settings/mcp.json', content);
+    assert.ok(r.redacted.some((k) => k.includes('JIRA_API_TOKEN')));
+    const parsed = JSON.parse(r.content);
+    assert.equal(parsed.mcpServers.jira.env.JIRA_API_TOKEN, '<set-in-vault>');
+  });
+
+  it('env key matching SECRET is redacted', () => {
+    const content = JSON.stringify({
+      mcpServers: { gd: { env: { GOOGLE_OAUTH_CLIENT_SECRET: 'abc123' } } },
+    });
+    const r = redactJsonSecrets('mcp.json', content);
+    assert.ok(r.redacted.some((k) => k.includes('GOOGLE_OAUTH_CLIENT_SECRET')));
+  });
+
+  it('env key matching KEY is redacted', () => {
+    const content = JSON.stringify({ env: { API_KEY: 'my-key' } });
+    const r = redactJsonSecrets('config.json', content);
+    assert.ok(r.redacted.some((k) => k.includes('API_KEY')));
+  });
+
+  it('Authorization header is redacted', () => {
+    const content = JSON.stringify({
+      mcpServers: {
+        obs: { headers: { Authorization: 'Bearer some-token' } },
+      },
+    });
+    const r = redactJsonSecrets('mcp.json', content);
+    assert.ok(r.redacted.some((k) => k.includes('Authorization')));
+    const parsed = JSON.parse(r.content);
+    assert.equal(parsed.mcpServers.obs.headers.Authorization, '<set-in-vault>');
+  });
+
+  it('X-Goog-Api-Key header is redacted', () => {
+    const content = JSON.stringify({
+      mcpServers: {
+        stitch: { headers: { 'X-Goog-Api-Key': 'AQ.abc123' } },
+      },
+    });
+    const r = redactJsonSecrets('mcp.json', content);
+    assert.ok(r.redacted.some((k) => k.includes('X-Goog-Api-Key')));
+  });
+
+  it('non-secret env keys are left intact', () => {
+    const content = JSON.stringify({
+      mcpServers: {
+        fetch: {
+          env: {
+            LOG_LEVEL: 'ERROR',
+            NODE_ENV: 'production',
+          },
+        },
+      },
+    });
+    const r = redactJsonSecrets('mcp.json', content);
+    assert.deepEqual(r.redacted, []);
+    assert.equal(r.content, content);
+  });
+
+  it('already-redacted placeholder is not double-redacted', () => {
+    const content = JSON.stringify({ env: { API_KEY: '<set-in-vault>' } });
+    const r = redactJsonSecrets('config.json', content);
+    assert.deepEqual(r.redacted, [], 'placeholder should not be listed as redacted again');
+    assert.equal(r.content, content);
+  });
+
+  it('empty string env values are not redacted', () => {
+    const content = JSON.stringify({ env: { API_KEY: '' } });
+    const r = redactJsonSecrets('config.json', content);
+    assert.deepEqual(r.redacted, []);
+  });
+});
+
+// ── importLocalConfig — backup, path containment, import ─────────────────────
+
+describe('importLocalConfig — backup and import behaviour', () => {
+  let cfg: import('../server/config.ts').Config;
+
+  before(async () => {
+    if (isDbOpen()) closeDb();
+    cfg = createTestConfig();
+    fs.mkdirSync(cfg.dataDir, { recursive: true });
+    setConfig(cfg);
+    openDb(':memory:');
+
+    // Insert test users so importLocalConfig can write to user_config_state
+    // (user_config_state.user_id is a FK to users.id)
+    const ts = new Date().toISOString();
+    for (const [id, email] of [
+      ['test-import-user-1', 'imp1@test.com'],
+      ['test-import-user-2', 'imp2@test.com'],
+      ['test-import-user-3', 'imp3@test.com'],
+    ]) {
+      dbRun(
+        'INSERT INTO users (id, email, name, password_hash, is_admin, disabled, created_at) VALUES (?, ?, ?, ?, 0, 0, ?)',
+        id, email, 'Test', 'not-a-real-hash', ts,
+      );
+    }
+  });
+
+  after(async () => {
+    closeDb();
+    try { fs.rmSync(cfg.dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('no existing config → backupPath is null', async () => {
+    const bak = await backupUserConfigFolder('test-user-1', 'kiro', cfg.dataDir);
+    assert.equal(bak, null);
+  });
+
+  it('existing config files → backup is created', async () => {
+    // Write a file into the user config root directly
+    const root = path.join(cfg.dataDir, 'user-config', 'test-user-2', 'kiro');
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'settings.json'), '{"x":1}', 'utf8');
+
+    const bak = await backupUserConfigFolder('test-user-2', 'kiro', cfg.dataDir);
+    assert.ok(bak, 'backup path should be returned');
+    assert.ok(bak!.includes('backups'), 'backup should be inside backups dir');
+    assert.ok(fs.existsSync(bak!), 'backup directory should exist');
+    assert.ok(
+      fs.existsSync(path.join(bak!, 'settings.json')),
+      'backup contains the original file',
+    );
+    // Original must still be in place (backup is a copy, not a move)
+    assert.ok(
+      fs.existsSync(path.join(root, 'settings.json')),
+      'original file still in place after backup',
+    );
+  });
+
+  it('empty config dir → backupPath is null', async () => {
+    const root = path.join(cfg.dataDir, 'user-config', 'test-user-3', 'kiro');
+    fs.mkdirSync(root, { recursive: true }); // dir exists but empty
+    const bak = await backupUserConfigFolder('test-user-3', 'kiro', cfg.dataDir);
+    assert.equal(bak, null);
+  });
+
+  it('imports only setup files from temp home dir', async () => {
+    const tmpHome = await fsp.mkdtemp(path.join(os.tmpdir(), 'portal-test-home-'));
+    try {
+      // Create a fake .kiro structure in the temp home
+      const kiroDir = path.join(tmpHome, '.kiro');
+      fs.mkdirSync(path.join(kiroDir, 'agents'), { recursive: true });
+      fs.mkdirSync(path.join(kiroDir, 'sessions'), { recursive: true });
+      fs.mkdirSync(path.join(kiroDir, 'settings'), { recursive: true });
+
+      fs.writeFileSync(path.join(kiroDir, 'agents', 'my-agent.md'), '# My Agent', 'utf8');
+      fs.writeFileSync(path.join(kiroDir, 'sessions', 'session1.json'), '{}', 'utf8'); // excluded
+      fs.writeFileSync(path.join(kiroDir, 'settings', 'mcp.json'), '{}', 'utf8');
+      fs.writeFileSync(path.join(kiroDir, 'secrets.json'), '{"key":"val"}', 'utf8'); // excluded (root-level)
+
+      const userId = 'test-import-user-1';
+      const summary = await importLocalConfig(userId, 'kiro', tmpHome);
+
+      assert.ok(
+        Object.values(summary.imported).flat().includes('agents/my-agent.md'),
+        'agent file should be imported',
+      );
+      assert.ok(
+        Object.values(summary.imported).flat().includes('settings/mcp.json'),
+        'settings/mcp.json should be imported',
+      );
+      assert.ok(
+        summary.skipped.some((s) => s.path === 'sessions/session1.json'),
+        'sessions file should be skipped',
+      );
+      assert.ok(
+        summary.skipped.some((s) => s.path === 'secrets.json'),
+        'root-level secrets.json should be skipped',
+      );
+
+      // Verify files were actually written to the portal config
+      const destRoot = path.join(cfg.dataDir, 'user-config', userId, 'kiro');
+      assert.ok(fs.existsSync(path.join(destRoot, 'agents', 'my-agent.md')));
+      assert.ok(fs.existsSync(path.join(destRoot, 'settings', 'mcp.json')));
+      assert.ok(!fs.existsSync(path.join(destRoot, 'sessions', 'session1.json')));
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts secrets in JSON files during import', async () => {
+    const tmpHome = await fsp.mkdtemp(path.join(os.tmpdir(), 'portal-test-home-'));
+    try {
+      const kiroDir = path.join(tmpHome, '.kiro');
+      fs.mkdirSync(path.join(kiroDir, 'settings'), { recursive: true });
+
+      const mcpContent = JSON.stringify({
+        mcpServers: {
+          jira: {
+            env: { JIRA_API_TOKEN: 'ATATT3xFfGF0_real_secret' },
+          },
+          obs: {
+            headers: { Authorization: 'Bearer real-bearer-token' },
+          },
+        },
+      });
+      fs.writeFileSync(path.join(kiroDir, 'settings', 'mcp.json'), mcpContent, 'utf8');
+
+      const userId = 'test-import-user-2';
+      const summary = await importLocalConfig(userId, 'kiro', tmpHome);
+
+      assert.ok(
+        summary.valuesRedacted.some((k) => k.includes('JIRA_API_TOKEN')),
+        'JIRA_API_TOKEN should be listed as redacted',
+      );
+      assert.ok(
+        summary.valuesRedacted.some((k) => k.includes('Authorization')),
+        'Authorization header should be listed as redacted',
+      );
+
+      // Verify the written file has placeholders, not real values
+      const destPath = path.join(cfg.dataDir, 'user-config', userId, 'kiro', 'settings', 'mcp.json');
+      const written = fs.readFileSync(destPath, 'utf8');
+      const parsed = JSON.parse(written);
+      assert.equal(
+        parsed.mcpServers.jira.env.JIRA_API_TOKEN, '<set-in-vault>',
+        'token should be replaced with placeholder',
+      );
+      assert.equal(
+        parsed.mcpServers.obs.headers.Authorization, '<set-in-vault>',
+        'Authorization header should be replaced with placeholder',
+      );
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('backup is created when portal config already has files', async () => {
+    const tmpHome = await fsp.mkdtemp(path.join(os.tmpdir(), 'portal-test-home-'));
+    try {
+      const kiroDir = path.join(tmpHome, '.kiro');
+      fs.mkdirSync(path.join(kiroDir, 'agents'), { recursive: true });
+      fs.writeFileSync(path.join(kiroDir, 'agents', 'agent.md'), '# Agent', 'utf8');
+
+      const userId = 'test-import-user-3';
+
+      // Pre-populate the portal config
+      const destRoot = path.join(cfg.dataDir, 'user-config', userId, 'kiro');
+      fs.mkdirSync(destRoot, { recursive: true });
+      fs.writeFileSync(path.join(destRoot, 'old-file.txt'), 'old content', 'utf8');
+
+      const summary = await importLocalConfig(userId, 'kiro', tmpHome);
+      assert.ok(summary.backupPath, 'backup should have been created');
+      assert.ok(fs.existsSync(summary.backupPath!), 'backup directory should exist');
+      assert.ok(
+        fs.existsSync(path.join(summary.backupPath!, 'old-file.txt')),
+        'old file should be in backup',
+      );
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('path traversal in relPath is caught by safeJoin', async () => {
+    // This tests that even if shouldIncludeLocalFile passes (which it would not for a
+    // traversal path since it would not match any included dir), safeJoin provides a
+    // second containment check.  We verify safeJoin directly here.
+    const { safeJoin } = await import('../server/util.ts');
+    const root = path.join(os.tmpdir(), 'fake-root');
+    assert.throws(
+      () => safeJoin(root, '../../etc/passwd'),
+      /escapes root/,
+      'safeJoin must throw on traversal',
+    );
+    assert.throws(
+      () => safeJoin(root, '../sibling'),
+      /escapes root/,
+      'safeJoin must throw on sibling escape',
+    );
+  });
+});
+
+// ── /api/user-config/:folder/import-local route ───────────────────────────────
+
+describe('POST /api/user-config/:folder/import-local — route guards', () => {
+  let baseUrl: string;
+  let adminCookie: string;
+
+  before(async () => {
+    const ts = await createTestServer(); // config.host = '127.0.0.1'
+    baseUrl = ts.baseUrl;
+    adminCookie = await setupAdmin(baseUrl);
+  });
+  after(async () => cleanup());
+
+  it('returns 400 for aws folder', async () => {
+    const r = await fetchJson(baseUrl, '/api/user-config/aws/import-local', {
+      method: 'POST',
+      body: {},
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 400);
+    assert.ok((r.body as Record<string, unknown>).error?.toString().includes('aws'));
+  });
+
+  it('returns 401 for unauthenticated requests', async () => {
+    const r = await fetchJson(baseUrl, '/api/user-config/kiro/import-local', {
+      method: 'POST',
+      body: {},
+    });
+    assert.equal(r.status, 401);
+  });
+
+  it('returns 403 when authenticated via API token (not browser)', async () => {
+    const tokenR = await fetchJson(baseUrl, '/api/api-tokens', {
+      method: 'POST',
+      body: { name: 'import-local-token', scope: 'write' },
+      cookie: adminCookie,
+    });
+    const token = (tokenR.body as Record<string, unknown>).token as string;
+
+    const r = await fetchJson(baseUrl, '/api/user-config/kiro/import-local', {
+      method: 'POST',
+      body: {},
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(r.status, 403, 'API token must be refused for import-local');
+  });
+
+  it('returns 200 with summary on localhost (config.host = 127.0.0.1)', async () => {
+    // The test server already uses config.host = '127.0.0.1' — a real import
+    // would try os.homedir() but we just verify the route does not 403.
+    const r = await fetchJson(baseUrl, '/api/user-config/kiro/import-local', {
+      method: 'POST',
+      body: {},
+      cookie: adminCookie,
+    });
+    // Should succeed (200) even if home dir has nothing to import
+    assert.ok(
+      [200, 500].includes(r.status),
+      `Expected 200 or 500, got ${r.status} (500 only if homedir unreadable in CI)`,
+    );
+    if (r.status === 200) {
+      const b = r.body as Record<string, unknown>;
+      assert.equal(b.ok, true);
+      assert.ok(typeof b.imported === 'object');
+      assert.ok(Array.isArray(b.skipped));
+      assert.ok(Array.isArray(b.valuesRedacted));
+    }
+  });
+});
+
+describe('POST /api/user-config/:folder/import-local — localhost-only guard', () => {
+  let baseUrl: string;
+  let adminCookie: string;
+  let server: import('node:http').Server;
+
+  before(async () => {
+    // Create a server whose config.host is NOT localhost
+    if (isDbOpen()) closeDb();
+    const cfg = createTestConfig({ host: '0.0.0.0' });
+    fs.mkdirSync(cfg.dataDir, { recursive: true });
+    setConfig(cfg);
+    openDb(':memory:');
+    server = await startServer({ port: 0, host: '127.0.0.1', config: cfg });
+    const addr = server.address() as { port: number };
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    // Set up admin
+    await fetchJson(baseUrl, '/api/auth/setup', {
+      method: 'POST',
+      body: { email: 'guard-admin@test.com', name: 'Admin', password: 'password1234', provider: 'demo' },
+    });
+    const lr = await fetchJson(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { email: 'guard-admin@test.com', password: 'password1234' },
+    });
+    adminCookie = lr.cookie ?? '';
+  });
+
+  after(async () => {
+    await new Promise<void>((res) => {
+      server.closeAllConnections?.();
+      server.close(() => res());
+    });
+    closeDb();
+  });
+
+  it('returns 403 when config.host is not localhost', async () => {
+    const r = await fetchJson(baseUrl, '/api/user-config/kiro/import-local', {
+      method: 'POST',
+      body: {},
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 403, 'must be refused when not bound to localhost');
+    assert.ok(
+      (r.body as Record<string, unknown>).error?.toString().toLowerCase().includes('localhost'),
+      'error message should mention localhost',
+    );
+  });
+
+  it('claude folder also returns 403 on non-localhost binding', async () => {
+    const r = await fetchJson(baseUrl, '/api/user-config/claude/import-local', {
+      method: 'POST',
+      body: {},
+      cookie: adminCookie,
+    });
+    assert.equal(r.status, 403);
   });
 });

@@ -662,6 +662,11 @@ function checkUIKnownFailures(modId, failingSections, knownEntries) {
  *   - spec → stdout (human-readable console output)
  *   - tap  → temp file (machine-readable for known-failure detection)
  *
+ * `--test-force-exit` is always passed so the Node.js event loop does not keep
+ * the process alive after all tests (and their after() hooks) have finished.
+ * Without it, server keep-alive connections and undici pool state can delay
+ * process exit by several seconds, which trips the per-file kill timeout.
+ *
  * A hard per-file timeout of 180 s (3 minutes, overridable with TEST_FILE_TIMEOUT_MS)
  * prevents hung test suites from blocking the runner indefinitely. If a file is killed,
  * a synthetic '__process_timeout__' failure is added for that file.
@@ -680,6 +685,7 @@ function runBackendTests(testFiles) {
       ...NODE_FLAGS,
       '--import', 'tsx',
       '--test',
+      '--test-force-exit',
       '--test-timeout=300000',
       '--test-reporter=spec',
       '--test-reporter-destination=stdout',

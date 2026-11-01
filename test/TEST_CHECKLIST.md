@@ -1,6 +1,6 @@
 # Agent Portal — Test Checklist
 
-> **Auto-generated** by `npm run test:checklist` on 2026-10-31.
+> **Auto-generated** by `npm run test:checklist` on 2026-11-01.
 > Do not edit by hand — changes will be overwritten.
 > Source of truth: `test/test-map.json` + `.test-pass-record.json`.
 
@@ -53,161 +53,168 @@ npm run test:map:check
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| auth | Authentication, login, session cookies | server/auth.ts<br>web/src/pages/Auth.jsx | test/auth.test.ts | auth | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| setup | First-run setup wizard | web/src/pages/setup/SetupWizard.jsx<br>web/src/pages/setup/AdminAccount.jsx<br>web/src/pages/setup/CloudSecurity.jsx<br>web/src/pages/setup/CloudStorage.jsx<br>web/src/pages/setup/ConfirmStep.jsx<br>web/src/pages/setup/DeployTarget.jsx<br>web/src/pages/setup/ModelProvider.jsx<br>web/src/pages/hub/ProjectHub.jsx<br>web/src/components/WizardProgress.jsx<br>web/src/styles/setup-wizard.css | — | setup | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
-| api-tokens | API token management and token scope enforcement | server/api-tokens.ts | test/api-tokens.test.ts<br>test/token-scopes.test.ts | api-tokens | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| permissions | Role-based access control, permission checks | server/permissions.ts<br>server/governance/users.ts | test/permissions.test.ts | permissions | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| audit | Audit log recording and retrieval | server/audit.ts | test/audit-fixes.test.ts<br>test/audit-fixes-3.test.ts | audit | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| delegation | Delegate tokens for sub-agent authentication | server/delegation.ts | test/delegate-token.test.ts<br>test/delegation.test.ts | delegation | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| auth | Authentication, login, session cookies | server/auth.ts<br>web/src/pages/Auth.jsx | test/auth.test.ts | auth | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| setup | First-run setup wizard | web/src/pages/setup/SetupWizard.jsx<br>web/src/pages/setup/AdminAccount.jsx<br>web/src/pages/setup/CloudSecurity.jsx<br>web/src/pages/setup/CloudStorage.jsx<br>web/src/pages/setup/ConfirmStep.jsx<br>web/src/pages/setup/DeployTarget.jsx<br>web/src/pages/setup/ModelProvider.jsx<br>web/src/pages/hub/ProjectHub.jsx<br>web/src/components/WizardProgress.jsx<br>web/src/styles/setup-wizard.css | — | setup | ✅ ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| api-tokens | API token management and token scope enforcement | server/api-tokens.ts<br>web/src/pages/ApiAccess.jsx | test/api-tokens.test.ts<br>test/token-scopes.test.ts | api-tokens | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| permissions | Role-based access control, permission checks | server/permissions.ts<br>server/governance/users.ts | test/permissions.test.ts | permissions | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| audit | Audit log recording and retrieval | server/audit.ts | test/audit-fixes.test.ts<br>test/audit-fixes-3.test.ts | audit | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| delegation | Delegate tokens for sub-agent authentication | server/delegation.ts | test/delegate-token.test.ts<br>test/delegation.test.ts | delegation | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 2 — Projects & Workspaces
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| projects | Project CRUD and listing | server/projects.ts<br>web/src/pages/Projects.jsx | test/projects.test.ts | projects | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| workspaces | Workspace management per project | server/workspaces.ts<br>web/src/pages/Workspaces.jsx<br>web/src/components/WorkspaceHeader.jsx<br>web/src/styles/workspace.css | — | workspaces | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
+| projects | Project CRUD and listing | server/projects.ts<br>web/src/pages/Projects.jsx | test/projects.test.ts | projects | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| workspaces | Workspace management per project | server/workspaces.ts<br>server/workflows/crud.ts<br>web/src/pages/Workspaces.jsx<br>web/src/components/WorkspaceHeader.jsx<br>web/src/styles/workspace.css | test/workspaces.test.ts | workspaces | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 3 — Sessions, Workflows & IDE
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| sessions | Session lifecycle, context, files, and live run streaming | server/session-lifecycle.ts<br>server/session-context.ts<br>server/session-files.ts<br>server/runs.ts<br>server/portal-events.ts<br>server/superpowers-skills.ts<br>web/src/pages/sessions/SessionList.jsx<br>web/src/pages/sessions/SessionLive.jsx<br>web/src/pages/sessions/SessionsShell.jsx<br>web/src/pages/sessions/SessionWorkspace.jsx<br>web/src/pages/sessions/SessionChanges.jsx<br>web/src/pages/sessions/NewSessionDialog.jsx<br>web/src/lib/useRunStream.js<br>web/src/styles/sessions.css | test/session-lifecycle.test.ts<br>test/session-context.test.ts<br>test/session-files.test.ts | sessions | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| workflows | Workflow engine, controls, and driver | server/workflows/crud.ts<br>server/workflows/controls.ts<br>server/workflows/driver.ts<br>server/workflows/working-copies.ts<br>server/tool-packs.ts | test/workflows.test.ts<br>test/session-sse.test.ts | sessions | ⚑ ⚑ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| ide | In-browser IDE workspace — editor, explorer, terminal, source control | server/terminal.ts<br>web/src/pages/sessions/IdeAgents.jsx<br>web/src/pages/sessions/IdeBrowser.jsx<br>web/src/pages/sessions/IdeEditor.jsx<br>web/src/pages/sessions/IdeExplorer.jsx<br>web/src/pages/sessions/IdeHeader.jsx<br>web/src/pages/sessions/IdeSessionPanel.jsx<br>web/src/pages/sessions/IdeSourceControl.jsx<br>web/src/pages/sessions/IdeStatusBar.jsx<br>web/src/pages/sessions/IdeTerminal.jsx<br>web/src/pages/sessions/IdeWorkspace.jsx<br>web/src/pages/sessions/codemirror-editor.jsx<br>web/src/pages/sessions/xterm-terminal.jsx<br>web/src/styles/ide.css | — | ide | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
+| sessions | Session lifecycle, context, files, and live run streaming | server/session-lifecycle.ts<br>server/session-context.ts<br>server/session-files.ts<br>server/runs.ts<br>server/portal-events.ts<br>server/superpowers-skills.ts<br>web/src/pages/sessions/SessionList.jsx<br>web/src/pages/sessions/SessionLive.jsx<br>web/src/pages/sessions/SessionsShell.jsx<br>web/src/pages/sessions/SessionWorkspace.jsx<br>web/src/pages/sessions/SessionChanges.jsx<br>web/src/pages/sessions/NewSessionDialog.jsx<br>web/src/lib/useRunStream.js<br>web/src/lib/mergeEvents.js<br>web/src/lib/outputFileMatch.js<br>web/src/lib/outputFileUtils.js<br>web/src/styles/sessions.css | test/session-lifecycle.test.ts<br>test/session-context.test.ts<br>test/session-files.test.ts<br>test/sanitize-merge.test.ts<br>test/output-files-match.test.ts<br>test/output-file-utils.test.ts | sessions | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| workflows | Workflow engine, controls, and driver | server/workflows/crud.ts<br>server/workflows/controls.ts<br>server/workflows/driver.ts<br>server/workflows/working-copies.ts<br>server/tool-packs.ts<br>server/review-lifecycle.ts | test/workflows.test.ts<br>test/session-sse.test.ts<br>test/run-events-sse.test.ts<br>test/working-copies.test.ts<br>test/resume-retry.test.ts | sessions | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| ide | In-browser IDE workspace — editor, explorer, terminal, source control, live browser | server/terminal.ts<br>server/browser-live.ts<br>web/src/pages/sessions/IdeAgents.jsx<br>web/src/pages/sessions/IdeBrowser.jsx<br>web/src/pages/sessions/IdeEditor.jsx<br>web/src/pages/sessions/IdeExplorer.jsx<br>web/src/pages/sessions/IdeHeader.jsx<br>web/src/pages/sessions/IdeOutputs.jsx<br>web/src/pages/sessions/IdeSessionPanel.jsx<br>web/src/pages/sessions/IdeSourceControl.jsx<br>web/src/pages/sessions/IdeStatusBar.jsx<br>web/src/pages/sessions/IdeTerminal.jsx<br>web/src/pages/sessions/IdeWorkspace.jsx<br>web/src/pages/sessions/OutputFilePreview.jsx<br>web/src/pages/sessions/RunOutputsCard.jsx<br>web/src/pages/sessions/codemirror-editor.jsx<br>web/src/pages/sessions/xterm-terminal.jsx<br>web/src/lib/outputFileUtils.js<br>web/src/lib/terminal-pipe.js<br>web/src/styles/ide.css | test/browser-live.test.ts<br>test/terminal.test.ts<br>test/terminal-pipe.test.ts | ide | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 4 — Dashboard
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| dashboard | Agent performance dashboard KPIs and drill-downs | server/dashboard.ts<br>web/src/pages/Dashboard.jsx<br>web/src/styles/dashboard.css | test/dashboard.test.ts | dashboard | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| dashboard | Agent performance dashboard KPIs and drill-downs | server/dashboard.ts<br>web/src/pages/Dashboard.jsx<br>web/src/styles/dashboard.css | test/dashboard.test.ts | dashboard | ⚑ ✅ backend, ⚑ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 5 — Knowledge
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| knowledge | Knowledge base documents, search, ask, decisions, and learning content | server/knowledge.ts<br>server/learn.ts<br>web/src/pages/Knowledge.jsx<br>web/src/pages/Learn.jsx<br>web/src/lib/templates/index.js | test/knowledge.test.ts | knowledge | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| knowledge | Knowledge base documents, search, ask, decisions, and learning content | server/knowledge.ts<br>server/learn.ts<br>web/src/pages/Knowledge.jsx<br>web/src/pages/Learn.jsx<br>web/src/lib/templates/index.js | test/knowledge.test.ts | knowledge | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 6 — Create (Diagrams / Documents / Decks)
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| create | Create hub page (container for Diagrams / Documents / Decks tabs) | web/src/pages/Create.jsx | — | create | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
-| diagrams | Diagram creation and rendering — draw.io, mermaid, and icon packs | server/diagrams.ts<br>server/drawio.ts<br>server/drawio-cloud.ts<br>server/drawio-pack.ts<br>server/drawio-render.ts<br>server/drawio-text.ts<br>server/diagram-icons.ts<br>server/diagram-text.ts<br>web/src/pages/Diagrams.jsx<br>web/src/components/DiagramStyle.jsx<br>web/src/components/MermaidViewer.jsx | test/diagrams.test.ts | create | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| generated-docs | AI-generated documents — Word/PDF/HTML generation pipeline | server/generated-docs.ts<br>server/generated-doc-text.ts<br>server/docgen.ts<br>server/docimage.ts<br>server/docs-pack.ts<br>server/doc-templates.ts<br>server/docx-template.ts<br>server/ooxml.ts<br>server/template-check.ts<br>server/convert.ts<br>web/src/pages/GeneratedDocs.jsx | test/generated-docs.test.ts | create | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| presentations | AI-generated presentations — PPTX creation and preview | server/presentations.ts<br>server/presentation-text.ts<br>server/pptx-preview.ts<br>server/pptx-template.ts<br>web/src/pages/Presentations.jsx | test/presentations.test.ts | create | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| create | Create hub page (container for Diagrams / Documents / Decks tabs) | web/src/pages/Create.jsx | — | create | ✅ ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| diagrams | Diagram creation and rendering — draw.io, mermaid, and icon packs | server/diagrams.ts<br>server/drawio.ts<br>server/drawio-cloud.ts<br>server/drawio-pack.ts<br>server/drawio-render.ts<br>server/drawio-text.ts<br>server/diagram-icons.ts<br>server/diagram-text.ts<br>web/src/pages/Diagrams.jsx<br>web/src/components/DiagramStyle.jsx<br>web/src/components/MermaidViewer.jsx | test/diagrams.test.ts<br>test/resume-retry.test.ts | create | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| generated-docs | AI-generated documents — Word/PDF/HTML generation pipeline | server/generated-docs.ts<br>server/generated-doc-text.ts<br>server/docgen.ts<br>server/docimage.ts<br>server/docs-pack.ts<br>server/doc-templates.ts<br>server/docx-template.ts<br>server/ooxml.ts<br>server/template-check.ts<br>server/convert.ts<br>web/src/pages/GeneratedDocs.jsx | test/generated-docs.test.ts<br>test/resume-retry.test.ts | create | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| presentations | AI-generated presentations — PPTX creation and preview | server/presentations.ts<br>server/presentation-text.ts<br>server/pptx-preview.ts<br>server/pptx-template.ts<br>web/src/pages/Presentations.jsx | test/presentations.test.ts<br>test/resume-retry.test.ts | create | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 7 — Vault
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| vault | Secret vault — project, personal, and portal secrets | server/vault.ts<br>server/vault-generated.ts<br>server/secrets.ts<br>web/src/pages/Vault.jsx | test/vault.test.ts | vault | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| vault | Secret vault — project, personal, and portal secrets | server/vault.ts<br>server/vault-generated.ts<br>server/secrets.ts<br>web/src/pages/Vault.jsx<br>web/src/lib/vaultFolders.js<br>web/src/styles/components.css | test/vault.test.ts<br>test/vault-folders.test.ts | vault | ⚠️ ⚠️ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 8 — Insights
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| insights | Session and cost insights analytics | server/insights.ts<br>web/src/pages/Insights.jsx | test/insights.test.ts | insights | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| insights | Session and cost insights analytics | server/insights.ts<br>web/src/pages/Insights.jsx | test/insights.test.ts | insights | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 9 — Inbox
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| inbox | Agent inbox for incoming tasks and messages | server/inbox.ts<br>web/src/pages/Inbox.jsx | — | inbox | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
+| inbox | Agent inbox for incoming tasks and messages | server/inbox.ts<br>web/src/pages/Inbox.jsx | — | inbox | ✅ ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 10 — Connections & Repositories
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| connections | Git provider connections management | server/git-connections.ts<br>web/src/pages/Connections.jsx<br>web/src/pages/ConnectionsPage.jsx<br>web/src/styles/connections.css | test/git-connections.test.ts | connections | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| repos | Repository listing, cloning, and clone progress tracking | server/repos.ts<br>server/git-progress.ts | test/repos.test.ts<br>test/repos-progress.test.ts | repos | ⚑ ⚑ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| connections | Git provider connections management | server/git-connections.ts<br>web/src/pages/Connections.jsx<br>web/src/pages/ConnectionsPage.jsx<br>web/src/styles/connections.css | test/git-connections.test.ts | connections | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| repos | Repository listing, cloning, and clone progress tracking | server/repos.ts<br>server/git-progress.ts | test/repos.test.ts<br>test/repos-progress.test.ts | repos | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 11 — Integrations
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| integrations | Third-party integrations (Atlassian, etc.) | server/integrations.ts<br>web/src/pages/Integrations.jsx | — | integrations | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
+| integrations | Third-party integrations (Atlassian, etc.) | server/integrations.ts<br>web/src/pages/Integrations.jsx | — | integrations | ✅ ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 12 — AWS Accounts & Credentials
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| aws-accounts | AWS account management and region selection | server/aws-accounts.ts<br>web/src/pages/AwsAccounts.jsx<br>web/src/components/AwsRegionSelect.jsx<br>web/src/lib/awsRegions.js | — | aws-accounts | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
-| credentials | AWS credentials management and parser | server/credentials.ts<br>server/kiro-idc.ts<br>web/src/pages/Credentials.jsx<br>web/src/lib/awsCredParser.js<br>web/src/styles/credentials.css | test/credentials.test.ts<br>test/aws-cred-parser.test.ts | credentials | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| bedrock-sso | Bedrock SSO via AWS Identity Center (IDC) | server/bedrock-sso.ts<br>server/kiro-idc.ts<br>server/kiro-idc-check.ts<br>web/src/components/DeviceCodeBox.jsx | test/bedrock-sso.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
+| aws-accounts | AWS account management and region selection | server/aws-accounts.ts<br>web/src/pages/AwsAccounts.jsx<br>web/src/components/AwsRegionSelect.jsx<br>web/src/lib/awsRegions.js | — | aws-accounts | ✅ ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| credentials | AWS credentials management and parser | server/credentials.ts<br>server/kiro-idc.ts<br>web/src/pages/Credentials.jsx<br>web/src/lib/awsCredParser.js<br>web/src/styles/credentials.css | test/credentials.test.ts<br>test/aws-cred-parser.test.ts | credentials | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| bedrock-sso | Bedrock SSO via AWS Identity Center (IDC) | server/bedrock-sso.ts<br>server/kiro-idc.ts<br>server/kiro-idc-check.ts<br>web/src/components/DeviceCodeBox.jsx | test/bedrock-sso.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
 
 ## 13 — Settings & Configuration
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| settings | Portal settings — AI provider, tools, permissions, code review, appearance | server/settings.ts<br>web/src/pages/settings/Appearance.jsx<br>web/src/pages/settings/Providers.jsx<br>web/src/pages/settings/Secrets.jsx<br>web/src/pages/settings/Settings.jsx<br>web/src/pages/settings/Users.jsx<br>web/src/pages/AdminPanel.jsx | test/settings.test.ts | settings | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| config | Portal configuration — deploy target, cloud config, config file editor | server/config.ts<br>web/src/pages/Configuration.jsx<br>web/src/pages/config/ConfigEditor.jsx<br>web/src/pages/config/ConfigFileTree.jsx<br>web/src/pages/config/ConfigStatus.jsx<br>web/src/styles/config.css | test/cloud-config.test.ts | config | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
-| user-config | Per-user configuration storage and retrieval | server/user-config.ts | test/user-config.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
+| settings | Portal settings — AI provider, tools, permissions, code review, appearance | server/settings.ts<br>web/src/pages/settings/Appearance.jsx<br>web/src/pages/settings/Providers.jsx<br>web/src/pages/settings/Secrets.jsx<br>web/src/pages/settings/Settings.jsx<br>web/src/pages/settings/Users.jsx<br>web/src/pages/AdminPanel.jsx | test/settings.test.ts | settings | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| config | Portal configuration — deploy target, cloud config, config file editor | server/config.ts<br>web/src/pages/Configuration.jsx<br>web/src/pages/config/ConfigEditor.jsx<br>web/src/pages/config/ConfigFileTree.jsx<br>web/src/pages/config/ConfigStatus.jsx<br>web/src/styles/config.css | test/cloud-config.test.ts | config | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| user-config | Per-user configuration storage and retrieval | server/user-config.ts | test/user-config.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
 
 ## 14 — Code Reviews
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| reviews | Code review creation, lifecycle, verdict, exports, and CI control plane | server/review.ts<br>server/review-lifecycle.ts<br>server/control-plane.ts<br>web/src/pages/Review.jsx<br>web/src/pages/ReviewDashboard.jsx<br>web/src/pages/ReviewDetail.jsx<br>web/src/pages/ReviewsPage.jsx | test/review.test.ts | reviews | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| reviews | Code review creation, lifecycle, verdict, exports, and CI control plane | server/review.ts<br>server/review-lifecycle.ts<br>server/control-plane.ts<br>web/src/pages/Review.jsx<br>web/src/pages/ReviewDashboard.jsx<br>web/src/pages/ReviewDetail.jsx<br>web/src/pages/ReviewsPage.jsx | test/review.test.ts | reviews | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 15 — Branch Scans
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| branch-scans | Branch scan creation and detail views | server/scan.ts<br>web/src/pages/BranchScans.jsx<br>web/src/pages/BranchScanDetail.jsx | test/scan.test.ts | branch-scans | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| branch-scans | Branch scan creation and detail views | server/scan.ts<br>web/src/pages/BranchScans.jsx<br>web/src/pages/BranchScanDetail.jsx | test/scan.test.ts | branch-scans | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 16 — Testing Module
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| testing-module | Tests module — test project management, script generation, and MCP tools | server/testing/index.ts<br>server/testing/generate.ts<br>server/testing/helpers.ts<br>server/testing/model-provider.ts<br>server/testing/projects.ts<br>server/testing/runner.ts<br>server/testing/scripts.ts<br>server/testing/ssrf.ts<br>server/testing/totp.ts<br>server/testing/types.ts<br>server/testing/vault.ts<br>server/mcp-routes.ts<br>web/src/pages/tests/TestsPage.jsx | test/testing.test.ts<br>test/testing-runs.test.ts<br>test/testing-generate.test.ts<br>test/testing-bedrock.test.ts<br>test/testing-kiro-provider.test.ts<br>test/mcp-tests-scope.test.ts | testing-module | ⚑ ✅ backend, ⚑ ui | c482229-dirty · 2026-10-31 |
+| testing-module | Tests module — test project management, script generation, and MCP tools | server/testing/index.ts<br>server/testing/generate.ts<br>server/testing/helpers.ts<br>server/testing/model-provider.ts<br>server/testing/projects.ts<br>server/testing/runner.ts<br>server/testing/scripts.ts<br>server/testing/ssrf.ts<br>server/testing/totp.ts<br>server/testing/types.ts<br>server/testing/vault.ts<br>server/testing/case-sets.ts<br>server/testing/curl.ts<br>server/testing/trace.ts<br>server/mcp-routes.ts<br>web/src/pages/tests/TestsPage.jsx<br>web/src/pages/tests/GenerationTracker.jsx<br>web/src/pages/tests/CaseSetList.jsx<br>web/src/pages/tests/CaseSetViewer.jsx<br>web/src/pages/tests/GenerateCasesDialog.jsx<br>web/src/pages/tests/tests-cases.css<br>web/src/lib/curlBuilder.js | test/testing.test.ts<br>test/testing-runs.test.ts<br>test/testing-generate.test.ts<br>test/testing-bedrock.test.ts<br>test/testing-kiro-provider.test.ts<br>test/mcp-tests-scope.test.ts<br>test/testing-case-sets.test.ts<br>test/curl-builder.test.ts<br>test/testing-trace.test.ts<br>test/testing-generation-progress.test.ts<br>test/resume-retry.test.ts | testing-module | ⚑ ✅ backend, ⚑ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 17 — API Access
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| api-access | API access page — scope checkboxes and MCP section (UI; backend covered by api-tokens) | web/src/pages/ApiAccess.jsx<br>web/src/styles/tokens.css | — | api-access, api-tokens | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
+| api-access | API access page — scope checkboxes and MCP section (UI; backend covered by api-tokens) | web/src/pages/ApiAccess.jsx<br>web/src/styles/tokens.css | — | api-access, api-tokens | ✅ ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 18 — Loop Specs
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| loop-specs | Loop specifications for multi-agent orchestration | server/loop-specs.ts<br>web/src/pages/LoopSpecs.jsx | test/loop-specs.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
+| loop-specs | Loop specifications for multi-agent orchestration | server/loop-specs.ts<br>web/src/pages/LoopSpecs.jsx | test/loop-specs.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
 
 ## 19 — Engines & Models
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| engines | AI engine and model configuration, listing, and passthrough | server/models.ts<br>server/kiro-list-models.ts | test/engines.test.ts<br>test/engine-models.test.ts<br>test/engine-model-passthrough.test.ts<br>test/model-listing.test.ts | engines | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| engines | AI engine and model configuration, listing, and passthrough | server/models.ts<br>server/kiro-list-models.ts<br>server/user-config.ts | test/engines.test.ts<br>test/engine-models.test.ts<br>test/engine-model-passthrough.test.ts<br>test/model-listing.test.ts<br>test/kiro-acp.test.ts<br>test/kiro-session.test.ts | engines | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 20 — Kiro Integration
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| kiro | Kiro CLI integration — command runner, settings parser, MCP server | server/kiro-cmd.ts<br>server/kiro-settings.ts<br>server/mcp-server.ts | test/kiro-cmd.test.ts<br>test/kiro-mcp-generate.test.ts<br>test/kiro-models-parser.test.ts<br>test/kiro-settings.test.ts<br>test/kiro-win-env.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
+| kiro | Kiro CLI integration — command runner, settings parser, MCP server | server/kiro-cmd.ts<br>server/kiro-settings.ts<br>server/mcp-server.ts | test/kiro-cmd.test.ts<br>test/kiro-mcp-generate.test.ts<br>test/kiro-models-parser.test.ts<br>test/kiro-settings.test.ts<br>test/kiro-win-env.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
 
 ## 21 — App Shell & Theme
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| shell | App shell — rail navigation, command palette, shortcuts, header, breadcrumb, dialogs | web/src/components/Rail.jsx<br>web/src/components/CommandPalette.jsx<br>web/src/components/ShortcutsSheet.jsx<br>web/src/components/AppHeader.jsx<br>web/src/components/Breadcrumb.jsx<br>web/src/components/ConfirmDialog.jsx<br>web/src/components/BulkActionBar.jsx<br>web/src/components/Skeleton.jsx<br>web/src/lib/pages-extra.js<br>web/src/lib/useBulkSelect.js<br>web/src/lib/useFocusTrap.js<br>web/src/styles/layout.css<br>web/src/styles/palette.css | — | shell | ✅ ✅ ui | c482229-dirty · 2026-10-31 |
-| theme | Theme system — theme cycling, persistence, and custom CSS templates | server/themes.ts<br>web/src/lib/theme.js<br>web/src/lib/shortcuts.js<br>web/src/styles/aethrix.css<br>web/theme-init.js | test/themes.test.ts | theme | ✅ ✅ backend, ✅ ui | c482229-dirty · 2026-10-31 |
+| shell | App shell — rail navigation, command palette, shortcuts, header, breadcrumb, dialogs | web/src/components/Rail.jsx<br>web/src/components/CommandPalette.jsx<br>web/src/components/ShortcutsSheet.jsx<br>web/src/components/AppHeader.jsx<br>web/src/components/Breadcrumb.jsx<br>web/src/components/ConfirmDialog.jsx<br>web/src/components/BulkActionBar.jsx<br>web/src/components/Skeleton.jsx<br>web/src/lib/pages-extra.js<br>web/src/lib/useBulkSelect.js<br>web/src/lib/useFocusTrap.js<br>web/src/styles/layout.css<br>web/src/styles/palette.css | — | shell | ✅ ✅ ui | 7f7d487-dirty · 2026-11-01 |
+| theme | Theme system — theme cycling, persistence, and custom CSS templates | server/themes.ts<br>server/testing/model-provider.ts<br>web/src/lib/theme.js<br>web/src/lib/shortcuts.js<br>web/src/styles/aethrix.css<br>web/src/styles/clovi.css<br>web/src/styles/nebula.css<br>web/src/styles/aurora-glass.css<br>web/src/styles/cyber-hud.css<br>web/src/styles/twilight.css<br>web/src/styles/terminal.css<br>web/src/styles/kiro-ide.css<br>web/theme-init.js<br>shared/themes/aethrix-night.json<br>shared/themes/classic-teal.json<br>shared/themes/clovi.json<br>shared/themes/nebula.json<br>shared/themes/aurora-glass.json<br>shared/themes/cyber-hud.json<br>shared/themes/twilight.json<br>shared/themes/terminal.json<br>shared/themes/kiro-ide.json<br>web/src/pages/settings/Appearance.jsx<br>web/src/components/Rail.jsx | test/themes.test.ts | theme | ✅ ✅ backend, ✅ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## 22 — Attachments
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| attachments | AI attachments — file upload, preview, and picker for session context | server/ai-attachments.ts<br>web/src/components/AttachmentPicker.jsx<br>web/src/components/FilePreviewModal.jsx<br>web/src/styles/file-preview.css | test/ai-attachments.test.ts | — | ⚑ ⚑ backend | c482229-dirty · 2026-10-31 |
+| attachments | AI attachments — file upload, preview, and picker for session context | server/ai-attachments.ts<br>web/src/components/AttachmentPicker.jsx<br>web/src/components/FilePreviewModal.jsx<br>web/src/styles/file-preview.css | test/ai-attachments.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
 
 ## 23 — Backend-only modules
 
 | Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
 |-----------|-------------|-------------|-----------|-----------|--------|-----------|
-| security | Security regression tests — SSRF guard, token scope enforcement, child-session cap (backend-only; sources are shared core files) | — | test/security-fixes.test.ts<br>test/ssrf.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
-| storage | File storage abstraction — local filesystem and S3 backends | server/storage/index.ts<br>server/storage/local.ts<br>server/storage/s3.ts<br>server/storage-instance.ts | test/storage.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
-| db | SQLite database recovery and migration tests (backend-only; server/db.ts is shared core) | — | test/db-recovery.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
-| health | Health-check endpoint | server/health.ts | test/health.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
-| guardrails | Output guardrails runner | server/guardrails.ts | test/guardrails-runner.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
-| output-files | Session output file management | server/output-files.ts | test/output-files.test.ts | — | ✅ ✅ backend | c482229-dirty · 2026-10-31 |
+| security | Security regression tests — SSRF guard, token scope enforcement, child-session cap (backend-only; sources are shared core files) | — | test/security-fixes.test.ts<br>test/ssrf.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
+| storage | File storage abstraction — local filesystem and S3 backends | server/storage/index.ts<br>server/storage/local.ts<br>server/storage/s3.ts<br>server/storage-instance.ts | test/storage.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
+| db | SQLite database recovery and migration tests (backend-only; server/db.ts is shared core) | — | test/db-recovery.test.ts<br>test/resume-retry.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
+| health | Health-check endpoint | server/health.ts | test/health.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
+| guardrails | Output guardrails runner | server/guardrails.ts | test/guardrails-runner.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
+| output-files | Session output file management — collection, versioning, Vault copy, and routes | server/output-files.ts<br>web/src/lib/outputFileMatch.js<br>web/src/lib/outputFileUtils.js | test/output-files.test.ts<br>test/output-files-match.test.ts<br>test/output-file-utils.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
+
+## Other modules (not yet grouped)
+
+| Module ID | Description | Source files | Test files | Smoke IDs | Status | Last pass |
+|-----------|-------------|-------------|-----------|-----------|--------|-----------|
+| jira | Jira integration: OAuth/API-token auth, ticket browse, session context | server/jira.ts<br>server/jira-text.ts<br>server/jira-adf.ts<br>server/workflows/crud.ts<br>server/workflows/driver.ts<br>server/agent/runner.ts | test/jira.test.ts | — | ✅ ✅ backend | 7f7d487-dirty · 2026-11-01 |
+| tickets | Jira ticket integration — connect, browse, and start sessions from tickets | web/src/pages/Tickets.jsx<br>web/src/components/JiraTicketPicker.jsx<br>web/src/components/TicketPreview.jsx<br>web/src/components/Markdown.jsx<br>web/src/pages/sessions/ticketVars.js<br>web/src/styles/jira.css | — | tickets | ⚠️ ⚠️ ui | 7f7d487-dirty · 2026-11-01 |
 
 ## Known failures
 
@@ -219,13 +226,11 @@ and be removed once the underlying issue is fixed.
 | Module | Part | File | Test name | Reason | Added |
 |--------|------|------|-----------|--------|-------|
 | workflows | backend | test/workflows.test.ts | __process_timeout__ | test/workflows.test.ts: modified workflow tests include slow agent operations that exceed the runner timeout; process killed after 3 minutes | 2026-10-31 |
-| repos | backend | test/repos.test.ts | __process_timeout__ | repos.test.ts: createTestServer() background git clone subprocess keeps the event loop alive after tests complete; process killed after 3 minutes | 2026-10-31 |
-| repos | backend | test/repos.test.ts | Repositories API > POST .../sync changes status to "cloning" | Background performSync from POST /repos sets syncInFlight before the sync-status test fires, returning 409 instead of 202 | 2026-10-31 |
-| repos | backend | test/repos-progress.test.ts | __process_timeout__ | repos-progress.test.ts: createTestServer() in before() hook hangs; background git clone subprocess never terminates | 2026-10-31 |
 | attachments | backend | test/ai-attachments.test.ts | __process_timeout__ | test/ai-attachments.test.ts: generate-based tests spin up a server that keeps the event loop alive past the runner timeout | 2026-10-31 |
-| repos | ui | §repos | Repo with in-progress clone renders [role=progressbar] | Clone progress indicator not rendering in repos list during an active clone | 2026-10-31 |
 | reviews | ui | §reviews | Creating a review then opening it navigates to reviews/code/:rid | Review detail navigation route does not match expected /reviews/code/:rid | 2026-10-31 |
 | testing-module | ui | §testing-module | Async generate: dialog closes, indicator appears, done clears it and shows toast | Async generate flow: dialog-close and indicator-appear state transitions do not fire in the expected order | 2026-10-31 |
+| dashboard | ui | §dashboard | Agent Network single node sits at SVG centre, not at top-left corner | Agent Network panel was redesigned from SVG radial graph to HTML agent cards; .db-network-svg no longer exists | 2026-11-01 |
+| dashboard | ui | §dashboard | Zoom toolbar visible; zoom in and reset view work without errors | Zoom/pan toolbar was removed as part of the Agent Network redesign to card-based layout | 2026-11-01 |
 
 ## Shared file blast-radius decisions
 
@@ -237,10 +242,11 @@ These files affect multiple modules when changed.
 | package.json, package-lock.json, tsconfig.json, scripts/build.mjs, scripts/preflight.mjs | **all modules** | Dependency or build-config changes can break any module silently — both compiled server code and the web bundle. Affects both backend and UI. |
 | test/fixtures.ts, test/fake-sdk.mjs, test/fake-kiro.mjs | **all modules** | Every backend test imports from fixtures.ts. fake-sdk and fake-kiro are used across multiple test suites. These are test helpers only — they don't affect the built server or the smoke suite. |
 | test/ui/smoke.ts | **all modules** | The smoke runner itself is shared UI infrastructure. Changes to timing, helpers, section list, or the SMOKE_ONLY mechanism only affect smoke (UI) outcomes, not backend unit tests. |
-| server/agent/runner.ts, server/agent/claude-code.ts, server/agent/demo.ts, server/agent/kiro.ts, server/agent/litellm.ts, server/agent/pricing.ts, server/agent/types.ts | sessions, workflows, reviews, branch-scans, testing-module | The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction. |
+| server/agent/runner.ts, server/agent/claude-code.ts, server/agent/claude-sessions.ts, server/agent/demo.ts, server/agent/kiro.ts, server/agent/recap.ts, server/agent/browser-headless.ts, server/agent/browser-manager.ts, server/agent/litellm.ts, server/agent/pricing.ts, server/agent/types.ts | sessions, workflows, reviews, branch-scans, testing-module, engines, ide | The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. browser-headless.ts rewrites Playwright MCP entries; browser-manager.ts provides the per-session live browser. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction. |
 | web/src/App.jsx, web/src/main.jsx, web/src/styles.css, web/src/styles/base.css, web/src/styles/components.css, web/src/lib/api.js, web/src/lib/events.js, web/src/lib/cx.js, web/src/lib/util.js | **all modules** | Every page is rendered through App.jsx and uses api.js, events, and the global stylesheet. Web-only files — they don't affect backend unit tests. Affects only UI parts. |
 | web/src/components/Icon.jsx, web/src/components/Skeleton.jsx, web/src/components/Toast.jsx | **all modules** | Used on virtually every page; a breakage is visible across the entire UI. Web-only files — affects only UI parts. |
 | web/src/lib/useRunStream.js | sessions, reviews, testing-module | Only features that display real-time agent output use this hook. Web-only file — affects only UI parts. |
+| web/src/lib/sanitize.js | sessions, attachments, knowledge | Used in SessionLive.jsx (sessions) and FilePreviewModal.jsx (attachments, knowledge) to sanitize marked output. Web-only — affects only UI parts. |
 | web/src/components/FilePreviewModal.jsx | attachments, sessions, knowledge | Used for previewing uploaded files in sessions, knowledge base documents, and the attachments picker. Web-only file — affects only UI parts. |
 | web/src/lib/awsCredParser.js, web/src/lib/awsRegions.js, web/src/components/AwsRegionSelect.jsx | credentials, aws-accounts, bedrock-sso | Specific to AWS credential entry, account management, and Bedrock SSO flows. Web-only files — affects only UI parts. |
 | web/src/components/DeviceCodeBox.jsx | bedrock-sso, auth, credentials | Used in Bedrock SSO device-code flow, auth provider setup, and the Kiro IAM Identity Center re-authentication flow in the Credentials page. Web-only file — affects only UI parts. |

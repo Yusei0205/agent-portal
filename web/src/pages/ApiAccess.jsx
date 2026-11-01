@@ -4,6 +4,8 @@ import { formatDate, formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useBulkSelect } from '../lib/useBulkSelect.js';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
 
 // ── Scope definitions ─────────────────────────────────────────────────────────
 
@@ -460,8 +462,12 @@ export function ApiAccess() {
   const [error, setError]         = useState(null);
   const [showNew, setShowNew]     = useState(false);
   const [revealToken, setRevealToken] = useState(null); // raw token string
+  const [bulkBusy, setBulkBusy]   = useState(false);
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
+  // Only allow selecting active tokens (revoked/expired ones can't be acted on)
+  const activeTokens = tokens.filter((t) => t.active);
+  const bulk = useBulkSelect(activeTokens);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -500,6 +506,32 @@ export function ApiAccess() {
     }
   };
 
+  const handleBulkRevoke = async () => {
+    const n = bulk.selected.size;
+    if (!await requestConfirm(
+      `Revoke ${n} token${n === 1 ? '' : 's'}? This cannot be undone.`,
+      'Revoke', 'danger',
+    )) return;
+    setBulkBusy(true);
+    const ids = [...bulk.selected];
+    const failed = [];
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await api.delete(`/api/api-tokens/${id}`);
+      } catch {
+        failed.push(id);
+      }
+    }));
+    const revokedAt = new Date().toISOString();
+    setTokens((prev) => prev.map((t) => {
+      if (ids.includes(t.id) && !failed.includes(t.id)) return { ...t, active: false, revoked_at: revokedAt };
+      return t;
+    }));
+    bulk.clearAll();
+    if (failed.length > 0) toast(`${failed.length} token${failed.length === 1 ? '' : 's'} could not be revoked.`, 'error');
+    setBulkBusy(false);
+  };
+
   const projectName = (id) => projects.find((p) => p.id === id)?.name ?? id;
 
   const scopeLabel = (tok) => {
@@ -535,52 +567,81 @@ export function ApiAccess() {
       )}
 
       {!loading && tokens.length > 0 && (
-        <table className="data-table" aria-label="API tokens">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Scopes</th>
-              <th>Project</th>
-              <th>Created</th>
-              <th>Last used</th>
-              <th>Expires</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {tokens.map((tok) => (
-              <tr key={tok.id} style={{ opacity: tok.active ? 1 : 0.5 }}>
-                <td>
-                  {tok.name}
-                  {!tok.active && (
-                    <span className="badge badge-neutral" style={{ marginLeft: 6 }}>
-                      {tok.revoked_at ? 'revoked' : 'expired'}
-                    </span>
-                  )}
-                </td>
-                <td>
-                  <span className="muted" style={{ fontSize: '0.82rem' }}>{scopeLabel(tok)}</span>
-                </td>
-                <td className="muted">{tok.project_id ? projectName(tok.project_id) : '—'}</td>
-                <td className="muted">{formatRelative(tok.created_at)}</td>
-                <td className="muted">{tok.last_used_at ? formatRelative(tok.last_used_at) : '—'}</td>
-                <td className="muted">{formatDate(tok.expires_at)}</td>
-                <td>
-                  {tok.active && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-danger"
-                      onClick={() => revokeToken(tok)}
-                      aria-label={`Revoke ${tok.name}`}
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </td>
+        <div style={{ position: 'relative' }}>
+          <table className="data-table" aria-label="API tokens">
+            <thead>
+              <tr>
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all active tokens"
+                    checked={bulk.allSelected}
+                    ref={(el) => { if (el) el.indeterminate = bulk.someSelected; }}
+                    onChange={bulk.toggleAll}
+                  />
+                </th>
+                <th>Name</th>
+                <th>Scopes</th>
+                <th>Project</th>
+                <th>Created</th>
+                <th>Last used</th>
+                <th>Expires</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tokens.map((tok) => (
+                <tr key={tok.id} style={{ opacity: tok.active ? 1 : 0.5 }}>
+                  <td>
+                    {tok.active ? (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${tok.name}`}
+                        checked={bulk.selected.has(tok.id)}
+                        onChange={() => bulk.toggle(tok.id)}
+                      />
+                    ) : null}
+                  </td>
+                  <td>
+                    {tok.name}
+                    {!tok.active && (
+                      <span className="badge badge-neutral" style={{ marginLeft: 6 }}>
+                        {tok.revoked_at ? 'revoked' : 'expired'}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <span className="muted" style={{ fontSize: '0.82rem' }}>{scopeLabel(tok)}</span>
+                  </td>
+                  <td className="muted">{tok.project_id ? projectName(tok.project_id) : '—'}</td>
+                  <td className="muted">{formatRelative(tok.created_at)}</td>
+                  <td className="muted">{tok.last_used_at ? formatRelative(tok.last_used_at) : '—'}</td>
+                  <td className="muted">{formatDate(tok.expires_at)}</td>
+                  <td>
+                    {tok.active && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger"
+                        onClick={() => revokeToken(tok)}
+                        aria-label={`Revoke ${tok.name}`}
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <BulkActionBar
+            selected={bulk.selected}
+            onDelete={handleBulkRevoke}
+            onClear={bulk.clearAll}
+            busy={bulkBusy}
+            noun="token"
+            deleteLabel="Revoke"
+          />
+        </div>
       )}
 
       {/* MCP section */}

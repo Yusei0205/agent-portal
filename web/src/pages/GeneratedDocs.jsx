@@ -3,7 +3,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
-import { BulkActionBar, BulkSelectHint } from '../components/BulkActionBar.jsx';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 
@@ -25,8 +25,9 @@ function DocTypeBadge({ type }) {
   return <span className="badge badge-muted">{labels[type] ?? type}</span>;
 }
 
-function StatusBadge({ stale, hasVersion }) {
+function StatusBadge({ stale, hasVersion, status }) {
   if (stale) return <span className="badge badge-warn">Stale</span>;
+  if (status === 'failed') return <span className="badge badge-error">Failed</span>;
   if (hasVersion) return <span className="badge badge-ok">Ready</span>;
   return <span className="badge badge-info">Generating…</span>;
 }
@@ -261,6 +262,7 @@ export function GeneratedDocs({ projectId }) {
   const [selected, setSelected] = useState(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [refreshingDoc, setRefreshingDoc] = useState(null);
+  const [retryingIds, setRetryingIds] = useState(new Set());
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
 
@@ -298,18 +300,33 @@ export function GeneratedDocs({ projectId }) {
     setRefreshingDoc(doc);
   };
 
+  const handleRetryDoc = async (id) => {
+    setRetryingIds((prev) => { const s = new Set(prev); s.add(id); return s; });
+    try {
+      const r = await api.post(`/api/projects/${projectId}/generated-docs/${id}/retry`, {});
+      setDocs((prev) => prev.map((d) => d.id === id ? { ...d, ...(r.doc ?? {}) } : d));
+    } catch (err) {
+      toast(err.message || 'Failed to retry', 'error');
+    } finally {
+      setRetryingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  };
+
   const handleBulkDelete = async () => {
     const ok = await requestConfirm(`Delete ${selected.size} document(s)?`, 'Delete', 'danger');
     if (!ok) return;
     setBulkBusy(true);
     try {
-      for (const id of selected) {
-        await api.delete(`/api/projects/${projectId}/generated-docs/${id}`);
-      }
+      const toDelete = new Set(selected); // capture before state changes
+      await Promise.all([...toDelete].map((id) =>
+        api.delete(`/api/projects/${projectId}/generated-docs/${id}`)
+      ));
+      // Remove deleted items from state immediately — no reload delay.
+      setDocs((prev) => prev.filter((d) => !toDelete.has(d.id)));
       setSelected(new Set());
-      load();
     } catch (err) {
       toast(err.message || 'Failed to delete', 'error');
+      load(); // re-sync with server on partial failure
     } finally {
       setBulkBusy(false);
     }
@@ -354,12 +371,11 @@ export function GeneratedDocs({ projectId }) {
         </div>
       ) : (
         <>
-          <BulkSelectHint selected={selected.size} total={docs.length} />
 
-          <table className="data-table" aria-label="Generated documents">
+          <table className="data-table" aria-label="Generated documents" data-has-sel={selected.size > 0 ? '' : undefined}>
             <thead>
               <tr>
-                <th>
+                <th className="sel-col">
                   <input
                     type="checkbox"
                     checked={selected.size === docs.length && docs.length > 0}
@@ -376,8 +392,8 @@ export function GeneratedDocs({ projectId }) {
             </thead>
             <tbody>
               {docs.map((d) => (
-                <tr key={d.id}>
-                  <td>
+                <tr key={d.id} className={selected.has(d.id) ? 'is-selected' : ''}>
+                  <td className="sel-col">
                     <input
                       type="checkbox"
                       checked={selected.has(d.id)}
@@ -397,10 +413,13 @@ export function GeneratedDocs({ projectId }) {
                         {' '}{d.attachments.length}
                       </span>
                     )}
+                    {d.status === 'failed' && d.error && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>{d.error}</div>
+                    )}
                   </td>
                   <td><DocTypeBadge type={d.doc_type} /></td>
                   <td>
-                    <StatusBadge stale={d.stale} hasVersion={Boolean(d.latest_version_id)} />
+                    <StatusBadge stale={d.stale} hasVersion={Boolean(d.latest_version_id)} status={d.status} />
                   </td>
                   <td className="table-muted">{formatDate(d.created_at)}</td>
                   <td>
@@ -422,6 +441,17 @@ export function GeneratedDocs({ projectId }) {
                             Download Word
                           </a>
                         </>
+                      )}
+                      {d.status === 'failed' && d.retryable && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => handleRetryDoc(d.id)}
+                          disabled={retryingIds.has(d.id)}
+                          aria-label={`Retry ${d.name}`}
+                        >
+                          {retryingIds.has(d.id) ? 'Retrying\u2026' : 'Retry'}
+                        </button>
                       )}
                       <button
                         type="button"
@@ -448,7 +478,7 @@ export function GeneratedDocs({ projectId }) {
 
           {selected.size > 0 && (
             <BulkActionBar
-              count={selected.size}
+              selected={selected}
               busy={bulkBusy}
               onDelete={handleBulkDelete}
               onClear={() => setSelected(new Set())}

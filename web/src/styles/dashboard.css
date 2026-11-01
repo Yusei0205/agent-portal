@@ -6,8 +6,8 @@
 
 /* ── Layout ─────────────────────────────────────────────────────────────────── */
 
-/* page.wide already sets max-width:1440px and grid gap via the .page rule.
-   We override gap for the dashboard's tighter feel. */
+/* .page no longer sets a max-width — the dashboard fills available width.
+   Override only gap for the dashboard's tighter feel. */
 .db-root.page {
   gap: 16px;
 }
@@ -36,14 +36,11 @@
   gap: 4px;
 }
 
-/* KPI row: 4 equal-width cards */
+/* KPI row: auto-fit cards, min 220 px each — up to 4 on wide screens */
 .db-kpis {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
-}
-@media (max-width: 1100px) {
-  .db-kpis { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
   .db-kpis { grid-template-columns: 1fr; }
@@ -132,25 +129,181 @@
   overflow: hidden;
 }
 
-.db-network-svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  overflow: visible;
+/* ── Agent card network layout ─────────────────────────────────────────────── */
+
+/* Outer column: centres lead row, connector SVG, children row, hint, legend */
+.db-agent-net {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 8px 0 2px;
 }
 
-/* fix 7: transform-box ensures the scale animates around the SVG element's own centre */
+/* Lead agent row (always centered) */
+.db-agent-net-lead-row {
+  display: flex;
+  justify-content: center;
+}
+
+/* Children row below the connector SVG */
+.db-agent-net-children-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* Flat grid — no delegation hierarchy or > 8 children */
+.db-agent-card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* ── Agent card ──────────────────────────────────────────────────────────────── */
+
+.db-agent-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  /* width must match AGENT_CARD_W in Dashboard.jsx for connector SVG alignment */
+  width: 164px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--line);
+  background: var(--panel);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.db-agent-card:hover {
+  border-color: var(--ink-3);
+  background: var(--canvas);
+}
+.db-agent-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.db-agent-card.is-running {
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
+  background: color-mix(in srgb, var(--ok) 5%, var(--panel));
+}
+
+/* Pulsing glow ring — only rendered for running nodes.
+   .db-node-glow is queried by smoke tests for animation verification. */
+.db-card-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--ok);
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Agent avatar circle */
+.db-card-avatar {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 12%, var(--canvas));
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.db-agent-card.is-running .db-card-avatar {
+  background: color-mix(in srgb, var(--ok) 15%, var(--canvas));
+  color: var(--ok);
+}
+
+/* Card text body */
+.db-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.db-card-name {
+  font-size: 0.82rem;
+  font-weight: 620;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.db-card-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.73rem;
+  color: var(--ink-3);
+}
+.db-card-status.is-running {
+  color: var(--ok);
+}
+
+.db-card-stats {
+  display: flex;
+  gap: 7px;
+  font-size: 0.71rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Suppress running dot pulse when the Animations toggle is off */
+.db-root:not(.db-anim) .db-card-status .dot-running {
+  animation: none;
+}
+
+/* Hint shown when only one agent exists */
+.db-agent-net-hint {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  text-align: center;
+  padding: 6px 16px;
+  margin-top: 4px;
+}
+
+/* Legend bar */
+.db-net-legend-bar {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2);
+  width: 100%;
+}
+.db-net-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+/* fix 7: Glow ring on running agent cards — only animate when .db-anim is active */
 .db-anim .db-node-glow {
-  transform-box: fill-box;
-  transform-origin: center;
   animation: db-node-glow 2s ease-in-out infinite;
 }
 @keyframes db-node-glow {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50%       { opacity: 0;   transform: scale(1.5); }
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 0; }
 }
 
-/* Running edge flowing dash */
+/* Running edge flowing dash -- works on <path> as well as <line> */
 .db-anim .db-edge-running {
   stroke-dasharray: 6 3;
   animation: db-edge-flow 0.7s linear infinite;
@@ -167,6 +320,19 @@
 @keyframes db-dot-blink {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.35; }
+}
+
+/* Glow enhancements for themes with data-fx-glow="true" */
+[data-fx-glow="true"] .db-agent-card.is-running {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 30%, transparent);
+}
+[data-fx-glow="true"] .db-anim .db-node-glow {
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--ok) 50%, transparent));
+}
+
+/* data-fx-motion override: suppress motion for themes that request it */
+:is([data-fx-motion="none"], [data-fx-motion="reduced"]) .db-agent-card {
+  animation: none !important;
 }
 
 /* fix 6: pause all dashboard CSS animations when the browser tab is hidden */
@@ -533,4 +699,47 @@
   .db-anim-toggle {
     transition: none;
   }
+}
+
+/* ── Mobile responsive (≤ 768 px) ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Agent network: scroll rather than overflow when the SVG tree is wider than
+     the panel — typical when ≥ 3 child nodes are rendered in a tree layout.   */
+  .db-network {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .db-agent-net {
+    /* Allow the inner flex column to grow to its natural size for scrolling */
+    min-width: min-content;
+    width: max-content;
+  }
+
+  /* Legend: allow items to wrap */
+  .db-net-legend-bar { flex-wrap: wrap; gap: 10px; }
+
+  /* Controls bar: tighter gap */
+  .db-controls { gap: 6px; }
+
+  /* Node-stats drill modal: single column */
+  .db-node-stats { grid-template-columns: 1fr; }
+
+  /* KPI: already auto-fit, but force 2-up above 340 px for better use of space */
+  .db-kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+
+  /* Session item: allow the right-side pill/timestamp to wrap below */
+  .db-session-item {
+    flex-wrap: wrap;
+  }
+  .db-session-right {
+    flex-direction: row;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 400px) {
+  /* Very narrow: single KPI column */
+  .db-kpis { grid-template-columns: 1fr; }
 }

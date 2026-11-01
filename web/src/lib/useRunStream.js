@@ -28,10 +28,12 @@ export function useRunStream(runId) {
   // deduplicate the historical replay if the stream reconnects.
   const seen = useRef(/** @type {Set<string | number>} */ (new Set()));
   const retryTimer = useRef(null);
+  const esRef = useRef(/** @type {EventSource | null} */ (null));
 
   const connect = useCallback((id, alive) => {
     const url = `/api/runs/${encodeURIComponent(id)}/events`;
     const es = new EventSource(url, { withCredentials: true });
+    esRef.current = es;
 
     es.onopen = () => {
       if (!alive.v) return;
@@ -79,12 +81,13 @@ export function useRunStream(runId) {
     setState({ events: [], connected: false, error: null });
 
     const alive = { v: true };
-    const es = connect(runId, alive);
+    connect(runId, alive);
 
     return () => {
       alive.v = false;
       clearTimeout(retryTimer.current);
-      es.close();
+      esRef.current?.close();
+      esRef.current = null;
     };
   }, [runId, connect]);
 

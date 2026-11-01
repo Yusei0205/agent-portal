@@ -802,7 +802,7 @@ describe('AI generation — mocked model', () => {
     }
 
     assert.equal(gen.status, 'failed');
-    assert.ok(String(gen.error).includes('invalid steps'), `Expected 'invalid steps' in error: ${gen.error}`);
+    assert.ok(String(gen.error).includes('no usable steps') || String(gen.error).includes('invalid steps'), `Expected error about unusable steps: ${gen.error}`);
   });
 
   it('non-array model output is rejected', async () => {

@@ -89,8 +89,57 @@ export async function* query({ prompt, options }) {
     return;
   }
 
-  if (scenario === 'agent-nudge') {
-    // Emit multiple Agent tool_use blocks to trigger the nudge threshold
+  if (scenario === 'sdk-session-resume') {
+    const resumeId = options?.resume;
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: resumeId ? `Resuming:${resumeId}` : 'New session started.' }],
+        usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    };
+    yield {
+      type: 'result',
+      subtype: 'success',
+      total_cost_usd: 0.001,
+      num_turns: 1,
+      is_error: false,
+      result: 'done',
+      stop_reason: 'end_turn',
+      session_id: 'sdk-session-001',
+    };
+    return;
+  }
+
+  if (scenario === 'sdk-session-resume-fail') {
+    const resumeId = options?.resume;
+    // Throw an error when asked to resume 'sdk-session-bad'
+    if (resumeId === 'sdk-session-bad') {
+      throw new Error('Claude Code session not found: ' + resumeId);
+    }
+    // Otherwise (no resume, or a different session id) succeed normally
+    const promptStr = typeof prompt === 'string' ? prompt.slice(0, 60) : '';
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: `New session. Prompt starts: ${promptStr.slice(0, 40)}` }],
+        usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    };
+    yield {
+      type: 'result',
+      subtype: 'success',
+      total_cost_usd: 0.001,
+      num_turns: 1,
+      is_error: false,
+      result: 'done',
+      stop_reason: 'end_turn',
+      session_id: 'sdk-session-002',
+    };
+    return;
+  }
+
+  if (scenario === 'agent-nudge') {    // Emit multiple Agent tool_use blocks to trigger the nudge threshold
     yield {
       type: 'assistant',
       message: {
@@ -170,5 +219,31 @@ export async function* query({ prompt, options }) {
     is_error: false,
     result: 'Task done.',
     stop_reason: 'end_turn',
+    session_id: 'sdk-session-001',
+  };
+}
+
+// ── sdk-session-resume scenario ───────────────────────────────────────────────
+// Used by kiro-session.test.ts to verify Claude Code session ID storage and resume.
+// Returns session_id: 'sdk-session-001' in the result.
+// If options.resume is set, emits a marker text so the test can verify it.
+export async function* _sessionScenario({ options }) {
+  const resumeId = options?.resume;
+  yield {
+    type: 'assistant',
+    message: {
+      content: [{ type: 'text', text: resumeId ? `Resuming:${resumeId}` : 'New session started.' }],
+      usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    },
+  };
+  yield {
+    type: 'result',
+    subtype: 'success',
+    total_cost_usd: 0.001,
+    num_turns: 1,
+    is_error: false,
+    result: 'done',
+    stop_reason: 'end_turn',
+    session_id: 'sdk-session-001',
   };
 }

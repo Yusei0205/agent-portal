@@ -24,7 +24,7 @@ import { createTestDb } from './fixtures.ts';
 import { getDb, one, all } from '../server/db.ts';
 import { encrypt } from '../server/secrets.ts';
 import { setConfig } from '../server/config.ts';
-import { setOIDCClientFactory, resolveCredentialEnv } from '../server/credentials.ts';
+import { setOIDCClientFactory, resolveCredentialEnv, setOIDCCallTimeoutMs } from '../server/credentials.ts';
 import type { OIDCClientLike } from '../server/credentials.ts';
 import { setProfilesFetcherOverride } from '../server/credentials.ts';
 import { now } from '../server/util.ts';
@@ -2125,5 +2125,276 @@ describe('fetchKiroProfiles — error propagation to profileFetchError and ensur
     assert.equal(extra.selectedProfileArn, 'arn:aws:codewhisperer:us-east-1:42:profile/fresh');
     assert.equal(extra.selectedProfileName, 'KiroProfile-fresh');
     assert.ok(!extra.profileFetchError, 'profileFetchError must be cleared on success');
+  });
+});
+
+// ── OIDC timeout hardening ────────────────────────────────────────────────────
+
+describe('Credentials — /refresh OIDC timeout hardening', () => {
+  let baseUrl: string;
+  let adminCookie: string;
+  let userCookie: string;
+
+  // Controls for the mock OIDC client
+  let hangForever = false;
+  let rejectWithOidcError = false;
+
+  before(async () => {
+    const ts = await setupServer();
+    baseUrl = ts.baseUrl;
+    adminCookie = await loginAdmin(baseUrl);
+    const u = await createNonAdmin(baseUrl, adminCookie, 'tout1');
+    userCookie = u.cookie;
+
+    setOIDCClientFactory((_region: string): OIDCClientLike => ({
+      registerClient: async () => ({
+        clientId: 'tout-client-id',
+        clientSecret: 'tout-client-secret',
+        clientSecretExpiresAt: Math.floor(Date.now() / 1000) + 86400,
+      }),
+      startDeviceAuthorization: async () => ({
+        deviceCode: 'tout-device-code',
+        userCode: 'TOUT-1234',
+        verificationUri: 'https://device.sso.us-east-1.amazonaws.com',
+        verificationUriComplete: 'https://device.sso.us-east-1.amazonaws.com/?user_code=TOUT-1234',
+        expiresIn: 600,
+        interval: 5,
+      }),
+      createToken: (input) => {
+        if (input.grantType === 'refresh_token') {
+          if (hangForever) {
+            // Never resolves — simulates an unresponsive AWS endpoint
+            return new Promise<never>(() => { /* intentionally hangs */ });
+          }
+          if (rejectWithOidcError) {
+            const err = new Error('InvalidGrantException') as Error & { name: string };
+            err.name = 'InvalidGrantException';
+            return Promise.reject(err);
+          }
+          return Promise.resolve({
+            accessToken: 'tout-access-token',
+            expiresIn: 28800,
+            refreshToken: 'tout-refresh-token',
+          });
+        }
+        // device_code grant: used only when polling the initial sign-in
+        return Promise.resolve({
+          accessToken: 'tout-initial-token',
+          expiresIn: 28800,
+          refreshToken: 'tout-initial-refresh-token',
+        });
+      },
+    }));
+  });
+
+  after(async () => {
+    setOIDCClientFactory(null);
+    setOIDCCallTimeoutMs(null);
+    await cleanup();
+  });
+
+  /** Create a fully signed-in IDC credential and return its id. */
+  async function createToutCred(name: string): Promise<string> {
+    const cr = await fetchJson(baseUrl, '/api/credentials', {
+      method: 'POST',
+      body: {
+        engine: 'kiro',
+        mode: 'identity_center',
+        name,
+        config: { startUrl: 'https://tout.awsapps.com/start', region: 'us-east-1' },
+      },
+      cookie: userCookie,
+    });
+    assert.equal(cr.status, 201, `Create: ${JSON.stringify(cr.body)}`);
+    const credId = (cr.body as { credential: { id: string } }).credential.id;
+
+    // Complete the initial device-code flow
+    const pollR = await fetchJson(baseUrl, `/api/credentials/${credId}/device-poll`, {
+      method: 'POST', cookie: userCookie,
+    });
+    assert.equal(
+      (pollR.body as { status: string }).status, 'complete',
+      `Initial poll: ${JSON.stringify(pollR.body)}`,
+    );
+    return credId;
+  }
+
+  it('hanging createToken resolves as 504 within the injected timeout bound', async () => {
+    const credId = await createToutCred('Timeout Cred');
+    setOIDCCallTimeoutMs(80); // 80 ms — fast for tests
+    hangForever = true;
+
+    const start = Date.now();
+    const r = await fetchJson(baseUrl, `/api/credentials/${credId}/refresh`, {
+      method: 'POST', cookie: userCookie,
+    });
+    const elapsed = Date.now() - start;
+
+    hangForever = false;
+    setOIDCCallTimeoutMs(null);
+
+    assert.equal(r.status, 504, `Expected 504 timeout, got ${r.status}: ${JSON.stringify(r.body)}`);
+    const body = r.body as { error: string };
+    assert.ok(typeof body.error === 'string' && body.error.length > 0, 'error message must be present');
+    assert.ok(
+      body.error.toLowerCase().includes('try again') || body.error.toLowerCase().includes("didn't respond"),
+      `error must suggest retrying, got: "${body.error}"`,
+    );
+    // Must not set needsSignIn for a timeout (token may still be renewable)
+    assert.ok(!('needsSignIn' in (r.body as object)), `needsSignIn must not be set on timeout, got: ${JSON.stringify(r.body)}`);
+    // Must resolve well within 2 seconds (80 ms + server overhead)
+    assert.ok(elapsed < 2_000, `Timeout must fire within 2s, took ${elapsed}ms`);
+  });
+
+  it('OIDC rejection still returns 409 with needsSignIn', async () => {
+    const credId = await createToutCred('Rejection Cred');
+    rejectWithOidcError = true;
+
+    const r = await fetchJson(baseUrl, `/api/credentials/${credId}/refresh`, {
+      method: 'POST', cookie: userCookie,
+    });
+
+    rejectWithOidcError = false;
+
+    assert.equal(r.status, 409, `Expected 409, got ${r.status}: ${JSON.stringify(r.body)}`);
+    const body = r.body as { needsSignIn: boolean; error: string };
+    assert.equal(body.needsSignIn, true, 'needsSignIn must be true for OIDC rejection');
+    assert.ok(typeof body.error === 'string' && body.error.length > 0, 'error message must be present');
+  });
+});
+
+// ── Production SDK error classification ──────────────────────────────────────
+
+describe('Credentials — /refresh production SDK error classification', () => {
+  let baseUrl: string;
+  let adminCookie: string;
+  let userCookie: string;
+  let createTokenBehavior: 'timeout_error' | 'econnreset' | 'invalid_grant' | 'success' = 'success';
+
+  before(async () => {
+    const ts = await setupServer();
+    baseUrl = ts.baseUrl;
+    adminCookie = await loginAdmin(baseUrl);
+    const u = await createNonAdmin(baseUrl, adminCookie, 'sdk-err');
+    userCookie = u.cookie;
+
+    setOIDCClientFactory((_region: string): OIDCClientLike => ({
+      registerClient: async () => ({
+        clientId: 'sdk-client-id',
+        clientSecret: 'sdk-client-secret',
+        clientSecretExpiresAt: Math.floor(Date.now() / 1000) + 86400,
+      }),
+      startDeviceAuthorization: async () => ({
+        deviceCode: 'sdk-device-code',
+        userCode: 'SDK0-1234',
+        verificationUri: 'https://device.sso.us-east-1.amazonaws.com',
+        verificationUriComplete: 'https://device.sso.us-east-1.amazonaws.com/?user_code=SDK0-1234',
+        expiresIn: 600,
+        interval: 5,
+      }),
+      createToken: (input) => {
+        if (input.grantType !== 'refresh_token') {
+          return Promise.resolve({ accessToken: 'sdk-initial-token', expiresIn: 28800, refreshToken: 'sdk-initial-refresh' });
+        }
+        if (createTokenBehavior === 'timeout_error') {
+          const err = new Error('Request timed out') as Error & { name: string };
+          err.name = 'TimeoutError';
+          return Promise.reject(err);
+        }
+        if (createTokenBehavior === 'econnreset') {
+          const err = new Error('read ECONNRESET') as NodeJS.ErrnoException;
+          (err as NodeJS.ErrnoException).code = 'ECONNRESET';
+          return Promise.reject(err);
+        }
+        if (createTokenBehavior === 'invalid_grant') {
+          const err = new Error('InvalidGrantException') as Error & { name: string };
+          err.name = 'InvalidGrantException';
+          return Promise.reject(err);
+        }
+        return Promise.resolve({ accessToken: 'sdk-refreshed-token', expiresIn: 28800, refreshToken: 'sdk-refreshed-refresh' });
+      },
+    }));
+  });
+
+  after(async () => {
+    setOIDCClientFactory(null);
+    await cleanup();
+  });
+
+  async function createSignedInSdkCred(name: string): Promise<string> {
+    const cr = await fetchJson(baseUrl, '/api/credentials', {
+      method: 'POST',
+      body: {
+        engine: 'kiro',
+        mode: 'identity_center',
+        name,
+        config: { startUrl: 'https://sdk.awsapps.com/start', region: 'us-east-1' },
+      },
+      cookie: userCookie,
+    });
+    assert.equal(cr.status, 201, `Create: ${JSON.stringify(cr.body)}`);
+    const credId = (cr.body as { credential: { id: string } }).credential.id;
+    const pollR = await fetchJson(baseUrl, `/api/credentials/${credId}/device-poll`, {
+      method: 'POST', cookie: userCookie,
+    });
+    assert.equal(
+      (pollR.body as { status: string }).status, 'complete',
+      `Initial poll: ${JSON.stringify(pollR.body)}`,
+    );
+    return credId;
+  }
+
+  it('TimeoutError from createToken → 504 (no needsSignIn)', async () => {
+    const credId = await createSignedInSdkCred('SDK TimeoutError');
+    createTokenBehavior = 'timeout_error';
+
+    const r = await fetchJson(baseUrl, `/api/credentials/${credId}/refresh`, {
+      method: 'POST', cookie: userCookie,
+    });
+
+    createTokenBehavior = 'success';
+
+    assert.equal(r.status, 504, `Expected 504, got ${r.status}: ${JSON.stringify(r.body)}`);
+    const body = r.body as { error: string };
+    assert.ok(typeof body.error === 'string' && body.error.length > 0, 'error message must be present');
+    assert.ok(
+      !('needsSignIn' in (r.body as object)),
+      `needsSignIn must not be set for transient error, got: ${JSON.stringify(r.body)}`,
+    );
+  });
+
+  it('ECONNRESET network error → 504 (no needsSignIn)', async () => {
+    const credId = await createSignedInSdkCred('SDK ECONNRESET');
+    createTokenBehavior = 'econnreset';
+
+    const r = await fetchJson(baseUrl, `/api/credentials/${credId}/refresh`, {
+      method: 'POST', cookie: userCookie,
+    });
+
+    createTokenBehavior = 'success';
+
+    assert.equal(r.status, 504, `Expected 504, got ${r.status}: ${JSON.stringify(r.body)}`);
+    const body = r.body as { error: string };
+    assert.ok(typeof body.error === 'string' && body.error.length > 0, 'error message must be present');
+    assert.ok(
+      !('needsSignIn' in (r.body as object)),
+      `needsSignIn must not be set for transient error, got: ${JSON.stringify(r.body)}`,
+    );
+  });
+
+  it('InvalidGrantException → 409 + needsSignIn', async () => {
+    const credId = await createSignedInSdkCred('SDK InvalidGrant');
+    createTokenBehavior = 'invalid_grant';
+
+    const r = await fetchJson(baseUrl, `/api/credentials/${credId}/refresh`, {
+      method: 'POST', cookie: userCookie,
+    });
+
+    createTokenBehavior = 'success';
+
+    assert.equal(r.status, 409, `Expected 409, got ${r.status}: ${JSON.stringify(r.body)}`);
+    const body = r.body as { needsSignIn: boolean; error: string };
+    assert.equal(body.needsSignIn, true, 'needsSignIn must be true for auth rejection');
+    assert.ok(typeof body.error === 'string' && body.error.length > 0, 'error message must be present');
   });
 });

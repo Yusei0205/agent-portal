@@ -177,6 +177,7 @@ function diagramView(d: Row): object {
     repo_ids: parseJson<string[]>(d.repo_ids as string, []),
     status: d.status,
     error: d.error ?? null,
+    retryable: String(d.status) === 'error',
     version: d.version ?? 0,
     stale: Boolean(d.stale),
     pending_workflow_id: d.pending_workflow_id ?? null,
@@ -732,6 +733,30 @@ export function registerDiagramRoutes(): void {
       diagram: diagramView(updated),
       workflowId: gen.workflowId,
     });
+  });
+
+  // POST /api/projects/:id/diagrams/:did/retry — retry a failed (error) generation
+  router.post('/api/projects/:id/diagrams/:did/retry', async (req: PortalRequest, res: PortalResponse) => {
+    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    if (!project) return;
+
+    const d = getDiagramRow(String(project.id), req.params.did);
+    if (String(d.status) !== 'error') {
+      sendJson(res, 409, { error: 'Diagram is not in an error state' });
+      return;
+    }
+
+    const effectiveAttachmentIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
+    let attachmentRows: Row[] = [];
+    if (effectiveAttachmentIds.length > 0) {
+      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      attachmentRows = rows ?? [];
+    }
+
+    const gen = await startDiagramGeneration(String(d.id), req.user!.id, attachmentRows);
+
+    const updated = one<Row>('SELECT * FROM diagrams WHERE id = ?', String(d.id))!;
+    sendJson(res, 202, { diagram: diagramView(updated), workflowId: gen.workflowId });
   });
 
   // GET /api/projects/:id/diagrams/:did/versions — list versions

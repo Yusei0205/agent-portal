@@ -15,6 +15,8 @@
  *   - Missing-credential failure without fallback to demo
  *   - kiro-cli missing: clear error, no fallback
  *   - Review prompt instructs for JSON findings output
+ *   - Heartbeat status events emitted during slow kiro runs
+ *   - Non-zero kiro exit: p6_runs.error stored, run-failed event in p6_events
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -31,6 +33,7 @@ import { setConfig } from '../server/config.ts';
 import type { Config } from '../server/config.ts';
 import { runClaudeCode } from '../server/agent/claude-code.ts';
 import { runKiro } from '../server/agent/kiro.ts';
+import { executeRun } from '../server/agent/runner.ts';
 import { loadRunPermissions, clearAlwaysBlockedCache } from '../server/guardrails.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 import { encrypt } from '../server/secrets.ts';
@@ -607,5 +610,111 @@ describe('Kiro engine — failure modes (no fallback)', () => {
       assert.ok(name === 'AbortError' || msg.includes('cancel'), `Expected AbortError, got: ${name}: ${msg}`);
     }
     assert.ok(threw, 'Expected AbortError to be thrown on cancellation');
+  });
+});
+
+// ── Kiro engine — heartbeat events ───────────────────────────────────────────
+
+describe('Kiro engine — heartbeat status events during slow run', () => {
+  let t: TestData;
+
+  before(() => {
+    createTestDb();
+    clearAlwaysBlockedCache();
+    t = makeTestData();
+    process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
+    process.env.PORTAL_KIRO_TEXT_MODE = '1';
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'slow';
+    // Short heartbeat interval for test speed; fake-kiro sleeps 300 ms by default
+    process.env.PORTAL_KIRO_HEARTBEAT_MS = '50';
+  });
+
+  after(async () => {
+    delete process.env.PORTAL_KIRO_FAKE;
+    delete process.env.PORTAL_KIRO_TEXT_MODE;
+    delete process.env.PORTAL_FAKE_KIRO_SCENARIO;
+    delete process.env.PORTAL_KIRO_HEARTBEAT_MS;
+    await cleanup();
+  });
+
+  it('emits at least one "Kiro is working" status event during a slow run', async () => {
+    const { ctx, events } = await makeRunContext(t, { engine: 'kiro' });
+    await runKiro(ctx);
+
+    const heartbeats = events.filter(
+      (e) => e.type === 'status' && String(e.payload.text ?? '').includes('Kiro is working'),
+    );
+    assert.ok(
+      heartbeats.length >= 1,
+      `Expected ≥1 heartbeat event; emitted events: ${events.map((e) => `${e.type}:${JSON.stringify(e.payload.text)}`).join(', ')}`,
+    );
+  });
+
+  it('heartbeat text includes elapsed seconds', async () => {
+    const { ctx, events } = await makeRunContext(t, { engine: 'kiro' });
+    await runKiro(ctx);
+
+    const heartbeatTexts = events
+      .filter((e) => e.type === 'status' && String(e.payload.text ?? '').includes('Kiro is working'))
+      .map((e) => String(e.payload.text ?? ''));
+    assert.ok(heartbeatTexts.length >= 1, 'Expected at least one heartbeat');
+    // Each heartbeat should contain a number of seconds in parentheses
+    assert.ok(
+      heartbeatTexts[0].match(/\(\d+s\)/),
+      `Heartbeat text should contain "(Ns)"; got: "${heartbeatTexts[0]}"`,
+    );
+  });
+});
+
+// ── Runner — kiro failure path stores error + run-failed event ────────────────
+
+describe('Runner — kiro failure path stores p6_runs.error and run-failed event', () => {
+  let t: TestData;
+
+  before(async () => {
+    createTestDb();
+    clearAlwaysBlockedCache();
+    t = makeTestData();
+    process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
+    process.env.PORTAL_KIRO_TEXT_MODE = '1';
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'error';
+
+    // Switch workflow engine to kiro and pre-set work_dir so executeRun uses
+    // the existing temp work dir rather than creating a new one from the project dir.
+    getDb()
+      .prepare("UPDATE p6_workflows SET engine = 'kiro', work_dir = ? WHERE id = ?")
+      .run(t.workDir, t.workflowId);
+  });
+
+  after(async () => {
+    delete process.env.PORTAL_KIRO_FAKE;
+    delete process.env.PORTAL_KIRO_TEXT_MODE;
+    delete process.env.PORTAL_FAKE_KIRO_SCENARIO;
+    await cleanup();
+  });
+
+  it('stores non-empty error in p6_runs.error when kiro exits non-zero', async () => {
+    await executeRun(t.runId, t.workflowId);
+
+    const runRow = one<{ status: string; error: string }>(
+      'SELECT status, error FROM p6_runs WHERE id = ?',
+      t.runId,
+    );
+    assert.equal(runRow?.status, 'failed', 'run status must be failed');
+    assert.ok(
+      runRow?.error && runRow.error.length > 0,
+      `p6_runs.error must be non-empty on failure; got: "${runRow?.error}"`,
+    );
+  });
+
+  it('inserts a run-failed event in p6_events', async () => {
+    // run was already executed in the previous test (same DB, same runId)
+    const failedEvent = one<{ type: string; payload: string }>(
+      "SELECT type, payload FROM p6_events WHERE run_id = ? AND type = 'run-failed'",
+      t.runId,
+    );
+    assert.ok(failedEvent, 'run-failed event must be in p6_events');
+    const payload = JSON.parse(failedEvent.payload) as { error: string };
+    assert.ok(payload.error, 'run-failed payload must contain an error message');
   });
 });

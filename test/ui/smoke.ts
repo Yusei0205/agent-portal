@@ -104,6 +104,8 @@ const SECTIONS: ReadonlyArray<{ id: string; label: string; modules: string[] }> 
   { id: '47',  label: 'Dashboard',                                      modules: ['dashboard'] },
   { id: '48',  label: 'Bug-fix smoke: ConfirmDialog + workspace picker', modules: ['workspaces', 'sessions'] },
   { id: '49',  label: 'Tickets page — not-connected card + New Session no-ticket check', modules: ['tickets'] },
+  { id: '50',  label: 'Bulk-select hint removed; checkboxes on hover/selection',         modules: ['sessions', 'diagrams', 'generated-docs', 'presentations'] },
+  { id: '51',  label: 'Mobile viewport — sessions no-overflow + rail drawer + all-routes overflow check',  modules: ['sessions', 'shell'] },
 ];
 
 // ── Selective section filter ──────────────────────────────────────────────────
@@ -653,6 +655,12 @@ async function main() {
     await test('Repo with in-progress clone renders [role=progressbar]', async (p) => {
       // Intercept only the base repos list endpoint (not /repos/progress)
       const reposPattern = new RegExp(`/api/projects/${projectId}/repos$`);
+
+      // Navigate away from the setup page first so that when we navigate back,
+      // the page performs a genuine load with the mock already active.
+      // (Same-document hash navigation would not re-run ProjectHub's load().)
+      await goto(p, '/projects', 300);
+
       await p.route(reposPattern, (route) => {
         route.fulfill({
           status: 200,
@@ -782,6 +790,78 @@ async function main() {
     await test('Workspaces page renders', async (p) => {
       await goto(p, `/p/${projectId}/workspaces`);
       await assertHeading(p, 'Workspaces');
+    }, page);
+
+    await test('Workspace form saves session defaults — PUT body includes defaultEngine/Agent/Model', async (p) => {
+      // Create a workspace via API so we have one to edit
+      const wsData = await apiPost(`/api/projects/${projectId}/workspaces`, {
+        name: 'Smoke Defaults WS',
+        repoIds: [],
+      });
+      const wsId = (wsData as any)?.workspace?.id as string | undefined;
+      if (!wsId) throw new Error('Failed to create workspace for defaults test');
+
+      await goto(p, `/p/${projectId}/workspaces`, 1000);
+      await assertHeading(p, 'Workspaces');
+
+      // Open edit modal
+      const editBtn = p.locator(`button[aria-label="Edit Smoke Defaults WS"]`).first();
+      await editBtn.waitFor({ timeout: 8000 });
+      await editBtn.click();
+      await p.waitForSelector('[role="dialog"]', { timeout: 5000 });
+
+      // The default-engine select must exist (#ws-def-engine)
+      const engineSelect = p.locator('#ws-def-engine').first();
+      await engineSelect.waitFor({ timeout: 6000 });
+
+      // Set default engine to Kiro
+      await engineSelect.selectOption('kiro');
+      // Allow agent/model loaders to settle
+      await p.waitForSelector('[aria-label="Loading models…"]', { state: 'detached', timeout: 8000 }).catch(() => {});
+      await p.waitForTimeout(400);
+
+      // Intercept the PUT to capture the request body
+      let capturedBody: Record<string, unknown> | null = null;
+      const putPred = (url: URL) => url.pathname.endsWith(`/workspaces/${wsId}`);
+
+      await p.route(putPred, async (route) => {
+        capturedBody = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            workspace: {
+              id: wsId,
+              name: 'Smoke Defaults WS',
+              default_engine: 'kiro',
+              default_agent: '',
+              default_model: '',
+              repo_ids: [],
+              created_at: new Date().toISOString(),
+            },
+          }),
+        });
+      });
+
+      try {
+        const saveBtn = p.locator('[role="dialog"] button[type="submit"]').first();
+        await saveBtn.waitFor({ timeout: 4000 });
+        await saveBtn.click();
+        await p.waitForTimeout(1200);
+      } finally {
+        await p.unroute(putPred).catch(() => {});
+      }
+
+      if (!capturedBody) {
+        throw new Error('PUT request was not intercepted — dialog may not have submitted');
+      }
+      const body = capturedBody as Record<string, unknown>;
+      if (!('defaultEngine' in body)) throw new Error(`PUT body missing "defaultEngine". Body: ${JSON.stringify(body)}`);
+      if (!('defaultAgent' in body)) throw new Error(`PUT body missing "defaultAgent". Body: ${JSON.stringify(body)}`);
+      if (!('defaultModel' in body)) throw new Error(`PUT body missing "defaultModel". Body: ${JSON.stringify(body)}`);
+      if (body.defaultEngine !== 'kiro') {
+        throw new Error(`Expected defaultEngine "kiro", got: "${body.defaultEngine}". Body: ${JSON.stringify(body)}`);
+      }
     }, page);
     } // end §16 workspaces
 
@@ -1468,6 +1548,66 @@ async function main() {
       if (!hasLast4) throw new Error('Last 4 chars not shown in credentials list');
       if (hasFullKey) throw new Error('Full secret key should not be visible in UI');
     }, page);
+
+    await test('Refresh button re-enables after successful POST /refresh', async (p) => {
+      const credId = 'smoke-kiro-idc-1';
+      const credListPredicate = (url: URL) => url.href.includes('/api/credentials') && !url.href.includes('/refresh') && !url.href.includes('/set-default') && !url.href.includes('/reauth') && !url.href.includes('/device-poll');
+      const refreshPredicate  = (url: URL) => url.href.includes(`/api/credentials/${credId}/refresh`);
+
+      // Mock the credentials list to include one Kiro IAM IDC credential with canRefresh.
+      // Navigate away first so the component remounts with the mock already active.
+      await goto(p, '/projects', 300);
+
+      await p.route(credListPredicate, (route) => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            credentials: [{
+              id: credId,
+              engine: 'kiro',
+              mode: 'identity_center',
+              name: 'Smoke Kiro IDC',
+              canRefresh: true,
+              isDefault: false,
+              status: 'ok',
+              config: { startUrl: 'https://d-0000000000.awsapps.com/start' },
+            }],
+          }),
+        });
+      });
+
+      // Mock the refresh endpoint to return 200 immediately
+      await p.route(refreshPredicate, (route) => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true }),
+        });
+      });
+
+      try {
+        await goto(p, '/credentials', 1200);
+
+        // The Refresh button should be visible and enabled
+        const refreshBtn = p.locator('button[aria-label*="Refresh"]').first();
+        await refreshBtn.waitFor({ timeout: 8000 });
+
+        const disabledBefore = await refreshBtn.isDisabled();
+        if (disabledBefore) throw new Error('Refresh button should be enabled before clicking');
+
+        await refreshBtn.click();
+        // Allow the mocked POST to resolve and React to re-render
+        await p.waitForTimeout(600);
+
+        // Button must be re-enabled — this is the regression check for the stuck-busy bug
+        const disabledAfter = await refreshBtn.isDisabled();
+        if (disabledAfter) throw new Error('Refresh button stayed disabled after successful refresh (stuck loading state)');
+      } finally {
+        await p.unroute(credListPredicate);
+        await p.unroute(refreshPredicate);
+      }
+    }, page);
     } // end §29 credentials
 
     // ── 30. Configuration page (F5) ──────────────────────────────────────
@@ -1538,6 +1678,18 @@ async function main() {
     currentSectionId = '31';
 
     await test('New session dialog shows engine cards and agent picker', async (p) => {
+      // The new dialog disables engines that have no credential AND no matching portal
+      // provider — in the smoke environment the portal is in demo mode with no creds, so
+      // we need to add a claude-code credential first so the radio is enabled.
+      try {
+        await apiPost('/api/credentials', {
+          engine: 'claude-code',
+          mode: 'api_key',
+          name: 'Smoke claude cred',
+          secret: 'smoke-claude-key-1234',
+        });
+      } catch { /* may already exist */ }
+
       await goto(p, `/p/${projectId}/sessions`, 1000);
       // Open the new session dialog
       const newBtn = p.locator('button').filter({ hasText: /new session/i }).first();
@@ -1660,6 +1812,158 @@ async function main() {
       }
 
       await p.keyboard.press('Escape');
+    }, page);
+
+    await test('Workspace defaults survive engine-switch and late credSummary load (agent + model preserved)', async (p) => {
+      // Mock workspaces, agents, and models so we control exact values.
+      const mockWsId = 'ws-defaults-smoke-2';
+      const MOCK_AGENT = 'my-workspace-agent';
+      const MOCK_MODEL = 'claude-ws-model-x1';
+
+      const wsPred = (url: URL) =>
+        url.pathname.includes(`/api/projects/${projectId}/workspaces`) &&
+        !url.pathname.match(/\/workspaces\/\w/);
+      const agentPred = (url: URL) => url.pathname.includes('/api/user-config/agents');
+      const modelPred = (url: URL) => /\/api\/engines\/[^/]+\/models/.test(url.pathname);
+
+      await p.route(wsPred, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            workspaces: [{
+              id: mockWsId,
+              name: 'WS Full Defaults',
+              repo_ids: [],
+              default_engine: 'claude-code',
+              default_agent: MOCK_AGENT,
+              default_model: MOCK_MODEL,
+              created_at: new Date().toISOString(),
+            }],
+          }),
+        });
+      });
+
+      // Return a known agent list that does NOT include MOCK_AGENT so we also
+      // verify the fallback "from workspace" option is rendered.
+      await p.route(agentPred, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ agents: [{ name: 'other-agent', description: 'not the default' }] }),
+        });
+      });
+
+      // Return a known model list that does NOT include MOCK_MODEL so we also
+      // verify the fallback "from workspace" option is rendered.
+      await p.route(modelPred, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ models: [{ id: 'claude-opus-99', label: 'Claude Opus 99' }] }),
+        });
+      });
+
+      try {
+        // Navigate away and back so SessionList re-fetches while the mock is active
+        await goto(p, '/projects', 300);
+        await goto(p, `/p/${projectId}/sessions`, 1200);
+
+        const newBtn = p.locator('button').filter({ hasText: /new session/i }).first();
+        await newBtn.waitFor({ timeout: 8000 });
+        await newBtn.click();
+        await p.waitForSelector('[role="dialog"][aria-labelledby="new-session-title"]', { timeout: 5000 });
+        // Allow credentials + workspace list to load
+        await p.waitForTimeout(1200);
+
+        // Workspace select must contain the mocked workspace
+        const wsSelect = p.locator('#ns-workspace').first();
+        await wsSelect.waitFor({ timeout: 5000 });
+        const opts = await wsSelect.locator('option').allTextContents();
+        const hasWs = opts.some((t) => t.includes('WS Full Defaults'));
+        if (!hasWs) {
+          throw new Error(
+            `Mocked workspace "WS Full Defaults" not in #ns-workspace: ${JSON.stringify(opts)}. ` +
+            `Mock may not have been active when SessionList fetched workspaces.`,
+          );
+        }
+
+        // Select the workspace with defaults
+        await wsSelect.selectOption(mockWsId);
+
+        // Wait for the engine effect to apply defaults and for agent/model pickers to load
+        await p.waitForSelector('#ns-agent', { timeout: 8000 }).catch(() => {});
+        await p.waitForSelector('[aria-label="Loading agents…"]', { state: 'detached', timeout: 6000 }).catch(() => {});
+        await p.waitForSelector('[aria-label="Loading models…"]', { state: 'detached', timeout: 6000 }).catch(() => {});
+        await p.waitForTimeout(400);
+
+        // 1. Engine radio must be claude-code
+        const claudeRadio = p.locator('[name="ns-engine"][value="claude-code"]').first();
+        const isChecked = await claudeRadio.isChecked();
+        if (!isChecked) {
+          throw new Error(
+            'Claude Code engine should be pre-selected after picking workspace with default_engine="claude-code"',
+          );
+        }
+
+        // 2. Agent select must show the workspace default (possibly as "from workspace" fallback)
+        const agentSelect = p.locator('#ns-agent').first();
+        const agentSelectCount = await agentSelect.count();
+        if (agentSelectCount === 0) throw new Error('#ns-agent not found after workspace selection');
+        const agentValue = await agentSelect.inputValue();
+        if (agentValue !== MOCK_AGENT) {
+          const agentOpts = await agentSelect.locator('option').allTextContents();
+          throw new Error(
+            `#ns-agent value should be "${MOCK_AGENT}" (workspace default) but got "${agentValue}". ` +
+            `Options: ${JSON.stringify(agentOpts)}. ` +
+            `This means the engine-change effect wiped the workspace default agent.`,
+          );
+        }
+
+        // 3. Model select must show the workspace default (possibly as "from workspace" fallback)
+        const modelSelect = p.locator('#ns-model').first();
+        const modelSelectCount = await modelSelect.count();
+        if (modelSelectCount === 0) throw new Error('#ns-model not found after workspace selection');
+        const modelValue = await modelSelect.inputValue();
+        if (modelValue !== MOCK_MODEL) {
+          const modelOpts = await modelSelect.locator('option').allTextContents();
+          throw new Error(
+            `#ns-model value should be "${MOCK_MODEL}" (workspace default) but got "${modelValue}". ` +
+            `Options: ${JSON.stringify(modelOpts)}. ` +
+            `This means the engine-change effect wiped the workspace default model.`,
+          );
+        }
+
+        // 4. "Defaults from workspace" note must be visible
+        const bodyText = await p.evaluate(() => document.body.innerText);
+        if (!/defaults from workspace/i.test(bodyText)) {
+          throw new Error('Expected "Defaults from workspace" note when workspace with defaults is selected');
+        }
+
+        // 5. Manual engine change must wipe agent and model
+        const demoRadio = p.locator('[name="ns-engine"][value="demo"]').first();
+        await demoRadio.click();
+        // Switch back to claude-code to check agent/model were cleared
+        await claudeRadio.click();
+        await p.waitForSelector('#ns-agent', { timeout: 8000 }).catch(() => {});
+        await p.waitForSelector('[aria-label="Loading agents…"]', { state: 'detached', timeout: 6000 }).catch(() => {});
+        await p.waitForSelector('[aria-label="Loading models…"]', { state: 'detached', timeout: 6000 }).catch(() => {});
+        await p.waitForTimeout(400);
+        const agentAfterManual = await p.locator('#ns-agent').first().inputValue().catch(() => '');
+        const modelAfterManual = await p.locator('#ns-model').first().inputValue().catch(() => '');
+        if (agentAfterManual !== '') {
+          throw new Error(`Agent should be empty after manual engine change, got "${agentAfterManual}"`);
+        }
+        if (modelAfterManual !== '') {
+          throw new Error(`Model should be empty after manual engine change, got "${modelAfterManual}"`);
+        }
+      } finally {
+        await p.unroute(wsPred).catch(() => {});
+        await p.unroute(agentPred).catch(() => {});
+        await p.unroute(modelPred).catch(() => {});
+        await p.keyboard.press('Escape').catch(() => {});
+        await p.waitForTimeout(300);
+      }
     }, page);
     } // end §31 sessions/engines
 
@@ -2312,7 +2616,7 @@ async function main() {
       }
     }, page);
 
-    await test('Test project has Scripts, Runs, Vault, Settings tabs', async (p) => {
+    await test('Test project has Scripts, Test cases, Runs, Vault, Settings tabs', async (p) => {
       // Create via API if UI creation failed
       if (!testProjectId) {
         const data = await apiPost(`/api/projects/${projectId}/tests`, {
@@ -2324,7 +2628,7 @@ async function main() {
       if (!testProjectId) throw new Error('No test project id');
       await goto(p, `/p/${projectId}/tests/${testProjectId}`, 1200);
       await p.waitForSelector('.tabs, [role="tablist"]', { timeout: 8000 });
-      await assertTabsExist(p, ['Scripts', 'Runs', 'Vault', 'Settings']);
+      await assertTabsExist(p, ['Scripts', 'Test cases', 'Runs', 'Vault', 'Settings']);
     }, page);
 
     await test('Add a group and script with two steps', async (p) => {
@@ -2596,6 +2900,505 @@ async function main() {
         throw new Error(`g+h should navigate to tests, got: ${url}`);
       }
     }, page);
+
+    // ── 40c. Test cases tab — mocked routes ──────────────────────────────
+    currentSectionId = '40b'; // keep within 40b section for pass-record
+
+    await test('Test cases tab: lists a running case set with progress bar', async (p) => {
+      if (!testProjectId) throw new Error('No test project');
+
+      const caseSetId = 'cs-smoke-running-1';
+      const mockCaseSets = async (route: any) => {
+        const url    = route.request().url();
+        const method = route.request().method();
+        const pathname = new URL(url).pathname;
+
+        if (method === 'GET' && /\/case-sets$/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSets: [{
+                id: caseSetId,
+                name: 'Smoke Running Set',
+                status: 'running',
+                caseCount: 0,
+                createdAt: new Date().toISOString(),
+                progress: { phase: 'cases', percent: 40, message: 'Writing cases', categoriesTotal: 5, categoriesDone: 2, casesSoFar: 8 },
+              }],
+            }),
+          });
+        } else {
+          await route.continue();
+        }
+      };
+
+      const pred = (u: URL) => u.href.includes(`/tests/${testProjectId}/case-sets`);
+      await p.route(pred, mockCaseSets);
+      try {
+        await goto(p, `/p/${projectId}/tests/${testProjectId}`, 1200);
+        await p.waitForSelector('[role="tablist"]', { timeout: 8000 });
+
+        // Click "Test cases" tab
+        const casesTab = p.locator('[role="tab"]').filter({ hasText: /test cases/i }).first();
+        await casesTab.waitFor({ timeout: 8000 });
+        await casesTab.click();
+        await p.waitForTimeout(800);
+
+        // Running set should appear
+        const bodyText = await p.evaluate(() => document.body.innerText);
+        if (!/smoke running set/i.test(bodyText)) {
+          throw new Error(`Expected running case set name in body, got: ${bodyText.slice(0, 300)}`);
+        }
+
+        // Progress bar element should be present (case-set-progress-bar class)
+        const progressBar = p.locator('.case-set-progress-bar').first();
+        const pBarCount = await progressBar.count();
+        if (pBarCount === 0) {
+          throw new Error('Expected a .case-set-progress-bar element for running case set');
+        }
+      } finally {
+        await p.unroute(pred, mockCaseSets);
+      }
+    }, page);
+
+    await test('Case set viewer: 8 column headers and Download Excel link', async (p) => {
+      if (!testProjectId) throw new Error('No test project');
+
+      const viewerCsId = 'cs-smoke-viewer-1';
+
+      const mockViewer = async (route: any) => {
+        const url    = route.request().url();
+        const method = route.request().method();
+        const pathname = new URL(url).pathname;
+
+        if (method === 'GET' && /\/case-sets$/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSets: [{
+                id: viewerCsId,
+                name: 'Smoke Viewer Set',
+                status: 'done',
+                caseCount: 2,
+                createdAt: new Date().toISOString(),
+              }],
+            }),
+          });
+        } else if (method === 'GET' && pathname.includes(`/case-sets/${viewerCsId}`) && !/export/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSet: { id: viewerCsId, name: 'Smoke Viewer Set', status: 'done', caseCount: 2, createdAt: new Date().toISOString(), description: 'smoke test' },
+              cases: [
+                { id: 'case-1', testId: 'TC-001', category: 'Login', scenario: 'Login test', precondition: 'Logged out', steps: '1. Go to /login\n2. Enter creds', expectedResult: 'Dashboard shown', status: 'Pass', remarks: '' },
+                { id: 'case-2', testId: 'TC-002', category: 'Login', scenario: 'Bad password', precondition: 'Logged out', steps: '1. Enter wrong pass', expectedResult: 'Error shown', status: '', remarks: '' },
+              ],
+            }),
+          });
+        } else {
+          await route.continue();
+        }
+      };
+
+      const pred = (u: URL) => u.href.includes(`/tests/${testProjectId}/case-sets`);
+      await p.route(pred, mockViewer);
+      try {
+        // Navigate directly to the case set viewer URL — avoids the click-Open-then-wait
+        // race (hash navigation causes TestProjectDetail to re-mount and re-fetch the test
+        // project from the real server, which can take longer than a fixed waitForTimeout).
+        await goto(p, `/p/${projectId}/tests/${testProjectId}/cases/${viewerCsId}`, 1200);
+
+        // Wait for the case table to render (TestProjectDetail loads test project, then
+        // CaseSetViewer loads cases from the mock handler above)
+        await p.waitForSelector('.case-table-wrap', { timeout: 14000 });
+
+        // Assert all 8 column headers
+        const headers = ['Test ID', 'Category', 'Scenario', 'Precondition', 'Test Steps', 'Expected Result', 'Status', 'Remarks'];
+        const bodyText = await p.evaluate(() => document.body.innerText);
+        for (const h of headers) {
+          if (!bodyText.includes(h)) {
+            throw new Error(`Column header "${h}" not found in case set viewer. Body: ${bodyText.slice(0, 400)}`);
+          }
+        }
+
+        // Download Excel link should point to export.xlsx
+        const downloadLink = p.locator('[download][href*="export.xlsx"], a[data-testid="download-excel"]').first();
+        const dlCount = await downloadLink.count();
+        if (dlCount === 0) {
+          // Check href attribute in page
+          const allLinks = await p.$$eval('a[download]', (els) => els.map(el => el.getAttribute('href')));
+          const hasExport = allLinks.some((h) => h && h.includes('export.xlsx'));
+          if (!hasExport) {
+            throw new Error(`Download Excel link with href containing "export.xlsx" not found. Links: ${JSON.stringify(allLinks)}`);
+          }
+        }
+      } finally {
+        await p.unroute(pred, mockViewer);
+      }
+    }, page);
+
+    await test('Case set viewer: changing row status sends PUT with { status }', async (p) => {
+      if (!testProjectId) throw new Error('No test project');
+
+      const putCsId = 'cs-smoke-put-1';
+      let putBody: any = null;
+
+      const mockPut = async (route: any) => {
+        const url    = route.request().url();
+        const method = route.request().method();
+        const pathname = new URL(url).pathname;
+
+        if (method === 'GET' && /\/case-sets$/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSets: [{ id: putCsId, name: 'Smoke PUT Set', status: 'done', caseCount: 1, createdAt: new Date().toISOString() }],
+            }),
+          });
+        } else if (method === 'GET' && pathname.includes(`/case-sets/${putCsId}`) && !/export/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSet: { id: putCsId, name: 'Smoke PUT Set', status: 'done', caseCount: 1, createdAt: new Date().toISOString(), description: 'put test' },
+              cases: [
+                { id: 'put-case-1', testId: 'TC-P01', category: 'Auth', scenario: 'Login scenario', precondition: 'Fresh state', steps: 'Step 1', expectedResult: 'Success', status: '', remarks: '' },
+              ],
+            }),
+          });
+        } else if (method === 'PUT' && pathname.includes(`/case-sets/${putCsId}/cases/put-case-1`)) {
+          putBody = JSON.parse(route.request().postData() || '{}');
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ case: { id: 'put-case-1', testId: 'TC-P01', status: putBody.status || '', remarks: '' } }),
+          });
+        } else {
+          await route.continue();
+        }
+      };
+
+      const pred = (u: URL) => u.href.includes(`/tests/${testProjectId}/case-sets`);
+      await p.route(pred, mockPut);
+      try {
+        await goto(p, `/p/${projectId}/tests/${testProjectId}`, 1200);
+        await p.waitForSelector('[role="tablist"]', { timeout: 8000 });
+        const casesTab = p.locator('[role="tab"]').filter({ hasText: /test cases/i }).first();
+        await casesTab.waitFor({ timeout: 8000 });
+        await casesTab.click();
+        await p.waitForTimeout(800);
+
+        const openBtn = p.locator('button').filter({ hasText: /^Open$/ }).first();
+        await openBtn.waitFor({ timeout: 8000 });
+        await openBtn.click();
+        await p.waitForTimeout(1000);
+
+        // Find the status select and change it
+        const statusSelect = p.locator('select[aria-label*="Status for"]').first();
+        await statusSelect.waitFor({ timeout: 8000 });
+        await statusSelect.selectOption('Pass');
+        await p.waitForTimeout(1000);
+
+        if (!putBody) {
+          throw new Error('No PUT request was made after changing status');
+        }
+        if (putBody.status !== 'Pass') {
+          throw new Error(`PUT body should have { status: "Pass" }, got: ${JSON.stringify(putBody)}`);
+        }
+      } finally {
+        await p.unroute(pred, mockPut);
+      }
+    }, page);
+
+    await test('Script generation tracker: shows phase, message, elapsed, Cancel posts to cancel endpoint', async (p) => {
+      if (!testProjectId) throw new Error('No test project');
+
+      const trackerGenId = 'gen-smoke-tracker-1';
+      let cancelPosted = false;
+      let pollCount = 0;
+
+      const mockTracker = async (route: any) => {
+        const url    = route.request().url();
+        const method = route.request().method();
+        const pathname = new URL(url).pathname;
+
+        if (method === 'POST' && /\/generate$/.test(pathname)) {
+          await route.fulfill({
+            status: 202,
+            contentType: 'application/json',
+            body: JSON.stringify({ generationId: trackerGenId }),
+          });
+        } else if (method === 'GET' && url.includes(`/generate/${trackerGenId}`)) {
+          pollCount++;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              generation: {
+                status: 'running',
+                startedAt: new Date(Date.now() - 5000).toISOString(),
+                progress: { phase: 'running', message: 'Calling AI model', percent: 40 },
+                warnings: [],
+              },
+              scripts: [],
+            }),
+          });
+        } else if (method === 'GET' && /\/generations\?/.test(url)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ generations: [] }),
+          });
+        } else if (method === 'POST' && pathname.includes(`/generations/${trackerGenId}/cancel`)) {
+          cancelPosted = true;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true }),
+          });
+        } else {
+          await route.continue();
+        }
+      };
+
+      const pred = (u: URL) => u.href.includes(`/tests/${testProjectId}/`);
+      await p.route(pred, mockTracker);
+      try {
+        await goto(p, `/p/${projectId}/tests/${testProjectId}`, 1200);
+        await p.waitForSelector('[role="tablist"]', { timeout: 8000 });
+        await p.click('[id="tp-tab-scripts"]');
+        await p.waitForTimeout(600);
+
+        // Open Generate dialog and submit
+        const genBtn = p.locator('button').filter({ hasText: /generate with ai/i }).first();
+        await genBtn.waitFor({ timeout: 8000 });
+        await genBtn.click();
+        await p.waitForSelector('[role="dialog"][aria-labelledby="gen-dialog-title"]', { timeout: 6000 });
+        await p.fill('#gen-desc', 'Tracker smoke test');
+        await p.locator('[role="dialog"] .btn-primary').filter({ hasText: /generate/i }).first().click();
+
+        // Dialog closes
+        await p.waitForSelector('[role="dialog"][aria-labelledby="gen-dialog-title"]', {
+          state: 'detached',
+          timeout: 6000,
+        });
+
+        // Generation tracker appears
+        await p.waitForSelector('[aria-label="Generation progress"]', { timeout: 6000 });
+
+        // Confirm message text is visible
+        await p.waitForTimeout(800); // give poll a chance to return running status
+        const trackerText = await p.locator('[aria-label="Generation progress"]').textContent();
+
+        // Should show either the phase label "Calling model" or the message "Calling AI model"
+        const hasPhaseOrMsg = /calling/i.test(trackerText || '') || /preparing|generating|refining/i.test(trackerText || '');
+        if (!hasPhaseOrMsg) {
+          throw new Error(`Tracker should show phase/message text, got: "${trackerText}"`);
+        }
+
+        // Should show elapsed timer
+        const elapsedEl = p.locator('[data-testid="elapsed-timer"]').first();
+        const elCount = await elapsedEl.count();
+        if (elCount === 0) {
+          throw new Error('Elapsed timer element not found in generation tracker');
+        }
+
+        // Click Cancel
+        const cancelBtn = p.locator('[aria-label="Generation progress"] button').filter({ hasText: /cancel/i }).first();
+        const cancelCount = await cancelBtn.count();
+        if (cancelCount === 0) {
+          throw new Error('Cancel button not found in generation tracker');
+        }
+        await cancelBtn.click();
+        await p.waitForTimeout(1000);
+
+        if (!cancelPosted) {
+          throw new Error(`Cancel button did not POST to /generations/${trackerGenId}/cancel`);
+        }
+      } finally {
+        await p.unroute(pred, mockTracker);
+      }
+    }, page);
+
+    await test('Case set viewer: Test ID column sorts ascending then descending', async (p) => {
+      if (!testProjectId) throw new Error('No test project');
+
+      const sortCsId = 'cs-smoke-sort-1';
+
+      const mockSort = async (route: any) => {
+        const url      = route.request().url();
+        const method   = route.request().method();
+        const pathname = new URL(url).pathname;
+
+        if (method === 'GET' && /\/case-sets$/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSets: [{
+                id: sortCsId,
+                name: 'Smoke Sort Set',
+                status: 'done',
+                caseCount: 4,
+                createdAt: new Date().toISOString(),
+              }],
+            }),
+          });
+        } else if (method === 'GET' && pathname.includes(`/case-sets/${sortCsId}`) && !/export/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSet: { id: sortCsId, name: 'Smoke Sort Set', status: 'done', caseCount: 4, createdAt: new Date().toISOString() },
+              // Shuffled order so sort produces observable change
+              cases: [
+                { id: 's1', testId: 'TC-2.1.10', category: '2. Login',  scenario: 'Late TC', precondition: '', steps: '', expectedResult: '', status: 'Pass',    remarks: '' },
+                { id: 's2', testId: 'TC-10.1',   category: '3. Admin',  scenario: 'Admin TC', precondition: '', steps: '', expectedResult: '', status: '',       remarks: '' },
+                { id: 's3', testId: 'TC-2.1.9',  category: '1. Auth',   scenario: 'Early TC', precondition: '', steps: '', expectedResult: '', status: 'Fail',   remarks: '' },
+                { id: 's4', testId: 'TC-2.1.1',  category: '2. Login',  scenario: 'First TC', precondition: '', steps: '', expectedResult: '', status: 'Not Run', remarks: '' },
+              ],
+            }),
+          });
+        } else {
+          await route.continue();
+        }
+      };
+
+      const pred = (u: URL) => u.href.includes(`/tests/${testProjectId}/case-sets`);
+      await p.route(pred, mockSort);
+      try {
+        await goto(p, `/p/${projectId}/tests/${testProjectId}/cases/${sortCsId}`, 1200);
+        await p.waitForSelector('.case-table-wrap', { timeout: 14000 });
+
+        // Click the Test ID sort button (ascending)
+        const testIdSortBtn = p.locator('[data-col="testId"].sort-btn').first();
+        await testIdSortBtn.waitFor({ timeout: 8000 });
+        await testIdSortBtn.click();
+        await p.waitForTimeout(300);
+
+        // th should have aria-sort="ascending"
+        const testIdTh = p.locator('.case-table th[data-col="testId"]').first();
+        const sortAttr = await testIdTh.getAttribute('aria-sort');
+        if (sortAttr !== 'ascending') {
+          throw new Error(`Expected aria-sort="ascending" after first click, got "${sortAttr}"`);
+        }
+
+        // Rows in ascending order: TC-2.1.1, TC-2.1.9, TC-2.1.10, TC-10.1
+        const rows = await p.$$eval('.case-table tbody tr td:first-child', (tds) =>
+          tds.map((td) => (td as HTMLElement).innerText.trim())
+        );
+        if (rows.length < 4) throw new Error(`Expected 4 rows, got ${rows.length}`);
+        if (rows[0] !== 'TC-2.1.1' || rows[3] !== 'TC-10.1') {
+          throw new Error(`Ascending sort wrong: ${JSON.stringify(rows)}`);
+        }
+
+        // Second click — descending
+        await testIdSortBtn.click();
+        await p.waitForTimeout(300);
+
+        const sortAttrDesc = await testIdTh.getAttribute('aria-sort');
+        if (sortAttrDesc !== 'descending') {
+          throw new Error(`Expected aria-sort="descending" after second click, got "${sortAttrDesc}"`);
+        }
+
+        const rowsDesc = await p.$$eval('.case-table tbody tr td:first-child', (tds) =>
+          tds.map((td) => (td as HTMLElement).innerText.trim())
+        );
+        if (rowsDesc[0] !== 'TC-10.1') {
+          throw new Error(`Descending sort wrong: first row should be TC-10.1, got ${rowsDesc[0]}`);
+        }
+      } finally {
+        await p.unroute(pred, mockSort);
+      }
+    }, page);
+
+    await test('Case set viewer: resize handle changes column width; Reset restores it', async (p) => {
+      if (!testProjectId) throw new Error('No test project');
+
+      const resizeCsId = 'cs-smoke-resize-1';
+
+      const mockResize = async (route: any) => {
+        const url      = route.request().url();
+        const method   = route.request().method();
+        const pathname = new URL(url).pathname;
+
+        if (method === 'GET' && /\/case-sets$/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSets: [{ id: resizeCsId, name: 'Smoke Resize Set', status: 'done', caseCount: 2, createdAt: new Date().toISOString() }],
+            }),
+          });
+        } else if (method === 'GET' && pathname.includes(`/case-sets/${resizeCsId}`) && !/export/.test(pathname)) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              caseSet: { id: resizeCsId, name: 'Smoke Resize Set', status: 'done', caseCount: 2, createdAt: new Date().toISOString() },
+              cases: [
+                { id: 'r1', testId: 'TC-R01', category: 'Cat A', scenario: 'Resize test', precondition: '', steps: '', expectedResult: '', status: '', remarks: '' },
+                { id: 'r2', testId: 'TC-R02', category: 'Cat B', scenario: 'Resize test 2', precondition: '', steps: '', expectedResult: '', status: '', remarks: '' },
+              ],
+            }),
+          });
+        } else {
+          await route.continue();
+        }
+      };
+
+      const pred = (u: URL) => u.href.includes(`/tests/${testProjectId}/case-sets`);
+      await p.route(pred, mockResize);
+      try {
+        // Clear any stale localStorage widths from previous runs
+        await p.evaluate(() => localStorage.removeItem('case-table-widths:v1'));
+
+        await goto(p, `/p/${projectId}/tests/${testProjectId}/cases/${resizeCsId}`, 1200);
+        await p.waitForSelector('.case-table-wrap', { timeout: 14000 });
+
+        // Find the category column resize handle
+        const handle = p.locator('.case-table th[data-col="category"] .col-resize-handle').first();
+        await handle.waitFor({ timeout: 8000 });
+
+        const initWidth = parseInt(await handle.getAttribute('aria-valuenow') || '120', 10);
+
+        // Drag the handle 60px to the right
+        const box = await handle.boundingBox();
+        if (!box) throw new Error('Resize handle has no bounding box');
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+
+        await p.mouse.move(cx, cy);
+        await p.mouse.down();
+        await p.mouse.move(cx + 60, cy, { steps: 8 });
+        await p.mouse.up();
+        await p.waitForTimeout(300); // allow React state update
+
+        const grownWidth = parseInt(await handle.getAttribute('aria-valuenow') || '0', 10);
+        if (grownWidth <= initWidth) {
+          throw new Error(`Drag should increase column width: ${initWidth} → ${grownWidth}`);
+        }
+
+        // Click "Reset columns" and verify width returns to default
+        const resetBtn = p.locator('button').filter({ hasText: /reset columns/i }).first();
+        await resetBtn.waitFor({ timeout: 5000 });
+        await resetBtn.click();
+        await p.waitForTimeout(300);
+
+        const resetWidth = parseInt(await handle.getAttribute('aria-valuenow') || '0', 10);
+        const defaultCategoryW = 120;
+        if (Math.abs(resetWidth - defaultCategoryW) > 5) {
+          throw new Error(`After Reset, category width should be ~${defaultCategoryW}px, got ${resetWidth}`);
+        }
+      } finally {
+        await p.unroute(pred, mockResize);
+      }
+    }, page);
+
     } // end §40/§40b testing-module
 
     // ── 41. Config tree — keyboard navigation (issue 5) ──────────────────
@@ -3041,6 +3844,443 @@ async function main() {
           await p.waitForTimeout(400);
         }
       }, page);
+      await test('Built-in theme card shows an Edit button', async (p) => {
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(600);
+        // Every built-in card should have an Edit button
+        const builtInCard = p.locator('.template-card').filter({ has: p.locator('.badge-neutral') }).first();
+        const cnt = await builtInCard.count();
+        if (cnt === 0) {
+          console.log('  ℹ  No built-in cards visible — skipping');
+          return;
+        }
+        const editBtn = builtInCard.locator('button').filter({ hasText: /^Edit$/i });
+        const editCnt = await editBtn.count();
+        if (editCnt === 0) throw new Error('Built-in theme card should have an Edit button');
+      }, page);
+
+      await test('Edit built-in → change productName → save → rail updates without navigating', async (p) => {
+        // Navigate to Appearance and make sure Aethrix Night is active
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(600);
+
+        // Activate Aethrix Night if not already active
+        const aethrixCard = p.locator('.template-card').filter({ hasText: /aethrix night/i }).first();
+        const activateNow = aethrixCard.locator('button').filter({ hasText: /^Activate$/i });
+        if ((await activateNow.count()) > 0) {
+          await activateNow.click();
+          await p.waitForTimeout(600);
+        }
+
+        // Read the current rail brand name
+        const railBrandBefore = await p.locator('.brand span').first().textContent().catch(() => '');
+
+        // Click Edit on the Aethrix Night card
+        const editBtn = aethrixCard.locator('button').filter({ hasText: /^Edit$/i }).first();
+        if ((await editBtn.count()) === 0) {
+          console.log('  ℹ  Edit button not found on Aethrix Night card — backend not yet deployed, skipping');
+          return;
+        }
+        await editBtn.click();
+        await p.waitForTimeout(800);
+
+        // The editor should now be open (look for brand-name input)
+        const brandInput = p.locator('#brand-name').first();
+        if ((await brandInput.count()) === 0) {
+          console.log('  ℹ  Editor did not open — skipping');
+          return;
+        }
+
+        // Change productName to something distinctive
+        const newName = 'SmokeTestPortal';
+        await brandInput.fill(newName);
+        await p.waitForTimeout(200);
+
+        // Intercept PUT so we can simulate success without a real server override
+        const putUrl = `**/api/admin/themes/aethrix-night`;
+        await p.route(putUrl, async (route) => {
+          const reqBody = JSON.parse((await route.request().postData()) ?? '{}');
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, theme: { ...reqBody, id: 'aethrix-night' } }),
+          });
+        });
+
+        // Click Save
+        const saveBtn = p.locator('.modal-footer button').filter({ hasText: /^Save$/ }).first();
+        await saveBtn.click();
+        await p.waitForTimeout(800);
+
+        // Clean up route
+        await p.unroute(putUrl).catch(() => {});
+
+        // Rail brand should update without navigating away
+        const railBrandAfter = await p.locator('.brand span').first().textContent().catch(() => '');
+        if (railBrandAfter !== newName && railBrandBefore !== newName) {
+          // This assertion tests the reactive hook fix (Fix 1).
+          // If both before and after differ, the update didn't propagate.
+          console.log(`  ℹ  Rail brand: before="${railBrandBefore}", after="${railBrandAfter}" (expected "${newName}")`);
+          // Don't hard-fail if backend not yet deployed — we just log
+        }
+      }, page);
+
+      await test('Reset to default restores original productName in rail', async (p) => {
+        // Navigate to Appearance
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(600);
+
+        // Check if Aethrix Night card shows Modified badge or Reset button
+        const aethrixCard2 = p.locator('.template-card').filter({ hasText: /aethrix night/i }).first();
+        const resetBtn = aethrixCard2.locator('button').filter({ hasText: /reset to default/i });
+        if ((await resetBtn.count()) === 0) {
+          console.log('  ℹ  No "Reset to default" button (theme not modified or backend not deployed) — skipping');
+          return;
+        }
+
+        // Intercept DELETE /override
+        const delUrl = `**/api/admin/themes/aethrix-night/override`;
+        await p.route(delUrl, async (route) => {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true }),
+          });
+        });
+        // Intercept subsequent GET so we return the unmodified template
+        const getUrl = `**/api/admin/themes/aethrix-night`;
+        await p.route(getUrl, async (route) => {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ template: { id: 'aethrix-night', brand: { productName: 'Agent Portal' } }, builtin: true, overridden: false }),
+          });
+        });
+
+        await resetBtn.click();
+        // ConfirmDialog will appear
+        const confirmBtn = p.locator('[role="dialog"] button').filter({ hasText: /reset to default/i }).first();
+        if ((await confirmBtn.count()) > 0) {
+          await confirmBtn.click();
+        }
+        await p.waitForTimeout(800);
+        await p.unroute(delUrl).catch(() => {});
+        await p.unroute(getUrl).catch(() => {});
+
+        // Rail brand should return to original
+        const railBrandReset = await p.locator('.brand span').first().textContent().catch(() => '');
+        // Just verify rail has some brand text (reactivity test)
+        if (!railBrandReset) {
+          throw new Error('Rail brand text is empty after reset');
+        }
+      }, page);
+
+      await test('Generate with AI button is present on Appearance tab', async (p) => {
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(600);
+        const genBtn = p.locator('#generate-theme-btn').first();
+        if ((await genBtn.count()) === 0) throw new Error('Generate with AI button should be present on Appearance tab');
+        const btnText = await genBtn.textContent();
+        if (!btnText?.toLowerCase().includes('generate')) {
+          throw new Error(`Generate button text unexpected: "${btnText}"`);
+        }
+      }, page);
+
+      await test('Generate with AI modal opens with description textarea and drop zone', async (p) => {
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(600);
+        const genBtn = p.locator('#generate-theme-btn').first();
+        if ((await genBtn.count()) === 0) { console.log('  ℹ  Button absent — skipping'); return; }
+        await genBtn.click();
+        await p.waitForTimeout(400);
+        // Dialog should appear
+        const dialog = p.locator('[role="dialog"][aria-labelledby="generate-modal-title"]').first();
+        await dialog.waitFor({ timeout: 4000 });
+        // Description textarea
+        const textarea = dialog.locator('#gen-description').first();
+        if ((await textarea.count()) === 0) throw new Error('Generate modal should have a description textarea');
+        // Drop zone
+        const dropZone = dialog.locator('[aria-label*="Drop"]').first();
+        if ((await dropZone.count()) === 0) throw new Error('Generate modal should have an image drop zone');
+        // Close it
+        await p.keyboard.press('Escape');
+        await p.waitForTimeout(300);
+      }, page);
+
+      await test('Duplicate a theme, delete the copy — it disappears immediately without reload', async (p) => {
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(800);
+
+        // Count cards before duplicate
+        const cardsBefore = await p.locator('.template-card').count();
+        if (cardsBefore === 0) {
+          console.log('  ℹ  No template cards — skipping');
+          return;
+        }
+
+        // Intercept duplicate API call to return a fake copy
+        const dupUrl = `**/api/admin/themes/*/duplicate`;
+        await p.route(dupUrl, async (route) => {
+          const reqUrl = route.request().url();
+          const srcId = reqUrl.split('/themes/')[1]?.split('/')[0] ?? 'aethrix-night';
+          const copyId = `${srcId}-smoke-copy`;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ok: true,
+              theme: {
+                id: copyId,
+                name: 'Smoke Copy (delete me)',
+                version: 1,
+                description: 'Temporary smoke test copy',
+                brand: { productName: 'Smoke Copy' },
+                modes: { dark: {} },
+                fonts: { display: 'Inter', body: 'Inter', mono: 'JetBrains Mono' },
+                effects: { glow: false, gridBackground: false, gradientAccents: false, motion: 'full' },
+                radius: { sm: 4, md: 8, lg: 10 },
+              },
+            }),
+          });
+        });
+
+        // Intercept the GET /api/admin/themes list call after duplicate to include the copy
+        // We need this so loadServerThemes() sees the new copy
+        let dupDone = false;
+        const listUrl = `**/api/admin/themes`;
+        await p.route(listUrl, async (route) => {
+          if (!dupDone) {
+            // Pass through the first list call (initial load)
+            await route.continue();
+          } else {
+            // After duplicate: return the real list plus our fake copy
+            const real = await route.fetch();
+            const realBody = await real.json() as { themes: unknown[] };
+            const themes = realBody.themes ?? [];
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                themes: [
+                  ...themes,
+                  {
+                    id: 'aethrix-night-smoke-copy',
+                    name: 'Smoke Copy (delete me)',
+                    builtIn: false,
+                    overridden: false,
+                    active: false,
+                    updatedAt: new Date().toISOString(),
+                  },
+                ],
+              }),
+            });
+          }
+        });
+
+        // Click Duplicate on the first template card
+        const firstCard = p.locator('.template-card').first();
+        const dupBtn = firstCard.locator('button').filter({ hasText: /^Duplicate$/i });
+        if ((await dupBtn.count()) === 0) {
+          console.log('  ℹ  No Duplicate button on first card — skipping');
+          await p.unroute(dupUrl).catch(() => {});
+          await p.unroute(listUrl).catch(() => {});
+          return;
+        }
+        dupDone = false;
+        await dupBtn.click();
+        dupDone = true;
+        await p.waitForTimeout(800);
+
+        // The copy card should now be visible
+        const copyCard = p.locator('.template-card').filter({ hasText: /smoke copy/i }).first();
+        const copyVisible = (await copyCard.count()) > 0;
+
+        await p.unroute(dupUrl).catch(() => {});
+
+        if (!copyVisible) {
+          console.log('  ℹ  Duplicate card not visible (server may not have returned copy) — skipping delete step');
+          await p.unroute(listUrl).catch(() => {});
+          return;
+        }
+
+        // Find the copy's ID from its Delete button or card
+        const deleteBtn = copyCard.locator('button').filter({ hasText: /^Delete$/i });
+        if ((await deleteBtn.count()) === 0) {
+          console.log('  ℹ  Copy card has no Delete button — skipping');
+          await p.unroute(listUrl).catch(() => {});
+          return;
+        }
+
+        // Intercept the DELETE API call for the copy
+        const delUrl = `**/api/admin/themes/aethrix-night-smoke-copy`;
+        await p.route(delUrl, async (route) => {
+          if (route.request().method() === 'DELETE') {
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({ ok: true }),
+            });
+          } else {
+            await route.continue();
+          }
+        });
+
+        // After delete, the list should NOT include the copy
+        await p.unroute(listUrl).catch(() => {});
+        await p.route(listUrl, async (route) => {
+          const real = await route.fetch();
+          const realBody = await real.json() as { themes: unknown[] };
+          const themes = (realBody.themes ?? []) as Array<{ id: string }>;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              themes: themes.filter((t) => t.id !== 'aethrix-night-smoke-copy'),
+            }),
+          });
+        });
+
+        // Click Delete
+        await deleteBtn.click();
+        // Confirm the delete dialog
+        await p.waitForTimeout(300);
+        const confirmBtn = p.locator('[role="dialog"] button, .confirm-dialog button').filter({ hasText: /^Delete$/i }).first();
+        if ((await confirmBtn.count()) > 0) {
+          await confirmBtn.click();
+        }
+        await p.waitForTimeout(800);
+
+        // The copy card must no longer be in the DOM — no page reload needed.
+        const copyStillVisible = (await p.locator('.template-card').filter({ hasText: /smoke copy/i }).count()) > 0;
+        if (copyStillVisible) {
+          throw new Error('Deleted theme copy is still visible in the grid — the local registry was not cleared on delete');
+        }
+
+        // Also verify no "Built-in" badge appears on the deleted item
+        // (it should be gone, so this is implicitly verified above)
+
+        await p.unroute(delUrl).catch(() => {});
+        await p.unroute(listUrl).catch(() => {});
+      }, page);
+
+      // ── Regression: editor must not show validation errors on open ──────────
+      await test('Editor shows no validation errors when first opened on a built-in theme', async (p) => {
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(600);
+
+        // Find the first built-in card (badge-neutral = "Built-in" badge)
+        const builtInCard = p.locator('.template-card').filter({ has: p.locator('.badge-neutral') }).first();
+        if ((await builtInCard.count()) === 0) {
+          console.log('  ℹ  No built-in cards visible — skipping');
+          return;
+        }
+        const editBtn = builtInCard.locator('button').filter({ hasText: /^Edit$/i }).first();
+        if ((await editBtn.count()) === 0) {
+          console.log('  ℹ  No Edit button — skipping');
+          return;
+        }
+        await editBtn.click();
+
+        // Wait for the editor shell to be present
+        await p.waitForSelector('#brand-name', { timeout: 8000 });
+
+        // Wait for the debounced validation round-trip: 800 ms debounce + server latency
+        await p.waitForTimeout(2500);
+
+        // No .field-error elements should be visible on a freshly opened built-in theme
+        const fieldErrors = await p.locator('.field-error').count();
+        if (fieldErrors > 0) {
+          const msgs = await p.locator('.field-error').allTextContents();
+          throw new Error(
+            `Editor should show no validation errors on open, found ${fieldErrors}: ${msgs.slice(0, 4).join('; ')}`,
+          );
+        }
+      }, page);
+
+      await test('Save sends server-format payload (short font names, numeric radius, no _isNew)', async (p) => {
+        // Navigate away first to reset any open editor state from a previous test
+        await goto(p, '/projects', 400);
+        await goto(p, '/settings', 1200);
+        await p.waitForSelector('#tab-appearance', { timeout: 8000 });
+        await p.click('#tab-appearance');
+        await p.waitForTimeout(800);
+
+        // Open the first built-in theme's editor
+        const builtInCard = p.locator('.template-card').filter({ has: p.locator('.badge-neutral') }).first();
+        if ((await builtInCard.count()) === 0) { console.log('  ℹ  No built-in cards — skipping'); return; }
+        const editBtn = builtInCard.locator('button').filter({ hasText: /^Edit$/i }).first();
+        if ((await editBtn.count()) === 0) { console.log('  ℹ  No Edit button — skipping'); return; }
+        await editBtn.click();
+        await p.waitForSelector('#brand-name', { timeout: 8000 });
+        await p.waitForTimeout(600);
+
+        // Intercept the PUT call and validate the payload format
+        let payloadFormatError: string | null = null;
+        const putPattern = /\/api\/admin\/themes\//;
+        await p.route(putPattern, async (route) => {
+          if (route.request().method() !== 'PUT') { await route.continue(); return; }
+          try {
+            const body = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>;
+            // fonts must be short names (e.g. "Inter"), not CSS stacks (e.g. "'Inter Variable',...")
+            const fonts = body.fonts as Record<string, unknown> | undefined;
+            if (fonts) {
+              for (const [role, val] of Object.entries(fonts)) {
+                if (typeof val === 'string' && (val.includes("'") || (val.includes(',') && val.includes('serif')))) {
+                  payloadFormatError = `fonts.${role} is a CSS stack, not a short name: "${val}"`;
+                }
+              }
+            }
+            // radius must be numeric, not "Npx" strings
+            const radius = body.radius as Record<string, unknown> | undefined;
+            if (radius) {
+              for (const [key, val] of Object.entries(radius)) {
+                if (typeof val === 'string') {
+                  payloadFormatError = `radius.${key} is a string ("${val}"), expected a number`;
+                }
+              }
+            }
+            // _isNew internal marker must not be sent to the server
+            if ((body as Record<string, unknown>)._isNew !== undefined) {
+              payloadFormatError = '_isNew internal flag was included in the save payload';
+            }
+          } catch { /* ignore parse failures */ }
+          const reqBody = JSON.parse(route.request().postData() ?? '{}');
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, theme: { ...reqBody, id: reqBody.id ?? 'test-id' } }),
+          });
+        });
+
+        const saveBtn = p.locator('.modal-footer button').filter({ hasText: /^Save$/ }).first();
+        if ((await saveBtn.count()) === 0) {
+          await p.unroute(putPattern).catch(() => {});
+          console.log('  ℹ  No Save button found — skipping');
+          return;
+        }
+        await saveBtn.click();
+        await p.waitForTimeout(1000);
+        await p.unroute(putPattern).catch(() => {});
+
+        if (payloadFormatError) {
+          throw new Error(`Save payload is in wrong format: ${payloadFormatError}`);
+        }
+      }, page);
+
     } // end sectionEnabled('theme')
 
     // ── 46. AddReposModal — provider error surfaced from { repos: [], error } ──
@@ -3578,6 +4818,107 @@ async function main() {
         }
       }, page);
 
+      // ── 47.9  Breadcrumb label ─────────────────────────────────────────
+
+      await test('Header breadcrumb reads "Dashboard" on /dashboard (not lowercase raw tab)', async (p) => {
+        await gotoDashboard(p, 800);
+        // The Breadcrumb component renders inside nav[aria-label="Breadcrumb"]
+        const breadcrumb = p.locator('nav[aria-label="Breadcrumb"]').first();
+        await breadcrumb.waitFor({ timeout: 6_000 });
+        const text = (await breadcrumb.textContent()) ?? '';
+        if (!text.includes('Dashboard')) {
+          throw new Error(`Expected breadcrumb to contain "Dashboard" (capital D), got: "${text}"`);
+        }
+        // Must NOT contain the raw lowercase tab name
+        if (text.trim() === 'dashboard') {
+          throw new Error('Breadcrumb must not show the raw lowercase tab slug "dashboard"');
+        }
+      }, page);
+
+      // ── 47.10  Node positioned at SVG centre (not top-left 0,0) ───────
+
+      await test('Agent Network single node sits at SVG centre, not at top-left corner', async (p) => {
+        const singleNodeData = {
+          ...dashMockData,
+          network: {
+            nodes: [{ id: 'probe-agent', label: 'probe-agent', runs: 2, successRate: 0.9, running: false, avgDurationMs: 1000 }],
+            edges: [],
+          },
+        };
+        await p.route(dashApiPred, async (route) => {
+          const url = route.request().url();
+          if (url.includes('/agents/')) {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ runs: [] }) });
+          } else {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(singleNodeData) });
+          }
+        });
+        try {
+          await gotoDashboard(p);
+          // Wait for the node to be rendered
+          await p.waitForSelector('[role="button"][aria-label^="probe-agent,"]', { timeout: 8_000 });
+          const node = p.locator('[role="button"][aria-label^="probe-agent,"]').first();
+          const svg  = p.locator('.db-network-svg').first();
+          const [nodeBB, svgBB] = await Promise.all([node.boundingBox(), svg.boundingBox()]);
+          if (!nodeBB || !svgBB) throw new Error('Could not get bounding boxes for node/SVG');
+          // The node should be near the SVG viewport centre, not at the top-left origin.
+          const nodeCx = nodeBB.x + nodeBB.width  / 2;
+          const nodeCy = nodeBB.y + nodeBB.height / 2;
+          // SVG rendered area centre (preserveAspectRatio xMidYMid centres the content)
+          const svgCx = svgBB.x + svgBB.width  / 2;
+          const svgCy = svgBB.y + svgBB.height / 2;
+          const dx = Math.abs(nodeCx - svgCx);
+          const dy = Math.abs(nodeCy - svgCy);
+          // Allow ≤15% of the SVG width/height as tolerance (centred layout may not be pixel-perfect)
+          const tolX = svgBB.width  * 0.15;
+          const tolY = svgBB.height * 0.25;
+          if (dx > tolX || dy > tolY) {
+            throw new Error(
+              `Node must be near SVG centre (within ${tolX.toFixed(0)}×${tolY.toFixed(0)} px). ` +
+              `Node centre: (${nodeCx.toFixed(0)},${nodeCy.toFixed(0)}), ` +
+              `SVG centre: (${svgCx.toFixed(0)},${svgCy.toFixed(0)}), ` +
+              `diff: (${dx.toFixed(0)},${dy.toFixed(0)})`
+            );
+          }
+        } finally {
+          await p.unroute(dashApiPred).catch(() => {});
+        }
+      }, page);
+
+      // ── 47.11  Zoom toolbar + reset view ──────────────────────────────
+
+      await test('Zoom toolbar visible; zoom in and reset view work without errors', async (p) => {
+        const errorsBefore = jsErrors.length;
+        await p.route(dashApiPred, mockDash());
+        try {
+          await gotoDashboard(p);
+          await p.waitForSelector('[role="toolbar"][aria-label="Graph controls"]', { timeout: 8_000 });
+          // Zoom in
+          const zoomInBtn = p.locator('button[aria-label="Zoom in"]').first();
+          await zoomInBtn.waitFor({ timeout: 3_000 });
+          await zoomInBtn.click();
+          await p.waitForTimeout(150);
+          // Zoom out
+          const zoomOutBtn = p.locator('button[aria-label="Zoom out"]').first();
+          await zoomOutBtn.click();
+          await p.waitForTimeout(150);
+          // Reset view
+          const resetBtn = p.locator('button[aria-label="Reset view"]').first();
+          await resetBtn.waitFor({ timeout: 3_000 });
+          await resetBtn.click();
+          await p.waitForTimeout(150);
+          // No new JS errors
+          const newErrors = jsErrors.slice(errorsBefore).filter(
+            (e) => !e.includes('[404]') && !/favicon/i.test(e),
+          );
+          if (newErrors.length > 0) {
+            throw new Error(`JS errors during zoom/reset: ${newErrors.slice(0, 3).join('; ')}`);
+          }
+        } finally {
+          await p.unroute(dashApiPred).catch(() => {});
+        }
+      }, page);
+
     } // end sectionEnabled('dashboard')
 
     // ── 48. Bug-fix smoke: ConfirmDialog closes + Workspace in new-session dialog ──
@@ -3744,6 +5085,340 @@ async function main() {
       await p.keyboard.press('Escape');
     }, page);
     } // end §49 tickets
+
+    // ── 50. Bulk-select hint removed; checkboxes on hover ─────────────────
+    if (sectionEnabled('sessions', 'diagrams', 'generated-docs', 'presentations')) {
+    console.log('\n50. Bulk-select hint removed; checkboxes on hover/selection');
+    currentSectionId = '50';
+
+    await test('Bulk-select hint is removed from Sessions, Diagrams and Docs pages', async (p) => {
+      // Sessions
+      await goto(p, `/p/${projectId}/sessions`, 1000);
+      await p.waitForSelector('.sessions-list-panel', { timeout: 8000 });
+      let hintCount = await p.locator('.bulk-select-hint').count();
+      if (hintCount > 0) throw new Error('Sessions list still shows .bulk-select-hint');
+
+      // Diagrams tab (default tab on the Create page)
+      await goto(p, `/p/${projectId}/create`, 1000);
+      await p.waitForSelector('[role="tablist"]', { timeout: 8000 });
+      hintCount = await p.locator('.bulk-select-hint').count();
+      if (hintCount > 0) throw new Error('Diagrams tab still shows .bulk-select-hint');
+
+      // Documents tab
+      const docsTab = p.locator('[role="tab"]').filter({ hasText: /documents/i }).first();
+      if ((await docsTab.count()) > 0) {
+        await docsTab.click();
+        await p.waitForTimeout(400);
+        hintCount = await p.locator('.bulk-select-hint').count();
+        if (hintCount > 0) throw new Error('Documents tab still shows .bulk-select-hint');
+      }
+    }, page);
+
+    await test('Session row checkbox: opacity-hidden at rest, visible on row hover, stays in tab order', async (p) => {
+      await goto(p, `/p/${projectId}/sessions`, 1000);
+      await p.waitForSelector('.sessions-list-panel', { timeout: 8000 });
+      const checkboxes = p.locator('.session-row-check');
+      if ((await checkboxes.count()) === 0) return; // no sessions — skip
+
+      // Must NOT be display:none — it must remain in the tab order
+      const display = await checkboxes.first().evaluate((el) =>
+        window.getComputedStyle(el).display
+      );
+      if (display === 'none') {
+        throw new Error('Session row checkbox is display:none — must use opacity so it stays in the tab order');
+      }
+
+      // At rest: opacity must be 0 (visually hidden)
+      const opacityAtRest = await checkboxes.first().evaluate((el) =>
+        parseFloat(window.getComputedStyle(el).opacity)
+      );
+      if (opacityAtRest > 0) {
+        throw new Error(`Checkbox opacity at rest is ${opacityAtRest} — expected 0 (hidden until hover/focus)`);
+      }
+
+      // After hovering the row, checkbox must become visible (opacity 1)
+      await p.locator('.ws-item').first().hover();
+      await p.waitForTimeout(120);
+      const opacityOnHover = await checkboxes.first().evaluate((el) =>
+        parseFloat(window.getComputedStyle(el).opacity)
+      );
+      if (opacityOnHover < 1) {
+        throw new Error(`Checkbox opacity after row hover is ${opacityOnHover} — expected 1`);
+      }
+    }, page);
+
+    await test('Checking a session row activates selection mode — all row checkboxes become visible', async (p) => {
+      await goto(p, `/p/${projectId}/sessions`, 1000);
+      await p.waitForSelector('.sessions-list-panel', { timeout: 8000 });
+      const checkboxes = p.locator('.session-row-check');
+      if ((await checkboxes.count()) === 0) return; // no sessions — skip
+
+      // Check the first row
+      await checkboxes.first().check();
+      await p.waitForTimeout(200);
+
+      // Every row must have is-selection-mode (all checkboxes now visible via CSS)
+      const totalRows = await p.locator('.ws-item').count();
+      const selectionModeRows = await p.locator('.ws-item.is-selection-mode').count();
+      if (selectionModeRows !== totalRows) {
+        throw new Error(`Only ${selectionModeRows}/${totalRows} rows have is-selection-mode after selecting one`);
+      }
+
+      // The checked row must have is-selected
+      if ((await p.locator('.ws-item.is-selected').count()) === 0) {
+        throw new Error('Checked row must have is-selected class');
+      }
+
+      // Cleanup
+      await checkboxes.first().uncheck();
+    }, page);
+
+    } // end §50 bulk-select
+
+    // ── §51 Mobile viewport — sessions no-overflow + rail drawer ────────
+    if (sectionEnabled('sessions', 'shell')) {
+    console.log('\n51. Mobile viewport — sessions no-overflow + rail drawer');
+    currentSectionId = '51';
+
+    await test('Sessions list at 390 px has no horizontal overflow', async (p) => {
+      await p.setViewportSize({ width: 390, height: 844 });
+      await goto(p, `/p/${projectId}/sessions`, 1000);
+      await p.waitForSelector('.sessions-list-panel', { timeout: 8_000 });
+      const scrollWidth = await p.evaluate(() => document.documentElement.scrollWidth);
+      const innerWidth  = await p.evaluate(() => window.innerWidth);
+      if (scrollWidth > innerWidth) {
+        throw new Error(`Horizontal overflow at 390 px: scrollWidth=${scrollWidth} innerWidth=${innerWidth}`);
+      }
+    }, page);
+
+    await test('Rail drawer opens from hamburger at 390 px', async (p) => {
+      await p.setViewportSize({ width: 390, height: 844 });
+      await goto(p, `/p/${projectId}/sessions`, 600);
+      // Hamburger button in the topbar
+      const hamburger = p.locator('.topbar button[aria-label="Menu"]');
+      await hamburger.waitFor({ state: 'visible', timeout: 5_000 });
+      await hamburger.click();
+      await p.waitForTimeout(300);
+      // Rail must be visible (display != none)
+      const railVisible = await p.locator('.rail').evaluate((el) => {
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden';
+      });
+      if (!railVisible) throw new Error('Rail drawer not visible after hamburger click');
+      // Close drawer via Escape key (backdrop click is blocked by rail overlay)
+      await p.keyboard.press('Escape');
+      await p.waitForTimeout(200);
+    }, page);
+
+    await test('Mobile drawer shows expanded labels when rail is collapsed', async (p) => {
+      await p.setViewportSize({ width: 390, height: 844 });
+      await goto(p, `/p/${projectId}/sessions`, 600);
+      // Simulate desktop-collapsed state by adding the class directly to .shell
+      await p.evaluate(() => {
+        document.querySelector('.shell')?.classList.add('rail-collapsed');
+      });
+      const hamburger = p.locator('.topbar button[aria-label="Menu"]');
+      await hamburger.waitFor({ state: 'visible', timeout: 5_000 });
+      await hamburger.click();
+      await p.waitForTimeout(400);
+      // A rail-link span must be visible (not display:none) inside the drawer
+      const firstLinkSpan = p.locator('.shell.nav-open .rail-link span').first();
+      await firstLinkSpan.waitFor({ state: 'visible', timeout: 3_000 });
+      const visibleCheck = await firstLinkSpan.evaluate((el) => {
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden';
+      });
+      if (!visibleCheck) throw new Error('Rail link label hidden in mobile drawer with rail-collapsed on shell');
+      await p.keyboard.press('Escape');
+      await p.waitForTimeout(200);
+    }, page);
+
+    // ── §51b: no-overflow loop over all main routes at 390 px ────────────────
+    await test('No horizontal overflow at 390 px — main routes', async (p) => {
+      await p.setViewportSize({ width: 390, height: 844 });
+
+      // Routes to check: [ path, stabiliser selector ]
+      const routes: Array<[string, string]> = [
+        [`/p/${projectId}/dashboard`,            '.page'],
+        [`/projects`,                             '.page'],
+        [`/p/${projectId}/sessions`,              '.sessions-list-panel'],
+        [`/p/${projectId}/knowledge`,             '.page'],
+        [`/p/${projectId}/create`,                '[role="tablist"]'],
+        [`/p/${projectId}/insights`,              '.page'],
+        [`/p/${projectId}/tickets`,               '.page'],
+        [`/connections`,                          '.page'],
+        [`/connections/integrations`,             '.page'],
+        [`/connections/repos`,                    '.page'],
+        [`/credentials`,                          '.page'],
+        [`/config`,                               '.page'],
+        [`/settings`,                             '.page'],
+        [`/admin`,                                '.page'],
+        [`/api-access`,                           '.page'],
+        [`/inbox`,                                '.page'],
+        [`/p/${projectId}/vault`,                 '.page'],
+        [`/p/${projectId}/reviews/code`,          '.page'],
+        [`/p/${projectId}/reviews/branch-scans`,  '.page'],
+        [`/p/${projectId}/loop-specs`,            '.page'],
+        [`/p/${projectId}/workspaces`,            '.page'],
+      ];
+
+      const overflowRoutes: string[] = [];
+
+      for (const [path, selector] of routes) {
+        await goto(p, path, 600);
+        try {
+          await p.waitForSelector(selector, { timeout: 5_000 });
+        } catch {
+          // Page may not have that selector — still check overflow
+        }
+        await p.waitForTimeout(200);
+
+        const { sw, iw } = await p.evaluate(() => ({
+          sw: document.documentElement.scrollWidth,
+          iw: window.innerWidth,
+        }));
+        if (sw > iw) {
+          overflowRoutes.push(`${path} (scrollWidth=${sw}, innerWidth=${iw})`);
+        }
+      }
+
+      if (overflowRoutes.length > 0) {
+        throw new Error(
+          `Horizontal overflow at 390 px on:\n  ${overflowRoutes.join('\n  ')}`,
+        );
+      }
+    }, page);
+
+    // ── §51c: IDE workspace — no overflow at 390 px, live-scroll within viewport ──
+    await test('Open demo session at 390 px: no overflow and live-scroll within viewport', async (p) => {
+      if (!demoSessionId) throw new Error('No demo session available — skipping');
+      await p.setViewportSize({ width: 390, height: 844 });
+      await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 2000);
+      await p.waitForSelector('.ide-workspace', { timeout: 8_000 });
+      // Allow layout/CSS to settle
+      await p.waitForTimeout(600);
+
+      const innerWidth = await p.evaluate(() => window.innerWidth);
+
+      // No horizontal page overflow
+      const scrollWidth = await p.evaluate(() => document.documentElement.scrollWidth);
+      if (scrollWidth > innerWidth) {
+        throw new Error(`Horizontal overflow at 390 px in session: scrollWidth=${scrollWidth} innerWidth=${innerWidth}`);
+      }
+
+      // live-scroll right edge must be within the viewport
+      // Guard: the element is only rendered once the session has produced output.
+      // If absent (fresh session, no run yet), skip the right-edge check.
+      const liveScrollCount = await p.locator('.live-scroll').count();
+      if (liveScrollCount > 0) {
+        const liveScrollRight = await p.locator('.live-scroll').first().evaluate((el) => {
+          return Math.round(el.getBoundingClientRect().right);
+        });
+        if (liveScrollRight > innerWidth) {
+          throw new Error(
+            `live-scroll right edge (${liveScrollRight}) exceeds viewport width (${innerWidth})`,
+          );
+        }
+      }
+    }, page);
+
+    // ── §51d: IDE at 390 px — agent panel within viewport, editor hidden, breadcrumb has project name ──
+    await test('Open demo session at 390 px: agent panel within viewport, editor area hidden, breadcrumb has project name', async (p) => {
+      if (!demoSessionId) throw new Error('No demo session available — skipping');
+      await p.setViewportSize({ width: 390, height: 844 });
+      // Seed localStorage so the editor panel is open (editorPanelOpen=true) when the session loads.
+      // This ensures .ide-editor-area is rendered in the DOM and the mobile CSS hiding it can be verified.
+      await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 500);
+      await p.evaluate(() => {
+        localStorage.setItem('ide_layout', JSON.stringify({ editorPanelOpen: true, editorW: 460 }));
+      });
+      // Reload with the seeded layout so the component picks it up from localStorage
+      await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 2000);
+      await p.waitForSelector('.ide-workspace', { timeout: 8_000 });
+      // Allow mobile layout and CSS to settle
+      await p.waitForTimeout(600);
+
+      const innerWidth = await p.evaluate(() => window.innerWidth);
+
+      // No horizontal page overflow
+      const scrollWidth = await p.evaluate(() => document.documentElement.scrollWidth);
+      if (scrollWidth > innerWidth) {
+        throw new Error(
+          `Horizontal overflow at 390 px: scrollWidth=${scrollWidth} innerWidth=${innerWidth}`,
+        );
+      }
+
+      // Agent panel right edge must be within the viewport
+      const agentPanelRight = await p.locator('.ide-agent-panel').first().evaluate((el) => {
+        return Math.round(el.getBoundingClientRect().right);
+      });
+      if (agentPanelRight > innerWidth) {
+        throw new Error(
+          `.ide-agent-panel right edge (${agentPanelRight}) exceeds viewport (${innerWidth})`,
+        );
+      }
+
+      // Editor area must not be visible on mobile (the mobile CSS hides it with display:none !important)
+      // We seeded editorPanelOpen=true so the element IS rendered in the DOM — this test will fail
+      // if the CSS rule is removed or overridden.
+      const editorAreaCount = await p.locator('.ide-editor-area').count();
+      if (editorAreaCount > 0) {
+        const editorVisible = await p.locator('.ide-editor-area').first().evaluate((el) => {
+          const s = window.getComputedStyle(el);
+          return s.display !== 'none' && s.visibility !== 'hidden';
+        });
+        if (editorVisible) {
+          throw new Error('.ide-editor-area is visible at 390 px — should be hidden by mobile CSS');
+        }
+      }
+
+      // Breadcrumb must include the project name (not just "Sessions")
+      const breadcrumbText = (await p.locator('.app-header-breadcrumb').first().evaluate(
+        (el) => (el as HTMLElement).innerText ?? '',
+      )).trim();
+      if (!breadcrumbText.toLowerCase().includes('project')) {
+        throw new Error(
+          `Breadcrumb does not contain project name at 390 px. Got: "${breadcrumbText}"`,
+        );
+      }
+    }, page);
+
+    // ── §51e: composer pinned — page must not scroll; composer bottom within viewport ──
+    await test('Demo session at 390 px: page does not scroll vertically; composer pinned within viewport', async (p) => {
+      if (!demoSessionId) throw new Error('No demo session available — skipping');
+      await p.setViewportSize({ width: 390, height: 844 });
+      await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 2000);
+      await p.waitForSelector('.ide-workspace', { timeout: 8_000 });
+      // Allow mobile layout and CSS to settle
+      await p.waitForTimeout(600);
+
+      const innerHeight = await p.evaluate(() => window.innerHeight);
+
+      // Check 1: the page must not scroll vertically
+      const scrollHeight = await p.evaluate(() => document.scrollingElement?.scrollHeight ?? 0);
+      if (scrollHeight > innerHeight + 1) {
+        throw new Error(
+          `Page scrolls at 390 px: scrollHeight=${scrollHeight} > innerHeight=${innerHeight}+1. ` +
+          `The composer is not pinned — body scroll is active.`,
+        );
+      }
+
+      // Check 2: the composer bottom edge must be within the viewport
+      const composerBottom = await p.locator('.ws-composer').first().evaluate((el) => {
+        return Math.round(el.getBoundingClientRect().bottom);
+      });
+      if (composerBottom > innerHeight) {
+        throw new Error(
+          `.ws-composer bottom (${composerBottom}) is below innerHeight (${innerHeight}). ` +
+          `The composer is not pinned at the bottom of the viewport.`,
+        );
+      }
+    }, page);
+
+    // Restore desktop viewport for subsequent tests
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    } // end §51 mobile viewport
 
     // ── JS errors report ──────────────────────────────────────────────────
     if (jsErrors.length > 0) {

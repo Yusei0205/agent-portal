@@ -5,31 +5,46 @@ import { Icon } from './Icon.jsx';
  * Appears at the bottom of its positioned container when selected.size > 0.
  *
  * @param {{
- *   selected: Set<string>,
- *   onDelete: () => void,
- *   onClear: () => void,
- *   busy?: boolean,
+ *   selected:      Set<string>,
+ *   onDelete:      () => void,
+ *   onClear:       () => void,
+ *   busy?:         boolean,
+ *   noun?:         string,           // singular label for the items (default 'item')
+ *   deleteLabel?:  string,           // delete button text (default 'Delete')
+ *   extraActions?: import('react').ReactNode,  // optional extra buttons shown before Delete
  * }} props
  */
-export function BulkActionBar({ selected, onDelete, onClear, busy = false }) {
+export function BulkActionBar({
+  selected,
+  onDelete,
+  onClear,
+  busy = false,
+  noun = 'item',
+  deleteLabel = 'Delete',
+  extraActions,
+}) {
   if (selected.size === 0) return null;
+
+  const nounPlural = noun + (noun.endsWith('s') ? '' : 's');
+  const countLabel = `${selected.size} ${selected.size === 1 ? noun : nounPlural} selected`;
 
   return (
     <div className="bulk-action-bar" role="toolbar" aria-label="Bulk actions">
       <span className="bulk-action-count">
         <Icon name="check" size={14} />
-        {selected.size} session{selected.size === 1 ? '' : 's'} selected
+        {countLabel}
       </span>
       <span className="bulk-action-sep" aria-hidden="true">·</span>
+      {extraActions}
       <button
         type="button"
         className="btn btn-sm btn-danger"
         onClick={onDelete}
         disabled={busy}
-        aria-label={`Delete ${selected.size} selected session${selected.size === 1 ? '' : 's'}`}
+        aria-label={`${deleteLabel} ${countLabel}`}
       >
         <Icon name="trash" size={13} />
-        Delete selected
+        {deleteLabel} selected
       </button>
       <button
         type="button"
@@ -41,18 +56,6 @@ export function BulkActionBar({ selected, onDelete, onClear, busy = false }) {
       >
         <Icon name="x" size={14} />
       </button>
-    </div>
-  );
-}
-
-/**
- * Small hint shown above the list to tell users they can tick rows.
- */
-export function BulkSelectHint() {
-  return (
-    <div className="bulk-select-hint" aria-hidden="true">
-      <span className="bulk-select-hint-icon">☐</span>
-      Tick rows to select them for bulk delete
     </div>
   );
 }

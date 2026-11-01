@@ -52,6 +52,7 @@ const PATHS = {
   chevronRight: 'M9 6l6 6-6 6',
   chevronLeft:  'M15 6l-6 6 6 6',
   chevronDown:  'M6 9l6 6 6-6',
+  chevronUp:    'M6 15l6-6 6 6',
   // Hyphenated aliases for spec compliance
   'chevron-right': 'M9 6l6 6-6 6',
   'chevron-left':  'M15 6l-6 6 6 6',

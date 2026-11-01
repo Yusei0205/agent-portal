@@ -321,7 +321,21 @@ export function JiraTicketPicker({ projectId, jiraMapping = null, value, onChang
               {loadError.message || 'Could not load tickets'}
             </div>
           ) : !issues.length ? (
-            <div className="jira-picker-state muted">No tickets found</div>
+            assigneeMode === 'me' ? (
+              <div className="jira-picker-state muted">
+                No open tickets assigned to you.{' '}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ display: 'inline', padding: '0 4px' }}
+                  onClick={() => setAssigneeMode('any')}
+                >
+                  Show all
+                </button>
+              </div>
+            ) : (
+              <div className="jira-picker-state muted">No tickets found</div>
+            )
           ) : (
             issues.map((issue) => (
               <button

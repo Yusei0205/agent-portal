@@ -551,9 +551,9 @@
   display: grid;
   gap: 18px;
   align-content: start;
-  max-width: 1120px;
+  /* No max-width cap — pages fill the available content-area width on all screen sizes. */
 }
-.page.wide   { max-width: 1440px; }
+/* .page.wide: no cap — kept for backwards compatibility in case it is added to JSX later. */
 .page.narrow { max-width: 760px; }
 .page-head,
 .page-header {
@@ -568,6 +568,12 @@
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+/* Long description paragraphs under page headings: keep a comfortable reading width
+   without constraining the entire page. */
+.page-head p.muted,
+.page-header p.muted {
+  max-width: 80ch;
 }
 
 /* ── Three-panel sessions layout ─────────────────────── */
@@ -637,8 +643,17 @@
 .span-2 { grid-column: 1 / -1; }
 
 /* ── Responsive ──────────────────────────────────────── */
+/* Sessions back button: hidden on desktop, shown in 900px breakpoint below */
+.sessions-back-btn { display: none; }
+
 @media (max-width: 900px) {
   .shell {
+    grid-template-columns: 1fr;
+  }
+  /* .shell.rail-collapsed uses grid-template-columns:56px 1fr with specificity
+     0,2,0 which beats the .shell rule above (0,1,0).  Override explicitly so
+     the collapsed-rail state doesn't shrink shell-right to 56 px on mobile. */
+  .shell.rail-collapsed {
     grid-template-columns: 1fr;
   }
   .rail {
@@ -648,12 +663,52 @@
     display: flex;
     position: fixed;
     inset: 0 auto 0 0;
-    width: var(--rail-w, 236px);
+    width: min(var(--rail-w, 236px), 85vw);
     z-index: 100;
   }
-  /* Collapse button hidden in mobile drawer */
+  /* Resize separator hidden in mobile drawer */
   .shell.nav-open .rail-sep { display: none; }
-  /* shell-right fills the single column; allow natural page scroll */
+
+  /* ── Mobile drawer: always show expanded layout ────────────────────────── */
+  /* Restore elements that rail-collapsed hides via display:none */
+  .shell.nav-open.rail-collapsed .brand > span,
+  .shell.nav-open.rail-collapsed .rail-link > span,
+  .shell.nav-open.rail-collapsed .rail-count,
+  .shell.nav-open.rail-collapsed .rail-foot-name { display: inline; }
+  /* Avatar span needs its own display:flex for internal centering */
+  .shell.nav-open.rail-collapsed .rail-avatar { display: flex; }
+
+  /* Hide the collapse toggle — it does nothing on mobile */
+  .shell.nav-open .rail-collapse-btn { display: none; }
+
+  /* Restore expanded padding / gap on the rail container */
+  .shell.nav-open.rail-collapsed .rail { padding: 8px 6px; gap: 6px; }
+
+  /* Restore expanded brand row */
+  .shell.nav-open.rail-collapsed .brand { justify-content: flex-start; padding: 2px 6px; }
+
+  /* Restore expanded nav link layout */
+  .shell.nav-open.rail-collapsed .rail-link {
+    justify-content: flex-start;
+    padding: 5px 9px;
+    gap: 8px;
+    min-height: unset;
+  }
+
+  /* Restore section divider margin (section labels are rendered by JSX in expanded mode) */
+  .shell.nav-open.rail-collapsed .rail-section-divider { margin: 5px 4px; }
+  .shell.nav-open.rail-collapsed .rail-section + .rail-section { margin-top: 4px; }
+  .shell.nav-open.rail-collapsed .rail-nav-wrap nav { padding-bottom: 4px; }
+
+  /* Restore footer layout */
+  .shell.nav-open.rail-collapsed .rail-foot { gap: 8px; padding-top: 10px; }
+  .shell.nav-open.rail-collapsed .rail-user {
+    justify-content: space-between;
+    flex-direction: row;
+    gap: 0;
+  }
+  .shell.nav-open.rail-collapsed .rail-user-name { padding: 4px 6px; justify-content: flex-start; }
+  /* shell-right fills the single column; allow natural page scroll on non-sessions pages */
   .shell-right {
     height: auto;
     min-height: 100vh;
@@ -662,10 +717,21 @@
   .main {
     overflow-y: visible; /* body scroll on mobile */
   }
-  /* sessions still need contained height on mobile */
-  .main.full-height {
-    min-height: calc(100vh - 88px); /* topbar + app-header */
+  /* Sessions page only: pin the shell to the visible viewport so the composer stays at the
+     bottom. :has() is supported in Chrome 105+, Safari 15.4+, Firefox 121+.
+     Overrides the .shell-right rule above (higher specificity: 3 class selectors vs 1). */
+  .shell-right:has(.main.full-height) {
+    height: 100vh;    /* fallback for browsers without dvh support */
+    height: 100dvh;   /* dynamic viewport height — excludes browser chrome on mobile */
+    min-height: 0;
     overflow: hidden;
+  }
+  /* Remove the 88 px magic offset; rely on flex:1 inside the fixed-height shell-right. */
+  .main.full-height {
+    flex: 1;          /* fills the remaining height after topbar and app-header */
+    min-height: 0;
+    overflow: hidden;
+    height: auto;
   }
   .topbar {
     display: flex;
@@ -674,24 +740,79 @@
     padding: 10px 14px;
     border-bottom: 1px solid var(--line);
     background: var(--rail);
+    flex-shrink: 0; /* topbar must not shrink in the fixed-height sessions layout */
   }
   .topbar-title {
     font-weight: 700;
     font-size: 0.94rem;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* Hide resize separator on mobile */
   .rail-sep { display: none; }
-}
-@media (max-width: 640px) {
-  .sessions-shell {
-    grid-template-columns: 1fr;
+  /* Sessions: single column, one panel at a time.
+     minmax(0,1fr) prevents the track from expanding to the IDE body's
+     min-content size (editor+sidebar fixed widths).
+     Both variants (.with-workspace has specificity 0,2,0 on desktop) need to
+     be covered so the mobile single-column layout always wins. */
+  .sessions-shell,
+  .sessions-shell.with-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* No session selected → show list only */
+  .sessions-shell:not(.with-workspace) .sessions-detail-panel {
+    display: none;
+  }
+  /* Session selected → show detail only */
+  .sessions-shell.with-workspace .sessions-list-panel {
+    display: none;
   }
   .sessions-list-panel {
     border-right: none;
-    border-bottom: 1px solid var(--line);
-    max-height: 40vh;
   }
+  /* Back button visible on mobile */
+  .sessions-back-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 14px;
+    border: none;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 0.84rem;
+    font-weight: 530;
+    text-align: left;
+    cursor: pointer;
+    flex-shrink: 0;
+    min-height: 44px;
+    width: 100%;
+  }
+  .sessions-back-btn:hover {
+    color: var(--ink);
+    background: var(--canvas);
+  }
+}
+@media (max-width: 640px) {
   .two-col {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ── Responsive global helpers ───────────────────────── */
+@media (max-width: 768px) {
+  /* Reduce page padding on small screens */
+  .page {
+    padding: 12px 12px 32px;
+  }
+  /* Stack page headers on small screens */
+  .page-head,
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

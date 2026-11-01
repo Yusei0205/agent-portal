@@ -73,6 +73,7 @@ function requireProjectAccess(
 
 function presView(p: Row) {
   const attIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
+  const status = String(p.status ?? 'ready');
   return {
     id: p.id,
     project_id: p.project_id,
@@ -90,6 +91,9 @@ function presView(p: Row) {
     preview_json: p.preview_json ? JSON.parse(String(p.preview_json)) : null,
     workflow_id: p.workflow_id ?? null,
     stale: Boolean(p.stale),
+    status,
+    error: p.error ?? null,
+    retryable: status === 'failed',
     created_by: p.created_by ?? null,
     created_at: p.created_at,
     updated_at: p.updated_at,
@@ -135,6 +139,9 @@ async function startPresRun(
   });
 
   emit(projectId, { type: 'workflow.created', workflowId });
+
+  // Mark the presentation as generating so startup recovery can flip it to failed on crash
+  update('presentations', presId, { status: 'generating', error: null, updated_at: now() });
 
   setTimeout(async () => {
     try {
@@ -204,6 +211,8 @@ export async function processPresentationOutput(workflowId: string, runId: strin
     pptx_path: pptxPath,
     preview_json: previewJson,
     stale: 0,
+    status: 'ready',
+    error: null,
     updated_at: ts,
   });
 }
@@ -445,6 +454,67 @@ export function registerPresentationRoutes(): void {
     }
     update('presentations', String(p.id), { workflow_id: workflowId, updated_at: now() });
     sendJson(res, 200, { workflowId });
+  });
+
+  // POST /api/projects/:id/presentations/:presId/retry — retry a failed generation
+  router.post('/api/projects/:id/presentations/:presId/retry', async (req: PortalRequest, res: any) => {
+    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    if (!project) return;
+
+    const p = getPresentation(req.params.presId, String(project.id));
+    const status = String(p.status ?? 'ready');
+    if (status !== 'failed') {
+      sendJson(res, 409, { error: 'Presentation is not in a failed state' });
+      return;
+    }
+
+    const effectiveAttachmentIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
+
+    let attachmentRows: Row[] = [];
+    if (effectiveAttachmentIds.length > 0) {
+      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      attachmentRows = rows ?? [];
+    }
+
+    const sourceBlock = buildSourceBlock(p);
+    const tplBlock = templateBlock({ mode: 'none' });
+
+    let goal = composePresentationPrompt({
+      kind: String(p.source_kind) as PresentationSourceKind,
+      title: String(p.name),
+      audience: String(p.audience ?? ''),
+      slides: Number(p.slide_count ?? 12),
+      source: sourceBlock,
+      template: tplBlock,
+    });
+
+    let preWorkflowId: string | undefined;
+    let preWorkDir: string | null = null;
+    if (attachmentRows.length > 0) {
+      preWorkflowId = newId('w_');
+      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
+      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+      goal += buildAttachmentPromptBlock(staged);
+    }
+
+    const workflowId = await startPresRun(
+      String(project.id),
+      String(p.id),
+      goal,
+      req.user!.id,
+      p.lead_agent ? String(p.lead_agent) : null,
+      Boolean(p.trust_all_tools),
+      { workflowId: preWorkflowId, workDir: preWorkDir },
+    );
+
+    if (effectiveAttachmentIds.length > 0) {
+      linkAttachmentsToParent(effectiveAttachmentIds, 'presentation', String(p.id));
+    }
+    update('presentations', String(p.id), { workflow_id: workflowId, updated_at: now() });
+
+    const updated = getPresentation(String(p.id), String(project.id));
+    sendJson(res, 202, { presentation: presView(updated) });
   });
 
   // GET /api/projects/:id/presentations/:presId/download

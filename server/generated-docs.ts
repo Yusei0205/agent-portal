@@ -74,6 +74,7 @@ function requireProjectAccess(
 
 function docView(d: Row, version?: Row | null) {
   const attIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
+  const status = String(d.status ?? 'ready');
   return {
     id: d.id,
     project_id: d.project_id,
@@ -87,6 +88,9 @@ function docView(d: Row, version?: Row | null) {
     audience: d.audience ?? null,
     latest_version_id: d.latest_version_id ?? null,
     stale: Boolean(d.stale),
+    status,
+    error: d.error ?? null,
+    retryable: status === 'failed',
     workflow_id: version?.workflow_id ?? null,
     created_by: d.created_by ?? null,
     created_at: d.created_at,
@@ -148,6 +152,9 @@ async function startDocRun(
     created_at: ts,
     updated_at: ts,
   });
+
+  // Mark the doc as generating so startup recovery can flip it to failed on crash
+  update('generated_docs', docId, { status: 'generating', error: null, workflow_id: workflowId });
 
   emit(projectId, { type: 'workflow.created', workflowId });
 
@@ -215,6 +222,8 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
   update('generated_docs', String(d.id), {
     latest_version_id: versionId,
     stale: 0,
+    status: 'ready',
+    error: null,
   });
 }
 
@@ -433,6 +442,65 @@ export function registerGeneratedDocRoutes(): void {
     }
 
     sendJson(res, 200, { workflowId });
+  });
+
+  // POST /api/projects/:id/generated-docs/:docId/retry — retry a failed generation
+  router.post('/api/projects/:id/generated-docs/:docId/retry', async (req: PortalRequest, res: PortalResponse) => {
+    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    if (!project) return;
+
+    const d = getDoc(req.params.docId, String(project.id));
+    const status = String(d.status ?? 'ready');
+    if (status !== 'failed') {
+      sendJson(res, 409, { error: 'Document is not in a failed state' });
+      return;
+    }
+
+    const effectiveAttachmentIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
+
+    let attachmentRows: Row[] = [];
+    if (effectiveAttachmentIds.length > 0) {
+      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      attachmentRows = rows ?? [];
+    }
+
+    let goal = composeDocPrompt({
+      type: String(d.doc_type) as DocType,
+      title: String(d.name),
+      audience: String(d.audience ?? ''),
+      repos: [],
+      knowledge: false,
+      decisions: false,
+      diagrams: [],
+    });
+
+    let preWorkflowId: string | undefined;
+    let preWorkDir: string | null = null;
+    if (attachmentRows.length > 0) {
+      preWorkflowId = newId('w_');
+      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
+      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+      goal += buildAttachmentPromptBlock(staged);
+    }
+
+    const workflowId = await startDocRun(
+      String(project.id),
+      String(d.id),
+      goal,
+      req.user!.id,
+      d.lead_agent ? String(d.lead_agent) : null,
+      Boolean(d.trust_all_tools),
+      { workflowId: preWorkflowId, workDir: preWorkDir },
+    );
+
+    if (effectiveAttachmentIds.length > 0) {
+      linkAttachmentsToParent(effectiveAttachmentIds, 'doc', String(d.id));
+    }
+
+    const updated = getDoc(String(d.id), String(project.id));
+    const v = latestVersion(String(d.id));
+    sendJson(res, 202, { doc: docView(updated, v) });
   });
 
   // GET /api/projects/:id/generated-docs/:docId/versions

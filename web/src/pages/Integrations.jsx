@@ -4,6 +4,8 @@ import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useBulkSelect } from '../lib/useBulkSelect.js';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
 
 const INTEGRATION_TYPES = [
   { value: 'http',       label: 'HTTP' },
@@ -215,8 +217,10 @@ export function Integrations({ projectId }) {
   const [modal, setModal]               = useState(null); // null | 'new' | { integration }
   const [testResults, setTestResults]   = useState({}); // id → { ok, note, error }
   const [testing, setTesting]           = useState({}); // id → bool
+  const [bulkBusy, setBulkBusy]         = useState(false);
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
+  const bulk = useBulkSelect(integrations);
 
   const load = useCallback(async () => {
     if (!projectId) { setLoading(false); return; }
@@ -266,6 +270,28 @@ export function Integrations({ projectId }) {
     } catch (e) {
       toast(e.message, 'error');
     }
+  };
+
+  const handleBulkDelete = async () => {
+    const n = bulk.selected.size;
+    if (!await requestConfirm(
+      `Remove ${n} integration${n === 1 ? '' : 's'}? This cannot be undone.`,
+      'Remove', 'danger',
+    )) return;
+    setBulkBusy(true);
+    const ids = [...bulk.selected];
+    const failed = [];
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await api.delete(`/api/projects/${projectId}/integrations/${id}`);
+      } catch {
+        failed.push(id);
+      }
+    }));
+    setIntegrations((prev) => prev.filter((i) => !ids.includes(i.id) || failed.includes(i.id)));
+    bulk.clearAll();
+    if (failed.length > 0) toast(`${failed.length} integration${failed.length === 1 ? '' : 's'} could not be removed.`, 'error');
+    setBulkBusy(false);
   };
 
   const handleSave = (saved) => {
@@ -318,73 +344,100 @@ export function Integrations({ projectId }) {
       )}
 
       {!loading && integrations.length > 0 && (
-        <table className="data-table" aria-label="MCP integrations">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Enabled</th>
-              <th>Added</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {integrations.map((intg) => (
-              <tr key={intg.id}>
-                <td>{intg.name}</td>
-                <td>
-                  <span className={TYPE_BADGE_CLASS[intg.type] || 'badge badge-neutral'}>
-                    {intg.type}
-                  </span>
-                </td>
-                <td>
-                  <button
-                    type="button"
-                    className={`btn btn-sm ${intg.enabled ? '' : 'btn-ghost'}`}
-                    onClick={() => toggleEnabled(intg)}
-                    aria-pressed={intg.enabled}
-                    aria-label={intg.enabled ? `Disable ${intg.name}` : `Enable ${intg.name}`}
-                  >
-                    {intg.enabled ? 'Enabled' : 'Disabled'}
-                  </button>
-                </td>
-                <td className="muted">{formatRelative(intg.created_at)}</td>
-                <td>
-                  <div className="row">
-                    {testResults[intg.id] && (
-                      <span
-                        className={testResults[intg.id].ok ? 'ok small' : 'danger small'}
-                        role="status"
-                      >
-                        {testResults[intg.id].ok
-                          ? testResults[intg.id].note || '✓ OK'
-                          : `✗ ${testResults[intg.id].error || 'Failed'}`}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => testIntegration(intg)}
-                      disabled={testing[intg.id]}
-                      aria-label={`Test ${intg.name}`}
-                    >
-                      {testing[intg.id] ? 'Testing…' : 'Test'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-icon"
-                      title="Delete"
-                      aria-label={`Delete ${intg.name}`}
-                      onClick={() => deleteIntegration(intg)}
-                    >
-                      <Icon name="trash" size={14} />
-                    </button>
-                  </div>
-                </td>
+        <div style={{ position: 'relative' }}>
+          <table className="data-table" aria-label="MCP integrations">
+            <thead>
+              <tr>
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all integrations"
+                    checked={bulk.allSelected}
+                    ref={(el) => { if (el) el.indeterminate = bulk.someSelected; }}
+                    onChange={bulk.toggleAll}
+                  />
+                </th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Enabled</th>
+                <th>Added</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {integrations.map((intg) => (
+                <tr key={intg.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${intg.name}`}
+                      checked={bulk.selected.has(intg.id)}
+                      onChange={() => bulk.toggle(intg.id)}
+                    />
+                  </td>
+                  <td>{intg.name}</td>
+                  <td>
+                    <span className={TYPE_BADGE_CLASS[intg.type] || 'badge badge-neutral'}>
+                      {intg.type}
+                    </span>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${intg.enabled ? '' : 'btn-ghost'}`}
+                      onClick={() => toggleEnabled(intg)}
+                      aria-pressed={intg.enabled}
+                      aria-label={intg.enabled ? `Disable ${intg.name}` : `Enable ${intg.name}`}
+                    >
+                      {intg.enabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                  </td>
+                  <td className="muted">{formatRelative(intg.created_at)}</td>
+                  <td>
+                    <div className="row">
+                      {testResults[intg.id] && (
+                        <span
+                          className={testResults[intg.id].ok ? 'ok small' : 'danger small'}
+                          role="status"
+                        >
+                          {testResults[intg.id].ok
+                            ? testResults[intg.id].note || '✓ OK'
+                            : `✗ ${testResults[intg.id].error || 'Failed'}`}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => testIntegration(intg)}
+                        disabled={testing[intg.id]}
+                        aria-label={`Test ${intg.name}`}
+                      >
+                        {testing[intg.id] ? 'Testing…' : 'Test'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title="Delete"
+                        aria-label={`Delete ${intg.name}`}
+                        onClick={() => deleteIntegration(intg)}
+                      >
+                        <Icon name="trash" size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <BulkActionBar
+            selected={bulk.selected}
+            onDelete={handleBulkDelete}
+            onClear={bulk.clearAll}
+            busy={bulkBusy}
+            noun="integration"
+            deleteLabel="Remove"
+          />
+        </div>
       )}
 
       {modal && (

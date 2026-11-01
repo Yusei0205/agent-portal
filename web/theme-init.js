@@ -19,7 +19,9 @@
   /* (mirrors normaliseTemplate() in web/src/lib/templates/index.js)       */
   var FONT_STACKS = {
     'Space Grotesk':  "'Space Grotesk Variable','Space Grotesk',system-ui,sans-serif",
+    'Quicksand':      "'Quicksand Variable','Quicksand',system-ui,sans-serif",
     'Inter':          "'Inter Variable','Inter',system-ui,sans-serif",
+    'Geist Sans':     "'Geist Sans',system-ui,sans-serif",
     'JetBrains Mono': "'JetBrains Mono Variable','JetBrains Mono','SF Mono',Consolas,monospace",
     'system-ui':      "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
     'ui-monospace':   "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",

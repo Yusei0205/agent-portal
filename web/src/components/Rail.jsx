@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from './Icon.jsx';
 import { navigate, href } from '../lib/router.js';
-import { getTemplate, getActiveTemplateId } from '../lib/theme.js';
+import { useActiveTemplate } from '../lib/theme.js';
 
 // ── Local storage keys ────────────────────────────────────────────────────────
 
@@ -92,6 +92,25 @@ const NAV_SECTIONS = [
     ],
   },
 ];
+
+// ── Mobile breakpoint hook ────────────────────────────────────────────────────
+
+/**
+ * Returns true when the viewport matches ≤900 px.
+ * Stays in sync with resize via matchMedia 'change' event.
+ */
+function useIsMobile(breakpoint = 900) {
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(`(max-width: ${breakpoint}px)`).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [breakpoint]);
+  return isMobile;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -515,6 +534,10 @@ export function Rail({
   // navProjectId: prefer current route's projectId, fall back to last
   const navProjectId = route.projectId || lastProjectId;
 
+  // On mobile the drawer always renders as expanded regardless of desktop preference.
+  const isMobile        = useIsMobile();
+  const effectiveCollapsed = collapsed && !isMobile;
+
   // Sync lastProjectId when route changes to a project page
   useEffect(() => {
     if (route.projectId && route.projectId !== lastProjectId) {
@@ -558,7 +581,7 @@ export function Rail({
   }, [isDrawerOpen]);
 
   useEffect(() => {
-    if (!collapsed) { setTooltip(null); return; }
+    if (!effectiveCollapsed) { setTooltip(null); return; }
     // Use railRef so footer elements (user avatar) also trigger tooltips
     const wrap = railRef.current;
     if (!wrap) return;
@@ -581,7 +604,7 @@ export function Rail({
       wrap.removeEventListener('focusin', show);
       wrap.removeEventListener('focusout', hide);
     };
-  }, [collapsed]);
+  }, [effectiveCollapsed]);
 
   const handlePickerSelect = useCallback((pid) => {
     setLastProjectId(pid || '');
@@ -626,10 +649,10 @@ export function Rail({
   useEffect(() => {
     const raf = requestAnimationFrame(updateFade);
     return () => cancelAnimationFrame(raf);
-  }, [collapsed, updateFade]);
+  }, [effectiveCollapsed, updateFade]);
 
-  // Brand from active template
-  const activeTmpl  = getTemplate(getActiveTemplateId());
+  // Brand from active template — reactive: re-renders on 'portal-theme-changed'
+  const activeTmpl  = useActiveTemplate();
   const logoSvg     = activeTmpl?.brand?.logoSvg;
   const productName = activeTmpl?.brand?.productName || 'Agent Portal';
   const logoDataUrl = logoSvg
@@ -639,8 +662,8 @@ export function Rail({
   // Avatar initials for user
   const userInitials = initials(user?.name || user?.email || '?');
 
-  // Portal-rendered tooltip
-  const tooltipEl = collapsed && tooltip
+  // Portal-rendered tooltip (only when truly collapsed on desktop)
+  const tooltipEl = effectiveCollapsed && tooltip
     ? createPortal(
         <div className="rail-tooltip" style={{ top: tooltip.y }} role="tooltip" aria-hidden="true">
           {tooltip.text}
@@ -663,7 +686,7 @@ export function Rail({
           ) : (
             <img src="/favicon.svg" width={22} height={22} alt="" className="brand-icon" />
           )}
-          {!collapsed && <span>{productName}</span>}
+          {!effectiveCollapsed && <span>{productName}</span>}
         </a>
 
         {/* Project picker */}
@@ -672,7 +695,7 @@ export function Rail({
             projects={projects}
             currentProjectId={navProjectId || ''}
             onSelect={handlePickerSelect}
-            collapsed={collapsed}
+            collapsed={effectiveCollapsed}
           />
         </div>
 
@@ -689,7 +712,7 @@ export function Rail({
                   user={user}
                   inboxCount={inboxCount}
                   onNavigate={onNavigate}
-                  collapsed={collapsed}
+                  collapsed={effectiveCollapsed}
                 />
               ))}
             </nav>
@@ -698,6 +721,7 @@ export function Rail({
 
         {/* Footer */}
         <div className="rail-foot">
+          {/* Collapse toggle — hidden on mobile via CSS (.shell.nav-open .rail-collapse-btn) */}
           <button
             type="button"
             className="rail-collapse-btn"
@@ -707,7 +731,7 @@ export function Rail({
             data-tooltip={collapsed ? 'Expand' : undefined}
           >
             <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} size={15} aria-hidden="true" />
-            {!collapsed && <span>Collapse</span>}
+            {!effectiveCollapsed && <span>Collapse</span>}
           </button>
 
           {/* User row */}
@@ -716,7 +740,7 @@ export function Rail({
               href="#/account"
               className="rail-user-name"
               aria-label={user?.name || user?.email}
-              data-tooltip={collapsed ? (user?.name || user?.email) : undefined}
+              data-tooltip={effectiveCollapsed ? (user?.name || user?.email) : undefined}
             >
               <span className="rail-avatar" aria-hidden="true">{userInitials}</span>
               <span className="rail-foot-name">{user?.name || user?.email}</span>

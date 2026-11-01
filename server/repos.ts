@@ -17,6 +17,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, insert } from './db.ts';
@@ -66,6 +67,24 @@ export const _repoProgressForTest = repoProgress;
 /** @internal Exposed for tests only. */
 export const _syncInFlightForTest = syncInFlight;
 
+/**
+ * Active git child processes (clone/fetch) tracked for graceful shutdown.
+ * Populated when a git subprocess starts; removed when it exits.
+ */
+const activeGitProcs = new Set<ChildProcess>();
+
+/**
+ * Kill all tracked git child processes.
+ * Called on server shutdown so in-flight git operations do not keep
+ * the Node.js event loop alive after the HTTP server has closed.
+ */
+export function killActiveGitProcesses(): void {
+  for (const proc of activeGitProcs) {
+    try { proc.kill(); } catch { /* already dead */ }
+  }
+  activeGitProcs.clear();
+}
+
 /** Attach the current progress snapshot (or null) to a repo row. */
 function withProgress(repo: Repository): Repository & { progress: ProgressInfo | null } {
   return { ...repo, progress: repoProgress.get(repo.id)?.snapshot ?? null };
@@ -73,18 +92,31 @@ function withProgress(repo: Repository): Repository & { progress: ProgressInfo |
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Resolve the directory on disk for a cloned repo. */
+/** Resolve the directory on disk for a cloned repo. Uses the raw repo name (no slugification). */
 function repoCloneDir(projectSlug: string, repoName: string): string {
   return path.join(config.dataDir, 'projects', projectSlug, 'repos', repoName);
 }
 
 /**
+ * The on-disk path for a repo's reference clone, keyed by project slug and raw repo name.
+ *
+ * Exported so runner.ts and working-copies.ts can derive the same path without re-implementing
+ * the logic. Uses `repoName` verbatim — this matches what `performSync` writes on disk (the
+ * clone directory is always named after the raw repo name, never slugified).
+ */
+export function repoRefDir(projectSlug: string, repoName: string): string {
+  return repoCloneDir(projectSlug, repoName);
+}
+
+/**
  * The reference clone directory for a repository. Used by diagram and document agents
  * to find the checked-out source files.
+ *
+ * Uses the raw `repo.name` (not slugified) — this matches what `performSync` wrote to disk.
  */
 export function repoDir(repo: Repo): string {
   const slug = one<{ slug: string }>('SELECT slug FROM projects WHERE id = ?', repo.project_id)?.slug ?? 'unknown';
-  return repoCloneDir(slug, repo.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+  return repoCloneDir(slug, repo.name);
 }
 
 /** Look up a repo by id. Throws notFound if missing. */
@@ -157,7 +189,12 @@ function spawnGitWithProgress(
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
     });
+    // Unref everything so the event loop can exit once the server closes,
+    // even if the git process is still running (e.g. slow network or test cleanup).
     proc.unref();
+    proc.stdout.unref();
+    proc.stderr.unref();
+    activeGitProcs.add(proc);
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     proc.stdout.on('data', (d: Buffer) => out.push(d));
@@ -166,6 +203,7 @@ function spawnGitWithProgress(
       onStderrChunk?.(d);
     });
     proc.on('close', (code) => {
+      activeGitProcs.delete(proc);
       if (code === 0) {
         resolve(Buffer.concat(out).toString('utf8').trim());
       } else {
@@ -173,7 +211,10 @@ function spawnGitWithProgress(
         reject(new Error(redactCredentials(raw)));
       }
     });
-    proc.on('error', reject);
+    proc.on('error', (e) => {
+      activeGitProcs.delete(proc);
+      reject(e);
+    });
   });
 }
 
@@ -320,6 +361,10 @@ export const _getCloneEnv = getCloneEnv;
 
 /** Background clone/sync operation. Updates status in the database. */
 async function performSync(repoId: string, projectId: string): Promise<void> {
+  // In test environments (PORTAL_DISABLE_GIT_SYNC=1), skip the actual git
+  // subprocess so the event loop can exit cleanly after server close.
+  if (process.env.PORTAL_DISABLE_GIT_SYNC === '1') return;
+
   // Prevent concurrent syncs of the same repo
   if (syncInFlight.has(repoId)) return;
   syncInFlight.add(repoId);
@@ -351,9 +396,16 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
       // Already cloned — fetch with progress
       await spawnGitWithProgress(['fetch', '--all', '--prune', '--progress'], cloneDir, cloneEnv, onChunk);
     } else {
-      // Fresh clone with progress
+      // Fresh clone with progress.
+      // -c core.longpaths=true: enables Win32 long-path API so repos with deeply-nested
+      // paths (>260 chars) clone successfully on Windows.
       await fsp.mkdir(path.dirname(cloneDir), { recursive: true });
-      await spawnGitWithProgress(['clone', '--progress', repo.url, cloneDir], path.dirname(cloneDir), cloneEnv, onChunk);
+      await spawnGitWithProgress(
+        ['clone', '--progress', '-c', 'core.longpaths=true', repo.url, cloneDir],
+        path.dirname(cloneDir),
+        cloneEnv,
+        onChunk,
+      );
     }
 
     tracker.finalize();
@@ -520,9 +572,10 @@ export function registerRepoRoutes(): void {
     );
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
-    // Reject concurrent syncs rather than silently dropping them
+    // If a sync is already running, attach to it — return 202 with the
+    // current status rather than a 409 which is not actionable for callers.
     if (syncInFlight.has(repo.id)) {
-      sendJson(res, 409, { error: 'A sync is already in progress for this repository', status: repo.status });
+      sendJson(res, 202, { ok: true, status: repo.status, alreadySyncing: true });
       return;
     }
 

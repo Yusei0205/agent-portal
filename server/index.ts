@@ -20,7 +20,7 @@ import { registerSettingsRoutes } from './settings.ts';
 import { registerToolPackRoutes } from './tool-packs.ts';
 import { registerUserRoutes } from './governance/users.ts';
 import { registerProjectRoutes } from './projects.ts';
-import { registerRepoRoutes } from './repos.ts';
+import { registerRepoRoutes, killActiveGitProcesses } from './repos.ts';
 import { registerWorkspaceRoutes } from './workspaces.ts';
 import { registerGitConnectionRoutes } from './git-connections.ts';
 import { registerWorkflowRoutes } from './workflows/crud.ts';
@@ -44,7 +44,7 @@ import { registerControlPlaneRoutes } from './control-plane.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
 import { registerAwsAccountRoutes } from './aws-accounts.ts';
 import { registerSessionFileRoutes } from './session-files.ts';
-import { registerTerminalRoutes, handleTerminalUpgrade } from './terminal.ts';
+import { registerTerminalRoutes, handleTerminalUpgrade, shutdownAllTerminals } from './terminal.ts';
 import { registerSessionLifecycleRoutes, startIdleStopTimer, stopIdleStopTimer } from './session-lifecycle.ts';
 import { registerCredentialRoutes } from './credentials.ts';
 import { registerUserConfigRoutes } from './user-config.ts';
@@ -59,6 +59,8 @@ import { registerKiroSettingsRoutes } from './kiro-settings.ts';
 import { registerEngineModelRoutes } from './models.ts';
 import { registerSessionContextRoutes } from './session-context.ts';
 import { registerJiraRoutes } from './jira.ts';
+import { registerBrowserLiveRoutes, handleBrowserLiveUpgrade } from './browser-live.ts';
+import { shutdownAllBrowsers } from './agent/browser-manager.ts';
 import './review-lifecycle.ts'; // Register review lifecycle hook (wires run stats → review row)
 
 // Track whether routes have been registered (they're global, so only once per process)
@@ -170,6 +172,7 @@ export async function startServer(
   registerEngineModelRoutes();
   registerSessionContextRoutes();
   registerJiraRoutes();
+  registerBrowserLiveRoutes();
 
   // 6. Auto-create admin from env vars if no users exist
   if (
@@ -189,8 +192,19 @@ export async function startServer(
   // 7. Start HTTP server
   const server = createServer();
 
-  // Register WebSocket terminal upgrade handler
-  setWsUpgradeHandler(handleTerminalUpgrade);
+  // Register WebSocket upgrade handlers (terminal + browser live)
+  const BROWSER_LIVE_RE = /^\/api\/workflows\/[^/]+\/browser\/live$/;
+  setWsUpgradeHandler((req, socket, head) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    if (url.pathname === '/api/terminal/ws') {
+      handleTerminalUpgrade(req, socket, head);
+    } else if (BROWSER_LIVE_RE.test(url.pathname)) {
+      handleBrowserLiveUpgrade(req, socket, head);
+    } else {
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+    }
+  });
   const port = opts.port ?? cfg.port;
   const host = opts.host ?? cfg.host;
 
@@ -227,6 +241,9 @@ export async function startServer(
     clearInterval(sessionCleanupTimer);
     clearInterval(attachmentCleanupTimer);
     stopIdleStopTimer();
+    killActiveGitProcesses();
+    shutdownAllTerminals();
+    shutdownAllBrowsers().catch(() => {/* non-fatal */});
     closeDb();
   });
 

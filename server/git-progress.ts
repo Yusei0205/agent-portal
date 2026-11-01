@@ -124,7 +124,7 @@ const ENUM_RE = /^remote:\s+Enumerating objects:\s+\d+/;
  */
 export function redactCredentials(text: string): string {
   return text
-    .replace(/\bAuthorization:\s*\S+/gi, 'Authorization: [REDACTED]')
+    .replace(/\bAuthorization:\s*[^\r\n]+/gi, 'Authorization: [REDACTED]')
     .replace(/https?:\/\/[^:@\s"'<>]+:[^@\s"'<>]+@/gi, 'https://[REDACTED]@');
 }
 

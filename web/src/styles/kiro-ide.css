@@ -1,0 +1,306 @@
+/**
+ * Kiro IDE — template-specific visual enhancements.
+ *
+ * All rules are gated on [data-template="kiro-ide"] so they have
+ * zero effect when another template is active.
+ *
+ * Effects:
+ *   - Faint blue 32px grid + radial glow top-centre (data-fx-grid)
+ *   - Panel: subtle top-edge highlight gradient line (::after)
+ *   - Chamfered/bracketed corners — top-left and bottom-right only (lighter than cyber-hud)
+ *   - Luminous blue panel borders with outer glow (data-fx-glow)
+ *   - Orbitron for h1 / brand display headings only
+ *   - KPI icon tiles: blue-tinted background
+ *   - Rail active pill: electric-blue wash
+ *   - IDE/editor/terminal areas: solid code-bg (no background effects)
+ *
+ * No url(), no external assets. prefers-reduced-motion and
+ * data-fx-motion respected. All contrast: WCAG AA verified.
+ */
+
+/* ── Canvas: blue grid + radial glow top-centre ──────────────────── */
+[data-template="kiro-ide"][data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    /* Radial glow — top centre */
+    radial-gradient(ellipse 70% 30% at 50% 0%, rgba(96,165,250,0.10) 0%, transparent 65%),
+    /* Vertical grid lines */
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 31px,
+      rgba(56,140,255,0.04) 31px,
+      rgba(56,140,255,0.04) 32px
+    ),
+    /* Horizontal grid lines */
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 31px,
+      rgba(56,140,255,0.04) 31px,
+      rgba(56,140,255,0.04) 32px
+    );
+  background-size: 100% 100%, 32px 32px, 32px 32px;
+}
+
+[data-template="kiro-ide"][data-mode="light"][data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    radial-gradient(ellipse 70% 30% at 50% 0%, rgba(37,99,235,0.07) 0%, transparent 65%),
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 31px,
+      rgba(59,130,246,0.05) 31px,
+      rgba(59,130,246,0.05) 32px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 31px,
+      rgba(59,130,246,0.05) 31px,
+      rgba(59,130,246,0.05) 32px
+    );
+  background-size: 100% 100%, 32px 32px, 32px 32px;
+}
+
+/* Disable effects behind IDE/editor/terminal */
+[data-template="kiro-ide"][data-fx-grid="true"] .ide-workspace,
+[data-template="kiro-ide"][data-fx-grid="true"] .ide-body,
+[data-template="kiro-ide"][data-fx-grid="true"] .ide-codemirror-host,
+[data-template="kiro-ide"][data-fx-grid="true"] .ide-terminal-panel {
+  background-image: none !important;
+}
+
+/* ── Panel: luminous blue border ─────────────────────────────────── */
+[data-template="kiro-ide"] .panel,
+[data-template="kiro-ide"] .project-card,
+[data-template="kiro-ide"] .stat-card {
+  border-color: rgba(56,140,255,0.25);
+}
+
+[data-template="kiro-ide"][data-fx-glow="true"] .panel,
+[data-template="kiro-ide"][data-fx-glow="true"] .project-card,
+[data-template="kiro-ide"][data-fx-glow="true"] .stat-card {
+  box-shadow: 0 0 0 1px rgba(56,140,255,0.10), 0 4px 20px rgba(0,10,40,0.40);
+}
+
+/* ── Panel: subtle top-edge highlight gradient line ──────────────── */
+[data-template="kiro-ide"] .panel::after,
+[data-template="kiro-ide"] .project-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(96,165,250,0.40) 30%, rgba(96,165,250,0.60) 50%, rgba(96,165,250,0.40) 70%, transparent 100%);
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+[data-template="kiro-ide"] .panel,
+[data-template="kiro-ide"] .project-card {
+  position: relative;
+  overflow: visible;
+}
+
+/* ── Chamfered corner brackets: top-left and bottom-right only ───── */
+[data-template="kiro-ide"] .panel::before,
+[data-template="kiro-ide"] .project-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background:
+    /* top-left corner */
+    linear-gradient(to right,  rgba(96,165,250,0.55) 8px, transparent 8px) top left / 8px 1px no-repeat,
+    linear-gradient(to bottom, rgba(96,165,250,0.55) 8px, transparent 8px) top left / 1px 8px no-repeat,
+    /* bottom-right corner */
+    linear-gradient(to left,  rgba(96,165,250,0.55) 8px, transparent 8px) bottom right / 8px 1px no-repeat,
+    linear-gradient(to top,   rgba(96,165,250,0.55) 8px, transparent 8px) bottom right / 1px 8px no-repeat;
+}
+
+/* Hover state — brighter borders and outer glow */
+[data-template="kiro-ide"] .project-card:hover {
+  border-color: rgba(96,165,250,0.50);
+  box-shadow:
+    0 0 0 1px rgba(96,165,250,0.20),
+    0 0 24px rgba(96,165,250,0.12),
+    0 4px 20px rgba(0,0,0,0.45);
+}
+
+[data-template="kiro-ide"] .project-card:hover::before {
+  background:
+    linear-gradient(to right,  rgba(96,165,250,0.80) 10px, transparent 10px) top left / 10px 1px no-repeat,
+    linear-gradient(to bottom, rgba(96,165,250,0.80) 10px, transparent 10px) top left / 1px 10px no-repeat,
+    linear-gradient(to left,  rgba(96,165,250,0.80) 10px, transparent 10px) bottom right / 10px 1px no-repeat,
+    linear-gradient(to top,   rgba(96,165,250,0.80) 10px, transparent 10px) bottom right / 1px 10px no-repeat;
+}
+
+/* ── Light mode panels ───────────────────────────────────────────── */
+[data-template="kiro-ide"][data-mode="light"] .panel,
+[data-template="kiro-ide"][data-mode="light"] .project-card,
+[data-template="kiro-ide"][data-mode="light"] .stat-card {
+  border-color: rgba(59,130,246,0.22);
+}
+
+[data-template="kiro-ide"][data-mode="light"] .panel::before,
+[data-template="kiro-ide"][data-mode="light"] .project-card::before {
+  background:
+    linear-gradient(to right,  rgba(37,99,235,0.40) 8px, transparent 8px) top left / 8px 1px no-repeat,
+    linear-gradient(to bottom, rgba(37,99,235,0.40) 8px, transparent 8px) top left / 1px 8px no-repeat,
+    linear-gradient(to left,  rgba(37,99,235,0.40) 8px, transparent 8px) bottom right / 8px 1px no-repeat,
+    linear-gradient(to top,   rgba(37,99,235,0.40) 8px, transparent 8px) bottom right / 1px 8px no-repeat;
+}
+
+[data-template="kiro-ide"][data-mode="light"] .panel::after,
+[data-template="kiro-ide"][data-mode="light"] .project-card::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(37,99,235,0.25) 30%, rgba(37,99,235,0.40) 50%, rgba(37,99,235,0.25) 70%, transparent 100%);
+}
+
+/* ── Rail active pill ────────────────────────────────────────────── */
+[data-template="kiro-ide"] .rail-link.is-active {
+  background: rgba(96,165,250,0.12);
+  color: var(--accent);
+  box-shadow:
+    inset 0 0 0 1px rgba(96,165,250,0.28),
+    0 0 10px rgba(96,165,250,0.10);
+  border-radius: var(--radius-md);
+  border: none;
+}
+
+[data-template="kiro-ide"] .rail-link.is-active svg {
+  color: var(--accent);
+}
+
+[data-template="kiro-ide"] .rail-group-btn.has-active-child {
+  background: rgba(96,165,250,0.09);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(96,165,250,0.20);
+  border: none;
+}
+
+[data-template="kiro-ide"][data-mode="light"] .rail-link.is-active {
+  background: rgba(37,99,235,0.10);
+  box-shadow: inset 0 0 0 1px rgba(37,99,235,0.24);
+}
+
+[data-template="kiro-ide"][data-mode="light"] .rail-group-btn.has-active-child {
+  background: rgba(37,99,235,0.07);
+  box-shadow: inset 0 0 0 1px rgba(37,99,235,0.18);
+}
+
+/* ── Display font — Orbitron for h1/brand headings only ──────────── */
+[data-template="kiro-ide"] h1,
+[data-template="kiro-ide"] .brand,
+[data-template="kiro-ide"] .page-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+}
+
+[data-template="kiro-ide"] .brand {
+  font-weight: 700;
+  font-size: 0.88rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* h2 stays in body font (Inter), not Orbitron */
+[data-template="kiro-ide"] h2 {
+  font-family: var(--font-body);
+  letter-spacing: -0.01em;
+}
+
+/* KPI/stat values stay in Inter so zeros read cleanly */
+[data-template="kiro-ide"] .kpi-value,
+[data-template="kiro-ide"] .stat-value {
+  font-family: var(--font-body);
+  font-weight: 700;
+}
+
+/* ── KPI icon tiles: blue-tinted ─────────────────────────────────── */
+[data-template="kiro-ide"] .stat-icon {
+  background: rgba(96,165,250,0.12);
+  border: 1px solid rgba(96,165,250,0.22);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+}
+
+[data-template="kiro-ide"][data-mode="light"] .stat-icon {
+  background: rgba(37,99,235,0.10);
+  border-color: rgba(37,99,235,0.20);
+  color: var(--accent);
+}
+
+/* ── Primary button ──────────────────────────────────────────────── */
+[data-template="kiro-ide"] .btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  box-shadow: 0 0 10px rgba(96,165,250,0.25);
+}
+
+[data-template="kiro-ide"] .btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  box-shadow: 0 0 18px rgba(96,165,250,0.45), 0 0 0 1px rgba(96,165,250,0.30) inset;
+  filter: brightness(1.06);
+}
+
+[data-template="kiro-ide"] .btn-primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(96,165,250,0.40), 0 0 14px rgba(96,165,250,0.30);
+}
+
+/* ── App header ──────────────────────────────────────────────────── */
+[data-template="kiro-ide"] .app-header {
+  background: var(--rail);
+  border-bottom-color: rgba(56,140,255,0.20);
+}
+
+/* ── Search palette trigger ──────────────────────────────────────── */
+[data-template="kiro-ide"] .palette-trigger-btn {
+  background: var(--panel);
+  border-color: rgba(56,140,255,0.25);
+  border-radius: var(--radius-md);
+}
+
+[data-template="kiro-ide"] .palette-trigger-btn:hover {
+  border-color: rgba(96,165,250,0.45);
+  box-shadow: 0 0 10px rgba(96,165,250,0.12);
+}
+
+[data-template="kiro-ide"][data-fx-glow="true"] .palette-dialog {
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.60),
+    0 0 0 1px rgba(56,140,255,0.22);
+}
+
+/* ── Motion: none ────────────────────────────────────────────────── */
+[data-template="kiro-ide"][data-fx-motion="none"] *,
+[data-template="kiro-ide"][data-fx-motion="none"] *::before,
+[data-template="kiro-ide"][data-fx-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* ── Reduced motion: strip radial glow ───────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-template="kiro-ide"][data-fx-grid="true"] .shell > .shell-right > .main {
+    background-image:
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 31px,
+        rgba(56,140,255,0.04) 31px,
+        rgba(56,140,255,0.04) 32px
+      ),
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 31px,
+        rgba(56,140,255,0.04) 31px,
+        rgba(56,140,255,0.04) 32px
+      );
+    background-size: 32px 32px, 32px 32px;
+  }
+}

@@ -8,12 +8,14 @@
  *   4. ProgressTracker — monotonicity, throttle, finalize, indeterminate
  *   5. redactCredentials — Authorization header and URL userinfo scrubbing
  *   6. GET /repos/progress endpoint — shape, idle null, injected state
- *   7. POST .../sync — 409 on concurrent sync
+ *   7. POST .../sync — 202 on concurrent sync (attaches to running sync)
  *   8. Existing list/get endpoints include `progress` field
  */
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
+import { _repoProgressForTest, _syncInFlightForTest } from '../server/repos.ts';
 import {
   parseProgressLine,
   parseProgressChunk,
@@ -24,8 +26,9 @@ import {
   PHASE_LABELS,
 } from '../server/git-progress.ts';
 import type { Phase } from '../server/git-progress.ts';
-import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
-import { _repoProgressForTest, _syncInFlightForTest } from '../server/repos.ts';
+
+// Force tsx to compile this file without caching from previous versions.
+const _v = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. parseProgressLine — unit tests
@@ -680,9 +683,9 @@ describe('repos progress — API integration', () => {
     }
   });
 
-  // ── 7. Concurrent sync → 409 ─────────────────────────────────────────────
+  // ── 7. Concurrent sync → 202 (attaches to running sync) ─────────────────
 
-  it('POST .../sync returns 409 when sync is already in flight', async () => {
+  it('POST .../sync returns 202 (attaches to running sync) when sync is already in flight', async () => {
     const createR = await fetchJson(baseUrl, `/api/projects/${projectId}/repos`, {
       method: 'POST',
       body: { name: 'concurrent-sync', url: 'https://github.com/example/concurrent', provider: 'github' },
@@ -698,11 +701,11 @@ describe('repos progress — API integration', () => {
         method: 'POST',
         cookie: adminCookie,
       });
-      assert.equal(syncR.status, 409, `expected 409, got ${syncR.status}: ${JSON.stringify(syncR.body)}`);
+      assert.equal(syncR.status, 202, `expected 202 (attach to running sync), got ${syncR.status}: ${JSON.stringify(syncR.body)}`);
       const body = syncR.body as Record<string, unknown>;
-      assert.ok(typeof body.error === 'string', 'error field required');
-      assert.ok((body.error as string).toLowerCase().includes('progress') || (body.error as string).toLowerCase().includes('sync'),
-        `error message should mention sync: ${body.error}`);
+      assert.ok(body.ok === true, 'response should have ok:true');
+      assert.ok(body.alreadySyncing === true, 'response should have alreadySyncing:true');
+      assert.ok(typeof body.status === 'string', 'response should include current status');
     } finally {
       _syncInFlightForTest.delete(repoId);
     }

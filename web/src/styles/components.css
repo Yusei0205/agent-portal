@@ -434,12 +434,202 @@ input:disabled, textarea:disabled, select:disabled {
   font-size: 0.84rem;
 }
 
-/* ── Toggle / checkbox ────────────────────────────────── */
+/* ── Custom checkbox & radio ─────────────────────────────────────── */
+/*
+ * Replaces native browser rendering with a fully themed control.
+ * Native semantics (keyboard, labels, screen readers) are unchanged.
+ * The native input is kept; only its appearance is overridden.
+ *
+ * States:
+ *   - unchecked:     transparent fill, --line border
+ *   - hover:         --accent border
+ *   - checked:       --accent fill + white tick/dot
+ *   - indeterminate: --accent fill + white dash
+ *   - focus-visible: 2-layer ring using --focus
+ *   - disabled:      50% opacity, not-allowed cursor
+ *   - glow themes:   soft accent glow on checked
+ */
 input[type="checkbox"],
 input[type="radio"] {
-  width: auto;
-  min-height: auto;
-  accent-color: var(--accent);
+  /* Reset browser appearance while keeping native semantics */
+  appearance: none;
+  -webkit-appearance: none;
+  /* Fixed size overrides the legacy width:auto */
+  width: 15px !important;
+  height: 15px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  flex-shrink: 0;
+  vertical-align: middle;
+  /* Needed so ::after marks can be positioned inside */
+  position: relative;
+  /* Surface */
+  background: transparent;
+  border: 1.5px solid var(--line);
+  /* Smooth state transitions */
+  transition:
+    background var(--t-fast, 80ms ease-out),
+    border-color var(--t-fast, 80ms ease-out),
+    box-shadow var(--t-fast, 80ms ease-out);
+  cursor: pointer;
+}
+
+input[type="checkbox"] { border-radius: 3px; }
+input[type="radio"]    { border-radius: 50%; }
+
+/* Hover — accent border */
+input[type="checkbox"]:hover:not(:disabled),
+input[type="radio"]:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* Focus ring — two-layer (canvas gap + focus colour) */
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--focus, var(--accent));
+}
+
+/* Checked — accent fill; mark drawn by ::after using accent-ink */
+input[type="checkbox"]:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+input[type="radio"]:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Indeterminate — accent fill; mark drawn by ::after using accent-ink */
+input[type="checkbox"]:indeterminate {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+/*
+ * Mark pseudo-elements — tick, dot, dash.
+ * background: var(--accent-ink) supplies the on-accent text colour.
+ * mask-image (luminance) cuts out the shape, so the mark adapts to
+ * any theme accent without hard-coding white.
+ */
+input[type="checkbox"]:checked::after,
+input[type="checkbox"]:indeterminate::after,
+input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent-ink, white);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-mode: luminance;
+  mask-mode: luminance;
+}
+/* Tick */
+input[type="checkbox"]:checked::after {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10' fill='none'%3E%3Cpath d='M1.5 5L4.5 8L10.5 2' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C%2Fsvg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10' fill='none'%3E%3Cpath d='M1.5 5L4.5 8L10.5 2' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C%2Fsvg%3E");
+  -webkit-mask-size: 10px 8px;
+  mask-size: 10px 8px;
+}
+/* Dash */
+input[type="checkbox"]:indeterminate::after {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 2'%3E%3Cpath d='M1 1H9' stroke='white' stroke-width='1.8' stroke-linecap='round'/%3E%3C%2Fsvg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 2'%3E%3Cpath d='M1 1H9' stroke='white' stroke-width='1.8' stroke-linecap='round'/%3E%3C%2Fsvg%3E");
+  -webkit-mask-size: 10px 2px;
+  mask-size: 10px 2px;
+}
+/* Dot */
+input[type="radio"]:checked::after {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Ccircle cx='4' cy='4' r='2' fill='white'/%3E%3C%2Fsvg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Ccircle cx='4' cy='4' r='2' fill='white'/%3E%3C%2Fsvg%3E");
+  -webkit-mask-size: 8px 8px;
+  mask-size: 8px 8px;
+}
+
+/* Glow themes — soft accent halo on checked/indeterminate */
+[data-fx-glow="true"] input[type="checkbox"]:checked,
+[data-fx-glow="true"] input[type="checkbox"]:indeterminate,
+[data-fx-glow="true"] input[type="radio"]:checked {
+  box-shadow: 0 0 0 2px var(--canvas),
+              0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent),
+              0 0 8px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* Disabled */
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  input[type="checkbox"],
+  input[type="radio"] { transition: none; }
+}
+
+/* Provider-card radios are visually hidden — keep that override */
+.provider-card input[type="radio"] {
+  position: absolute;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 1;
+}
+
+/* ── Bulk-select: show-on-hover for data tables ─────────────────── */
+/*
+ * Checkbox columns marked .sel-col are hidden by default and shown:
+ *   - on row hover
+ *   - on keyboard focus of the checkbox
+ *   - when the table has [data-has-sel] (selection mode)
+ *   - always on touch devices
+ */
+.data-table .sel-col input[type="checkbox"],
+.table .sel-col input[type="checkbox"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-fast, 80ms ease-out);
+}
+.data-table tr:hover .sel-col input[type="checkbox"],
+.table tr:hover .sel-col input[type="checkbox"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.data-table .sel-col input[type="checkbox"]:focus-visible,
+.table .sel-col input[type="checkbox"]:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.data-table[data-has-sel] .sel-col input[type="checkbox"],
+.table[data-has-sel] .sel-col input[type="checkbox"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none) {
+  .data-table .sel-col input[type="checkbox"],
+  .table .sel-col input[type="checkbox"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Selected row — accent wash + left inset border */
+.data-table tr.is-selected > td,
+.table tr.is-selected > td {
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.data-table tr.is-selected > td:first-child,
+.table tr.is-selected > td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .choice {
   display: flex;
@@ -1573,3 +1763,159 @@ input[type="datetime-local"]:focus {
     animation: none;
   }
 }
+
+/* ── Vault breadcrumb ─────────────────────────────────── */
+.vault-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+  margin-bottom: 8px;
+}
+.vault-breadcrumb-item {
+  display: flex;
+  align-items: center;
+}
+.vault-breadcrumb-sep {
+  color: var(--ink-3);
+  padding: 0 4px;
+  user-select: none;
+}
+.vault-breadcrumb-seg {
+  background: none;
+  border: none;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+  color: var(--link, var(--accent));
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.1s;
+}
+.vault-breadcrumb-seg:hover {
+  background: var(--accent-wash);
+}
+.vault-breadcrumb-seg.is-current {
+  color: var(--ink);
+  font-weight: 620;
+  cursor: default;
+}
+.vault-breadcrumb-seg.is-current:hover {
+  background: transparent;
+}
+
+/* Vault folder row clickable link */
+.vault-folder-link {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: var(--radius);
+  color: var(--link, var(--accent));
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  transition: background 0.1s;
+}
+.vault-folder-link:hover {
+  background: var(--accent-wash);
+}
+.vault-folder-row {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+}
+
+/* ── Responsive global helpers (Part 1) ─────────────────────────────────── */
+
+/* Tables: horizontal scroll on small screens */
+@media (max-width: 768px) {
+  .data-table,
+  .table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Dialogs and modals: prevent overflow on small screens */
+@media (max-width: 768px) {
+  .dialog,
+  .modal {
+    max-width: calc(100vw - 16px) !important;
+  }
+}
+
+/* ── Responsive global helpers (Part 2) ─────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Tab bars: scroll horizontally instead of overflowing.
+     min-width:0 is critical for grid items — without it the grid item expands
+     to fit all button content, defeating overflow-x:auto.                   */
+  .tab-bar,
+  .tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+    /* bottom border remains visible while scrolling */
+    padding-bottom: 1px;
+    margin-bottom: 19px;
+    min-width: 0; /* allow grid/flex parent to constrain the tab bar */
+  }
+  .tab-bar::-webkit-scrollbar,
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab-btn { flex-shrink: 0; }
+
+  /* Tab panel: needs min-width:0 as a grid item so it can be narrower than
+     its content minimum size; internal table has its own overflow-x:auto.   */
+  .tab-panel {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  /* Modal footer: wrap and left-align on narrow screens */
+  .modal-footer {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  /* Table-wrap: ensure explicit wrappers also scroll */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Filter bar: inputs can shrink a bit more on narrow screens */
+  .filter-bar input[type="search"] { min-width: 120px; }
+
+  /* Long URLs / monospace values wrap instead of overflowing */
+  .device-code-url,
+  .conn-account { word-break: break-all; }
+
+  /* Toolbar rows that may not already wrap */
+  .section-header { flex-wrap: wrap; }
+
+  /* Credential card actions stack */
+  .cred-card { flex-wrap: wrap; }
+  .cred-card-actions { flex-shrink: 0; }
+
+  /* Two-column grids inside forms collapse on very narrow screens */
+  .two-col-form {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Ensure stat tiles in Insights don't force overflow */
+  .stat-tile { min-width: 0; }
+
+  /* Provider cards use auto-fill — stays responsive, ensure min-width is sane */
+  .provider-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .cred-mode-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+}
+

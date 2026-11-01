@@ -245,9 +245,10 @@ interface Seen {
   jqls: string[];
   comments: unknown[];
   auths: string[];
+  projectSearchCalls: number;
 }
 
-const seen: Seen = { tokenCalls: [], jqls: [], comments: [], auths: [] };
+const seen: Seen = { tokenCalls: [], jqls: [], comments: [], auths: [], projectSearchCalls: 0 };
 let refreshBehaviour: 'ok' | 'fail' = 'ok';
 let fake: http.Server;
 let fakeBase = '';
@@ -296,6 +297,18 @@ const ISSUE = {
     subtasks: [],
   },
 };
+
+// 118 generic projects + RLP + PAY = 120 total, spread across 3 pages of 50
+const FAKE_JIRA_PROJECTS = [
+  ...Array.from({ length: 118 }, (_, i) => ({
+    key: `P${String(i + 1).padStart(3, '0')}`,
+    name: `Project ${String(i + 1).padStart(3, '0')}`,
+    avatarUrls: { '48x48': '' },
+    projectTypeKey: 'software',
+  })),
+  { key: 'PAY', name: 'Payments', avatarUrls: { '48x48': '' }, projectTypeKey: 'software' },
+  { key: 'RLP', name: 'Refund Portal', avatarUrls: { '48x48': '' }, projectTypeKey: 'software' },
+];
 
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -360,15 +373,20 @@ before(async () => {
       });
     }
 
-    if (url.pathname === `${api}/project/search`)
-      return send(200, {
-        values: [
-          { key: 'RLP', name: 'Refund Portal', avatarUrls: { '48x48': '' }, projectTypeKey: 'software' },
-          { key: 'PAY', name: 'Payments', avatarUrls: { '48x48': '' }, projectTypeKey: 'software' },
-        ],
-        total: 2,
-        startAt: 0,
-      });
+    if (url.pathname === `${api}/project/search`) {
+      seen.projectSearchCalls++;
+      const query = (url.searchParams.get('query') ?? '').toLowerCase();
+      const filtered = query
+        ? FAKE_JIRA_PROJECTS.filter(
+            (pj) => pj.name.toLowerCase().includes(query) || pj.key.toLowerCase().includes(query),
+          )
+        : FAKE_JIRA_PROJECTS;
+      const pageStart = Number(url.searchParams.get('startAt') ?? 0);
+      const maxResults = Number(url.searchParams.get('maxResults') ?? 50);
+      const page = filtered.slice(pageStart, pageStart + maxResults);
+      const isLast = pageStart + page.length >= filtered.length;
+      return send(200, { values: page, total: filtered.length, startAt: pageStart, maxResults: page.length, isLast });
+    }
 
     if (url.pathname === `${api}/project/RLP/statuses`)
       return send(200, [
@@ -777,13 +795,60 @@ describe('Jira integration', () => {
     assert.match((notFound.body as any).error, /Not found in Jira/);
   });
 
-  test('Jira projects list returns project keys and names', async () => {
+  test('Jira projects list: paginates all 120 projects and returns sorted results', async () => {
+    const callsBefore = seen.projectSearchCalls;
+    const r = await fetchJson(baseUrl, `/api/projects/${pid}/jira/projects?refresh=1`, { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    const { projects, total, truncated } = r.body as any;
+    assert.ok(Array.isArray(projects));
+    assert.equal(projects.length, 120, 'all 120 projects returned');
+    assert.equal(total, 120, 'total matches Jira count');
+    assert.equal(truncated, false, 'not truncated');
+    assert.equal(seen.projectSearchCalls - callsBefore, 3, 'paged through 3 pages (50+50+20)');
+    for (let i = 1; i < projects.length; i++) {
+      assert.ok(
+        (projects[i - 1].name as string).localeCompare(projects[i].name) <= 0,
+        `unsorted at index ${i}: ${projects[i - 1].name} > ${projects[i].name}`,
+      );
+    }
+    assert.ok(projects.some((pr: any) => pr.key === 'RLP'), 'RLP present');
+    assert.ok(projects.some((pr: any) => pr.key === 'PAY'), 'PAY present');
+  });
+
+  test('Jira projects list: cache hit avoids Jira calls', async () => {
+    const callsBefore = seen.projectSearchCalls;
     const r = await fetchJson(baseUrl, `/api/projects/${pid}/jira/projects`, { cookie: adminCookie });
     assert.equal(r.status, 200);
-    const projects = (r.body as any).projects;
-    assert.ok(Array.isArray(projects));
-    assert.ok(projects.some((pr: any) => pr.key === 'RLP'));
-    assert.ok(projects.some((pr: any) => pr.key === 'PAY'));
+    assert.equal((r.body as any).projects.length, 120, 'cached result still has 120 projects');
+    assert.equal(seen.projectSearchCalls, callsBefore, 'no new Jira calls on cache hit');
+  });
+
+  test('Jira projects list: ?q= filters results server-side and caches per query', async () => {
+    const callsBefore = seen.projectSearchCalls;
+    const r = await fetchJson(baseUrl, `/api/projects/${pid}/jira/projects?q=refund`, { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    const { projects } = r.body as any;
+    assert.ok(projects.some((pr: any) => pr.key === 'RLP'), 'Refund Portal matches q=refund');
+    assert.ok(
+      (projects as any[]).every(
+        (pr) => (pr.name as string).toLowerCase().includes('refund') || (pr.key as string).toLowerCase().includes('refund'),
+      ),
+      'all returned projects match the query',
+    );
+    assert.ok(seen.projectSearchCalls > callsBefore, 'q= triggers Jira fetch (cold cache for this query)');
+    // Second call with same q → served from cache
+    const callsBefore2 = seen.projectSearchCalls;
+    const r2 = await fetchJson(baseUrl, `/api/projects/${pid}/jira/projects?q=refund`, { cookie: adminCookie });
+    assert.equal(r2.status, 200);
+    assert.equal(seen.projectSearchCalls, callsBefore2, 'q= result is cached on second call');
+  });
+
+  test('Jira projects list: ?refresh=1 bypasses cache', async () => {
+    const callsBefore = seen.projectSearchCalls;
+    const r = await fetchJson(baseUrl, `/api/projects/${pid}/jira/projects?refresh=1`, { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    assert.equal((r.body as any).projects.length, 120);
+    assert.ok(seen.projectSearchCalls > callsBefore, '?refresh=1 bypasses the in-memory cache');
   });
 
   test('session create with jiraKey: validates key, stores jira_key/jira_summary/jira_url', async () => {

@@ -9,6 +9,8 @@
  * Routes:
  *   GET    /api/projects/:id/vault                       — list (scope filter via ?scope=)
  *   POST   /api/projects/:id/vault/upload                — multipart upload
+ *   POST   /api/projects/:id/vault/move                  — bulk move project files to a folder
+ *   POST   /api/projects/:id/vault/delete                — bulk delete files
  *   DELETE /api/projects/:id/vault/:fileId               — delete
  *   GET    /api/projects/:id/vault/:fileId/download      — stream file
  *   GET    /api/projects/:id/vault/zip                   — zip scope
@@ -20,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { all, one, run, insert } from './db.ts';
+import { all, one, run, insert, tx } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, badRequest } from './util.ts';
 import { config } from './config.ts';
@@ -162,6 +164,20 @@ function mimeFromExt(filename: string): string {
   return MIME[path.extname(filename).toLowerCase()] ?? 'application/octet-stream';
 }
 
+/**
+ * Clean a client-supplied Vault folder ("Sessions/My run (abc12345)").
+ * Drops empty, "." and ".." segments and odd characters; null means the root.
+ * The folder is only a label in the database, never part of a disk path.
+ */
+function sanitiseFolder(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const segs = raw
+    .split(/[\\/]+/)
+    .map((s) => s.replace(/[^\w\s.()\-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120))
+    .filter((s) => s && s !== '.' && s !== '..');
+  return segs.length ? segs.slice(0, 8).join('/') : null;
+}
+
 function doUpload(
   req: PortalRequest,
   res: PortalResponse,
@@ -198,6 +214,7 @@ function doUpload(
   const userId = effectiveScope === 'personal' ? req.user!.id : null;
   const absPath = vaultStorePath(effectiveScope, projectId, fileId, filename);
   const safeFilename = path.basename(filename).replace(/[^\w.\-]/g, '_').slice(0, 200);
+  const folder = effectiveScope === 'project' ? sanitiseFolder(parsed.fields.folder) : null;
 
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, data);
@@ -213,6 +230,7 @@ function doUpload(
     size_bytes: data.length,
     mime_type: mimeType || mimeFromExt(filename),
     uploaded_by: req.user!.id,
+    folder,
     created_at: now(),
   });
 
@@ -351,22 +369,44 @@ export function registerVaultRoutes(): void {
       if (!project) return;
 
       const scope = (req.query.get('scope') as VaultScope | null) ?? 'project';
+      const folderFilter = req.query.get('folder');
       const userId = req.user!.id;
       const projectId = req.params.id;
 
       let files: Row[];
       if (scope === 'portal') {
-        files = all<Row>('SELECT * FROM vault_files WHERE project_id IS NULL');
+        if (folderFilter) {
+          files = all<Row>(
+            'SELECT * FROM vault_files WHERE project_id IS NULL AND (folder = ? OR folder LIKE ?)',
+            folderFilter, `${folderFilter}/%`,
+          );
+        } else {
+          files = all<Row>('SELECT * FROM vault_files WHERE project_id IS NULL');
+        }
       } else if (scope === 'personal') {
-        files = all<Row>(
-          'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ?',
-          projectId, userId,
-        );
+        if (folderFilter) {
+          files = all<Row>(
+            'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ? AND (folder = ? OR folder LIKE ?)',
+            projectId, userId, folderFilter, `${folderFilter}/%`,
+          );
+        } else {
+          files = all<Row>(
+            'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ?',
+            projectId, userId,
+          );
+        }
       } else {
-        files = all<Row>(
-          'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL',
-          projectId,
-        );
+        if (folderFilter) {
+          files = all<Row>(
+            'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL AND (folder = ? OR folder LIKE ?)',
+            projectId, folderFilter, `${folderFilter}/%`,
+          );
+        } else {
+          files = all<Row>(
+            'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL',
+            projectId,
+          );
+        }
       }
 
       const JSZip = (await import('jszip')).default;
@@ -387,6 +427,114 @@ export function registerVaultRoutes(): void {
         'Cache-Control': 'no-store',
       });
       res.end(buf);
+    },
+  );
+
+  // POST /api/projects/:id/vault/move
+  router.post(
+    '/api/projects/:id/vault/move',
+    (req: PortalRequest, res: PortalResponse): void => {
+      const project = requireMember(req, res, req.params.id);
+      if (!project) return;
+
+      const body = req.body as Record<string, unknown>;
+      const rawIds = body.fileIds;
+
+      if (!Array.isArray(rawIds) || rawIds.length === 0) {
+        sendJson(res, 400, { error: 'fileIds must be a non-empty array' });
+        return;
+      }
+      if (rawIds.length > 500) {
+        sendJson(res, 400, { error: 'Maximum 500 file IDs per request' });
+        return;
+      }
+
+      const fileIds = rawIds.map(String);
+      const folder = sanitiseFolder(body.folder);
+      const projectId = req.params.id;
+
+      // Validate all files first — any unknown or non-project-scope id aborts with no changes.
+      for (const id of fileIds) {
+        const vf = one<Row>(
+          'SELECT id FROM vault_files WHERE id = ? AND project_id = ? AND user_id IS NULL',
+          id,
+          projectId,
+        );
+        if (!vf) {
+          sendJson(res, 404, { error: `File not found: ${id}` });
+          return;
+        }
+      }
+
+      // All valid — update inside a transaction.
+      tx(() => {
+        for (const id of fileIds) {
+          run('UPDATE vault_files SET folder = ? WHERE id = ?', folder, id);
+        }
+      });
+
+      const files = fileIds.map(
+        (id) => one<Row>('SELECT * FROM vault_files WHERE id = ?', id)!,
+      );
+      sendJson(res, 200, { moved: fileIds.length, files });
+    },
+  );
+
+  // POST /api/projects/:id/vault/delete
+  router.post(
+    '/api/projects/:id/vault/delete',
+    (req: PortalRequest, res: PortalResponse): void => {
+      const project = requireMember(req, res, req.params.id);
+      if (!project) return;
+
+      const body = req.body as Record<string, unknown>;
+      const rawIds = body.fileIds;
+
+      if (!Array.isArray(rawIds) || rawIds.length === 0) {
+        sendJson(res, 400, { error: 'fileIds must be a non-empty array' });
+        return;
+      }
+      if (rawIds.length > 500) {
+        sendJson(res, 400, { error: 'Maximum 500 file IDs per request' });
+        return;
+      }
+
+      const fileIds = rawIds.map(String);
+      const projectId = req.params.id;
+
+      // Validate all files first — same permission logic as single DELETE.
+      const vaultFiles: Row[] = [];
+      for (const id of fileIds) {
+        const vf = one<Row>(
+          'SELECT * FROM vault_files WHERE id = ? AND project_id = ?',
+          id,
+          projectId,
+        );
+        if (!vf) {
+          sendJson(res, 404, { error: `File not found: ${id}` });
+          return;
+        }
+        if (vf.user_id && vf.user_id !== req.user!.id && !req.user!.is_admin) {
+          sendJson(res, 403, { error: 'You can only delete your own files' });
+          return;
+        }
+        vaultFiles.push(vf);
+      }
+
+      // All valid — delete rows in a transaction.
+      tx(() => {
+        for (const id of fileIds) {
+          run('DELETE FROM vault_files WHERE id = ?', id);
+        }
+      });
+
+      // Remove stored files from disk (best-effort, mirrors single DELETE).
+      for (const vf of vaultFiles) {
+        const absPath = path.join(config.dataDir, String(vf.path));
+        try { fs.rmSync(absPath, { force: true }); } catch { /* non-fatal */ }
+      }
+
+      sendJson(res, 200, { deleted: fileIds.length });
     },
   );
 

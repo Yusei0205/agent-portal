@@ -1,0 +1,338 @@
+/**
+ * Terminal — template-specific visual enhancements.
+ *
+ * All rules are gated on [data-template="terminal"] so they have
+ * zero effect when another template is active.
+ *
+ * Effects:
+ *   - Faint green 32px grid on main canvas (data-fx-grid)
+ *   - Very subtle scanline overlay (data-fx-grid)
+ *   - Uppercase monospace headings, letter-spacing 0.04em
+ *   - KPI/stat cards with 2px colored left-border accent by status
+ *   - kbd chips: bordered monospace look
+ *   - Primary button: filled phosphor-green with dark text
+ *   - Secondary/outline buttons: outlined green with soft glow on hover
+ *   - Rail active item: green left bar + wash
+ *
+ * No url(), no external assets. prefers-reduced-motion and
+ * data-fx-motion respected. All contrast: WCAG AA verified.
+ */
+
+/* ── Canvas: faint green grid + scanline ─────────────────────────── */
+[data-template="terminal"][data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    /* Scanlines — very subtle */
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 3px,
+      rgba(61,220,132,0.015) 3px,
+      rgba(61,220,132,0.015) 4px
+    ),
+    /* Vertical grid lines */
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 31px,
+      rgba(61,220,132,0.04) 31px,
+      rgba(61,220,132,0.04) 32px
+    ),
+    /* Horizontal grid lines */
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 31px,
+      rgba(61,220,132,0.04) 31px,
+      rgba(61,220,132,0.04) 32px
+    );
+  background-size: 100% 4px, 32px 32px, 32px 32px;
+}
+
+[data-template="terminal"][data-mode="light"][data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 31px,
+      rgba(15,122,62,0.04) 31px,
+      rgba(15,122,62,0.04) 32px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 31px,
+      rgba(15,122,62,0.04) 31px,
+      rgba(15,122,62,0.04) 32px
+    );
+  background-size: 32px 32px, 32px 32px;
+}
+
+/* Disable effects behind IDE/editor/terminal areas */
+[data-template="terminal"][data-fx-grid="true"] .ide-workspace,
+[data-template="terminal"][data-fx-grid="true"] .ide-body,
+[data-template="terminal"][data-fx-grid="true"] .ide-codemirror-host,
+[data-template="terminal"][data-fx-grid="true"] .ide-terminal-panel {
+  background-image: none !important;
+}
+
+/* ── Panel: thin green border ────────────────────────────────────── */
+[data-template="terminal"] .panel,
+[data-template="terminal"] .project-card,
+[data-template="terminal"] .stat-card {
+  border-color: var(--line);
+  border-radius: var(--radius-sm);
+}
+
+[data-template="terminal"][data-fx-glow="true"] .panel,
+[data-template="terminal"][data-fx-glow="true"] .project-card,
+[data-template="terminal"][data-fx-glow="true"] .stat-card {
+  box-shadow: 0 0 0 1px rgba(61,220,132,0.08), 0 2px 8px rgba(0,0,0,0.5);
+}
+
+/* ── KPI / stat cards: 2px left-border accent by status ─────────── */
+[data-template="terminal"] .stat-card {
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+[data-template="terminal"] .stat-card.ok,
+[data-template="terminal"] .stat-card[data-status="ok"] {
+  border-left-color: var(--ok);
+}
+
+[data-template="terminal"] .stat-card.warn,
+[data-template="terminal"] .stat-card[data-status="warn"] {
+  border-left-color: var(--warn);
+}
+
+[data-template="terminal"] .stat-card.danger,
+[data-template="terminal"] .stat-card[data-status="danger"] {
+  border-left-color: var(--danger);
+}
+
+[data-template="terminal"] .stat-card.info,
+[data-template="terminal"] .stat-card[data-status="info"] {
+  border-left-color: var(--info);
+}
+
+/* ── Card hover ──────────────────────────────────────────────────── */
+[data-template="terminal"] .project-card:hover {
+  border-color: rgba(61,220,132,0.45);
+  box-shadow:
+    0 0 0 1px rgba(61,220,132,0.18),
+    0 0 16px rgba(61,220,132,0.08),
+    0 4px 16px rgba(0,0,0,0.5);
+}
+
+[data-template="terminal"][data-mode="light"] .project-card:hover {
+  border-color: rgba(15,122,62,0.40);
+  box-shadow:
+    0 0 0 1px rgba(15,122,62,0.15),
+    0 4px 12px rgba(15,40,20,0.08);
+}
+
+/* ── Rail: active item — left bar + green wash ───────────────────── */
+[data-template="terminal"] .rail-link.is-active {
+  background: rgba(61,220,132,0.08);
+  color: var(--accent);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  padding-left: calc(var(--rail-link-pad, 0.75rem) - 2px);
+}
+
+[data-template="terminal"] .rail-link.is-active svg {
+  color: var(--accent);
+}
+
+[data-template="terminal"] .rail-group-btn.has-active-child {
+  background: rgba(61,220,132,0.06);
+  color: var(--accent);
+  border-left: 2px solid rgba(61,220,132,0.40);
+}
+
+[data-template="terminal"][data-mode="light"] .rail-link.is-active {
+  background: rgba(15,122,62,0.08);
+  border-left-color: var(--accent);
+}
+
+[data-template="terminal"][data-mode="light"] .rail-group-btn.has-active-child {
+  background: rgba(15,122,62,0.06);
+  border-left-color: rgba(15,122,62,0.35);
+}
+
+/* ── Headings: uppercase monospace ───────────────────────────────── */
+[data-template="terminal"] h1,
+[data-template="terminal"] h2,
+[data-template="terminal"] .page-title,
+[data-template="terminal"] .brand {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+[data-template="terminal"] .brand {
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+}
+
+/* Card titles uppercase mono */
+[data-template="terminal"] .panel-title,
+[data-template="terminal"] .card-title,
+[data-template="terminal"] .stat-label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+
+/* KPI numbers stay in body font (monospace, no slash zero issue) */
+[data-template="terminal"] .kpi-value,
+[data-template="terminal"] .stat-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* ── kbd chips: bordered monospace ───────────────────────────────── */
+[data-template="terminal"] kbd {
+  font-family: var(--font-mono);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.35em;
+  font-size: 0.8em;
+  background: var(--panel);
+  color: var(--accent);
+}
+
+[data-template="terminal"][data-mode="light"] kbd {
+  border-color: var(--line);
+  color: var(--accent);
+  background: var(--raised);
+}
+
+/* ── Stat icon ───────────────────────────────────────────────────── */
+[data-template="terminal"] .stat-icon {
+  background: rgba(61,220,132,0.08);
+  border: 1px solid rgba(61,220,132,0.20);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+}
+
+[data-template="terminal"][data-mode="light"] .stat-icon {
+  background: rgba(15,122,62,0.08);
+  border-color: rgba(15,122,62,0.18);
+  color: var(--accent);
+}
+
+/* ── Primary button: filled phosphor-green ───────────────────────── */
+[data-template="terminal"] .btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85em;
+}
+
+[data-template="terminal"] .btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  box-shadow: 0 0 14px rgba(61,220,132,0.35), 0 0 0 1px rgba(61,220,132,0.25) inset;
+  filter: brightness(1.08);
+}
+
+[data-template="terminal"] .btn-primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(61,220,132,0.40);
+}
+
+/* Secondary/outline buttons: outlined green */
+[data-template="terminal"] .btn-secondary,
+[data-template="terminal"] .btn-outline {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85em;
+}
+
+[data-template="terminal"] .btn-secondary:hover:not(:disabled),
+[data-template="terminal"] .btn-outline:hover:not(:disabled) {
+  background: rgba(61,220,132,0.08);
+  box-shadow: 0 0 10px rgba(61,220,132,0.20);
+}
+
+[data-template="terminal"][data-mode="light"] .btn-primary {
+  box-shadow: 0 0 10px rgba(15,122,62,0.20);
+}
+
+[data-template="terminal"][data-mode="light"] .btn-primary:hover:not(:disabled) {
+  box-shadow: 0 0 16px rgba(15,122,62,0.30);
+  filter: brightness(1.05);
+}
+
+/* ── App header ──────────────────────────────────────────────────── */
+[data-template="terminal"] .app-header {
+  background: var(--rail);
+  border-bottom-color: var(--line);
+}
+
+/* ── Search palette trigger ──────────────────────────────────────── */
+[data-template="terminal"] .palette-trigger-btn {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+[data-template="terminal"] .palette-trigger-btn:hover {
+  border-color: rgba(61,220,132,0.40);
+  box-shadow: 0 0 8px rgba(61,220,132,0.14);
+}
+
+[data-template="terminal"][data-fx-glow="true"] .palette-dialog {
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.65),
+    0 0 0 1px rgba(61,220,132,0.20);
+}
+
+/* ── Motion: none ────────────────────────────────────────────────── */
+[data-template="terminal"][data-fx-motion="none"] *,
+[data-template="terminal"][data-fx-motion="none"] *::before,
+[data-template="terminal"][data-fx-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* ── Reduced motion: strip scanline (visual motion) ──────────────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-template="terminal"][data-fx-grid="true"] .shell > .shell-right > .main {
+    background-image:
+      /* Keep only the grid, drop the scanlines */
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 31px,
+        rgba(61,220,132,0.04) 31px,
+        rgba(61,220,132,0.04) 32px
+      ),
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 31px,
+        rgba(61,220,132,0.04) 31px,
+        rgba(61,220,132,0.04) 32px
+      );
+    background-size: 32px 32px, 32px 32px;
+  }
+}

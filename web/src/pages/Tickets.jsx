@@ -365,29 +365,84 @@ function SiteSelector({ sites, currentSiteId, projectId, onSiteChanged }) {
 // ── Jira project settings ──────────────────────────────────────────────────────
 
 function JiraProjectSettings({ projectId, mapping, onSaved }) {
-  const [allProjects, setAllProjects]   = useState(null);
-  const [loadErr, setLoadErr]           = useState(null);
-  const [selected, setSelected]         = useState(
+  const [allProjects, setAllProjects] = useState(null);
+  const [total, setTotal]             = useState(0);
+  const [truncated, setTruncated]     = useState(false);
+  const [loadErr, setLoadErr]         = useState(null);
+  const [selected, setSelected]       = useState(
     new Set(mapping?.projectKeys ?? []),
   );
-  const [jql, setJql]                   = useState(mapping?.jql ?? '');
-  const [busy, setBusy]                 = useState(false);
-  const [error, setError]               = useState(null);
-  const [saved, setSaved]               = useState(false);
+  const [jql, setJql]                 = useState(mapping?.jql ?? '');
+  const [busy, setBusy]               = useState(false);
+  const [refreshing, setRefreshing]   = useState(false);
+  const [error, setError]             = useState(null);
+  const [saved, setSaved]             = useState(false);
+  const [searchQ, setSearchQ]         = useState('');
 
-  useEffect(() => {
-    api.get(`/api/projects/${projectId}/jira/projects`)
-      .then((r) => setAllProjects(r.projects ?? []))
-      .catch((e) => setLoadErr(e.message || 'Could not load Jira projects'));
+  const loadProjects = useCallback(async (refresh = false) => {
+    if (refresh) setRefreshing(true);
+    else setLoadErr(null);
+    try {
+      const url = refresh
+        ? `/api/projects/${projectId}/jira/projects?refresh=1`
+        : `/api/projects/${projectId}/jira/projects`;
+      const r = await api.get(url);
+      setAllProjects(r.projects ?? []);
+      setTotal(r.total ?? (r.projects?.length ?? 0));
+      setTruncated(r.truncated ?? false);
+    } catch (e) {
+      setLoadErr(e.message || 'Could not load Jira projects');
+    } finally {
+      if (refresh) setRefreshing(false);
+    }
   }, [projectId]);
+
+  useEffect(() => { loadProjects(); }, [loadProjects]);
+
+  // Client-side filter by key or name
+  const filteredProjects = allProjects
+    ? (searchQ
+        ? allProjects.filter((p) => {
+            const q = searchQ.toLowerCase();
+            return (
+              p.key.toLowerCase().includes(q) ||
+              p.name.toLowerCase().includes(q)
+            );
+          })
+        : allProjects)
+    : null;
+
+  // Projects currently selected (for chip row)
+  const selectedList = allProjects
+    ? allProjects.filter((p) => selected.has(p.key))
+    : [];
 
   const toggle = (key) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
+
+  const removeChip = (key) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  const selectAllShown = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      filteredProjects?.forEach((p) => next.add(p.key));
+      return next;
+    });
+  };
+
+  const clearAll = () => setSelected(new Set());
 
   const save = async () => {
     setBusy(true); setError(null); setSaved(false);
@@ -414,43 +469,187 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
       {loadErr && <div className="error-note" role="alert">{loadErr}</div>}
 
       {allProjects === null && !loadErr && (
-        <div className="spinner" style={{ margin: '8px auto' }} aria-label="Loading Jira projects…" />
-      )}
-
-      {allProjects && allProjects.length > 0 && (
         <div
-          className="stack"
-          style={{ gap: 6, maxHeight: 240, overflowY: 'auto' }}
-          role="group"
-          aria-label="Jira project selection"
-        >
-          {allProjects.map((p) => (
-            <label
-              key={p.key}
-              className="choice"
-              style={{ cursor: 'pointer' }}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(p.key)}
-                onChange={() => toggle(p.key)}
-              />
-              <span>
-                <strong>{p.key}</strong>{' '}
-                <span className="muted">— {p.name}</span>
-                {p.type && (
-                  <span className="badge" style={{ marginLeft: 6 }}>
-                    {p.type}
-                  </span>
-                )}
-              </span>
-            </label>
-          ))}
-        </div>
+          className="spinner"
+          style={{ margin: '8px auto' }}
+          aria-label="Loading Jira projects…"
+        />
       )}
 
-      {allProjects && allProjects.length === 0 && (
-        <p className="muted small">No Jira projects found in this site.</p>
+      {allProjects !== null && (
+        <>
+          {/* Selected chips row */}
+          {selectedList.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 6,
+                alignItems: 'center',
+              }}
+              aria-label={`Selected projects: ${selectedList.length}`}
+            >
+              <span className="muted small" style={{ whiteSpace: 'nowrap' }}>
+                Selected ({selectedList.length}):
+              </span>
+              {selectedList.map((p) => (
+                <span
+                  key={p.key}
+                  className="badge"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    paddingRight: 4,
+                  }}
+                >
+                  {p.key}
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    style={{ width: 14, height: 14, padding: 0, lineHeight: 1 }}
+                    aria-label={`Remove ${p.key}`}
+                    onClick={() => removeChip(p.key)}
+                  >
+                    <Icon name="x" size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Search bar + refresh */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Icon
+                name="search"
+                size={13}
+                style={{
+                  position: 'absolute',
+                  left: 7,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--ink-3)',
+                  pointerEvents: 'none',
+                }}
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                className="input"
+                style={{ paddingLeft: 26 }}
+                placeholder="Filter by key or name…"
+                aria-label="Filter Jira projects"
+                value={searchQ}
+                onChange={(e) => setSearchQ(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              aria-label="Refresh project list"
+              title="Refresh"
+              disabled={refreshing}
+              onClick={() => loadProjects(true)}
+            >
+              {refreshing ? (
+                <span
+                  className="spinner"
+                  style={{ width: 13, height: 13 }}
+                  aria-hidden="true"
+                />
+              ) : (
+                <Icon name="refresh" size={13} />
+              )}
+            </button>
+          </div>
+
+          {/* Count + bulk actions */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <span className="muted small">
+              Showing {filteredProjects?.length ?? 0} of {total} project
+              {total !== 1 ? 's' : ''}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={(filteredProjects?.length ?? 0) === 0}
+              onClick={selectAllShown}
+            >
+              Select all shown
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={selected.size === 0}
+              onClick={clearAll}
+            >
+              Clear
+            </button>
+          </div>
+
+          {truncated && (
+            <p className="muted small" role="note">
+              Not all projects are listed — use the search box to find projects
+              by key or name.
+            </p>
+          )}
+
+          {/* Checklist — padding prevents the first row from being clipped */}
+          {filteredProjects && filteredProjects.length > 0 && (
+            <div
+              className="stack"
+              style={{
+                gap: 6,
+                maxHeight: 240,
+                overflowY: 'auto',
+                padding: '2px 0',
+              }}
+              role="group"
+              aria-label="Jira project selection"
+            >
+              {filteredProjects.map((p) => (
+                <label
+                  key={p.key}
+                  className="choice"
+                  style={{ cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(p.key)}
+                    onChange={() => toggle(p.key)}
+                  />
+                  <span>
+                    <strong>{p.key}</strong>{' '}
+                    <span className="muted">— {p.name}</span>
+                    {p.type && (
+                      <span className="badge" style={{ marginLeft: 6 }}>
+                        {p.type}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {filteredProjects &&
+            filteredProjects.length === 0 &&
+            allProjects.length > 0 && (
+              <p className="muted small">No projects match "{searchQ}".</p>
+            )}
+
+          {allProjects.length === 0 && (
+            <p className="muted small">No Jira projects found in this site.</p>
+          )}
+        </>
       )}
 
       <div className="field">
@@ -459,7 +658,7 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
           id="jira-jql-filter"
           type="text"
           className="input"
-          placeholder='project in (PAY, BKD) AND issuetype = Bug'
+          placeholder="issuetype = Bug AND labels = backend"
           value={jql}
           onChange={(e) => setJql(e.target.value)}
         />
@@ -483,7 +682,11 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
         onClick={save}
       >
         {busy ? (
-          <span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" />
+          <span
+            className="spinner"
+            style={{ width: 14, height: 14 }}
+            aria-hidden="true"
+          />
         ) : (
           <Icon name="check" size={14} />
         )}
@@ -495,26 +698,58 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
 
 // ── Ticket browser ─────────────────────────────────────────────────────────────
 
-function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
-  const [jiraProject, setJiraProject] = useState(
-    jiraProjects?.length === 1 ? jiraProjects[0].key : '',
-  );
-  const [q, setQ]                   = useState('');
-  const [status, setStatus]         = useState('');
-  const [assigneeMe, setAssigneeMe] = useState(true);
-  const [statuses, setStatuses]     = useState([]);
-  const [issues, setIssues]         = useState(null);
-  const [nextPage, setNextPage]     = useState(null);
-  const [loading, setLoading]       = useState(false);
-  const [loadErr, setLoadErr]       = useState(null);
-  const [selected, setSelected]     = useState(null); // { key, summary, ... }
+function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
+  // Load all Jira projects to populate the project dropdown
+  const [allJiraProjects, setAllJiraProjects] = useState(null);
+  useEffect(() => {
+    api
+      .get(`/api/projects/${projectId}/jira/projects`)
+      .then((r) => setAllJiraProjects(r.projects ?? []))
+      .catch(() => setAllJiraProjects([]));
+  }, [projectId]);
+
+  // Compute which projects to offer in the dropdown.
+  // When allowedKeys is non-empty, restrict to those keys; otherwise show all.
+  const projectsForDropdown =
+    allJiraProjects === null
+      ? []
+      : allowedKeys?.length > 0
+      ? allJiraProjects.filter((p) => allowedKeys.includes(p.key))
+      : allJiraProjects;
+
+  const showProjectDropdown = projectsForDropdown.length > 1;
+  const isLongList = projectsForDropdown.length > 8;
+
+  const [projectSearch, setProjectSearch] = useState('');
+  const filteredDropdownProjects =
+    isLongList && projectSearch
+      ? projectsForDropdown.filter(
+          (p) =>
+            p.key.toLowerCase().includes(projectSearch.toLowerCase()) ||
+            p.name.toLowerCase().includes(projectSearch.toLowerCase()),
+        )
+      : projectsForDropdown;
+
+  const [jiraProject, setJiraProject] = useState('');
+  const [q, setQ]                     = useState('');
+  const [status, setStatus]           = useState('');
+  const [assigneeMe, setAssigneeMe]   = useState(true);
+  const [statuses, setStatuses]       = useState([]);
+  const [issues, setIssues]           = useState(null);
+  const [nextPage, setNextPage]       = useState(null);
+  const [loading, setLoading]         = useState(false);
+  const [loadErr, setLoadErr]         = useState(null);
+  const [selected, setSelected]       = useState(null); // { key, summary, ... }
 
   const loadIdRef = useRef(0);
 
   // Load available statuses when project changes
   useEffect(() => {
     if (!jiraProject) { setStatuses([]); return; }
-    api.get(`/api/projects/${projectId}/jira/statuses?project=${encodeURIComponent(jiraProject)}`)
+    api
+      .get(
+        `/api/projects/${projectId}/jira/statuses?project=${encodeURIComponent(jiraProject)}`,
+      )
       .then((r) => setStatuses(r.statuses ?? []))
       .catch(() => setStatuses([]));
   }, [projectId, jiraProject]);
@@ -547,7 +782,8 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
         );
         setNextPage(r.nextPage ?? null);
       } catch (e) {
-        if (id === loadIdRef.current) setLoadErr(e.message || 'Failed to load tickets');
+        if (id === loadIdRef.current)
+          setLoadErr(e.message || 'Failed to load tickets');
       } finally {
         if (id === loadIdRef.current) setLoading(false);
       }
@@ -575,25 +811,48 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
             display: 'flex',
             gap: 8,
             flexWrap: 'wrap',
-            alignItems: 'center',
+            alignItems: 'flex-end',
           }}
         >
-          {/* Project dropdown */}
-          {jiraProjects && jiraProjects.length > 1 && (
-            <select
-              aria-label="Jira project"
-              className="input"
-              style={{ maxWidth: 160 }}
-              value={jiraProject}
-              onChange={(e) => { setJiraProject(e.target.value); setSelected(null); }}
+          {/* Project dropdown — visible when multiple projects available */}
+          {showProjectDropdown && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+                minWidth: 140,
+                maxWidth: isLongList ? 220 : 160,
+              }}
             >
-              <option value="">All projects</option>
-              {jiraProjects.map((p) => (
-                <option key={p.key} value={p.key}>
-                  {p.key} – {p.name}
-                </option>
-              ))}
-            </select>
+              {isLongList && (
+                <input
+                  type="search"
+                  className="input"
+                  style={{ fontSize: '0.82rem' }}
+                  placeholder="Filter projects…"
+                  aria-label="Filter project list"
+                  value={projectSearch}
+                  onChange={(e) => setProjectSearch(e.target.value)}
+                />
+              )}
+              <select
+                aria-label="Jira project"
+                className="input"
+                value={jiraProject}
+                onChange={(e) => {
+                  setJiraProject(e.target.value);
+                  setSelected(null);
+                }}
+              >
+                <option value="">All projects</option>
+                {filteredDropdownProjects.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.key} – {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
 
           {/* Search */}
@@ -633,7 +892,10 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
             >
               <option value="">Any status</option>
               {statuses.map((s) => (
-                <option key={typeof s === 'string' ? s : s.name} value={typeof s === 'string' ? s : s.name}>
+                <option
+                  key={typeof s === 'string' ? s : s.name}
+                  value={typeof s === 'string' ? s : s.name}
+                >
                   {typeof s === 'string' ? s : s.name}
                 </option>
               ))}
@@ -662,7 +924,11 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
         >
           {loading && !issues && (
             <div style={{ padding: '24px', textAlign: 'center' }}>
-              <div className="spinner" style={{ margin: '0 auto' }} aria-label="Loading tickets…" />
+              <div
+                className="spinner"
+                style={{ margin: '0 auto' }}
+                aria-label="Loading tickets…"
+              />
             </div>
           )}
           {loadErr && (
@@ -672,7 +938,21 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
           )}
           {!loading && issues && issues.length === 0 && (
             <p className="muted small" style={{ padding: '16px 18px' }}>
-              No tickets found. Try adjusting your filters.
+              {assigneeMe ? (
+                <>
+                  No open tickets assigned to you.{' '}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ display: 'inline', padding: '0 4px' }}
+                    onClick={() => setAssigneeMe(false)}
+                  >
+                    Show all tickets
+                  </button>
+                </>
+              ) : (
+                'No tickets found. Try adjusting your filters.'
+              )}
             </p>
           )}
           {issues && issues.length > 0 && (
@@ -698,12 +978,16 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
                     onClick={() => setSelected(issue)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault(); setSelected(issue);
+                        e.preventDefault();
+                        setSelected(issue);
                       }
                     }}
                   >
                     <td>
-                      <code className="mono" style={{ fontSize: '0.82rem', color: 'var(--accent)' }}>
+                      <code
+                        className="mono"
+                        style={{ fontSize: '0.82rem', color: 'var(--accent)' }}
+                      >
                         {issue.key}
                       </code>
                     </td>
@@ -742,7 +1026,9 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
             </table>
           )}
           {nextPage !== null && (
-            <div style={{ padding: '8px 18px', borderTop: '1px solid var(--line)' }}>
+            <div
+              style={{ padding: '8px 18px', borderTop: '1px solid var(--line)' }}
+            >
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -750,7 +1036,11 @@ function TicketBrowser({ projectId, jiraProjects, onNewSession }) {
                 onClick={() => load({ more: true })}
               >
                 {loading ? (
-                  <span className="spinner" style={{ width: 12, height: 12 }} aria-hidden="true" />
+                  <span
+                    className="spinner"
+                    style={{ width: 12, height: 12 }}
+                    aria-hidden="true"
+                  />
                 ) : null}
                 Load more
               </button>
@@ -900,7 +1190,6 @@ export function Tickets({ projectId, route, onNewSession }) {
   const [jira, setJira]             = useState(null);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
-  const [jiraProjects, setJiraProjects] = useState(null);
   const { toast, toasts, removeToast } = useToast();
 
   const loadJira = useCallback(async () => {
@@ -909,12 +1198,6 @@ export function Tickets({ projectId, route, onNewSession }) {
     try {
       const r = await api.get(`/api/projects/${projectId}/jira`);
       setJira(r);
-      if (r.connected) {
-        // Load allowed Jira projects for the browser header
-        api.get(`/api/projects/${projectId}/jira/projects`)
-          .then((pr) => setJiraProjects(pr.projects ?? []))
-          .catch(() => setJiraProjects([]));
-      }
     } catch (e) {
       // Treat 404 as "not configured" — the backend may not have this endpoint yet
       if (e.status === 404) {
@@ -1059,13 +1342,7 @@ export function Tickets({ projectId, route, onNewSession }) {
         {/* Ticket browser */}
         <TicketBrowser
           projectId={projectId}
-          jiraProjects={
-            jira.mapping?.projectKeys?.length > 0
-              ? (jiraProjects ?? []).filter((p) =>
-                  jira.mapping.projectKeys.includes(p.key),
-                )
-              : jiraProjects ?? []
-          }
+          allowedKeys={jira.mapping?.projectKeys ?? []}
           onNewSession={onNewSession}
         />
       </div>

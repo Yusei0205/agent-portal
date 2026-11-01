@@ -87,6 +87,10 @@ function AgentPicker({ engine, value, onChange }) {
             aria-describedby="ns-agent-hint"
           >
             <option value="">Engine default</option>
+            {/* Workspace default not in loaded list — keep it selectable */}
+            {value && !agents.some((a) => a.name === value) && (
+              <option key="__ws_agent__" value={value}>{value} (from workspace)</option>
+            )}
             {agents.map((a) => (
               <option key={a.name} value={a.name}>
                 {a.name}
@@ -154,6 +158,10 @@ function ModelPicker({ engine, credentialId, value, onChange }) {
           aria-describedby={error ? 'ns-model-error' : runsAs ? 'ns-model-hint' : undefined}
         >
           <option value="">Engine default</option>
+          {/* Workspace default not in loaded list — keep it selectable */}
+          {value && !models.some((m) => m.id === value) && (
+            <option key="__ws_model__" value={value}>{value} (from workspace)</option>
+          )}
           {models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label || m.id}
@@ -241,6 +249,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   const [maxIterations, setMaxIterations] = useState(10);
   const [selectedRepos, setSelectedRepos] = useState(new Set());
   const [workspaceId, setWorkspaceId] = useState('');
+  const [wsDefaultNote, setWsDefaultNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const goalRef = useRef(null);
@@ -289,14 +298,15 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Update default credential when engine changes
+  // Update default credential when engine changes.
+  // Agent and model are NOT cleared here — clearing happens only in the engine
+  // radio onChange handler (manual user change) so that workspace defaults
+  // survive the credential-load that follows a workspace-triggered engine switch.
   useEffect(() => {
     if (!credSummary) return;
     const creds = credSummary[engine] || [];
     const def = creds.find((c) => c.isDefault) || creds[0];
     setCredentialId(def?.id || '');
-    setLeadAgent('');
-    setModel('');
   }, [engine, credSummary]);
 
   // Focus goal on open
@@ -324,6 +334,28 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Apply workspace defaults when the selected workspace changes.
+  // Playground (workspaceId='') keeps the current choices unchanged.
+  // Re-applies every time the workspace picker changes, even if the user
+  // already modified a field.
+  useEffect(() => {
+    if (!workspaceId) { setWsDefaultNote(''); return; }
+    const ws = workspaces.find((w) => w.id === workspaceId);
+    if (!ws) { setWsDefaultNote(''); return; }
+    const defEngine = ws.default_engine || '';
+    if (!defEngine) { setWsDefaultNote(''); return; }
+    const available = isEngineAvailable(defEngine);
+    if (!available) {
+      const label = defEngine === 'kiro' ? 'Kiro' : defEngine === 'claude-code' ? 'Claude Code' : defEngine;
+      setWsDefaultNote(`Engine "${label}" from workspace "${ws.name}" is not set up — no credential found.`);
+      return;
+    }
+    setEngine(defEngine);
+    if (ws.default_agent) setLeadAgent(ws.default_agent);
+    if (ws.default_model) setModel(ws.default_model);
+    setWsDefaultNote(`Defaults from workspace ${ws.name}`);
+  }, [workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check if engine is available
   const isEngineAvailable = (eng) => {
@@ -473,7 +505,13 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                       value={opt.id}
                       checked={engine === opt.id}
                       disabled={!available}
-                      onChange={() => available && setEngine(opt.id)}
+                      onChange={() => {
+                        if (available) {
+                          setEngine(opt.id);
+                          setLeadAgent('');
+                          setModel('');
+                        }
+                      }}
                     />
                     <span>
                       <strong>{opt.label}</strong>{' '}
@@ -519,6 +557,9 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
               </p>
               {workspaceRepoHint && (
                 <p className="field-hint">{workspaceRepoHint}</p>
+              )}
+              {wsDefaultNote && (
+                <p className="field-hint" aria-live="polite">{wsDefaultNote}</p>
               )}
             </div>
           )}

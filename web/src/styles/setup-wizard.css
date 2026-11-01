@@ -240,3 +240,17 @@
 .auth-card h1 {
   font-size: 1.3rem;
 }
+
+/* ── Mobile responsive (≤ 600 px) ─────────────────────────────────────── */
+@media (max-width: 600px) {
+  /* Auth card: reduce padding on narrow screens */
+  .auth-card {
+    padding: 24px 20px;
+  }
+  /* Wizard card: reduce padding */
+  .wizard-card {
+    padding: 24px 20px;
+  }
+  /* Wizard progress: allow wrapping */
+  .wizard-progress { flex-wrap: wrap; gap: 6px; }
+}

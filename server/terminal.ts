@@ -4,13 +4,13 @@
  * Authentication: session cookie (admin only). API tokens are explicitly refused.
  * Origin check: the upgrade request Origin must match the server's host (CSRF-equivalent).
  *
- * PTY support: tries to load node-pty at runtime; degrades to a piped spawn when unavailable.
- * The capability response tells the UI what mode is active.
+ * PTY support: tries @lydell/node-pty, then node-pty at runtime; degrades to a piped
+ * spawn when unavailable. The capability response tells the UI what mode is active.
  *
  * WebSocket protocol (JSON messages):
  *
  *   Server → client:
- *     { type: 'ready',  pty: boolean, cols: number, rows: number }
+ *     { type: 'ready',  pty: boolean, cols: number, rows: number, shell?: string }
  *     { type: 'output', data: string }   (base64-encoded bytes)
  *     { type: 'exit',   code: number }
  *     { type: 'error',  message: string }
@@ -31,7 +31,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
@@ -60,25 +60,75 @@ interface NodePty {
   spawn(
     file: string,
     args: string[],
-    opts: { name?: string; cols?: number; rows?: number; cwd?: string; env?: Record<string, string> },
+    opts: { name?: string; cols?: number; rows?: number; cwd?: string; env?: Record<string, string | undefined> },
   ): NodePtyProcess;
 }
 
 let _pty: NodePty | null = null;
 let _ptyChecked = false;
 
+// Internal import function — can be replaced in tests via _setImporterForTest.
+type PtyImportFn = (pkg: string) => Promise<NodePty>;
+let _ptyImport: PtyImportFn = (pkg) =>
+  Function('m', 'return import(m)')(pkg) as Promise<NodePty>;
+
+// Ordered list of packages to try. @lydell/node-pty is preferred: ships prebuilt
+// win32-x64 binaries, never requires node-gyp.
+const PTY_PACKAGES = ['@lydell/node-pty', 'node-pty'] as const;
+
 async function tryLoadPty(): Promise<NodePty | null> {
   if (_ptyChecked) return _pty;
   _ptyChecked = true;
-  try {
-    // node-pty is an optional native module — may not be installed or compiled.
-    const mod = await (Function('m', 'return import(m)')('node-pty') as Promise<NodePty>);
-    _pty = mod;
-  } catch {
-    _pty = null;
+  for (const pkg of PTY_PACKAGES) {
+    try {
+      const mod = await _ptyImport(pkg);
+      // Handle both named-export (mod.spawn) and default-export (mod.default.spawn)
+      // that CJS/ESM interop may produce.
+      const candidate: NodePty =
+        mod && typeof (mod as NodePty).spawn === 'function'
+          ? (mod as NodePty)
+          : ((mod as unknown as { default?: NodePty }).default ?? (mod as NodePty));
+      if (candidate && typeof candidate.spawn === 'function') {
+        _pty = candidate;
+        break;
+      }
+    } catch {
+      // package missing or binary unavailable — try next
+    }
   }
   return _pty;
 }
+
+// ── Test helpers (exported only for the test suite) ───────────────────────────
+
+/** Reset PTY load state so the next tryLoadPty() call re-probes. */
+export function _resetPtyStateForTest(): void {
+  _pty = null;
+  _ptyChecked = false;
+  _ptyImport = (pkg) => Function('m', 'return import(m)')(pkg) as Promise<NodePty>;
+}
+
+/** Override the import function for PTY package loading in tests. Also resets state. */
+export function _setImporterForTest(fn: PtyImportFn): void {
+  _ptyImport = fn;
+  _pty = null;
+  _ptyChecked = false;
+}
+
+/** Override the loaded PTY module directly (for tests that need a mock PTY). */
+export function _overridePtyForTest(mod: NodePty | null): void {
+  _pty = mod;
+  _ptyChecked = true;
+}
+
+/** Reset the cached Windows shell detection result. */
+export function _resetShellCacheForTest(): void {
+  _windowsShell = null;
+}
+
+export { buildSafeEnv as _buildSafeEnvForTest };
+export { defaultShell as _defaultShellForTest };
+export { pipeFallbackShell as _pipeFallbackShellForTest };
 
 // ── Safe environment ──────────────────────────────────────────────────────────
 
@@ -108,24 +158,76 @@ const BLOCKED_ENV_KEYS = new Set([
 function buildSafeEnv(cwd: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (!SAFE_ENV_KEYS.has(k)) continue;
-    if (BLOCKED_ENV_KEYS.has(k)) continue;
+    // Windows env var names are case-insensitive (e.g. 'Path' instead of 'PATH').
+    // Normalise to uppercase for the allow/block checks, but keep the original key
+    // in the output env so the child process receives it in its native casing.
+    const upperKey = k.toUpperCase();
+    if (!SAFE_ENV_KEYS.has(upperKey)) continue;
+    if (BLOCKED_ENV_KEYS.has(upperKey)) continue;
     if (v !== undefined) env[k] = v;
   }
   for (const k of BLOCKED_ENV_KEYS) {
     delete env[k];
   }
   env.PWD = cwd;
+  // Force terminal type for full colour/interactive support.
+  // These override anything inherited from process.env.
+  env.TERM = 'xterm-256color';
+  env.COLORTERM = 'truecolor';
   return env;
 }
 
 // ── Shell detection ───────────────────────────────────────────────────────────
 
+// Cache the Windows shell detection result (runs `where` once at most).
+let _windowsShell: { cmd: string; args: string[] } | null = null;
+
+/** Detect the best PTY shell on Windows: pwsh.exe (PS7+) > powershell.exe, both with -NoLogo. */
+function detectWindowsShell(): { cmd: string; args: string[] } {
+  if (_windowsShell) return _windowsShell;
+  try {
+    const result = spawnSync('where', ['pwsh.exe'], { encoding: 'utf8', timeout: 3000, windowsHide: true });
+    if (result.status === 0 && result.stdout.trim()) {
+      _windowsShell = { cmd: 'pwsh.exe', args: ['-NoLogo'] };
+      return _windowsShell;
+    }
+  } catch {
+    // `where` unavailable — fall through
+  }
+  _windowsShell = { cmd: 'powershell.exe', args: ['-NoLogo'] };
+  return _windowsShell;
+}
+
+/** Shell used for PTY sessions. */
 function defaultShell(): { cmd: string; args: string[] } {
   if (process.platform === 'win32') {
-    return { cmd: 'cmd.exe', args: [] };
+    return detectWindowsShell();
   }
   return { cmd: process.env.SHELL ?? '/bin/bash', args: [] };
+}
+
+/** Shell used for the non-PTY pipe fallback. */
+function pipeFallbackShell(): { cmd: string; args: string[] } {
+  if (process.platform === 'win32') {
+    // powershell.exe with -Command - reads commands from stdin line by line.
+    return { cmd: 'powershell.exe', args: ['-NoLogo', '-NoProfile', '-Command', '-'] };
+  }
+  return { cmd: process.env.SHELL ?? '/bin/bash', args: [] };
+}
+
+// ── Active process tracking (for server shutdown) ─────────────────────────────
+
+const activeTerminalProcesses = new Set<{ kill(): void }>();
+
+/**
+ * Kill all active terminal PTY/pipe processes.
+ * Called during server shutdown so no conpty/powershell processes are left orphaned.
+ */
+export function shutdownAllTerminals(): void {
+  for (const proc of activeTerminalProcesses) {
+    try { proc.kill(); } catch { /* ignore */ }
+  }
+  activeTerminalProcesses.clear();
 }
 
 // ── Concurrency limits ────────────────────────────────────────────────────────
@@ -364,7 +466,6 @@ async function handleTerminalSession(
   if (workflowId) {
     const resolved = resolveTerminalWorkDir(workflowId);
     if (!resolved) {
-      // Send a clear error and close — do not fall back to the project/data dir.
       const safeSendErr = (msg: object): void => {
         try { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); } catch { /* ignore */ }
       };
@@ -416,6 +517,10 @@ async function handleTerminalSession(
 
   resetIdleTimer();
 
+  // Holds a reference to the active PTY or child process so cleanup() can
+  // remove it from the global tracking set on any exit path.
+  let activeProcess: { kill(): void } | null = null;
+
   const ptyMod = await tryLoadPty();
 
   let cleanedUp = false;
@@ -423,6 +528,10 @@ async function handleTerminalSession(
     if (cleanedUp) return;
     cleanedUp = true;
     if (idleTimer) clearTimeout(idleTimer);
+    if (activeProcess) {
+      activeTerminalProcesses.delete(activeProcess);
+      activeProcess = null;
+    }
     decrementSession(auth.userId);
     // Audit: terminal closed
     try {
@@ -458,11 +567,16 @@ async function handleTerminalSession(
       return;
     }
 
-    safeSend({ type: 'ready', pty: true, cols, rows });
+    activeProcess = ptyProcess;
+    activeTerminalProcesses.add(ptyProcess);
+
+    safeSend({ type: 'ready', pty: true, cols, rows, shell: cmd });
 
     ptyProcess.onData((data) => {
       resetIdleTimer();
-      safeSend({ type: 'output', data: Buffer.from(data, 'binary').toString('base64') });
+      // node-pty delivers decoded UTF-8 text; re-encode as UTF-8 (not latin1) so
+      // non-ASCII output such as box-drawing or CJK characters survives the trip.
+      safeSend({ type: 'output', data: Buffer.from(data, 'utf8').toString('base64') });
     });
 
     ptyProcess.onExit(({ exitCode }) => {
@@ -480,7 +594,8 @@ async function handleTerminalSession(
         return;
       }
       if (msg.type === 'input' && msg.data) {
-        ptyProcess.write(Buffer.from(msg.data, 'base64').toString('binary'));
+        // The client sends UTF-8 bytes (TextEncoder); decode them as UTF-8.
+        ptyProcess.write(Buffer.from(msg.data, 'base64').toString('utf8'));
       } else if (msg.type === 'resize' && msg.cols && msg.rows) {
         cols = msg.cols;
         rows = msg.rows;
@@ -502,7 +617,8 @@ async function handleTerminalSession(
 
   } else {
     // ── Pipe-based fallback (no PTY) ─────────────────────────────────────────
-    const { cmd, args } = defaultShell();
+    // Uses PowerShell on Windows for better command compatibility than cmd.exe.
+    const { cmd, args } = pipeFallbackShell();
     let proc: ChildProcess;
     try {
       proc = spawn(cmd, args, {
@@ -510,6 +626,7 @@ async function handleTerminalSession(
         env: buildSafeEnv(cwd) as NodeJS.ProcessEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: false,
+        windowsHide: true,
       });
     } catch (e: unknown) {
       safeSend({ type: 'error', message: `Failed to start terminal: ${e instanceof Error ? e.message : String(e)}` });
@@ -518,7 +635,11 @@ async function handleTerminalSession(
       return;
     }
 
-    safeSend({ type: 'ready', pty: false, cols, rows });
+    activeProcess = proc;
+    activeTerminalProcesses.add(proc);
+
+    // pty: false tells the UI it's in degraded mode; shell tells it what's running.
+    safeSend({ type: 'ready', pty: false, cols, rows, shell: cmd });
 
     proc.stdout?.on('data', (chunk: Buffer) => {
       resetIdleTimer();

@@ -316,6 +316,7 @@
   border-left: 1px solid var(--line);
   background: var(--panel);
   position: relative;
+  min-width: 280px; /* moved from JSX inline style; overridden to 0 on mobile */
 }
 
 /* ── Terminal panel ──────────────────────────────────── */
@@ -325,14 +326,57 @@
   flex-direction: column;
   overflow: hidden;
   border-top: 1px solid var(--line);
-  background: #1e1e1e;
+  background: var(--term-bg, #1e1e1e);
   position: relative;
+
+  /*
+   * Terminal colour palette — override any of these in a theme CSS file to
+   * re-skin the terminal without touching the component code.
+   * Defaults are VS Code Dark+ colours.
+   */
+  --term-bg:            #1e1e1e;
+  --term-fg:            #d4d4d4;
+  --term-cursor:        #d4d4d4;
+  --term-selection:     rgba(255, 255, 255, 0.2);
+  --term-black:         #000000;
+  --term-red:           #cd3131;
+  --term-green:         #0dbc79;
+  --term-yellow:        #e5e510;
+  --term-blue:          #2472c8;
+  --term-magenta:       #bc3fbc;
+  --term-cyan:          #11a8cd;
+  --term-white:         #e5e5e5;
+  --term-bright-black:  #666666;
+  --term-bright-red:    #f14c4c;
+  --term-bright-green:  #23d18b;
+  --term-bright-yellow: #f5f543;
+  --term-bright-blue:   #3b8eea;
+  --term-bright-magenta:#d670d6;
+  --term-bright-cyan:   #29b8db;
+  --term-bright-white:  #e5e5e5;
 }
 
 .ide-terminal-host {
+  /*
+   * Root cause of the scroll bug (fixed 2025):
+   *
+   * The project uses box-sizing:border-box globally.  The old rule had
+   * padding:4px and overflow:hidden.  FitAddon reads
+   * getComputedStyle(container).height which under border-box returns the
+   * TOTAL box height (content + padding).  It then sized xterm to fill that
+   * total height.  But xterm opens inside the CONTENT area (inside the
+   * padding), which is 8 px shorter.  The terminal overflowed by 8 px and
+   * overflow:hidden clipped it — hiding the last terminal row AND the bottom
+   * of the scrollbar track, making wheel-scroll and the scrollbar thumb
+   * non-functional for the last portion of content.
+   *
+   * Fix: remove padding and overflow:hidden from this element.  FitAddon now
+   * measures the exact available area.  The outer .ide-terminal-panel retains
+   * overflow:hidden as the clipping boundary.
+   */
   flex: 1;
-  overflow: hidden;
-  padding: 4px;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* ── Status bar ──────────────────────────────────────── */
@@ -381,7 +425,11 @@
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   flex-shrink: 0;
-  overflow: hidden;
+  /* Must not clip: the "More session actions" dropdown hangs below the header.
+     The title wrap truncates long titles on its own. */
+  overflow: visible;
+  position: relative;
+  z-index: 20;
 }
 
 .ide-header-title-wrap {
@@ -678,4 +726,622 @@
   height: 26px;
   padding: 0 6px;
   min-width: 0;
+}
+
+/* ── Live browser panel (idb-*) ─────────────────────────────────────────── */
+
+/* Outer container */
+.idb-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  background: var(--canvas);
+}
+.idb-panel.is-popped {
+  height: 100%;
+}
+
+/* Tab strip */
+.idb-tabstrip {
+  display: flex;
+  align-items: stretch;
+  background: var(--rail);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  flex-shrink: 0;
+  min-height: 30px;
+  scrollbar-width: none;
+}
+.idb-tabstrip::-webkit-scrollbar { display: none; }
+
+.idb-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  border: none;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 160px;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.idb-tab:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.idb-tab.is-active {
+  background: var(--canvas);
+  color: var(--ink);
+  border-bottom: 2px solid var(--accent);
+}
+.idb-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toolbar */
+.idb-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
+/* Address bar form */
+.idb-address-form {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.idb-address {
+  flex: 1;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  outline: none;
+  min-width: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.idb-address:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
+.idb-address.is-readonly {
+  cursor: default;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--canvas) 70%, var(--panel));
+}
+
+/* Status dot */
+.idb-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+.idb-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  /* Subtle pulse for "Live" state handled via class below */
+}
+.idb-status-label {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Remote control toggle */
+.idb-remote-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.idb-remote-label {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Toggle switch */
+.idb-toggle {
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  border: none;
+  background: var(--line);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.18s;
+  padding: 0;
+  outline: none;
+}
+.idb-toggle:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
+}
+.idb-toggle.is-on {
+  background: var(--accent);
+}
+.idb-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s;
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+.idb-toggle.is-on .idb-toggle-knob {
+  transform: translateX(14px);
+}
+
+/* Control active banner */
+.idb-control-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: var(--warn-wash);
+  border-bottom: 1px solid var(--warn);
+  flex-shrink: 0;
+}
+
+/* Socket error banner */
+.idb-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  flex-shrink: 0;
+}
+
+/* Viewport container */
+.idb-viewport {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  background: #202020;
+}
+.idb-viewport.can-control {
+  cursor: default;
+}
+
+/* Canvas — hidden until first frame */
+.idb-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: none;
+  outline: none;
+}
+.idb-canvas.is-visible {
+  display: block;
+}
+.idb-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Fallback screenshot */
+.idb-fallback {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  opacity: 0.85;
+}
+
+/* Empty-state placeholder */
+.idb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-3);
+  text-align: center;
+  padding: 24px 16px;
+  font-size: 0.84rem;
+}
+.idb-empty p {
+  margin: 0;
+}
+
+/* View-only hint overlay (shown on hover when not in control) */
+.idb-viewonly-hint {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  text-align: center;
+  background: rgba(0,0,0,0.55);
+  color: rgba(255,255,255,0.9);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.idb-viewport:hover .idb-viewonly-hint {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .idb-viewonly-hint { transition: none; }
+}
+
+/* Sidebar popped note */
+.idb-sidebar-popped-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  padding: 20px 12px;
+  color: var(--ink-3);
+  font-size: 0.83rem;
+  text-align: center;
+}
+.idb-sidebar-popped-note p {
+  margin: 0;
+}
+
+/* Main-area pop-out overlay */
+.idb-main-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+  border-left: 1px solid var(--line);
+}
+
+/* ── Activity bar badge (Outputs count) ─────────────────────────── */
+.ide-activity-btn {
+  position: relative; /* ensure badge positions relative to button */
+}
+.ide-activity-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ── Outputs panel ───────────────────────────────────────────────── */
+.ide-outputs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.ide-outputs-actions {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.ide-outputs-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  padding: 20px 14px;
+  color: var(--ink-3);
+  text-align: center;
+  font-size: 0.82rem;
+}
+.ide-outputs-empty p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.ide-outputs-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* .ide-outputs-item layout now defined at the bottom of the file (flex + thumb/badge) */
+
+.ide-outputs-item-name {
+  font-size: 0.82rem;
+  font-weight: 560;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ide-outputs-version {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-wash);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.ide-outputs-item-folder {
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.ide-outputs-item-meta {
+  font-size: 0.72rem;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.ide-outputs-item-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+/* ── Outputs panel — item with leading thumbnail/badge ──── */
+.ide-outputs-item {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-2);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ide-outputs-item:last-child {
+  border-bottom: none;
+}
+/* Thumbnail button (images) */
+.ide-outputs-thumb-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.12s;
+}
+.ide-outputs-thumb-btn:hover {
+  border-color: var(--accent);
+}
+.ide-outputs-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  display: block;
+}
+/* Type badge (non-images) */
+.ide-outputs-type-badge {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--canvas);
+}
+.ide-outputs-type-label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1;
+}
+/* Main info column (wraps name, folder, meta, actions) */
+.ide-outputs-item-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+/* ── Activity button flash ───────────────────────────── */
+@keyframes ide-activity-flash {
+  0%   { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+  60%  { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  100% { background: transparent; color: var(--ink-3); }
+}
+.ide-activity-btn--flash {
+  animation: ide-activity-flash 2s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ide-activity-btn--flash { animation: none; }
+}
+
+/* ── Run outputs card (in the chat feed) ─────────────── */
+.run-outputs-card {
+  margin: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--canvas);
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+.run-outputs-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--line-2);
+  font-weight: 600;
+  font-size: 0.79rem;
+  color: var(--ink-2);
+}
+.run-outputs-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.run-outputs-card-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line-2);
+}
+.run-outputs-card-item:last-child {
+  border-bottom: none;
+}
+/* Thumbnail button */
+.run-outputs-card-thumb-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.12s;
+}
+.run-outputs-card-thumb-btn:hover {
+  border-color: var(--accent);
+}
+.run-outputs-card-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  display: block;
+}
+/* Type badge */
+.run-outputs-card-type-badge {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+.run-outputs-card-type-label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1;
+}
+/* File info column */
+.run-outputs-card-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.run-outputs-card-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 540;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.run-outputs-card-item-meta {
+  font-size: 0.72rem;
+}
+/* Actions */
+.run-outputs-card-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* Show-all button */
+.run-outputs-card-show-more {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 5px 12px;
+  border-top: 1px solid var(--line-2);
+  border-radius: 0;
+  color: var(--ink-2);
+  font-size: 0.79rem;
+}
+/* Footer */
+.run-outputs-card-footer {
+  display: flex;
+  gap: 4px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--line-2);
+  background: var(--raised);
 }
