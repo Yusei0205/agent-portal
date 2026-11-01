@@ -777,6 +777,18 @@
       ],
       "smokeIds": [],
       "note": "Spike A container. run.ts and index.ts are not unit-tested here; the full container is smoke-tested via the local docker run in docs/plans/2026-11-01-spike-a-agentcore-results.md."
+    },
+    "kiro-runner": {
+      "description": "Kiro CLI AgentCore Runtime container — payload validation (backend-only; no smoke section)",
+      "sources": [
+        "kiro-runner/src/validate.ts",
+        "kiro-runner/src/run.ts",
+        "kiro-runner/src/login.ts",
+        "kiro-runner/src/index.ts"
+      ],
+      "tests": [],
+      "smokeIds": [],
+      "note": "Spike B container. No unit tests yet — the container is tested end-to-end via infra/scripts/spike-b-run.mjs. Add kiro-runner-validation.test.ts if validate.ts logic grows."
     }
   },
 

@@ -4,20 +4,34 @@ CDK TypeScript stacks for `main_v3` spikes.
 
 | Stack | Purpose |
 |---|---|
-| `AgentPortalSpikeA` | AgentCore Runtime (agent-runner container) |
+| `AgentPortalSpikeA` | AgentCore Runtime (agent-runner container, Claude Code via Bedrock) |
+| `AgentPortalSpikeB` | AgentCore Runtime (kiro-runner container, kiro-cli headless via IdC) |
 | `AgentPortalSpikeC` | AppSync Events live-update channels proof |
 
 ## What it creates
+
+### Spike A
 
 - ECR repository `agent-portal/agent-runner` (lifecycle rule: keep 3 images)
 - IAM execution role `agent-portal-spike-a-runtime-role` (Bedrock InvokeModel + logs + ECR)
 - CloudWatch Log Group `/aws/bedrock-agentcore/agent-runner` (14-day retention)
 - AgentCore Runtime `agentPortalSpikeA-1BMsBp5VDV` (PUBLIC network, 5-min idle, 30-min max)
 
-## Runtime ARN
-
+**Runtime ARN:**
 ```
 arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalSpikeA-1BMsBp5VDV
+```
+
+### Spike B
+
+- ECR repository `agent-portal/kiro-runner` (lifecycle rule: keep 3 images; kiro-cli 2.37.1 musl/arm64)
+- IAM execution role `agent-portal-spike-b-runtime-role` (logs + ECR only — no Bedrock)
+- CloudWatch Log Group `/aws/bedrock-agentcore/kiro-runner` (14-day retention)
+- AgentCore Runtime `agentPortalSpikeB-bdj4np3GHd` (PUBLIC network, 5-min idle, 30-min max)
+
+**Runtime ARN:**
+```
+arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalSpikeB-bdj4np3GHd
 ```
 
 ## Deploy
@@ -26,6 +40,8 @@ Prerequisites:
 - AWS CLI profile `agentcore` configured
 - Docker Desktop running with linux/arm64 emulation (QEMU)
 - CDK CLI 2.1147.0+ (`npm install -g aws-cdk@latest`)
+
+### Spike A
 
 ```sh
 # From repo root: build and push image to ECR
@@ -38,10 +54,32 @@ docker push 366019841051.dkr.ecr.ap-southeast-1.amazonaws.com/agent-portal/agent
 # Deploy the CDK stack
 cd infra
 npm install
-cdk deploy --profile agentcore --require-approval never
+cdk deploy AgentPortalSpikeA --profile agentcore --require-approval never
+```
+
+### Spike B
+
+```sh
+# From repo root: build and push kiro-runner image to ECR
+# (create ECR repo first if it doesn't exist)
+aws ecr create-repository --repository-name agent-portal/kiro-runner \
+  --region ap-southeast-1 --profile agentcore
+
+$loginPwd = aws ecr get-login-password --region ap-southeast-1 --profile agentcore
+$loginPwd | docker login --username AWS --password-stdin 366019841051.dkr.ecr.ap-southeast-1.amazonaws.com
+docker buildx build --platform linux/arm64 --load -f kiro-runner/Dockerfile -t kiro-runner:local .
+docker tag kiro-runner:local 366019841051.dkr.ecr.ap-southeast-1.amazonaws.com/agent-portal/kiro-runner:latest
+docker push 366019841051.dkr.ecr.ap-southeast-1.amazonaws.com/agent-portal/kiro-runner:latest
+
+# Deploy the CDK stack
+cd infra
+npm install
+cdk deploy AgentPortalSpikeB --profile agentcore --require-approval never
 ```
 
 ## Invoke
+
+### Spike A
 
 ```sh
 # Single normal run
@@ -63,31 +101,58 @@ node scripts/invoke.mjs --repo
 node scripts/invoke.mjs --diag
 ```
 
+### Spike B
+
+```sh
+# Run kiro-cli headless with the stored IdC credential
+# (reads data/portal.db, refreshes the OIDC token, invokes kiro-runner)
+node scripts/spike-b-run.mjs
+
+# Start device-flow login (user must approve code in browser — do not run unattended)
+node scripts/spike-b-login.mjs
+```
+
 ## Destroy
 
-The stack costs nothing when idle (no running sessions). ECR storage is ~$0.06/month for a 614 MB image.
+### Spike A
 
-To tear everything down:
+The Spike A stack costs nothing when idle (no running sessions). ECR storage is ~$0.06/month for a 644 MB image.
 
 ```sh
 cd infra
-npx cdk destroy --profile agentcore
-```
-
-Then delete the ECR repo (CDK does not manage it since it was created via CLI):
-
-```sh
+npx cdk destroy AgentPortalSpikeA --profile agentcore
 aws ecr delete-repository --repository-name agent-portal/agent-runner \
   --force --region ap-southeast-1 --profile agentcore
 ```
 
+### Spike B
+
+The Spike B stack costs ~$0.04/month idle (kiro-runner image, no Bedrock cost).
+
+```sh
+cd infra
+npx cdk destroy AgentPortalSpikeB --profile agentcore
+aws ecr delete-repository --repository-name agent-portal/kiro-runner \
+  --force --region ap-southeast-1 --profile agentcore
+```
+
 ## Cost
+
+### Spike A
 
 With idle stack (no invocations): ~$0.06/month (ECR storage).  
 Per short run (5–10 s): ~$0.009–$0.025 (Bedrock tokens; compute is negligible).  
 20 runs/day of 10-minute sessions: ~$32–62/month (Bedrock tokens dominate).
 
 See `docs/plans/2026-11-01-spike-a-agentcore-results.md` for full measurements.
+
+### Spike B
+
+With idle stack: ~$0.04/month (ECR storage for 399 MB kiro-runner image).  
+kiro-cli uses Kiro's service endpoints (not Bedrock) — no Bedrock token cost.  
+AgentCore compute: same pricing as Spike A; CPU scales to zero during kiro API calls.
+
+See `docs/plans/2026-11-02-spike-b-kiro-agentcore-results.md` for full measurements.
 
 ---
 
