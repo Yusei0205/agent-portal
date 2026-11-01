@@ -12,10 +12,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { router, sendJson, requireAuth } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
-import { one, all, run, insert, getDb } from '../db.ts';
-import { generateId, now, str, badRequest, HttpError } from '../util.ts';
+import { one, insert, getDb } from '../db.ts';
+import { generateId, now, str, badRequest } from '../util.ts';
 import { appendAudit } from '../audit.ts';
 import { hashPassword } from '../auth.ts';
+import { getAuthRepository } from '../repositories/auth.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -35,40 +36,32 @@ function requireAdmin(req: PortalRequest, res: PortalResponse): boolean {
 
 export function registerUserRoutes(): void {
   // GET /api/governance/users — list all users
-  router.get('/api/governance/users', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/governance/users', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
-    const users = all<{
-      id: string;
-      email: string;
-      name: string;
-      is_admin: number;
-      disabled: number;
-      created_at: string;
-      last_active_at: string | null;
-    }>(
-      `SELECT u.id, u.email, u.name, u.is_admin, u.disabled, u.created_at,
-              MAX(s.created_at) AS last_active_at
-         FROM users u
-         LEFT JOIN sessions s ON s.user_id = u.id
-        GROUP BY u.id
-        ORDER BY u.created_at`,
-    );
+    const users = await getAuthRepository().listUsersWithLastActive();
 
-    sendJson(res, 200, { users });
+    sendJson(res, 200, {
+      users: users.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        is_admin: u.is_admin,
+        disabled: u.disabled,
+        created_at: u.created_at,
+        last_active_at: u.last_active_at ?? null,
+      })),
+    });
   }));
 
   // PUT /api/governance/users/:id — update user (admin only)
-  router.put('/api/governance/users/:id', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.put('/api/governance/users/:id', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const userId = req.params.id;
     const body = req.body as Record<string, unknown>;
 
-    const user = one<{ id: string; email: string; is_admin: number }>(
-      'SELECT id, email, is_admin FROM users WHERE id = ?',
-      userId,
-    );
+    const user = await getAuthRepository().getUserById(userId);
     if (!user) {
       sendJson(res, 404, { error: 'User not found' });
       return;
@@ -85,12 +78,7 @@ export function registerUserRoutes(): void {
     if (typeof body.is_admin === 'boolean') patch.is_admin = body.is_admin ? 1 : 0;
 
     if (Object.keys(patch).length > 0) {
-      const setClauses = Object.keys(patch).map((k) => `${k} = ?`).join(', ');
-      run(
-        `UPDATE users SET ${setClauses} WHERE id = ?`,
-        ...Object.values(patch),
-        userId,
-      );
+      await getAuthRepository().updateUserFields(userId, patch);
     }
 
     appendAudit(
@@ -102,12 +90,21 @@ export function registerUserRoutes(): void {
       req.ip,
     );
 
-    const updated = one<{ id: string; email: string; name: string; is_admin: number; disabled: number }>(
-      'SELECT id, email, name, is_admin, disabled FROM users WHERE id = ?',
-      userId,
-    )!;
+    const updated = await getAuthRepository().getUserById(userId);
+    if (!updated) {
+      sendJson(res, 500, { error: 'Failed to retrieve updated user' });
+      return;
+    }
 
-    sendJson(res, 200, { user: updated });
+    sendJson(res, 200, {
+      user: {
+        id: updated.id,
+        email: updated.email,
+        name: updated.name,
+        is_admin: updated.is_admin,
+        disabled: updated.disabled,
+      },
+    });
   }));
 
   // POST /api/governance/invitations — create invitation
@@ -128,7 +125,7 @@ export function registerUserRoutes(): void {
 
     // Check for existing user with this email
     if (email) {
-      const existing = one('SELECT id FROM users WHERE email = ?', email);
+      const existing = await getAuthRepository().getUserByEmail(email);
       if (existing) throw badRequest('A user with this email already exists');
     }
 
@@ -139,7 +136,7 @@ export function registerUserRoutes(): void {
     // Expiry: 7 days
     const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
 
-    insert('invitations', {
+    await getAuthRepository().createInvitation({
       token_hash: tokenHash,
       email: email || null,
       is_admin: role === 'admin' ? 1 : 0,
@@ -179,29 +176,24 @@ export function registerUserRoutes(): void {
   }));
 
   // GET /api/governance/invitations — list pending invitations
-  router.get('/api/governance/invitations', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/governance/invitations', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
-    const invitations = all<{
-      token_hash: string;
-      email: string | null;
-      is_admin: number;
-      portal_role: string;
-      project_id: string | null;
-      expires_at: string;
-      created_by: string;
-      created_at: string;
-      used_at: string | null;
-    }>(
-      `SELECT token_hash, email, is_admin, portal_role, project_id,
-              expires_at, created_by, created_at, used_at
-         FROM invitations
-        WHERE used_at IS NULL AND expires_at > ?
-        ORDER BY created_at DESC`,
-      now(),
-    );
+    const invitations = await getAuthRepository().listPendingInvitations(now());
 
-    sendJson(res, 200, { invitations });
+    sendJson(res, 200, {
+      invitations: invitations.map((inv) => ({
+        token_hash: inv.token_hash,
+        email: inv.email ?? null,
+        is_admin: inv.is_admin,
+        portal_role: inv.portal_role,
+        project_id: inv.project_id ?? null,
+        expires_at: inv.expires_at,
+        created_by: inv.created_by,
+        created_at: inv.created_at,
+        used_at: inv.used_at ?? null,
+      })),
+    });
   }));
 
   // POST /api/auth/accept-invite — accept an invitation (public)
@@ -216,18 +208,7 @@ export function registerUserRoutes(): void {
     if (password.length < 10) throw badRequest('Password must be at least 10 characters');
 
     const tokenHash = sha256(token);
-    const inv = one<{
-      token_hash: string;
-      email: string | null;
-      is_admin: number;
-      portal_role: string;
-      project_id: string | null;
-      expires_at: string;
-      used_at: string | null;
-    }>(
-      'SELECT token_hash, email, is_admin, portal_role, project_id, expires_at, used_at FROM invitations WHERE token_hash = ?',
-      tokenHash,
-    );
+    const inv = await getAuthRepository().getInvitationByHash(tokenHash);
 
     if (!inv) {
       sendJson(res, 400, { error: 'Invitation not found or already used' });
@@ -249,21 +230,35 @@ export function registerUserRoutes(): void {
     }
 
     // Check for duplicate
-    if (one('SELECT id FROM users WHERE email = ?', email)) {
+    if (await getAuthRepository().getUserByEmail(email)) {
       throw badRequest('A user with this email already exists');
     }
 
-    // Create the user
+    // Claim the invite FIRST (atomic). If already used, return 400 without creating a user.
     const userId = generateId();
-    insert('users', {
-      id: userId,
-      email,
-      name: name.trim(),
-      password_hash: hashPassword(password),
-      is_admin: inv.is_admin,
-      disabled: 0,
-      created_at: now(),
-    });
+    const usedAt = now();
+    const claimed = await getAuthRepository().markInvitationUsed(tokenHash, userId, usedAt);
+    if (!claimed) {
+      sendJson(res, 400, { error: 'This invitation has already been used' });
+      return;
+    }
+
+    // Create the user — release the invite claim on failure so the invite can be retried.
+    try {
+      await getAuthRepository().createUser({
+        id: userId,
+        email,
+        name: name.trim(),
+        password_hash: hashPassword(password),
+        is_admin: inv.is_admin,
+        disabled: 0,
+        created_at: usedAt,
+      });
+    } catch (e: unknown) {
+      // Release the claim so the invite remains usable
+      await getAuthRepository().releaseInvitationClaim(tokenHash).catch(() => {/* best-effort */});
+      throw e;
+    }
 
     // If invitation had a project, add the user as a member
     if (inv.project_id) {
@@ -281,14 +276,6 @@ export function registerUserRoutes(): void {
         }
       }
     }
-
-    // Mark invitation as used
-    run(
-      'UPDATE invitations SET used_at = ?, used_by = ? WHERE token_hash = ?',
-      now(),
-      userId,
-      tokenHash,
-    );
 
     appendAudit(
       getDb(),

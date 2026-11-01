@@ -13,13 +13,14 @@
  */
 
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { router, sendJson, setCookie, parseCookies, setAuthenticator } from './http.ts';
+import { router, sendJson, setCookie, parseCookies, setAuthenticator, registerBackgroundWrite } from './http.ts';
 import type { PortalRequest, PortalResponse, PortalUser, AuthInfo } from './http.ts';
-import { one, run, insert, update, all } from './db.ts';
-import { generateId, now, str, badRequest, HttpError } from './util.ts';
-import { getApiTokenRepository } from './repositories/api-tokens.ts';
-import { appendAudit } from './audit.ts';
 import { getDb } from './db.ts';
+import { generateId, now, str, badRequest } from './util.ts';
+import { getApiTokenRepository } from './repositories/api-tokens.ts';
+import { getAuthRepository } from './repositories/auth.ts';
+import { EmailAlreadyTakenError, AdminAlreadyExistsError } from './repositories/auth.ts';
+import { appendAudit } from './audit.ts';
 import { config } from './config.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -56,69 +57,77 @@ function sha256(s: string): string {
 
 // ── User helpers ──────────────────────────────────────────────────────────────
 
-export function userCount(): number {
-  return (one<{ n: number }>('SELECT COUNT(*) AS n FROM users')?.n ?? 0);
-}
-
-export function createUser(input: {
+export async function createUser(input: {
   email: string;
   name: string;
   password: string;
   isAdmin: boolean;
-}): PortalUser {
+}): Promise<PortalUser> {
   const email = input.email.trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+$/.test(email)) throw badRequest('Enter a valid email address');
   if (input.password.length < 10) throw badRequest('Password must be at least 10 characters');
-  if (one('SELECT id FROM users WHERE email = ?', email)) {
-    throw badRequest('A user with this email already exists');
-  }
+
+  const repo = getAuthRepository();
   const id = generateId();
-  insert('users', {
-    id,
-    email,
-    name: str(input.name, 'Name', { max: 120 }).trim(),
-    password_hash: hashPassword(input.password),
-    is_admin: input.isAdmin ? 1 : 0,
-    disabled: 0,
-    created_at: now(),
-  });
-  return one<PortalUser>('SELECT id, email, name, is_admin FROM users WHERE id = ?', id)!;
+  let user;
+  try {
+    user = await repo.createUser({
+      id,
+      email,
+      name: str(input.name, 'Name', { max: 120 }).trim(),
+      password_hash: hashPassword(input.password),
+      is_admin: input.isAdmin ? 1 : 0,
+      disabled: 0,
+      created_at: now(),
+    });
+  } catch (e: unknown) {
+    if (e instanceof EmailAlreadyTakenError) {
+      throw badRequest('A user with this email already exists');
+    }
+    throw e;
+  }
+
+  return { id: user.id, email: user.email, name: user.name, is_admin: user.is_admin };
 }
 
 // ── Session management ────────────────────────────────────────────────────────
 
-function startSession(res: PortalResponse, userId: string, secure: boolean): void {
+async function startSession(res: PortalResponse, userId: string, secure: boolean): Promise<void> {
   const token = randomBytes(32).toString('base64url');
   const expires = new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString();
-  insert('sessions', {
+  const ts = now();
+  await getAuthRepository().createSession({
     token_hash: sha256(token),
     user_id: userId,
-    created_at: now(),
     expires_at: expires,
+    created_at: ts,
   });
   setCookie(res, COOKIE_NAME, token, { maxAge: SESSION_DAYS * 86400, secure });
 }
 
 export function cleanupSessions(): void {
-  run('DELETE FROM sessions WHERE expires_at < ?', now());
+  // Route through the repository so both SQLite and DynamoDB handle expiry correctly.
+  // DynamoDB: TTL handles automatic expiry; deleteExpiredSessions() is a no-op.
+  getAuthRepository().deleteExpiredSessions().catch(() => {/* best-effort cleanup */});
 }
 
 // ── Authenticator (used by HTTP router) ───────────────────────────────────────
 
 export async function authenticate(rawReq: import('node:http').IncomingMessage, authInfo: AuthInfo = {}): Promise<PortalUser | null> {
-  // 1. Try cookie auth first (synchronous SQLite lookup)
+  // 1. Try cookie auth (session lookup via repository)
   const cookieHeader = rawReq.headers.cookie;
   if (cookieHeader) {
     const cookies = parseCookies(cookieHeader);
     const token = cookies[COOKIE_NAME];
     if (token) {
-      const row = one<PortalUser & { expires_at: string; disabled: number }>(
-        `SELECT u.id, u.email, u.name, u.is_admin, u.disabled, s.expires_at
-           FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`,
-        sha256(decodeURIComponent(token)),
-      );
-      if (row && !row.disabled && row.expires_at >= now()) {
-        return { id: row.id, email: row.email, name: row.name, is_admin: row.is_admin };
+      const session = await getAuthRepository().getSessionWithUser(sha256(decodeURIComponent(token)));
+      if (session && !session.disabled && session.expires_at >= now()) {
+        return {
+          id: session.user_id,
+          email: session.email,
+          name: session.name,
+          is_admin: session.is_admin,
+        };
       }
     }
   }
@@ -139,9 +148,10 @@ export async function authenticate(rawReq: import('node:http').IncomingMessage, 
       authInfo.authViaToken = true;
       authInfo.tokenWorkflowId = row.workflow_id ?? null;
 
-      // Update last_used_at at most once per minute (fire-and-forget)
+      // Update last_used_at at most once per minute (tracked background write)
       if (!row.last_used_at || Date.parse(row.last_used_at) < Date.now() - 60_000) {
-        repo.updateLastUsed(row.id, row.user_id, now()).catch(() => {/* non-fatal */});
+        const p = repo.updateLastUsed(row.id, row.user_id, now()).catch(() => {/* non-fatal */});
+        registerBackgroundWrite(p);
       }
 
       return { id: row.user_id, email: row.user_email, name: row.user_name, is_admin: row.user_is_admin };
@@ -199,8 +209,8 @@ export function registerAuthRoutes(): void {
   setAuthenticator(authenticate);
 
   // GET /api/auth/state
-  router.get('/api/auth/state', (req: PortalRequest, res: PortalResponse): void => {
-    const needsSetup = userCount() === 0;
+  router.get('/api/auth/state', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const needsSetup = (await getAuthRepository().countUsers()) === 0;
     const user = req.user;
     sendJson(res, 200, {
       loggedIn: user != null,
@@ -236,12 +246,9 @@ export function registerAuthRoutes(): void {
       return;
     }
 
-    const row = one<{ id: string; password_hash: string; disabled: number }>(
-      'SELECT id, password_hash, disabled FROM users WHERE email = ?',
-      email,
-    );
+    const user = await getAuthRepository().getUserByEmail(email);
 
-    if (!row || row.disabled || !verifyPassword(password, row.password_hash)) {
+    if (!user || user.disabled || !verifyPassword(password, user.password_hash)) {
       const next = {
         count: (failures && failures.until > Date.now() ? failures.count : 0) + 1,
         until: Date.now() + 15 * 60_000,
@@ -252,21 +259,21 @@ export function registerAuthRoutes(): void {
     }
 
     loginFailures.delete(rateKey);
-    startSession(res, row.id, req.secure);
-    appendAudit(getDb(), row.id, 'auth.login', `user:${row.id}`, { email }, req.ip);
+    await startSession(res, user.id, req.secure);
+    appendAudit(null, user.id, 'auth.login', `user:${user.id}`, { email }, req.ip);
     sendJson(res, 200, { ok: true });
   });
 
   // POST /api/auth/logout
-  router.post('/api/auth/logout', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/auth/logout', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const cookies = parseCookies(req.headers.cookie);
     const token = cookies[COOKIE_NAME];
     if (token) {
-      run('DELETE FROM sessions WHERE token_hash = ?', sha256(decodeURIComponent(token)));
+      await getAuthRepository().deleteSession(sha256(decodeURIComponent(token)));
     }
     setCookie(res, COOKIE_NAME, '', { maxAge: 0, secure: req.secure });
     if (req.user) {
-      appendAudit(getDb(), req.user.id, 'auth.logout', `user:${req.user.id}`, {}, req.ip);
+      appendAudit(null, req.user.id, 'auth.logout', `user:${req.user.id}`, {}, req.ip);
     }
     sendJson(res, 200, { ok: true });
   });
@@ -280,17 +287,6 @@ export function registerAuthRoutes(): void {
       sendJson(res, 429, { error: 'Too many setup attempts. Try again in an hour.' });
       return;
     }
-
-    if (userCount() > 0) {
-      sendJson(res, 409, { error: 'Setup is already done. Sign in instead.' });
-      return;
-    }
-
-    // Record the attempt
-    setupAttempts.set(ip, {
-      count: (sa && sa.until > Date.now() ? sa.count : 0) + 1,
-      until: Date.now() + 3600_000,
-    });
 
     const body = req.body as Record<string, unknown>;
 
@@ -311,8 +307,43 @@ export function registerAuthRoutes(): void {
       sendJson(res, 400, { error: 'Password must be at least 10 characters' });
       return;
     }
+    if (!/^[^@\s]+@[^@\s]+$/.test(email)) {
+      sendJson(res, 400, { error: 'Enter a valid email address' });
+      return;
+    }
 
-    const user = createUser({ email, name, password, isAdmin: true });
+    // Record the attempt
+    setupAttempts.set(ip, {
+      count: (sa && sa.until > Date.now() ? sa.count : 0) + 1,
+      until: Date.now() + 3600_000,
+    });
+
+    // Atomically create the first admin only if no users exist yet.
+    // createFirstAdmin() checks count=0 and inserts the user in a single atomic operation.
+    // A concurrent request, or a pre-existing user in the database, returns AdminAlreadyExistsError.
+    let user: import('./http.ts').PortalUser;
+    try {
+      const record = await getAuthRepository().createFirstAdmin({
+        id: generateId(),
+        email,
+        name: str(name, 'Name', { max: 120 }).trim(),
+        password_hash: hashPassword(password),
+        is_admin: 1,
+        disabled: 0,
+        created_at: now(),
+      });
+      user = { id: record.id, email: record.email, name: record.name, is_admin: record.is_admin };
+    } catch (e: unknown) {
+      if (e instanceof AdminAlreadyExistsError) {
+        sendJson(res, 409, { error: 'Setup is already done. Sign in instead.' });
+        return;
+      }
+      if (e instanceof EmailAlreadyTakenError) {
+        sendJson(res, 400, { error: 'A user with this email already exists' });
+        return;
+      }
+      throw e;
+    }
 
     // Write wizard settings if provided
     const db = getDb();
@@ -345,8 +376,8 @@ export function registerAuthRoutes(): void {
       );
     }
 
-    startSession(res, user.id, req.secure);
-    appendAudit(db, user.id, 'auth.setup', `user:${user.id}`, { email: user.email }, req.ip);
+    await startSession(res, user.id, req.secure);
+    appendAudit(null, user.id, 'auth.setup', `user:${user.id}`, { email: user.email }, req.ip);
 
     // Clear rate limit on success
     setupAttempts.delete(ip);
@@ -355,11 +386,14 @@ export function registerAuthRoutes(): void {
   });
 
   // GET /api/users  (admin: list users)
-  router.get('/api/users', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/users', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     if (!req.user.is_admin) { sendJson(res, 403, { error: 'Admin access required' }); return; }
-    const users = all('SELECT id, email, name, is_admin, disabled, created_at FROM users ORDER BY created_at');
-    sendJson(res, 200, { users });
+    const users = await getAuthRepository().listUsersWithLastActive();
+    sendJson(res, 200, { users: users.map((u) => ({
+      id: u.id, email: u.email, name: u.name, is_admin: u.is_admin,
+      disabled: u.disabled, created_at: u.created_at,
+    })) });
   });
 
   // POST /api/users  (admin: create user)
@@ -367,13 +401,13 @@ export function registerAuthRoutes(): void {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     if (!req.user.is_admin) { sendJson(res, 403, { error: 'Only admins can do this' }); return; }
     const body = req.body as Record<string, unknown>;
-    const user = createUser({
+    const user = await createUser({
       email: String(body.email ?? ''),
       name: String(body.name ?? ''),
       password: String(body.password ?? ''),
       isAdmin: Boolean(body.isAdmin),
     });
-    appendAudit(getDb(), req.user.id, 'user.create', `user:${user.id}`, { email: user.email }, req.ip);
+    appendAudit(null, req.user.id, 'user.create', `user:${user.id}`, { email: user.email }, req.ip);
     sendJson(res, 201, { user });
   });
 
@@ -381,8 +415,8 @@ export function registerAuthRoutes(): void {
   router.post('/api/auth/password', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     const body = req.body as Record<string, unknown>;
-    const row = one<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = ?', req.user.id)!;
-    if (!verifyPassword(String(body.current ?? ''), row.password_hash)) {
+    const user = await getAuthRepository().getUserById(req.user.id);
+    if (!user || !verifyPassword(String(body.current ?? ''), user.password_hash)) {
       sendJson(res, 400, { error: 'Current password is incorrect' });
       return;
     }
@@ -391,8 +425,8 @@ export function registerAuthRoutes(): void {
       sendJson(res, 400, { error: 'Password must be at least 10 characters' });
       return;
     }
-    update('users', req.user.id, { password_hash: hashPassword(newPassword) });
-    appendAudit(getDb(), req.user.id, 'auth.password_change', `user:${req.user.id}`, {}, req.ip);
+    await getAuthRepository().updateUserFields(req.user.id, { password_hash: hashPassword(newPassword) });
+    appendAudit(null, req.user.id, 'auth.password_change', `user:${req.user.id}`, {}, req.ip);
     sendJson(res, 200, { ok: true });
   });
 }

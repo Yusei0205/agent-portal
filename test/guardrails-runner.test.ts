@@ -10,14 +10,13 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb, cleanup } from './fixtures.ts';
-import { loadRunPermissions, evaluateCommand, clearAlwaysBlockedCache } from '../server/guardrails.ts';
+import { loadRunPermissions, evaluateCommand } from '../server/guardrails.ts';
 
 // ── Unit tests for evaluateCommand ────────────────────────────────────────────
 
 describe('evaluateCommand — cdk deploy always blocked', () => {
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
   });
 
   after(async () => {
@@ -48,7 +47,6 @@ describe('evaluateCommand — cdk deploy always blocked', () => {
 describe('evaluateCommand — git push depends on trust', () => {
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
   });
 
   after(async () => {
@@ -73,7 +71,6 @@ describe('evaluateCommand — git push depends on trust', () => {
 describe('evaluateCommand — no hardcoded lists', () => {
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
   });
 
   after(async () => {
@@ -118,7 +115,6 @@ describe('evaluateCommand — no hardcoded lists', () => {
 describe('evaluateCommand — project-level tool rules', () => {
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
   });
 
   after(async () => {

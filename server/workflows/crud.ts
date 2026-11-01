@@ -29,6 +29,7 @@ import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
 import { createChildSession, checkDelegationLimits, getDelegationSettings, stopAndDeleteChildren } from '../delegation.ts';
+import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
 import { checkKey, issueDetail, mustMapping } from '../jira.ts';
 
 // ── Constant ───────────────────────────────────────────────────────────────────
@@ -459,7 +460,7 @@ export function registerWorkflowRoutes(): void {
       const title = body.title ? str(body.title as string, 'title', { max: 200, optional: true }).trim() : undefined;
       const leadAgent = body.leadAgent ? str(body.leadAgent as string, 'leadAgent', { max: 200, optional: true }).trim() : undefined;
 
-      const settings = getDelegationSettings();
+      const settings = await getDelegationSettingsRepository().get();
       if (!settings.enabled) {
         sendJson(res, 429, { error: 'Delegation is disabled by the portal administrator.' });
         return;

@@ -16,6 +16,8 @@ import { encrypt, decrypt } from './secrets.ts';
 import { config } from './config.ts';
 import { badRequest, HttpError, now } from './util.ts';
 import { getDelegationSettings, setDelegationSettings } from './delegation.ts';
+import { getDelegationSettingsRepository } from './repositories/delegation-settings.ts';
+import type { DelegationSettings } from './repositories/delegation-settings.ts';
 import { spawn } from 'node:child_process';
 import { resolveKiroCmd } from './kiro-cmd.ts';
 import { spawnKiroListModels } from './kiro-list-models.ts';
@@ -1404,16 +1406,17 @@ export function registerSettingsRoutes(): void {
   }));
 
   // GET /api/admin/delegation — read delegation limits (admin write, everyone read)
-  router.get('/api/admin/delegation', requireAuth((_req: PortalRequest, res: PortalResponse) => {
-    sendJson(res, 200, getDelegationSettings());
+  router.get('/api/admin/delegation', requireAuth(async (_req: PortalRequest, res: PortalResponse) => {
+    const settings = await getDelegationSettingsRepository().get();
+    sendJson(res, 200, settings);
   }));
 
   // PUT /api/admin/delegation — update delegation limits (admin only)
-  router.put('/api/admin/delegation', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.put('/api/admin/delegation', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const body = req.body as Record<string, unknown>;
-    const patch: Parameters<typeof setDelegationSettings>[0] = {};
+    const patch: Partial<DelegationSettings> = {};
 
     if (body.enabled !== undefined) patch.enabled = Boolean(body.enabled);
 
@@ -1443,7 +1446,8 @@ export function registerSettingsRoutes(): void {
       patch.nudgeThreshold = Math.max(0, Math.min(20, Math.round(v)));
     }
 
-    setDelegationSettings(patch);
-    sendJson(res, 200, getDelegationSettings());
+    await getDelegationSettingsRepository().patch(patch);
+    const updated = await getDelegationSettingsRepository().get();
+    sendJson(res, 200, updated);
   }));
 }

@@ -11,6 +11,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import http from 'node:http';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { HttpError } from './util.ts';
 
 // ── Request / Response types ──────────────────────────────────────────────────
@@ -42,6 +43,62 @@ export interface PortalRequest extends IncomingMessage {
 export type PortalResponse = ServerResponse;
 
 export type Handler = (req: PortalRequest, res: PortalResponse) => Promise<void> | void;
+
+// ── Background write tracker ──────────────────────────────────────────────────
+//
+// Lambda freezes the Node.js event loop after the HTTP response is dispatched.
+// Fire-and-forget writes (audit appends, updateLastUsed) can be silently lost.
+//
+// Writes are tracked per-request using AsyncLocalStorage so concurrent requests
+// do not interfere with each other.  Each write is drained BEFORE res.end() is
+// called (by wrapping res.end), ensuring Lambda cannot freeze mid-write.
+//
+// SSE and streaming responses bypass the wrapper (isSSE routes are excluded).
+
+/** Per-request set of pending write promises (populated via AsyncLocalStorage). */
+const _requestWriteStorage = new AsyncLocalStorage<Set<Promise<unknown>>>();
+
+/** Fallback global set for writes registered outside request context. */
+const _pendingWrites = new Set<Promise<unknown>>();
+
+/**
+ * Register a background write promise so it completes before the response ends.
+ * Tracked per-request when called inside a request handler; falls back to the
+ * global set otherwise.  Idempotent — the promise is removed once it settles.
+ */
+export function registerBackgroundWrite(p: Promise<unknown>): void {
+  const store = _requestWriteStorage.getStore() ?? _pendingWrites;
+  const settled = p.finally(() => store.delete(settled));
+  store.add(settled);
+}
+
+/**
+ * Wait for all registered background writes (global fallback set only), up to `timeoutMs`.
+ * Errors in individual writes are ignored.
+ * @deprecated Prefer per-request draining via the AsyncLocalStorage mechanism.
+ */
+export async function drainBackgroundWrites(timeoutMs = 500): Promise<void> {
+  if (_pendingWrites.size === 0) return;
+  const pending = [..._pendingWrites];
+  await Promise.race([
+    Promise.allSettled(pending),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref()),
+  ]);
+}
+
+/**
+ * Drain the per-request write set (from AsyncLocalStorage).
+ * Called from the wrapped res.end before the response body is sent.
+ */
+async function _drainRequestWrites(timeoutMs = 500): Promise<void> {
+  const store = _requestWriteStorage.getStore();
+  if (!store || store.size === 0) return;
+  const pending = [...store];
+  await Promise.race([
+    Promise.allSettled(pending),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref()),
+  ]);
+}
 
 // ── Auth info (populated by authenticator, consumed by request handler) ───────
 
@@ -431,7 +488,32 @@ export function createRequestHandler(): (
         if (req.body === undefined) req.body = {};
       }
 
-      await matched.handler(req, res);
+      // ── Per-request write drain ───────────────────────────────────────────
+      // Wrap res.end so tracked writes settle BEFORE the response body is sent.
+      // Lambda Web Adapter may freeze the process as soon as res.end() writes its
+      // final bytes; draining first ensures audit / updateLastUsed writes complete.
+      // SSE routes are excluded: they keep the connection alive and are not frozen.
+      if (!matched.isSSE) {
+        const origEnd = res.end.bind(res) as typeof res.end;
+        let endCalled = false;
+        // @ts-ignore — intentional override of res.end signature
+        res.end = (...args: Parameters<typeof origEnd>) => {
+          if (endCalled) return origEnd(...args);
+          endCalled = true;
+          void _drainRequestWrites(500).then(
+            () => origEnd(...args),
+            () => origEnd(...args),
+          );
+          return res;
+        };
+      }
+
+      await _requestWriteStorage.run(new Set<Promise<unknown>>(), async () => {
+        await matched!.handler(req, res);
+      });
+
+      // Safety net: drain any writes registered outside the ALS context (global set).
+      await drainBackgroundWrites(500);
     } catch (err: unknown) {
       const isHttp = err instanceof HttpError;
       const status = isHttp ? err.status : 500;

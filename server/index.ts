@@ -9,8 +9,8 @@ import type { Config } from './config.ts';
 import { openDb, closeDb, isDbOpen } from './db.ts';
 import { createServer, clearRoutes, router, setWsUpgradeHandler } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { registerAuthRoutes, createUser, userCount, cleanupSessions } from './auth.ts';
-import { registerHealthRoutes } from './health.ts';
+import { registerAuthRoutes, createUser, cleanupSessions, hashPassword } from './auth.ts';
+import { getAuthRepository } from './repositories/auth.ts';import { registerHealthRoutes } from './health.ts';
 import { initStorage } from './storage-instance.ts';
 import { initApiTokenRepository } from './repositories/api-tokens.ts';
 import { config } from './config.ts';
@@ -89,6 +89,16 @@ export async function startServer(
 
   // 3a. Initialise api-token repository (SQLite by default, DynamoDB when configured)
   await initApiTokenRepository();
+
+  // 3b. Initialise auth, permissions, audit, and delegation-settings repositories
+  const { initAuthRepository } = await import('./repositories/auth.ts');
+  const { initPermissionsRepository } = await import('./repositories/permissions.ts');
+  const { initAuditRepository } = await import('./repositories/audit.ts');
+  const { initDelegationSettingsRepository } = await import('./repositories/delegation-settings.ts');
+  await initAuthRepository();
+  await initPermissionsRepository();
+  await initAuditRepository();
+  await initDelegationSettingsRepository();
 
   // 4. Open database and run migrations.
   // Skip if already open — tests may inject an in-memory DB before calling startServer.
@@ -178,19 +188,27 @@ export async function startServer(
   registerJiraRoutes();
   registerBrowserLiveRoutes();
 
-  // 6. Auto-create admin from env vars if no users exist
-  if (
-    userCount() === 0 &&
-    process.env.ADMIN_EMAIL &&
-    process.env.ADMIN_PASSWORD
-  ) {
-    createUser({
-      email: process.env.ADMIN_EMAIL,
-      name: process.env.ADMIN_NAME ?? 'Admin',
-      password: process.env.ADMIN_PASSWORD,
-      isAdmin: true,
-    });
-    console.log(`[setup] Created admin account ${process.env.ADMIN_EMAIL}`);
+  // 6. Auto-create admin from env vars if no users exist.
+  // Uses createFirstAdmin() which atomically checks count=0 before inserting,
+  // so concurrent Lambda cold starts cannot create two admin accounts.
+  // Silently skips when users already exist (no crash on env vars left in place).
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    try {
+      await getAuthRepository().createFirstAdmin({
+        id: (await import('./util.ts')).generateId(),
+        email: process.env.ADMIN_EMAIL.trim().toLowerCase(),
+        name: process.env.ADMIN_NAME ?? 'Admin',
+        password_hash: hashPassword(process.env.ADMIN_PASSWORD),
+        is_admin: 1,
+        disabled: 0,
+        created_at: (await import('./util.ts')).now(),
+      });
+      console.log(`[setup] Created admin account ${process.env.ADMIN_EMAIL}`);
+    } catch (e: unknown) {
+      // AdminAlreadyExistsError is expected when the portal already has users — not fatal
+      const { AdminAlreadyExistsError } = await import('./repositories/auth.ts');
+      if (!(e instanceof AdminAlreadyExistsError)) throw e;
+    }
   }
 
   // 7. Start HTTP server
@@ -221,7 +239,7 @@ export async function startServer(
   console.log(`Server listening on http://${displayHost}:${port}`);
   console.log(`Data folder: ${cfg.dataDir}`);
 
-  if (userCount() === 0) {
+  if ((await getAuthRepository().countUsers()) === 0) {
     console.log('Open the address above to create the first admin account.');
   }
 

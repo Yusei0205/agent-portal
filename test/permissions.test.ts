@@ -9,8 +9,6 @@
  *   - evaluateCommand ALLOWS 'git push' when trusted=true (scope=untrusted, skipped)
  *   - evaluateCommand returns allow for a harmless command like 'ls -la'
  *   - POST /api/admin/permissions/test returns block for 'cdk deploy'
- *   - isAlwaysBlocked('cdk deploy') returns true
- *   - isAlwaysBlocked('npm test') returns false
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -20,8 +18,6 @@ import { closeDb, run, insert, one } from '../server/db.ts';
 import {
   loadRunPermissions,
   evaluateCommand,
-  isAlwaysBlocked,
-  clearAlwaysBlockedCache,
 } from '../server/guardrails.ts';
 import { generateId, now } from '../server/util.ts';
 
@@ -30,7 +26,6 @@ import { generateId, now } from '../server/util.ts';
 describe('loadRunPermissions', () => {
   before(() => {
     createTestDb(); // opens in-memory DB with all migrations
-    clearAlwaysBlockedCache();
   });
 
   after(() => {
@@ -83,7 +78,6 @@ describe('loadRunPermissions', () => {
 describe('evaluateCommand', () => {
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
   });
 
   after(() => {
@@ -135,27 +129,6 @@ describe('evaluateCommand', () => {
   });
 });
 
-describe('isAlwaysBlocked', () => {
-  before(() => {
-    createTestDb();
-    clearAlwaysBlockedCache();
-  });
-
-  after(() => {
-    closeDb();
-  });
-
-  it("isAlwaysBlocked('cdk deploy') returns true", () => {
-    const result = isAlwaysBlocked('cdk deploy MyStack');
-    assert.equal(result, true);
-  });
-
-  it("isAlwaysBlocked('npm test') returns false", () => {
-    const result = isAlwaysBlocked('npm test');
-    assert.equal(result, false);
-  });
-});
-
 // ── API route tests ───────────────────────────────────────────────────────────
 
 describe('POST /api/admin/permissions/test', () => {
@@ -165,7 +138,6 @@ describe('POST /api/admin/permissions/test', () => {
   before(async () => {
     const ts = await createTestServer();
     baseUrl = ts.baseUrl;
-    clearAlwaysBlockedCache();
 
     // Create admin user
     const setupR = await fetchJson(baseUrl, '/api/auth/setup', {

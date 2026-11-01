@@ -17,15 +17,14 @@
 
 import { router, requireAuth, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run, insert } from './db.ts';
+import { one } from './db.ts';
 import { generateId, now, str, badRequest, notFound, forbidden } from './util.ts';
+import { getPermissionsRepository } from './repositories/permissions.ts';
 import {
   loadRunPermissions,
   evaluateCommand,
-  type PermissionRuleGroup,
-  type PermissionRule,
-  type ProjectToolRule,
 } from './guardrails.ts';
+import type { PermissionRuleGroup, PermissionRule, ProjectToolRule } from './repositories/permissions.ts';
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -60,13 +59,9 @@ function requireProjectOwner(
   return true;
 }
 
-/** Get the currently active default group id from portal_permissions. */
-function getDefaultGroupId(): string {
-  return (
-    one<{ default_group_id: string }>(
-      'SELECT default_group_id FROM portal_permissions WHERE id = 1',
-    )?.default_group_id ?? 'standard'
-  );
+/** Get the currently active default group id from the repository. */
+async function getDefaultGroupId(): Promise<string> {
+  return (await getPermissionsRepository().getPortalDefaultGroupId()) ?? 'standard';
 }
 
 // ── Portal-wide admin routes ──────────────────────────────────────────────────
@@ -74,28 +69,20 @@ function getDefaultGroupId(): string {
 export function registerPermissionRoutes(): void {
   /**
    * GET /api/admin/permissions
-   * Returns the active permission rule group and its rules.
    */
   router.get(
     '/api/admin/permissions',
     requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       if (!requireAdmin(req, res)) return;
 
-      const groupId = getDefaultGroupId();
-      const group = one<PermissionRuleGroup>(
-        'SELECT * FROM permission_rule_groups WHERE id = ?',
-        groupId,
-      );
+      const groupId = await getDefaultGroupId();
+      const group = await getPermissionsRepository().getGroupById(groupId);
       if (!group) {
         sendJson(res, 404, { error: `Permission group '${groupId}' not found` });
         return;
       }
 
-      const rules = all<PermissionRule>(
-        'SELECT * FROM permission_rules WHERE group_id = ? ORDER BY sort_order',
-        groupId,
-      );
-
+      const rules = await getPermissionsRepository().getRulesForGroup(groupId);
       sendJson(res, 200, { group, rules });
     }),
   );
@@ -103,7 +90,6 @@ export function registerPermissionRoutes(): void {
   /**
    * PUT /api/admin/permissions
    * Body: { defaultGroupId: string }
-   * Updates the portal-wide default permission group.
    */
   router.put(
     '/api/admin/permissions',
@@ -113,31 +99,19 @@ export function registerPermissionRoutes(): void {
       const body = req.body as Record<string, unknown>;
       const defaultGroupId = str(body.defaultGroupId, 'defaultGroupId');
 
-      // Verify the group exists
-      const group = one<{ id: string }>(
-        'SELECT id FROM permission_rule_groups WHERE id = ?',
-        defaultGroupId,
-      );
+      const group = await getPermissionsRepository().getGroupById(defaultGroupId);
       if (!group) {
         sendJson(res, 400, { error: `Permission group '${defaultGroupId}' not found` });
         return;
       }
 
-      run(
-        'UPDATE portal_permissions SET default_group_id = ?, updated_at = ? WHERE id = 1',
-        defaultGroupId,
-        now(),
-      );
-
+      await getPermissionsRepository().setPortalDefaultGroupId(defaultGroupId);
       sendJson(res, 200, { ok: true, defaultGroupId });
     }),
   );
 
   /**
    * POST /api/admin/permissions/rules
-   * Body: { name, pattern?, category?, action, scope, reason?, sortOrder? }
-   * Adds a new rule to the currently active group.
-   * Fails if the active group is built-in (is_builtin = 1).
    */
   router.post(
     '/api/admin/permissions/rules',
@@ -155,45 +129,38 @@ export function registerPermissionRoutes(): void {
         throw badRequest("scope must be 'always' or 'untrusted'");
       }
 
-      const groupId = getDefaultGroupId();
-      const group = one<{ id: string; is_builtin: number }>(
-        'SELECT id, is_builtin FROM permission_rule_groups WHERE id = ?',
-        groupId,
-      );
+      const groupId = await getDefaultGroupId();
+      const group = await getPermissionsRepository().getGroupById(groupId);
       if (!group) {
         sendJson(res, 404, { error: `Permission group '${groupId}' not found` });
         return;
       }
       if (group.is_builtin) {
-        throw badRequest(
-          'Cannot add rules to a built-in group. Create a custom group first.',
-        );
+        throw badRequest('Cannot add rules to a built-in group. Create a custom group first.');
       }
 
       const id = generateId();
       const ts = now();
-      insert('permission_rules', {
+      const rule = await getPermissionsRepository().createRule({
         id,
         group_id: groupId,
         name,
         pattern: body.pattern != null ? String(body.pattern) : null,
         category: body.category != null ? String(body.category) : null,
-        action,
-        scope,
+        action: action as 'allow' | 'block' | 'ask',
+        scope: scope as 'always' | 'untrusted',
         reason: body.reason != null ? String(body.reason) : null,
         sort_order: body.sortOrder != null ? Number(body.sortOrder) : 0,
         created_at: ts,
         updated_at: ts,
       });
 
-      const rule = one<PermissionRule>('SELECT * FROM permission_rules WHERE id = ?', id);
       sendJson(res, 201, { rule });
     }),
   );
 
   /**
    * DELETE /api/admin/permissions/rules/:id
-   * Deletes a rule. Fails if the rule belongs to a built-in group.
    */
   router.delete(
     '/api/admin/permissions/rules/:id',
@@ -201,27 +168,33 @@ export function registerPermissionRoutes(): void {
       if (!requireAdmin(req, res)) return;
 
       const ruleId = req.params.id;
-      const rule = one<PermissionRule & { is_builtin: number }>(
-        `SELECT r.*, g.is_builtin
-           FROM permission_rules r
-           JOIN permission_rule_groups g ON g.id = r.group_id
-          WHERE r.id = ?`,
-        ruleId,
-      );
-      if (!rule) throw notFound('Permission rule not found');
-      if (rule.is_builtin) {
+      // Find the rule and its group to check is_builtin
+      const groups = await getPermissionsRepository().listGroups();
+      let foundRule: PermissionRule | null = null;
+      let foundGroup: PermissionRuleGroup | null = null;
+
+      for (const group of groups) {
+        const rules = await getPermissionsRepository().getRulesForGroup(group.id);
+        const rule = rules.find((r) => r.id === ruleId);
+        if (rule) {
+          foundRule = rule;
+          foundGroup = group;
+          break;
+        }
+      }
+
+      if (!foundRule || !foundGroup) throw notFound('Permission rule not found');
+      if (foundGroup.is_builtin) {
         throw forbidden('Cannot delete rules from a built-in group');
       }
 
-      run('DELETE FROM permission_rules WHERE id = ?', ruleId);
+      await getPermissionsRepository().deleteRule(ruleId);
       sendJson(res, 200, { ok: true });
     }),
   );
 
   /**
    * POST /api/admin/permissions/test
-   * Body: { command, trusted?, projectId? }
-   * Tests a command against the effective permission rules and returns the decision.
    */
   router.post(
     '/api/admin/permissions/test',
@@ -240,13 +213,15 @@ export function registerPermissionRoutes(): void {
         trusted,
       );
 
-      // Include the matched rule details if available
+      // Include the matched rule if available
       let matchedRule: PermissionRule | null = null;
       if (decision.ruleId) {
-        matchedRule = one<PermissionRule>(
-          'SELECT * FROM permission_rules WHERE id = ?',
-          decision.ruleId,
-        ) ?? null;
+        const groups = await getPermissionsRepository().listGroups();
+        for (const group of groups) {
+          const rules = await getPermissionsRepository().getRulesForGroup(group.id);
+          matchedRule = rules.find((r) => r.id === decision.ruleId) ?? null;
+          if (matchedRule) break;
+        }
       }
 
       sendJson(res, 200, { decision, matchedRule });
@@ -257,7 +232,6 @@ export function registerPermissionRoutes(): void {
 
   /**
    * GET /api/projects/:id/permissions
-   * Returns the project's group override (or null) and its tool rules.
    */
   router.get(
     '/api/projects/:id/permissions',
@@ -265,15 +239,8 @@ export function registerPermissionRoutes(): void {
       const projectId = req.params.id;
       if (!requireProjectOwner(req, res, projectId)) return;
 
-      const override = one<{ rule_group_id: string }>(
-        'SELECT rule_group_id FROM project_permissions WHERE project_id = ?',
-        projectId,
-      );
-
-      const toolRules = all<ProjectToolRule>(
-        'SELECT * FROM project_tool_rules WHERE project_id = ?',
-        projectId,
-      );
+      const override = await getPermissionsRepository().getProjectPermissions(projectId);
+      const toolRules = await getPermissionsRepository().getProjectToolRules(projectId);
 
       sendJson(res, 200, {
         groupOverride: override?.rule_group_id ?? null,
@@ -284,8 +251,6 @@ export function registerPermissionRoutes(): void {
 
   /**
    * PUT /api/projects/:id/permissions
-   * Body: { ruleGroupId: string | null }
-   * Sets (or clears) the project's rule group override.
    */
   router.put(
     '/api/projects/:id/permissions',
@@ -297,39 +262,24 @@ export function registerPermissionRoutes(): void {
       const ruleGroupId = body.ruleGroupId != null ? String(body.ruleGroupId) : null;
 
       if (ruleGroupId === null) {
-        // Clear the project override
-        run('DELETE FROM project_permissions WHERE project_id = ?', projectId);
+        await getPermissionsRepository().clearProjectPermissions(projectId);
         sendJson(res, 200, { ok: true, groupOverride: null });
         return;
       }
 
-      // Verify the group exists
-      const group = one<{ id: string }>(
-        'SELECT id FROM permission_rule_groups WHERE id = ?',
-        ruleGroupId,
-      );
+      const group = await getPermissionsRepository().getGroupById(ruleGroupId);
       if (!group) {
         sendJson(res, 400, { error: `Permission group '${ruleGroupId}' not found` });
         return;
       }
 
-      run(
-        `INSERT INTO project_permissions (project_id, rule_group_id, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(project_id) DO UPDATE SET rule_group_id = excluded.rule_group_id, updated_at = excluded.updated_at`,
-        projectId,
-        ruleGroupId,
-        now(),
-      );
-
+      await getPermissionsRepository().setProjectPermissions(projectId, ruleGroupId);
       sendJson(res, 200, { ok: true, groupOverride: ruleGroupId });
     }),
   );
 
   /**
    * POST /api/projects/:id/tool-rules
-   * Body: { toolName, action, commandPattern?, scope? }
-   * Adds a tool rule to the project.
    */
   router.post(
     '/api/projects/:id/tool-rules',
@@ -350,28 +300,23 @@ export function registerPermissionRoutes(): void {
 
       const id = generateId();
       const ts = now();
-      insert('project_tool_rules', {
+      const rule = await getPermissionsRepository().createProjectToolRule({
         id,
         project_id: projectId,
         tool_name: toolName,
-        action,
+        action: action as 'allow' | 'block' | 'ask',
         command_pattern: body.commandPattern != null ? String(body.commandPattern) : null,
-        scope,
+        scope: scope as 'always' | 'untrusted',
         created_at: ts,
         updated_at: ts,
       });
 
-      const rule = one<ProjectToolRule>(
-        'SELECT * FROM project_tool_rules WHERE id = ?',
-        id,
-      );
       sendJson(res, 201, { rule });
     }),
   );
 
   /**
    * DELETE /api/projects/:id/tool-rules/:rid
-   * Deletes a project tool rule.
    */
   router.delete(
     '/api/projects/:id/tool-rules/:rid',
@@ -380,14 +325,11 @@ export function registerPermissionRoutes(): void {
       if (!requireProjectOwner(req, res, projectId)) return;
 
       const ruleId = req.params.rid;
-      const rule = one<ProjectToolRule>(
-        'SELECT id FROM project_tool_rules WHERE id = ? AND project_id = ?',
-        ruleId,
-        projectId,
-      );
+      const toolRules = await getPermissionsRepository().getProjectToolRules(projectId);
+      const rule = toolRules.find((r: ProjectToolRule) => r.id === ruleId);
       if (!rule) throw notFound('Tool rule not found');
 
-      run('DELETE FROM project_tool_rules WHERE id = ?', ruleId);
+      await getPermissionsRepository().deleteProjectToolRule(projectId, ruleId);
       sendJson(res, 200, { ok: true });
     }),
   );

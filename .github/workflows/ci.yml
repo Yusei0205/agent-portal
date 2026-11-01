@@ -6,8 +6,13 @@
 # the ephemeral runner budget for every PR.  Run it locally or on a dedicated
 # self-hosted runner.
 #
-# Make "checks" a required check on main_v3 (Settings › Branches) so nothing
-# merges red.
+# "repo-contracts" job: runs the DynamoDB repository contract tests against
+# DynamoDB Local. Uses REQUIRE_DYNAMODB=1 so skips become failures.
+# Only runs the four repository modules:
+#   api-tokens, auth, permissions, audit, delegation
+#
+# Make both jobs required checks on main_v3 (Settings › Branches) so
+# nothing merges red.
 name: CI
 
 on:
@@ -55,3 +60,90 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  repo-contracts:
+    name: Repository contract tests (DynamoDB Local)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    services:
+      dynamodb-local:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+        options: >-
+          --health-cmd "curl -sf http://localhost:8000/ > /dev/null"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Wait for DynamoDB Local to be ready
+        run: |
+          echo "Waiting for DynamoDB Local..."
+          READY=0
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000 > /dev/null 2>&1; then
+              echo "DynamoDB Local is ready after attempt $i"
+              READY=1
+              break
+            fi
+            echo "Attempt $i: not ready yet, waiting 2s..."
+            sleep 2
+          done
+          if [ "$READY" -eq 0 ]; then
+            echo "ERROR: DynamoDB Local did not become ready after 40 seconds" >&2
+            exit 1
+          fi
+
+      - name: Repository contract tests (api-tokens)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module api-tokens --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (auth)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module auth --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (permissions)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module permissions --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (audit)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module audit --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (delegation)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module delegation --backend-only
+        timeout-minutes: 5

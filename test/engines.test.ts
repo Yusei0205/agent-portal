@@ -34,7 +34,7 @@ import type { Config } from '../server/config.ts';
 import { runClaudeCode } from '../server/agent/claude-code.ts';
 import { runKiro } from '../server/agent/kiro.ts';
 import { executeRun } from '../server/agent/runner.ts';
-import { loadRunPermissions, clearAlwaysBlockedCache } from '../server/guardrails.ts';
+import { loadRunPermissions } from '../server/guardrails.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 import { encrypt } from '../server/secrets.ts';
 import { materialiseForRun, getRunHomeDir } from '../server/user-config.ts';
@@ -153,7 +153,7 @@ describe('Claude Code engine — event mapping', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
     process.env.PORTAL_FAKE_SDK_SCENARIO = 'normal';
@@ -209,7 +209,7 @@ describe('Claude Code engine — usage and cost', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
     process.env.PORTAL_FAKE_SDK_SCENARIO = 'normal';
@@ -267,7 +267,7 @@ describe('Claude Code engine — guardrails', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
   });
@@ -337,7 +337,7 @@ describe('Claude Code engine — credentials and cancellation', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
   });
@@ -438,7 +438,7 @@ describe('Kiro engine — text mode events', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_KIRO_TEXT_MODE = '1';
@@ -499,7 +499,7 @@ describe('Kiro engine — JSON mode events', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     // JSON mode: no PORTAL_KIRO_TEXT_MODE
@@ -529,7 +529,7 @@ describe('Kiro engine — failure modes (no fallback)', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_KIRO_TEXT_MODE = '1';
@@ -620,7 +620,7 @@ describe('Kiro engine — heartbeat status events during slow run', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_KIRO_TEXT_MODE = '1';
@@ -673,7 +673,7 @@ describe('Runner — kiro failure path stores p6_runs.error and run-failed event
 
   before(async () => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_KIRO_TEXT_MODE = '1';

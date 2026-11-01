@@ -45,7 +45,7 @@ import { now, generateId } from '../server/util.ts';
 import { setConfig } from '../server/config.ts';
 import type { Config } from '../server/config.ts';
 import { runKiro } from '../server/agent/kiro.ts';
-import { loadRunPermissions, clearAlwaysBlockedCache } from '../server/guardrails.ts';
+import { loadRunPermissions } from '../server/guardrails.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 import { materialiseForRun, getRunHomeDir, cleanupRunHome } from '../server/user-config.ts';
 import { encrypt, decrypt } from '../server/secrets.ts';
@@ -255,7 +255,7 @@ describe('runKiro — materialised home dir env vars (Windows guard)', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeKiroTestRun();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'home-env-check';
@@ -360,7 +360,7 @@ describe('runKiro — KIRO_TEST_DB_PATH injected for identity_center credential'
 
   before(async () => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeKiroTestRun();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'kiro-test-db-check';
@@ -586,7 +586,7 @@ describe('runKiro — IDC materialisation failure → run throws user-actionable
 
   before(async () => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     _clearIdcHookCheckCache();
     t = makeKiroTestRun();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
@@ -675,7 +675,7 @@ describe('runKiro — IDC hook ignored → run refused with API-key suggestion',
 
   before(async () => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     _clearIdcHookCheckCache();
     t = makeKiroTestRun();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
@@ -852,7 +852,7 @@ describe('runKiro — IDC token write-back when kiro-cli refreshes access_token'
 
   before(async () => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     _clearIdcHookCheckCache();
     t = makeKiroTestRun();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;

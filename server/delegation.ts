@@ -19,26 +19,12 @@ import { startRun } from './workflows/driver.ts';
 import { cancelRun } from './workflows/controls.ts';
 import { randomBytes } from 'node:crypto';
 import { getApiTokenRepository } from './repositories/api-tokens.ts';
+import { getDelegationSettingsRepository } from './repositories/delegation-settings.ts';
+import type { DelegationSettings } from './repositories/delegation-settings.ts';
+import { DELEGATION_DEFAULTS } from './repositories/delegation-settings.ts';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-export interface DelegationSettings {
-  enabled: boolean;
-  maxRunningPerParent: number;
-  maxRunningPerUser: number;
-  idleStopMinutes: number;
-  allowNested: boolean;
-  nudgeThreshold: number;
-}
-
-const DELEGATION_DEFAULTS: DelegationSettings = {
-  enabled: true,
-  maxRunningPerParent: 3,
-  maxRunningPerUser: 5,
-  idleStopMinutes: 15,
-  allowNested: false,
-  nudgeThreshold: 4,
-};
+// Re-export DelegationSettings type for callers that import it from here
+export type { DelegationSettings };
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -132,32 +118,34 @@ function countRunningChildrenForUser(userId: string): number {
 /**
  * Assert delegation limits are not exceeded.
  * Throws HttpError 429 with a descriptive message if they are.
+ * Pass `settings` when calling from inside a transaction (avoids a second DB read).
  */
 export function checkDelegationLimits(
   parentWorkflowId: string,
   userId: string,
+  settings?: DelegationSettings,
 ): void {
-  const settings = getDelegationSettings();
+  const s = settings ?? getDelegationSettings();
 
-  if (!settings.enabled) {
+  if (!s.enabled) {
     throw new HttpError(429, 'Delegation is disabled by the portal administrator.');
   }
 
   const runningChildren = countRunningChildren(parentWorkflowId);
-  if (settings.maxRunningPerParent > 0 && runningChildren >= settings.maxRunningPerParent) {
+  if (s.maxRunningPerParent > 0 && runningChildren >= s.maxRunningPerParent) {
     throw new HttpError(
       429,
       `This session already has ${runningChildren} running child session(s). ` +
-        `The maximum per parent is ${settings.maxRunningPerParent}. Wait for a child to finish.`,
+        `The maximum per parent is ${s.maxRunningPerParent}. Wait for a child to finish.`,
     );
   }
 
   const userRunning = countRunningChildrenForUser(userId);
-  if (settings.maxRunningPerUser > 0 && userRunning >= settings.maxRunningPerUser) {
+  if (s.maxRunningPerUser > 0 && userRunning >= s.maxRunningPerUser) {
     throw new HttpError(
       429,
       `You already have ${userRunning} running delegated sessions. ` +
-        `The maximum per user is ${settings.maxRunningPerUser}. Wait for a child to finish.`,
+        `The maximum per user is ${s.maxRunningPerUser}. Wait for a child to finish.`,
     );
   }
 }
@@ -179,7 +167,9 @@ export async function createChildSession(
   const parent = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', parentWorkflowId);
   if (!parent) throw new HttpError(404, 'Parent session not found');
 
-  const settings = getDelegationSettings();
+  // Fetch delegation settings async via repository so DynamoDB mode reads
+  // from the correct store.
+  const settings = await getDelegationSettingsRepository().get();
 
   // Nested delegation check
   if (!settings.allowNested && parent.parent_id) {
@@ -189,14 +179,39 @@ export async function createChildSession(
     );
   }
 
+  // Check delegation limits before the transaction to avoid async inside tx()
+  if (!settings.enabled) {
+    throw new HttpError(429, 'Delegation is disabled by the portal administrator.');
+  }
+
+  const runningChildren = countRunningChildren(parentWorkflowId);
+  if (settings.maxRunningPerParent > 0 && runningChildren >= settings.maxRunningPerParent) {
+    throw new HttpError(
+      429,
+      `This session already has ${runningChildren} running child session(s). ` +
+        `The maximum per parent is ${settings.maxRunningPerParent}. Wait for a child to finish.`,
+    );
+  }
+
+  const userRunning = countRunningChildrenForUser(userId);
+  if (settings.maxRunningPerUser > 0 && userRunning >= settings.maxRunningPerUser) {
+    throw new HttpError(
+      429,
+      `You already have ${userRunning} running delegated sessions. ` +
+        `The maximum per user is ${settings.maxRunningPerUser}. Wait for a child to finish.`,
+    );
+  }
+
   // Atomically check limits + insert the child row to avoid TOCTOU races
   // where two concurrent createChildSession calls both pass the count check.
   const childId = generateId();
   const ts = now();
 
   tx(() => {
-    // Re-check limits inside the transaction so the count is accurate
-    checkDelegationLimits(parentWorkflowId, userId);
+    // Re-check limits inside the transaction so the count is accurate under concurrency.
+    // Pass the already-fetched settings so the in-transaction check uses the same source,
+    // avoiding a second (synchronous SQLite) read that would be wrong in DynamoDB mode.
+    checkDelegationLimits(parentWorkflowId, userId, settings);
 
     insert('p6_workflows', {
       id: childId,
@@ -379,9 +394,9 @@ export function stopAndDeleteChildren(parentWorkflowId: string): void {
  * Stop finished children that have been idle for longer than idleStopMinutes.
  * Run periodically alongside the main idle-stop check.
  */
-export function checkDelegationChildIdleStop(): void {
+export async function checkDelegationChildIdleStop(): Promise<void> {
   try {
-    const settings = getDelegationSettings();
+    const settings = await getDelegationSettingsRepository().get();
     const idleMinutes = settings.idleStopMinutes;
     const cutoff = new Date(Date.now() - idleMinutes * 60_000).toISOString();
 

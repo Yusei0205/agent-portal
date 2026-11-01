@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Tests for engine session persistence (F-SESSION-RESUME).
  *
  * Covers:
@@ -39,7 +39,7 @@ import { setConfig } from '../server/config.ts';
 import type { Config } from '../server/config.ts';
 import { runKiro } from '../server/agent/kiro.ts';
 import { runClaudeCode } from '../server/agent/claude-code.ts';
-import { loadRunPermissions, clearAlwaysBlockedCache } from '../server/guardrails.ts';
+import { loadRunPermissions } from '../server/guardrails.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 import { encrypt } from '../server/secrets.ts';
 import {
@@ -49,13 +49,13 @@ import {
 } from '../server/agent/claude-sessions.ts';
 import { buildConversationRecap } from '../server/agent/recap.ts';
 
-// ── Paths ─────────────────────────────────────────────────────────────────────
+// -- Paths ---------------------------------------------------------------------
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_KIRO = path.join(__dirname, 'fake-kiro.mjs');
 const FAKE_SDK = path.join(__dirname, 'fake-sdk.mjs');
 
-// ── Test data factory ─────────────────────────────────────────────────────────
+// -- Test data factory ---------------------------------------------------------
 
 interface TestData {
   workDir: string;
@@ -164,14 +164,14 @@ function statusMessages(events: Array<{ type: string; payload: Record<string, un
     .map((e) => String(e.payload.text));
 }
 
-// ── Kiro: first run stores engine_session_id ──────────────────────────────────
+// -- Kiro: first run stores engine_session_id ----------------------------------
 
-describe('Kiro session — first run stores engine_session_id', () => {
+describe('Kiro session � first run stores engine_session_id', () => {
   let t: TestData;
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData('kiro');
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'normal';
@@ -208,14 +208,14 @@ describe('Kiro session — first run stores engine_session_id', () => {
   });
 });
 
-// ── Kiro: second run uses session/load ────────────────────────────────────────
+// -- Kiro: second run uses session/load ----------------------------------------
 
-describe('Kiro session — second run calls session/load, not session/new', () => {
+describe('Kiro session � second run calls session/load, not session/new', () => {
   let t: TestData;
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData('kiro');
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-session-resume';
@@ -259,14 +259,14 @@ describe('Kiro session — second run calls session/load, not session/new', () =
   });
 });
 
-// ── Kiro: replayed history is suppressed ──────────────────────────────────────
+// -- Kiro: replayed history is suppressed --------------------------------------
 
-describe('Kiro session — replayed history during session/load is not emitted', () => {
+describe('Kiro session � replayed history during session/load is not emitted', () => {
   let t: TestData;
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData('kiro');
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-session-resume';
@@ -290,14 +290,14 @@ describe('Kiro session — replayed history during session/load is not emitted',
   });
 });
 
-// ── Kiro: load failure falls back to session/new with recap ───────────────────
+// -- Kiro: load failure falls back to session/new with recap -------------------
 
-describe('Kiro session — load failure falls back to session/new with recap', () => {
+describe('Kiro session � load failure falls back to session/new with recap', () => {
   let t: TestData;
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData('kiro');
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-session-load-fail';
@@ -372,14 +372,14 @@ describe('Kiro session — load failure falls back to session/new with recap', (
   });
 });
 
-// ── Kiro: no stored id with prior runs → recap ────────────────────────────────
+// -- Kiro: no stored id with prior runs ? recap --------------------------------
 
-describe('Kiro session — no stored id with prior runs prepends recap', () => {
+describe('Kiro session � no stored id with prior runs prepends recap', () => {
   let t: TestData;
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData('kiro');
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-session-load-fail'; // causes echo of prompt
@@ -507,9 +507,9 @@ describe('Kiro session — no stored id with prior runs prepends recap', () => {
   });
 });
 
-// ── Recap quality — ordering and exclusion ────────────────────────────────────
+// -- Recap quality � ordering and exclusion ------------------------------------
 
-describe('buildConversationRecap — time ordering and current message exclusion', () => {
+describe('buildConversationRecap � time ordering and current message exclusion', () => {
   let t: TestData;
 
   before(() => {
@@ -630,7 +630,7 @@ describe('buildConversationRecap — time ordering and current message exclusion
     assert.equal(buildConversationRecap(wf2Id, run2Id), '', 'Empty recap after /clear');
   });
 });
-// ── /clear resets engine_session_id ──────────────────────────────────────────
+// -- /clear resets engine_session_id ------------------------------------------
 
 describe('/clear command resets engine_session_id', () => {
   let baseUrl: string;
@@ -696,7 +696,7 @@ describe('/clear command resets engine_session_id', () => {
   });
 });
 
-// ── workflowView exposes engineSessionId ─────────────────────────────────────
+// -- workflowView exposes engineSessionId -------------------------------------
 
 describe('workflowView includes engineSessionId', () => {
   let baseUrl: string;
@@ -743,14 +743,14 @@ describe('workflowView includes engineSessionId', () => {
   });
 });
 
-// ── Claude Code: session_id stored and resume option passed ──────────────────
+// -- Claude Code: session_id stored and resume option passed ------------------
 
-describe('Claude Code session — session_id stored from SDK result', () => {
+describe('Claude Code session � session_id stored from SDK result', () => {
   let t: TestData;
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData('claude-code');
     process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
     process.env.PORTAL_FAKE_SDK_SCENARIO = 'sdk-session-resume';
@@ -823,14 +823,14 @@ describe('Claude Code session — session_id stored from SDK result', () => {
   });
 });
 
-// ── Claude Code: resume failure retries without resume ────────────────────────
+// -- Claude Code: resume failure retries without resume ------------------------
 
-describe('Claude Code session — resume failure retries without resume', () => {
+describe('Claude Code session � resume failure retries without resume', () => {
   let t: TestData;
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData('claude-code');
     process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
     process.env.PORTAL_FAKE_SDK_SCENARIO = 'sdk-session-resume-fail';
@@ -902,9 +902,9 @@ describe('Claude Code session — resume failure retries without resume', () => 
   });
 });
 
-// ── Claude Code transcript persistence ───────────────────────────────────────
+// -- Claude Code transcript persistence ---------------------------------------
 
-describe('Claude Code transcript persistence — persist and restore .jsonl only', () => {
+describe('Claude Code transcript persistence � persist and restore .jsonl only', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -957,7 +957,7 @@ describe('Claude Code transcript persistence — persist and restore .jsonl only
     const sensitiveFiles = [
       'credentials.json',
       'auth.json',
-      'cookie.jsonl',  // .jsonl but still sensitive — but we copy ALL .jsonl by design
+      'cookie.jsonl',  // .jsonl but still sensitive � but we copy ALL .jsonl by design
     ];
     for (const f of sensitiveFiles) {
       await fsp.writeFile(

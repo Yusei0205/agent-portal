@@ -38,6 +38,27 @@ never imports from `db.ts` directly for the covered entity.
 | `server/repositories/api-tokens-dynamodb.ts` | DynamoDB implementation |
 | `test/api-tokens-repo.test.ts` | Contract tests (both implementations) |
 
+## Files created by S1 (auth, permissions, audit, delegation)
+
+| File | Role |
+|---|---|
+| `server/repositories/auth.ts` | Interface + factory for users, sessions, invitations |
+| `server/repositories/auth-sqlite.ts` | SQLite implementation |
+| `server/repositories/auth-dynamodb.ts` | DynamoDB implementation (portal-users table) |
+| `test/auth-repo.test.ts` | Contract tests (18 SQLite + 18 DynamoDB assertions) |
+| `server/repositories/permissions.ts` | Interface + factory for permission groups/rules/project perms |
+| `server/repositories/permissions-sqlite.ts` | SQLite implementation |
+| `server/repositories/permissions-dynamodb.ts` | DynamoDB implementation (portal-config + portal-projects) |
+| `test/permissions-repo.test.ts` | Contract tests (14 SQLite + 14 DynamoDB assertions) |
+| `server/repositories/audit.ts` | Interface + factory for audit_log |
+| `server/repositories/audit-sqlite.ts` | SQLite implementation |
+| `server/repositories/audit-dynamodb.ts` | DynamoDB implementation (portal-projects table) |
+| `test/audit-repo.test.ts` | Contract tests (7 SQLite + 7 DynamoDB assertions) |
+| `server/repositories/delegation-settings.ts` | Interface + factory for delegation settings |
+| `server/repositories/delegation-settings-sqlite.ts` | SQLite implementation |
+| `server/repositories/delegation-settings-dynamodb.ts` | DynamoDB implementation (portal-config table) |
+| `test/delegation-repo.test.ts` | Contract tests (8 SQLite + 8 DynamoDB assertions) |
+
 ---
 
 ## Shared infrastructure (use in every new DynamoDB module)
@@ -203,8 +224,12 @@ shared entry in `test/test-map.json` with `"affects": [...]` listing all affecte
 docker run -d --name ddb-local -p 8000:8000 amazon/dynamodb-local
 
 # 2. Run contract tests (DYNAMODB_ENDPOINT only — no global switch)
-DYNAMODB_ENDPOINT=http://localhost:8000 \
+DYNAMODB_ENDPOINT=http://localhost:8000 REQUIRE_DYNAMODB=1 \
   npm run test:affected -- --module api-tokens --backend-only
+
+# To run all repository modules at once:
+DYNAMODB_ENDPOINT=http://localhost:8000 REQUIRE_DYNAMODB=1 \
+  npm run test:repo-contracts
 
 # 3. Stop and remove the container
 docker stop ddb-local && docker rm ddb-local
@@ -212,6 +237,11 @@ docker stop ddb-local && docker rm ddb-local
 
 Table name defaults to `portal-users-test` when `DYNAMODB_TABLE_PORTAL_USERS` is not set.
 To use a custom table: `DYNAMODB_TABLE_PORTAL_USERS=my-table DYNAMODB_ENDPOINT=...`.
+
+> ⚠️  **Never set `DYNAMODB_TABLE_PORTAL_USERS` or `USE_DYNAMODB` during test runs.**
+> These activate DynamoDB globally, breaking HTTP route test files that start a real server.
+> Use `DYNAMODB_ENDPOINT` only — the contract test files check it and run the DynamoDB suite
+> without polluting the global repository singleton.
 
 ---
 

@@ -5,10 +5,16 @@
       "description": "Authentication, login, session cookies",
       "sources": [
         "server/auth.ts",
+        "server/governance/users.ts",
+        "server/repositories/auth.ts",
+        "server/repositories/auth-sqlite.ts",
+        "server/repositories/auth-dynamodb.ts",
         "web/src/pages/Auth.jsx"
       ],
       "tests": [
-        "test/auth.test.ts"
+        "test/auth.test.ts",
+        "test/auth-repo.test.ts",
+        "test/setup-security.test.ts"
       ],
       "smokeIds": ["auth"]
     },
@@ -49,32 +55,45 @@
       "description": "Role-based access control, permission checks",
       "sources": [
         "server/permissions.ts",
-        "server/governance/users.ts"
+        "server/guardrails.ts",
+        "server/governance/users.ts",
+        "server/repositories/permissions.ts",
+        "server/repositories/permissions-sqlite.ts",
+        "server/repositories/permissions-dynamodb.ts"
       ],
       "tests": [
-        "test/permissions.test.ts"
+        "test/permissions.test.ts",
+        "test/permissions-repo.test.ts"
       ],
       "smokeIds": ["permissions"]
     },
     "audit": {
       "description": "Audit log recording and retrieval",
       "sources": [
-        "server/audit.ts"
+        "server/audit.ts",
+        "server/repositories/audit.ts",
+        "server/repositories/audit-sqlite.ts",
+        "server/repositories/audit-dynamodb.ts"
       ],
       "tests": [
         "test/audit-fixes.test.ts",
-        "test/audit-fixes-3.test.ts"
+        "test/audit-fixes-3.test.ts",
+        "test/audit-repo.test.ts"
       ],
       "smokeIds": ["audit"]
     },
     "delegation": {
       "description": "Delegate tokens for sub-agent authentication",
       "sources": [
-        "server/delegation.ts"
+        "server/delegation.ts",
+        "server/repositories/delegation-settings.ts",
+        "server/repositories/delegation-settings-sqlite.ts",
+        "server/repositories/delegation-settings-dynamodb.ts"
       ],
       "tests": [
         "test/delegate-token.test.ts",
-        "test/delegation.test.ts"
+        "test/delegation.test.ts",
+        "test/delegation-repo.test.ts"
       ],
       "smokeIds": ["delegation"]
     },
@@ -928,9 +947,9 @@
         "server/repositories/backend.ts",
         "server/repositories/dynamo-client.ts"
       ],
-      "affects": ["api-tokens"],
+      "affects": ["api-tokens", "auth", "permissions", "audit", "delegation"],
       "part": "backend",
-      "rationale": "Shared backend selector (usesDynamoDb), DynamoDB client singleton, and attribute-marshaling helpers used by all DynamoDB repository implementations. Backend only — not compiled into the web bundle. Update affects to include each new module as it adopts the DynamoDB implementation."
+      "rationale": "Shared backend selector (usesDynamoDb), DynamoDB client singleton, and attribute-marshaling helpers used by all DynamoDB repository implementations. Backend only — not compiled into the web bundle."
     }
   ]
 }

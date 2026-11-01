@@ -42,7 +42,8 @@ import {
 import { getRunHomeDir } from '../user-config.ts';
 import { buildConversationRecap } from './recap.ts';
 import type { RunContext } from './types.ts';
-import { getDelegationSettings, createRunToken, revokeRunToken } from '../delegation.ts';
+import { createRunToken, revokeRunToken } from '../delegation.ts';
+import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
 import { config } from '../config.ts';
 import {
   materialiseKiroAuthDb, cleanupKiroAuthDb, KIRO_TEST_DB_ENV, readKiroAuthDbToken,
@@ -1003,7 +1004,7 @@ export async function runKiro(ctx: RunContext): Promise<string> {
   let delegationUserId: string | null = null;
   if (homeDir && run.credentialOwnerId) {
     try {
-      const delegationSettings = getDelegationSettings();
+      const delegationSettings = await getDelegationSettingsRepository().get();
       if (delegationSettings.enabled) {
         const { raw: tokenRaw, tokenId } = await createRunToken(run.credentialOwnerId, run.workflowId);
         delegationTokenId = tokenId;

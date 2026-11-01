@@ -12,7 +12,8 @@ import { sleep } from '../util.ts';
 import { run as dbRun } from '../db.ts';
 import { evaluateCommand } from '../guardrails.ts';
 import type { RunContext } from './types.ts';
-import { getDelegationSettings, createChildSession } from '../delegation.ts';
+import { createChildSession } from '../delegation.ts';
+import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ export async function runDemo(ctx: RunContext): Promise<string> {
   // what an agent would do with the delegate_session tool.
   const delegationMatch = goal.match(/delegate:\s*(.+?)(?:\n|$)/i);
   if (delegationMatch && run.credentialOwnerId) {
-    const delegationSettings = getDelegationSettings();
+    const delegationSettings = await getDelegationSettingsRepository().get();
     if (delegationSettings.enabled) {
       const delegatedTask = delegationMatch[1].trim();
       emit('assistant-text', { text: `I'll delegate the sub-task to a child session: "${delegatedTask}"` });

@@ -212,17 +212,27 @@ export async function ensureTableExists(client: DynamoDBClient, tableName: strin
           { AttributeName: 'SK', KeyType: 'RANGE' },
         ],
         AttributeDefinitions: [
-          { AttributeName: 'PK', AttributeType: 'S' },
-          { AttributeName: 'SK', AttributeType: 'S' },
-          { AttributeName: 'tokenHash', AttributeType: 'S' },
+          { AttributeName: 'PK',         AttributeType: 'S' },
+          { AttributeName: 'SK',         AttributeType: 'S' },
+          { AttributeName: 'tokenHash',  AttributeType: 'S' },
           { AttributeName: 'entityType', AttributeType: 'S' },
+          { AttributeName: 'email',      AttributeType: 'S' },
+          { AttributeName: 'userId',     AttributeType: 'S' },
         ],
         GlobalSecondaryIndexes: [
           {
             IndexName: 'GSI-TokenHash',
             KeySchema: [
-              { AttributeName: 'tokenHash', KeyType: 'HASH' },
+              { AttributeName: 'tokenHash',  KeyType: 'HASH' },
               { AttributeName: 'entityType', KeyType: 'RANGE' },
+            ],
+            Projection: { ProjectionType: 'ALL' },
+          },
+          {
+            IndexName: 'GSI-UserEmail',
+            KeySchema: [
+              { AttributeName: 'email',  KeyType: 'HASH' },
+              { AttributeName: 'userId', KeyType: 'RANGE' },
             ],
             Projection: { ProjectionType: 'ALL' },
           },

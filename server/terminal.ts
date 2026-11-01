@@ -275,7 +275,7 @@ interface AuthResult {
  * API tokens (Authorization: Bearer ...) are explicitly refused at the
  * call site; this function only checks browser session cookies.
  */
-function authenticateUpgrade(req: http.IncomingMessage): AuthResult | null {
+async function authenticateUpgrade(req: http.IncomingMessage): Promise<AuthResult | null> {
   const cookieHeader = req.headers.cookie ?? '';
   if (!cookieHeader) return null;
   const cookies = parseCookies(cookieHeader);
@@ -283,17 +283,17 @@ function authenticateUpgrade(req: http.IncomingMessage): AuthResult | null {
   if (!token) return null;
 
   const tokenHash = createHash('sha256').update(decodeURIComponent(token)).digest('hex');
-  const row = one<{ id: string; is_admin: number; disabled: number; expires_at: string }>(
-    `SELECT u.id, u.is_admin, u.disabled, s.expires_at
-       FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = ?`,
-    tokenHash,
-  );
-  if (!row) return null;
-  if (row.disabled) return null;
-  if (row.expires_at < new Date().toISOString()) return null;
 
-  return { userId: row.id, isAdmin: Boolean(row.is_admin) };
+  // Use the auth repository (works for both SQLite and DynamoDB).
+  // For SQLite, the SqliteAuthRepository also exposes getSessionWithUserSync() but
+  // since terminal upgrade handlers are already called from async contexts, async is fine.
+  const { getAuthRepository } = await import('./repositories/auth.ts');
+  const session = await getAuthRepository().getSessionWithUser(tokenHash);
+  if (!session) return null;
+  if (session.disabled) return null;
+  if (session.expires_at < new Date().toISOString()) return null;
+
+  return { userId: session.user_id, isAdmin: Boolean(session.is_admin) };
 }
 
 /**
@@ -385,6 +385,18 @@ export function handleTerminalUpgrade(
   socket: import('node:stream').Duplex,
   head: Buffer,
 ): void {
+  // Delegate to the async implementation; any unhandled rejection is caught.
+  _handleTerminalUpgradeAsync(req, socket, head).catch((err: unknown) => {
+    console.error('[terminal] upgrade error:', err);
+    try { socket.destroy(); } catch { /* ignore */ }
+  });
+}
+
+async function _handleTerminalUpgradeAsync(
+  req: http.IncomingMessage,
+  socket: import('node:stream').Duplex,
+  head: Buffer,
+): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname !== '/api/terminal/ws') {
     socket.destroy();
@@ -406,7 +418,7 @@ export function handleTerminalUpgrade(
   }
 
   // Auth: session cookie only
-  const auth = authenticateUpgrade(req);
+  const auth = await authenticateUpgrade(req);
   if (!auth) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
     socket.destroy();

@@ -31,7 +31,8 @@ import type { Review, Finding } from './review.ts';
 import { emit } from './events.ts';
 import { decrypt } from './secrets.ts';
 import { config } from './config.ts';
-import { getDelegationSettings, createChildSession } from './delegation.ts';
+import { createChildSession } from './delegation.ts';
+import { getDelegationSettingsRepository } from './repositories/delegation-settings.ts';
 import { getSetting } from './settings.ts';
 import { queueTestRun, _runningCount, _cancelledRuns } from './testing/runner.ts';
 import { runGeneration } from './testing/generate.ts';
@@ -489,7 +490,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
           assertWorkflow(projectId, effectiveWorkflowId);
           audit(uid, 'delegate_session', `workflow:${effectiveWorkflowId}`, { task: task.slice(0, 200) });
 
-          const settings = getDelegationSettings();
+          const settings = await getDelegationSettingsRepository().get();
           if (!settings.enabled) {
             return errorResult('Delegation is disabled by the portal administrator.');
           }

@@ -420,6 +420,9 @@ All queries use `budget_usage` joined with `agent_runs`, `projects`, `users`.
 | `USER#<userId>` | `ECRED#<credId>` | `engine_credentials` row |
 | `USER#<userId>` | `UCFG#<folder>` | `user_config_state` row |
 | `TEAM_CFG#<folder>` | `V#<publishedAt>#<id>` | `team_config_versions` (ordered by time) |
+| `USER_INDEX` | `<createdAt>#<userId>` | user index entry (all users, newest-first for listUsers()) |
+| `USER_COUNT` | `#TOTAL` | atomic counter for countUsers() — no Scan needed |
+| `INVITE_INDEX` | `<createdAt>#<tokenHash>` | invitation index entry for listPendingInvitations() |
 
 **GSIs:**
 
@@ -445,7 +448,9 @@ All queries use `budget_usage` joined with `agent_runs`, `projects`, `users`.
 | List user's tokens (B1) | Query PK=`USER#<id>`, SK begins_with `TOKEN#` → sort by `createdAt` descending in app, limit 50 |
 | Admin list all tokens (B5) | Query PK=`TOKEN_INDEX`, `ScanIndexForward=false`, Limit=200 (see TOKEN_INDEX below) |
 | Get user by ID (A6) | GetItem(`USER#<id>`, `#META`) |
-| Count all users (A5) | Maintained as a counter item: GetItem(`USER_COUNT`, `#TOTAL`) |
+| Count all users (A5) | GetItem(`USER_COUNT`, `#TOTAL`) — atomic counter, incremented on createUser |
+| List all users (admin) | Query PK=`USER_INDEX`, ScanIndexForward=true, then BatchGet `USER#<id>#META` for full fields |
+| List pending invitations | Query PK=`INVITE_INDEX`, FilterExpression=usedAt not exists AND expiresAt > now |
 
 **TOKEN_INDEX partition** — admin token list without Scan:
 

@@ -37,7 +37,8 @@ import { launchSessionBrowser } from './browser-manager.ts';
 import { getRunHomeDir } from '../user-config.ts';
 import { estimateCost } from './pricing.ts';
 import type { RunContext } from './types.ts';
-import { getDelegationSettings, createChildSession } from '../delegation.ts';
+import { createChildSession } from '../delegation.ts';
+import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
 import { buildConversationRecap } from './recap.ts';
 import {
   persistClaudeTranscripts,
@@ -257,7 +258,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   const maxBudgetUsd = wfBudget ?? globalBudget;
 
   // ── Delegation settings ────────────────────────────────────────────────────
-  const delegationSettings = getDelegationSettings();
+  const delegationSettings = await getDelegationSettingsRepository().get();
   const delegationEnabled = delegationSettings.enabled;
   const nudgeThreshold = delegationSettings.nudgeThreshold;
 

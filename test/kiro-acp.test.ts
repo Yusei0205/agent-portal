@@ -36,7 +36,7 @@ import { now, generateId } from '../server/util.ts';
 import { setConfig } from '../server/config.ts';
 import type { Config } from '../server/config.ts';
 import { runKiro } from '../server/agent/kiro.ts';
-import { loadRunPermissions, clearAlwaysBlockedCache } from '../server/guardrails.ts';
+import { loadRunPermissions } from '../server/guardrails.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 import { rewritePlaywrightMcpHeadless } from '../server/agent/browser-headless.ts';
 
@@ -154,7 +154,7 @@ describe('Kiro ACP — agent_message_chunk → assistant-text', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'normal';
@@ -210,7 +210,7 @@ describe('Kiro ACP — agent_thought_chunk → agent-thought', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-thought';
@@ -239,7 +239,7 @@ describe('Kiro ACP — tool_call/tool_call_update → tool-start/tool-end', () =
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-tool';
@@ -278,7 +278,7 @@ describe('Kiro ACP — browser tool events', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-browser';
@@ -315,7 +315,7 @@ describe('Kiro ACP — plan → plan event', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-plan';
@@ -346,7 +346,7 @@ describe('Kiro ACP — usage_update → credits recorded', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-usage';
@@ -375,7 +375,7 @@ describe('Kiro ACP — session/request_permission → approve', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-permission';
@@ -417,7 +417,7 @@ describe('Kiro ACP — session/request_permission → deny', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-permission-deny';
@@ -447,7 +447,7 @@ describe('Kiro ACP — acp-error scenario → throws clear error', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-error';
@@ -480,7 +480,7 @@ describe('Kiro legacy fallback (PORTAL_KIRO_TEXT_MODE=1)', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_KIRO_TEXT_MODE = '1';
@@ -518,7 +518,7 @@ describe('Kiro ACP — heartbeat fires only when no updates arrive', () => {
 
   before(() => {
     createTestDb();
-    clearAlwaysBlockedCache();
+
     t = makeTestData();
     process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-slow';
