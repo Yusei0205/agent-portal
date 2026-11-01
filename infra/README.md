@@ -1,6 +1,11 @@
-# infra — Spike A CDK Stack
+# infra — CDK Stacks
 
-CDK TypeScript stack for the AgentCore Runtime spike (Spike A, `main_v3` branch).
+CDK TypeScript stacks for `main_v3` spikes.
+
+| Stack | Purpose |
+|---|---|
+| `AgentPortalSpikeA` | AgentCore Runtime (agent-runner container) |
+| `AgentPortalSpikeC` | AppSync Events live-update channels proof |
 
 ## What it creates
 
@@ -83,3 +88,71 @@ Per short run (5–10 s): ~$0.009–$0.025 (Bedrock tokens; compute is negligibl
 20 runs/day of 10-minute sessions: ~$32–62/month (Bedrock tokens dominate).
 
 See `docs/plans/2026-11-01-spike-a-agentcore-results.md` for full measurements.
+
+---
+
+# Spike C — AppSync Events
+
+Live-update channel proof: AppSync Events with IAM publish + Lambda authorizer for browser subscribe.
+
+## What it creates
+
+- AppSync Events API `agent-portal-spike-c`
+- Lambda authorizer `agent-portal-spike-c-authorizer` (token scope → channel access)
+- Channel namespaces: `run`, `project`, `global` (with IAM publish + Lambda subscribe auth)
+- IAM log role and CloudWatch Log Group `/aws/appsync/spike-c` (3-day retention)
+
+## API endpoints (deployed)
+
+| Endpoint | URL |
+|---|---|
+| HTTP (publish) | `https://am5pzyt7cjffdgzpq6jyuvli5e.appsync-api.ap-southeast-1.amazonaws.com` |
+| WebSocket (subscribe) | `wss://am5pzyt7cjffdgzpq6jyuvli5e.appsync-realtime-api.ap-southeast-1.amazonaws.com/event/realtime` |
+
+## Deploy Spike C
+
+Prerequisites: CDK bootstrapped (done), profile `agentcore` configured.
+
+```sh
+# From repo root
+cd infra
+npm install
+npm run build
+npx cdk deploy AgentPortalSpikeC --profile agentcore --require-approval never
+```
+
+Then generate config and run tests:
+
+```sh
+# Write scripts/spike-c-config.json from CDK outputs
+node scripts/spike-c-setup.mjs
+
+# Terminal 1: subscribe (listen for events, cross-project deny test, latency stats)
+node scripts/spike-c-subscribe.mjs --duration 90
+
+# Terminal 2: publish (500-event burst, large-payload test, cost estimate)
+node scripts/spike-c-publish.mjs
+
+# Quick smoke check (single event, IAM auth test)
+node scripts/spike-c-publish.mjs --verify
+```
+
+## Key results
+
+- **Cross-project subscribe denied** ✅
+- **p50 latency: 74 ms, p95: 165 ms** (same region)
+- **Batch limit: 5 events per HTTP request** (AppSync enforced)
+- **Reconnect: 107 ms** — no missed events replayed (pure pub/sub)
+- **Spike cost: < $0.002** — production estimate ~$0.13/month at 20 runs/day
+
+See `docs/plans/2026-11-02-spike-c-appsync-events-results.md` for full measurements.
+
+## Destroy Spike C
+
+```sh
+cd infra
+npx cdk destroy AgentPortalSpikeC --profile agentcore
+# No ECR repo was created for Spike C — nothing else to delete.
+```
+
+The stack costs ~$0/month when idle (no connections, no invocations).

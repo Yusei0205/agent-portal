@@ -24,3 +24,5 @@ agent-runner/shared/
 # infra CDK outputs and dependencies
 infra/node_modules/
 infra/cdk.out/
+# Spike C generated config (deployment-specific, not for commit)
+infra/scripts/spike-c-config.json
