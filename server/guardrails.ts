@@ -315,10 +315,29 @@ export function parseStatus(text: string | null | undefined): WorkflowStatus | n
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
-/** True when the last iterations keep reporting the same thing, so another one is unlikely to help. */
+/** True when two summaries say nearly the same: at least 85% of their words in common (Jaccard), or equal. */
+export function sameReport(a: string, b: string): boolean {
+  const x = norm(a);
+  const y = norm(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const wa = new Set(x.split(' '));
+  const wb = new Set(y.split(' '));
+  let common = 0;
+  for (const w of wa) if (wb.has(w)) common++;
+  return common / (wa.size + wb.size - common) >= 0.85;
+}
+
+/**
+ * True when the last iterations keep reporting the same thing, so another one is unlikely to help. "The same" allows
+ * small rewording: an agent that changes one word each time is still not making progress. The window is at least 2.
+ */
 export function stagnated(summaries: string[], window = 3): boolean {
-  const recent = summaries.slice(-window).map(norm).filter(Boolean);
-  return recent.length >= window && new Set(recent).size === 1;
+  const size = Math.max(2, Math.round(window) || 3);
+  const recent = summaries.slice(-size).filter((s) => norm(s));
+  if (recent.length < size) return false;
+  const last = recent[recent.length - 1];
+  return recent.every((s) => sameReport(s, last));
 }
 
 export interface IterationInput {

@@ -16,7 +16,7 @@ import { getSettings } from '../settings.ts';
 import { getToolPacks } from '../tool-packs.ts';
 import { isDraining } from '../control-plane.ts';
 import { type VerificationStep } from '../loop-specs.ts';
-import { runPipeline, formatPipelineForPrompt, persistPipelineResult, appendProgress } from '../loop-verification.ts';
+import { runPipeline, formatPipelineForPrompt, persistPipelineResult, appendProgress, recentProgress } from '../loop-verification.ts';
 import { driving, getWorkflow, isSingleRun, iterationBudget, patch, log, overBudget } from './store.ts';
 import { sessionRepos, reposView } from './views.ts';
 import { askEngineSwitch, closeEngineSwitch } from './engine-switch.ts';
@@ -52,6 +52,11 @@ async function drive(id: string, gen: number): Promise<void> {
   }
   const summaries: string[] = savedState?.summaries ? parseJson<string[]>(savedState.summaries, []) : [];
   const wallClockStart = wallClockStartedAt(id);
+  /** The loop spec this session was started from, as saved when it started ({} without one). */
+  const specSnapshot = (): any => {
+    const s = one<Row>('SELECT spec_snapshot FROM loop_run_states WHERE workflow_id = ?', id);
+    return s?.spec_snapshot ? parseJson<any>(s.spec_snapshot, {}) : {};
+  };
 
   /** Write current loop state to the database (called at the start of every iteration). */
   function persistLoopState(iteration: number): void {
@@ -114,11 +119,13 @@ async function drive(id: string, gen: number): Promise<void> {
     const iteration = w.iteration + 1;
     // Persist loop state before starting the iteration (checkpoint).
     persistLoopState(iteration);
+    // What the last iterations did, from the session's progress file (FR-LOOP-6); the latest summary when there is none.
+    const progress = specSnapshot().memory_config?.progressFile === false ? '' : recentProgress(w.project_id, id);
     const prompt = composeIterationPrompt({
       title: w.title,
       goal: w.goal,
       rules: w.rules,
-      progress: w.summary,
+      progress: progress || w.summary,
       instructions: pending.map((p) => String(p.body)),
       check: lastCheck,
       ticket,
@@ -238,7 +245,11 @@ async function drive(id: string, gen: number): Promise<void> {
       if (isSingleRun(w)) return stopWith(id, 'failed', String(finished.error || finished.status).slice(0, 300));
       failures++;
       log(id, 'iteration', `Iteration ${iteration} did not complete: ${finished.error || finished.status}`, { runId: finished.id, data: { failed: true } });
-      if (failures >= 2) return stopWith(id, 'failed', `Two runs in a row failed: ${String(finished.error || finished.status).slice(0, 200)}`);
+      // The loop spec's maxConsecutiveFailures (default 2).
+      const maxFailures = Math.max(1, Number(specSnapshot().stop_rules?.maxConsecutiveFailures ?? 2) || 2);
+      if (failures >= maxFailures) {
+        return stopWith(id, 'failed', `${maxFailures === 1 ? 'A run' : `${maxFailures} runs in a row`} failed: ${String(finished.error || finished.status).slice(0, 200)}`);
+      }
       continue;
     }
     failures = 0;
@@ -364,7 +375,8 @@ async function drive(id: string, gen: number): Promise<void> {
     }
     if (status?.state === 'blocked') return stopWith(id, 'blocked', status.needs || status.summary || 'The agent needs a person.');
     if (status?.state === 'done') {
-      if (lastCheck && !lastCheck.ok) {
+      // A loop spec may accept "done" without passing checks (stop_rules.requireVerification: false); by default not.
+      if (lastCheck && !lastCheck.ok && specSnapshot().stop_rules?.requireVerification !== false) {
         // Claimed done but the check disagrees: keep going with the check output in front of it.
         log(id, 'status', 'The agent reported done, but the check failed, so it goes on.');
       } else {
@@ -378,7 +390,10 @@ async function drive(id: string, gen: number): Promise<void> {
       }
     }
     if (isSingleRun(w) && (!lastCheck || lastCheck.ok)) return stopWith(id, 'done', 'The run finished. Review the changes.');
-    if (stagnated(summaries)) return stopWith(id, 'blocked', 'The last iterations all reported the same thing, so it is not making progress. Give it a new instruction.');
+    // The loop spec's stagnationWindow (default 3, at least 2).
+    if (stagnated(summaries, Number(specSnapshot().stop_rules?.stagnationWindow ?? 3))) {
+      return stopWith(id, 'blocked', 'The last iterations all reported the same thing, so it is not making progress. Give it a new instruction.');
+    }
   }
 }
 

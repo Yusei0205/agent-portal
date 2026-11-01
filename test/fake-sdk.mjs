@@ -18,7 +18,7 @@ export function query({ prompt, options }) {
 
     // A marker in the prompt picks one of the extra scenarios at the end of this file.
     const text = typeof first.value?.message?.content === 'string' ? first.value.message.content : '';
-    const scenario = text.match(/\[(guards|metered|bash-remember|hang|approvals|expiry|budget|spend-then-hang|ask-slowly)\]/)?.[1];
+    const scenario = text.match(/\[(guards|metered|bash-remember|hang|approvals|expiry|budget|spend-then-hang|ask-slowly|loop|loop-fail|loop-same|loop-done)\]/)?.[1];
     if (scenario) {
       yield* extraScenario(scenario, call, options, text);
     } else if (Array.isArray(options.tools) && options.tools.length === 0 && text.includes('advisory code review judge')) {
@@ -178,6 +178,27 @@ async function* extraScenario(name, call, options, text) {
     case 'ask-slowly': {
       call.answer = await options.canUseTool('AskUserQuestion', { questions: [{ question: 'Which size?', header: 'Size', multiSelect: false, options: [{ label: 'small', description: '' }] }] }, { signal, toolUseID: 'q1', requestId: 'q1' });
       yield ok('answered');
+      return;
+    }
+    // Session iterations: continue twice with a numbered summary, then done (the count lives in globalThis.__fakeLoopCount).
+    case 'loop': {
+      const n = (globalThis.__fakeLoopCount = (globalThis.__fakeLoopCount ?? 0) + 1);
+      yield ok(`Worked.\nWORKFLOW_STATUS {"state":"${n >= 3 ? 'done' : 'continue'}","summary":"Step ${n} done"}`);
+      return;
+    }
+    case 'loop-fail': {
+      yield { type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom', total_cost_usd: 0.001, session_id: 'sess-1' };
+      return;
+    }
+    // The same report each time, reworded a little.
+    case 'loop-same': {
+      const n = (globalThis.__fakeLoopCount = (globalThis.__fakeLoopCount ?? 0) + 1);
+      const summary = n % 2 ? 'Still working on the refund rules, nothing new yet' : 'Still working on refund rules, nothing new yet';
+      yield ok(`WORKFLOW_STATUS {"state":"continue","summary":"${summary}"}`);
+      return;
+    }
+    case 'loop-done': {
+      yield ok('WORKFLOW_STATUS {"state":"done","summary":"All done"}');
       return;
     }
     case 'bash-remember': {
