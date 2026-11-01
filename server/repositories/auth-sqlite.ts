@@ -64,6 +64,16 @@ export class SqliteAuthRepository implements AuthRepository {
     return row ? toUserRecord(row) : null;
   }
 
+  async getUsersByIds(ids: string[]): Promise<UserRecord[]> {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = all<Row>(
+      `SELECT * FROM users WHERE id IN (${placeholders})`,
+      ...ids,
+    );
+    return rows.map(toUserRecord);
+  }
+
   async getUserByEmail(email: string): Promise<UserRecord | null> {
     const row = one<Row>('SELECT * FROM users WHERE email = ?', email);
     return row ? toUserRecord(row) : null;

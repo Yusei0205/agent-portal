@@ -112,6 +112,10 @@ export function registerInboxRoutes(): void {
         offset,
       );
     } else {
+      // S1-TODO(projects): This JOIN should use getProjectRepository().listMyProjects(userId)
+      // to get projectIds and then filter p6_inbox with WHERE project_id IN (...).
+      // Converting this requires making the route handler async and splitting the query.
+      // Leave on direct SQLite until the inbox module is converted.
       items = all<Row>(
         `SELECT i.* FROM p6_inbox i
            JOIN project_members pm ON pm.project_id = i.project_id AND pm.user_id = ?
@@ -139,6 +143,7 @@ export function registerInboxRoutes(): void {
     if (req.user.is_admin) {
       total = (one<{ n: number }>('SELECT COUNT(*) AS n FROM p6_inbox WHERE resolved = 0')?.n ?? 0);
     } else {
+      // S1-TODO(projects): This COUNT JOIN should use the project repository once inbox is async.
       total = (one<{ n: number }>(
         `SELECT COUNT(*) AS n FROM p6_inbox i
            JOIN project_members pm ON pm.project_id = i.project_id AND pm.user_id = ?
@@ -158,6 +163,7 @@ export function registerInboxRoutes(): void {
     if (req.user.is_admin) {
       count = one<{ n: number }>('SELECT COUNT(*) AS n FROM p6_inbox WHERE resolved = 0')?.n ?? 0;
     } else {
+      // S1-TODO(projects): This COUNT JOIN should use the project repository once inbox is async.
       count = one<{ n: number }>(
         `SELECT COUNT(*) AS n FROM p6_inbox i
            JOIN project_members pm ON pm.project_id = i.project_id AND pm.user_id = ?
@@ -183,6 +189,8 @@ export function registerInboxRoutes(): void {
 
     // Check project membership
     if (!req.user.is_admin && item.project_id) {
+      // S1-TODO(projects): This should use getProjectRepository().isMember() once the
+      // POST /api/inbox/:id/resolve route handler is converted to async.
       const member = one<Row>(
         'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
         item.project_id as string,

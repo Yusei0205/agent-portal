@@ -149,6 +149,10 @@ function resolveWorkingCopyRoots(workflowId: string): WorkingCopyRoots | null {
   if (!wf) return null;
   if (!wf.project_id) return null;
 
+  // S1-TODO(projects): This should use getProjectRepository().getProjectById() once
+  // resolveWorkingCopyRoots is converted to async. The function is called synchronously
+  // from async route handlers in session-files.ts; converting it requires making those
+  // callers await it. Leave on direct SQLite until session-files module is converted.
   const project = one<Row>('SELECT id, slug FROM projects WHERE id = ?', wf.project_id as string);
   if (!project) return null;
 

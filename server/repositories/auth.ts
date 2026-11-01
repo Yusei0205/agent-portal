@@ -116,6 +116,14 @@ export interface AuthRepository {
   /** Get user by ID (A6). */
   getUserById(id: string): Promise<UserRecord | null>;
 
+  /**
+   * Get multiple users by ID in a single call.
+   * DynamoDB: BatchGet with UnprocessedKeys retry.
+   * Returns only found users — unknown IDs are silently omitted.
+   * Returns an empty array when ids is empty.
+   */
+  getUsersByIds(ids: string[]): Promise<UserRecord[]>;
+
   /** Get user by email for login (A1). */
   getUserByEmail(email: string): Promise<UserRecord | null>;
 

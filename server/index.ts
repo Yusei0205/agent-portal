@@ -90,17 +90,19 @@ export async function startServer(
   // 3a. Initialise api-token repository (SQLite by default, DynamoDB when configured)
   await initApiTokenRepository();
 
-  // 3b. Initialise auth, permissions, audit, delegation-settings, and settings repositories
+  // 3b. Initialise auth, permissions, audit, delegation-settings, settings, and projects repositories
   const { initAuthRepository } = await import('./repositories/auth.ts');
   const { initPermissionsRepository } = await import('./repositories/permissions.ts');
   const { initAuditRepository } = await import('./repositories/audit.ts');
   const { initDelegationSettingsRepository } = await import('./repositories/delegation-settings.ts');
   const { initSettingsRepository, refreshSnapshotIfStale } = await import('./repositories/settings.ts');
+  const { initProjectRepository } = await import('./repositories/projects.ts');
   await initAuthRepository();
   await initPermissionsRepository();
   await initAuditRepository();
   await initDelegationSettingsRepository();
   await initSettingsRepository();
+  await initProjectRepository();
 
   // 3c. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)

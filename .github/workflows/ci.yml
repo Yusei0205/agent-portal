@@ -124,6 +124,14 @@ jobs:
         run: npm run test:affected -- --module auth --backend-only
         timeout-minutes: 5
 
+      - name: Repository contract tests (projects)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module projects --backend-only
+        timeout-minutes: 5
+
       - name: Repository contract tests (permissions)
         env:
           DYNAMODB_ENDPOINT: http://localhost:8000
@@ -146,4 +154,12 @@ jobs:
           REQUIRE_DYNAMODB: "1"
           DYNAMODB_REGION: ap-southeast-1
         run: npm run test:affected -- --module delegation --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (settings)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module settings --backend-only
         timeout-minutes: 5

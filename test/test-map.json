@@ -98,13 +98,17 @@
       "smokeIds": ["delegation"]
     },
     "projects": {
-      "description": "Project CRUD and listing",
+      "description": "Project CRUD and listing, project/team repository layer",
       "sources": [
         "server/projects.ts",
+        "server/repositories/projects.ts",
+        "server/repositories/projects-sqlite.ts",
+        "server/repositories/projects-dynamodb.ts",
         "web/src/pages/Projects.jsx"
       ],
       "tests": [
-        "test/projects.test.ts"
+        "test/projects.test.ts",
+        "test/projects-repo.test.ts"
       ],
       "smokeIds": ["projects"]
     },

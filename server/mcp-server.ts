@@ -42,6 +42,10 @@ import type { TestProject, TestScript } from './testing/helpers.ts';
 
 /** Returns the project row if the user is admin or a member, else throws. */
 function assertProjectAccess(userId: string, isAdmin: boolean, projectId: string): Row {
+  // S1-TODO(projects): assertProjectAccess is a sync helper used by many MCP tool handlers.
+  // The MCP server dispatches tools synchronously inside its request handler.
+  // Converting this to async would require restructuring the entire MCP dispatch loop.
+  // Leave on direct SQLite until the mcp-server module gets its own async conversion pass.
   const project = one<Row>('SELECT id, name FROM projects WHERE id = ? AND archived = 0', projectId);
   if (!project) throw new Error('Project not found');
   if (isAdmin) return project;

@@ -850,6 +850,9 @@ function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId
     sendJson(res, 401, { error: 'Sign in to continue' });
     return false;
   }
+  // S1-TODO(projects): requireProjectAccess is a sync helper called from many sync route handlers.
+  // Converting all callers to async in this batch would touch 20+ routes across review.ts.
+  // Leave on direct SQLite until the review module gets its own async conversion pass.
   const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
@@ -873,6 +876,9 @@ function requireProjectEditor(req: PortalRequest, res: PortalResponse, projectId
     sendJson(res, 401, { error: 'Sign in to continue' });
     return false;
   }
+  // S1-TODO(projects): requireProjectEditor is a sync helper called from many sync route handlers.
+  // Converting all callers to async in this batch would touch 20+ routes across review.ts.
+  // Leave on direct SQLite until the review module gets its own async conversion pass.
   if (req.user.is_admin) return true;
   const member = one<{ user_id: string; access: string }>(
     'SELECT user_id, access FROM project_members WHERE project_id = ? AND user_id = ?',
@@ -1284,8 +1290,14 @@ export function registerReviewRoutes(): void {
 
     let projectIds: string[];
     if (isAdmin) {
+      // S1-TODO(projects): This query should use getProjectRepository().listProjects() once
+      // the route handler is converted to async. Leaving on direct SQLite for now because
+      // the surrounding review lifecycle handler is sync.
       projectIds = all<{ id: string }>('SELECT id FROM projects WHERE archived = 0').map((r) => r.id);
     } else {
+      // S1-TODO(projects): This query should use getProjectRepository().listMyProjects(userId) once
+      // the route handler is converted to async. Leaving on direct SQLite for now because
+      // the surrounding review lifecycle handler is sync.
       projectIds = all<{ project_id: string }>(
         'SELECT project_id FROM project_members WHERE user_id = ?',
         userId,
@@ -1719,6 +1731,8 @@ export function registerReviewRoutes(): void {
     if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     if (!req.user.is_admin) {
+      // S1-TODO(projects): This membership check should use getProjectRepository().isMember() once
+      // this route handler is converted to async. Leaving on direct SQLite for now.
       const member = one<{ access: string }>(
         'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
         req.params.id,

@@ -401,6 +401,8 @@ function projectDir(projectSlug: string): string {
 }
 
 function getProjectSlug(projectId: string): string {
+  // S1-TODO(projects): This should use getProjectRepository().getProjectBySlug() or
+  // getProjectById() once the jira module is converted to async. Leave on direct SQLite.
   const r = one<Row>('SELECT slug FROM projects WHERE id = ?', projectId);
   if (!r) throw badRequest('Project not found');
   return r.slug as string;
@@ -495,6 +497,9 @@ function requireProjectAccess(
   projectId: string,
 ): Row | null {
   if (!requireAuth(req, res)) return null;
+  // S1-TODO(projects): requireProjectAccess is a sync helper called from sync route handlers
+  // in jira.ts. Converting all callers to async would require reworking the OAuth callback
+  // flow. Leave on direct SQLite until jira module is converted.
   const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
   if (!p) {
     sendJson(res, 404, { error: 'Project not found' });
@@ -519,6 +524,8 @@ function requireOwnerAccess(
   projectId: string,
 ): Row | null {
   if (!requireAuth(req, res)) return null;
+  // S1-TODO(projects): requireOwnerAccess is a sync helper. Leave on direct SQLite
+  // until jira module is converted to async.
   const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
   if (!p) {
     sendJson(res, 404, { error: 'Project not found' });
@@ -544,6 +551,8 @@ function requireOwnerAccess(
 function isOwner(req: PortalRequest, projectId: string): boolean {
   if (!req.user) return false;
   if (req.user.is_admin) return true;
+  // S1-TODO(projects): isOwner is a sync helper. Leave on direct SQLite
+  // until jira module is converted to async.
   const m = one<Row>(
     'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
     projectId,

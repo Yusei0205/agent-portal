@@ -298,10 +298,8 @@ async function copyToVault(
 ): Promise<void> {
   if (!files.length) return;
 
-  const proj = one<{ vault_generated: number | null }>(
-    'SELECT vault_generated FROM projects WHERE id = ?',
-    projectId,
-  );
+  const { getProjectRepository } = await import('./repositories/projects.ts');
+  const proj = await getProjectRepository().getProjectById(projectId);
   if (!proj || proj.vault_generated === 0) return;
 
   const wf = one<Row>('SELECT id, title, goal FROM p6_workflows WHERE id = ?', workflowId);

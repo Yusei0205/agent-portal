@@ -68,6 +68,9 @@ function requireProjectAccess(
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
+  // S1-TODO(projects): requireProjectAccess is a sync helper called from many sync route handlers
+  // in learn.ts. Converting all callers to async in this batch would touch 20+ routes.
+  // Leave on direct SQLite until the learn module gets its own async conversion pass.
   const project = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
@@ -92,6 +95,8 @@ function requireProjectAccess(
 
 function isEditorOf(req: PortalRequest, projectId: unknown): boolean {
   if (req.user?.is_admin) return true;
+  // S1-TODO(projects): This membership check should use getProjectRepository().roleOf() once
+  // isEditorOf is made async. Leave on direct SQLite until learn module is converted.
   return Boolean(
     one<Row>(
       "SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? AND role IN ('editor','owner')",

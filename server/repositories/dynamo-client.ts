@@ -18,6 +18,19 @@ import { getDynamoDbEndpoint, getDynamoDbRegion } from './backend.ts';
 let _client: DynamoDBClient | null = null;
 
 /**
+ * Return true only when the endpoint points at localhost or 127.0.0.1.
+ * Fake credentials must never be injected for a real AWS endpoint.
+ */
+function isLocalEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Return the shared DynamoDB client (lazily created on first call).
  * Region defaults to ap-southeast-1 when no AWS_REGION env var is set.
  */
@@ -27,6 +40,15 @@ export function getDynamoDbClient(): DynamoDBClient {
   _client = new DynamoDBClient({
     region: getDynamoDbRegion(),
     ...(endpoint ? { endpoint } : {}),
+    // Inject fake credentials only for DynamoDB Local (localhost/127.0.0.1) so the
+    // SDK skips the default credential chain.  A misconfigured production endpoint
+    // must never silently use fake credentials.
+    ...(endpoint && isLocalEndpoint(endpoint) ? {
+      credentials: {
+        accessKeyId:     'fakeAccessKeyId',
+        secretAccessKey: 'fakeSecretAccessKey',
+      },
+    } : {}),
   });
   return _client;
 }

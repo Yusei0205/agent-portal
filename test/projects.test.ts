@@ -354,3 +354,76 @@ describe('DELETE /api/projects/:id/members/:userId', () => {
     assert.equal(r.status, 404);
   });
 });
+
+// ── Slug race retry (item 5) ──────────────────────────────────────────────────
+
+describe('POST /api/projects — slug race retry', () => {
+  let baseUrl: string;
+  let adminCookie: string;
+
+  before(async () => {
+    const ts = await createTestServer();
+    baseUrl = ts.baseUrl;
+
+    const setupR = await fetchJson(baseUrl, '/api/auth/setup', {
+      method: 'POST',
+      body: { email: 'admin-race@example.com', name: 'Admin Race', password: 'password1234', provider: 'demo' },
+    });
+    assert.equal(setupR.status, 200);
+    adminCookie = setupR.cookie ?? '';
+  });
+
+  after(async () => {
+    await cleanup();
+  });
+
+  it('retries on SlugAlreadyTakenError and returns 201', async () => {
+    const { setProjectRepository, getProjectRepository, clearProjectRepository } = await import('../server/repositories/projects.ts');
+    const { SlugAlreadyTakenError } = await import('../server/repositories/projects.ts');
+
+    const realRepo = getProjectRepository();
+    let attempts = 0;
+
+    const mockRepo = Object.create(realRepo) as typeof realRepo;
+    mockRepo.createProjectWithOwner = async (...args: Parameters<typeof realRepo.createProjectWithOwner>) => {
+      attempts++;
+      if (attempts === 1) throw new SlugAlreadyTakenError();
+      return realRepo.createProjectWithOwner(...args);
+    };
+
+    setProjectRepository(mockRepo);
+    try {
+      const r = await fetchJson(baseUrl, '/api/projects', {
+        method: 'POST',
+        body: { name: 'Slug Race Project' },
+        cookie: adminCookie,
+      });
+      assert.equal(r.status, 201, `route should retry and succeed, got ${r.status}: ${JSON.stringify(r.body)}`);
+      assert.equal(attempts, 2, 'should have called createProjectWithOwner exactly twice');
+    } finally {
+      clearProjectRepository();
+    }
+  });
+
+  it('returns 409 after MAX_RETRIES slug collisions', async () => {
+    const { setProjectRepository, clearProjectRepository } = await import('../server/repositories/projects.ts');
+    const { SlugAlreadyTakenError } = await import('../server/repositories/projects.ts');
+
+    const alwaysFailRepo = {
+      getAllSlugs: async () => [] as string[],
+      createProjectWithOwner: async () => { throw new SlugAlreadyTakenError(); },
+    };
+
+    setProjectRepository(alwaysFailRepo as Parameters<typeof setProjectRepository>[0]);
+    try {
+      const r = await fetchJson(baseUrl, '/api/projects', {
+        method: 'POST',
+        body: { name: 'Always Fails' },
+        cookie: adminCookie,
+      });
+      assert.equal(r.status, 409, `should return 409 after exhausting retries, got ${r.status}`);
+    } finally {
+      clearProjectRepository();
+    }
+  });
+});

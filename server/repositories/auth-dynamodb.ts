@@ -251,6 +251,16 @@ export class DynamoDbAuthRepository implements AuthRepository {
     return resp.Item ? itemToUser(resp.Item) : null;
   }
 
+  async getUsersByIds(ids: string[]): Promise<UserRecord[]> {
+    if (ids.length === 0) return [];
+    const keys = ids.map((id) => ({
+      PK: { S: `USER#${id}` },
+      SK: { S: '#META' },
+    }));
+    const items = await batchGetWithRetry(this.client, this.tableName, keys);
+    return items.map(itemToUser);
+  }
+
   async getUserByEmail(email: string): Promise<UserRecord | null> {
     // Use the direct EMAIL# reservation item for an exact key lookup.
     // This is cheaper than the GSI query and doesn't require the email to be on the user item's GSI.

@@ -608,6 +608,35 @@ function runContract(
       const reClaimed = await repo.markInvitationUsed(tokenHash, `usr-rel2-${sfx}`, now());
       assert.equal(reClaimed, true, 'invite should be claimable again after release');
     });
+
+    // ── getUsersByIds (item 7) ─────────────────────────────────────────────────
+
+    test('getUsersByIds — empty array returns empty', async () => {
+      const result = await repo.getUsersByIds([]);
+      assert.deepEqual(result, []);
+    });
+
+    test('getUsersByIds — returns found users, omits unknown ids', async () => {
+      const idA = `gsbi-a-${sfx}`;
+      const idB = `gsbi-b-${sfx}`;
+
+      await repo.createUser({
+        id: idA, email: `gsbi-a-${sfx}@test.com`, name: 'GSBI A',
+        password_hash: 'h', is_admin: 0, disabled: 0, created_at: now(),
+      });
+      await repo.createUser({
+        id: idB, email: `gsbi-b-${sfx}@test.com`, name: 'GSBI B',
+        password_hash: 'h', is_admin: 0, disabled: 0, created_at: now(),
+      });
+
+      const users = await repo.getUsersByIds([idA, 'no-such-id-99999', idB]);
+      assert.equal(users.length, 2, 'should return exactly the two existing users');
+      const ids = users.map((u) => u.id).sort();
+      assert.deepEqual(ids, [idA, idB].sort());
+      const nameMap = new Map(users.map((u) => [u.id, u.name]));
+      assert.equal(nameMap.get(idA), 'GSBI A');
+      assert.equal(nameMap.get(idB), 'GSBI B');
+    });
   });
 }
 
