@@ -1000,12 +1000,14 @@ export async function runKiro(ctx: RunContext): Promise<string> {
 
   // ── Delegation: merge portal-delegation MCP into materialised home (F7) ────
   let delegationTokenId: string | null = null;
+  let delegationUserId: string | null = null;
   if (homeDir && run.credentialOwnerId) {
     try {
       const delegationSettings = getDelegationSettings();
       if (delegationSettings.enabled) {
-        const { raw: tokenRaw, tokenId } = createRunToken(run.credentialOwnerId, run.workflowId);
+        const { raw: tokenRaw, tokenId } = await createRunToken(run.credentialOwnerId, run.workflowId);
         delegationTokenId = tokenId;
+        delegationUserId = run.credentialOwnerId;
 
         const newEntry = {
           url: `http://127.0.0.1:${config.port}/api/mcp`,
@@ -1025,8 +1027,9 @@ export async function runKiro(ctx: RunContext): Promise<string> {
           emit('run', {
             text: 'Portal delegation skipped: ~/.kiro/settings/mcp.json contains invalid JSON.',
           });
-          revokeRunToken(tokenId);
+          revokeRunToken(tokenId, run.credentialOwnerId).catch(() => {/* non-fatal */});
           delegationTokenId = null;
+          delegationUserId = null;
           skipDelegation = true;
         }
 
@@ -1104,9 +1107,10 @@ export async function runKiro(ctx: RunContext): Promise<string> {
     }
   } finally {
     // Always clean up delegation token and materialised secrets
-    if (delegationTokenId) {
-      revokeRunToken(delegationTokenId);
+    if (delegationTokenId && delegationUserId) {
+      await revokeRunToken(delegationTokenId, delegationUserId);
       delegationTokenId = null;
+      delegationUserId = null;
     }
 
     if (homeDir) {

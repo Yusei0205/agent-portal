@@ -431,7 +431,8 @@ All queries use `budget_usage` joined with `agent_runs`, `projects`, `users`.
 
 `GSI-TokenHash` covers both sessions (SK `SESSION#<userId>`) and api_tokens (SK `TOKEN#<userId>`). Both are looked up by their hash, and the entityType prefix distinguishes them.
 
-**TTL field:** `expiresAtEpoch` — set for sessions, invitations, password_resets, api_tokens with an `expires_at`. DynamoDB's TTL deletes the item automatically without a scan-based cleanup job.
+**TTL field:** `expiresAtEpoch` — set for sessions, invitations, password_resets, api_tokens with an `expires_at`.  
+**For api_tokens specifically:** `expiresAtEpoch = floor(expires_at_unix + 90 * 86400)` to retain expired and revoked tokens for 90 days, matching SQLite behaviour (where tokens remain visible to users after expiry until manually pruned). On revoke, `expiresAtEpoch` is reset to `floor(revokedAt_unix + 90 * 86400)`. A missing or non-parseable `expires_at` produces no TTL attribute (the item is never auto-deleted). DynamoDB's TTL deletes the item automatically without a scan-based cleanup job.
 
 **Access-pattern mapping:**
 
@@ -441,9 +442,20 @@ All queries use `budget_usage` joined with `agent_runs`, `projects`, `users`.
 | Google login (A2) | Query `GSI-GoogleSub` PK=googleSub |
 | Auth check: session (A3) | Query `GSI-TokenHash` PK=hash, filter entityType=SESSION |
 | Auth check: API token (B2) | Query `GSI-TokenHash` PK=hash, filter entityType=TOKEN |
-| List user's tokens (B1) | Query PK=`USER#<id>`, SK begins_with `TOKEN#` |
+| List user's tokens (B1) | Query PK=`USER#<id>`, SK begins_with `TOKEN#` → sort by `createdAt` descending in app, limit 50 |
+| Admin list all tokens (B5) | Query PK=`TOKEN_INDEX`, `ScanIndexForward=false`, Limit=200 (see TOKEN_INDEX below) |
 | Get user by ID (A6) | GetItem(`USER#<id>`, `#META`) |
 | Count all users (A5) | Maintained as a counter item: GetItem(`USER_COUNT`, `#TOTAL`) |
+
+**TOKEN_INDEX partition** — admin token list without Scan:
+
+A lightweight index entry is written to `PK=TOKEN_INDEX, SK=<createdAt>#<tokenId>` for every **non-delegate** token on `create()`.  The ISO timestamp prefix makes SK sort order equivalent to creation-time order, so `ScanIndexForward=false` gives newest-first.  `revoke()` updates the `revokedAt` and `expiresAtEpoch` attributes in the index entry.  Denormalized `userName` and `userEmail` are stored at create time; changes to the user record afterwards are not propagated.
+
+| TOKEN_INDEX item | PK | SK | Stored fields |
+|---|---|---|---|
+| One entry per non-delegate api_token | `TOKEN_INDEX` | `<createdAt>#<tokenId>` | id, userId, userName, userEmail, name, prefix, scope, scopes, projectId, expiresAt, revokedAt, createdAt, expiresAtEpoch |
+
+Access pattern B5 (admin list all tokens) was missing from the original access-pattern table and is added above.
 
 ---
 

@@ -18,6 +18,7 @@ import { emit } from './events.ts';
 import { startRun } from './workflows/driver.ts';
 import { cancelRun } from './workflows/controls.ts';
 import { randomBytes } from 'node:crypto';
+import { getApiTokenRepository } from './repositories/api-tokens.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -436,14 +437,14 @@ export interface RunToken {
  *   - Hidden from the API Access token list and token stats.
  *   - Revoked explicitly in kiro.ts via revokeRunToken() in a finally block.
  */
-export function createRunToken(userId: string, workflowId: string): RunToken {
+export async function createRunToken(userId: string, workflowId: string): Promise<RunToken> {
   const raw = 'ap_' + randomBytes(16).toString('hex');
   const hash = sha256(raw);
   const tokenId = generateId();
   const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString(); // 1h hard cap
   const ts = now();
 
-  insert('api_tokens', {
+  await getApiTokenRepository().create({
     id: tokenId,
     user_id: userId,
     name: `[delegate-${tokenId.slice(0, 8)}]`,
@@ -452,11 +453,9 @@ export function createRunToken(userId: string, workflowId: string): RunToken {
     scope: 'read', // legacy column kept for schema compat; effective scope is 'delegate'
     scopes: JSON.stringify(['delegate']),
     expires_at: expiresAt,
-    last_used_at: null,
-    revoked_at: null,
-    created_at: ts,
-    project_id: null,
     workflow_id: workflowId,
+    project_id: null,
+    created_at: ts,
   });
 
   return { raw, hash, tokenId };
@@ -465,9 +464,9 @@ export function createRunToken(userId: string, workflowId: string): RunToken {
 /**
  * Revoke a previously created run token.
  */
-export function revokeRunToken(tokenId: string): void {
+export async function revokeRunToken(tokenId: string, userId: string): Promise<void> {
   try {
-    dbRun('UPDATE api_tokens SET revoked_at = ? WHERE id = ?', now(), tokenId);
+    await getApiTokenRepository().revoke(tokenId, userId, now());
   } catch {
     // Non-fatal
   }

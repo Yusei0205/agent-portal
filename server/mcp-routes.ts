@@ -13,10 +13,9 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all } from './db.ts';
-import type { Row } from './db.ts';
 import { now } from './util.ts';
 import { createMcpServer } from './mcp-server.ts';
+import { getApiTokenRepository } from './repositories/api-tokens.ts';
 
 // ── Tool catalogue (for /info endpoint) ───────────────────────────────────────
 
@@ -53,24 +52,22 @@ const TOOL_CATALOGUE: ToolInfo[] = [
 
 // ── Token stats helper ─────────────────────────────────────────────────────────
 
-function tokenStats() {
-  // Exclude internal delegate tokens from stats — they are not user-visible.
-  const rows = all<Row>(
-    `SELECT scopes, scope, last_used_at, revoked_at, expires_at FROM api_tokens
-     WHERE (scopes IS NULL OR scopes NOT LIKE '%"delegate"%')`,
-  );
+async function tokenStats(): Promise<{ active: number; withWrite: number; withMerge: number; neverUsed: number }> {
   const validNow = now();
   let active = 0;
   let withWrite = 0;
   let withMerge = 0;
   let neverUsed = 0;
 
+  // listAll() excludes delegate tokens; for DynamoDB it returns [] with a warning.
+  const rows = await getApiTokenRepository().listAll();
+
   for (const t of rows) {
-    if (t.revoked_at || String(t.expires_at) < validNow) continue;
+    if (t.revoked_at || t.expires_at < validNow) continue;
     active++;
     const scopes: string[] = t.scopes
-      ? ((): string[] => { try { return JSON.parse(String(t.scopes)) as string[]; } catch { return [String(t.scope)]; } })()
-      : (String(t.scope) === 'write' ? ['read', 'write'] : ['read']);
+      ? ((): string[] => { try { return JSON.parse(t.scopes!) as string[]; } catch { return [t.scope]; } })()
+      : (t.scope === 'write' ? ['read', 'write'] : ['read']);
     if (scopes.includes('write')) withWrite++;
     if (scopes.includes('merge')) withMerge++;
     if (!t.last_used_at) neverUsed++;
@@ -84,7 +81,7 @@ function tokenStats() {
 export function registerMcpRoutes(): void {
 
   // GET /api/mcp/info — info for the API Access page (requires browser session or token)
-  router.get('/api/mcp/info', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/mcp/info', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) {
       sendJson(res, 401, { error: 'Sign in to continue' });
       return;
@@ -103,7 +100,7 @@ export function registerMcpRoutes(): void {
       },
     };
 
-    const stats = tokenStats();
+    const stats = await tokenStats();
 
     sendJson(res, 200, {
       url,

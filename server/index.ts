@@ -12,6 +12,7 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { registerAuthRoutes, createUser, userCount, cleanupSessions } from './auth.ts';
 import { registerHealthRoutes } from './health.ts';
 import { initStorage } from './storage-instance.ts';
+import { initApiTokenRepository } from './repositories/api-tokens.ts';
 import { config } from './config.ts';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -85,6 +86,9 @@ export async function startServer(
 
   // 3. Initialise storage backend (local or S3)
   await initStorage();
+
+  // 3a. Initialise api-token repository (SQLite by default, DynamoDB when configured)
+  await initApiTokenRepository();
 
   // 4. Open database and run migrations.
   // Skip if already open — tests may inject an in-memory DB before calling startServer.

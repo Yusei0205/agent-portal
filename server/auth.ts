@@ -17,6 +17,7 @@ import { router, sendJson, setCookie, parseCookies, setAuthenticator } from './h
 import type { PortalRequest, PortalResponse, PortalUser, AuthInfo } from './http.ts';
 import { one, run, insert, update, all } from './db.ts';
 import { generateId, now, str, badRequest, HttpError } from './util.ts';
+import { getApiTokenRepository } from './repositories/api-tokens.ts';
 import { appendAudit } from './audit.ts';
 import { getDb } from './db.ts';
 import { config } from './config.ts';
@@ -104,8 +105,8 @@ export function cleanupSessions(): void {
 
 // ── Authenticator (used by HTTP router) ───────────────────────────────────────
 
-export function authenticate(rawReq: import('node:http').IncomingMessage, authInfo: AuthInfo = {}): PortalUser | null {
-  // 1. Try cookie auth first
+export async function authenticate(rawReq: import('node:http').IncomingMessage, authInfo: AuthInfo = {}): Promise<PortalUser | null> {
+  // 1. Try cookie auth first (synchronous SQLite lookup)
   const cookieHeader = rawReq.headers.cookie;
   if (cookieHeader) {
     const cookies = parseCookies(cookieHeader);
@@ -122,27 +123,28 @@ export function authenticate(rawReq: import('node:http').IncomingMessage, authIn
     }
   }
 
-  // 2. Try Bearer token auth (ap_ prefix)
+  // 2. Try Bearer token auth (ap_ prefix) via repository
   const authHeader = String(rawReq.headers.authorization ?? '');
   if (authHeader.startsWith('Bearer ap_')) {
     const bearerToken = authHeader.slice(7).trim();
     const tokenHash = sha256(bearerToken);
-    const row = one<{ user_id: string; email: string; name: string; is_admin: number; disabled: number; expires_at: string; revoked_at: string | null; scopes: string | null; scope: string; workflow_id: string | null }>(
-      `SELECT t.expires_at, t.revoked_at, t.scopes, t.scope, t.workflow_id,
-              u.id AS user_id, u.email, u.name, u.is_admin, u.disabled
-       FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?`,
-      tokenHash,
-    );
-    if (row && !row.revoked_at && !row.disabled && row.expires_at >= now()) {
-      // Populate AuthInfo for downstream scope checks
-      const scopesRaw = row.scopes ? String(row.scopes) : null;
+    const repo = getApiTokenRepository();
+    const row = await repo.getByHash(tokenHash);
+    if (row && !row.revoked_at && !row.user_disabled && row.expires_at >= now()) {
+      const scopesRaw = row.scopes;
       const scopes: string[] = scopesRaw
         ? ((): string[] => { try { return JSON.parse(scopesRaw) as string[]; } catch { return [String(row.scope) === 'write' ? 'write' : 'read']; } })()
         : (String(row.scope) === 'write' ? ['read', 'write'] : ['read']);
       authInfo.tokenScopes = scopes;
       authInfo.authViaToken = true;
       authInfo.tokenWorkflowId = row.workflow_id ?? null;
-      return { id: String(row.user_id), email: String(row.email), name: String(row.name), is_admin: Number(row.is_admin) };
+
+      // Update last_used_at at most once per minute (fire-and-forget)
+      if (!row.last_used_at || Date.parse(row.last_used_at) < Date.now() - 60_000) {
+        repo.updateLastUsed(row.id, row.user_id, now()).catch(() => {/* non-fatal */});
+      }
+
+      return { id: row.user_id, email: row.user_email, name: row.user_name, is_admin: row.user_is_admin };
     }
   }
 

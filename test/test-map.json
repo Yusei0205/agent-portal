@@ -33,11 +33,15 @@
       "description": "API token management and token scope enforcement",
       "sources": [
         "server/api-tokens.ts",
+        "server/repositories/api-tokens.ts",
+        "server/repositories/api-tokens-sqlite.ts",
+        "server/repositories/api-tokens-dynamodb.ts",
         "web/src/pages/ApiAccess.jsx"
       ],
       "tests": [
         "test/api-tokens.test.ts",
-        "test/token-scopes.test.ts"
+        "test/token-scopes.test.ts",
+        "test/api-tokens-repo.test.ts"
       ],
       "smokeIds": ["api-tokens"]
     },
@@ -917,6 +921,16 @@
       "affects": ["theme"],
       "part": "ui",
       "rationale": "Theme palette CSS definitions — web-only. Changes affect only the theme module's UI part."
+    },
+    {
+      "description": "DynamoDB repository infrastructure — shared client, region config, and attribute helpers",
+      "sources": [
+        "server/repositories/backend.ts",
+        "server/repositories/dynamo-client.ts"
+      ],
+      "affects": ["api-tokens"],
+      "part": "backend",
+      "rationale": "Shared backend selector (usesDynamoDb), DynamoDB client singleton, and attribute-marshaling helpers used by all DynamoDB repository implementations. Backend only — not compiled into the web bundle. Update affects to include each new module as it adopts the DynamoDB implementation."
     }
   ]
 }

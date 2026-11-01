@@ -62,7 +62,7 @@ describe('Delegate token structure', () => {
   });
   after(cleanup);
 
-  it('createRunToken uses delegate scope and 1h expiry', () => {
+  it('createRunToken uses delegate scope and 1h expiry', async () => {
     const userId = generateId();
     insert('users', {
       id: userId,
@@ -75,7 +75,7 @@ describe('Delegate token structure', () => {
     });
 
     const workflowId = generateId();
-    const { raw, tokenId } = createRunToken(userId, workflowId);
+    const { raw, tokenId } = await createRunToken(userId, workflowId);
 
     const tokenRow = one<Row>('SELECT * FROM api_tokens WHERE id = ?', tokenId);
     assert.ok(tokenRow, 'token should be in DB');
@@ -94,7 +94,7 @@ describe('Delegate token structure', () => {
     assert.equal(String(tokenRow!.workflow_id ?? ''), workflowId);
 
     // Clean up
-    revokeRunToken(tokenId);
+    void revokeRunToken(tokenId, userId).catch(() => {});
   });
 });
 
@@ -119,24 +119,24 @@ describe('Delegate token hidden from listings', () => {
 
   it('delegate token does not appear in GET /api/api-tokens', async () => {
     const workflowId = generateId();
-    const { tokenId } = createRunToken(userId, workflowId);
+    const { tokenId } = await createRunToken(userId, workflowId);
 
     const r = await fetchJson(baseUrl, '/api/api-tokens', { cookie: adminCookie });
     const tokens = (r.body as { tokens: Array<{ id: string }> }).tokens;
     assert.ok(!tokens.some((t) => t.id === tokenId), 'delegate token must not appear in user list');
 
-    revokeRunToken(tokenId);
+    void revokeRunToken(tokenId, userId).catch(() => {});
   });
 
   it('delegate token does not appear in GET /api/admin/api-tokens', async () => {
     const workflowId = generateId();
-    const { tokenId } = createRunToken(userId, workflowId);
+    const { tokenId } = await createRunToken(userId, workflowId);
 
     const r = await fetchJson(baseUrl, '/api/admin/api-tokens', { cookie: adminCookie });
     const tokens = (r.body as { tokens: Array<{ id: string }> }).tokens;
     assert.ok(!tokens.some((t) => t.id === tokenId), 'delegate token must not appear in admin list');
 
-    revokeRunToken(tokenId);
+    void revokeRunToken(tokenId, userId).catch(() => {});
   });
 
   it('delegate token does not appear in token stats (GET /api/mcp/info)', async () => {
@@ -149,7 +149,7 @@ describe('Delegate token hidden from listings', () => {
     const writeTokenId = (writeR.body as { info: { id: string } }).info.id;
 
     const workflowId = generateId();
-    const { tokenId } = createRunToken(userId, workflowId);
+    const { tokenId } = await createRunToken(userId, workflowId);
 
     const infoR = await fetchJson(baseUrl, '/api/mcp/info', { cookie: adminCookie });
     const { tokenStats } = infoR.body as { tokenStats: { active: number } };
@@ -164,7 +164,7 @@ describe('Delegate token hidden from listings', () => {
       method: 'DELETE',
       cookie: adminCookie,
     });
-    revokeRunToken(tokenId);
+    void revokeRunToken(tokenId, userId).catch(() => {});
 
     // After cleanup, stats active count should be lower (or same) than before adding delegate
     const infoAfter = await fetchJson(baseUrl, '/api/mcp/info', { cookie: adminCookie });
@@ -193,30 +193,30 @@ describe('Delegate token blocked from REST routes', () => {
   after(cleanup);
 
   it('delegate token returns 401 on GET /api/auth/state', async () => {
-    const { raw, tokenId } = createRunToken(userId, generateId());
+    const { raw, tokenId } = await createRunToken(userId, generateId());
     const r = await fetchJson(baseUrl, '/api/auth/state', {
       headers: { Authorization: `Bearer ${raw}`, 'X-Requested-With': 'agent-portal' },
     });
     assert.equal(r.status, 401, `Expected 401, got ${r.status}`);
-    revokeRunToken(tokenId);
+    void revokeRunToken(tokenId, userId).catch(() => {});
   });
 
   it('delegate token returns 401 on GET /api/projects', async () => {
-    const { raw, tokenId } = createRunToken(userId, generateId());
+    const { raw, tokenId } = await createRunToken(userId, generateId());
     const r = await fetchJson(baseUrl, '/api/projects', {
       headers: { Authorization: `Bearer ${raw}` },
     });
     assert.equal(r.status, 401, `Expected 401, got ${r.status}`);
-    revokeRunToken(tokenId);
+    void revokeRunToken(tokenId, userId).catch(() => {});
   });
 
   it('delegate token returns 401 on GET /api/api-tokens', async () => {
-    const { raw, tokenId } = createRunToken(userId, generateId());
+    const { raw, tokenId } = await createRunToken(userId, generateId());
     const r = await fetchJson(baseUrl, '/api/api-tokens', {
       headers: { Authorization: `Bearer ${raw}` },
     });
     assert.equal(r.status, 401, `Expected 401, got ${r.status}`);
-    revokeRunToken(tokenId);
+    void revokeRunToken(tokenId, userId).catch(() => {});
   });
 });
 
@@ -245,7 +245,7 @@ describe('Delegate token MCP: delegate_session bound to workflow', () => {
   after(cleanup);
 
   it('delegate token can call delegate_session via MCP (creates child of bound workflow)', async () => {
-    const { raw, tokenId } = createRunToken(userId, workflowId);
+    const { raw, tokenId } = await createRunToken(userId, workflowId);
 
     // Build MCP JSON-RPC request for delegate_session
     const mcpBody = JSON.stringify({
@@ -279,11 +279,11 @@ describe('Delegate token MCP: delegate_session bound to workflow', () => {
     // Result should contain childWorkflowId
     assert.ok(text.includes('childWorkflowId') || text.includes('started'), `Expected child result: ${text.slice(0, 200)}`);
 
-    revokeRunToken(tokenId);
+    revokeRunToken(tokenId, userId).catch(() => {});
   });
 
   it('delegate token using workflowId=other uses the token-bound workflow (ignores caller)', async () => {
-    const { raw, tokenId } = createRunToken(userId, workflowId);
+    const { raw, tokenId } = await createRunToken(userId, workflowId);
 
     const mcpBody = JSON.stringify({
       jsonrpc: '2.0',
@@ -341,11 +341,11 @@ describe('Delegate token MCP: delegate_session bound to workflow', () => {
       }
     }
 
-    revokeRunToken(tokenId);
+    revokeRunToken(tokenId, userId).catch(() => {});
   });
 
   it('delegate token refused for other MCP tools (list_sessions)', async () => {
-    const { raw, tokenId } = createRunToken(userId, workflowId);
+    const { raw, tokenId } = await createRunToken(userId, workflowId);
 
     const mcpBody = JSON.stringify({
       jsonrpc: '2.0',
@@ -377,12 +377,12 @@ describe('Delegate token MCP: delegate_session bound to workflow', () => {
       `Expected error for list_sessions with delegate token: ${text.slice(0, 200)}`,
     );
 
-    revokeRunToken(tokenId);
+    revokeRunToken(tokenId, userId).catch(() => {});
   });
 
   it('revoked delegate token is refused at MCP endpoint', async () => {
-    const { raw, tokenId } = createRunToken(userId, workflowId);
-    revokeRunToken(tokenId);
+    const { raw, tokenId } = await createRunToken(userId, workflowId);
+    await revokeRunToken(tokenId, userId);
 
     const resp = await fetch(`${baseUrl}/api/mcp`, {
       method: 'POST',

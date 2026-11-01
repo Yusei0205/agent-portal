@@ -247,7 +247,10 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string)
 
 // ── Authenticator injection ───────────────────────────────────────────────────
 
-export type Authenticator = (req: IncomingMessage, authInfo: AuthInfo) => PortalUser | null;
+export type Authenticator = (
+  req: IncomingMessage,
+  authInfo: AuthInfo,
+) => Promise<PortalUser | null> | PortalUser | null;
 
 let _authenticator: Authenticator = () => null;
 
@@ -356,7 +359,7 @@ export function createRequestHandler(): (
 
       // ── Authenticate ──────────────────────────────────────────────────────
       const _authInfo: AuthInfo = {};
-      req.user = _authenticator(rawReq, _authInfo);
+      req.user = await _authenticator(rawReq, _authInfo);
       if (_authInfo.tokenScopes !== undefined) req.tokenScopes = _authInfo.tokenScopes;
       if (_authInfo.authViaToken) req.authViaToken = true;
       if (_authInfo.tokenWorkflowId !== undefined) req.tokenWorkflowId = _authInfo.tokenWorkflowId;

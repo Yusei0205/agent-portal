@@ -22,9 +22,10 @@
 import { randomBytes } from 'node:crypto';
 import { router, sendJson, requireCookieAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { all, one, run, insert } from './db.ts';
-import type { Row } from './db.ts';
 import { generateId, now, str, sha256 } from './util.ts';
+import { getApiTokenRepository } from './repositories/api-tokens.ts';
+import { SqliteApiTokenRepository } from './repositories/api-tokens-sqlite.ts';
+import type { TokenRecord } from './repositories/api-tokens.ts';
 
 export const TOKEN_PREFIX = 'ap_';
 const MAX_ACTIVE = 10;
@@ -36,14 +37,14 @@ const VALID_SCOPES: TokenScope[] = ['read', 'write', 'review', 'merge', 'tests']
 
 // ── View helper ───────────────────────────────────────────────────────────────
 
-function tokenView(t: Row) {
-  const rawScopes = t.scopes as string | null;
+function tokenView(t: TokenRecord) {
+  const rawScopes = t.scopes;
   const scopes: string[] = rawScopes
     ? ((): string[] => {
         try { return JSON.parse(rawScopes) as string[]; }
-        catch { return [String(t.scope) === 'write' ? 'write' : 'read']; }
+        catch { return [t.scope === 'write' ? 'write' : 'read']; }
       })()
-    : (String(t.scope) === 'write' ? ['read', 'write'] : ['read']);
+    : (t.scope === 'write' ? ['read', 'write'] : ['read']);
   return {
     id: t.id,
     name: t.name,
@@ -55,7 +56,7 @@ function tokenView(t: Row) {
     expires_at: t.expires_at,
     last_used_at: t.last_used_at ?? null,
     revoked_at: t.revoked_at ?? null,
-    active: !t.revoked_at && String(t.expires_at) >= now(),
+    active: !t.revoked_at && t.expires_at >= now(),
   };
 }
 
@@ -65,8 +66,12 @@ function tokenView(t: Row) {
  * @deprecated Use req.tokenScopes (set by auth.ts authenticator) instead.
  *
  * Reads Authorization: Bearer ap_... header, sha256-hashes the token,
- * looks up in api_tokens table, verifies not revoked/expired, sets req.user
- * and req.tokenScopes. Returns true if authenticated via token.
+ * looks up via the SQLite repository synchronously, verifies not
+ * revoked/expired, sets req.user and req.tokenScopes.
+ * Returns true if authenticated via token.
+ *
+ * This function is intentionally synchronous for backward compatibility
+ * with existing tests.  It only works with the SQLite repository.
  */
 export function authenticateApiToken(req: PortalRequest): boolean {
   const authHeader = req.headers.authorization;
@@ -76,35 +81,38 @@ export function authenticateApiToken(req: PortalRequest): boolean {
   if (!token.startsWith(TOKEN_PREFIX)) return false;
 
   const hash = sha256(token);
-  const row = one<Row>(
-    `SELECT t.id, t.scope, t.scopes, t.expires_at, t.revoked_at, t.last_used_at,
-            u.id AS user_id, u.email, u.name, u.is_admin, u.disabled
-     FROM api_tokens t
-     JOIN users u ON u.id = t.user_id
-     WHERE t.token_hash = ?`,
-    hash,
-  );
 
+  const repo = getApiTokenRepository();
+  if (!(repo instanceof SqliteApiTokenRepository)) {
+    // Should not happen during normal usage; DynamoDB auth goes through
+    // the async path in auth.ts.
+    throw new Error(
+      'authenticateApiToken() requires the SQLite repository. ' +
+        'Use the async authenticate() function from auth.ts instead.',
+    );
+  }
+
+  const row = repo.getByHashSync(hash);
   if (!row) return false;
   if (row.revoked_at) return false;
-  if (row.disabled) return false;
-  if (row.expires_at && String(row.expires_at) < now()) return false;
+  if (row.user_disabled) return false;
+  if (row.expires_at && row.expires_at < now()) return false;
 
   // Update last_used_at at most once per minute
-  if (!row.last_used_at || Date.parse(String(row.last_used_at)) < Date.now() - 60_000) {
-    run('UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), String(row.id));
+  if (!row.last_used_at || Date.parse(row.last_used_at) < Date.now() - 60_000) {
+    repo.updateLastUsedSync(row.id, now());
   }
 
   req.user = {
-    id: String(row.user_id),
-    email: String(row.email),
-    name: String(row.name),
-    is_admin: Number(row.is_admin),
+    id: row.user_id,
+    email: row.user_email,
+    name: row.user_name,
+    is_admin: row.user_is_admin,
   };
-  const rawScopes = row.scopes as string | null;
+  const rawScopes = row.scopes;
   req.tokenScopes = rawScopes
     ? ((): string[] => { try { return JSON.parse(rawScopes) as string[]; } catch { return ['read']; } })()
-    : (String(row.scope) === 'write' ? ['read', 'write'] : ['read']);
+    : (row.scope === 'write' ? ['read', 'write'] : ['read']);
   req.authViaToken = true;
   return true;
 }
@@ -115,18 +123,9 @@ export function registerApiTokenRoutes(): void {
   /** GET /api/api-tokens — list user's own tokens (browser-session only) */
   router.get(
     '/api/api-tokens',
-    requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
-      // Delegate tokens are internal run tokens; hide them from the user list.
-      const tokens = all<Row>(
-        `SELECT id, name, prefix, scope, scopes, project_id, created_at, expires_at,
-                last_used_at, revoked_at
-         FROM api_tokens
-         WHERE user_id = ?
-           AND (scopes IS NULL OR scopes NOT LIKE '%"delegate"%')
-         ORDER BY created_at DESC
-         LIMIT 50`,
-        req.user!.id,
-      );
+    requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
+      const repo = getApiTokenRepository();
+      const tokens = await repo.listByUser(req.user!.id);
       sendJson(res, 200, { tokens: tokens.map(tokenView), maxActive: MAX_ACTIVE });
     }),
   );
@@ -170,14 +169,10 @@ export function registerApiTokenRoutes(): void {
         expiresAt = new Date(Date.now() + 90 * 86_400_000).toISOString();
       }
 
+      const repo = getApiTokenRepository();
+
       // Check active token limit
-      const active = Number(
-        one<Row>(
-          'SELECT COUNT(*) AS n FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL AND expires_at >= ?',
-          req.user!.id,
-          now(),
-        )?.n ?? 0,
-      );
+      const active = await repo.countActive(req.user!.id);
       if (active >= MAX_ACTIVE) {
         sendJson(res, 400, { error: `You already have ${MAX_ACTIVE} active tokens. Revoke one first.` });
         return;
@@ -186,7 +181,7 @@ export function registerApiTokenRoutes(): void {
       const token = `${TOKEN_PREFIX}${randomBytes(16).toString('hex')}`;
       const id = generateId();
 
-      insert('api_tokens', {
+      const record = await repo.create({
         id,
         user_id: req.user!.id,
         name,
@@ -199,28 +194,22 @@ export function registerApiTokenRoutes(): void {
         created_at: now(),
       });
 
-      const info = tokenView(
-        one<Row>('SELECT * FROM api_tokens WHERE id = ?', id)!,
-      );
-      sendJson(res, 201, { token, info });
+      sendJson(res, 201, { token, info: tokenView(record) });
     }),
   );
 
   /** DELETE /api/api-tokens/:id — revoke a token (browser-session only) */
   router.delete(
     '/api/api-tokens/:id',
-    requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
-      const t = one<Row>(
-        'SELECT * FROM api_tokens WHERE id = ? AND user_id = ?',
-        req.params.id,
-        req.user!.id,
-      );
+    requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
+      const repo = getApiTokenRepository();
+      const t = await repo.getByIdAndUser(req.params.id, req.user!.id);
       if (!t) {
         sendJson(res, 404, { error: 'Token not found' });
         return;
       }
       if (!t.revoked_at) {
-        run('UPDATE api_tokens SET revoked_at = ? WHERE id = ?', now(), String(t.id));
+        await repo.revoke(t.id, t.user_id, now());
       }
       sendJson(res, 200, { ok: true });
     }),
@@ -229,28 +218,19 @@ export function registerApiTokenRoutes(): void {
   /** GET /api/admin/api-tokens — list all tokens (admin, browser-session only) */
   router.get(
     '/api/admin/api-tokens',
-    requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+    requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
       if (!req.user?.is_admin) {
         sendJson(res, 403, { error: 'Admin access required' });
         return;
       }
-      // Delegate tokens are internal run tokens; hide them from admin listings too.
-      const tokens = all<Row>(
-        `SELECT t.id, t.name, t.prefix, t.scope, t.scopes, t.project_id,
-                t.created_at, t.expires_at, t.last_used_at, t.revoked_at,
-                u.id AS user_id, u.name AS user_name, u.email AS user_email
-         FROM api_tokens t
-         JOIN users u ON u.id = t.user_id
-         WHERE (t.scopes IS NULL OR t.scopes NOT LIKE '%"delegate"%')
-         ORDER BY t.created_at DESC
-         LIMIT 200`,
-      );
+      const repo = getApiTokenRepository();
+      const tokens = await repo.listAll();
       sendJson(res, 200, {
         tokens: tokens.map((t) => ({
           ...tokenView(t),
-          user_id: String(t.user_id),
-          user_name: String(t.user_name),
-          user_email: String(t.user_email),
+          user_id: t.user_id,
+          user_name: t.user_name,
+          user_email: t.user_email,
         })),
       });
     }),

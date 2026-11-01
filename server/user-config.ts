@@ -987,12 +987,12 @@ function isTokenAuth(req: PortalRequest): boolean {
   return !!(authHeader && String(authHeader).startsWith('Bearer '));
 }
 
-/** Get the scope of the bearer token, or null if not a token request. */
+/** Get the scope of the bearer token using the already-populated req.tokenScopes. */
 function getTokenScope(req: PortalRequest): string | null {
   if (!isTokenAuth(req)) return null;
-  const token = String(req.headers.authorization ?? '').slice(7).trim();
-  const row = one<Row>('SELECT scope FROM api_tokens WHERE token_hash = ?', sha256(token));
-  return row ? String(row.scope ?? 'read') : 'read';
+  // req.tokenScopes is set by auth.ts authenticator; no DB lookup needed.
+  const scopes = req.tokenScopes ?? [];
+  return scopes.includes('write') ? 'write' : 'read';
 }
 
 /** Checks write scope for API token requests; browser sessions are always allowed. */
