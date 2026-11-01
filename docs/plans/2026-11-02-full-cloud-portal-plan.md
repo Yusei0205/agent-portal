@@ -125,7 +125,7 @@ A sensible path is hybrid first to get a working cloud portal, then move phases 
 |---|---|---|
 | 1 | Serverless or hybrid | Full serverless. |
 | 2 | Database | User asked about DynamoDB. Trade-offs below; waiting for confirmation. |
-| 3 | Kiro | Headless mode in AgentCore (Spike B). Needs a Kiro API key (Pro tier or higher). |
+| 3 | Kiro | Headless mode in AgentCore (Spike B). Two sign-in modes, as in the reference product at dvfknzixb0pap.cloudfront.net/credentials: (a) Kiro API key stored in Secrets Manager and passed as `KIRO_API_KEY`; (b) IAM Identity Center sign-in. For (b) the portal already stores each user's IdC token encrypted, writes it into a temporary `data.sqlite3` per run (`KIRO_TEST_DB_PATH`), and saves the refreshed token after the run (`server/kiro-idc.ts`, `server/agent/kiro.ts`). The cloud version reuses that: the runner receives the encrypted token, runs kiro-cli, and returns the refreshed token. The device-code sign-in itself runs in a short-lived AgentCore session. Token status shown to the user: valid, refreshable, expired (sign in again), missing. |
 | 4 | Auth | Google sign-in wanted. Options below. |
 | 5 | Live updates | Explained below; waiting for confirmation. |
 | 6 | First phase | S0 spikes + S1 data layer. |
@@ -177,7 +177,7 @@ In the cloud the code that produces an event (an AgentCore run or another Lambda
 | Phase | Status | Commits |
 |---|---|---|
 | S0 Spike A (AgentCore runner) | Done, deployed | dcefd4a |
-| S0 Spike B (Kiro headless) | Waiting for a Kiro API key | — |
+| S0 Spike B (Kiro headless) | Can start without an API key using IAM Identity Center sign-in (needs the user to approve one device code) | — |
 | S0 Spike C (AppSync Events) | Done, deployed, PASS | 61f3f67 |
 | S1 DynamoDB data design | Done | 836e8de |
 | S1 modules converted | api-tokens, auth (users, sessions, invitations), permissions, audit, delegation settings, settings + secrets, projects + members + teams | c88c001, f993e25, 7ff92db, f982d7c, ac7c5de |
