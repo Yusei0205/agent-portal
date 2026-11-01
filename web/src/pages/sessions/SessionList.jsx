@@ -83,9 +83,8 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename, select
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
 
-  const title = (w.title || w.goal)
-    ? ((w.title || w.goal).length > 60 ? (w.title || w.goal).slice(0, 59) + '…' : (w.title || w.goal))
-    : `Session ${w.id.slice(0, 8)}`;
+  const rawTitle = w.title || w.goal || '';
+  const title = rawTitle || `Session ${w.id.slice(0, 8)}`;
 
   const engineBadgeClass =
     w.engine === 'kiro'
@@ -174,7 +173,7 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename, select
             style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 8, textDecoration: 'none', color: 'inherit' }}
           >
             <div className="ws-item-body">
-              <span className="ws-item-title">{title}</span>
+              <span className="ws-item-title" title={title}>{title}</span>
               <div className="ws-item-sub">
                 <span className={engineBadgeClass}>{engineLabel(w.engine)}</span>
                 {projectName && <span>{projectName}</span>}
@@ -309,6 +308,13 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Custom event fired by the empty-state "New session" button in SessionsShell
+  useEffect(() => {
+    const handler = () => setShowNewDialog(true);
+    document.addEventListener('portal:new-session', handler);
+    return () => document.removeEventListener('portal:new-session', handler);
   }, []);
 
   // When the parent sends a ticket to pre-fill (from Tickets page), open the dialog

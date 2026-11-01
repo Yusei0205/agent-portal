@@ -56,12 +56,18 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
         {selectedId ? (
           <SessionWorkspace id={selectedId} project={proj} />
         ) : (
-          <div className="ws-placeholder">
+          <div className="ws-placeholder sessions-empty-placeholder">
             <div className="ws-placeholder-icon">
               <Icon name="play" size={48} />
             </div>
             <p>Select a session to view it</p>
-            <p className="small muted">or start a new one with + New</p>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => document.dispatchEvent(new CustomEvent('portal:new-session'))}
+            >
+              New session
+            </button>
           </div>
         )}
       </div>

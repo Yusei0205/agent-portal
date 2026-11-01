@@ -580,14 +580,14 @@
 .sessions-shell {
   display: grid;
   /* minmax(0, 1fr) lets the detail panel shrink below its content width instead of overflowing */
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   height: 100%; /* parent flex provides the 100vh space */
   overflow: hidden;
 }
 /* With a session open the shell still has two children (list + detail);
    the detail panel takes all remaining width. */
 .sessions-shell.with-workspace {
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
 }
 .sessions-list-panel {
   border-right: 1px solid var(--line);
