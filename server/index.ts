@@ -87,10 +87,18 @@ export async function startServer(
   // 3. Initialise storage backend (local or S3)
   await initStorage();
 
-  // 3a. Initialise api-token repository (SQLite by default, DynamoDB when configured)
+  // 4. Open database and run migrations.
+  // This must happen before any repository init that queries the database
+  // (e.g. initSettingsRepository calls loadSnapshot() which calls getDb()).
+  // Skip if already open — tests may inject an in-memory DB before calling startServer.
+  if (!isDbOpen()) {
+    openDb(`${cfg.dataDir}/portal.db`, cfg);
+  }
+
+  // 5. Initialise api-token repository (SQLite by default, DynamoDB when configured)
   await initApiTokenRepository();
 
-  // 3b. Initialise auth, permissions, audit, delegation-settings, settings, and projects repositories
+  // 6. Initialise auth, permissions, audit, delegation-settings, settings, and projects repositories
   const { initAuthRepository } = await import('./repositories/auth.ts');
   const { initPermissionsRepository } = await import('./repositories/permissions.ts');
   const { initAuditRepository } = await import('./repositories/audit.ts');
@@ -104,16 +112,10 @@ export async function startServer(
   await initSettingsRepository();
   await initProjectRepository();
 
-  // 3c. Register pre-request hook to keep settings snapshot fresh on Lambda
+  // 7. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)
   const { setPreRequestHook } = await import('./http.ts');
   setPreRequestHook(refreshSnapshotIfStale);
-
-  // 4. Open database and run migrations.
-  // Skip if already open — tests may inject an in-memory DB before calling startServer.
-  if (!isDbOpen()) {
-    openDb(`${cfg.dataDir}/portal.db`, cfg);
-  }
 
   // 5. Register routes (clear any previously registered routes first for test isolation)
   clearRoutes();

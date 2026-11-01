@@ -601,10 +601,13 @@
         "web/src/lib/pages-extra.js",
         "web/src/lib/useBulkSelect.js",
         "web/src/lib/useFocusTrap.js",
+        "web/src/lib/useOverlayDismiss.js",
         "web/src/styles/layout.css",
         "web/src/styles/palette.css"
       ],
-      "tests": [],
+      "tests": [
+        "test/overlay-dismiss.test.ts"
+      ],
       "smokeIds": ["shell"]
     },
     "theme": {
@@ -712,7 +715,8 @@
         "server/health.ts"
       ],
       "tests": [
-        "test/health.test.ts"
+        "test/health.test.ts",
+        "test/startup-ordering.test.ts"
       ],
       "smokeIds": []
     },
@@ -875,6 +879,15 @@
       "affects": ["sessions", "reviews", "testing-module"],
       "part": "ui",
       "rationale": "Only features that display real-time agent output use this hook. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Overlay dismiss hook — drag-safe backdrop close for all dialogs and modals",
+      "sources": [
+        "web/src/lib/useOverlayDismiss.js"
+      ],
+      "affects": ["shell", "sessions", "ide", "testing-module", "dashboard", "diagrams", "generated-docs", "presentations", "vault", "credentials", "loop-specs", "reviews", "branch-scans", "settings", "theme", "attachments"],
+      "part": "ui",
+      "rationale": "Used by every dialog and modal overlay in the app. Web-only file — affects only UI parts."
     },
     {
       "description": "Markdown sanitizer (DOMPurify wrapper)",
