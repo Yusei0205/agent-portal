@@ -1718,7 +1718,7 @@ describe('R2-Item 1: findings parsed from demo run and verdict reflects them', (
     assert.ok(Number(verdict.activeFindings) > 0, 'activeFindings should be non-zero');
   });
 
-  it('review marked failed when agent produces no text output', () => {
+  it('review marked failed when agent produces no text output', async () => {
     // Simulate a lifecycle event where no assistant-text events were emitted at all.
     // handleReviewLifecycle should mark the review failed rather than done with 0 findings.
     const pid = insertProject('R2Item1-NoOutput');
@@ -1738,7 +1738,7 @@ describe('R2-Item 1: findings parsed from demo run and verdict reflects them', (
       rid, pid, wid, now(),
     );
     // No p6_events at all so collectAssistantText returns ''
-    handleReviewLifecycle(wid, 'fake-run-no-events', 'done');
+    await handleReviewLifecycle(wid, 'fake-run-no-events', 'done');
 
     const review = one<{ status: string }>('SELECT status FROM p10_reviews WHERE id = ?', rid);
     assert.equal(review?.status, 'failed', 'review with no agent output should be marked failed');
@@ -2155,7 +2155,7 @@ describe('Item 1: Cancelled/aborted run terminates the review row', () => {
   before(async () => { await createTestServer(); });
   after(async () => { await cleanup(); });
 
-  it('handleReviewLifecycle(cancelled) marks a running review as failed', () => {
+  it('handleReviewLifecycle(cancelled) marks a running review as failed', async () => {
     const pid = insertProject('cancelled-run-test');
 
     const wid = generateId();
@@ -2176,14 +2176,14 @@ describe('Item 1: Cancelled/aborted run terminates the review row', () => {
       rid, pid, wid, now(),
     );
 
-    handleReviewLifecycle(wid, 'fake-run-id-cancel', 'cancelled');
+    await handleReviewLifecycle(wid, 'fake-run-id-cancel', 'cancelled');
 
     const review = one<{ status: string }>('SELECT status FROM p10_reviews WHERE id = ?', rid);
     assert.equal(review?.status, 'failed',
       'review must be marked failed when its run is cancelled — not left in running forever');
   });
 
-  it('handleReviewLifecycle(cancelled) is a no-op for an already-done review', () => {
+  it('handleReviewLifecycle(cancelled) is a no-op for an already-done review', async () => {
     const pid = insertProject('cancelled-done-test');
 
     const wid = generateId();
@@ -2204,7 +2204,7 @@ describe('Item 1: Cancelled/aborted run terminates the review row', () => {
       rid, pid, wid, now(),
     );
 
-    handleReviewLifecycle(wid, 'fake-run-id-done', 'cancelled');
+    await handleReviewLifecycle(wid, 'fake-run-id-done', 'cancelled');
 
     // A 'done' review must not be regressed to 'failed'
     const review = one<{ status: string }>('SELECT status FROM p10_reviews WHERE id = ?', rid);
@@ -2257,7 +2257,7 @@ describe('Item 2: workflow kind=review set on create and rerun; rerun produces f
     assert.equal(wf?.kind, 'review', 'rerun workflow should also have kind=review');
   });
 
-  it('rerun review with kind=review produces findings and verdict is blocked', () => {
+  it('rerun review with kind=review produces findings and verdict is blocked', async () => {
     // Simulate: a re-run workflow completes; lifecycle hook fires 'done'.
     // Findings must be created (not silently empty) and computeMergeVerdict must block.
     const pid = insertProject('rerun-produces-findings');
@@ -2297,7 +2297,7 @@ describe('Item 2: workflow kind=review set on create and rerun; rerun produces f
       now(),
     );
 
-    handleReviewLifecycle(wid, runId, 'done');
+    await handleReviewLifecycle(wid, runId, 'done');
 
     // Findings must exist
     const findings = all<{ severity: string; accepted: number }>(

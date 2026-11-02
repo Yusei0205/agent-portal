@@ -24,6 +24,7 @@ import { getSetting } from './settings.ts';
 import { getGitConnectionsRepository } from './repositories/git-connections.ts';
 import type { GitConnectionRecord } from './repositories/git-connections.ts';
 
+import { getMemberRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type GitConnection = GitConnectionRecord;
@@ -586,11 +587,7 @@ export async function resolveCodeCommitAwsCreds(creds: {
     // Authorization: the requesting user must be a member (or admin) of the project
     // that owns this AWS account. Admins may access any account.
     if (!creds.callerIsAdmin && acc.project_id && creds.connectionOwnerId) {
-      const isMember = one<{ user_id: string }>(
-        'SELECT user_id FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1',
-        acc.project_id,
-        creds.connectionOwnerId,
-      );
+      const isMember = await getMemberRow(acc.project_id, creds.connectionOwnerId);
       const isProjectAdmin = one<{ id: string }>(
         'SELECT id FROM users WHERE id = ? AND is_admin = 1 LIMIT 1',
         creds.connectionOwnerId,

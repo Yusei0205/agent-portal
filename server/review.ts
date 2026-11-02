@@ -36,6 +36,8 @@ import { buildXlsx, buildDocx } from './docgen.ts';
 import { decrypt } from './secrets.ts';
 import { config } from './config.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
+import { getProjectRepository } from './repositories/projects.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Review {
@@ -847,7 +849,7 @@ function hasTokenScope(req: PortalRequest, scope: string): boolean {
   return (req.tokenScopes ?? []).includes(scope);
 }
 
-function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return false;
@@ -855,17 +857,13 @@ function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId
   // S1-TODO(projects): requireProjectAccess is a sync helper called from many sync route handlers.
   // Converting all callers to async in this batch would touch 20+ routes across review.ts.
   // Leave on direct SQLite until the review module gets its own async conversion pass.
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return false;
   }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string; access: string }>(
-    'SELECT user_id, access FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return false;
@@ -873,7 +871,7 @@ function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId
   return true;
 }
 
-function requireProjectEditor(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectEditor(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return false;
@@ -882,11 +880,7 @@ function requireProjectEditor(req: PortalRequest, res: PortalResponse, projectId
   // Converting all callers to async in this batch would touch 20+ routes across review.ts.
   // Leave on direct SQLite until the review module gets its own async conversion pass.
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string; access: string }>(
-    'SELECT user_id, access FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return false;
@@ -1286,18 +1280,9 @@ export function registerReviewRoutes(): void {
 
     let projectIds: string[];
     if (isAdmin) {
-      // S1-TODO(projects): This query should use getProjectRepository().listProjects() once
-      // the route handler is converted to async. Leaving on direct SQLite for now because
-      // the surrounding review lifecycle handler is sync.
-      projectIds = all<{ id: string }>('SELECT id FROM projects WHERE archived = 0').map((r) => r.id);
+      projectIds = (await getProjectRepository().listProjects()).map((p) => p.id);
     } else {
-      // S1-TODO(projects): This query should use getProjectRepository().listMyProjects(userId) once
-      // the route handler is converted to async. Leaving on direct SQLite for now because
-      // the surrounding review lifecycle handler is sync.
-      projectIds = all<{ project_id: string }>(
-        'SELECT project_id FROM project_members WHERE user_id = ?',
-        userId,
-      ).map((r) => r.project_id);
+      projectIds = (await getProjectRepository().listMyProjects(userId)).map((p) => p.id);
     }
 
     if (projectIds.length === 0) {
@@ -1368,8 +1353,8 @@ export function registerReviewRoutes(): void {
   }));
 
   // ── GET /api/projects/:id/reviews ─────────────────────────────────────────
-  router.get('/api/projects/:id/reviews', (req: PortalRequest, res: PortalResponse): void => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+  router.get('/api/projects/:id/reviews', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const q = req.query;
     const runBy = q.get('runBy') ?? 'everyone';
@@ -1466,7 +1451,7 @@ export function registerReviewRoutes(): void {
   // ── POST /api/projects/:id/reviews ────────────────────────────────────────
   router.post('/api/projects/:id/reviews', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const repoId = body.repoId != null ? String(body.repoId) : null;
@@ -1593,7 +1578,7 @@ export function registerReviewRoutes(): void {
 
   // ── GET /api/projects/:id/reviews/:rid ────────────────────────────────────
   router.get('/api/projects/:id/reviews/:rid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const review = await getReviewsRepository().getById(req.params.rid);
     if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
@@ -1613,7 +1598,7 @@ export function registerReviewRoutes(): void {
 
   // ── DELETE /api/projects/:id/reviews/:rid ─────────────────────────────────
   router.delete('/api/projects/:id/reviews/:rid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const review = await getReviewsRepository().getById(req.params.rid);
     if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
@@ -1628,7 +1613,7 @@ export function registerReviewRoutes(): void {
 
   // ── GET /api/projects/:id/reviews/:rid/findings ───────────────────────────
   router.get('/api/projects/:id/reviews/:rid/findings', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const review = await getReviewsRepository().getById(req.params.rid);
     if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
@@ -1639,7 +1624,7 @@ export function registerReviewRoutes(): void {
 
   // ── PUT /api/projects/:id/reviews/:rid/findings/:fid ─────────────────────
   router.put('/api/projects/:id/reviews/:rid/findings/:fid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const review = await getReviewsRepository().getById(req.params.rid);
     if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
@@ -1666,12 +1651,8 @@ export function registerReviewRoutes(): void {
     if (!req.user.is_admin) {
       // S1-TODO(projects): This membership check should use getProjectRepository().isMember() once
       // this route handler is converted to async. Leaving on direct SQLite for now.
-      const member = one<{ access: string }>(
-        'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-        req.params.id,
-        req.user.id,
-      );
-      if (!member || !['owner', 'admin', 'editor'].includes(member.access)) {
+      const member = await getMemberRow(req.params.id, req.user.id);
+      if (!member || !['owner', 'admin', 'editor'].includes(String(member.access))) {
         sendJson(res, 403, { error: 'Editor or admin access required to post findings' });
         return;
       }
@@ -1876,7 +1857,7 @@ export function registerReviewRoutes(): void {
   // ── POST /api/projects/:id/reviews/:rid/merge (R1) ────────────────────────
   router.post('/api/projects/:id/reviews/:rid/merge', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'merge')) { sendJson(res, 403, { error: 'merge scope required' }); return; }
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const review = one<Review>(
       'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
@@ -2032,7 +2013,7 @@ export function registerReviewRoutes(): void {
   // ── POST /api/projects/:id/reviews/:rid/rerun (R2) ────────────────────────
   router.post('/api/projects/:id/reviews/:rid/rerun', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const parent = one<Review>(
       'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
@@ -2156,7 +2137,7 @@ export function registerReviewRoutes(): void {
 
   // ── GET /api/projects/:id/reviews/:rid/export/xlsx (R4) ───────────────────
   router.get('/api/projects/:id/reviews/:rid/export/xlsx', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const review = one<Review>(
       'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
@@ -2225,7 +2206,7 @@ export function registerReviewRoutes(): void {
 
   // ── GET /api/projects/:id/reviews/:rid/export/docx (R4) ───────────────────
   router.get('/api/projects/:id/reviews/:rid/export/docx', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const review = one<Review>(
       'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',

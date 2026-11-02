@@ -869,7 +869,7 @@ export function registerCaseSetRoutes(): void {
   // POST /case-sets — create + start generation
   router.post('/api/projects/:pid/tests/:tpid/case-sets', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -916,9 +916,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // GET /case-sets — list all, newest first
-  router.get('/api/projects/:pid/tests/:tpid/case-sets', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/case-sets', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
 
     const rows = all<TestCaseSet>(
@@ -929,9 +929,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // GET /case-sets/:csid — get with cases
-  router.get('/api/projects/:pid/tests/:tpid/case-sets/:csid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/case-sets/:csid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -944,9 +944,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // PATCH /case-sets/:csid — update name
-  router.patch('/api/projects/:pid/tests/:tpid/case-sets/:csid', (req: PortalRequest, res: PortalResponse): void => {
+  router.patch('/api/projects/:pid/tests/:tpid/case-sets/:csid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -962,7 +962,7 @@ export function registerCaseSetRoutes(): void {
   // DELETE /case-sets/:csid — delete + cancel
   router.delete('/api/projects/:pid/tests/:tpid/case-sets/:csid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -979,9 +979,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // POST /case-sets/:csid/cancel — cancel generation
-  router.post('/api/projects/:pid/tests/:tpid/case-sets/:csid/cancel', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/case-sets/:csid/cancel', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -1000,7 +1000,7 @@ export function registerCaseSetRoutes(): void {
   // POST /case-sets/:csid/resume — resume a failed/cancelled set, or re-generate skipped categories
   router.post('/api/projects/:pid/tests/:tpid/case-sets/:csid/resume', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -1070,9 +1070,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // GET /case-sets/:csid/trace — generation trace steps
-  router.get('/api/projects/:pid/tests/:tpid/case-sets/:csid/trace', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/case-sets/:csid/trace', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -1082,9 +1082,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // POST /case-sets/:csid/cases — add a case row
-  router.post('/api/projects/:pid/tests/:tpid/case-sets/:csid/cases', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/case-sets/:csid/cases', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -1138,9 +1138,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // PUT /case-sets/:csid/cases/:cid — update case fields
-  router.put('/api/projects/:pid/tests/:tpid/case-sets/:csid/cases/:cid', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:pid/tests/:tpid/case-sets/:csid/cases/:cid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -1179,9 +1179,9 @@ export function registerCaseSetRoutes(): void {
   });
 
   // DELETE /case-sets/:csid/cases/:cid — remove a case
-  router.delete('/api/projects/:pid/tests/:tpid/case-sets/:csid/cases/:cid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:pid/tests/:tpid/case-sets/:csid/cases/:cid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
@@ -1199,7 +1199,7 @@ export function registerCaseSetRoutes(): void {
   // GET /case-sets/:csid/export.xlsx — Excel workbook
   router.get('/api/projects/:pid/tests/:tpid/case-sets/:csid/export.xlsx', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
     const cs = requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;

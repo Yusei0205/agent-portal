@@ -65,7 +65,8 @@ Lambda can run many instances, and an instance is **frozen** as soon as its resp
 
 ### "Project not found" / 403 on sessions, files, terminal, reviews (non-SQLite code paths)
 - **Cause:** many modules still ran raw SQLite queries (`SELECT ... FROM projects / project_members`). In DynamoDB mode those return nothing.
-- **Fix:** use the repositories. `server/project-access.ts` has `getMembership()` and `getProjectSlug()`; `getProjectRepository()` has `getProjectById`, `isMember`, `addMember`. Converted so far: workflows CRUD, runs, session lifecycle, runner, accept-invite. Still raw (will fail on the cloud portal): session context/files, terminal, browser-live, reviews, scans, vault/knowledge pages and similar. Find them with `grep -rn "FROM projects\|FROM project_members" server`.
+- **Fix:** use the repositories. `server/project-access.ts` has `getProjectRow`, `getMemberRow`, `getProjectSlug`, `getMembership`, `getWorkflowRow`, `getLatestRunRow`, `getRepoRow` (plain-row results, same shape the old queries returned). All project and membership lookups now go through them (2026-11-03). Helpers are async: every caller must `await` (a missing `await` on an `async` access check is always truthy and silently lets requests through).
+- **Still raw SQL (domain tables), will fail on the cloud portal:** learn, diagrams, doc templates, generated docs, presentations, reviews, scans, testing, MCP server, themes, terminal and browser-live. Find them with `grep -rnE "(one|all)(<[^>]*>)?\(" server | grep -v repositories/`. Terminal and browser-live also need local shells/WebSockets, which belong to the AgentCore step.
 - **Tip:** the Lambda log does not record request paths. Reproduce with the browser Network tab and read the JSON error body.
 
 ## Kiro (AgentCore runner)

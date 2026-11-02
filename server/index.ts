@@ -303,9 +303,9 @@ export async function startServer(
   setWsUpgradeHandler((req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname === '/api/terminal/ws') {
-      handleTerminalUpgrade(req, socket, head);
+      Promise.resolve(handleTerminalUpgrade(req, socket, head)).catch(() => { try { socket.destroy(); } catch { /* closed */ } });
     } else if (BROWSER_LIVE_RE.test(url.pathname)) {
-      handleBrowserLiveUpgrade(req, socket, head);
+      handleBrowserLiveUpgrade(req, socket, head).catch(() => { try { socket.destroy(); } catch { /* closed */ } });
     } else {
       socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       socket.destroy();

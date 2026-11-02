@@ -96,9 +96,9 @@ export function registerTestProjectRoutes(): void {
   }));
 
   // GET /api/projects/:pid/tests — list test projects
-  router.get('/api/projects/:pid/tests', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    if (!requireProjectMember(req, res, req.params.pid)) return;
+    if (!await requireProjectMember(req, res, req.params.pid)) return;
     const projects = all<TestProject>(
       'SELECT * FROM test_projects WHERE project_id = ? ORDER BY created_at DESC',
       req.params.pid,
@@ -107,9 +107,9 @@ export function registerTestProjectRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests — create test project
-  router.post('/api/projects/:pid/tests', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    if (!requireProjectEditor(req, res, req.params.pid)) return;
+    if (!await requireProjectEditor(req, res, req.params.pid)) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 200 }).trim();
@@ -155,17 +155,17 @@ export function registerTestProjectRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid — get test project
-  router.get('/api/projects/:pid/tests/:tpid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     sendJson(res, 200, { testProject: tpView(tp) });
   });
 
   // PUT /api/projects/:pid/tests/:tpid — update test project
-  router.put('/api/projects/:pid/tests/:tpid', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:pid/tests/:tpid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -206,9 +206,9 @@ export function registerTestProjectRoutes(): void {
   });
 
   // DELETE /api/projects/:pid/tests/:tpid — delete test project
-  router.delete('/api/projects/:pid/tests/:tpid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:pid/tests/:tpid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     run('DELETE FROM test_projects WHERE id = ?', tp.id);

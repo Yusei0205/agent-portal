@@ -67,9 +67,9 @@ export function registerScriptRoutes(): void {
   // ── Groups ────────────────────────────────────────────────────────────────────
 
   // GET /api/projects/:pid/tests/:tpid/groups
-  router.get('/api/projects/:pid/tests/:tpid/groups', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/groups', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const groups = all<TestGroup>(
       'SELECT * FROM test_groups WHERE test_project_id = ? ORDER BY sort_order, name',
@@ -79,9 +79,9 @@ export function registerScriptRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests/:tpid/groups
-  router.post('/api/projects/:pid/tests/:tpid/groups', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/groups', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -101,9 +101,9 @@ export function registerScriptRoutes(): void {
   });
 
   // PUT /api/projects/:pid/tests/:tpid/groups/:gid
-  router.put('/api/projects/:pid/tests/:tpid/groups/:gid', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:pid/tests/:tpid/groups/:gid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const group = one<TestGroup>('SELECT * FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
@@ -122,9 +122,9 @@ export function registerScriptRoutes(): void {
   });
 
   // DELETE /api/projects/:pid/tests/:tpid/groups/:gid
-  router.delete('/api/projects/:pid/tests/:tpid/groups/:gid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:pid/tests/:tpid/groups/:gid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const group = one<TestGroup>('SELECT * FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
@@ -135,9 +135,9 @@ export function registerScriptRoutes(): void {
   // ── Scripts ───────────────────────────────────────────────────────────────────
 
   // GET /api/projects/:pid/tests/:tpid/scripts — all scripts
-  router.get('/api/projects/:pid/tests/:tpid/scripts', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/scripts', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const scripts = all<TestScript>(
       'SELECT * FROM test_scripts WHERE test_project_id = ? ORDER BY test_group_id, sort_order',
@@ -147,9 +147,9 @@ export function registerScriptRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/groups/:gid/scripts — scripts in group
-  router.get('/api/projects/:pid/tests/:tpid/groups/:gid/scripts', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/groups/:gid/scripts', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const group = one<TestGroup>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
@@ -161,9 +161,9 @@ export function registerScriptRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests/:tpid/groups/:gid/scripts — create script
-  router.post('/api/projects/:pid/tests/:tpid/groups/:gid/scripts', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/groups/:gid/scripts', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const group = one<TestGroup>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
@@ -201,9 +201,9 @@ export function registerScriptRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/scripts/:sid — get script
-  router.get('/api/projects/:pid/tests/:tpid/scripts/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/scripts/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
@@ -211,9 +211,9 @@ export function registerScriptRoutes(): void {
   });
 
   // PUT /api/projects/:pid/tests/:tpid/scripts/:sid — update script
-  router.put('/api/projects/:pid/tests/:tpid/scripts/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:pid/tests/:tpid/scripts/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
@@ -244,9 +244,9 @@ export function registerScriptRoutes(): void {
   });
 
   // DELETE /api/projects/:pid/tests/:tpid/scripts/:sid
-  router.delete('/api/projects/:pid/tests/:tpid/scripts/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:pid/tests/:tpid/scripts/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
@@ -256,9 +256,9 @@ export function registerScriptRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/scripts/:sid/history — run history + trend
-  router.get('/api/projects/:pid/tests/:tpid/scripts/:sid/history', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/scripts/:sid/history', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const script = one<TestScript>('SELECT id FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }

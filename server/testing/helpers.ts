@@ -6,6 +6,7 @@ import type { Row } from '../db.ts';
 import { sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 
+import { getMemberRow, getProjectRow } from '../project-access.ts';
 // ── DB row types ───────────────────────────────────────────────────────────────
 
 export interface TestProject extends Row {
@@ -120,26 +121,22 @@ export function hasScope(req: PortalRequest, scope: 'read' | 'write' | 'review' 
  * Require the caller to be a member of the portal project.
  * Returns the member row (or null on failure, after sending the response).
  */
-function getProjectMember(
+async function getProjectMember(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): { role: string } | null {
+): Promise<{ role: string } | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const project = one<Row>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user.is_admin) return { role: 'owner' };
-  const member = one<Row>(
-    'SELECT role FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -158,14 +155,14 @@ function getProjectMember(
  * On success returns the TestProject row.
  * On failure sends the error response and returns null.
  */
-export function requireTestProject(
+export async function requireTestProject(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
   testProjectId: string,
   minRole: 'viewer' | 'editor' = 'viewer',
-): TestProject | null {
-  const member = getProjectMember(req, res, projectId);
+): Promise<TestProject | null> {
+  const member = await getProjectMember(req, res, projectId);
   if (!member) return null;
 
   if (minRole === 'editor' && member.role === 'viewer') {
@@ -189,24 +186,24 @@ export function requireTestProject(
  * Require the caller to be a project member (at least viewer) without needing a test project.
  * Used for listing test projects and the capability endpoint.
  */
-export function requireProjectMember(
+export async function requireProjectMember(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): boolean {
-  const member = getProjectMember(req, res, projectId);
+): Promise<boolean> {
+  const member = await getProjectMember(req, res, projectId);
   return member !== null;
 }
 
 /**
  * Require the caller to be at least an editor of the portal project.
  */
-export function requireProjectEditor(
+export async function requireProjectEditor(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): boolean {
-  const member = getProjectMember(req, res, projectId);
+): Promise<boolean> {
+  const member = await getProjectMember(req, res, projectId);
   if (!member) return false;
   if (member.role === 'viewer') {
     sendJson(res, 403, { error: 'Editor access required' });

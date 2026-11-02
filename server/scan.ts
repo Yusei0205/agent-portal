@@ -31,6 +31,7 @@ import { convertToMarkdown } from './convert.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type ScanStatus =
@@ -1064,16 +1065,12 @@ function hasTokenScope(req: PortalRequest, scope: string): boolean {
   return (req.tokenScopes ?? []).includes(scope);
 }
 
-function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string }>(
-    'SELECT user_id FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   return true;
 }
@@ -1166,8 +1163,8 @@ export function registerScanRoutes(): void {
   }));
 
   // ── GET /api/projects/:id/scans ───────────────────────────────────────────
-  router.get('/api/projects/:id/scans', (req: PortalRequest, res: PortalResponse): void => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+  router.get('/api/projects/:id/scans', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const q = req.query;
     const runBy = q.get('runBy') ?? 'everyone';
@@ -1233,7 +1230,7 @@ export function registerScanRoutes(): void {
   // ── POST /api/projects/:id/scans ──────────────────────────────────────────
   router.post('/api/projects/:id/scans', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     if (!canRunScans(req.user!.id, Boolean(req.user!.is_admin))) {
       sendJson(res, 403, {
@@ -1312,7 +1309,7 @@ export function registerScanRoutes(): void {
 
   // ── GET /api/projects/:id/scans/:sid ──────────────────────────────────────
   router.get('/api/projects/:id/scans/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
@@ -1328,7 +1325,7 @@ export function registerScanRoutes(): void {
 
   // ── DELETE /api/projects/:id/scans/:sid ───────────────────────────────────
   router.delete('/api/projects/:id/scans/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
@@ -1344,7 +1341,7 @@ export function registerScanRoutes(): void {
 
   // ── GET /api/projects/:id/scans/:sid/files ────────────────────────────────
   router.get('/api/projects/:id/scans/:sid/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
@@ -1356,7 +1353,7 @@ export function registerScanRoutes(): void {
   // ── POST /api/projects/:id/scans/:sid/confirm ─────────────────────────────
   router.post('/api/projects/:id/scans/:sid/confirm', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     if (!canRunScans(req.user!.id, Boolean(req.user!.is_admin))) {
       sendJson(res, 403, {
@@ -1407,7 +1404,7 @@ export function registerScanRoutes(): void {
   // ── POST /api/projects/:id/scans/:sid/resume ──────────────────────────────
   router.post('/api/projects/:id/scans/:sid/resume', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     if (!canRunScans(req.user!.id, Boolean(req.user!.is_admin))) {
       sendJson(res, 403, {

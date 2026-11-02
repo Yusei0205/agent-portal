@@ -22,6 +22,7 @@ import { emit } from './events.ts';
 import { getLoopSpecsRepository } from './repositories/loop-specs.ts';
 import type { LoopSpecRecord } from './repositories/loop-specs.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface LoopSpec {
@@ -54,22 +55,18 @@ const TRIGGER_TYPES = ['manual', 'cron', 'interval', 'webhook', 'github', 'jira'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return false;
   }
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return false;
   }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string }>(
-    'SELECT user_id FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return false;
@@ -77,17 +74,13 @@ function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId
   return true;
 }
 
-function requireProjectEditor(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectEditor(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return false;
   }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string; access: string }>(
-    'SELECT user_id, access FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return false;
@@ -114,7 +107,7 @@ export function registerLoopSpecRoutes(): void {
   // GET /api/projects/:id/loop-specs
   // Returns built-in specs (project_id IS NULL) + project-specific specs
   router.get('/api/projects/:id/loop-specs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const allSpecs = await getLoopSpecsRepository().listSpecsByProject(req.params.id);
 
@@ -129,7 +122,7 @@ export function registerLoopSpecRoutes(): void {
 
   // POST /api/projects/:id/loop-specs
   router.post('/api/projects/:id/loop-specs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
 
@@ -162,7 +155,7 @@ export function registerLoopSpecRoutes(): void {
 
   // GET /api/projects/:id/loop-specs/:sid
   router.get('/api/projects/:id/loop-specs/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
     if (!spec || (spec.project_id !== null && spec.project_id !== req.params.id)) {
@@ -174,7 +167,7 @@ export function registerLoopSpecRoutes(): void {
 
   // PUT /api/projects/:id/loop-specs/:sid
   router.put('/api/projects/:id/loop-specs/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
@@ -210,7 +203,7 @@ export function registerLoopSpecRoutes(): void {
 
   // DELETE /api/projects/:id/loop-specs/:sid
   router.delete('/api/projects/:id/loop-specs/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const deleted = await getLoopSpecsRepository().deleteSpec(req.params.sid, req.params.id);
     if (!deleted) {
@@ -223,7 +216,7 @@ export function registerLoopSpecRoutes(): void {
 
   // POST /api/projects/:id/loop-specs/:sid/run — manually trigger a loop run
   router.post('/api/projects/:id/loop-specs/:sid/run', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectEditor(req, res, req.params.id)) return;
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     // Find built-in or project spec
     const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
@@ -265,7 +258,7 @@ export function registerLoopSpecRoutes(): void {
 
   // GET /api/projects/:id/loop-specs/:sid/runs — list loop run history
   router.get('/api/projects/:id/loop-specs/:sid/runs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
     if (!spec || (spec.project_id !== null && spec.project_id !== req.params.id)) {

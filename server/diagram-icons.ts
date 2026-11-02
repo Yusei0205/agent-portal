@@ -54,10 +54,10 @@ export async function styleChoices(): Promise<StyleInfo[]> {
 }
 
 /** The cloud to use when the person did not say: what the given repositories (or all of the project's) point to, else AWS. */
-export function cloudFor(projectId: string, repoIds?: string[]): { cloud: Cloud; detected: boolean; signals: string[] } {
+export async function cloudFor(projectId: string, repoIds?: string[]): Promise<{ cloud: Cloud; detected: boolean; signals: string[] }> {
   try {
     const repos = all<Repo>('SELECT * FROM repos WHERE project_id = ?', projectId).filter((r) => !repoIds || repoIds.includes(r.id));
-    const g = detectCloud(repos.map((r) => repoDir(r)));
+    const g = detectCloud(await Promise.all(repos.map((r) => repoDir(r))));
     return { cloud: g.cloud, detected: g.detected, signals: g.signals };
   } catch {
     return { cloud: DEFAULT_CLOUD, detected: false, signals: [] };

@@ -17,6 +17,7 @@ import { encrypt, decrypt } from './secrets.ts';
 import { config } from './config.ts';
 import { getIntegrationsRepository } from './repositories/integrations.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 const VALID_TYPES = ['http', 'stdio', 'atlassian', 'aws', 'browser', 'drawio'] as const;
@@ -24,15 +25,12 @@ type IntegrationType = (typeof VALID_TYPES)[number];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string }>(
-    'SELECT user_id FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId, req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   return true;
 }
@@ -48,14 +46,14 @@ export function registerIntegrationRoutes(): void {
 
   // GET /api/projects/:id/integrations
   router.get('/api/projects/:id/integrations', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
     const items = await getIntegrationsRepository().listByProject(req.params.id);
     sendJson(res, 200, { integrations: items.map(safeIntegration) });
   });
 
   // POST /api/projects/:id/integrations
   router.post('/api/projects/:id/integrations', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 120 }).trim();
@@ -87,7 +85,7 @@ export function registerIntegrationRoutes(): void {
 
   // PUT /api/projects/:id/integrations/:iid
   router.put('/api/projects/:id/integrations/:iid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const existing = await getIntegrationsRepository().getByIdAndProject(req.params.iid, req.params.id);
     if (!existing) { sendJson(res, 404, { error: 'Integration not found' }); return; }
@@ -112,7 +110,7 @@ export function registerIntegrationRoutes(): void {
 
   // DELETE /api/projects/:id/integrations/:iid
   router.delete('/api/projects/:id/integrations/:iid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const deleted = await getIntegrationsRepository().delete(req.params.iid, req.params.id);
     if (!deleted) { sendJson(res, 404, { error: 'Integration not found' }); return; }
@@ -122,7 +120,7 @@ export function registerIntegrationRoutes(): void {
 
   // POST /api/projects/:id/integrations/:iid/test
   router.post('/api/projects/:id/integrations/:iid/test', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const item = await getIntegrationsRepository().getByIdAndProject(req.params.iid, req.params.id);
     if (!item) { sendJson(res, 404, { error: 'Integration not found' }); return; }

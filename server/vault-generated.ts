@@ -20,6 +20,7 @@ import { auditRaw } from './audit.ts';
 import { MAX_FILE, MAX_VAULT, listVault, vaultDir } from './vault.ts';
 import { safeJoin } from './util.ts';
 
+import { getProjectRow } from './project-access.ts';
 export const GENERATED_DIR = 'generated';
 export type GeneratedKind = 'diagrams' | 'docs' | 'decks';
 
@@ -28,8 +29,8 @@ export interface GeneratedFile {
   data: Buffer | string;
 }
 
-export function generatedEnabled(projectId: string): boolean {
-  const p = one<{ vault_generated: number }>('SELECT vault_generated FROM projects WHERE id = ?', projectId);
+export async function generatedEnabled(projectId: string): Promise<boolean> {
+  const p = await getProjectRow(projectId);
   return Boolean(p && p.vault_generated);
 }
 
@@ -58,10 +59,10 @@ export interface SaveResult {
  * name and another extension (for example a .docx the new version no longer has, or a picture of the previous diagram
  * version) are removed unless `prune` is false. Never throws.
  */
-export function saveGenerated(projectId: string, kind: GeneratedKind, name: string, files: GeneratedFile[], actor: string | null, prune = true): SaveResult {
+export async function saveGenerated(projectId: string, kind: GeneratedKind, name: string, files: GeneratedFile[], actor: string | null, prune = true): Promise<SaveResult> {
   const result: SaveResult = { saved: [], skipped: null };
   try {
-    if (!generatedEnabled(projectId)) return { saved: [], skipped: 'The project does not save generated files to the Vault.' };
+    if (!await generatedEnabled(projectId)) return { saved: [], skipped: 'The project does not save generated files to the Vault.' };
     const dir = vaultDir('project', '', projectId);
     const used = () => listVault(dir).reduce((n, e) => n + e.size, 0);
     for (const f of files) {

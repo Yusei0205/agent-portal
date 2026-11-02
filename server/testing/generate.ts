@@ -648,7 +648,7 @@ export function registerGenerateRoutes(): void {
   // POST /api/projects/:pid/tests/:tpid/generate — start generation
   router.post('/api/projects/:pid/tests/:tpid/generate', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -709,7 +709,7 @@ export function registerGenerateRoutes(): void {
   // POST /api/projects/:pid/tests/:tpid/scripts/:sid/refine — refine existing script
   router.post('/api/projects/:pid/tests/:tpid/scripts/:sid/refine', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
@@ -749,9 +749,9 @@ export function registerGenerateRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/generations — list generations for a test project
-  router.get('/api/projects/:pid/tests/:tpid/generations', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/generations', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
 
     const activeOnly = req.query.get('active') === '1';
@@ -809,9 +809,9 @@ export function registerGenerateRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/generate/:genId — get generation status
-  router.get('/api/projects/:pid/tests/:tpid/generate/:genId', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/generate/:genId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const gen = one<TestGeneration>(
       'SELECT * FROM test_generations WHERE id = ? AND test_project_id = ?',
@@ -860,7 +860,7 @@ export function registerGenerateRoutes(): void {
   // POST /api/projects/:pid/tests/:tpid/import — import test cases from CSV/XLSX/DOCX/MD
   router.post('/api/projects/:pid/tests/:tpid/import', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -937,9 +937,9 @@ export function registerGenerateRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests/:tpid/generations/:gid/cancel — cancel a generation
-  router.post('/api/projects/:pid/tests/:tpid/generations/:gid/cancel', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/generations/:gid/cancel', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const gen = one<TestGeneration>(
@@ -991,9 +991,9 @@ export function registerGenerateRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/generations/:gid/trace — generation trace steps
-  router.get('/api/projects/:pid/tests/:tpid/generations/:gid/trace', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/generations/:gid/trace', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
 
     const gen = one<{ id: string }>(
@@ -1009,7 +1009,7 @@ export function registerGenerateRoutes(): void {
   // POST /api/projects/:pid/tests/:tpid/generations/:gid/retry — retry a failed generation
   router.post('/api/projects/:pid/tests/:tpid/generations/:gid/retry', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const original = one<TestGeneration>(

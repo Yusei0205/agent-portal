@@ -37,6 +37,9 @@ import { generateId, now, str, badRequest, notFound, parseJson } from './util.ts
 import type { SQLInputValue } from 'node:sqlite';
 import { emit } from './events.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
+import { getProjectRepository } from './repositories/projects.ts';
+import { getAuthRepository } from './repositories/auth.ts';
 // ── Type helpers ──────────────────────────────────────────────────────────────
 
 /** Cast unknown Row value to string for use as DB parameter. */
@@ -58,12 +61,12 @@ function pick<T extends readonly string[]>(v: unknown, allowed: T, field: string
 
 // ── Access control ────────────────────────────────────────────────────────────
 
-function requireProjectAccess(
+async function requireProjectAccess(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
   level: 'viewer' | 'editor' = 'viewer',
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
@@ -71,17 +74,13 @@ function requireProjectAccess(
   // S1-TODO(projects): requireProjectAccess is a sync helper called from many sync route handlers
   // in learn.ts. Converting all callers to async in this batch would touch 20+ routes.
   // Leave on direct SQLite until the learn module gets its own async conversion pass.
-  const project = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user.is_admin) return project;
-  const member = one<Row>(
-    'SELECT * FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -93,16 +92,10 @@ function requireProjectAccess(
   return project;
 }
 
-function isEditorOf(req: PortalRequest, projectId: unknown): boolean {
+async function isEditorOf(req: PortalRequest, projectId: unknown): Promise<boolean> {
   if (req.user?.is_admin) return true;
-  // S1-TODO(projects): This membership check should use getProjectRepository().roleOf() once
-  // isEditorOf is made async. Leave on direct SQLite until learn module is converted.
-  return Boolean(
-    one<Row>(
-      "SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? AND role IN ('editor','owner')",
-      S(projectId), req.user!.id,
-    ),
-  );
+  const role = await getProjectRepository().roleOf(S(projectId), req.user!.id);
+  return role === 'editor' || role === 'owner';
 }
 
 function notifyLearn(projectId: string, detail: Record<string, unknown> = {}): void {
@@ -240,11 +233,11 @@ export function registerLearnRoutes(): void {
 
   router.get(
     '/api/projects/:pid/learn/docs',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
-      const project = requireProjectAccess(req, res, req.params.pid);
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
+      const project = await requireProjectAccess(req, res, req.params.pid);
       if (!project) return;
 
-      const editor = isEditorOf(req, project.id);
+      const editor = await isEditorOf(req, project.id);
       const rows = all<Row>(
         `SELECT l.*, u.name AS created_by_name,
                 EXISTS(SELECT 1 FROM doc_reads r WHERE r.learn_doc_id = l.id AND r.user_id = ?) AS read_flag
@@ -262,7 +255,7 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/projects/:pid/learn/docs',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const project = requireProjectAccess(req, res, req.params.pid, 'editor');
+      const project = await requireProjectAccess(req, res, req.params.pid, 'editor');
       if (!project) return;
 
       const body = req.body as Record<string, unknown>;
@@ -298,12 +291,12 @@ export function registerLearnRoutes(): void {
 
   router.get(
     '/api/learn/docs/:id',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const d = getLearnDoc(req.params.id);
-      const project = requireProjectAccess(req, res, S(d.project_id));
+      const project = await requireProjectAccess(req, res, S(d.project_id));
       if (!project) return;
 
-      const editor = isEditorOf(req, d.project_id);
+      const editor = await isEditorOf(req, d.project_id);
       if (d.status !== 'published' && !editor) {
         sendJson(res, 404, { error: 'Document not found' });
         return;
@@ -324,7 +317,7 @@ export function registerLearnRoutes(): void {
     '/api/learn/docs/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const d = getLearnDoc(req.params.id);
-      const project = requireProjectAccess(req, res, S(d.project_id), 'editor');
+      const project = await requireProjectAccess(req, res, S(d.project_id), 'editor');
       if (!project) return;
 
       const body = req.body as Record<string, unknown>;
@@ -340,9 +333,9 @@ export function registerLearnRoutes(): void {
 
   router.delete(
     '/api/learn/docs/:id',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const d = getLearnDoc(req.params.id);
-      requireProjectAccess(req, res, S(d.project_id), 'editor');
+      await requireProjectAccess(req, res, S(d.project_id), 'editor');
       dbRun('DELETE FROM learn_docs WHERE id = ?', S(d.id));
       notifyLearn(S(d.project_id), { id: d.id });
       sendJson(res, 200, { ok: true });
@@ -351,9 +344,9 @@ export function registerLearnRoutes(): void {
 
   router.post(
     '/api/learn/docs/:id/publish',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const d = getLearnDoc(req.params.id);
-      requireProjectAccess(req, res, S(d.project_id), 'editor');
+      await requireProjectAccess(req, res, S(d.project_id), 'editor');
       update('learn_docs', S(d.id), { status: 'published', published_at: now(), updated_at: now() });
       notifyLearn(S(d.project_id), { id: d.id });
       sendJson(res, 200, { doc: docView(getLearnDoc(S(d.id))) });
@@ -362,9 +355,9 @@ export function registerLearnRoutes(): void {
 
   router.post(
     '/api/learn/docs/:id/unpublish',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const d = getLearnDoc(req.params.id);
-      requireProjectAccess(req, res, S(d.project_id), 'editor');
+      await requireProjectAccess(req, res, S(d.project_id), 'editor');
       update('learn_docs', S(d.id), { status: 'draft', updated_at: now() });
       notifyLearn(S(d.project_id), { id: d.id });
       sendJson(res, 200, { ok: true });
@@ -373,9 +366,9 @@ export function registerLearnRoutes(): void {
 
   router.post(
     '/api/learn/docs/:id/read',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const d = getLearnDoc(req.params.id);
-      requireProjectAccess(req, res, S(d.project_id));
+      await requireProjectAccess(req, res, S(d.project_id));
       dbRun(
         'INSERT OR REPLACE INTO doc_reads (learn_doc_id, user_id, read_at) VALUES (?, ?, ?)',
         S(d.id), req.user!.id, now(),
@@ -388,11 +381,11 @@ export function registerLearnRoutes(): void {
 
   router.get(
     '/api/projects/:pid/learn/quizzes',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
-      const project = requireProjectAccess(req, res, req.params.pid);
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
+      const project = await requireProjectAccess(req, res, req.params.pid);
       if (!project) return;
 
-      const editor = isEditorOf(req, project.id);
+      const editor = await isEditorOf(req, project.id);
       const rows = all<Row>(
         `SELECT q.*,
                 json_array_length(COALESCE(q.questions, q.questions_json, '[]')) AS question_count,
@@ -411,7 +404,7 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/projects/:pid/learn/quizzes',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const project = requireProjectAccess(req, res, req.params.pid, 'editor');
+      const project = await requireProjectAccess(req, res, req.params.pid, 'editor');
       if (!project) return;
 
       const body = req.body as Record<string, unknown>;
@@ -451,12 +444,12 @@ export function registerLearnRoutes(): void {
 
   router.get(
     '/api/learn/quizzes/:id',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const q = getQuiz(req.params.id);
-      const project = requireProjectAccess(req, res, S(q.project_id));
+      const project = await requireProjectAccess(req, res, S(q.project_id));
       if (!project) return;
 
-      const editor = isEditorOf(req, q.project_id);
+      const editor = await isEditorOf(req, q.project_id);
       if (q.status !== 'published' && !editor) {
         sendJson(res, 404, { error: 'Quiz not found' });
         return;
@@ -470,7 +463,7 @@ export function registerLearnRoutes(): void {
     '/api/learn/quizzes/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const q = getQuiz(req.params.id);
-      requireProjectAccess(req, res, S(q.project_id), 'editor');
+      await requireProjectAccess(req, res, S(q.project_id), 'editor');
 
       const body = req.body as Record<string, unknown>;
       const patch: Record<string, SQLInputValue | boolean | undefined> = { updated_at: now() };
@@ -483,9 +476,9 @@ export function registerLearnRoutes(): void {
 
   router.delete(
     '/api/learn/quizzes/:id',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const q = getQuiz(req.params.id);
-      requireProjectAccess(req, res, S(q.project_id), 'editor');
+      await requireProjectAccess(req, res, S(q.project_id), 'editor');
       dbRun('DELETE FROM quizzes WHERE id = ?', S(q.id));
       notifyLearn(S(q.project_id), { id: q.id });
       sendJson(res, 200, { ok: true });
@@ -494,9 +487,9 @@ export function registerLearnRoutes(): void {
 
   router.post(
     '/api/learn/quizzes/:id/publish',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const q = getQuiz(req.params.id);
-      requireProjectAccess(req, res, S(q.project_id), 'editor');
+      await requireProjectAccess(req, res, S(q.project_id), 'editor');
       update('quizzes', S(q.id), { status: 'published', published_at: now(), updated_at: now() });
       notifyLearn(S(q.project_id), { id: q.id });
       sendJson(res, 200, { ok: true });
@@ -505,9 +498,9 @@ export function registerLearnRoutes(): void {
 
   router.post(
     '/api/learn/quizzes/:id/unpublish',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const q = getQuiz(req.params.id);
-      requireProjectAccess(req, res, S(q.project_id), 'editor');
+      await requireProjectAccess(req, res, S(q.project_id), 'editor');
       update('quizzes', S(q.id), { status: 'draft', updated_at: now() });
       notifyLearn(S(q.project_id), { id: q.id });
       sendJson(res, 200, { ok: true });
@@ -519,10 +512,10 @@ export function registerLearnRoutes(): void {
     '/api/learn/quizzes/:id/attempts',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const q = getQuiz(req.params.id);
-      const project = requireProjectAccess(req, res, S(q.project_id));
+      const project = await requireProjectAccess(req, res, S(q.project_id));
       if (!project) return;
 
-      const editor = isEditorOf(req, q.project_id);
+      const editor = await isEditorOf(req, q.project_id);
       if (q.status !== 'published' && !editor) {
         sendJson(res, 403, { error: 'This quiz is not published yet' });
         return;
@@ -564,12 +557,12 @@ export function registerLearnRoutes(): void {
   /** GET /api/learn/quizzes/:id/attempts — list attempts */
   router.get(
     '/api/learn/quizzes/:id/attempts',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const q = getQuiz(req.params.id);
-      const project = requireProjectAccess(req, res, S(q.project_id));
+      const project = await requireProjectAccess(req, res, S(q.project_id));
       if (!project) return;
 
-      const editor = isEditorOf(req, q.project_id);
+      const editor = await isEditorOf(req, q.project_id);
       const rows = editor
         ? all<Row>(
             'SELECT a.id, a.score, a.total, a.created_at AS completed_at, u.name FROM quiz_attempts a JOIN users u ON u.id = a.user_id WHERE a.quiz_id = ? ORDER BY a.created_at DESC LIMIT 200',
@@ -587,11 +580,11 @@ export function registerLearnRoutes(): void {
 
   router.get(
     '/api/projects/:pid/learn/paths',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
-      const project = requireProjectAccess(req, res, req.params.pid);
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
+      const project = await requireProjectAccess(req, res, req.params.pid);
       if (!project) return;
 
-      const editor = isEditorOf(req, project.id);
+      const editor = await isEditorOf(req, project.id);
       const rows = all<Row>(
         `SELECT * FROM paths WHERE project_id = ? ${editor ? '' : "AND status = 'published'"} ORDER BY title`,
         S(project.id),
@@ -603,7 +596,7 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/projects/:pid/learn/paths',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const project = requireProjectAccess(req, res, req.params.pid, 'editor');
+      const project = await requireProjectAccess(req, res, req.params.pid, 'editor');
       if (!project) return;
 
       const body = req.body as Record<string, unknown>;
@@ -633,7 +626,7 @@ export function registerLearnRoutes(): void {
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const r = one<Row>('SELECT * FROM paths WHERE id = ?', req.params.id);
       if (!r) { sendJson(res, 404, { error: 'Path not found' }); return; }
-      requireProjectAccess(req, res, S(r.project_id), 'editor');
+      await requireProjectAccess(req, res, S(r.project_id), 'editor');
 
       const body = req.body as Record<string, unknown>;
       const patch: Record<string, SQLInputValue | boolean | undefined> = { updated_at: now() };
@@ -651,10 +644,10 @@ export function registerLearnRoutes(): void {
 
   router.delete(
     '/api/learn/paths/:id',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
       const r = one<Row>('SELECT * FROM paths WHERE id = ?', req.params.id);
       if (!r) { sendJson(res, 404, { error: 'Path not found' }); return; }
-      requireProjectAccess(req, res, S(r.project_id), 'editor');
+      await requireProjectAccess(req, res, S(r.project_id), 'editor');
       dbRun('DELETE FROM paths WHERE id = ?', S(r.id));
       notifyLearn(S(r.project_id), { id: r.id });
       sendJson(res, 200, { ok: true });
@@ -664,14 +657,16 @@ export function registerLearnRoutes(): void {
   /** GET /api/projects/:pid/learn/progress — team progress (editor+) */
   router.get(
     '/api/projects/:pid/learn/progress',
-    requireAuth((req: PortalRequest, res: PortalResponse) => {
-      const project = requireProjectAccess(req, res, req.params.pid, 'editor');
+    requireAuth(async (req: PortalRequest, res: PortalResponse) => {
+      const project = await requireProjectAccess(req, res, req.params.pid, 'editor');
       if (!project) return;
 
-      const members = all<Row>(
-        'SELECT u.id, u.name, m.role FROM project_members m JOIN users u ON u.id = m.user_id WHERE m.project_id = ? ORDER BY u.name',
-        S(project.id),
-      );
+      const memberRecords = await getProjectRepository().listMembers(S(project.id));
+      const memberUsers = await getAuthRepository().getUsersByIds(memberRecords.map((m) => m.user_id));
+      const nameById = new Map(memberUsers.map((u) => [u.id, u.name]));
+      const members: Row[] = memberRecords
+        .map((m) => ({ id: m.user_id, name: nameById.get(m.user_id) ?? '', role: m.role }) as Row)
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
       const paths = all<Row>(
         "SELECT * FROM paths WHERE project_id = ? AND status = 'published' ORDER BY title",
         S(project.id),

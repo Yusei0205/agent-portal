@@ -38,18 +38,19 @@ import { queueTestRun, _runningCount, _cancelledRuns } from './testing/runner.ts
 import { runGeneration } from './testing/generate.ts';
 import type { TestProject, TestScript } from './testing/helpers.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Access helpers ─────────────────────────────────────────────────────────────
 
 /** Returns the project row if the user is admin or a member, else throws. */
-function assertProjectAccess(userId: string, isAdmin: boolean, projectId: string): Row {
+async function assertProjectAccess(userId: string, isAdmin: boolean, projectId: string): Promise<Row> {
   // S1-TODO(projects): assertProjectAccess is a sync helper used by many MCP tool handlers.
   // The MCP server dispatches tools synchronously inside its request handler.
   // Converting this to async would require restructuring the entire MCP dispatch loop.
   // Leave on direct SQLite until the mcp-server module gets its own async conversion pass.
-  const project = one<Row>('SELECT id, name FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) throw new Error('Project not found');
   if (isAdmin) return project;
-  const m = one<Row>('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?', projectId, userId);
+  const m = await getMemberRow(projectId, userId);
   if (!m) throw new Error('Project not found');
   return project;
 }
@@ -154,7 +155,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, status, limit = 50, offset = 0 }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'list_sessions', `project:${projectId}`, { status });
 
           const conditions = ['project_id = ?'];
@@ -190,7 +191,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, workflowId, limit = 100, cursor }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           assertWorkflow(projectId, workflowId);
           audit(uid, 'get_transcript', `workflow:${workflowId}`, { projectId });
 
@@ -238,7 +239,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, status, limit = 50, offset = 0 }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'list_reviews', `project:${projectId}`, { status });
 
           const conditions = ['project_id = ?'];
@@ -273,7 +274,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, reviewId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const r = assertReview(projectId, reviewId);
           audit(uid, 'get_review', `review:${reviewId}`, { projectId });
 
@@ -300,7 +301,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, reviewId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const r = assertReview(projectId, reviewId) as unknown as Review;
           audit(uid, 'get_review_usage', `review:${reviewId}`, { projectId });
 
@@ -342,7 +343,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, goal, engine = 'demo', trustTools = false }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'start_session', `project:${projectId}`, { goal: goal.slice(0, 200) });
 
           const id = generateId();
@@ -389,7 +390,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, workflowId, message }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const w = assertWorkflow(projectId, workflowId);
           audit(uid, 'prompt_session', `workflow:${workflowId}`, { message: message.slice(0, 200) });
 
@@ -438,7 +439,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, workflowId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           assertWorkflow(projectId, workflowId);
           audit(uid, 'stop_session', `workflow:${workflowId}`, { projectId });
 
@@ -490,7 +491,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             ? tokenWorkflowId
             : workflowId;
 
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           assertWorkflow(projectId, effectiveWorkflowId);
           audit(uid, 'delegate_session', `workflow:${effectiveWorkflowId}`, { task: task.slice(0, 200) });
 
@@ -533,7 +534,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, repoId, baseRef, headRef, prNumber }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'start_review', `project:${projectId}`, { repoId, baseRef, headRef, prNumber });
 
           const id = generateId();
@@ -597,7 +598,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, reviewId, timeoutMs = 25000 }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'wait_for_review', `review:${reviewId}`, { projectId, timeoutMs });
 
           const deadline = Date.now() + Math.min(timeoutMs, 25_000);
@@ -651,7 +652,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, reviewId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const r = assertReview(projectId, reviewId) as unknown as Review;
           audit(uid, 'post_review_comments', `review:${reviewId}`, { projectId });
 
@@ -720,7 +721,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, repoId, branch, includePaths, excludePaths }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
 
           // Scan allowlist check
           const allowlist = (() => {
@@ -791,7 +792,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, scanId, budgetTokens }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const scan = assertScan(projectId, scanId);
           audit(uid, 'confirm_scan', `scan:${scanId}`, { budgetTokens });
 
@@ -825,7 +826,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, scanId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const scan = assertScan(projectId, scanId);
           audit(uid, 'resume_scan', `scan:${scanId}`, { projectId });
 
@@ -863,7 +864,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, reviewId, strategy = 'squash' }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const r = assertReview(projectId, reviewId) as unknown as Review;
           audit(uid, 'merge_pull_request', `review:${reviewId}`, { projectId, strategy });
 
@@ -926,7 +927,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'list_test_projects', `project:${projectId}`, {});
           const rows = all<Row>(
             `SELECT id, name, app_url, api_base_url, viewport_width, viewport_height,
@@ -954,7 +955,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, testProjectId, groupId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const tp = one<Row>('SELECT id FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
           if (!tp) return errorResult('Test project not found');
           audit(uid, 'list_test_scripts', `test_project:${testProjectId}`, { groupId });
@@ -995,7 +996,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, testProjectId, runId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const tp = one<Row>('SELECT id FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
           if (!tp) return errorResult('Test project not found');
           const testRun = one<Row>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', runId, testProjectId);
@@ -1032,7 +1033,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, testProjectId, scriptId, groupId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const tp = one<TestProject>('SELECT * FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
           if (!tp) return errorResult('Test project not found');
           audit(uid, 'start_test_run', `test_project:${testProjectId}`, { scriptId, groupId });
@@ -1101,7 +1102,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, testProjectId, runId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const tp = one<Row>('SELECT id FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
           if (!tp) return errorResult('Test project not found');
           const testRun = one<Row>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', runId, testProjectId);
@@ -1141,7 +1142,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       },
       async ({ projectId, testProjectId, description, groupId }) => {
         try {
-          assertProjectAccess(uid, isAdmin, projectId);
+          await assertProjectAccess(uid, isAdmin, projectId);
           const tp = one<TestProject>('SELECT * FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
           if (!tp) return errorResult('Test project not found');
           audit(uid, 'generate_test_script', `test_project:${testProjectId}`, { description: description.slice(0, 200) });

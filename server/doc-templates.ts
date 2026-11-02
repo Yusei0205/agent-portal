@@ -21,6 +21,7 @@ import { config } from './config.ts';
 import { checkTemplateUpload, TEMPLATE_LIMITS, TemplateError, KIND_OF_EXT } from './template-check.ts';
 import type { TemplateKind } from './template-check.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function requireAuth(req: PortalRequest, res: PortalResponse): boolean {
@@ -31,27 +32,23 @@ function requireAuth(req: PortalRequest, res: PortalResponse): boolean {
   return true;
 }
 
-function requireProjectAccess(
+async function requireProjectAccess(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
   level: 'viewer' | 'editor' = 'viewer',
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const project = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user.is_admin) return project;
-  const member = one<Row>(
-    'SELECT * FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -134,7 +131,7 @@ async function readUpload(req: PortalRequest): Promise<{ buf: Buffer; filename: 
 export function registerDocTemplateRoutes(): void {
   // GET /api/projects/:id/templates
   router.get('/api/projects/:id/templates', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const projectTemplates = all<Row>(
@@ -152,7 +149,7 @@ export function registerDocTemplateRoutes(): void {
 
   // POST /api/projects/:id/templates/upload
   router.post('/api/projects/:id/templates/upload', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const count = (one<{ n: number }>(
@@ -201,7 +198,7 @@ export function registerDocTemplateRoutes(): void {
 
   // DELETE /api/projects/:id/templates/:tid
   router.delete('/api/projects/:id/templates/:tid', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const t = one<Row>('SELECT * FROM doc_templates WHERE id = ?', req.params.tid);
@@ -224,7 +221,7 @@ export function registerDocTemplateRoutes(): void {
 
   // PUT /api/projects/:id/templates/:tid/default
   router.put('/api/projects/:id/templates/:tid/default', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const t = one<Row>('SELECT * FROM doc_templates WHERE id = ?', req.params.tid);

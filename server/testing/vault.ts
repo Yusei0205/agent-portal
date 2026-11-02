@@ -151,9 +151,9 @@ export function registerTestVaultRoutes(): void {
 
   // GET /api/projects/:pid/tests/:tpid/vault/files — list vault files
   // Registered BEFORE /vault/:itemId to avoid route conflict
-  router.get('/api/projects/:pid/tests/:tpid/vault/files', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/vault/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const files = all<Row>(
       'SELECT id, name, size_bytes, mime_type, created_at FROM test_vault_files WHERE test_project_id = ? ORDER BY name',
@@ -163,9 +163,9 @@ export function registerTestVaultRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests/:tpid/vault/files — upload vault file (browser-only, multipart)
-  router.post('/api/projects/:pid/tests/:tpid/vault/files', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/vault/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowserAuth(req, res)) return;
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     if (!req.rawBody?.length) { sendJson(res, 400, { error: 'No file data received' }); return; }
@@ -210,9 +210,9 @@ export function registerTestVaultRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/vault/files/:fileId/download
-  router.get('/api/projects/:pid/tests/:tpid/vault/files/:fileId/download', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/vault/files/:fileId/download', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const file = one<Row>('SELECT * FROM test_vault_files WHERE id = ? AND test_project_id = ?', req.params.fileId, tp.id);
     if (!file) { sendJson(res, 404, { error: 'File not found' }); return; }
@@ -229,9 +229,9 @@ export function registerTestVaultRoutes(): void {
   });
 
   // DELETE /api/projects/:pid/tests/:tpid/vault/files/:fileId
-  router.delete('/api/projects/:pid/tests/:tpid/vault/files/:fileId', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:pid/tests/:tpid/vault/files/:fileId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowserAuth(req, res)) return;
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const file = one<Row>('SELECT * FROM test_vault_files WHERE id = ? AND test_project_id = ?', req.params.fileId, tp.id);
     if (!file) { sendJson(res, 404, { error: 'File not found' }); return; }
@@ -242,9 +242,9 @@ export function registerTestVaultRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests/:tpid/vault/import — CSV import (browser-only)
-  router.post('/api/projects/:pid/tests/:tpid/vault/import', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/vault/import', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowserAuth(req, res)) return;
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -313,9 +313,9 @@ export function registerTestVaultRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/vault — list vault items (write-only: no secrets in response)
-  router.get('/api/projects/:pid/tests/:tpid/vault', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/vault', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const items = all<TestVaultItem>(
       'SELECT * FROM test_vault_items WHERE test_project_id = ? ORDER BY kind, name',
@@ -325,9 +325,9 @@ export function registerTestVaultRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests/:tpid/vault — create vault item (browser-only)
-  router.post('/api/projects/:pid/tests/:tpid/vault', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/vault', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowserAuth(req, res)) return;
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -384,9 +384,9 @@ export function registerTestVaultRoutes(): void {
   });
 
   // DELETE /api/projects/:pid/tests/:tpid/vault/:itemId — delete vault item (browser-only)
-  router.delete('/api/projects/:pid/tests/:tpid/vault/:itemId', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:pid/tests/:tpid/vault/:itemId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowserAuth(req, res)) return;
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const item = one<Row>('SELECT id FROM test_vault_items WHERE id = ? AND test_project_id = ?', req.params.itemId, tp.id);
     if (!item) { sendJson(res, 404, { error: 'Vault item not found' }); return; }

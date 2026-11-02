@@ -16,6 +16,7 @@ import { config } from './config.ts';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 
+import { getMemberRow, getProjectRow, getRepoRow, getWorkflowRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Repo {
@@ -50,10 +51,10 @@ export interface SessionContext {
  * @param workflowRow  The p6_workflows row.
  * @param projectRow   The projects row.
  */
-export function buildSessionContext(
+export async function buildSessionContext(
   workflowRow: Row,
   projectRow: Row,
-): SessionContext {
+): Promise<SessionContext> {
   const dataDir = config.dataDir;
   const slug = String(projectRow.slug ?? '');
   const projectDir = path.join(dataDir, 'projects', slug);
@@ -68,7 +69,7 @@ export function buildSessionContext(
   const repoIds = parseJsonArray(String(workflowRow.repo_ids ?? '[]'));
   const repos: Repo[] = [];
   for (const rid of repoIds) {
-    const r = one<Row>('SELECT * FROM repositories WHERE id = ?', rid);
+    const r = await getRepoRow(rid);
     if (r) {
       repos.push({
         id: String(r.id),
@@ -144,27 +145,23 @@ export interface ContextItem {
  * Access helper — mirrors the pattern in output-files.ts.
  * Returns the workflow row or null (response already sent).
  */
-function requireWorkflowAccess(
+async function requireWorkflowAccess(
   req: PortalRequest,
   res: PortalResponse,
   workflowId: string,
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  const wf = await getWorkflowRow(workflowId);
   if (!wf) {
     sendJson(res, 404, { error: 'Workflow not found' });
     return null;
   }
   if (req.user.is_admin) return wf;
   if (!wf.project_id) return wf;
-  const member = one<Row>(
-    'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-    wf.project_id as string,
-    req.user.id,
-  );
+  const member = await getMemberRow(wf.project_id as string, req.user.id);
   if (!member) {
     sendJson(res, 403, { error: 'Not a project member' });
     return null;
@@ -175,12 +172,12 @@ function requireWorkflowAccess(
 export function registerSessionContextRoutes(): void {
   router.get(
     '/api/workflows/:id/context',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const wf = requireWorkflowAccess(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const wf = await requireWorkflowAccess(req, res, req.params.id);
       if (!wf) return;
 
       const projectRow = wf.project_id
-        ? one<Row>('SELECT * FROM projects WHERE id = ?', wf.project_id as string)
+        ? (await getProjectRow(wf.project_id as string))
         : null;
 
       if (!projectRow) {
@@ -188,7 +185,7 @@ export function registerSessionContextRoutes(): void {
         return;
       }
 
-      const ctx = buildSessionContext(wf, projectRow);
+      const ctx = await buildSessionContext(wf, projectRow);
       const items: ContextItem[] = [];
 
       if (ctx.claudeMd) {

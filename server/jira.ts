@@ -29,6 +29,7 @@ import {
   type TicketDetail,
 } from './jira-text.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Environment overrides (for tests) ────────────────────────────────────────
 const AUTH_BASE = (): string => process.env.JIRA_AUTH_URL || 'https://auth.atlassian.com';
 const API_BASE = (): string => process.env.JIRA_API_URL || 'https://api.atlassian.com';
@@ -400,16 +401,16 @@ function projectDir(projectSlug: string): string {
   return path.join(config.dataDir, 'projects', projectSlug);
 }
 
-function getProjectSlug(projectId: string): string {
+async function getProjectSlug(projectId: string): Promise<string> {
   // S1-TODO(projects): This should use getProjectRepository().getProjectBySlug() or
   // getProjectById() once the jira module is converted to async. Leave on direct SQLite.
-  const r = one<Row>('SELECT slug FROM projects WHERE id = ?', projectId);
+  const r = await getProjectRow(projectId);
   if (!r) throw badRequest('Project not found');
   return r.slug as string;
 }
 
-export function attachmentDir(projectId: string, key: string): string {
-  return path.join(projectDir(getProjectSlug(projectId)), 'work', 'jira-attachments', key);
+export async function attachmentDir(projectId: string, key: string): Promise<string> {
+  return path.join(projectDir(await getProjectSlug(projectId)), 'work', 'jira-attachments', key);
 }
 
 function attachmentFileName(id: string, filename: string): string {
@@ -425,7 +426,7 @@ export async function downloadAttachments(projectId: string, t: TicketDetail, wo
   if (!t.attachments.length) return t;
   const dir = workDir
     ? path.join(workDir, 'jira-attachments', t.key)
-    : attachmentDir(projectId, t.key);
+    : await attachmentDir(projectId, t.key);
   const c = await connection(projectId);
 
   let authHeader: string;
@@ -491,26 +492,22 @@ function requireAuth(req: PortalRequest, res: PortalResponse): boolean {
   return true;
 }
 
-function requireProjectAccess(
+async function requireProjectAccess(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): Row | null {
+): Promise<Row | null> {
   if (!requireAuth(req, res)) return null;
   // S1-TODO(projects): requireProjectAccess is a sync helper called from sync route handlers
   // in jira.ts. Converting all callers to async would require reworking the OAuth callback
   // flow. Leave on direct SQLite until jira module is converted.
-  const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const p = await getProjectRow(projectId);
   if (!p) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user!.is_admin) return p;
-  const m = one<Row>(
-    'SELECT access, role FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user!.id,
-  );
+  const m = await getMemberRow(projectId, req.user!.id);
   if (!m) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -518,25 +515,21 @@ function requireProjectAccess(
   return p;
 }
 
-function requireOwnerAccess(
+async function requireOwnerAccess(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): Row | null {
+): Promise<Row | null> {
   if (!requireAuth(req, res)) return null;
   // S1-TODO(projects): requireOwnerAccess is a sync helper. Leave on direct SQLite
   // until jira module is converted to async.
-  const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const p = await getProjectRow(projectId);
   if (!p) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user!.is_admin) return p;
-  const m = one<Row>(
-    'SELECT access, role FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user!.id,
-  );
+  const m = await getMemberRow(projectId, req.user!.id);
   if (!m) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -548,16 +541,12 @@ function requireOwnerAccess(
   return p;
 }
 
-function isOwner(req: PortalRequest, projectId: string): boolean {
+async function isOwner(req: PortalRequest, projectId: string): Promise<boolean> {
   if (!req.user) return false;
   if (req.user.is_admin) return true;
   // S1-TODO(projects): isOwner is a sync helper. Leave on direct SQLite
   // until jira module is converted to async.
-  const m = one<Row>(
-    'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const m = await getMemberRow(projectId, req.user.id);
   return m?.access === 'owner';
 }
 
@@ -579,14 +568,14 @@ export function registerJiraRoutes(): void {
 
   // ---- GET /api/projects/:pid/jira — status overview ----
   router.get('/api/projects/:pid/jira', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireProjectAccess(req, res, req.params.pid);
+    const p = await requireProjectAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
 
     const app = await loadApp(projectId);
     const conn = await loadConn(projectId);
     const mapping = getMapping(projectId);
-    const canManage = isOwner(req, projectId);
+    const canManage = await isOwner(req, projectId);
 
     const siteOut = conn ? { id: conn.site.cloudId, name: conn.site.name, url: conn.site.url } : null;
     const sitesOut = conn?.authType === 'oauth'
@@ -607,7 +596,7 @@ export function registerJiraRoutes(): void {
 
   // ---- GET /api/projects/:pid/jira/app — OAuth app details (owner only) ----
   router.get('/api/projects/:pid/jira/app', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     const app = await loadApp(String(p.id));
     sendJson(res, 200, {
@@ -620,7 +609,7 @@ export function registerJiraRoutes(): void {
 
   // ---- PUT /api/projects/:pid/jira/app — save OAuth app ----
   router.put('/api/projects/:pid/jira/app', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -651,8 +640,8 @@ export function registerJiraRoutes(): void {
   });
 
   // ---- DELETE /api/projects/:pid/jira/app — remove app + connection ----
-  router.delete('/api/projects/:pid/jira/app', (req: PortalRequest, res: PortalResponse): void => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+  router.delete('/api/projects/:pid/jira/app', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     dropJira(String(p.id));
     sendJson(res, 200, { ok: true });
@@ -660,7 +649,7 @@ export function registerJiraRoutes(): void {
 
   // ---- GET /api/projects/:pid/jira/connect — begin OAuth flow (redirect) ----
   router.get('/api/projects/:pid/jira/connect', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
 
@@ -696,7 +685,7 @@ export function registerJiraRoutes(): void {
 
   // ---- POST /api/projects/:pid/jira/connect — begin OAuth flow (JSON, returns { url }) ----
   router.post('/api/projects/:pid/jira/connect', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
 
@@ -760,11 +749,7 @@ export function registerJiraRoutes(): void {
       return;
     }
 
-    const projectMember = one<Row>(
-      'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-      s.projectId,
-      req.user.id,
-    );
+    const projectMember = await getMemberRow(s.projectId, req.user.id);
     if (!req.user.is_admin && (!projectMember || projectMember.access !== 'owner')) {
       back('error', 'You are no longer a project owner.', s.returnTo);
       return;
@@ -829,7 +814,7 @@ export function registerJiraRoutes(): void {
 
   // ---- POST /api/projects/:pid/jira/token — API-token auth ----
   router.post('/api/projects/:pid/jira/token', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -885,7 +870,7 @@ export function registerJiraRoutes(): void {
 
   // ---- PUT /api/projects/:pid/jira/site — switch OAuth site ----
   router.put('/api/projects/:pid/jira/site', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
     const c = await connection(projectId);
@@ -900,8 +885,8 @@ export function registerJiraRoutes(): void {
   });
 
   // ---- DELETE /api/projects/:pid/jira/connection — disconnect ----
-  router.delete('/api/projects/:pid/jira/connection', (req: PortalRequest, res: PortalResponse): void => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+  router.delete('/api/projects/:pid/jira/connection', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     dropJiraConnection(String(p.id));
     sendJson(res, 200, { ok: true });
@@ -909,7 +894,7 @@ export function registerJiraRoutes(): void {
 
   // ---- GET /api/projects/:pid/jira/projects — list Jira projects ----
   router.get('/api/projects/:pid/jira/projects', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireProjectAccess(req, res, req.params.pid);
+    const p = await requireProjectAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
 
@@ -965,8 +950,8 @@ export function registerJiraRoutes(): void {
   });
 
   // ---- PUT /api/projects/:pid/jira — update project-key mapping ----
-  router.put('/api/projects/:pid/jira', (req: PortalRequest, res: PortalResponse): void => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+  router.put('/api/projects/:pid/jira', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -990,8 +975,8 @@ export function registerJiraRoutes(): void {
   });
 
   // ---- DELETE /api/projects/:pid/jira — remove mapping ----
-  router.delete('/api/projects/:pid/jira', (req: PortalRequest, res: PortalResponse): void => {
-    const p = requireOwnerAccess(req, res, req.params.pid);
+  router.delete('/api/projects/:pid/jira', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
     exec('DELETE FROM project_jira WHERE project_id = ?', String(p.id));
     sendJson(res, 200, { ok: true });
@@ -999,7 +984,7 @@ export function registerJiraRoutes(): void {
 
   // ---- GET /api/projects/:pid/jira/statuses?project=KEY ----
   router.get('/api/projects/:pid/jira/statuses', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireProjectAccess(req, res, req.params.pid);
+    const p = await requireProjectAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
     const mapping = mustMapping(projectId);
@@ -1033,7 +1018,7 @@ export function registerJiraRoutes(): void {
 
   // ---- GET /api/projects/:pid/jira/issues?project=KEY&q=&status=&assignee=me|any&page=<token> ----
   router.get('/api/projects/:pid/jira/issues', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireProjectAccess(req, res, req.params.pid);
+    const p = await requireProjectAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
     const mapping = mustMapping(projectId);
@@ -1083,7 +1068,7 @@ export function registerJiraRoutes(): void {
 
   // ---- GET /api/projects/:pid/jira/issues/:key ----
   router.get('/api/projects/:pid/jira/issues/:key', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const p = requireProjectAccess(req, res, req.params.pid);
+    const p = await requireProjectAccess(req, res, req.params.pid);
     if (!p) return;
     const projectId = String(p.id);
     const ticket = await issueDetail(projectId, mustMapping(projectId), req.params.key);
@@ -1104,7 +1089,7 @@ export function registerJiraRoutes(): void {
       return;
     }
     const projectId = String(r.project_id ?? '');
-    const projectP = requireProjectAccess(req, res, projectId);
+    const projectP = await requireProjectAccess(req, res, projectId);
     if (!projectP) return;
 
     const meta = parseJson<Record<string, unknown>>(r.meta as string, {});
@@ -1129,7 +1114,7 @@ export function registerJiraRoutes(): void {
     let text = String(r.result ?? '');
     const workDir = meta.workDir ? String(meta.workDir) : '';
     if (workDir) {
-      const slug = getProjectSlug(projectId);
+      const slug = await getProjectSlug(projectId);
       const file = path.join(projectDir(slug), workDir, 'analysis.md');
       try {
         if (fs.existsSync(file)) text = fs.readFileSync(file, 'utf8');

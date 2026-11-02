@@ -36,6 +36,7 @@ import { appendAudit } from './audit.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { getDb } from './db.ts';
 
+import { getLatestRunRow, getMemberRow, getProjectRow, getWorkflowRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const TEXT_EXTS = new Set([
@@ -145,8 +146,8 @@ function parseMultipartUploadMulti(
 
 // ── Working copy resolution ───────────────────────────────────────────────────
 
-function resolveWorkingCopyRoots(workflowId: string): WorkingCopyRoots | null {
-  const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+async function resolveWorkingCopyRoots(workflowId: string): Promise<WorkingCopyRoots | null> {
+  const wf = await getWorkflowRow(workflowId);
   if (!wf) return null;
   if (!wf.project_id) return null;
 
@@ -154,7 +155,7 @@ function resolveWorkingCopyRoots(workflowId: string): WorkingCopyRoots | null {
   // resolveWorkingCopyRoots is converted to async. The function is called synchronously
   // from async route handlers in session-files.ts; converting it requires making those
   // callers await it. Leave on direct SQLite until session-files module is converted.
-  const project = one<Row>('SELECT id, slug FROM projects WHERE id = ?', wf.project_id as string);
+  const project = await getProjectRow(wf.project_id as string);
   if (!project) return null;
 
   const slug = String(project.slug);
@@ -171,10 +172,7 @@ function resolveWorkingCopyRoots(workflowId: string): WorkingCopyRoots | null {
   } else {
     // Pre-M21 fallback: look up the latest run
     const workDir = path.join(projectDir, 'work');
-    const latestRun = one<Row>(
-      'SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1',
-      workflowId,
-    );
+    const latestRun = await getLatestRunRow(workflowId);
     runId = latestRun ? String(latestRun.id) : null;
     runWorkDir = runId ? path.join(workDir, runId) : workDir;
   }
@@ -233,16 +231,16 @@ function assertPathContained(absPath: string, root: string): void {
 // ── Access control ────────────────────────────────────────────────────────────
 
 /** Returns the workflow row or null (response already sent). */
-function requireWorkflowReadAccess(
+async function requireWorkflowReadAccess(
   req: PortalRequest,
   res: PortalResponse,
   workflowId: string,
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  const wf = await getWorkflowRow(workflowId);
   if (!wf) {
     sendJson(res, 404, { error: 'Session not found' });
     return null;
@@ -254,11 +252,7 @@ function requireWorkflowReadAccess(
     sendJson(res, 403, { error: 'Not authorized to access this session' });
     return null;
   }
-  const member = one<Row>(
-    'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    wf.project_id as string,
-    req.user.id,
-  );
+  const member = await getMemberRow(wf.project_id as string, req.user.id);
   if (!member) {
     sendJson(res, 403, { error: 'Not a project member' });
     return null;
@@ -267,7 +261,7 @@ function requireWorkflowReadAccess(
 }
 
 /** Returns true if the user can write to the session's working copy. */
-function canWrite(req: PortalRequest, wf: Row): boolean {
+async function canWrite(req: PortalRequest, wf: Row): Promise<boolean> {
   if (!req.user) return false;
   if (req.user.is_admin) {
     // Admin via API token still needs write scope
@@ -275,11 +269,7 @@ function canWrite(req: PortalRequest, wf: Row): boolean {
     return true;
   }
   if (!wf.project_id) return false;
-  const member = one<Row>(
-    'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    wf.project_id as string,
-    req.user.id,
-  );
+  const member = await getMemberRow(wf.project_id as string, req.user.id);
   if (!member) return false;
   if (!['editor', 'owner'].includes(String(member.access))) return false;
   // API-token requests additionally need write scope
@@ -406,10 +396,10 @@ export function registerSessionFileRoutes(): void {
 
   // GET /api/workflows/:id/ide/tree
   router.get('/api/workflows/:id/ide/tree', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -473,8 +463,8 @@ export function registerSessionFileRoutes(): void {
   });
 
   // GET /api/workflows/:id/ide/file
-  router.get('/api/workflows/:id/ide/file', (req: PortalRequest, res: PortalResponse): void => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+  router.get('/api/workflows/:id/ide/file', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
     const scope = (req.query.get('scope') as IdeScope | null) ?? 'work';
@@ -488,7 +478,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -551,9 +541,9 @@ export function registerSessionFileRoutes(): void {
 
   // PUT /api/workflows/:id/ide/file — write (requires token for concurrency guard)
   router.put('/api/workflows/:id/ide/file', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
-    if (!canWrite(req, wf)) {
+    if (!await canWrite(req, wf)) {
       sendJson(res, 403, { error: 'Project editor access required' });
       return;
     }
@@ -573,7 +563,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -622,9 +612,9 @@ export function registerSessionFileRoutes(): void {
 
   // POST /api/workflows/:id/ide/file — create new file
   router.post('/api/workflows/:id/ide/file', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
-    if (!canWrite(req, wf)) {
+    if (!await canWrite(req, wf)) {
       sendJson(res, 403, { error: 'Project editor access required' });
       return;
     }
@@ -643,7 +633,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -680,9 +670,9 @@ export function registerSessionFileRoutes(): void {
 
   // POST /api/workflows/:id/ide/folder — create folder
   router.post('/api/workflows/:id/ide/folder', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
-    if (!canWrite(req, wf)) {
+    if (!await canWrite(req, wf)) {
       sendJson(res, 403, { error: 'Project editor access required' });
       return;
     }
@@ -700,7 +690,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -720,9 +710,9 @@ export function registerSessionFileRoutes(): void {
 
   // DELETE /api/workflows/:id/ide/file
   router.delete('/api/workflows/:id/ide/file', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
-    if (!canWrite(req, wf)) {
+    if (!await canWrite(req, wf)) {
       sendJson(res, 403, { error: 'Project editor access required' });
       return;
     }
@@ -739,7 +729,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -786,9 +776,9 @@ export function registerSessionFileRoutes(): void {
 
   // PATCH /api/workflows/:id/ide/rename
   router.patch('/api/workflows/:id/ide/rename', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
-    if (!canWrite(req, wf)) {
+    if (!await canWrite(req, wf)) {
       sendJson(res, 403, { error: 'Project editor access required' });
       return;
     }
@@ -808,7 +798,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -850,9 +840,9 @@ export function registerSessionFileRoutes(): void {
 
   // POST /api/workflows/:id/ide/upload
   router.post('/api/workflows/:id/ide/upload', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
-    if (!canWrite(req, wf)) {
+    if (!await canWrite(req, wf)) {
       sendJson(res, 403, { error: 'Project editor access required' });
       return;
     }
@@ -890,7 +880,7 @@ export function registerSessionFileRoutes(): void {
       }
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -939,7 +929,7 @@ export function registerSessionFileRoutes(): void {
 
   // GET /api/workflows/:id/ide/download-zip
   router.get('/api/workflows/:id/ide/download-zip', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
     const repoParam = req.query.get('repo') ?? '';
@@ -951,7 +941,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session working copy not found' });
       return;
@@ -1024,10 +1014,10 @@ export function registerSessionFileRoutes(): void {
 
   // GET /api/workflows/:id/ide/git/status
   router.get('/api/workflows/:id/ide/git/status', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots || !fs.existsSync(roots.workDir)) {
       sendJson(res, 200, { repos: [] });
       return;
@@ -1143,7 +1133,7 @@ export function registerSessionFileRoutes(): void {
 
   // GET /api/workflows/:id/ide/git/diff
   router.get('/api/workflows/:id/ide/git/diff', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
     // New contract: ?repo=<name>&path=<relpath>
@@ -1156,7 +1146,7 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots || !fs.existsSync(roots.workDir)) {
       sendJson(res, 404, { error: 'Working copy not found' });
       return;
@@ -1231,10 +1221,10 @@ export function registerSessionFileRoutes(): void {
 
   // GET /api/workflows/:id/ide/vault — list vault files (read-only overlay)
   router.get('/api/workflows/:id/ide/vault', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const wf = requireWorkflowReadAccess(req, res, req.params.id);
+    const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
-    const roots = resolveWorkingCopyRoots(req.params.id);
+    const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
       sendJson(res, 404, { error: 'Session not found' });
       return;

@@ -620,7 +620,7 @@ export function registerRunRoutes(): void {
   // POST /api/projects/:pid/tests/:tpid/scripts/:sid/run — run one script
   router.post('/api/projects/:pid/tests/:tpid/scripts/:sid/run', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
@@ -662,7 +662,7 @@ export function registerRunRoutes(): void {
   // POST /api/projects/:pid/tests/:tpid/groups/:gid/run — run whole group
   router.post('/api/projects/:pid/tests/:tpid/groups/:gid/run', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const group = one<TestGroup>('SELECT * FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
@@ -706,9 +706,9 @@ export function registerRunRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/runs — list runs
-  router.get('/api/projects/:pid/tests/:tpid/runs', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/runs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const limit = Math.min(200, Math.max(1, Number(req.query.get('limit') || 50)));
     const offset = Math.max(0, Number(req.query.get('offset') || 0));
@@ -721,9 +721,9 @@ export function registerRunRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/runs/:rid — get run + steps
-  router.get('/api/projects/:pid/tests/:tpid/runs/:rid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/runs/:rid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const testRun = one<TestRun>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', req.params.rid, tp.id);
     if (!testRun) { sendJson(res, 404, { error: 'Run not found' }); return; }
@@ -736,9 +736,9 @@ export function registerRunRoutes(): void {
   });
 
   // POST /api/projects/:pid/tests/:tpid/runs/:rid/cancel
-  router.post('/api/projects/:pid/tests/:tpid/runs/:rid/cancel', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:pid/tests/:tpid/runs/:rid/cancel', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
     const testRun = one<TestRun>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', req.params.rid, tp.id);
     if (!testRun) { sendJson(res, 404, { error: 'Run not found' }); return; }
@@ -754,9 +754,9 @@ export function registerRunRoutes(): void {
   });
 
   // GET /api/projects/:pid/tests/:tpid/runs/:rid/steps/:stepIdx/screenshot
-  router.get('/api/projects/:pid/tests/:tpid/runs/:rid/steps/:stepIdx/screenshot', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:pid/tests/:tpid/runs/:rid/steps/:stepIdx/screenshot', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
-    const tp = requireTestProject(req, res, req.params.pid, req.params.tpid);
+    const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
     const testRun = one<TestRun>('SELECT id, test_project_id FROM test_runs WHERE id = ? AND test_project_id = ?', req.params.rid, tp.id);
     if (!testRun) { sendJson(res, 404, { error: 'Run not found' }); return; }

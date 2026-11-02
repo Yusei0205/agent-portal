@@ -16,6 +16,7 @@ import { setRunLifecycleHook } from './agent/runner.ts';
 import { processReviewOutput, triggerAutoPost, getPrCommentMode } from './review.ts';
 import { config } from './config.ts';
 
+import { getProjectRow } from './project-access.ts';
 // ── Run-log entry ─────────────────────────────────────────────────────────────
 
 export interface RunLogEntry {
@@ -149,11 +150,11 @@ function buildRunLog(runId: string): {
 
 // ── Lifecycle handler ─────────────────────────────────────────────────────────
 
-export function handleReviewLifecycle(
+export async function handleReviewLifecycle(
   workflowId: string,
   runId: string,
   event: 'start' | 'done' | 'failed' | 'cancelled',
-): void {
+): Promise<void> {
   interface ReviewRow {
     id: string;
     started_at: string | null;
@@ -278,9 +279,9 @@ export function handleReviewLifecycle(
     // Derive the run's work directory so processReviewOutput() can also scan
     // any findings files the agent wrote (findings.json, review.md, etc.).
     const projectRow = review.project_id
-      ? one<{ slug: string }>('SELECT slug FROM projects WHERE id = ?', review.project_id)
+      ? (await getProjectRow(review.project_id))
       : null;
-    const slug = projectRow?.slug ?? 'unknown';
+    const slug = String(projectRow?.slug ?? 'unknown');
     const workDir = path.join(config.dataDir, 'projects', slug, 'work', runId);
 
     // Parse findings from whatever the agent produced.
@@ -307,8 +308,8 @@ export function handleReviewLifecycle(
 }
 
 // Register hook when this module is imported
-setRunLifecycleHook((workflowId, runId, event) => {
-  handleReviewLifecycle(workflowId, runId, event);
+setRunLifecycleHook(async (workflowId, runId, event) => {
+  await handleReviewLifecycle(workflowId, runId, event);
   handleArtifactLifecycle(workflowId, event);
 });
 

@@ -37,29 +37,26 @@ import {
 import { createWorkDir } from './workflows/working-copies.ts';
 import { config } from './config.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function requireProjectAccess(
+async function requireProjectAccess(
   req: PortalRequest,
   res: any,
   projectId: string,
   level: 'viewer' | 'editor' = 'viewer',
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const project = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user.is_admin) return project;
-  const member = one<Row>(
-    'SELECT * FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -222,7 +219,7 @@ export async function processPresentationOutput(workflowId: string, runId: strin
 export function registerPresentationRoutes(): void {
   // GET /api/projects/:id/presentations
   router.get('/api/projects/:id/presentations', async (req: PortalRequest, res: any) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const rows = all<Row>(
@@ -239,7 +236,7 @@ export function registerPresentationRoutes(): void {
 
   // POST /api/projects/:id/presentations
   router.post('/api/projects/:id/presentations', async (req: PortalRequest, res: any) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const body = req.body as Record<string, unknown>;
@@ -367,7 +364,7 @@ export function registerPresentationRoutes(): void {
 
   // GET /api/projects/:id/presentations/:presId
   router.get('/api/projects/:id/presentations/:presId', async (req: PortalRequest, res: any) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));
@@ -376,7 +373,7 @@ export function registerPresentationRoutes(): void {
 
   // DELETE /api/projects/:id/presentations/:presId
   router.delete('/api/projects/:id/presentations/:presId', async (req: PortalRequest, res: any) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));
@@ -387,7 +384,7 @@ export function registerPresentationRoutes(): void {
 
   // POST /api/projects/:id/presentations/:presId/refresh
   router.post('/api/projects/:id/presentations/:presId/refresh', async (req: PortalRequest, res: any) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));
@@ -458,7 +455,7 @@ export function registerPresentationRoutes(): void {
 
   // POST /api/projects/:id/presentations/:presId/retry — retry a failed generation
   router.post('/api/projects/:id/presentations/:presId/retry', async (req: PortalRequest, res: any) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));
@@ -519,7 +516,7 @@ export function registerPresentationRoutes(): void {
 
   // GET /api/projects/:id/presentations/:presId/download
   router.get('/api/projects/:id/presentations/:presId/download', async (req: PortalRequest, res: any) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));

@@ -33,6 +33,7 @@ import { appendAudit } from './audit.ts';
 import { getAiAttachmentRepository } from './repositories/ai-attachments.ts';
 import type { AiAttachmentRecord, AttachmentParentKind } from './repositories/ai-attachments.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_IMAGE_BYTES    = 10 * 1024 * 1024; // 10 MB — images
@@ -175,19 +176,16 @@ function parseMultipartFile(rawBody: Buffer, contentType: string): UploadedFile 
 
 // ── Access control ────────────────────────────────────────────────────────────
 
-function requireEditorAccess(
+async function requireEditorAccess(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return null; }
-  const project = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) { sendJson(res, 404, { error: 'Project not found' }); return null; }
   if (req.user.is_admin) return project;
-  const member = one<Row>(
-    'SELECT * FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId, req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) { sendJson(res, 404, { error: 'Project not found' }); return null; }
   if (!['owner', 'editor'].includes(String(member.access))) {
     sendJson(res, 403, { error: 'Editor access required to manage AI attachments' });
@@ -405,7 +403,7 @@ export function registerAiAttachmentRoutes(): void {
   router.post(
     '/api/projects/:id/ai-attachments',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const project = requireEditorAccess(req, res, req.params.id);
+      const project = await requireEditorAccess(req, res, req.params.id);
       if (!project) return;
 
       if (!req.rawBody || req.rawBody.length === 0) {
@@ -510,7 +508,7 @@ export function registerAiAttachmentRoutes(): void {
   router.delete(
     '/api/projects/:id/ai-attachments/:attId',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const project = requireEditorAccess(req, res, req.params.id);
+      const project = await requireEditorAccess(req, res, req.params.id);
       if (!project) return;
 
       const att = await getAiAttachmentRepository().getByIdForProject(req.params.attId, req.params.id);

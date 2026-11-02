@@ -26,6 +26,7 @@ import {
 } from './guardrails.ts';
 import type { PermissionRuleGroup, PermissionRule, ProjectToolRule } from './repositories/permissions.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
 function requireAdmin(req: PortalRequest, res: PortalResponse): boolean {
@@ -37,21 +38,17 @@ function requireAdmin(req: PortalRequest, res: PortalResponse): boolean {
 }
 
 /** Returns the project if the authenticated user is a member with role='owner'. */
-function requireProjectOwner(
+async function requireProjectOwner(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): boolean {
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ?', projectId);
+): Promise<boolean> {
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return false;
   }
-  const membership = one<{ role: string }>(
-    "SELECT role FROM project_members WHERE project_id = ? AND user_id = ?",
-    projectId,
-    req.user!.id,
-  );
+  const membership = await getMemberRow(projectId, req.user!.id);
   if (!membership || membership.role !== 'owner') {
     sendJson(res, 403, { error: 'Project owner access required' });
     return false;
@@ -237,7 +234,7 @@ export function registerPermissionRoutes(): void {
     '/api/projects/:id/permissions',
     requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const projectId = req.params.id;
-      if (!requireProjectOwner(req, res, projectId)) return;
+      if (!await requireProjectOwner(req, res, projectId)) return;
 
       const override = await getPermissionsRepository().getProjectPermissions(projectId);
       const toolRules = await getPermissionsRepository().getProjectToolRules(projectId);
@@ -256,7 +253,7 @@ export function registerPermissionRoutes(): void {
     '/api/projects/:id/permissions',
     requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const projectId = req.params.id;
-      if (!requireProjectOwner(req, res, projectId)) return;
+      if (!await requireProjectOwner(req, res, projectId)) return;
 
       const body = req.body as Record<string, unknown>;
       const ruleGroupId = body.ruleGroupId != null ? String(body.ruleGroupId) : null;
@@ -285,7 +282,7 @@ export function registerPermissionRoutes(): void {
     '/api/projects/:id/tool-rules',
     requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const projectId = req.params.id;
-      if (!requireProjectOwner(req, res, projectId)) return;
+      if (!await requireProjectOwner(req, res, projectId)) return;
 
       const body = req.body as Record<string, unknown>;
       const toolName = str(body.toolName, 'toolName');
@@ -322,7 +319,7 @@ export function registerPermissionRoutes(): void {
     '/api/projects/:id/tool-rules/:rid',
     requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const projectId = req.params.id;
-      if (!requireProjectOwner(req, res, projectId)) return;
+      if (!await requireProjectOwner(req, res, projectId)) return;
 
       const ruleId = req.params.rid;
       const toolRules = await getPermissionsRepository().getProjectToolRules(projectId);

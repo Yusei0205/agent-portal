@@ -15,6 +15,7 @@ import { generateId, now, str, parseJson } from './util.ts';
 import { getWorkspacesRepository } from './repositories/workspaces.ts';
 import type { WorkspaceRecord } from './repositories/workspaces.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Workspace {
@@ -35,16 +36,12 @@ const MODEL_RE = /^[A-Za-z0-9._:/@-]{0,200}$/;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string }>(
-    'SELECT user_id FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   return true;
 }
@@ -59,14 +56,14 @@ export function registerWorkspaceRoutes(): void {
 
   // GET /api/projects/:id/workspaces
   router.get('/api/projects/:id/workspaces', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
     const workspaces = await getWorkspacesRepository().listByProject(req.params.id);
     sendJson(res, 200, { workspaces: workspaces.map(parseWorkspace) });
   });
 
   // POST /api/projects/:id/workspaces
   router.post('/api/projects/:id/workspaces', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 120 }).trim();
@@ -108,7 +105,7 @@ export function registerWorkspaceRoutes(): void {
 
   // PUT /api/projects/:id/workspaces/:wid
   router.put('/api/projects/:id/workspaces/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const existing = await getWorkspacesRepository().getByIdForProject(req.params.wid, req.params.id);
     if (!existing) { sendJson(res, 404, { error: 'Workspace not found' }); return; }
@@ -154,7 +151,7 @@ export function registerWorkspaceRoutes(): void {
 
   // DELETE /api/projects/:id/workspaces/:wid
   router.delete('/api/projects/:id/workspaces/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const deleted = await getWorkspacesRepository().delete(req.params.wid, req.params.id);
     if (!deleted) { sendJson(res, 404, { error: 'Workspace not found' }); return; }

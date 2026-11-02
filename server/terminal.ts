@@ -48,6 +48,7 @@ import { getSettingsRepository, _updateSnapshotKey } from './repositories/settin
 import path from 'node:path';
 import fs from 'node:fs';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── PTY capability ────────────────────────────────────────────────────────────
 
 interface NodePtyProcess {
@@ -302,15 +303,11 @@ async function authenticateUpgrade(req: http.IncomingMessage): Promise<AuthResul
  * Admins always pass. Other users must be 'editor' or 'owner' of the project.
  * Returns false if the workflow or project cannot be found.
  */
-function canUserWriteWorkflow(userId: string, isAdmin: boolean, workflowId: string): boolean {
+async function canUserWriteWorkflow(userId: string, isAdmin: boolean, workflowId: string): Promise<boolean> {
   if (isAdmin) return true;
   const wf = one<Row>('SELECT project_id FROM p6_workflows WHERE id = ?', workflowId);
   if (!wf || !wf.project_id) return false;
-  const member = one<Row>(
-    'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    String(wf.project_id),
-    userId,
-  );
+  const member = await getMemberRow(String(wf.project_id), userId);
   if (!member) return false;
   return ['editor', 'owner'].includes(String(member.access));
 }
@@ -335,10 +332,10 @@ function checkOrigin(req: http.IncomingMessage): boolean {
 
 // ── Resolve working directory for a workflow ──────────────────────────────────
 
-function resolveTerminalWorkDir(workflowId: string): string | null {
+async function resolveTerminalWorkDir(workflowId: string): Promise<string | null> {
   const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
   if (!wf || !wf.project_id) return null;
-  const project = one<Row>('SELECT slug FROM projects WHERE id = ?', wf.project_id as string);
+  const project = await getProjectRow(wf.project_id as string);
   if (!project) return null;
   const slug = String(project.slug);
 
@@ -442,7 +439,7 @@ async function _handleTerminalUpgradeAsync(
       socket.destroy();
       return;
     }
-    if (!canUserWriteWorkflow(auth.userId, false, workflowId)) {
+    if (!await canUserWriteWorkflow(auth.userId, false, workflowId)) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
@@ -477,7 +474,7 @@ async function handleTerminalSession(
   // Resolve working directory — refuse if a workflow was specified but has no working copy.
   let cwd: string;
   if (workflowId) {
-    const resolved = resolveTerminalWorkDir(workflowId);
+    const resolved = await resolveTerminalWorkDir(workflowId);
     if (!resolved) {
       const safeSendErr = (msg: object): void => {
         try { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); } catch { /* ignore */ }

@@ -52,6 +52,7 @@ import {
 } from './agent/browser-manager.ts';
 import type { LatestFrame } from './agent/browser-manager.ts';
 
+import { getMemberRow } from './project-access.ts';
 // ── Auth helpers (mirrors terminal.ts) ───────────────────────────────────────
 
 interface AuthResult {
@@ -92,30 +93,22 @@ function checkOrigin(req: http.IncomingMessage): boolean {
 }
 
 /** Require project read access for a workflow. */
-function canReadWorkflow(userId: string, isAdmin: boolean, workflowId: string): Row | undefined {
+async function canReadWorkflow(userId: string, isAdmin: boolean, workflowId: string): Promise<Row | undefined> {
   if (isAdmin) {
     return one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
   }
   const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
   if (!wf || !wf.project_id) return undefined;
-  const member = one<Row>(
-    'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    String(wf.project_id),
-    userId,
-  );
+  const member = await getMemberRow(String(wf.project_id), userId);
   return member ? wf : undefined;
 }
 
 /** Require project editor access for a workflow (for control toggle). */
-function canWriteWorkflow(userId: string, isAdmin: boolean, workflowId: string): boolean {
+async function canWriteWorkflow(userId: string, isAdmin: boolean, workflowId: string): Promise<boolean> {
   if (isAdmin) return true;
   const wf = one<Row>('SELECT project_id FROM p6_workflows WHERE id = ?', workflowId);
   if (!wf || !wf.project_id) return false;
-  const member = one<Row>(
-    'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    String(wf.project_id),
-    userId,
-  );
+  const member = await getMemberRow(String(wf.project_id), userId);
   if (!member) return false;
   return ['editor', 'owner'].includes(String(member.access));
 }
@@ -526,11 +519,11 @@ const LIVE_PATH_RE = /^\/api\/workflows\/([^/]+)\/browser\/live$/;
  * Handle WebSocket upgrade for /api/workflows/:id/browser/live.
  * Called from the combined upgrade handler in index.ts.
  */
-export function handleBrowserLiveUpgrade(
+export async function handleBrowserLiveUpgrade(
   req: http.IncomingMessage,
   socket: import('node:stream').Duplex,
   head: Buffer,
-): void {
+): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const match = LIVE_PATH_RE.exec(url.pathname);
   if (!match) {
@@ -565,7 +558,7 @@ export function handleBrowserLiveUpgrade(
   const workflowId = match[1];
 
   // Check project membership
-  const wf = canReadWorkflow(auth.userId, auth.isAdmin, workflowId);
+  const wf = await canReadWorkflow(auth.userId, auth.isAdmin, workflowId);
   if (!wf) {
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
     socket.destroy();
@@ -586,7 +579,7 @@ export function registerBrowserLiveRoutes(): void {
   // POST /api/workflows/:id/browser/control
   router.post(
     '/api/workflows/:id/browser/control',
-    (req: PortalRequest, res: PortalResponse): void => {
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       if (!req.user) {
         sendJson(res, 401, { error: 'Sign in to continue' });
         return;
@@ -597,7 +590,7 @@ export function registerBrowserLiveRoutes(): void {
       }
 
       const workflowId = req.params.id;
-      if (!canWriteWorkflow(req.user.id, Boolean(req.user.is_admin), workflowId)) {
+      if (!await canWriteWorkflow(req.user.id, Boolean(req.user.is_admin), workflowId)) {
         sendJson(res, 403, { error: 'Project editor access required' });
         return;
       }

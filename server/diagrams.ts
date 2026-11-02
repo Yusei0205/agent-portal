@@ -61,6 +61,7 @@ import {
 } from './ai-attachments.ts';
 import { createWorkDir } from './workflows/working-copies.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 export { DIAGRAM_KINDS, DIAGRAM_LIMITS, KIND_LABELS, type DiagramKind };
 
 /** Where in the project's git repository the diagrams are kept. */
@@ -68,27 +69,23 @@ export const DIAGRAMS_DIR = 'docs/diagrams';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function requireProjectAccess(
+async function requireProjectAccess(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
   level: 'viewer' | 'editor' = 'viewer',
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const project = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user.is_admin) return project;
-  const member = one<Row>(
-    'SELECT * FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -266,7 +263,7 @@ async function startDiagramGeneration(
   // Pre-stage attachment files if provided
   let preWorkDir: string | null = null;
   if (attachmentRows.length > 0) {
-    const project = one<Row>('SELECT slug FROM projects WHERE id = ?', String(d.project_id));
+    const project = await getProjectRow(String(d.project_id));
     if (project) {
       const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
       preWorkDir = await createWorkDir(workflowId, projectDir);
@@ -518,7 +515,7 @@ function findDrawioFile(workDir: string): string | null {
 export function registerDiagramRoutes(): void {
   // GET /api/projects/:id/diagrams — list all diagrams
   router.get('/api/projects/:id/diagrams', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const rows = all<Row>('SELECT * FROM diagrams WHERE project_id = ? ORDER BY updated_at DESC', String(project.id));
@@ -546,7 +543,7 @@ export function registerDiagramRoutes(): void {
 
   // POST /api/projects/:id/diagrams — create + start generation
   router.post('/api/projects/:id/diagrams', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const body = req.body as Record<string, unknown>;
@@ -645,8 +642,8 @@ export function registerDiagramRoutes(): void {
   });
 
   // GET /api/projects/:id/diagrams/:did — get diagram
-  router.get('/api/projects/:id/diagrams/:did', (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+  router.get('/api/projects/:id/diagrams/:did', async (req: PortalRequest, res: PortalResponse) => {
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);
@@ -667,7 +664,7 @@ export function registerDiagramRoutes(): void {
 
   // DELETE /api/projects/:id/diagrams/:did
   router.delete('/api/projects/:id/diagrams/:did', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);
@@ -680,7 +677,7 @@ export function registerDiagramRoutes(): void {
 
   // POST /api/projects/:id/diagrams/:did/refresh — redraw diagram
   router.post('/api/projects/:id/diagrams/:did/refresh', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);
@@ -737,7 +734,7 @@ export function registerDiagramRoutes(): void {
 
   // POST /api/projects/:id/diagrams/:did/retry — retry a failed (error) generation
   router.post('/api/projects/:id/diagrams/:did/retry', async (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id, 'editor');
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);
@@ -760,8 +757,8 @@ export function registerDiagramRoutes(): void {
   });
 
   // GET /api/projects/:id/diagrams/:did/versions — list versions
-  router.get('/api/projects/:id/diagrams/:did/versions', (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+  router.get('/api/projects/:id/diagrams/:did/versions', async (req: PortalRequest, res: PortalResponse) => {
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);
@@ -771,8 +768,8 @@ export function registerDiagramRoutes(): void {
   });
 
   // GET /api/projects/:id/diagrams/:did/versions/:vid/download — download source
-  router.get('/api/projects/:id/diagrams/:did/versions/:vid/download', (req: PortalRequest, res: PortalResponse) => {
-    const project = requireProjectAccess(req, res, req.params.id);
+  router.get('/api/projects/:id/diagrams/:did/versions/:vid/download', async (req: PortalRequest, res: PortalResponse) => {
+    const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);

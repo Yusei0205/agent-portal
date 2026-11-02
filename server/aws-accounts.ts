@@ -17,6 +17,7 @@ import { encrypt, decrypt } from './secrets.ts';
 import { config } from './config.ts';
 import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 const VALID_AUTH_METHODS = ['keys', 'profile', 'instance-role', 'sso'] as const;
@@ -24,15 +25,12 @@ type AwsAuthMethod = (typeof VALID_AUTH_METHODS)[number];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string }>(
-    'SELECT user_id FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId, req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   return true;
 }
@@ -48,14 +46,14 @@ export function registerAwsAccountRoutes(): void {
 
   // GET /api/projects/:id/aws-accounts
   router.get('/api/projects/:id/aws-accounts', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
     const accounts = await getAwsAccountsRepository().listByProject(req.params.id);
     sendJson(res, 200, { accounts: accounts.map(safeAccount) });
   });
 
   // POST /api/projects/:id/aws-accounts
   router.post('/api/projects/:id/aws-accounts', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 120 }).trim();
@@ -91,7 +89,7 @@ export function registerAwsAccountRoutes(): void {
 
   // PUT /api/projects/:id/aws-accounts/:aid
   router.put('/api/projects/:id/aws-accounts/:aid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const existing = await getAwsAccountsRepository().getByIdAndProject(req.params.aid, req.params.id);
     if (!existing) { sendJson(res, 404, { error: 'AWS account not found' }); return; }
@@ -117,7 +115,7 @@ export function registerAwsAccountRoutes(): void {
 
   // DELETE /api/projects/:id/aws-accounts/:aid
   router.delete('/api/projects/:id/aws-accounts/:aid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const deleted = await getAwsAccountsRepository().delete(req.params.aid, req.params.id);
     if (!deleted) { sendJson(res, 404, { error: 'AWS account not found' }); return; }
@@ -127,7 +125,7 @@ export function registerAwsAccountRoutes(): void {
 
   // POST /api/projects/:id/aws-accounts/:aid/test
   router.post('/api/projects/:id/aws-accounts/:aid/test', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const account = await getAwsAccountsRepository().getByIdAndProject(req.params.aid, req.params.id);
     if (!account) { sendJson(res, 404, { error: 'AWS account not found' }); return; }

@@ -30,6 +30,7 @@ import type { ProgressInfo } from './git-progress.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getGitConnectionsRepository } from './repositories/git-connections.ts';
 
+import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Repository {
@@ -116,8 +117,8 @@ export function repoRefDir(projectSlug: string, repoName: string): string {
  *
  * Uses the raw `repo.name` (not slugified) — this matches what `performSync` wrote to disk.
  */
-export function repoDir(repo: Repo): string {
-  const slug = one<{ slug: string }>('SELECT slug FROM projects WHERE id = ?', repo.project_id)?.slug ?? 'unknown';
+export async function repoDir(repo: Repo): Promise<string> {
+  const slug = String((await getProjectRow(repo.project_id))?.slug ?? 'unknown');
   return repoCloneDir(slug, repo.name);
 }
 
@@ -129,21 +130,18 @@ export function getRepo(id: string): Repo {
 }
 
 /** Get the project slug for a project id. */
-function getProjectSlug(projectId: string): string | null {
-  return one<{ slug: string }>('SELECT slug FROM projects WHERE id = ?', projectId)?.slug ?? null;
+async function getProjectSlug(projectId: string): Promise<string | null> {
+  const row = await getProjectRow(projectId);
+  return row ? String(row.slug) : null;
 }
 
 /** Require the caller to be authenticated and a member (or admin) of the project. */
-function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): boolean {
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
   if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  const project = one<{ id: string }>('SELECT id FROM projects WHERE id = ? AND archived = 0', projectId);
+  const project = await getProjectRow(projectId);
   if (!project) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   if (req.user.is_admin) return true;
-  const member = one<{ user_id: string }>(
-    'SELECT user_id FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getMemberRow(projectId, req.user.id);
   if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
   return true;
 }
@@ -378,7 +376,7 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
     return;
   }
 
-  const slug = getProjectSlug(projectId);
+  const slug = await getProjectSlug(projectId);
   if (!slug) {
     syncInFlight.delete(repoId);
     repoProgress.delete(repoId);
@@ -454,14 +452,14 @@ export function registerRepoRoutes(): void {
 
   // GET /api/projects/:id/repos
   router.get('/api/projects/:id/repos', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
     const repos = await getGitReposRepository().listByProject(req.params.id);
     sendJson(res, 200, { repos: repos.map(withProgress) });
   });
 
   // POST /api/projects/:id/repos
   router.post('/api/projects/:id/repos', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 120 }).trim();
@@ -499,7 +497,7 @@ export function registerRepoRoutes(): void {
   // for every repo in the project. Must be registered before /:repoId so the
   // literal segment "progress" is not captured as a repoId.
   router.get('/api/projects/:id/repos/progress', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
     const repos = await getGitReposRepository().listByProject(req.params.id);
     const result = repos.map((r) => ({
       id: r.id,
@@ -512,7 +510,7 @@ export function registerRepoRoutes(): void {
 
   // GET /api/projects/:id/repos/:repoId
   router.get('/api/projects/:id/repos/:repoId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
@@ -522,7 +520,7 @@ export function registerRepoRoutes(): void {
 
   // DELETE /api/projects/:id/repos/:repoId
   router.delete('/api/projects/:id/repos/:repoId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const deleted = await getGitReposRepository().delete(req.params.repoId, req.params.id);
     if (!deleted) { sendJson(res, 404, { error: 'Repository not found' }); return; }
@@ -532,7 +530,7 @@ export function registerRepoRoutes(): void {
 
   // POST /api/projects/:id/repos/:repoId/sync
   router.post('/api/projects/:id/repos/:repoId/sync', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
@@ -543,7 +541,7 @@ export function registerRepoRoutes(): void {
       return;
     }
 
-    const slug = getProjectSlug(req.params.id);
+    const slug = await getProjectSlug(req.params.id);
     const isReclone = slug
       ? fs.existsSync(path.join(repoCloneDir(slug, repo.name), '.git'))
       : false;
@@ -560,7 +558,7 @@ export function registerRepoRoutes(): void {
 
   // GET /api/projects/:id/repos/:repoId/branches
   router.get('/api/projects/:id/repos/:repoId/branches', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const repo = one<Repository>(
       'SELECT * FROM repositories WHERE id = ? AND project_id = ?',
@@ -569,7 +567,7 @@ export function registerRepoRoutes(): void {
     );
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
-    const slug = getProjectSlug(req.params.id);
+    const slug = await getProjectSlug(req.params.id);
     if (!slug) { sendJson(res, 404, { error: 'Project not found' }); return; }
 
     const cloneDir = repoCloneDir(slug, repo.name);
@@ -593,7 +591,7 @@ export function registerRepoRoutes(): void {
 
   // PUT /api/projects/:id/repos/:repoId/default-branch
   router.put('/api/projects/:id/repos/:repoId/default-branch', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
@@ -609,7 +607,7 @@ export function registerRepoRoutes(): void {
   // POST /api/projects/:id/repos/bulk
   // Bulk-add repos from a connection, skipping duplicates (by URL).
   router.post('/api/projects/:id/repos/bulk', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!requireProjectAccess(req, res, req.params.id)) return;
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const connectionId = typeof body.connectionId === 'string' ? body.connectionId.trim() : '';
