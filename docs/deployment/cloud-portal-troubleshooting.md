@@ -65,6 +65,15 @@ Lambda can run many instances, and an instance is **frozen** as soon as its resp
 - **Check it works:** `aws scheduler list-schedules --name-prefix agent-portal`; invoke by hand with `aws lambda invoke --payload fileb://event.json` (expect `{"ok":true,"job":"idle-stop"}`; a wrong secret gives 403). Add a new job by adding it to `JOBS` in `scheduled-jobs.ts` and to the `jobs` list in `infra/lib/portal-stack.ts`.
 - **Not scheduled:** loop-spec `cron` triggers (nightly test fixer etc.) are stored but nothing executes them yet, on any backend.
 
+### Scans and uploaded documents stay "processing" / "estimating" forever
+- **Cause:** work started with `setImmediate(...)` after the HTTP reply never runs on Lambda, because the instance is frozen as soon as the reply ends.
+- **Fix:** `server/background-jobs.ts`. Register a job with `registerBackgroundJob(name, fn)` and start it with `await runInBackground(name, args)` **before** sending the reply. On Lambda the portal then invokes itself asynchronously (`InvocationType: Event`, needs `lambda:InvokeFunction` on its own ARN, already granted); Lambda Web Adapter forwards the payload to `/internal/events`, which checks the secret and runs the job (up to 15 minutes). If the self-invoke fails the job runs inline. Locally it is a plain `setImmediate`. Jobs in use: `scan-estimate`, `scan-run` (resumable: use Resume if a scan hits the time limit), `knowledge-process`.
+- Not converted: the tool-pack installer (`tool-packs.ts`), which installs local command-line tools and does not apply on Lambda.
+- **Check:** invoke by hand: `aws lambda invoke --function-name agent-portal --payload fileb://event.json out.json` with `{"job":"scan-run","args":{"id":"x"},"secret":"<origin secret>"}` returns `{"ok":true,...}`.
+
+### Agent-written files missing after a Claude or Kiro session
+- The runners send back changed deliverable files (documents, images, spreadsheets, diagrams; up to 50 files, 10 MB each, 40 MB total) as chunked `file` events. The portal re-checks every path, extension and size (`server/agent/runner-files.ts`), writes them into the run's work folder and mirrors them to S3, and the normal end-of-run collection then lists them as output files. Other file types, tool folders (`.claude`, `.kiro`, `repos`, `node_modules`) and anything over the limits are skipped; the status line says how many were skipped.
+
 ### "Secret key must be a 64-character hex string"
 - **Cause:** the master key secret was a random string, not hex.
 - **Fix:** the CDK secret `MasterKeyHex` (`agent-portal/master-key-hex`) generates 64 hex characters. Changing the master key makes previously stored encrypted values (credentials, integrations) unreadable; re-enter them.
