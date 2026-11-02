@@ -38,6 +38,8 @@ import {
   IMAGE_LIBS,
   type PackManifest,
   drawioPackState,
+  ensureDrawioPackRestored,
+  persistDrawioPack,
 } from './drawio-pack.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -277,6 +279,7 @@ export async function getToolPacks(): Promise<ToolPack[]> {
   if (_cache && Date.now() - _cache.at < CACHE_TTL_MS) {
     return _cache.packs;
   }
+  await ensureDrawioPackRestored().catch(() => {});
 
   const [uvStatus, kiroStatus, browserStatus, headroomStatus] =
     await Promise.all([
@@ -787,6 +790,10 @@ async function installDrawio(job: InstallJob): Promise<void> {
   };
   fs.writeFileSync(manifestFile(), JSON.stringify(manifest, null, 2));
   addLogLine(job, `draw.io pack installed (${imageRelPaths.length} icon image(s) available).`);
+  // The local disk can vanish (Lambda /tmp), so keep a copy in the storage backend.
+  addLogLine(job, 'Saving a durable copy of the pack…');
+  await persistDrawioPack();
+  addLogLine(job, 'Durable copy saved.');
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────

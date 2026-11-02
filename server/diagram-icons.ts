@@ -14,7 +14,7 @@ import { DiagramError, NoDiagramError } from './diagram-text.ts';
 import { DRAWIO_LIMITS, STYLE_LABELS } from './drawio.ts';
 import { DRAWIO_FILE, parseDiagramFileReply } from './drawio-text.ts';
 import { drawioRendererProblem, renderDrawio } from './drawio-render.ts';
-import { DRAWIO_PACK_HINT, drawioPackState } from './drawio-pack.ts';
+import { DRAWIO_PACK_HINT, drawioPackState, ensureDrawioPackRestored } from './drawio-pack.ts';
 import { rendererProblem } from './docimage.ts';
 import { all } from './db.ts';
 import { repoDir, type Repo } from './repos.ts';
@@ -38,6 +38,7 @@ export interface StyleInfo {
 
 /** The drawing styles and what each needs, for the diagram list. */
 export async function styleChoices(): Promise<StyleInfo[]> {
+  await ensureDrawioPackRestored().catch(() => {});
   const mermaidProblem = rendererProblem();
   const tool = drawioPackState().tool;
   const previewProblem = drawioRendererProblem();

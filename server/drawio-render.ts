@@ -20,7 +20,7 @@ import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { browserArgs, findBrowser, IMAGE_LIMITS } from './docimage.ts';
 import { DrawioError, validateDrawio } from './drawio.ts';
-import { RENDERER_FILES, rendererDir, rendererFilesProblem } from './drawio-pack.ts';
+import { RENDERER_FILES, rendererDir, rendererFilesProblem, ensureDrawioPackRestored } from './drawio-pack.ts';
 
 export type DrawioRender =
   | { ok: true; png: Buffer; svg: string; pxW: number; pxH: number; density: number; notes: string[] }
@@ -127,6 +127,7 @@ ${scripts}</head><body style="margin:0;background:#fff"><script id="data" type="
  */
 export async function renderDrawio(inputs: { xml: string }[]): Promise<DrawioRender[]> {
   if (!inputs.length) return [];
+  await ensureDrawioPackRestored().catch(() => {});
   const problem = drawioRendererProblem();
   if (problem) return inputs.map(() => ({ ok: false as const, reason: problem }));
   const results: DrawioRender[] = new Array(inputs.length);

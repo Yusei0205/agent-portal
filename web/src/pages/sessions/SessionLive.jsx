@@ -989,6 +989,10 @@ export function SessionLive({
 
   // ── Pending message deduplication: remove once human event confirms send ─
 
+  // Saved human messages already used to confirm a pending bubble (so two identical messages sent
+  // one after another are each matched to their own saved copy).
+  const usedConfirmationsRef = useRef(/** @type {Set<string>} */ (new Set()));
+
   useEffect(() => {
     if (!onRemovePending || !pendingMessages.length) return;
     const active = pendingMessages.filter(
@@ -996,17 +1000,74 @@ export function SessionLive({
     );
     if (!active.length) return;
 
+    const textOf = (ev) => ev.payload?.text || ev.payload?.body || ev.payload?.message || '';
+
     for (const ev of events) {
       if (ev.type !== 'human') continue;
-      const text = ev.payload?.text || ev.payload?.body || ev.payload?.message || '';
-      const match = active.find((m) => m.text === text);
+      const match = active.find((m) => m.text === textOf(ev) && !matchedPendingRef.current.has(m.clientId));
       if (match) {
         matchedPendingRef.current.add(match.clientId);
         onRemovePending(match.clientId);
       }
     }
+
+    // The saved copy of the message arrives through the transcript, not the run stream.
+    for (const ev of earlierEvents) {
+      if (ev.type !== 'human') continue;
+      const key = `${ev.src ?? ''}:${ev.id ?? ''}`;
+      if (usedConfirmationsRef.current.has(key)) continue;
+      const savedAt = new Date(ev.created_at || 0).getTime();
+      const match = active.find(
+        (m) => m.text === textOf(ev)
+          && !matchedPendingRef.current.has(m.clientId)
+          && savedAt >= (m.sentAt ?? 0) - 120_000,
+      );
+      if (match) {
+        usedConfirmationsRef.current.add(key);
+        matchedPendingRef.current.add(match.clientId);
+        onRemovePending(match.clientId);
+      }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, pendingMessages]);
+  }, [events, earlierEvents, pendingMessages]);
+
+  // While a message the server accepted is still waiting to be confirmed, look for its saved copy.
+  // Only the user's own messages are merged in, so agent replies already shown are not duplicated.
+  const waitingKey = pendingMessages
+    .filter((m) => m.status === 'sent' && !matchedPendingRef.current.has(m.clientId))
+    .map((m) => m.clientId)
+    .join(',');
+
+  useEffect(() => {
+    if (!waitingKey || !workflowId || !projectId) return undefined;
+    let cancelled = false;
+    let tries = 0;
+    let timer = null;
+    const tick = async () => {
+      if (cancelled) return;
+      tries += 1;
+      try {
+        const data = await api.get(`/api/projects/${projectId}/workflows/${workflowId}/transcript?limit=50`);
+        if (cancelled) return;
+        const saved = (data.events ?? [])
+          .map(normaliseTranscriptEvent)
+          .filter((e) => e.src === 'w' && e.type === 'human');
+        if (saved.length) {
+          setEarlierEvents((prev) => {
+            const have = new Set(prev.map((e) => `${e.src ?? ''}:${e.id ?? ''}`));
+            const add = saved.filter((e) => !have.has(`${e.src ?? ''}:${e.id ?? ''}`));
+            if (!add.length) return prev;
+            return [...prev, ...add].sort(
+              (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime(),
+            );
+          });
+        }
+      } catch { /* the transcript is non-critical; try again */ }
+      if (!cancelled && tries < 15) timer = setTimeout(tick, 2000);
+    };
+    timer = setTimeout(tick, 400);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [waitingKey, workflowId, projectId]);
 
   // ── Transcript loading ────────────────────────────────────────────────────
 

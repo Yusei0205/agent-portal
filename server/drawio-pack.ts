@@ -125,3 +125,18 @@ export function drawioPackState(): DrawioPackState {
   const renderer: PartState = rp ? { ok: false, reason: rp } : { ok: true, reason: `draw.io viewer ${m?.viewerTag ?? 'files'} installed` };
   return { tool, renderer };
 }
+
+/**
+ * On Lambda the pack folder lives on /tmp and disappears with the instance, so a copy is kept in the storage
+ * backend (S3). Call this before reading the pack's state or files; it restores the folder when it is missing.
+ */
+export async function ensureDrawioPackRestored(): Promise<void> {
+  const { restoreTree } = await import('./durable-files.ts');
+  await restoreTree(packDir());
+}
+
+/** Keep a copy of the whole pack folder in the storage backend (after an install). */
+export async function persistDrawioPack(): Promise<void> {
+  const { persistTree } = await import('./durable-files.ts');
+  await persistTree(packDir());
+}
