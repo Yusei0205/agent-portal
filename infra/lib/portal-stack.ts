@@ -102,6 +102,8 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   /** https://<cloudfront domain>; needed for Google sign-in (redirect URI). */
   /** AgentCore runtime that runs Claude (the agent-runner image); enables Claude sessions on the cloud portal. */
   claudeRuntimeArn?: string;
+  /** Give Claude runs on AgentCore the Browser tools (-c agentcoreBrowser=true). */
+  agentcoreBrowser?: boolean;
   publicUrl?: string;
   /** Emails / @domains allowed to sign in with Google without an invite, comma separated. */
   googleAllowed?: string;
@@ -242,6 +244,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.publicUrl ? { PORTAL_PUBLIC_URL: props.publicUrl } : {}),
         ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
         ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
+        ...(props.agentcoreBrowser ? { PORTAL_AGENTCORE_BROWSER: '1' } : {}),
         ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
       },
     });

@@ -288,6 +288,15 @@ describe('validatePayload — auth (Anthropic credential)', () => {
   });
 });
 
+describe('validatePayload — browser', () => {
+  it('accepts a boolean and drops false', () => {
+    assert.equal(ok({ ...minPayload(), browser: true }).browser, true);
+    assert.equal(ok({ ...minPayload(), browser: false }).browser, undefined);
+    assert.equal(ok(minPayload()).browser, undefined);
+    assert.equal(validatePayload({ ...minPayload(), browser: 'yes' }).ok, false);
+  });
+});
+
 describe('validatePayload — trustTools', () => {
   test('accepts a boolean and rejects other types', () => {
     assert.equal(ok({ ...minPayload(), trustTools: false }).trustTools, false);

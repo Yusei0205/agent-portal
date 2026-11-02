@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import type { KiroRunPayload } from './validate.js';
 
@@ -369,9 +370,22 @@ export async function runKiroRun(
       acp.sendNotification('notifications/initialized');
 
       // New session
+      // AgentCore Browser tools, served by dist/browser-mcp.mjs (started by kiro-cli on demand). The child gets
+      // the AWS credential variables explicitly because kiro-cli does not pass its own environment on.
+      const browserMcp = payload.browser
+        ? [{
+            name: 'browser',
+            command: 'node',
+            args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'browser-mcp.mjs')],
+            env: ['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+              'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
+              .filter((k) => process.env[k])
+              .map((k) => ({ name: k, value: process.env[k] as string })),
+          }]
+        : [];
       const sessionResult = await acp.sendRequest('session/new', {
         cwd: workDir,
-        mcpServers: [],
+        mcpServers: browserMcp,
       }) as { sessionId?: string };
       const sessionId = sessionResult?.sessionId ?? '';
       if (!sessionId) throw new Error('kiro-cli ACP did not return a sessionId');

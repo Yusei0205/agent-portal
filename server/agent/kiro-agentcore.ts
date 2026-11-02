@@ -466,6 +466,8 @@ export interface AgentCoreRunOpts {
   token: KiroTokenPayload;
   credentialId: string | null;
   expectedCiphertext: string | null;
+  /** Give kiro-cli the AgentCore Browser tools (MCP server in the runner). */
+  browser?: boolean;
 }
 
 /**
@@ -504,6 +506,7 @@ export async function runKiroViaAgentCore(
       runId: opts.runId,
       prompt: opts.prompt,
       token: opts.token,
+      ...(opts.browser ? { browser: true } : {}),
     };
 
     const fileReceiver = ctx.run?.workDir ? createFileReceiver(ctx.run.workDir, (abs) => persistFile(abs)) : null;

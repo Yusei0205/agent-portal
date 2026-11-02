@@ -40,6 +40,7 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
+import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
 import { emitRunnerFiles } from '../shared/runner-files.js';
 import {
   type InvocationPayload,
@@ -79,6 +80,9 @@ const WRITE_TOOLS = new Set([
 const READ_ONLY_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebSearch', 'WebFetch', 'TodoWrite',
   'read', 'glob', 'grep', 'ls',
+  // AgentCore Browser tools that only look (opening a page is like WebFetch). click/type need "Trust all tools".
+  `mcp__${BROWSER_SERVER_NAME}__goto`, `mcp__${BROWSER_SERVER_NAME}__snapshot`,
+  `mcp__${BROWSER_SERVER_NAME}__get_text`, `mcp__${BROWSER_SERVER_NAME}__screenshot`,
 ]);
 
 // ── Disk usage helper ─────────────────────────────────────────────────────────
@@ -247,6 +251,9 @@ export async function runInvocation(
     emit({ type: 'status', text: `Wall-clock limit of ${maxMinutes} minutes reached. Run aborted.` });
   }, maxMinutes * 60_000);
 
+  // ── AgentCore Browser (optional, started on first use, always stopped in finally) ──
+  const browser = payload.browser ? new AgentCoreBrowser(emit, region) : null;
+
   // ── Counters ─────────────────────────────────────────────────────────────────
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -328,6 +335,7 @@ export async function runInvocation(
         // result message (with total_cost_usd and stop_reason:"max_turns").
         // Our manual counter below remains for the turns metric.
         maxTurns,
+        ...(browser ? { mcpServers: { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser) } } : {}),
       },
     }) as AsyncIterable<Record<string, unknown>>;
 
@@ -439,6 +447,7 @@ export async function runInvocation(
     stopReason = 'aborted';
   } finally {
     clearTimeout(wallClockTimer);
+    await browser?.close();
   }
 
   // Flush any pending tool-ends

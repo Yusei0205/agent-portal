@@ -73,7 +73,41 @@ export class AgentPortalSpikeBStack extends cdk.Stack {
       ],
     }));
 
+    // AgentCore writes each runtime's logs and metrics to its default log group; without this the runtime
+    // runs but nothing shows up in CloudWatch or the AgentCore observability view.
+    executionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreDefaultLogs',
+      effect: iam.Effect.ALLOW,
+      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'],
+      resources: [
+        `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+        `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*`,
+      ],
+    }));
+    executionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreMetrics',
+      effect: iam.Effect.ALLOW,
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+      conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } },
+    }));
+
     // ECR: pull the kiro-runner image
+    // AgentCore Browser: the runner's browser MCP starts a managed browser session on demand and drives it over the
+    // automation WebSocket (SigV4 with this role). Resource * until the exact browser ARNs are confirmed.
+    executionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreBrowser',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock-agentcore:StartBrowserSession',
+        'bedrock-agentcore:GetBrowserSession',
+        'bedrock-agentcore:StopBrowserSession',
+        'bedrock-agentcore:ConnectBrowserAutomationStream',
+        'bedrock-agentcore:ConnectBrowserLiveViewStream',
+      ],
+      resources: ['*'],
+    }));
+
     executionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'EcrPullKiroRunner',
       effect: iam.Effect.ALLOW,

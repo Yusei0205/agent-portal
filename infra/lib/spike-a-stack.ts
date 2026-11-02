@@ -59,6 +59,22 @@ export class AgentPortalSpikeAStack extends cdk.Stack {
       description: 'Execution role for AgentCore Runtime spike-a. Bedrock + Logs + ECR only',
     });
 
+    // AgentCore Browser: the runner starts a managed browser session on demand and drives it over the
+    // automation WebSocket (SigV4 with this role). Resource is * because the AWS-managed browser
+    // (aws.browser.v1) lives under an AWS-owned ARN; tighten once the exact ARNs are confirmed.
+    executionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreBrowser',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock-agentcore:StartBrowserSession',
+        'bedrock-agentcore:GetBrowserSession',
+        'bedrock-agentcore:StopBrowserSession',
+        'bedrock-agentcore:ConnectBrowserAutomationStream',
+        'bedrock-agentcore:ConnectBrowserLiveViewStream',
+      ],
+      resources: ['*'],
+    }));
+
     // Bedrock: InvokeModel on both global inference profiles + underlying model ARNs.
     // The global inference profile routes to one or more regional model endpoints.
     // Both the inference profile ARN and the foundation-model ARNs are needed so
@@ -95,6 +111,25 @@ export class AgentPortalSpikeAStack extends cdk.Stack {
         logGroup.logGroupArn,
         `${logGroup.logGroupArn}:*`,
       ],
+    }));
+
+    // AgentCore writes each runtime's logs and metrics to its default log group; without this the runtime
+    // runs but nothing shows up in CloudWatch or the AgentCore observability view.
+    executionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreDefaultLogs',
+      effect: iam.Effect.ALLOW,
+      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'],
+      resources: [
+        `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+        `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*`,
+      ],
+    }));
+    executionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreMetrics',
+      effect: iam.Effect.ALLOW,
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+      conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } },
     }));
 
     // ECR: pull the agent-runner image

@@ -52,6 +52,8 @@ export interface InvocationPayload {
    * run after the guard checks.
    */
   trustTools?: boolean;
+  /** true = give the agent the AgentCore Browser tools (mcp__browser__*). Off by default: a browser session bills while open. */
+  browser?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -68,7 +70,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal', 'auth', 'trustTools',
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal', 'auth', 'trustTools', 'browser',
 ]);
 const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
@@ -195,6 +197,10 @@ export function validatePayload(raw: unknown): ValidationResult {
     return err('"trustTools" must be a boolean');
   }
 
+  if (obj.browser !== undefined && typeof obj.browser !== 'boolean') {
+    return err('"browser" must be a boolean');
+  }
+
   // auth — optional object { kind, secret }
   let auth: AuthConfig | undefined;
   if (obj.auth !== undefined) {
@@ -230,6 +236,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       portal,
       auth,
       trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,
+      browser: obj.browser === true ? true : undefined,
     },
   };
 }

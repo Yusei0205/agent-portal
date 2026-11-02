@@ -28,6 +28,8 @@ export interface ClaudeAgentCoreOpts {
   trustTools: boolean;
   maxBudgetUsd?: number | null;
   maxTurns?: number | null;
+  /** Give the agent the AgentCore Browser tools (mcp__browser__*). */
+  browser?: boolean;
 }
 
 export interface ClaudeAgentCoreResult {
@@ -81,6 +83,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     model: opts.model,
     auth: opts.auth,
     trustTools: opts.trustTools,
+    ...(opts.browser ? { browser: true } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
     ...(opts.maxTurns && opts.maxTurns > 0 ? { maxTurns: Math.min(opts.maxTurns, 200) } : {}),

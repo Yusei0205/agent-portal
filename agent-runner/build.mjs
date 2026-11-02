@@ -23,7 +23,7 @@ await esbuild.build({
   target: 'node22',
   outfile: path.join(distDir, 'index.mjs'),
   // Keep the SDK external — install it in the container via npm ci
-  external: ['@anthropic-ai/claude-agent-sdk'],
+  external: ['@anthropic-ai/claude-agent-sdk', 'playwright-core', 'zod'],
   // node: built-ins stay external automatically with platform: 'node'
   sourcemap: false,
   logLevel: 'info',

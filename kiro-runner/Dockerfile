@@ -28,6 +28,7 @@ COPY kiro-runner/src/ ./src/
 COPY kiro-runner/tsconfig.json ./
 COPY kiro-runner/build.mjs ./
 COPY server/agent/runner-files.ts ./shared/runner-files.ts
+COPY agent-runner/src/browser-tools.ts ./shared/browser-tools.ts
 
 # Compile + bundle → dist/index.mjs (no external runtime deps; node:* built-ins only)
 RUN node build.mjs
@@ -60,7 +61,11 @@ RUN curl -LsSf https://cli.kiro.dev/install > /tmp/kiro-install.sh && \
 
 WORKDIR /app
 
-# Copy compiled bundle from builder (no npm install needed — all node:* built-ins)
+# playwright-core is the only runtime dependency (the browser tools connect to AgentCore Browser over CDP; no browser is downloaded)
+COPY kiro-runner/package.json kiro-runner/package-lock.json* ./
+RUN npm install --omit=dev && npm cache clean --force
+
+# Copy compiled bundles from builder
 COPY --from=builder /build/dist/ ./dist/
 
 # Run as non-root user (UID 1000, from base image)

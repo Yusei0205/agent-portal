@@ -20,6 +20,7 @@ test-*.txt
 agent-runner/node_modules/
 agent-runner/dist/
 agent-runner/shared/
+kiro-runner/shared/
 
 # infra CDK outputs and dependencies
 infra/node_modules/

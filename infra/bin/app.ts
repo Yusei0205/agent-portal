@@ -48,6 +48,7 @@ if (budgetEmail) {
     budgetEmail,
     storageBucket: app.node.tryGetContext('storageBucket'),
     claudeRuntimeArn: app.node.tryGetContext('claudeRuntimeArn'),
+    agentcoreBrowser: String(app.node.tryGetContext('agentcoreBrowser')) === 'true',
     publicUrl: app.node.tryGetContext('publicUrl'),
     googleAllowed: app.node.tryGetContext('googleAllowed'),
   });

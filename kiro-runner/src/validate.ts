@@ -32,6 +32,8 @@ export interface KiroRunPayload {
   runId: string;
   prompt: string;
   token: KiroTokenInput;
+  /** true = give kiro-cli the AgentCore Browser tools as an MCP server. */
+  browser?: boolean;
 }
 
 export interface KiroLoginPayload {
@@ -137,6 +139,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       mode: 'kiro-run',
       runId: (obj.runId as string).trim(),
       prompt: obj.prompt as string,
+      ...(obj.browser === true ? { browser: true } : {}),
       token: {
         accessToken: tok.accessToken as string,
         expiresAt: tok.expiresAt as string,

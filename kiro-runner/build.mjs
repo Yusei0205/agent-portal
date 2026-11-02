@@ -26,4 +26,18 @@ await esbuild.build({
   logLevel: 'info',
 });
 
-console.log('kiro-runner build complete → dist/index.mjs');
+// Stdio MCP server for the AgentCore Browser tools. playwright-core stays external (installed in the image).
+await esbuild.build({
+  entryPoints: [path.join(root, 'src', 'browser-mcp.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node22',
+  outfile: path.join(distDir, 'browser-mcp.mjs'),
+  external: ['playwright-core'],
+  banner: { js: "import{createRequire as __cr}from'module';const require=__cr(import.meta.url);" },
+  sourcemap: false,
+  logLevel: 'info',
+});
+
+console.log('kiro-runner build complete → dist/index.mjs, dist/browser-mcp.mjs');
