@@ -9,6 +9,7 @@
  *   POST /api/auth/accept-invite        — accept invitation (public)
  */
 
+import { publicBaseUrl } from '../public-url.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { router, sendJson, requireAuth } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
@@ -160,9 +161,7 @@ export function registerUserRoutes(): void {
     );
 
     // Build invite URL using the request's host
-    const host = req.headers.host ?? 'localhost:8787';
-    const protocol = req.secure ? 'https' : 'http';
-    const inviteUrl = `${protocol}://${host}/#/accept-invite?token=${encodeURIComponent(token)}`;
+    const inviteUrl = `${publicBaseUrl(req)}/#/accept-invite?token=${encodeURIComponent(token)}`;
 
     sendJson(res, 201, {
       invitation: {

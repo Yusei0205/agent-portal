@@ -45,6 +45,12 @@ Quick reference: account `366019841051`, region `ap-southeast-1`, stack `AgentPo
 - **Cause:** a distribution-wide error response turned every 404 (including API 404s) into `index.html` with status 200, so the browser parsed HTML as JSON.
 - **Fix:** no distribution-level error responses. A CloudFront Function (`SpaRewrite`) on the web (S3) behaviour only rewrites paths without a file extension to `/index.html`. API errors stay JSON.
 
+### Jira (or any OAuth) says "redirect_uri is not registered" / sign-in link goes to the Lambda address
+- **Cause:** links the server builds were based on the request's Host header, which behind CloudFront is the internal Lambda URL (and `http`).
+- **Fix:** `server/public-url.ts` `publicBaseUrl(req)` uses `PORTAL_PUBLIC_URL` (deploy context `publicUrl`) and falls back to the request for local installs. Used for the Jira callback and invite links. Build any new server-side link the same way.
+- **In Atlassian:** the app's callback URL must be exactly `<portal URL>/api/jira/callback`, e.g. `https://d1tah6dqw2fe9f.cloudfront.net/api/jira/callback`. Update it in the Atlassian developer console and in the project's Jira app settings.
+- The Jira OAuth `state` is a signed value, not an in-memory entry, so the callback can land on any Lambda instance.
+
 ### Invite link "keeps loading"
 Two separate causes:
 1. **Wrong host:** the server built the link from the `Host` header, which behind CloudFront is the Function URL host (locked to CloudFront). The Users page now rebuilds the link on `window.location.origin`. Any other server-built link (OAuth callbacks, Google sign-in) has the same risk: use a configured public URL, not the request host.

@@ -10,6 +10,7 @@
  *   oauth     — Atlassian 3LO; requires an Atlassian developer app with client ID/secret.
  *   api_token — Atlassian email + API token + site URL; Basic auth; no OAuth app needed.
  */
+import { publicBaseUrl } from './public-url.ts';
 import { getSetting, setSetting } from './settings.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -563,14 +564,42 @@ async function isOwner(req: PortalRequest, projectId: string): Promise<boolean> 
 
 // ── OAuth state map ───────────────────────────────────────────────────────────
 
-const states = new Map<string, { userId: string; projectId: string; returnTo: string; exp: number }>();
+interface OAuthState { userId: string; projectId: string; returnTo: string; exp: number }
+
+// The OAuth `state` is a signed value (not an in-memory map) so the callback can be handled by any Lambda instance.
+function stateKey(): Buffer {
+  return crypto.createHmac('sha256', config.secretKey).update('jira-oauth-state-v1').digest();
+}
+function makeState(payload: OAuthState): string {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', stateKey()).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+// Best-effort single use: a state already seen by this instance is refused. (Another instance cannot know,
+// but the authorization code Atlassian issues for it is single-use as well.)
+const usedStates = new Map<string, number>();
+function readState(state: string): OAuthState | null {
+  for (const [k, exp] of usedStates) if (exp < Date.now()) usedStates.delete(k);
+  if (usedStates.has(state)) return null;
+  const [body, sig] = state.split('.');
+  if (!body || !sig) return null;
+  const expected = crypto.createHmac('sha256', stateKey()).update(body).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as OAuthState;
+    usedStates.set(state, parsed.exp);
+    return parsed;
+  } catch { return null; }
+}
 
 function safeReturn(v: string | null): string {
   return v && /^#\/[A-Za-z0-9_\/.-]{0,120}$/.test(v) ? v : '';
 }
 
 function defaultRedirect(req: PortalRequest): string {
-  return `${req.secure ? 'https' : 'http'}://${req.headers.host}/api/jira/callback`;
+  return `${publicBaseUrl(req)}/api/jira/callback`;
 }
 
 // ── Route registration ────────────────────────────────────────────────────────
@@ -670,9 +699,7 @@ export function registerJiraRoutes(): void {
       return;
     }
 
-    const state = crypto.randomBytes(24).toString('base64url');
-    for (const [k, v] of states) if (v.exp < Date.now()) states.delete(k);
-    states.set(state, {
+    const state = makeState({
       userId: req.user!.id,
       projectId,
       returnTo: safeReturn(req.query.get('return')) || `#/p/${projectId}/tickets`,
@@ -707,9 +734,7 @@ export function registerJiraRoutes(): void {
     }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const state = crypto.randomBytes(24).toString('base64url');
-    for (const [k, v] of states) if (v.exp < Date.now()) states.delete(k);
-    states.set(state, {
+    const state = makeState({
       userId: req.user!.id,
       projectId,
       returnTo: safeReturn(typeof body.return === 'string' ? body.return : '') || `#/p/${projectId}/tickets`,
@@ -739,9 +764,7 @@ export function registerJiraRoutes(): void {
       res.end();
     };
 
-    const stateKey = req.query.get('state') ?? '';
-    const s = states.get(stateKey);
-    states.delete(stateKey);
+    const s = readState(req.query.get('state') ?? '');
 
     if (!s || s.exp < Date.now() || !req.user || s.userId !== req.user.id) {
       back('error', 'The sign-in link expired. Click Connect Jira again.');
