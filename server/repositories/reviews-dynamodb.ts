@@ -1,7 +1,7 @@
 /**
  * DynamoDB implementation of ReviewsRepository.
  *
- * Table: portal-p10
+ * Table: portal-code
  * Reviews:  PK=REVIEW#<projectId>  SK=REV#<isoCreatedAt>#<id>
  *           workflowId attr (sparse) → GSI-P10WorkflowId
  * Findings: PK=FIND#<reviewId>     SK=FIND#<id>
@@ -20,7 +20,7 @@ import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
 import type { ReviewsRepository, ReviewRecord, FindingRecord, CreateReviewInput, CreateFindingInput, ReviewStatus } from './reviews.ts';
 
-function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_P10 ?? 'portal-p10-test'; }
+function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_CODE ?? 'portal-code-test'; }
 
 function reviewPk(projectId: string): string { return `REVIEW#${projectId}`; }
 function reviewSk(createdAt: string, id: string): string { return `REV#${createdAt}#${id}`; }

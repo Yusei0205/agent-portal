@@ -1,7 +1,7 @@
 /**
  * Repository interface for p10_reviews + p10_findings.
  *
- * DynamoDB table: portal-p10
+ * DynamoDB table: portal-code
  * Reviews: PK=REVIEW#<projectId>  SK=REV#<isoCreatedAt>#<id>
  *          workflowId attr (sparse) → GSI-P10WorkflowId
  * Findings: PK=FIND#<reviewId>    SK=FIND#<id>

@@ -1,7 +1,7 @@
 /**
  * Repository interface for p10_loop_specs + p10_loop_runs.
  *
- * DynamoDB table: portal-p10
+ * DynamoDB table: portal-code
  * Specs: PK=LOOPSPEC#<projectId>  SK=SPEC#<id>  (custom)
  *        PK=LOOPSPEC_BUILTIN       SK=SPEC#<id>  (builtin)
  * Runs:  PK=LOOPRUN#<specId>       SK=RUN#<isoStartedAt>#<id>

@@ -12,6 +12,7 @@
     "outDir": "./dist",
     "rootDir": "./",
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "experimentalDecorators": true,
     "skipLibCheck": true
   },

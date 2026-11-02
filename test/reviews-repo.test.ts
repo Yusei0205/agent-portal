@@ -192,7 +192,7 @@ describe('DynamoDB Local suite', async () => {
     test.skip('DynamoDB suite skipped (DYNAMODB_ENDPOINT not set)');
     return;
   }
-  process.env.DYNAMODB_TABLE_PORTAL_P10 = `portal-p10-test-rv-${RUN_TAG}`;
+  process.env.DYNAMODB_TABLE_PORTAL_CODE = `portal-code-test-rv-${RUN_TAG}`;
   const { DynamoDbReviewsRepository } = await import('../server/repositories/reviews-dynamodb.ts');
   runContract('DynamoDB', async () => {
     const repo = new DynamoDbReviewsRepository();

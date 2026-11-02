@@ -1,7 +1,7 @@
 /**
  * DynamoDB implementation of GitReposRepository.
  *
- * Table: portal-p10
+ * Table: portal-code
  * PK=REPO#<projectId>  SK=REPO#<isoCreatedAt>#<id>
  * GSI-P10EntityId: PK=id, SK=entityType='repo'
  */
@@ -17,7 +17,7 @@ import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, av } from './dynamo-client.ts';
 import type { GitReposRepository, GitRepoRecord, CreateGitRepoInput } from './git-repos.ts';
 
-function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_P10 ?? 'portal-p10-test'; }
+function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_CODE ?? 'portal-code-test'; }
 function pk(projectId: string): string { return `REPO#${projectId}`; }
 function sk(createdAt: string, id: string): string { return `REPO#${createdAt}#${id}`; }
 

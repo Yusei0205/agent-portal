@@ -1,7 +1,7 @@
 /**
  * DynamoDB implementation of ScansRepository.
  *
- * Table: portal-p10
+ * Table: portal-code
  * Scans:     PK=SCAN#<projectId>   SK=SCAN#<isoCreatedAt>#<id>
  * ScanFiles: PK=SCANFILES#<scanId> SK=FILE#<id>
  * GSI-P10EntityId: PK=id, SK=entityType='scan'
@@ -19,7 +19,7 @@ import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
 import type { ScansRepository, ScanRecord, ScanFileRecord, CreateScanInput, CreateScanFileInput, ScanStatus } from './scans.ts';
 
-function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_P10 ?? 'portal-p10-test'; }
+function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_CODE ?? 'portal-code-test'; }
 
 function scanPk(projectId: string | null): string { return `SCAN#${projectId ?? 'null'}`; }
 function scanSk(createdAt: string, id: string): string { return `SCAN#${createdAt}#${id}`; }

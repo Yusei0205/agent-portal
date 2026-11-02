@@ -149,7 +149,7 @@ describe('DynamoDB Local suite', async () => {
     return;
   }
 
-  process.env.DYNAMODB_TABLE_PORTAL_P10 = `portal-p10-test-ws-${RUN_TAG}`;
+  process.env.DYNAMODB_TABLE_PORTAL_CODE = `portal-code-test-ws-${RUN_TAG}`;
   const { DynamoDbWorkspacesRepository } = await import('../server/repositories/workspaces-dynamodb.ts');
 
   runContract('DynamoDB', async () => {

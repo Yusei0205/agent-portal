@@ -1,7 +1,7 @@
 /**
  * DynamoDB implementation of LoopSpecsRepository.
  *
- * Table: portal-p10
+ * Table: portal-code
  * Specs:  PK=LOOPSPEC#<projectId>  SK=SPEC#<id>  (project)
  *         PK=LOOPSPEC_BUILTIN       SK=SPEC#<id>  (builtin)
  * Runs:   PK=LOOPRUN#<specId>       SK=RUN#<isoStartedAt>#<id>
@@ -19,7 +19,7 @@ import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
 import type { LoopSpecsRepository, LoopSpecRecord, LoopRunRecord, CreateLoopSpecInput, CreateLoopRunInput } from './loop-specs.ts';
 
-function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_P10 ?? 'portal-p10-test'; }
+function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_CODE ?? 'portal-code-test'; }
 
 function specPk(projectId: string | null, isBuiltin: number): string {
   return isBuiltin ? 'LOOPSPEC_BUILTIN' : `LOOPSPEC#${projectId ?? 'null'}`;

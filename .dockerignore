@@ -21,3 +21,9 @@ Thumbs.db
 # Docker artefacts
 compose.yml
 compose.aws.yml
+infra
+docs
+data-playwright-test
+**/node_modules
+.playwright-mcp
+data-*

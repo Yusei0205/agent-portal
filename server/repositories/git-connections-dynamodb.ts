@@ -1,7 +1,7 @@
 /**
  * DynamoDB implementation of GitConnectionsRepository.
  *
- * Table: portal-p10
+ * Table: portal-code
  * PK=GITCONN#<userId>   SK=CONN#<id>   (personal)
  * PK=GITCONN_SHARED     SK=CONN#<id>   (shared)
  * GSI-P10EntityId: PK=id, SK=entityType='gitconn'
@@ -18,7 +18,7 @@ import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, av } from './dynamo-client.ts';
 import type { GitConnectionsRepository, GitConnectionRecord, CreateGitConnectionInput } from './git-connections.ts';
 
-function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_P10 ?? 'portal-p10-test'; }
+function table(): string { return process.env.DYNAMODB_TABLE_PORTAL_CODE ?? 'portal-code-test'; }
 
 function pk(ownerId: string | null, scope: string): string {
   return scope === 'shared' ? 'GITCONN_SHARED' : `GITCONN#${ownerId ?? 'anon'}`;

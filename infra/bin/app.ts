@@ -4,6 +4,8 @@ import * as cdk from 'aws-cdk-lib';
 import { AgentPortalSpikeAStack } from '../lib/spike-a-stack';
 import { AgentPortalSpikeBStack } from '../lib/spike-b-stack';
 import { AgentPortalSpikeCStack } from '../lib/spike-c-stack';
+import { AgentPortalCloudStack } from '../lib/portal-stack';
+import * as path from 'node:path';
 
 const app = new cdk.App();
 
@@ -33,3 +35,17 @@ new AgentPortalSpikeCStack(app, 'AgentPortalSpikeC', {
   description: 'Spike C: AppSync Events live-update channel proof for agent-portal (project=agent-portal, purpose=spike-c)',
   stackName: 'AgentPortalSpikeC',
 });
+
+// Path B core stack. Required context: -c budgetEmail=you@example.com ; optional: -c kiroRuntimeArn=arn:aws:bedrock-agentcore:...
+const budgetEmail = app.node.tryGetContext('budgetEmail');
+if (budgetEmail) {
+  new AgentPortalCloudStack(app, 'AgentPortalCloud', {
+    env: { account: '366019841051', region: 'ap-southeast-1' },
+    description: 'Agent Portal Path B: Lambda + DynamoDB + S3/CloudFront (project=agent-portal)',
+    stackName: 'AgentPortalCloud',
+    repoRoot: path.resolve(__dirname, '..', '..'),
+    kiroRuntimeArn: app.node.tryGetContext('kiroRuntimeArn'),
+    budgetEmail,
+    storageBucket: app.node.tryGetContext('storageBucket'),
+  });
+}

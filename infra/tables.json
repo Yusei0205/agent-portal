@@ -1,0 +1,985 @@
+[
+  {
+    "TableName": "portal-runs",
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "budgetProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "budgetSortKey",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "inboxProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "inboxSortKey",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "inboxGlobal",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "projectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "wfGsiSk",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "statusGsiSk",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "gStatus",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "gParentId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "runId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "inputHash",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "run_id",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "inputId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "idleCandidate",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "last_turn_at_idle",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "childIdleCandidate",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "updated_at_child_idle",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-BudgetProject",
+        "KeySchema": [
+          {
+            "AttributeName": "budgetProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "budgetSortKey",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-InboxByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "inboxProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "inboxSortKey",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-InboxGlobal",
+        "KeySchema": [
+          {
+            "AttributeName": "inboxGlobal",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "inboxSortKey",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-ProjectWorkflows",
+        "KeySchema": [
+          {
+            "AttributeName": "projectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "wfGsiSk",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-WorkflowStatus",
+        "KeySchema": [
+          {
+            "AttributeName": "projectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "statusGsiSk",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-StatusGlobal",
+        "KeySchema": [
+          {
+            "AttributeName": "gStatus",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "wfGsiSk",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-ChildWorkflows",
+        "KeySchema": [
+          {
+            "AttributeName": "gParentId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "wfGsiSk",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-RunId",
+        "KeySchema": [
+          {
+            "AttributeName": "runId",
+            "KeyType": "HASH"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-InputHash",
+        "KeySchema": [
+          {
+            "AttributeName": "inputHash",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "run_id",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-InputId",
+        "KeySchema": [
+          {
+            "AttributeName": "inputId",
+            "KeyType": "HASH"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-IdleCandidate",
+        "KeySchema": [
+          {
+            "AttributeName": "idleCandidate",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "last_turn_at_idle",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-ChildIdle",
+        "KeySchema": [
+          {
+            "AttributeName": "childIdleCandidate",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "updated_at_child_idle",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      }
+    ],
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-create",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "attProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "attParentKey",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "listSK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "diagProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "tplProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "tplListSK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "gdocProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "presProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "presWorkflowId",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-AttByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "attProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "listSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-AttByParent",
+        "KeySchema": [
+          {
+            "AttributeName": "attParentKey",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "listSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-DiagByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "diagProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "listSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-TplByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "tplProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "tplListSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-GDocByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "gdocProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "listSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-PresByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "presProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "listSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-PresByWorkflow",
+        "KeySchema": [
+          {
+            "AttributeName": "presWorkflowId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "SK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-users",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "tokenHash",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "entityType",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "email",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "userId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "actorId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "ts",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "slug",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "projectId",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-TokenHash",
+        "KeySchema": [
+          {
+            "AttributeName": "tokenHash",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "entityType",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-UserEmail",
+        "KeySchema": [
+          {
+            "AttributeName": "email",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "userId",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-ActorAudit",
+        "KeySchema": [
+          {
+            "AttributeName": "actorId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "ts",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-ProjectSlug",
+        "KeySchema": [
+          {
+            "AttributeName": "slug",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "projectId",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-UserProjects",
+        "KeySchema": [
+          {
+            "AttributeName": "userId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "projectId",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-projects",
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      }
+    ],
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-config",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-code",
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "id",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "entityType",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "workflowId",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-P10EntityId",
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "entityType",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-P10WorkflowId",
+        "KeySchema": [
+          {
+            "AttributeName": "workflowId",
+            "KeyType": "HASH"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      }
+    ],
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-content",
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "id",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "entityType",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-ContentEntityId",
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "entityType",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      }
+    ],
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-search",
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "postingDocId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "postingTerm",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-DocId",
+        "KeySchema": [
+          {
+            "AttributeName": "postingDocId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "postingTerm",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "KEYS_ONLY"
+        }
+      }
+    ],
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-learn",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "learnProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "learnListSK",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-LearnByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "learnProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "learnListSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-events",
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      }
+    ],
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-testing",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
+      },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "testPortalProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "testTestProjectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "vaultItemKey",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "testListSK",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "GSI-TestByProject",
+        "KeySchema": [
+          {
+            "AttributeName": "testPortalProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "testListSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-TestByTestProject",
+        "KeySchema": [
+          {
+            "AttributeName": "testTestProjectId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "testListSK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      },
+      {
+        "IndexName": "GSI-VaultItemByName",
+        "KeySchema": [
+          {
+            "AttributeName": "vaultItemKey",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "SK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "Ttl": null
+  }
+]

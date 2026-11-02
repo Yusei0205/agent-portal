@@ -1,7 +1,7 @@
 /**
  * Repository interface for the `repositories` table (git repos).
  *
- * DynamoDB table: portal-p10
+ * DynamoDB table: portal-code
  * PK=REPO#<projectId>  SK=REPO#<isoCreatedAt>#<id>
  * GSI-P10EntityId: PK=id, SK=entityType='repo'
  */

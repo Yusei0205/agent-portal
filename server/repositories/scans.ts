@@ -1,7 +1,7 @@
 /**
  * Repository interface for p10_scans + p10_scan_files.
  *
- * DynamoDB table: portal-p10
+ * DynamoDB table: portal-code
  * Scans:     PK=SCAN#<projectId>    SK=SCAN#<isoCreatedAt>#<id>
  * ScanFiles: PK=SCANFILES#<scanId>  SK=FILE#<id>
  * GSI-P10EntityId: PK=id, SK=entityType='scan'

@@ -1,7 +1,7 @@
 /**
  * Repository interface for git_connections_v2.
  *
- * DynamoDB table: portal-p10
+ * DynamoDB table: portal-code
  * PK=GITCONN#<userId> SK=CONN#<id> (personal)
  * PK=GITCONN_SHARED   SK=CONN#<id> (shared)
  * GSI-P10EntityId: PK=id, SK=entityType='gitconn'

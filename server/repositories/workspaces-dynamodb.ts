@@ -1,7 +1,7 @@
 /**
  * DynamoDB implementation of WorkspacesRepository.
  *
- * Table: portal-p10
+ * Table: portal-code
  * PK=WS#<projectId>  SK=WS#<isoCreatedAt>#<id>
  * GSI-P10EntityId: PK=id, SK=entityType
  */
@@ -19,7 +19,7 @@ import { getDynamoDbClient, marshalItem, getString, av } from './dynamo-client.t
 import type { WorkspacesRepository, WorkspaceRecord, CreateWorkspaceInput } from './workspaces.ts';
 
 function table(): string {
-  return process.env.DYNAMODB_TABLE_PORTAL_P10 ?? 'portal-p10-test';
+  return process.env.DYNAMODB_TABLE_PORTAL_CODE ?? 'portal-code-test';
 }
 
 function pk(projectId: string): string { return `WS#${projectId}`; }

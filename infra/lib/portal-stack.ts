@@ -1,0 +1,286 @@
+/**
+ * AgentPortalCloud: Path B (full serverless) core stack.
+ *
+ *   - DynamoDB tables (on-demand), generated from infra/tables.json
+ *     (refresh with: node --import tsx scripts/dump-dynamo-tables.ts)
+ *   - Lambda container image (Lambda Web Adapter, response streaming) behind a Function URL
+ *     (open URL; the server rejects requests without CloudFront's secret header)
+ *   - S3 bucket for the web UI + CloudFront: /* -> S3, /api/* -> Lambda Function URL
+ *   - Secrets Manager secret for the portal master key
+ *   - $10/month budget alert
+ *
+ * Deploy: cd infra && npx cdk deploy AgentPortalCloud --profile agentcore
+ */
+import * as cdk from 'aws-cdk-lib';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as budgets from 'aws-cdk-lib/aws-budgets';
+import * as appsync from 'aws-cdk-lib/aws-appsync';
+import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
+import { Construct } from 'constructs';
+import tablesJson from '../tables.json';
+
+interface KeyDef { AttributeName: string; KeyType: 'HASH' | 'RANGE' }
+interface TableSpec {
+  TableName: string;
+  KeySchema: KeyDef[];
+  AttributeDefinitions: { AttributeName: string; AttributeType: string }[];
+  GlobalSecondaryIndexes?: {
+    IndexName: string;
+    KeySchema: KeyDef[];
+    Projection: { ProjectionType: string; NonKeyAttributes?: string[] };
+  }[];
+  Ttl: string | null;
+}
+
+const attrType = (t: string) =>
+  t === 'N' ? dynamodb.AttributeType.NUMBER : t === 'B' ? dynamodb.AttributeType.BINARY : dynamodb.AttributeType.STRING;
+
+
+/**
+ * AppSync Events Lambda authorizer. Verifies the portal's signed token (HS256, key derived from the master key)
+ * and enforces channel access:
+ *   connect: any valid token          publish: never (the portal publishes with IAM)
+ *   subscribe /global/* and /run/*: any valid token
+ *   subscribe /project/<id>: admin, or <id> is in the token's project list
+ */
+const REALTIME_AUTHORIZER_CODE = `
+const crypto = require('crypto');
+const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+let key;
+async function signingKey() {
+  if (key) return key;
+  const r = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: process.env.KEY_SECRET_ARN }));
+  key = crypto.createHmac('sha256', r.SecretString.trim()).update('portal-realtime-v1').digest();
+  return key;
+}
+function verify(token, k) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) return null;
+  const expected = crypto.createHmac('sha256', k).update(parts[0] + '.' + parts[1]).digest('base64url');
+  const a = Buffer.from(parts[2]), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  let c;
+  try { c = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')); } catch (e) { return null; }
+  if (!c || typeof c.exp !== 'number' || c.exp < Date.now() / 1000) return null;
+  return c;
+}
+exports.handler = async (e) => {
+  const claims = verify(e.authorizationToken, await signingKey());
+  if (!claims) return { isAuthorized: false };
+  const ctx = e.requestContext || {};
+  if (ctx.operation === 'EVENT_CONNECT') return { isAuthorized: true };
+  if (ctx.operation !== 'EVENT_SUBSCRIBE') return { isAuthorized: false };
+  const ch = ctx.channel || '';
+  if (ch.startsWith('/global/') || ch.startsWith('/run/')) return { isAuthorized: true };
+  const m = ch.match(/^\/project\/([^/]+)/);
+  if (m) return { isAuthorized: claims.adm === true || (Array.isArray(claims.prj) && claims.prj.includes(m[1])) };
+  return { isAuthorized: false };
+};
+`.trim();
+
+export interface AgentPortalCloudProps extends cdk.StackProps {
+  /** Image build context: the repo root. */
+  repoRoot: string;
+  /** Kiro AgentCore runtime ARN from Spike B. */
+  kiroRuntimeArn?: string;
+  budgetEmail: string;
+  /** Existing S3 bucket the portal may read and write for file storage (optional). */
+  storageBucket?: string;
+}
+
+export class AgentPortalCloudStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props: AgentPortalCloudProps) {
+    super(scope, id, props);
+
+    // ── DynamoDB ──────────────────────────────────────────────────────────────
+    const tables: dynamodb.Table[] = [];
+    const tableEnv: Record<string, string> = {};
+    for (const spec of tablesJson as unknown as TableSpec[]) {
+      const typeOf = (n: string) => attrType(spec.AttributeDefinitions.find((a) => a.AttributeName === n)!.AttributeType);
+      const pk = spec.KeySchema.find((k) => k.KeyType === 'HASH')!.AttributeName;
+      const sk = spec.KeySchema.find((k) => k.KeyType === 'RANGE')?.AttributeName;
+      const table = new dynamodb.Table(this, spec.TableName, {
+        tableName: spec.TableName,
+        partitionKey: { name: pk, type: typeOf(pk) },
+        ...(sk ? { sortKey: { name: sk, type: typeOf(sk) } } : {}),
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+        pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+        ...(spec.Ttl ? { timeToLiveAttribute: spec.Ttl } : {}),
+      });
+      for (const g of spec.GlobalSecondaryIndexes ?? []) {
+        const gpk = g.KeySchema.find((k) => k.KeyType === 'HASH')!.AttributeName;
+        const gsk = g.KeySchema.find((k) => k.KeyType === 'RANGE')?.AttributeName;
+        const proj = g.Projection.ProjectionType;
+        table.addGlobalSecondaryIndex({
+          indexName: g.IndexName,
+          partitionKey: { name: gpk, type: typeOf(gpk) },
+          ...(gsk ? { sortKey: { name: gsk, type: typeOf(gsk) } } : {}),
+          projectionType:
+            proj === 'KEYS_ONLY' ? dynamodb.ProjectionType.KEYS_ONLY
+            : proj === 'INCLUDE' ? dynamodb.ProjectionType.INCLUDE
+            : dynamodb.ProjectionType.ALL,
+          ...(proj === 'INCLUDE' ? { nonKeyAttributes: g.Projection.NonKeyAttributes } : {}),
+        });
+      }
+      tables.push(table);
+      // portal-users -> DYNAMODB_TABLE_PORTAL_USERS, and so on.
+      tableEnv[`DYNAMODB_TABLE_${spec.TableName.replace(/-/g, '_').toUpperCase()}`] = spec.TableName;
+    }
+
+    // ── Master key ────────────────────────────────────────────────────────────
+    // The portal encrypts stored credentials with a key that must be exactly 64 hex characters (32 bytes),
+    // so only 0-9 and a-f may be generated. (The first version used any alphanumeric and failed at runtime.)
+    const masterKey = new secretsmanager.Secret(this, 'MasterKeyHex', {
+      secretName: 'agent-portal/master-key-hex',
+      generateSecretString: {
+        passwordLength: 64,
+        excludePunctuation: true,
+        excludeUppercase: true,
+        excludeCharacters: 'ghijklmnopqrstuvwxyz',
+      },
+    });
+
+    // ── Live updates: AppSync Events ──────────────────────────────────────────
+    const authorizerFn = new lambda.Function(this, 'RealtimeAuthorizer', {
+      functionName: 'agent-portal-realtime-authorizer',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      code: lambda.Code.fromInline(REALTIME_AUTHORIZER_CODE),
+      environment: { KEY_SECRET_ARN: masterKey.secretArn },
+    });
+    masterKey.grantRead(authorizerFn);
+    authorizerFn.addPermission('AllowAppSyncInvoke', {
+      principal: new iam.ServicePrincipal('appsync.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+    });
+
+    const eventsApi = new appsync.CfnApi(this, 'EventsApi', {
+      name: 'agent-portal-events',
+      eventConfig: {
+        authProviders: [
+          { authType: 'AWS_IAM' },
+          {
+            authType: 'AWS_LAMBDA',
+            // No result caching: the cache is keyed by token, but access depends on the channel.
+            lambdaAuthorizerConfig: { authorizerUri: authorizerFn.functionArn, authorizerResultTtlInSeconds: 0 },
+          },
+        ],
+        connectionAuthModes: [{ authType: 'AWS_LAMBDA' }],
+        defaultPublishAuthModes: [{ authType: 'AWS_IAM' }],
+        defaultSubscribeAuthModes: [{ authType: 'AWS_LAMBDA' }],
+      },
+    });
+    eventsApi.node.addDependency(authorizerFn);
+    for (const ns of ['run', 'project', 'global']) {
+      const channelNs = new appsync.CfnChannelNamespace(this, `${ns}Namespace`, {
+        apiId: eventsApi.attrApiId,
+        name: ns,
+        publishAuthModes: [{ authType: 'AWS_IAM' }],
+        subscribeAuthModes: [{ authType: 'AWS_LAMBDA' }],
+      });
+      channelNs.addDependency(eventsApi);
+    }
+
+    // CloudFront origin access control cannot sign POST bodies for Function URLs, so the URL is open and
+    // the server only accepts requests that carry this secret header (PORTAL_ORIGIN_SECRET).
+    const originSecret = new secretsmanager.Secret(this, 'OriginSecret', {
+      secretName: 'agent-portal/origin-secret',
+      generateSecretString: { passwordLength: 40, excludePunctuation: true },
+    });
+
+    // ── Lambda ────────────────────────────────────────────────────────────────
+    const fn = new lambda.DockerImageFunction(this, 'Portal', {
+      functionName: 'agent-portal',
+      code: lambda.DockerImageCode.fromImageAsset(props.repoRoot, {
+        file: 'Dockerfile.lambda',
+        platform: ecrAssets.Platform.LINUX_AMD64,
+        ignoreMode: cdk.IgnoreMode.DOCKER,
+      }),
+      memorySize: 1024,
+      timeout: cdk.Duration.minutes(15),
+      environment: {
+        ...tableEnv,
+        USE_DYNAMODB: 'true',
+        SECRET_KEY_ARN: masterKey.secretArn,
+        PORTAL_ORIGIN_SECRET: originSecret.secretValue.unsafeUnwrap(),
+        PORTAL_EVENTS_HTTP_DOMAIN: eventsApi.attrDnsHttp,
+        PORTAL_EVENTS_REALTIME_DOMAIN: eventsApi.attrDnsRealtime,
+        ...(props.storageBucket
+          ? { STORAGE_BACKEND: 's3', STORAGE_S3_BUCKET: props.storageBucket, STORAGE_S3_PREFIX: 'data', STORAGE_S3_REGION: this.region }
+          : {}),
+        ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
+      },
+    });
+    tables.forEach((t) => t.grantReadWriteData(fn));
+    masterKey.grantRead(fn);
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['appsync:EventPublish'],
+      resources: [`arn:aws:appsync:${this.region}:${this.account}:apis/${eventsApi.attrApiId}/channelNamespace/*`],
+    }));
+    if (props.kiroRuntimeArn) {
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],
+        resources: [props.kiroRuntimeArn, `${props.kiroRuntimeArn}/*`],
+      }));
+    }
+    if (props.storageBucket) {
+      const storage = s3.Bucket.fromBucketName(this, 'StorageBucket', props.storageBucket);
+      storage.grantReadWrite(fn);
+    }
+    const fnUrl = fn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE,
+      invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
+    });
+
+    // ── Web + CloudFront ──────────────────────────────────────────────────────
+    const webBucket = new s3.Bucket(this, 'WebBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+    const dist = new cloudfront.Distribution(this, 'Cdn', {
+      defaultRootObject: 'index.html',
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(webBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+      additionalBehaviors: {
+        '/api/*': {
+          origin: new origins.FunctionUrlOrigin(fnUrl, {
+            customHeaders: { 'x-portal-origin': originSecret.secretValue.unsafeUnwrap() },
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
+      },
+      // Single-page app: unknown paths serve index.html.
+      errorResponses: [{ httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' }],
+    });
+
+    // ── Budget ────────────────────────────────────────────────────────────────
+    new budgets.CfnBudget(this, 'Budget10', {
+      budget: { budgetName: 'agent-portal-10-usd', budgetType: 'COST', timeUnit: 'MONTHLY', budgetLimit: { amount: 10, unit: 'USD' } },
+      notificationsWithSubscribers: [80, 100].map((threshold) => ({
+        notification: { notificationType: 'ACTUAL', comparisonOperator: 'GREATER_THAN', threshold, thresholdType: 'PERCENTAGE' },
+        subscribers: [{ subscriptionType: 'EMAIL', address: props.budgetEmail }],
+      })),
+    });
+
+    new cdk.CfnOutput(this, 'PortalUrl', { value: `https://${dist.distributionDomainName}` });
+    new cdk.CfnOutput(this, 'WebBucketName', { value: webBucket.bucketName });
+    new cdk.CfnOutput(this, 'DistributionId', { value: dist.distributionId });
+  }
+}

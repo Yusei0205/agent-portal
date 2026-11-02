@@ -1,7 +1,7 @@
 /**
  * Repository interface for workspaces_v2.
  *
- * DynamoDB table: portal-p10
+ * DynamoDB table: portal-code
  * PK=WS#<projectId>  SK=WS#<isoCreatedAt>#<id>
  * GSI-P10EntityId: PK=id, SK=entityType='workspace'
  */
