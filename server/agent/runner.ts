@@ -39,6 +39,7 @@ import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
 import { ticketMarkdown, composeRunPrompt } from '../jira-text.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import type { RunFinalizeStats } from '../repositories/sessions.ts';
 import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
 
@@ -272,7 +273,17 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   const repo = getSessionsRepository();
   const workflow = await repo.getWorkflowById(workflowId);
   if (!workflow) {
-    await repo.updateRun(runId, { status: 'failed', finished_at: now() }).catch(() => {});
+    // Workflow was deleted between createRun and executeRun.
+    // Use finalizeRun so the run is counted in DynamoDB rollups (UNSCOPED bucket).
+    const missingTs = now();
+    await repo.finalizeRun(runId, 'pending', {
+      status: 'failed',
+      finished_at: missingTs,
+    }, {
+      dateUTC: missingTs.slice(0, 10),
+      projectId: null,
+      agentName: 'default',
+    }).catch(() => {});
     return;
   }
 
@@ -503,10 +514,15 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
     // Success: conditionally update run to done — skip if the run was stopped
     // while finishing (e.g. stop racing with run completion).
-    const runFinished = await repo.updateRunConditional(runId, 'running', {
+    const _statsHint: RunFinalizeStats = {
+      dateUTC: now().slice(0, 10),
+      projectId: agentRun.projectId,
+      agentName: (agentRun.leadAgent ?? '').trim() || 'default',
+    };
+    const runFinished = await repo.finalizeRun(runId, 'running', {
       status: 'done',
       finished_at: now(),
-    });
+    }, _statsHint);
 
     // Update workflow: iteration count + 1, status done, last_turn_at
     // Use conditional to avoid overwriting a stop that arrived concurrently.
@@ -553,19 +569,24 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     }
 
     const failTs = now();
+    const _failStatsHint: RunFinalizeStats = {
+      dateUTC: failTs.slice(0, 10),
+      projectId: workflow.project_id ? String(workflow.project_id) : null,
+      agentName: (workflow.lead_agent ?? '').trim() || 'default',
+    };
     // Conditional: only update the run if it's still in 'running' state.
     // If a concurrent stop/cancel already marked it terminal, don't overwrite.
-    await repo.updateRunConditional(runId, 'running', {
+    await repo.finalizeRun(runId, 'running', {
       status: aborted ? 'cancelled' : 'failed',
       finished_at: failTs,
       error: aborted ? '' : msg.slice(0, 2000),
-    });
+    }, _failStatsHint);
     // Fallback: if the run is in 'pending' (never transitioned to running), mark it failed too.
-    await repo.updateRunConditional(runId, 'pending', {
+    await repo.finalizeRun(runId, 'pending', {
       status: aborted ? 'cancelled' : 'failed',
       finished_at: failTs,
       error: aborted ? '' : msg.slice(0, 2000),
-    });
+    }, _failStatsHint);
 
     await repo.updateWorkflowConditional(workflowId, 'running', {
       status: aborted ? 'paused' : 'failed',

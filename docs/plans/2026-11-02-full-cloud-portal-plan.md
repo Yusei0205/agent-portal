@@ -333,3 +333,90 @@ New test: `record -- DynamoDB rollups equal the sum of rows (atomicity contract)
 - **`opts` extension for conditional updates with GSI hints.** Adding `opts?: { hintParentId?: string | null }` as an optional parameter to `updateWorkflowConditional` avoids an extra GetItem when the caller already has the workflow loaded, while staying backward-compatible with existing callers.
 - **Suite-scoped DynamoDB assertions in shared contracts.** Use the `label` variable from the `runContract` closure (not `process.env.DYNAMODB_ENDPOINT`) to gate DynamoDB-specific assertions. This prevents SQLite suite runs from failing on DynamoDB-only behaviour even when `DYNAMODB_ENDPOINT` is set globally.
 - **Pre-existing `security` test failure.** `security-fixes.test.ts Item 6` calls `deliverChildResult` without `await` and reads the DB immediately — the async write has not completed. Recorded in `known-failures.json`.
+
+### S1 dashboard/insights — stats repository (done 2026-11-03, branch pathb-serverless)
+
+**Progress update (2026-11-03)**
+
+| Module | Status |
+|---|---|
+| S1 dashboard + insights | Done — all SQL removed; stats repository introduced |
+| DynamoDB contract tests (all repo modules) | 158 pass, 0 skip (REQUIRE_DYNAMODB=1) |
+
+**What was built**
+
+New `StatsRepository` (`server/repositories/stats.ts`, `stats-sqlite.ts`, `stats-dynamodb.ts`) provides read-only access to dashboard (G1–G11) and insights (H1–H6) metrics without SQL in the route files.
+
+`SessionsRepository` extended with two new methods:
+- `listPendingWorkflows()` — DynamoDB: queries `GSI-StatusGlobal` with `gStatus='pending'`.
+- `finalizeRun(id, expectedStatus, patch, statsHint)` — atomically transitions a run to a terminal status AND writes rollup counters in one `TransactWriteItems`. SQLite: delegates to `updateRunConditional` (stats are computed live).
+
+New rollup items in `portal-runs` table:
+```
+RUNSTATS#<projectId>           DAY#<date>                    → doneCount, failedCount, cancelledCount, totalDurationMs, durationCount
+AGENTSTATS#<projectId>         AGENT#<agentName>#DAY#<date>  → runs, doneCount, failedCount, cancelledCount, costUsd, inputTokens, outputTokens, totalDurationMs, durationCount
+```
+
+`server/agent/runner.ts` updated to use `finalizeRun` with `RunFinalizeStats` hints at all three terminal transitions (pending→terminal, running→done, running→failed/cancelled).
+
+`server/dashboard.ts` and `server/insights.ts` are SQL-free: all queries go through `getStatsRepository()`.
+
+**Rollup key design**
+
+- Null `projectId` → `UNSCOPED` bucket key (no leakage between scoped and unscoped runs).
+- Agent names with `#` are replaced by `_` in the AGENTSTATS SK so the `AGENT#<name>#DAY#<date>` pattern remains parseable.
+- AGENTSTATS query uses `begins_with(SK, 'AGENT#')` (not BETWEEN) because agent names (a-z, A-Z) sort lexicographically AFTER `#` (ASCII 35), which would break a BETWEEN upper bound.
+
+**Anti-drift guarantee**
+
+`finalizeRun` uses a single `TransactWriteItemsCommand`:
+1. `UpdateItem` on the run item with `ConditionExpression: #status = :expected` — only one concurrent caller wins.
+2. One or two `UpdateItem` on rollup items (`RUNSTATS`, `AGENTSTATS`) with ADD expressions — initialized to 0 on first write.
+
+If the condition fails (`ConditionalCheckFailed` / `TransactionCanceledException` with reason[0] = `ConditionalCheckFailed`), the function returns `false` and the caller skips the stats write. This ensures each run is counted in exactly one terminal bucket.
+
+**Approximations in DynamoDB mode (documented)**
+
+| Metric | Approximation | Reason |
+|---|---|---|
+| G7 p50/p95 duration | null | Raw duration list not available from rollups |
+| G7 toolCalls/toolErrors | 0 | Not stored in rollups; event queries per run would be prohibitive |
+| G11 provider field | null | Not stored on run record; requires budget_usage lookup per run |
+| G8 agent edges | Bounded by ~200 workflows per project query | GSI-ProjectWorkflows pagination cap |
+| H5 project names | BatchGet from portal-projects (best-effort, fall back to ID) | Cross-table join |
+| H6 cost by user with projectId filter | Ignores project filter | USERSTATS rollups don't encode project scope |
+| H2/H3 source | SQLite: agent_runs (legacy); DynamoDB: p6_runs rollups | DynamoDB rollups only cover P6 runs |
+
+**New rules learned (apply to every remaining module)**
+
+- **AGENTSTATS SK uses `begins_with`, not BETWEEN.** Agent names (printable ASCII) sort after `#` (ASCII 35) so an upper bound like `AGENT##<date>z` would silently exclude all named-agent entries. Always use `begins_with(SK, :prefix)` for SK-prefix scans unless the prefix character is guaranteed to be the lexicographic maximum of all possible values.
+- **`DynamoDB contract tests must be run directly, not via test:affected.`** The affected runner skips modules whose code hash already passed. To run with `DYNAMODB_ENDPOINT` and `REQUIRE_DYNAMODB=1`, invoke `node --disable-warning=ExperimentalWarning --import tsx --test <test-files...>` directly. Do not rely on `test:affected` for DynamoDB contract coverage.
+- **Set repository singletons in DynamoDB-only tests.** When a DynamoDB repository implementation calls `getSessionsRepository()` or `getProjectRepository()` at test time, the singleton may fall back to SQLite (database not opened). Call `setSessionsRepository(ddbRepo)` in `before()` and `clearSessionsRepository()` in `after()` to ensure the correct implementation is used.
+- **`RUNSTATS#UNSCOPED` bucket.** Runs with `project_id = null` are counted in `RUNSTATS#UNSCOPED` and `AGENTSTATS#UNSCOPED`. Read paths that query "all projects" must include `UNSCOPED` in the target list if unscoped runs exist.
+- **stats-sqlite.ts separates tool-call query from agent-stats query.** The tool-call aggregate (JOIN p6_events) is a separate query merged in-app by agent name, same as the original dashboard.ts pattern. This avoids a cross-product JOIN that could be expensive for large event tables.
+
+**Files changed**
+
+| File | Change |
+|---|---|
+| `server/repositories/stats.ts` | NEW — interface + factory |
+| `server/repositories/stats-sqlite.ts` | NEW — SQLite implementation (live SQL) |
+| `server/repositories/stats-dynamodb.ts` | NEW — DynamoDB implementation (rollup reads) |
+| `server/repositories/sessions.ts` | Add `RunFinalizeStats`, `finalizeRun`, `listPendingWorkflows` |
+| `server/repositories/sessions-sqlite.ts` | Implement `finalizeRun` (→ updateRunConditional), `listPendingWorkflows` |
+| `server/repositories/sessions-dynamodb.ts` | Implement `finalizeRun` (TransactWriteItems + rollups), `listPendingWorkflows` |
+| `server/dashboard.ts` | Remove all SQL; use `getStatsRepository()` |
+| `server/insights.ts` | Remove all SQL; use `getStatsRepository()` |
+| `server/agent/runner.ts` | Use `finalizeRun` with `RunFinalizeStats` hint at 3 terminal transitions |
+| `server/index.ts` | Add `initStatsRepository()` at startup |
+| `test/stats-repo.test.ts` | NEW — contract tests (SQLite + DynamoDB Local) |
+| `test/test-map.json` | Add stats sources to dashboard/insights/sessions modules |
+| `package.json` | Add `--module dashboard` to `test:repo-contracts` |
+
+**Test counts**
+
+- Dashboard backend: all pass (including exact toolCalls/toolErrors, p50/p95, projectId scoping)
+- Insights backend: all pass
+- Stats contract (SQLite suite): 9 pass
+- Stats contract (DynamoDB Local, REQUIRE_DYNAMODB=1): 9 pass, 0 skip
+- All other DynamoDB repo contract tests: 158 total pass, 0 skip

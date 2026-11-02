@@ -586,11 +586,40 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       ConditionExpression: 'attribute_not_exists(PK)',
     }));
 
-    // If this is a child workflow, atomically increment the parent's child count.
+    // If this is a child workflow, atomically increment the parent's child count
+    // and write the EDGESTATS edge rollup for the G8 agent-network graph.
     // The repository owns this bookkeeping so every caller gets it automatically —
     // no separate incrementWorkflowChildCount call is needed at the route layer.
     if (input.parent_id) {
       await this.incrementWorkflowChildCount(input.parent_id, 1);
+      // Write edge rollup: fetch parent's lead_agent, then ADD 1 to per-project
+      // and GLOBAL EDGESTATS buckets.  Best-effort — errors here must not fail
+      // the workflow creation (the workflow itself was already persisted above).
+      try {
+        const parent = await this.getWorkflowById(input.parent_id);
+        if (parent) {
+          const sourceAgent = (parent.lead_agent ?? '').trim() || 'default';
+          const targetAgent = (input.lead_agent ?? '').trim() || 'default';
+          const safeSrc = sourceAgent.replace(/#/g, '_');
+          const safeTgt = targetAgent.replace(/#/g, '_');
+          const edgeDate = (input.created_at ?? new Date().toISOString()).slice(0, 10);
+          const edgeSk = `DAY#${edgeDate}#${safeSrc}#${safeTgt}`;
+          const edgeUpdates: Array<{ pk: string }> = [];
+          if (input.project_id) edgeUpdates.push({ pk: `EDGESTATS#${input.project_id}` });
+          edgeUpdates.push({ pk: 'EDGESTATS#GLOBAL' });
+          await Promise.all(edgeUpdates.map(({ pk }) =>
+            this.client.send(new UpdateItemCommand({
+              TableName: runsTable(),
+              Key: marshalItem({ PK: pk, SK: edgeSk }),
+              UpdateExpression: 'ADD #cnt :one',
+              ExpressionAttributeNames: { '#cnt': 'count' },
+              ExpressionAttributeValues: { ':one': { N: '1' } },
+            })),
+          ));
+        }
+      } catch {
+        // Non-fatal: edge rollup is a best-effort stats counter.
+      }
     }
 
     return itemToWorkflow(item);
@@ -1990,9 +2019,179 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     });
     return items.map((item) => itemToWorkflow(item));
   }
+
+  async listPendingWorkflows(): Promise<WorkflowRecord[]> {
+    const items = await paginateQuery(this.client, {
+      TableName: runsTable(),
+      IndexName: 'GSI-StatusGlobal',
+      KeyConditionExpression: '#gs = :pending',
+      ExpressionAttributeNames: { '#gs': 'gStatus' },
+      ExpressionAttributeValues: { ':pending': av('pending') },
+    });
+    return items.map((item) => itemToWorkflow(item));
+  }
+
+  async finalizeRun(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<RunRecord>,
+    statsHint: import('./sessions.ts').RunFinalizeStats,
+  ): Promise<boolean> {
+    // Get the run item to find workflow_id, created_at, and current cost/tokens.
+    const run = await this.getRunById(id);
+    if (!run) return false;
+
+    const allowed: (keyof RunRecord)[] = [
+      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
+      'stop_reason', 'time_limit_at', 'model', 'error',
+    ];
+    const setExprs: string[] = [];
+    const names: Record<string, import('@aws-sdk/client-dynamodb').AttributeValue> = {};
+    const attrNames: Record<string, string> = { '#curSt': 'status' };
+    const vals: Record<string, import('@aws-sdk/client-dynamodb').AttributeValue> = {
+      ':expected': av(expectedStatus),
+    };
+    let i = 0;
+    for (const k of allowed) {
+      if (k in patch && patch[k] !== undefined) {
+        const nk = `#f${i}`;
+        const vk = `:fw${i}`;
+        attrNames[nk] = k;
+        vals[vk] = av(patch[k] as string | number | null);
+        setExprs.push(`${nk} = ${vk}`);
+        i++;
+      }
+    }
+    void names;
+    if (setExprs.length === 0) return false;
+
+    const runSk = `RUN#${run.created_at}#${id}`;
+    const termStatus = patch.status as string | undefined;
+    const isTerminal = termStatus === 'done' || termStatus === 'failed' || termStatus === 'cancelled';
+
+    // Compute duration from run.started_at + patch.finished_at
+    const startedAt = run.started_at ? Date.parse(run.started_at) : null;
+    const finishedAt = patch.finished_at ? Date.parse(patch.finished_at as string) : null;
+    const durationMs = startedAt != null && finishedAt != null && finishedAt > startedAt
+      ? finishedAt - startedAt
+      : null;
+
+    // Cost/tokens from the run item (already updated by the engine before finalization)
+    const costUsd = run.cost_usd || 0;
+    const inputTokens = run.input_tokens || 0;
+    const outputTokens = run.output_tokens || 0;
+
+    type TransactItem = NonNullable<ConstructorParameters<typeof TransactWriteItemsCommand>[0]['TransactItems']>[number];
+    const transactItems: TransactItem[] = [
+      {
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `WF#${run.workflow_id}`, SK: runSk }),
+          UpdateExpression: `SET ${setExprs.join(', ')}`,
+          ConditionExpression: '#curSt = :expected',
+          ExpressionAttributeNames: attrNames,
+          ExpressionAttributeValues: vals,
+        },
+      },
+    ];
+
+    if (isTerminal && termStatus) {
+      const bucket = statsHint.projectId ?? 'UNSCOPED';
+      const date = statsHint.dateUTC;
+      const agentKey = statsHint.agentName || 'default';
+
+      const statusAttr = termStatus === 'done' ? 'doneCount'
+        : termStatus === 'failed' ? 'failedCount'
+        : 'cancelledCount';
+
+      // RUNSTATS rollup (per-project per-day)
+      let rsExpr = `ADD #sc :one`;
+      const rsNames: Record<string, string> = { '#sc': statusAttr };
+      const rsVals: Record<string, import('@aws-sdk/client-dynamodb').AttributeValue> = { ':one': { N: '1' } };
+      if (durationMs != null && durationMs > 0) {
+        rsExpr += ', totalDurationMs :dur, durationCount :one';
+        rsVals[':dur'] = { N: String(Math.round(durationMs)) };
+      }
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `RUNSTATS#${bucket}`, SK: `DAY#${date}` }),
+          UpdateExpression: rsExpr,
+          ExpressionAttributeNames: rsNames,
+          ExpressionAttributeValues: rsVals,
+        },
+      });
+
+      // AGENTSTATS rollup (per-project per-agent per-day)
+      // SK format: DAY#<date>#AGENT#<name>  — date-led so BETWEEN queries are bounded.
+      let asExpr = `ADD #asc :one, runs :one, costUsd :cost, inputTokens :inp, outputTokens :out`;
+      const asNames: Record<string, string> = { '#asc': statusAttr };
+      const asVals: Record<string, import('@aws-sdk/client-dynamodb').AttributeValue> = {
+        ':one': { N: '1' },
+        ':cost': { N: String(costUsd) },
+        ':inp': { N: String(inputTokens) },
+        ':out': { N: String(outputTokens) },
+      };
+      if (durationMs != null && durationMs > 0) {
+        asExpr += ', totalDurationMs :dur, durationCount :one';
+        asVals[':dur'] = { N: String(Math.round(durationMs)) };
+      }
+      // Safely encode agent name in SK (replace '#' with '_' so the date-led SK is unambiguous)
+      const safeAgent = agentKey.replace(/#/g, '_');
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `AGENTSTATS#${bucket}`, SK: `DAY#${date}#AGENT#${safeAgent}` }),
+          UpdateExpression: asExpr,
+          ExpressionAttributeNames: asNames,
+          ExpressionAttributeValues: asVals,
+        },
+      });
+
+      // GLOBAL rollup — also written for every terminal run so admin queries
+      // against RUNSTATS#GLOBAL and AGENTSTATS#GLOBAL return non-zero totals.
+      // (bucket may already be 'GLOBAL' only if projectId was null/UNSCOPED, but
+      //  we always write GLOBAL separately so the admin path always finds data.)
+      if (bucket !== 'GLOBAL') {
+        transactItems.push({
+          Update: {
+            TableName: runsTable(),
+            Key: marshalItem({ PK: 'RUNSTATS#GLOBAL', SK: `DAY#${date}` }),
+            UpdateExpression: rsExpr,
+            ExpressionAttributeNames: rsNames,
+            ExpressionAttributeValues: rsVals,
+          },
+        });
+        transactItems.push({
+          Update: {
+            TableName: runsTable(),
+            Key: marshalItem({ PK: 'AGENTSTATS#GLOBAL', SK: `DAY#${date}#AGENT#${safeAgent}` }),
+            UpdateExpression: asExpr,
+            ExpressionAttributeNames: asNames,
+            ExpressionAttributeValues: asVals,
+          },
+        });
+      }
+    }
+
+    try {
+      await this.client.send(new TransactWriteItemsCommand({ TransactItems: transactItems }));
+      return true;
+    } catch (e: unknown) {
+      const name = (e as { name?: string }).name ?? '';
+      if (name === 'ConditionalCheckFailedException') return false;
+      // TransactionCanceledException: check if the run condition failed (item 0)
+      if (name === 'TransactionCanceledException') {
+        const reasons = (e as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons ?? [];
+        if (reasons[0]?.Code === 'ConditionalCheckFailed') return false;
+      }
+      throw e;
+    }
+  }
 }
 
-// ── Batch delete helper ────────────────────────────────────────────────────────
+
 
 async function batchDelete(
   client: DynamoDBClient,

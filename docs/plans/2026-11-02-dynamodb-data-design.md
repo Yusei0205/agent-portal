@@ -1250,3 +1250,18 @@ At the same single-user usage, Aurora costs approximately $15–20/month (storag
 | OQ-8 | **DynamoDB Local for CI.** The test suite (`npm run test:affected`) runs against an in-memory SQLite database today. Running the DynamoDB suite in CI requires either DynamoDB Local (Docker container) or a dedicated AWS test account. Which is preferred? DynamoDB Local is free and offline; a real account is more faithful but requires IAM setup and incurs small costs. | CI / `testing-affected` rule | Before phase 6.1 |
 | OQ-9 | **Global event log (`p6_events`)** ordering across multiple Lambda invocations. SQLite's `AUTOINCREMENT` gives a total order within one process. In DynamoDB, `seq` must be assigned atomically per run. Options: (a) monotonic counter item per run (atomic ADD), (b) timestamp + UUID with the UI deduplicating by time, (c) an SQS FIFO queue that sequences events before writing to DynamoDB. Option (a) is simplest; confirm it is acceptable for replay fidelity. | `portal-events` schema | Before phase 6.4 |
 | OQ-10 | **Multi-project dashboard (admin).** `buildScope` in `server/dashboard.ts` can include all projects (admin mode). With DynamoDB, querying `GSI-ProjectWorkflows` for every project in a single page load may cause excessive read units. Is the admin dashboard used frequently enough to justify a pre-aggregated `PORTAL_STATS` item maintained on every run state transition? | Dashboard architecture | Before phase 6.7 |
+
+
+---
+
+## 9. DynamoDB mode approximations
+
+The following metrics return values that differ from the SQLite implementation or are not fully equivalent. Each is a deliberate tradeoff between query cost and accuracy, documented here so product teams can make informed decisions before disabling SQLite fallback.
+
+| Metric | What DynamoDB returns | What SQLite returns | Impact | Fix path |
+|---|---|---|---|---|
+| **G7 p50/p95 duration** | `null` | Exact percentiles from raw run durations | P50/P95 not shown in agent table | Store individual durations in a separate rollup or approximate with DDSketch |
+| **G7 toolCalls / toolErrors** | `0` | Exact counts from p6_events | Tool column blank in agent table | Add per-run counters to AGENTSTATS rollup when appending tool-start/blocked events |
+| **G11 provider** | `null` | Latest provider from budget_usage | Provider column blank in drill-down | Store provider on the run record at finalization |
+| **H6 project filter** | Ignored (USERSTATS keyed by userId only) | Respected (budget_usage has project_id) | Cost-by-user always shows global totals even when projectId is supplied | Key USERSTATS by `projectId#userId` and maintain a separate USERSTATS#GLOBAL#<userId> |
+| **H5/H6 project and user names** | BatchGet from portal-projects / portal-users (O(projects) + O(users) per request) | Single SQL JOIN | Extra read latency at team scale | Cache project/user names in a lightweight resolver with short TTL |

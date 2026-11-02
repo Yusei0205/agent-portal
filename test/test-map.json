@@ -142,6 +142,9 @@
         "server/repositories/sessions.ts",
         "server/repositories/sessions-sqlite.ts",
         "server/repositories/sessions-dynamodb.ts",
+        "server/repositories/stats.ts",
+        "server/repositories/stats-sqlite.ts",
+        "server/repositories/stats-dynamodb.ts",
         "web/src/pages/sessions/SessionList.jsx",
         "web/src/pages/sessions/SessionLive.jsx",
         "web/src/pages/sessions/SessionsShell.jsx",
@@ -225,11 +228,15 @@
       "description": "Agent performance dashboard KPIs and drill-downs",
       "sources": [
         "server/dashboard.ts",
+        "server/repositories/stats.ts",
+        "server/repositories/stats-sqlite.ts",
+        "server/repositories/stats-dynamodb.ts",
         "web/src/pages/Dashboard.jsx",
         "web/src/styles/dashboard.css"
       ],
       "tests": [
-        "test/dashboard.test.ts"
+        "test/dashboard.test.ts",
+        "test/stats-repo.test.ts"
       ],
       "smokeIds": ["dashboard"]
     },
@@ -335,6 +342,9 @@
       "description": "Session and cost insights analytics",
       "sources": [
         "server/insights.ts",
+        "server/repositories/stats.ts",
+        "server/repositories/stats-sqlite.ts",
+        "server/repositories/stats-dynamodb.ts",
         "web/src/pages/Insights.jsx"
       ],
       "tests": [

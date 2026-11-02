@@ -925,6 +925,31 @@ describe('GET /api/dashboard – summary live counts', () => {
     const summary = (r.body as Record<string, unknown>).summary as Record<string, unknown>;
     assert.equal(Number(summary.activeAgents), 1, 'only live-agent-one has a running run');
   });
+
+  test('network node running flag is true for agent with a running run', async () => {
+    const projRunning = seedProject('Network Running Flag Proj');
+
+    // Seed a workflow for the agent and a running run
+    const wfRun = seedWorkflowWithStatus(projRunning, 'running-network-agent', 'running');
+    seedRunFor(wfRun, 'running');
+    // Also seed a terminal run for a different agent to confirm non-running flag is false
+    const wfDone = seedWorkflowWithStatus(projRunning, 'done-network-agent', 'done');
+    seedRunFor(wfDone, 'done');
+
+    const r = await fetchJson(baseUrl, `/api/dashboard?projectId=${projRunning}`, { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    const nodes = ((r.body as Record<string, unknown>).network as Record<string, unknown>)
+      .nodes as Array<Record<string, unknown>>;
+
+    const runningNode = nodes.find((n) => n.id === 'running-network-agent');
+    assert.ok(runningNode, 'running-network-agent must appear as a network node');
+    assert.equal(runningNode!.running, true, 'running flag must be true for agent with running run');
+
+    const doneNode = nodes.find((n) => n.id === 'done-network-agent');
+    if (doneNode) {
+      assert.equal(doneNode.running, false, 'running flag must be false for agent with no running run');
+    }
+  });
 });
 
 // ── Tests: SSE notifications ──────────────────────────────────────────────────

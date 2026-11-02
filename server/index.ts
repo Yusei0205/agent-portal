@@ -124,6 +124,10 @@ export async function startServer(
   const { initBudgetRepository } = await import('./repositories/budget.ts');
   await initBudgetRepository();
 
+  // 6e. Initialise stats repository (dashboard G1–G11 + insights H1–H6 reads)
+  const { initStatsRepository } = await import('./repositories/stats.ts');
+  await initStatsRepository();
+
   // 7. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)
   const { setPreRequestHook } = await import('./http.ts');

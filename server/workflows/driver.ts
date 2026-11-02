@@ -9,6 +9,7 @@ import { emit } from '../events.ts';
 import { activeRunCount, abortAllRuns } from './controls.ts';
 import { executeRun } from '../agent/runner.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import type { RunFinalizeStats } from '../repositories/sessions.ts';
 
 // ── Before-close hook ─────────────────────────────────────────────────────────
 // Abort all active runs when the database is closed so background executeRun
@@ -85,11 +86,17 @@ export async function startRun(workflowId: string): Promise<string> {
 
   if (!claimed) {
     // Another caller transitioned the workflow before us.
-    // Cancel our orphaned pending run so getActiveRun finds the winner's run.
-    await repo.updateRunConditional(runId, 'pending', {
+    // Cancel our orphaned pending run via finalizeRun so it is counted in DynamoDB rollups.
+    const cancelTs = now();
+    const cancelHint: RunFinalizeStats = {
+      dateUTC: cancelTs.slice(0, 10),
+      projectId: workflow.project_id ?? null,
+      agentName: (workflow.lead_agent ?? '').trim() || 'default',
+    };
+    await repo.finalizeRun(runId, 'pending', {
       status: 'cancelled',
-      finished_at: now(),
-    });
+      finished_at: cancelTs,
+    }, cancelHint);
     const conflictRun = await repo.getActiveRun(workflowId);
     if (conflictRun) return conflictRun.id;
     // Workflow moved to a terminal state between our read and write.
@@ -106,10 +113,14 @@ export async function startRun(workflowId: string): Promise<string> {
   // Spawn the run in the background (fire-and-forget)
   executeRun(runId, workflowId).catch((e: unknown) => {
     console.error(`[driver] Unhandled error in run ${runId}:`, e);
-    // Best-effort: mark the run failed using conditional to avoid clobbering
-    // a stop that may have already set the run terminal.
+    // Best-effort: mark the run failed via finalizeRun so rollups are updated.
     const errTs = now();
-    repo.updateRunConditional(runId, 'running', { status: 'failed', finished_at: errTs }).catch(() => {});
+    const errHint: RunFinalizeStats = {
+      dateUTC: errTs.slice(0, 10),
+      projectId: workflow.project_id ?? null,
+      agentName: (workflow.lead_agent ?? '').trim() || 'default',
+    };
+    repo.finalizeRun(runId, 'running', { status: 'failed', finished_at: errTs }, errHint).catch(() => {});
     repo.updateWorkflowConditional(workflowId, 'running', { status: 'failed', updated_at: errTs }).catch(() => {});
     if (workflow.project_id) {
       emit(workflow.project_id, { type: 'run.updated', workflowId, runId, status: 'failed' });

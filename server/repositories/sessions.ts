@@ -242,6 +242,24 @@ export interface RunTotals {
   total_output: number;
 }
 
+// ── Run finalization stats hint ───────────────────────────────────────────────
+
+/**
+ * Hint passed to finalizeRun() so the implementation can write per-project
+ * and per-agent stats rollups atomically with the run status transition.
+ *
+ * DynamoDB: bundled in the same TransactWriteItems as the run UpdateItem.
+ * SQLite:   ignored — stats are computed from live queries.
+ */
+export interface RunFinalizeStats {
+  /** UTC date (YYYY-MM-DD) for the rollup bucket, e.g. now().slice(0, 10). */
+  dateUTC: string;
+  /** Project ID for RUNSTATS and AGENTSTATS rollup keys. Null → 'UNSCOPED'. */
+  projectId: string | null;
+  /** Normalized agent name for AGENTSTATS key ('default' for null/empty). */
+  agentName: string;
+}
+
 // ── Repository interface ───────────────────────────────────────────────────────
 
 export interface SessionsRepository {
@@ -657,6 +675,36 @@ export interface SessionsRepository {
    *   (clearing childIdleCandidate) once child-idle-stopped prevents re-selection.
    */
   listTerminalChildWorkflows(cutoff: string): Promise<WorkflowRecord[]>;
+
+  /**
+   * List all workflows with status='pending'.
+   * Used by the dashboard queued-session count (G3).
+   * DynamoDB: queries GSI-StatusGlobal with gStatus='pending'.
+   */
+  listPendingWorkflows(): Promise<WorkflowRecord[]>;
+
+  /**
+   * Terminal run finalization: atomically transitions run status AND writes
+   * per-project and per-agent stats rollup counters (RUNSTATS#*, AGENTSTATS#*).
+   *
+   * The statsHint supplies the project/agent context for rollup keys.  The
+   * DynamoDB implementation derives cost/duration from the run item it already
+   * fetches (to get workflow_id), so no extra GetItem is needed.
+   *
+   * DynamoDB: single TransactWriteItems — run UpdateItem (conditional) +
+   *           RUNSTATS UpdateItem (ADD counters) +
+   *           AGENTSTATS UpdateItem (ADD counters).
+   * SQLite:   equivalent to updateRunConditional (stats computed from live SQL).
+   *
+   * Returns true when the transition applied (status matched), false on lost race.
+   * Only call with a terminal patch.status ('done' | 'failed' | 'cancelled').
+   */
+  finalizeRun(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<RunRecord>,
+    statsHint: RunFinalizeStats,
+  ): Promise<boolean>;
 }
 
 // ── Singleton ─────────────────────────────────────────────────────────────────

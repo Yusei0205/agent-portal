@@ -866,4 +866,19 @@ export class SqliteSessionsRepository implements SessionsRepository {
     );
     return rows.map(toWorkflow);
   }
+
+  async listPendingWorkflows(): Promise<WorkflowRecord[]> {
+    const rows = all<Row>("SELECT * FROM p6_workflows WHERE status = 'pending'");
+    return rows.map(toWorkflow);
+  }
+
+  async finalizeRun(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<RunRecord>,
+    _statsHint: import('./sessions.ts').RunFinalizeStats,
+  ): Promise<boolean> {
+    // SQLite: stats are computed from live queries — just delegate to updateRunConditional.
+    return this.updateRunConditional(id, expectedStatus, patch);
+  }
 }
