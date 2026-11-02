@@ -787,3 +787,16 @@ describe('saveRefreshedTokenConditional — conditional write', () => {
     assert.equal(rt, 'new-refresh-token');
   });
 });
+
+describe('deviceUrlWithCode', () => {
+  it('puts the code in the Identity Center device link so it works when already signed in', async () => {
+    const { deviceUrlWithCode } = await import('../server/agent/kiro-agentcore.ts');
+    assert.equal(
+      deviceUrlWithCode('https://d-906665ee1d.awsapps.com/start', 'HMMX-MJRW'),
+      'https://d-906665ee1d.awsapps.com/start/#/device?user_code=HMMX-MJRW',
+    );
+    assert.equal(deviceUrlWithCode('https://d-1.awsapps.com/start/', 'AB-CD'), 'https://d-1.awsapps.com/start/#/device?user_code=AB-CD');
+    const full = 'https://d-1.awsapps.com/start/#/device?user_code=AB-CD';
+    assert.equal(deviceUrlWithCode(full, 'AB-CD'), full);
+  });
+});

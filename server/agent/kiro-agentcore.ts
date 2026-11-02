@@ -592,8 +592,20 @@ export async function runKiroViaAgentCore(
 
 // ── AgentCore login path ───────────────────────────────────────────────────────
 
+/**
+ * The sign-in link with the code already in it. Opening the bare /start page while signed in to IAM Identity Center
+ * just shows the app portal and never asks for the code; the device page takes it from the URL instead.
+ */
+export function deviceUrlWithCode(verificationUri: string, userCode: string): string {
+  if (/user_code=/i.test(verificationUri)) return verificationUri;
+  const base = verificationUri.replace(/#.*$/, '').replace(/\/+$/, '');
+  return `${base}/#/device?user_code=${encodeURIComponent(userCode)}`;
+}
+
 export interface AgentCoreLoginChallenge {
   verificationUri: string;
+  /** Same link with the code filled in; use this one for the clickable link. */
+  verificationUriComplete?: string;
   userCode: string;
   expiresIn: number;
   interval: number;
@@ -674,6 +686,7 @@ export async function startAgentCoreLogin(
               challengeResolved = true;
               resolve({
                 verificationUri: vEv.verificationUri,
+                verificationUriComplete: deviceUrlWithCode(vEv.verificationUri, vEv.userCode),
                 userCode: vEv.userCode,
                 expiresIn: 900,
                 interval: 5,

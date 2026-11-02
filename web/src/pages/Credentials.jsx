@@ -380,7 +380,7 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
               </p>
               <div className="device-code-url">
                 <a
-                  href={deviceChallenge.verificationUri}
+                  href={deviceChallenge.verificationUriComplete || deviceChallenge.verificationUri}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

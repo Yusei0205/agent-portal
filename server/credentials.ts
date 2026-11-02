@@ -905,6 +905,7 @@ export function registerCredentialRoutes(): void {
           };
           deviceChallenge = {
             verificationUri: challenge.verificationUri,
+            verificationUriComplete: challenge.verificationUriComplete,
             userCode: challenge.userCode,
             expiresIn: challenge.expiresIn,
             interval: challenge.interval,
@@ -1315,6 +1316,7 @@ export function registerCredentialRoutes(): void {
           credential: reauthAcUpdated ? credView(reauthAcUpdated) : null,
           deviceChallenge: {
             verificationUri: challenge.verificationUri,
+            verificationUriComplete: challenge.verificationUriComplete,
             userCode: challenge.userCode,
             expiresIn: challenge.expiresIn,
             interval: challenge.interval,
