@@ -12,7 +12,10 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { SpawnOptions, ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
@@ -23,6 +26,19 @@ import {
   hasExcelCapability,
   hasPptxCapability,
 } from './docs-pack.ts';
+import {
+  packDir,
+  mcpPrefix,
+  mcpEntry,
+  shapeIndexFile,
+  manifestFile,
+  rendererDir,
+  DRAWIO_PIN,
+  RENDERER_FILES,
+  IMAGE_LIBS,
+  type PackManifest,
+  drawioPackState,
+} from './drawio-pack.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -59,12 +75,125 @@ function getInstallJob(packId: string): InstallJob | null {
   return installJobs.get(packId) ?? null;
 }
 
+// ── Spawn indirection (replaceable in tests) ──────────────────────────────────
+
+type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess;
+let _spawnImpl: SpawnFn = spawn as SpawnFn;
+
+/**
+ * Replace the spawn implementation used by all installers.
+ * Pass null to restore the real spawn.
+ * For use in tests only — do NOT call in production code.
+ */
+export function _setSpawnForTest(fn: SpawnFn | null): void {
+  _spawnImpl = fn ?? (spawn as SpawnFn);
+}
+
+// ── Fetch indirection (replaceable in tests) ─────────────────────────────────
+
+type FetchFn = typeof fetch;
+let _fetchImpl: FetchFn = fetch;
+
+/**
+ * Replace the fetch implementation used by all HTTP downloaders.
+ * Pass null to restore the real fetch.
+ * For use in tests only — do NOT call in production code.
+ */
+export function _setFetchForTest(fn: FetchFn | null): void {
+  _fetchImpl = fn ?? fetch;
+}
+
+// ── SHA-256 overrides (replaceable in tests) ──────────────────────────────────
+//
+// The production installer verifies downloads against the hashes pinned in
+// DRAWIO_PIN / RENDERER_FILES.  Tests that need a "full success" path would
+// otherwise have to produce content that pre-image-attacks those hashes.
+// Instead, tests can supply their own fake content and override the expected
+// hashes here so that downloadAndVerify() accepts the fake content.
+
+let _testIndexSha256: string | null = null;
+let _testRendererShas: Map<string, string> | null = null;
+
+/**
+ * Override the expected SHA-256 values used during draw.io installation.
+ * indexSha overrides DRAWIO_PIN.indexSha256;
+ * rendererShas is a map of { [fileName]: sha256 } overriding each renderer file's hash.
+ * Pass null for either to clear the override.
+ * For use in tests only.
+ */
+export function _setDrawioHashesForTest(
+  indexSha: string | null,
+  rendererShas: Record<string, string> | null,
+): void {
+  _testIndexSha256 = indexSha;
+  _testRendererShas = rendererShas ? new Map(Object.entries(rendererShas)) : null;
+}
+
+function getIndexSha256(): string {
+  return _testIndexSha256 ?? DRAWIO_PIN.indexSha256;
+}
+
+function getRendererFileSha256(fileName: string, defaultSha: string): string {
+  return _testRendererShas?.get(fileName) ?? defaultSha;
+}
+
+// ── Platform helper (overrideable in tests) ───────────────────────────────────
+
+let _platformOverride: string | null = null;
+
+/**
+ * Override the detected platform.
+ * Pass null to restore the real platform.
+ * For use in tests only.
+ */
+export function _setPlatformForTest(platform: string | null): void {
+  _platformOverride = platform;
+}
+
+const currentPlatform = (): string => _platformOverride ?? process.platform;
+
 // ── Detection helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve the actual executable and argument list for the current platform.
+ *
+ * On Windows:
+ *  - 'powershell' → 'powershell.exe' directly (it is a real .exe, no wrapper needed).
+ *  - All other commands → 'cmd.exe' /d /c <cmd>.cmd [args...]
+ *    .cmd scripts cannot be spawned directly with shell:false on current Node versions
+ *    (EINVAL); cmd.exe /d /c is the safe wrapper.  /d disables AutoRun registry entries
+ *    which prevents injection through the registry.  All arguments are fixed strings from
+ *    the installer, never user-supplied input.
+ *  - Commands already ending in .cmd or .exe are used as-is inside the cmd.exe wrapper.
+ *
+ * On non-Windows: command and args are returned unchanged.
+ *
+ * The original `cmd` is preserved for use in error messages so that errors say
+ * '"npm" failed' rather than '"cmd.exe" failed'.
+ */
+function resolveSpawnArgs(
+  cmd: string,
+  args: string[],
+): { spawnCmd: string; spawnArgs: string[] } {
+  if (currentPlatform() !== 'win32') {
+    return { spawnCmd: cmd, spawnArgs: args };
+  }
+  // powershell.exe is a real executable; no cmd.exe wrapper needed.
+  if (cmd === 'powershell') {
+    return { spawnCmd: 'powershell.exe', spawnArgs: args };
+  }
+  // All other Windows commands: wrap with cmd.exe.
+  // If the caller already passed 'npm.cmd', use it as-is; bare names get .cmd appended.
+  const resolved =
+    cmd.endsWith('.cmd') || cmd.endsWith('.exe') ? cmd : `${cmd}.cmd`;
+  return { spawnCmd: 'cmd.exe', spawnArgs: ['/d', '/c', resolved, ...args] };
+}
 
 function spawnCheck(cmd: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
     try {
-      const child = spawn(cmd, args, { stdio: 'ignore', shell: false });
+      const { spawnCmd, spawnArgs } = resolveSpawnArgs(cmd, args);
+      const child = _spawnImpl(spawnCmd, spawnArgs, { stdio: 'ignore', shell: false });
       child.on('error', () => resolve(false));
       child.on('close', (code) => resolve(code === 0));
       // Timeout after 5 seconds
@@ -105,11 +234,11 @@ async function detectBrowser(): Promise<'available' | 'not-available'> {
   return ok ? 'available' : 'not-available';
 }
 
-async function detectDrawio(): Promise<'available' | 'not-available'> {
-  const dir = process.env.ICON_DIAGRAMS_DIR;
-  if (!dir) return 'not-available';
-  const pkgFile = path.join(dir, 'package.json');
-  return fs.existsSync(pkgFile) ? 'available' : 'not-available';
+function detectDrawio(): 'available' | 'not-available' {
+  // Use drawioPackState() so that detectDrawio() and the post-install state check
+  // agree on what "available" means: MCP entry, shape index, AND all renderer files.
+  const { tool, renderer } = drawioPackState();
+  return tool.ok && renderer.ok ? 'available' : 'not-available';
 }
 
 function detectDocs(): 'available' | 'not-available' {
@@ -149,16 +278,16 @@ export async function getToolPacks(): Promise<ToolPack[]> {
     return _cache.packs;
   }
 
-  const [uvStatus, kiroStatus, browserStatus, drawioStatus, headroomStatus] =
+  const [uvStatus, kiroStatus, browserStatus, headroomStatus] =
     await Promise.all([
       detectUv(),
       detectKiro(),
       detectBrowser(),
-      detectDrawio(),
       detectHeadroom(),
     ]);
 
   const docsStatus = detectDocs();
+  const drawioStatus = detectDrawio();
 
   // Overlay 'installing' status from active jobs
   const jobStatus = (id: string): 'installing' | null => {
@@ -257,7 +386,8 @@ async function runInstall(job: InstallJob): Promise<void> {
   } catch (e: unknown) {
     job.status = 'failed';
     job.finishedAt = now();
-    job.error = String((e as Error)?.message ?? e).slice(0, 500);
+    // Do NOT truncate: the full message is what the UI shows.
+    job.error = String((e as Error)?.message ?? e);
     addLogLine(job, `Error: ${job.error}`);
   } finally {
     clearPackCache();
@@ -271,6 +401,26 @@ async function runInstall(job: InstallJob): Promise<void> {
   }
 }
 
+/**
+ * Run an install job synchronously for tests.
+ * Creates and runs a job; returns it once settled (status 'done' or 'failed').
+ * For use in tests only.
+ */
+export async function _runInstallJobForTest(packId: string): Promise<InstallJob> {
+  const job: InstallJob = {
+    id: generateId(),
+    packId,
+    status: 'pending',
+    log: [],
+    startedAt: now(),
+    finishedAt: null,
+    error: null,
+    subscribers: new Set(),
+  };
+  await runInstall(job);
+  return job;
+}
+
 async function spawnWithLog(
   job: InstallJob,
   cmd: string,
@@ -278,79 +428,365 @@ async function spawnWithLog(
   opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const isWindows = process.platform === 'win32';
-    const actualCmd = isWindows && !cmd.endsWith('.cmd') ? `${cmd}.cmd` : cmd;
+    const { spawnCmd, spawnArgs } = resolveSpawnArgs(cmd, args);
 
-    const child = spawn(actualCmd, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: isWindows,
-      env: opts.env ?? process.env,
-      cwd: opts.cwd,
-    });
+    let child: ChildProcess;
+    try {
+      child = _spawnImpl(spawnCmd, spawnArgs, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+        env: opts.env ?? process.env,
+        cwd: opts.cwd,
+      });
+    } catch (e) {
+      // Synchronous throw from spawn itself (e.g. bad options) — rare but handle it.
+      // Use the original `cmd` in the message (not spawnCmd) so the error is human-readable.
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
+        reject(new Error(`Command not found: "${cmd}". Ensure it is installed and available on the PATH.`));
+      } else {
+        reject(new Error(`Failed to start "${cmd}": ${err.message}`));
+      }
+      return;
+    }
+
+    // Collect stderr lines so we can include them in the exit-code error message.
+    const stderrLines: string[] = [];
 
     child.stdout?.on('data', (chunk: Buffer) => {
       addLogLine(job, chunk.toString('utf8').trim());
     });
     child.stderr?.on('data', (chunk: Buffer) => {
-      addLogLine(job, chunk.toString('utf8').trim());
+      const text = chunk.toString('utf8').trim();
+      if (text) {
+        addLogLine(job, text);
+        // Keep the last 20 stderr lines for error context; avoids unbounded growth.
+        stderrLines.push(text);
+        if (stderrLines.length > 20) stderrLines.shift();
+      }
     });
-    child.on('error', (e) => reject(e));
-    child.on('close', (code) => {
+    child.on('error', (e) => {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
+        reject(new Error(`Command not found: "${cmd}". Ensure it is installed and available on the PATH.`));
+      } else {
+        reject(new Error(`Failed to start "${cmd}": ${err.message}`));
+      }
+    });
+    child.on('close', (code, signal) => {
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`Process exited with code ${code}`));
+        const exitInfo = signal ? `killed by signal ${signal}` : `exit code ${code}`;
+        const hint = stderrLines.length
+          ? `\nRelevant output:\n  ${stderrLines.slice(-5).join('\n  ')}`
+          : '';
+        reject(new Error(`"${cmd}" failed (${exitInfo}).${hint}`));
       }
     });
   });
 }
 
+// ── HTTP download helpers ─────────────────────────────────────────────────────
+
+/**
+ * Download a URL to a Buffer.
+ * Throws with a descriptive error on HTTP error or network failure, naming the
+ * file, URL, and reason — never fails silently.
+ */
+async function downloadToBuffer(url: string, displayName: string): Promise<Buffer> {
+  let res: Response;
+  try {
+    res = await _fetchImpl(url, { signal: AbortSignal.timeout(120_000) });
+  } catch (e: unknown) {
+    const msg = (e as Error)?.message ?? String(e);
+    throw new Error(
+      `Cannot download ${displayName} from ${url}: network error — ${msg}. ` +
+      `Ensure the container has outbound internet access (ports 80 and 443).`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Cannot download ${displayName} from ${url}: HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}.`,
+    );
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Download a file to a temp path, verify its SHA-256, then atomically rename it into place.
+ * Throws on network/HTTP error, checksum mismatch, or write failure — never skips silently.
+ */
+async function downloadAndVerify(
+  url: string,
+  destPath: string,
+  expectedSha256: string,
+  displayName: string,
+): Promise<void> {
+  const buf = await downloadToBuffer(url, displayName);
+  const actual = createHash('sha256').update(buf).digest('hex');
+  if (actual !== expectedSha256) {
+    throw new Error(
+      `Checksum mismatch for ${displayName} (from ${url}):\n` +
+      `  expected: ${expectedSha256}\n` +
+      `  actual:   ${actual}\n` +
+      `The pinned hash in DRAWIO_PIN may need updating.`,
+    );
+  }
+  const tmp = `${destPath}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, destPath);
+  } catch (e: unknown) {
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    throw new Error(
+      `Failed to write ${displayName} to ${destPath}: ${(e as Error)?.message ?? String(e)}`,
+    );
+  }
+}
+
 async function installUv(job: InstallJob): Promise<void> {
-  addLogLine(job, 'Downloading and installing uv via installer script…');
-  // On Linux/Mac, use the official installer
-  if (process.platform === 'win32') {
+  addLogLine(job, 'Downloading and installing uv…');
+  if (currentPlatform() === 'win32') {
     addLogLine(job, 'Downloading uv for Windows via PowerShell…');
     await spawnWithLog(job, 'powershell', [
       '-Command',
       'irm https://astral.sh/uv/install.ps1 | iex',
     ]);
   } else {
-    addLogLine(job, 'Downloading uv for Linux/macOS…');
-    await spawnWithLog(job, 'sh', ['-c', 'curl -LsSf https://astral.sh/uv/install.sh | sh']);
+    // Pre-flight: verify curl is available before trying to use it.
+    const hasCurl = await spawnCheck('curl', ['--version']);
+    if (!hasCurl) {
+      throw new Error(
+        'curl is not installed in this image. Cannot download the uv installer. ' +
+        'Add curl to the container image (e.g. apt-get install -y curl) or install uv another way.',
+      );
+    }
+
+    // Download the installer to a temp file, then run it as a separate step.
+    // This avoids the pipeline-exit-code problem: `curl … | sh` exits with sh's
+    // code even when curl failed, so a download failure is silently ignored.
+    const tmpScript = path.join(os.tmpdir(), `uv-install-${Date.now()}.sh`);
+    addLogLine(job, 'Downloading uv installer script…');
+    try {
+      await spawnWithLog(job, 'curl', ['-LsSf', 'https://astral.sh/uv/install.sh', '-o', tmpScript]);
+      addLogLine(job, 'Running uv installer…');
+      await spawnWithLog(job, 'sh', [tmpScript]);
+    } finally {
+      try { fs.unlinkSync(tmpScript); } catch { /* best-effort cleanup */ }
+    }
   }
-  addLogLine(job, 'uv installed successfully.');
+
+  // Verify: confirm the binary was written where the installer is expected to put it.
+  const uvBin = path.join(process.env.HOME ?? '/root', '.local', 'bin', 'uvx');
+  const verified = fs.existsSync(uvBin) || await spawnCheck('uvx', ['--version']);
+  if (!verified) {
+    throw new Error(
+      `uv was not found after installation. Expected binary at ${uvBin}. ` +
+      `The installer may have put it in a different location — check the log above.`,
+    );
+  }
+  addLogLine(job, `uv verified (${uvBin}).`);
 }
 
 async function installKiro(job: InstallJob): Promise<void> {
   addLogLine(job, 'Downloading Kiro CLI installer…');
-  if (process.platform === 'win32') {
-    addLogLine(job, 'Download kiro-cli for Windows from https://kiro.dev/downloads');
+  if (currentPlatform() === 'win32') {
     throw new Error('Kiro CLI Windows install must be done manually. See https://kiro.dev/downloads');
   }
-  await spawnWithLog(job, 'sh', ['-c', 'curl -LsSf https://cli.kiro.dev/install | sh']);
-  addLogLine(job, 'Kiro CLI installed. Run: kiro-cli login --use-device-flow');
-}
 
-async function installDrawio(job: InstallJob): Promise<void> {
-  addLogLine(job, 'Installing draw.io MCP server via npm…');
-  const dir = process.env.ICON_DIAGRAMS_DIR ?? './data/tools/icon-diagrams';
-  fs.mkdirSync(dir, { recursive: true });
-
-  // Write a package.json placeholder
-  const pkgPath = path.join(dir, 'package.json');
-  if (!fs.existsSync(pkgPath)) {
-    fs.writeFileSync(
-      pkgPath,
-      JSON.stringify({ name: 'icon-diagrams-host', private: true, version: '0.0.0' }),
+  // Pre-flight: verify curl is available.
+  const hasCurl = await spawnCheck('curl', ['--version']);
+  if (!hasCurl) {
+    throw new Error(
+      'curl is not installed in this image. Cannot download the Kiro CLI installer. ' +
+      'Add curl to the container image (e.g. apt-get install -y curl).',
     );
   }
 
+  // Download to a temp file first (avoids hidden pipeline failures).
+  const tmpScript = path.join(os.tmpdir(), `kiro-install-${Date.now()}.sh`);
+  try {
+    await spawnWithLog(job, 'curl', ['-LsSf', 'https://cli.kiro.dev/install', '-o', tmpScript]);
+    addLogLine(job, 'Running Kiro CLI installer…');
+    await spawnWithLog(job, 'sh', [tmpScript]);
+  } finally {
+    try { fs.unlinkSync(tmpScript); } catch { /* best-effort cleanup */ }
+  }
+
+  // Verify: check the binary was installed.
+  const kiroBin = path.join(process.env.HOME ?? '/root', '.local', 'bin', 'kiro-cli');
+  const verified = fs.existsSync(kiroBin) || await spawnCheck('kiro-cli', ['--version']);
+  if (!verified) {
+    throw new Error(
+      `kiro-cli was not found after installation. Expected binary at ${kiroBin}. ` +
+      `The installer may have put it in a different location — check the log above.`,
+    );
+  }
+  addLogLine(job, `Kiro CLI verified (${kiroBin}). Run: kiro-cli login --use-device-flow`);
+}
+
+async function installDrawio(job: InstallJob): Promise<void> {
+  // Use the canonical location that the rest of the server reads from (packDir() →
+  // ICON_DIAGRAMS_DIR or dataPath('tools','icon-diagrams')). The old code used a
+  // relative './data/tools/icon-diagrams' fallback which resolves against the process
+  // working directory — not the data volume — making the installed files invisible to
+  // detection and unusable by the non-root runtime user.
+  const mcpDir = mcpPrefix();  // e.g. /data/tools/icon-diagrams/mcp
+  const baseDir = packDir();   // e.g. /data/tools/icon-diagrams
+  const renDir = rendererDir(); // e.g. /data/tools/icon-diagrams/renderer
+
+  addLogLine(job, `Installing draw.io pack to ${baseDir}…`);
+
+  // ── Step 1: Ensure required directories are writable ─────────────────────
+  for (const dir of [mcpDir, renDir]) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (e: unknown) {
+      const msg = (e as Error)?.message ?? String(e);
+      throw new Error(
+        `Cannot create directory ${dir}: ${msg}. ` +
+        `Ensure ${baseDir} is writable by the current user (uid ${process.getuid?.() ?? 'unknown'}).`,
+      );
+    }
+    // Double-check write access even if mkdirSync succeeds on an existing read-only dir.
+    try {
+      fs.accessSync(dir, fs.constants.W_OK);
+    } catch {
+      throw new Error(
+        `Directory ${dir} is not writable by the current user (uid ${process.getuid?.() ?? 'unknown'}). ` +
+        `Check the permissions on ${baseDir}.`,
+      );
+    }
+  }
+
+  // ── Step 2: Install the @drawio/mcp npm package ───────────────────────────
+  const hasNpm = await spawnCheck('npm', ['--version']);
+  if (!hasNpm) {
+    throw new Error(`npm is not available on the PATH. Cannot install ${DRAWIO_PIN.mcpPackage}.`);
+  }
+
+  addLogLine(job, `Installing ${DRAWIO_PIN.mcpPackage}@${DRAWIO_PIN.mcpVersion} via npm…`);
   await spawnWithLog(
     job,
-    process.platform === 'win32' ? 'npm.cmd' : 'npm',
-    ['install', '--prefix', dir, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '@drawio/mcp'],
+    'npm',
+    [
+      'install',
+      '--prefix', mcpDir,
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      '--save-exact',
+      `${DRAWIO_PIN.mcpPackage}@${DRAWIO_PIN.mcpVersion}`,
+    ],
   );
-  addLogLine(job, 'draw.io MCP server installed.');
+
+  // Verify: confirm the entry point the server uses was actually created.
+  const entry = mcpEntry();
+  if (!fs.existsSync(entry)) {
+    throw new Error(
+      `npm install ran but the expected entry point was not created: ${entry}. ` +
+      `The installation may be incomplete — check the log above.`,
+    );
+  }
+  addLogLine(job, `MCP server installed at ${entry}.`);
+
+  // ── Step 3: Download shape-index.json (SHA-256 verified) ─────────────────
+  // The package does not ship this file; it normally downloads it from a CDN on first
+  // use.  We pin a specific commit so the server never needs network at run time.
+  const shapeIndexUrl =
+    `https://raw.githubusercontent.com/jgraph/drawio-mcp/${DRAWIO_PIN.indexCommit}/shape-search/search-index.json`;
+  addLogLine(job, `Downloading shape index from commit ${DRAWIO_PIN.indexCommit.slice(0, 8)}…`);
+  await downloadAndVerify(
+    shapeIndexUrl,
+    shapeIndexFile(),
+    getIndexSha256(),
+    'shape-index.json',
+  );
+  addLogLine(job, `Shape index verified (sha256 OK).`);
+
+  // ── Step 4: Download renderer files (SHA-256 verified) ───────────────────
+  const viewerBase =
+    `https://raw.githubusercontent.com/jgraph/drawio/${DRAWIO_PIN.viewerTag}/src/main/webapp`;
+  addLogLine(job, `Downloading draw.io viewer files (${DRAWIO_PIN.viewerTag})…`);
+  for (const file of RENDERER_FILES) {
+    const url = `${viewerBase}/${file.source}`;
+    const dest = path.join(renDir, file.name);
+    addLogLine(job, `  Downloading ${file.name}…`);
+    await downloadAndVerify(url, dest, getRendererFileSha256(file.name, file.sha256), file.name);
+  }
+  addLogLine(job, `Renderer files installed.`);
+
+  // ── Step 5: Download Azure icon images (best effort) ─────────────────────
+  // Failure here must not block the install: an icon that is not installed is just
+  // left blank in the rendered diagram.  Successes are recorded in pack.json.
+  const imageRelPaths: string[] = [];
+  for (const lib of IMAGE_LIBS) {
+    const listUrl =
+      `https://api.github.com/repos/jgraph/drawio/contents/src/main/webapp/img/lib/${lib}?ref=${DRAWIO_PIN.viewerTag}`;
+    let listing: Array<{ name: string; type: string; download_url: string | null }>;
+    try {
+      addLogLine(job, `Listing ${lib} icon images…`);
+      const buf = await downloadToBuffer(listUrl, `image list (${lib})`);
+      const parsed = JSON.parse(buf.toString('utf8'));
+      if (!Array.isArray(parsed)) throw new Error('GitHub API returned unexpected shape');
+      listing = parsed;
+    } catch (e: unknown) {
+      addLogLine(
+        job,
+        `Warning: could not list ${lib} images from GitHub API: ${(e as Error)?.message ?? String(e)}. ` +
+        `Skipping image downloads — icon images will be blank until the pack is reinstalled.`,
+      );
+      continue;
+    }
+
+    const imageFiles = listing.filter((f) => f.type === 'file');
+    addLogLine(job, `Downloading ${imageFiles.length} ${lib} image(s)…`);
+    let failCount = 0;
+    for (const imgFile of imageFiles) {
+      const imgUrl =
+        imgFile.download_url ??
+        `${viewerBase}/img/lib/${lib}/${imgFile.name}`;
+      const imgDest = path.join(renDir, 'img', 'lib', lib, imgFile.name);
+      try {
+        const buf = await downloadToBuffer(imgUrl, `${lib}/${imgFile.name}`);
+        fs.mkdirSync(path.dirname(imgDest), { recursive: true });
+        const tmp = `${imgDest}.tmp`;
+        fs.writeFileSync(tmp, buf);
+        fs.renameSync(tmp, imgDest);
+        imageRelPaths.push(`img/lib/${lib}/${imgFile.name}`);
+      } catch (e: unknown) {
+        failCount++;
+        addLogLine(
+          job,
+          `Warning: could not download ${lib}/${imgFile.name}: ${(e as Error)?.message ?? String(e)}`,
+        );
+      }
+    }
+    if (failCount > 0) {
+      addLogLine(
+        job,
+        `Warning: ${failCount} of ${imageFiles.length} ${lib} image(s) failed to download.`,
+      );
+    } else if (imageFiles.length > 0) {
+      addLogLine(job, `Downloaded all ${imageFiles.length} ${lib} image(s).`);
+    }
+  }
+
+  // ── Step 6: Write pack.json LAST ─────────────────────────────────────────
+  // A missing or incomplete pack.json means the pack is treated as not installed by
+  // drawioPackState() and detectDrawio().  Writing it last ensures a partial install
+  // never falsely reports as complete.
+  const manifest: PackManifest = {
+    mcp: `${DRAWIO_PIN.mcpPackage}@${DRAWIO_PIN.mcpVersion}`,
+    indexSha256: DRAWIO_PIN.indexSha256,
+    viewerTag: DRAWIO_PIN.viewerTag,
+    images: imageRelPaths,
+    installedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(manifestFile(), JSON.stringify(manifest, null, 2));
+  addLogLine(job, `draw.io pack installed (${imageRelPaths.length} icon image(s) available).`);
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────

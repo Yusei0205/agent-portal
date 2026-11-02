@@ -932,6 +932,18 @@
       "tests": [],
       "smokeIds": [],
       "note": "Spike B container. No unit tests yet — the container is tested end-to-end via infra/scripts/spike-b-run.mjs. Add kiro-runner-validation.test.ts if validate.ts logic grows."
+    },
+    "tool-packs": {
+      "description": "Tool-pack installer logic — uv, kiro-cli, and draw.io install, detection, and verification",
+      "sources": [
+        "server/tool-packs.ts",
+        "server/drawio-pack.ts"
+      ],
+      "tests": [
+        "test/tool-packs.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "Backend-only. Tests exercise the installer logic (spawn mocks, path resolution, verification) without a running server."
     }
   },
 
