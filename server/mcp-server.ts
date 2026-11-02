@@ -17,9 +17,15 @@
  *              REST routes blocked; not user-creatable
  */
 
+import { getSessionsRepository } from './repositories/sessions.ts';
+import { getReviewsRepository } from './repositories/reviews.ts';
+import { getScansRepository } from './repositories/scans.ts';
+import { getGitConnectionsRepository } from './repositories/git-connections.ts';
+import { testingRepo } from './testing/data.ts';
+import { runInBackground } from './background-jobs.ts';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { one, all, insert, run as dbRun, getDb } from './db.ts';
+import { getDb } from './db.ts';
 import type { Row } from './db.ts';
 import type { PortalUser } from './http.ts';
 import { generateId, now, newId, sleep } from './util.ts';
@@ -34,11 +40,10 @@ import { config } from './config.ts';
 import { createChildSession } from './delegation.ts';
 import { getDelegationSettingsRepository } from './repositories/delegation-settings.ts';
 import { getSetting } from './settings.ts';
-import { queueTestRun, _runningCount, _cancelledRuns } from './testing/runner.ts';
-import { runGeneration } from './testing/generate.ts';
+import { _runningCount, _cancelledRuns } from './testing/runner.ts';
 import type { TestProject, TestScript } from './testing/helpers.ts';
 
-import { getMemberRow, getProjectRow } from './project-access.ts';
+import { getMemberRow, getProjectRow, getRepoInfo } from './project-access.ts';
 // ── Access helpers ─────────────────────────────────────────────────────────────
 
 /** Returns the project row if the user is admin or a member, else throws. */
@@ -56,34 +61,30 @@ async function assertProjectAccess(userId: string, isAdmin: boolean, projectId: 
 }
 
 /** Returns the workflow row if it belongs to the project, else throws. */
-function assertWorkflow(projectId: string, workflowId: string): Row {
-  const w = one<Row>('SELECT * FROM p6_workflows WHERE id = ? AND project_id = ?', workflowId, projectId);
+async function assertWorkflow(projectId: string, workflowId: string): Promise<Row> {
+  const w = await getSessionsRepository().getWorkflowByProjectId(projectId, workflowId);
   if (!w) throw new Error('Session not found');
-  return w;
+  return w as unknown as Row;
 }
 
 /** Returns the review row if it belongs to the project, else throws. */
-function assertReview(projectId: string, reviewId: string): Row {
-  const r = one<Row>('SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?', reviewId, projectId);
-  if (!r) throw new Error('Review not found');
-  return r;
+async function assertReview(projectId: string, reviewId: string): Promise<Row> {
+  const r = await getReviewsRepository().getById(reviewId);
+  if (!r || r.project_id !== projectId) throw new Error('Review not found');
+  return r as unknown as Row;
 }
 
 /** Returns the scan row if it belongs to the project, else throws. */
-function assertScan(projectId: string, scanId: string): Row {
-  const s = one<Row>('SELECT * FROM p10_scans WHERE id = ? AND project_id = ?', scanId, projectId);
+async function assertScan(projectId: string, scanId: string): Promise<Row> {
+  const s = await getScansRepository().getByIdForProject(scanId, projectId);
   if (!s) throw new Error('Scan not found');
-  return s;
+  return s as unknown as Row;
 }
 
 // ── Credential helpers (duplicated from review.ts which does not export them) ─
 
-function findGitHubTokenForUser(userId: string): string | null {
-  interface ConnRow { credentials_enc: string | null }
-  const conns = all<ConnRow>(
-    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'github' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
-    userId,
-  );
+async function findGitHubTokenForUser(userId: string): Promise<string | null> {
+  const conns = await getGitConnectionsRepository().listByProviderForUser('github', userId);
   for (const c of conns) {
     if (!c.credentials_enc) continue;
     try {
@@ -158,18 +159,12 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
           await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'list_sessions', `project:${projectId}`, { status });
 
-          const conditions = ['project_id = ?'];
-          const params: (string | number)[] = [projectId];
-          if (status) { conditions.push('status = ?'); params.push(status); }
-
-          const total = Number(
-            one<{ n: number }>(`SELECT COUNT(*) AS n FROM p6_workflows WHERE ${conditions.join(' AND ')}`, ...params)?.n ?? 0,
-          );
-          const rows = all<Row>(
-            `SELECT id, title, goal, status, engine, trust_tools, lead_agent, created_by, created_at, updated_at
-             FROM p6_workflows WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
-            ...params, limit, offset,
-          );
+          const listed = await getSessionsRepository().listWorkflowsByProject(projectId, { limit, offset, status: status || undefined });
+          const rows = listed.workflows.map((w) => ({
+            id: w.id, title: w.title, goal: w.goal, status: w.status, engine: w.engine, trust_tools: w.trust_tools,
+            lead_agent: w.lead_agent, created_by: w.created_by, created_at: w.created_at, updated_at: w.updated_at,
+          }));
+          const total = listed.total ?? rows.length;
           return jsonResult({ sessions: rows, total });
         } catch (e: unknown) {
           return errorResult((e as Error).message);
@@ -192,25 +187,23 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, workflowId, limit = 100, cursor }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          assertWorkflow(projectId, workflowId);
+          await assertWorkflow(projectId, workflowId);
           audit(uid, 'get_transcript', `workflow:${workflowId}`, { projectId });
 
-          let rows: Row[];
-          if (cursor !== undefined) {
-            rows = all<Row>(
-              `SELECT e.id, e.run_id, e.type, e.payload, e.created_at
-               FROM p6_events e JOIN p6_runs r ON r.id = e.run_id
-               WHERE r.workflow_id = ? AND e.id < ? ORDER BY e.id DESC LIMIT ?`,
-              workflowId, cursor, limit,
-            );
-          } else {
-            rows = all<Row>(
-              `SELECT e.id, e.run_id, e.type, e.payload, e.created_at
-               FROM p6_events e JOIN p6_runs r ON r.id = e.run_id
-               WHERE r.workflow_id = ? ORDER BY e.id DESC LIMIT ?`,
-              workflowId, limit,
-            );
+          // Newest first across every run of the session. (On DynamoDB event ids count per run, so the cursor
+          // filters each run's events and the merged list is ordered by time.)
+          const sessions = getSessionsRepository();
+          const runs = await sessions.listRunsByWorkflow(workflowId, 1000);
+          const collected: Row[] = [];
+          for (const run of runs) {
+            const evs = cursor !== undefined
+              ? await sessions.listRunEventsBefore(run.id, cursor, limit)
+              : (await sessions.listRunEvents(run.id, 5000)).slice(-limit);
+            for (const e of evs) collected.push({ id: e.id, run_id: e.run_id, type: e.type, payload: e.payload, created_at: e.created_at } as Row);
           }
+          const rows = collected
+            .sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)) || Number(y.id) - Number(x.id))
+            .slice(0, limit);
           const events = rows.map((e) => ({
             id: e.id,
             run_id: e.run_id,
@@ -242,19 +235,15 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
           await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'list_reviews', `project:${projectId}`, { status });
 
-          const conditions = ['project_id = ?'];
-          const params: (string | number)[] = [projectId];
-          if (status) { conditions.push('status = ?'); params.push(status); }
-
-          const total = Number(
-            one<{ n: number }>(`SELECT COUNT(*) AS n FROM p10_reviews WHERE ${conditions.join(' AND ')}`, ...params)?.n ?? 0,
-          );
-          const rows = all<Row>(
-            `SELECT id, base_ref, head_ref, pr_number, repo_id, status, post_mode, summary,
-                    input_tokens, output_tokens, cost_usd, created_by, created_at
-             FROM p10_reviews WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-            ...params, limit, offset,
-          );
+          const all = (await getReviewsRepository().listByProject(projectId, { limit: 100000, offset: 0 })).items
+            .filter((r) => !status || r.status === status)
+            .sort((x, y) => y.created_at.localeCompare(x.created_at));
+          const total = all.length;
+          const rows = all.slice(offset, offset + limit).map((r) => ({
+            id: r.id, base_ref: r.base_ref, head_ref: r.head_ref, pr_number: r.pr_number, repo_id: r.repo_id,
+            status: r.status, post_mode: r.post_mode, summary: r.summary, input_tokens: r.input_tokens,
+            output_tokens: r.output_tokens, created_by: r.created_by, created_at: r.created_at,
+          }));
           return jsonResult({ reviews: rows, total });
         } catch (e: unknown) {
           return errorResult((e as Error).message);
@@ -275,13 +264,11 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, reviewId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const r = assertReview(projectId, reviewId);
+          const r = await assertReview(projectId, reviewId);
           audit(uid, 'get_review', `review:${reviewId}`, { projectId });
 
-          const findings = all<Row>(
-            'SELECT id, file_path, line_number, severity, title, body, confidence, accepted, posted_at, created_at FROM p10_findings WHERE review_id = ? ORDER BY created_at',
-            reviewId,
-          );
+          const findings = (await getReviewsRepository().listFindings(reviewId))
+            .sort((x, y) => x.created_at.localeCompare(y.created_at));
           return jsonResult({ review: r, findings });
         } catch (e: unknown) {
           return errorResult((e as Error).message);
@@ -302,7 +289,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, reviewId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const r = assertReview(projectId, reviewId) as unknown as Review;
+          const r = await assertReview(projectId, reviewId) as unknown as Review;
           audit(uid, 'get_review_usage', `review:${reviewId}`, { projectId });
 
           const rateCard = getRateCard();
@@ -348,7 +335,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
 
           const id = generateId();
           const ts = now();
-          insert('p6_workflows', {
+          await getSessionsRepository().createWorkflow({
             id,
             project_id: projectId,
             goal,
@@ -362,13 +349,14 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             iteration_count: 0,
             max_iterations: 10,
             credential_id: null,
+            model: '',
             created_by: uid,
             created_at: ts,
             updated_at: ts,
           });
 
           const runId = await startRun(id);
-          dbRun('UPDATE p6_workflows SET last_turn_at = ?, stop_reason = \'\', updated_at = ? WHERE id = ?', now(), now(), id);
+          await getSessionsRepository().updateWorkflow(id, { last_turn_at: now(), stop_reason: '', updated_at: now() });
           emit(projectId, { type: 'workflow.created', workflowId: id });
           return jsonResult({ workflowId: id, runId });
         } catch (e: unknown) {
@@ -391,11 +379,11 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, workflowId, message }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const w = assertWorkflow(projectId, workflowId);
+          const w = await assertWorkflow(projectId, workflowId);
           audit(uid, 'prompt_session', `workflow:${workflowId}`, { message: message.slice(0, 200) });
 
           const isCommand = message.startsWith('/');
-          insert('p6_workflow_events', {
+          await getSessionsRepository().appendWorkflowEvent({
             workflow_id: workflowId,
             kind: isCommand ? 'command' : 'human',
             body: message,
@@ -404,7 +392,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
           });
 
           const ts = now();
-          dbRun('UPDATE p6_workflows SET last_turn_at = ?, stop_reason = \'\', updated_at = ? WHERE id = ?', ts, ts, workflowId);
+          await getSessionsRepository().updateWorkflow(workflowId, { last_turn_at: ts, stop_reason: '', updated_at: ts });
 
           if (w.project_id) {
             emit(String(w.project_id), {
@@ -440,16 +428,13 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, workflowId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          assertWorkflow(projectId, workflowId);
+          await assertWorkflow(projectId, workflowId);
           audit(uid, 'stop_session', `workflow:${workflowId}`, { projectId });
 
-          const activeRun = one<Row>(
-            "SELECT id FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running')",
-            workflowId,
-          );
+          const activeRun = await getSessionsRepository().getActiveRun(workflowId);
           if (activeRun) cancelRun(String(activeRun.id));
 
-          dbRun("UPDATE p6_workflows SET status = 'paused', updated_at = ? WHERE id = ?", now(), workflowId);
+          await getSessionsRepository().updateWorkflow(workflowId, { status: 'paused', updated_at: now() });
           return jsonResult({ ok: true });
         } catch (e: unknown) {
           return errorResult((e as Error).message);
@@ -492,7 +477,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             : workflowId;
 
           await assertProjectAccess(uid, isAdmin, projectId);
-          assertWorkflow(projectId, effectiveWorkflowId);
+          await assertWorkflow(projectId, effectiveWorkflowId);
           audit(uid, 'delegate_session', `workflow:${effectiveWorkflowId}`, { task: task.slice(0, 200) });
 
           const settings = await getDelegationSettingsRepository().get();
@@ -539,7 +524,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
 
           const id = generateId();
           const ts = now();
-          insert('p10_reviews', {
+          await getReviewsRepository().create({
             id,
             project_id: projectId,
             base_ref: baseRef,
@@ -605,7 +590,8 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
           let review: Row | undefined;
 
           while (Date.now() < deadline) {
-            review = one<Row>('SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?', reviewId, projectId);
+            const found = await getReviewsRepository().getById(reviewId);
+            review = found && found.project_id === projectId ? (found as unknown as Row) : undefined;
             if (!review) return errorResult('Review not found');
             const s = String(review.status);
             if (s === 'done' || s === 'failed') break;
@@ -616,9 +602,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
 
           if (!review) return errorResult('Review not found');
 
-          const findingsCount = Number(
-            one<{ n: number }>('SELECT COUNT(*) AS n FROM p10_findings WHERE review_id = ?', reviewId)?.n ?? 0,
-          );
+          const findingsCount = (await getReviewsRepository().listFindings(reviewId)).length;
 
           return jsonResult({
             review: {
@@ -653,30 +637,27 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, reviewId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const r = assertReview(projectId, reviewId) as unknown as Review;
+          const r = await assertReview(projectId, reviewId) as unknown as Review;
           audit(uid, 'post_review_comments', `review:${reviewId}`, { projectId });
 
           if (r.status !== 'done') return errorResult('Review is not complete');
           if (!r.pr_number) return errorResult('Review has no PR number; cannot post comments');
           if (!r.repo_id) return errorResult('Review has no repository; cannot post comments');
 
-          const repo = one<{ url: string; provider: string }>(
-            'SELECT url, provider FROM repositories WHERE id = ?', r.repo_id,
-          );
+          const repo = await getRepoInfo(r.repo_id);
           if (!repo) return errorResult('Repository not found');
           if (repo.provider !== 'github') return errorResult('Comment posting only supported for GitHub repositories');
 
           const ownerRepo = parseGHOwnerRepo(String(repo.url));
-          const token = findGitHubTokenForUser(uid);
+          const token = await findGitHubTokenForUser(uid);
           if (!ownerRepo || !token) return errorResult('GitHub credentials not found');
 
           const headSha = r.head_commit_sha ?? r.source_sha;
           if (!headSha) return errorResult('Review has no commit SHA; cannot post comments');
 
-          const findings = all<Finding>(
-            "SELECT * FROM p10_findings WHERE review_id = ? AND accepted != -1 ORDER BY created_at",
-            reviewId,
-          );
+          const findings = ((await getReviewsRepository().listFindings(reviewId)) as unknown as Finding[])
+            .filter((f) => f.accepted !== -1)
+            .sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
 
           let posted = 0;
           let failed = 0;
@@ -688,7 +669,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
               body, headSha, f.file_path || null, f.line_number ?? null, token,
             );
             if (result.ok) {
-              dbRun('UPDATE p10_findings SET posted_at = ? WHERE id = ?', now(), f.id);
+              await getReviewsRepository().markFindingPosted(f.id, now());
               posted++;
             } else {
               failed++;
@@ -696,7 +677,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
           }
 
           if (posted > 0 || failed === 0) {
-            dbRun('UPDATE p10_reviews SET posted_at = ? WHERE id = ?', now(), reviewId);
+            await getReviewsRepository().update(reviewId, { posted_at: now() } as never);
           }
 
           return jsonResult({ ok: true, posted, failed });
@@ -725,9 +706,9 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
 
           // Scan allowlist check
           const allowlist = (() => {
-            const raw = one<Row>('SELECT value FROM settings WHERE key = ?', 'review.fullScanUsers');
+            const raw = getSetting(getDb(), 'review.fullScanUsers');
             if (!raw) return [] as string[];
-            try { return JSON.parse(String(raw.value)) as string[]; } catch { return []; }
+            try { return JSON.parse(String(raw)) as string[]; } catch { return []; }
           })();
           if (!isAdmin && !allowlist.includes(uid)) {
             return errorResult('You are not authorized to run branch scans');
@@ -737,7 +718,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
 
           const id = newId('sc_');
           const ts = now();
-          insert('p10_scans', {
+          await getScansRepository().create({
             id,
             project_id: projectId,
             repo_id: repoId,
@@ -793,7 +774,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, scanId, budgetTokens }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const scan = assertScan(projectId, scanId);
+          const scan = await assertScan(projectId, scanId);
           audit(uid, 'confirm_scan', `scan:${scanId}`, { budgetTokens });
 
           const currentStatus = String(scan.status);
@@ -801,11 +782,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             return errorResult(`Cannot confirm: scan is ${currentStatus}`);
           }
 
-          dbRun(
-            "UPDATE p10_scans SET status = 'queued', budget_tokens = ? WHERE id = ?",
-            budgetTokens,
-            scanId,
-          );
+          await getScansRepository().update(scanId, { status: 'queued', budget_tokens: budgetTokens });
 
           return jsonResult({ ok: true, scanId, status: 'queued' });
         } catch (e: unknown) {
@@ -827,7 +804,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, scanId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const scan = assertScan(projectId, scanId);
+          const scan = await assertScan(projectId, scanId);
           audit(uid, 'resume_scan', `scan:${scanId}`, { projectId });
 
           const currentStatus = String(scan.status);
@@ -835,10 +812,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             return errorResult(`Cannot resume: scan is ${currentStatus}`);
           }
 
-          dbRun(
-            "UPDATE p10_scans SET status = 'queued', fail_reason = NULL WHERE id = ?",
-            scanId,
-          );
+          await getScansRepository().update(scanId, { status: 'queued', fail_reason: null });
 
           return jsonResult({ ok: true, scanId, status: 'queued' });
         } catch (e: unknown) {
@@ -865,29 +839,27 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, reviewId, strategy = 'squash' }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const r = assertReview(projectId, reviewId) as unknown as Review;
+          const r = await assertReview(projectId, reviewId) as unknown as Review;
           audit(uid, 'merge_pull_request', `review:${reviewId}`, { projectId, strategy });
 
           if (r.status !== 'done') return errorResult('Review is not complete');
           if (!r.pr_number) return errorResult('Review has no PR number');
           if (!r.repo_id) return errorResult('Review has no repository');
 
-          const repo = one<{ url: string; provider: string }>(
-            'SELECT url, provider FROM repositories WHERE id = ?', r.repo_id,
-          );
+          const repo = await getRepoInfo(r.repo_id);
           if (!repo) return errorResult('Repository not found');
           if (repo.provider !== 'github') return errorResult('Merge only supported for GitHub repositories');
 
           const ownerRepo = parseGHOwnerRepo(String(repo.url));
-          const token = findGitHubTokenForUser(uid);
+          const token = await findGitHubTokenForUser(uid);
           if (!ownerRepo || !token) return errorResult('GitHub credentials not found');
 
           // Check merge verdict
-          const findings = all<Finding>('SELECT severity, accepted FROM p10_findings WHERE review_id = ?', reviewId);
+          const findings = (await getReviewsRepository().listFindings(reviewId)) as unknown as Finding[];
           const verdict = computeMergeVerdict(r, findings, (() => {
-            const raw = one<Row>('SELECT value FROM settings WHERE key = ?', 'review.mergeThreshold');
+            const raw = getSetting(getDb(), 'review.mergeThreshold');
             if (!raw) return 'high';
-            try { return JSON.parse(String(raw.value)) as string; } catch { return 'high'; }
+            try { return JSON.parse(String(raw)) as string; } catch { return 'high'; }
           })() as Parameters<typeof computeMergeVerdict>[2]);
 
           if (!verdict.mergeable) {
@@ -899,10 +871,9 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             strategy as 'squash' | 'merge', token, r.head_commit_sha ?? null,
           );
 
-          dbRun(
-            'UPDATE p10_reviews SET merged_at = ?, merged_by = ?, head_commit_sha = COALESCE(?, head_commit_sha) WHERE id = ?',
-            now(), uid, result.sha ?? null, reviewId,
-          );
+          await getReviewsRepository().update(reviewId, {
+            merged_at: now(), merged_by: uid, head_commit_sha: result.sha ?? r.head_commit_sha ?? null,
+          });
 
           return jsonResult({ ok: true, sha: result.sha });
         } catch (e: unknown) {
@@ -929,12 +900,13 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
           audit(uid, 'list_test_projects', `project:${projectId}`, {});
-          const rows = all<Row>(
-            `SELECT id, name, app_url, api_base_url, viewport_width, viewport_height,
-                    timeout_secs, rules_for_ai, created_by, created_at, updated_at
-             FROM test_projects WHERE project_id = ? ORDER BY created_at DESC`,
-            projectId,
-          );
+          const rows = (await testingRepo().listTestProjectsByProject(projectId))
+            .sort((x, y) => y.created_at.localeCompare(x.created_at))
+            .map((t) => ({
+              id: t.id, name: t.name, app_url: t.app_url, api_base_url: t.api_base_url, viewport_width: t.viewport_width,
+              viewport_height: t.viewport_height, timeout_secs: t.timeout_secs, rules_for_ai: t.rules_for_ai,
+              created_by: t.created_by, created_at: t.created_at, updated_at: t.updated_at,
+            })) as Row[];
           return jsonResult({ testProjects: rows });
         } catch (e: unknown) {
           return errorResult((e as Error).message);
@@ -956,21 +928,18 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, testProjectId, groupId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const tp = one<Row>('SELECT id FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
+          const tp = await testingRepo().getTestProjectByProjectAndId(projectId, testProjectId);
           if (!tp) return errorResult('Test project not found');
           audit(uid, 'list_test_scripts', `test_project:${testProjectId}`, { groupId });
-          const cond = groupId
-            ? 'test_project_id = ? AND test_group_id = ?'
-            : 'test_project_id = ?';
-          const params: string[] = groupId ? [testProjectId, groupId] : [testProjectId];
-          const rows = all<Row>(
-            `SELECT s.id, s.name, s.test_group_id, g.name AS group_name,
-                    s.sort_order, s.steps, s.created_by, s.created_at
-             FROM test_scripts s
-             JOIN test_groups g ON g.id = s.test_group_id
-             WHERE s.${cond} ORDER BY s.test_group_id, s.sort_order`,
-            ...params,
-          );
+          const groups = await testingRepo().listGroupsByTestProject(testProjectId);
+          const groupName = new Map(groups.map((g) => [g.id, g.name]));
+          const rows = (await testingRepo().listScriptsByTestProject(testProjectId))
+            .filter((x) => (!groupId || x.test_group_id === groupId) && groupName.has(x.test_group_id))
+            .sort((a, b) => a.test_group_id.localeCompare(b.test_group_id) || a.sort_order - b.sort_order)
+            .map((x) => ({
+              id: x.id, name: x.name, test_group_id: x.test_group_id, group_name: groupName.get(x.test_group_id),
+              sort_order: x.sort_order, steps: x.steps, created_by: x.created_by, created_at: x.created_at,
+            })) as Row[];
           // Return steps as parsed JSON to be useful; vault refs are template strings, not actual values
           const scripts = rows.map((s) => ({
             ...s,
@@ -997,16 +966,14 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, testProjectId, runId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const tp = one<Row>('SELECT id FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
+          const tp = await testingRepo().getTestProjectByProjectAndId(projectId, testProjectId);
           if (!tp) return errorResult('Test project not found');
-          const testRun = one<Row>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', runId, testProjectId);
+          const testRun = (await testingRepo().getTestRunByTestProjectAndId(testProjectId, runId)) as unknown as Row | null;
           if (!testRun) return errorResult('Test run not found');
           audit(uid, 'get_test_run', `test_run:${runId}`, { testProjectId });
-          const steps = all<Row>(
-            `SELECT id, script_id, step_index, status, duration_ms, error, created_at
-             FROM test_run_steps WHERE run_id = ? ORDER BY step_index`,
-            runId,
-          );
+          const steps = (await testingRepo().listStepsByRun(runId))
+            .sort((a, b) => a.step_index - b.step_index)
+            .map((x) => ({ id: x.id, script_id: x.script_id, step_index: x.step_index, status: x.status, duration_ms: x.duration_ms, error: x.error, created_at: x.created_at })) as Row[];
           // Omit screenshot_path — it's a server filesystem path, not useful over MCP
           return jsonResult({ run: testRun, steps });
         } catch (e: unknown) {
@@ -1034,7 +1001,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, testProjectId, scriptId, groupId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const tp = one<TestProject>('SELECT * FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
+          const tp = (await testingRepo().getTestProjectByProjectAndId(projectId, testProjectId)) as unknown as TestProject | null;
           if (!tp) return errorResult('Test project not found');
           audit(uid, 'start_test_run', `test_project:${testProjectId}`, { scriptId, groupId });
 
@@ -1048,20 +1015,18 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
 
           let scripts: TestScript[];
           if (scriptId) {
-            const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', scriptId, testProjectId);
+            const script = (await testingRepo().getTestScriptByTestProjectAndId(testProjectId, scriptId)) as unknown as TestScript | null;
             if (!script) return errorResult('Script not found');
             scripts = [script];
           } else {
-            scripts = all<TestScript>(
-              'SELECT * FROM test_scripts WHERE test_group_id = ? ORDER BY sort_order',
-              groupId!,
-            );
+            scripts = ((await testingRepo().listScriptsByGroup(groupId!)) as unknown as TestScript[])
+              .sort((a, b) => a.sort_order - b.sort_order);
             if (scripts.length === 0) return errorResult('No scripts in this group');
           }
 
           const runId = generateId();
           const ts = now();
-          insert('test_runs', {
+          await testingRepo().createTestRun({
             id: runId,
             test_project_id: testProjectId,
             script_id: scriptId ?? null,
@@ -1075,12 +1040,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             finished_at: null,
           });
 
-          queueTestRun(runId, scripts, tp).catch((e: unknown) => {
-            try {
-              dbRun('UPDATE test_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?',
-                'error', String((e as Error).message ?? e), now(), runId);
-            } catch { /* best effort */ }
-          });
+          await runInBackground('test-run', { runId, testProjectId, scriptIds: scripts.map((x) => x.id) });
 
           return jsonResult({ runId });
         } catch (e: unknown) {
@@ -1103,9 +1063,9 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, testProjectId, runId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const tp = one<Row>('SELECT id FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
+          const tp = await testingRepo().getTestProjectByProjectAndId(projectId, testProjectId);
           if (!tp) return errorResult('Test project not found');
-          const testRun = one<Row>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', runId, testProjectId);
+          const testRun = (await testingRepo().getTestRunByTestProjectAndId(testProjectId, runId)) as unknown as Row | null;
           if (!testRun) return errorResult('Test run not found');
           audit(uid, 'cancel_test_run', `test_run:${runId}`, { testProjectId });
 
@@ -1115,12 +1075,9 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
           }
 
           _cancelledRuns.add(runId);
-          dbRun(
-            "UPDATE test_runs SET status = 'cancelled', finished_at = ? WHERE id = ? AND status IN ('queued','running')",
-            now(), runId,
-          );
+          await testingRepo().updateTestRun(runId, { status: 'cancelled', finished_at: now() });
 
-          const updated = one<Row>('SELECT status FROM test_runs WHERE id = ?', runId);
+          const updated = await testingRepo().getTestRunById(runId);
           return jsonResult({ ok: true, status: updated?.status ?? 'cancelled' });
         } catch (e: unknown) {
           return errorResult((e as Error).message);
@@ -1143,30 +1100,31 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
       async ({ projectId, testProjectId, description, groupId }) => {
         try {
           await assertProjectAccess(uid, isAdmin, projectId);
-          const tp = one<TestProject>('SELECT * FROM test_projects WHERE id = ? AND project_id = ?', testProjectId, projectId);
+          const tp = (await testingRepo().getTestProjectByProjectAndId(projectId, testProjectId)) as unknown as TestProject | null;
           if (!tp) return errorResult('Test project not found');
           audit(uid, 'generate_test_script', `test_project:${testProjectId}`, { description: description.slice(0, 200) });
 
           // Resolve group
           let targetGroupId: string;
           if (groupId) {
-            const group = one<Row>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', groupId, testProjectId);
+            const group = await testingRepo().getTestGroupByTestProjectAndId(testProjectId, groupId);
             if (!group) return errorResult('Group not found in this test project');
             targetGroupId = groupId;
           } else {
-            let existing = one<Row>('SELECT id FROM test_groups WHERE test_project_id = ? ORDER BY sort_order LIMIT 1', testProjectId);
-            if (!existing) {
+            const groups = (await testingRepo().listGroupsByTestProject(testProjectId)).sort((a, b) => a.sort_order - b.sort_order);
+            let existingId = groups[0]?.id;
+            if (!existingId) {
               const gid = generateId();
               const ts = now();
-              insert('test_groups', { id: gid, test_project_id: testProjectId, name: 'Default', sort_order: 0, created_at: ts, updated_at: ts });
-              existing = { id: gid };
+              await testingRepo().createTestGroup({ id: gid, test_project_id: testProjectId, name: 'Default', sort_order: 0, created_at: ts, updated_at: ts });
+              existingId = gid;
             }
-            targetGroupId = String(existing.id);
+            targetGroupId = existingId;
           }
 
           const genId = generateId();
           const ts = now();
-          insert('test_generations', {
+          await testingRepo().createGeneration({
             id: genId,
             test_project_id: testProjectId,
             script_id: null,
@@ -1175,12 +1133,18 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
             status: 'pending',
             error: null,
             result_script_ids: '[]',
+            warnings: '[]',
+            group_id: targetGroupId,
+            attachment_ids: '[]',
+            progress: '{}',
+            started_at: null,
+            cancelled_at: null,
             created_by: uid,
             created_at: ts,
             finished_at: null,
           });
 
-          runGeneration(genId, tp, description, targetGroupId, null, uid).catch(() => {});
+          await runInBackground('test-generate', { genId, testProjectId: tp.id, description, targetGroupId, existingScriptId: null, createdBy: uid, attachmentIds: [] });
 
           return jsonResult({ generationId: genId });
         } catch (e: unknown) {
