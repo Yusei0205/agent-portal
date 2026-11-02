@@ -401,7 +401,7 @@ export async function runGeneration(
     let attachmentRows: Row[] = [];
     let attachmentNames: string[] = [];
     if (attachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(tp.project_id, attachmentIds);
+      const { rows } = await validateAttachmentIds(tp.project_id, attachmentIds);
       attachmentRows = rows ?? [];
       attachmentNames = attachmentRows.map((r) => String(r.filename));
     }
@@ -658,7 +658,7 @@ export function registerGenerateRoutes(): void {
 
     // Validate attachment IDs
     if (rawAttachmentIds.length > 0) {
-      const { error } = validateAttachmentIds(req.params.pid, rawAttachmentIds);
+      const { error } = await validateAttachmentIds(req.params.pid, rawAttachmentIds);
       if (error) { sendJson(res, 400, { error }); return; }
     }
 
@@ -720,7 +720,7 @@ export function registerGenerateRoutes(): void {
 
     // Validate attachment IDs
     if (rawAttachmentIds.length > 0) {
-      const { error } = validateAttachmentIds(req.params.pid, rawAttachmentIds);
+      const { error } = await validateAttachmentIds(req.params.pid, rawAttachmentIds);
       if (error) { sendJson(res, 400, { error }); return; }
     }
 
@@ -1036,7 +1036,7 @@ export function registerGenerateRoutes(): void {
     try { attachmentIds = JSON.parse(String(original.attachment_ids || '[]')) as string[]; } catch { attachmentIds = []; }
 
     if (attachmentIds.length > 0) {
-      const { error } = validateAttachmentIds(req.params.pid, attachmentIds);
+      const { error } = await validateAttachmentIds(req.params.pid, attachmentIds);
       if (error) attachmentIds = [];
     }
 

@@ -636,7 +636,7 @@ describe('AI Attachments — cleanupOrphanedAttachments', () => {
       created_at: new Date(Date.now() - 25 * 3600 * 1000).toISOString(),
     });
 
-    cleanupOrphanedAttachments();
+    await cleanupOrphanedAttachments();
 
     assert.equal(one<Row>('SELECT * FROM ai_attachments WHERE id = ?', id), undefined, 'should be deleted');
     assert.ok(!fs.existsSync(tmpPath), 'file should be deleted');
@@ -655,7 +655,7 @@ describe('AI Attachments — cleanupOrphanedAttachments', () => {
       created_at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(),
     });
 
-    cleanupOrphanedAttachments();
+    await cleanupOrphanedAttachments();
 
     assert.ok(one<Row>('SELECT * FROM ai_attachments WHERE id = ?', id), 'should NOT be deleted');
 

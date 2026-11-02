@@ -95,6 +95,7 @@ function itemToDoc(item: Record<string, AttributeValue>): GeneratedDocRecord {
     created_by:        getString(item, 'created_by'),
     created_at:        getString(item, 'created_at') ?? '',
     attachment_ids:    getString(item, 'attachment_ids') ?? '[]',
+    workflow_id:       getString(item, 'workflow_id'),
   };
 }
 
@@ -208,6 +209,7 @@ export class DynamoDbGeneratedDocRepository implements GeneratedDocRepository {
     if (fields.status !== undefined)            add('status', fields.status);
     if (fields.error !== undefined)             add('error', fields.error);
     if (fields.attachment_ids !== undefined)    add('attachment_ids', fields.attachment_ids);
+    if (fields.workflow_id !== undefined)       add('workflow_id', fields.workflow_id);
     if (sets.length === 0) return;
     await this.client.send(new UpdateItemCommand({
       TableName:                 this.tableName,

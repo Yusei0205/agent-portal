@@ -32,6 +32,7 @@ function toDoc(row: Row): GeneratedDocRecord {
     created_by:        row.created_by != null ? String(row.created_by) : null,
     created_at:        String(row.created_at ?? ''),
     attachment_ids:    String(row.attachment_ids ?? '[]'),
+    workflow_id:       row.workflow_id != null ? String(row.workflow_id) : null,
   };
 }
 
@@ -100,6 +101,7 @@ export class SqliteGeneratedDocRepository implements GeneratedDocRepository {
     if (fields.status !== undefined)            dbFields.status = fields.status;
     if (fields.error !== undefined)             dbFields.error = fields.error;
     if (fields.attachment_ids !== undefined)    dbFields.attachment_ids = fields.attachment_ids;
+    if (fields.workflow_id !== undefined)       dbFields.workflow_id = fields.workflow_id;
     update('generated_docs', id, dbFields);
   }
 

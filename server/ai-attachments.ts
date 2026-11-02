@@ -236,16 +236,16 @@ function rowToView(row: AiAttachmentRecord): AttachmentView {
  * Backlog S2: convert to async using getAiAttachmentRepository() once all
  * callers (diagrams.ts, presentations.ts, etc.) have been made async.
  */
-export function validateAttachmentIds(
+export async function validateAttachmentIds(
   projectId: string,
   ids: string[],
-): { error: string; rows: null } | { error: null; rows: Row[] } {
+): Promise<{ error: string; rows: null } | { error: null; rows: Row[] }> {
   if (ids.length > 5) {
     return { error: 'Maximum 5 attachments allowed per generation', rows: null };
   }
   const rows: Row[] = [];
   for (const id of ids) {
-    const att = one<Row>('SELECT * FROM ai_attachments WHERE id = ?', id);
+    const att = (await getAiAttachmentRepository().getById(id)) as unknown as Row | null;
     if (!att) return { error: `Attachment ${id} not found`, rows: null };
     if (String(att.project_id) !== projectId)
       return { error: `Attachment ${id} does not belong to this project`, rows: null };
@@ -259,11 +259,11 @@ export function validateAttachmentIds(
  * Backlog S2: convert to async using getAiAttachmentRepository() once
  * diagramView/presView/docView callers are made async.
  */
-export function getAttachmentsView(projectId: string, ids: string[]): AttachmentView[] {
-  return ids
-    .map((id) => one<Row>('SELECT * FROM ai_attachments WHERE id = ? AND project_id = ?', id, projectId))
-    .filter((r): r is Row => r !== undefined)
-    .map((row: Row) => ({
+export async function getAttachmentsView(projectId: string, ids: string[]): Promise<AttachmentView[]> {
+  const found = await Promise.all(ids.map((id) => getAiAttachmentRepository().getByIdForProject(id, projectId)));
+  return found
+    .filter((r): r is NonNullable<typeof r> => r != null)
+    .map((row) => ({
       id: String(row.id),
       filename: String(row.filename),
       mimeType: String(row.mime_type),
@@ -379,19 +379,16 @@ export async function deleteAttachmentsByIds(ids: string[]): Promise<void> {
  * Backlog S2: convert to async using getAiAttachmentRepository() once
  * the test is updated to await the call (or uses a sync-compatible API).
  */
-export function cleanupOrphanedAttachments(): void {
+export async function cleanupOrphanedAttachments(): Promise<void> {
   try {
     const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-    const rows = all<Row>(
-      'SELECT * FROM ai_attachments WHERE parent_id IS NULL AND created_at < ?',
-      cutoff,
-    );
+    const repo = getAiAttachmentRepository();
+    const rows = await repo.listOrphanedBefore(cutoff);
     for (const row of rows) {
       try { fs.rmSync(String(row.file_path), { force: true }); } catch { /* best effort */ }
+      await forgetFile(String(row.file_path)).catch(() => { /* best effort */ });
     }
-    if (rows.length > 0) {
-      dbRunSync('DELETE FROM ai_attachments WHERE parent_id IS NULL AND created_at < ?', cutoff);
-    }
+    if (rows.length > 0) await repo.deleteOrphanedBefore(cutoff);
   } catch { /* non-fatal */ }
 }
 

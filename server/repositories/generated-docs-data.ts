@@ -33,6 +33,8 @@ export interface GeneratedDocRecord {
   created_by: string | null;
   created_at: string;
   attachment_ids: string;
+  /** The session (workflow) that is generating or last generated this document. */
+  workflow_id: string | null;
 }
 
 export interface GeneratedDocVersionRecord {
@@ -77,7 +79,7 @@ export interface CreateGeneratedDocVersionInput {
 
 export type GeneratedDocUpdate = Partial<Pick<GeneratedDocRecord,
   'name' | 'doc_type' | 'sources_json' | 'diagram_style' | 'diagram_cloud' | 'lead_agent' |
-  'trust_all_tools' | 'audience' | 'latest_version_id' | 'stale' | 'status' | 'error' | 'attachment_ids'
+  'trust_all_tools' | 'audience' | 'latest_version_id' | 'stale' | 'status' | 'error' | 'attachment_ids' | 'workflow_id'
 >>;
 
 // ── Repository interface ───────────────────────────────────────────────────────

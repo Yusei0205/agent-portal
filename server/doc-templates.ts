@@ -10,11 +10,12 @@
  *   POST   /api/settings/templates/upload      — upload portal-wide template (admin)
  *   DELETE /api/settings/templates/:tid        — delete portal-wide template (admin)
  */
+import { getDocTemplateRepository } from './repositories/doc-templates-data.ts';
+import { persistFile, forgetFile } from './durable-files.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, insert, run as dbRun, update } from './db.ts';
 import type { Row } from './db.ts';
 import { newId, now, badRequest, notFound, forbidden, str } from './util.ts';
 import { config } from './config.ts';
@@ -84,33 +85,17 @@ function templateView(t: Row) {
   };
 }
 
-function setDefault(id: string, projectId: string | null, type: string): void {
-  if (projectId) {
-    dbRun(
-      "UPDATE doc_templates SET is_default = 0 WHERE project_id = ? AND type = ? AND id != ?",
-      projectId, type, id,
-    );
-  } else {
-    dbRun(
-      "UPDATE doc_templates SET is_default = 0 WHERE project_id IS NULL AND type = ? AND id != ?",
-      type, id,
-    );
-  }
-  dbRun('UPDATE doc_templates SET is_default = 1 WHERE id = ?', id);
+async function setDefault(id: string, projectId: string | null, type: string): Promise<void> {
+  await getDocTemplateRepository().setDefault(id, projectId, type);
 }
 
 async function readUpload(req: PortalRequest): Promise<{ buf: Buffer; filename: string; kind: TemplateKind }> {
   const filename = str(req.query.get('filename') ?? '', 'filename', { max: 200 });
   if (!filename) throw badRequest('filename query parameter is required');
 
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req as any) {
-    chunks.push(chunk as Buffer);
-    total += (chunk as Buffer).length;
-    if (total > TEMPLATE_LIMITS.bytes + 1024) throw badRequest('File too large');
-  }
-  const buf = Buffer.concat(chunks);
+  // The router has already read the request body into rawBody (it is capped at 5 MB for non-multipart uploads).
+  const buf = req.rawBody ?? Buffer.alloc(0);
+  if (buf.length > TEMPLATE_LIMITS.bytes) throw badRequest('File too large');
 
   try {
     await checkTemplateUpload(buf, filename);
@@ -134,13 +119,9 @@ export function registerDocTemplateRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const projectTemplates = all<Row>(
-      "SELECT * FROM doc_templates WHERE project_id = ? ORDER BY type, created_at",
-      String(project.id),
-    );
-    const portalTemplates = all<Row>(
-      "SELECT * FROM doc_templates WHERE project_id IS NULL ORDER BY type, created_at",
-    );
+    const repo = getDocTemplateRepository();
+    const projectTemplates = (await repo.listByProject(String(project.id))) as unknown as Row[];
+    const portalTemplates = (await repo.listPortal()) as unknown as Row[];
 
     sendJson(res, 200, {
       templates: [...projectTemplates, ...portalTemplates].map(templateView),
@@ -152,10 +133,7 @@ export function registerDocTemplateRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const count = (one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM doc_templates WHERE project_id = ?",
-      String(project.id),
-    )?.n ?? 0);
+    const count = (await getDocTemplateRepository().listByProject(String(project.id))).length;
     if (count >= TEMPLATE_LIMITS.perProject) {
       throw badRequest(`A project can hold at most ${TEMPLATE_LIMITS.perProject} templates`);
     }
@@ -167,11 +145,12 @@ export function registerDocTemplateRoutes(): void {
     fs.mkdirSync(dir, { recursive: true });
     const storedName = `${id}${path.extname(filename)}`;
     fs.writeFileSync(path.join(dir, storedName), buf);
+    await persistFile(path.join(dir, storedName));
 
     const makeDefault = req.query.get('default') === '1';
     const name = str(req.query.get('name') ?? path.basename(filename, path.extname(filename)), 'name', { max: 80, optional: true }).trim() || path.basename(filename, path.extname(filename));
 
-    insert('doc_templates', {
+    await getDocTemplateRepository().create({
       id,
       project_id: String(project.id),
       name,
@@ -183,16 +162,14 @@ export function registerDocTemplateRoutes(): void {
     });
 
     if (makeDefault) {
-      setDefault(id, String(project.id), kind);
+      await setDefault(id, String(project.id), kind);
     } else {
-      const hasDefault = one<Row>(
-        "SELECT 1 FROM doc_templates WHERE project_id = ? AND type = ? AND is_default = 1",
-        String(project.id), kind,
-      );
-      if (!hasDefault) setDefault(id, String(project.id), kind);
+      const hasDefault = (await getDocTemplateRepository().listByProject(String(project.id)))
+        .some((x) => x.type === kind && x.is_default === 1);
+      if (!hasDefault) await setDefault(id, String(project.id), kind);
     }
 
-    const t = one<Row>('SELECT * FROM doc_templates WHERE id = ?', id)!;
+    const t = (await getDocTemplateRepository().getById(id)) as unknown as Row;
     sendJson(res, 200, { template: templateView(t) });
   });
 
@@ -201,7 +178,7 @@ export function registerDocTemplateRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const t = one<Row>('SELECT * FROM doc_templates WHERE id = ?', req.params.tid);
+    const t = (await getDocTemplateRepository().getById(req.params.tid)) as unknown as Row | null;
     if (!t) {
       sendJson(res, 404, { error: 'Template not found' });
       return;
@@ -211,10 +188,11 @@ export function registerDocTemplateRoutes(): void {
       return;
     }
 
-    dbRun('DELETE FROM doc_templates WHERE id = ?', t.id);
+    await getDocTemplateRepository().delete(String(t.id));
     try {
       fs.rmSync(templatePath(t), { force: true });
     } catch { /* best effort */ }
+    await forgetFile(templatePath(t)).catch(() => { /* best effort */ });
 
     sendJson(res, 200, { ok: true });
   });
@@ -224,13 +202,13 @@ export function registerDocTemplateRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const t = one<Row>('SELECT * FROM doc_templates WHERE id = ?', req.params.tid);
+    const t = (await getDocTemplateRepository().getById(req.params.tid)) as unknown as Row | null;
     if (!t || String(t.project_id) !== String(project.id)) {
       sendJson(res, 404, { error: 'Template not found' });
       return;
     }
 
-    setDefault(String(t.id), String(project.id), String(t.type));
+    await setDefault(String(t.id), String(project.id), String(t.type));
     sendJson(res, 200, { ok: true });
   });
 
@@ -242,9 +220,7 @@ export function registerDocTemplateRoutes(): void {
       return;
     }
 
-    const rows = all<Row>(
-      "SELECT * FROM doc_templates WHERE project_id IS NULL ORDER BY type, created_at",
-    );
+    const rows = (await getDocTemplateRepository().listPortal()) as unknown as Row[];
     sendJson(res, 200, { templates: rows.map(templateView) });
   });
 
@@ -256,9 +232,7 @@ export function registerDocTemplateRoutes(): void {
       return;
     }
 
-    const count = (one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM doc_templates WHERE project_id IS NULL",
-    )?.n ?? 0);
+    const count = (await getDocTemplateRepository().listPortal()).length;
     if (count >= TEMPLATE_LIMITS.portal) {
       throw badRequest(`The portal can hold at most ${TEMPLATE_LIMITS.portal} templates`);
     }
@@ -270,11 +244,12 @@ export function registerDocTemplateRoutes(): void {
     fs.mkdirSync(dir, { recursive: true });
     const storedName = `${id}${path.extname(filename)}`;
     fs.writeFileSync(path.join(dir, storedName), buf);
+    await persistFile(path.join(dir, storedName));
 
     const makeDefault = req.query.get('default') === '1';
     const name = str(req.query.get('name') ?? path.basename(filename, path.extname(filename)), 'name', { max: 80, optional: true }).trim() || path.basename(filename, path.extname(filename));
 
-    insert('doc_templates', {
+    await getDocTemplateRepository().create({
       id,
       project_id: null,
       name,
@@ -286,16 +261,14 @@ export function registerDocTemplateRoutes(): void {
     });
 
     if (makeDefault) {
-      setDefault(id, null, kind);
+      await setDefault(id, null, kind);
     } else {
-      const hasDefault = one<Row>(
-        "SELECT 1 FROM doc_templates WHERE project_id IS NULL AND type = ? AND is_default = 1",
-        kind,
-      );
-      if (!hasDefault) setDefault(id, null, kind);
+      const hasDefault = (await getDocTemplateRepository().listPortal())
+        .some((x) => x.type === kind && x.is_default === 1);
+      if (!hasDefault) await setDefault(id, null, kind);
     }
 
-    const t = one<Row>('SELECT * FROM doc_templates WHERE id = ?', id)!;
+    const t = (await getDocTemplateRepository().getById(id)) as unknown as Row;
     sendJson(res, 200, { template: templateView(t) });
   });
 
@@ -307,16 +280,17 @@ export function registerDocTemplateRoutes(): void {
       return;
     }
 
-    const t = one<Row>('SELECT * FROM doc_templates WHERE id = ?', req.params.tid);
-    if (!t || t.project_id !== null) {
+    const t = (await getDocTemplateRepository().getById(req.params.tid)) as unknown as Row | null;
+    if (!t || (t.project_id ?? null) !== null) {
       sendJson(res, 404, { error: 'Template not found' });
       return;
     }
 
-    dbRun('DELETE FROM doc_templates WHERE id = ?', t.id);
+    await getDocTemplateRepository().delete(String(t.id));
     try {
       fs.rmSync(templatePath(t), { force: true });
     } catch { /* best effort */ }
+    await forgetFile(templatePath(t)).catch(() => { /* best effort */ });
 
     sendJson(res, 200, { ok: true });
   });

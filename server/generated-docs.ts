@@ -14,7 +14,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, insert, run as dbRun, update } from './db.ts';
+import { getGeneratedDocRepository } from './repositories/generated-docs-data.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
 import type { Row } from './db.ts';
 import { newId, now, badRequest, notFound, str, parseJson } from './util.ts';
 import { emit } from './events.ts';
@@ -69,7 +70,7 @@ async function requireProjectAccess(
   return project;
 }
 
-function docView(d: Row, version?: Row | null) {
+async function docView(d: Row, version?: Row | null) {
   const attIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
   const status = String(d.status ?? 'ready');
   return {
@@ -92,7 +93,7 @@ function docView(d: Row, version?: Row | null) {
     created_by: d.created_by ?? null,
     created_at: d.created_at,
     latest_version: version ? versionView(version) : null,
-    attachments: attIds.length > 0 ? getAttachmentsView(String(d.project_id), attIds) : [],
+    attachments: attIds.length > 0 ? await getAttachmentsView(String(d.project_id), attIds) : [],
   };
 }
 
@@ -109,14 +110,14 @@ function versionView(v: Row) {
   };
 }
 
-function getDoc(docId: string, projectId: string): Row {
-  const d = one<Row>('SELECT * FROM generated_docs WHERE id = ? AND project_id = ?', docId, projectId);
+async function getDoc(docId: string, projectId: string): Promise<Row> {
+  const d = (await getGeneratedDocRepository().getById(docId, projectId)) as unknown as Row | null;
   if (!d) throw notFound('Document not found');
   return d;
 }
 
-function latestVersion(docId: string): Row | null {
-  return one<Row>('SELECT * FROM generated_doc_versions WHERE doc_id = ? ORDER BY version_num DESC LIMIT 1', docId) ?? null;
+async function latestVersion(docId: string): Promise<Row | null> {
+  return ((await getGeneratedDocRepository().getLatestVersion(docId)) as unknown as Row | null) ?? null;
 }
 
 async function startDocRun(
@@ -131,7 +132,8 @@ async function startDocRun(
   const workflowId = preconfig?.workflowId ?? newId('w_');
   const ts = now();
 
-  insert('p6_workflows', {
+  const sessions = getSessionsRepository();
+  await sessions.createWorkflow({
     id: workflowId,
     project_id: projectId,
     goal,
@@ -144,14 +146,16 @@ async function startDocRun(
     repo_ids: '[]',
     iteration_count: 0,
     max_iterations: 1,
-    work_dir: preconfig?.workDir ?? null,
+    credential_id: null,
+    model: '',
     created_by: userId,
     created_at: ts,
     updated_at: ts,
   });
+  if (preconfig?.workDir) await sessions.updateWorkflow(workflowId, { work_dir: preconfig.workDir });
 
   // Mark the doc as generating so startup recovery can flip it to failed on crash
-  update('generated_docs', docId, { status: 'generating', error: null, workflow_id: workflowId });
+  await getGeneratedDocRepository().update(docId, { status: 'generating', error: null, workflow_id: workflowId });
 
   emit(projectId, { type: 'workflow.created', workflowId });
 
@@ -175,10 +179,10 @@ async function startDocRun(
  */
 export async function processDocOutput(workflowId: string, runId: string, workDir: string): Promise<void> {
   // Find the generated_doc linked to this workflow
-  const d = one<Row>(
-    "SELECT gd.* FROM generated_docs gd JOIN p6_workflows w ON w.id = ? WHERE w.project_id = gd.project_id",
-    workflowId,
-  );
+  const wf = await getSessionsRepository().getWorkflowById(workflowId);
+  if (!wf?.project_id) return;
+  const d = ((await getGeneratedDocRepository().listByProject(wf.project_id)) as unknown as Row[])
+    .find((x) => x.workflow_id === workflowId);
   if (!d) return;
 
   // Look for a markdown file in the workDir
@@ -196,16 +200,12 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
   } catch { /* best effort */ }
 
   // Get next version number
-  const lastVersion = one<{ max_v: number }>(
-    'SELECT COALESCE(MAX(version_num), 0) AS max_v FROM generated_doc_versions WHERE doc_id = ?',
-    String(d.id),
-  );
-  const versionNum = (lastVersion?.max_v ?? 0) + 1;
+  const versionNum = (await getGeneratedDocRepository().getMaxVersionNum(String(d.id))) + 1;
 
   const versionId = newId('gdv_');
   const ts = now();
 
-  insert('generated_doc_versions', {
+  await getGeneratedDocRepository().createVersion({
     id: versionId,
     doc_id: String(d.id),
     version_num: versionNum,
@@ -216,7 +216,7 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
     created_at: ts,
   });
 
-  update('generated_docs', String(d.id), {
+  await getGeneratedDocRepository().update(String(d.id), {
     latest_version_id: versionId,
     stale: 0,
     status: 'ready',
@@ -232,17 +232,14 @@ export function registerGeneratedDocRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const docs = all<Row>(
-      'SELECT * FROM generated_docs WHERE project_id = ? ORDER BY created_at DESC',
-      String(project.id),
-    );
+    const docs = (await getGeneratedDocRepository().listByProject(String(project.id))) as unknown as Row[];
 
-    const result = docs.map((d) => {
+    const result = await Promise.all(docs.map(async (d) => {
       const v = d.latest_version_id
-        ? one<Row>('SELECT * FROM generated_doc_versions WHERE id = ?', String(d.latest_version_id))
+        ? ((await getGeneratedDocRepository().getVersionById(String(d.latest_version_id))) as unknown as Row | null)
         : null;
-      return docView(d, v);
-    });
+      return await docView(d, v);
+    }));
 
     sendJson(res, 200, {
       docs: result,
@@ -276,16 +273,13 @@ export function registerGeneratedDocRoutes(): void {
     // Validate attachment IDs
     let attachmentRows: Row[] = [];
     if (rawAttachmentIds.length > 0) {
-      const { error, rows } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+      const { error, rows } = await validateAttachmentIds(String(project.id), rawAttachmentIds);
       if (error) throw badRequest(error);
       attachmentRows = rows!;
     }
 
     // Check per-project limit
-    const count = (one<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM generated_docs WHERE project_id = ?',
-      String(project.id),
-    )?.n ?? 0);
+    const count = await getGeneratedDocRepository().countByProject(String(project.id));
     if (count >= DOC_LIMITS.perProject) {
       throw badRequest(`A project can hold at most ${DOC_LIMITS.perProject} generated documents`);
     }
@@ -315,7 +309,7 @@ export function registerGeneratedDocRoutes(): void {
     const id = newId('gd_');
     const ts = now();
 
-    insert('generated_docs', {
+    await getGeneratedDocRepository().create({
       id,
       project_id: String(project.id),
       name,
@@ -348,8 +342,8 @@ export function registerGeneratedDocRoutes(): void {
       await linkAttachmentsToParent(rawAttachmentIds, 'doc', id);
     }
 
-    const d = one<Row>('SELECT * FROM generated_docs WHERE id = ?', id)!;
-    sendJson(res, 200, { doc: docView(d, null), workflowId });
+    const d = (await getDoc(id, String(project.id)));
+    sendJson(res, 200, { doc: await docView(d, null), workflowId });
   });
 
   // GET /api/projects/:id/generated-docs/:docId
@@ -357,9 +351,9 @@ export function registerGeneratedDocRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const d = getDoc(req.params.docId, String(project.id));
-    const v = latestVersion(String(d.id));
-    sendJson(res, 200, { doc: docView(d, v) });
+    const d = await getDoc(req.params.docId, String(project.id));
+    const v = await latestVersion(String(d.id));
+    sendJson(res, 200, { doc: await docView(d, v) });
   });
 
   // DELETE /api/projects/:id/generated-docs/:docId
@@ -367,9 +361,9 @@ export function registerGeneratedDocRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const d = getDoc(req.params.docId, String(project.id));
+    const d = await getDoc(req.params.docId, String(project.id));
     await deleteAttachmentsForParent('doc', String(d.id));
-    dbRun('DELETE FROM generated_docs WHERE id = ?', String(d.id));
+    await getGeneratedDocRepository().delete(String(d.id));
     sendJson(res, 200, { ok: true });
   });
 
@@ -378,7 +372,7 @@ export function registerGeneratedDocRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const d = getDoc(req.params.docId, String(project.id));
+    const d = await getDoc(req.params.docId, String(project.id));
     const body = (req.body ?? {}) as Record<string, unknown>;
     const rawAttachmentIds = Array.isArray(body.attachmentIds) ? (body.attachmentIds as unknown[]).map(String) : null;
 
@@ -386,21 +380,21 @@ export function registerGeneratedDocRoutes(): void {
     let effectiveAttachmentIds: string[];
     if (rawAttachmentIds !== null) {
       if (rawAttachmentIds.length > 0) {
-        const { error } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+        const { error } = await validateAttachmentIds(String(project.id), rawAttachmentIds);
         if (error) { sendJson(res, 400, { error }); return; }
       }
       // Replace old attachments
       const oldIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
       if (oldIds.length > 0) await deleteAttachmentsForParent('doc', String(d.id));
       effectiveAttachmentIds = rawAttachmentIds;
-      update('generated_docs', String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds) });
+      await getGeneratedDocRepository().update(String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds) });
     } else {
       effectiveAttachmentIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
     }
 
     let attachmentRows: Row[] = [];
     if (effectiveAttachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      const { rows } = await validateAttachmentIds(String(project.id), effectiveAttachmentIds);
       attachmentRows = rows ?? [];
     }
 
@@ -446,7 +440,7 @@ export function registerGeneratedDocRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const d = getDoc(req.params.docId, String(project.id));
+    const d = await getDoc(req.params.docId, String(project.id));
     const status = String(d.status ?? 'ready');
     if (status !== 'failed') {
       sendJson(res, 409, { error: 'Document is not in a failed state' });
@@ -457,7 +451,7 @@ export function registerGeneratedDocRoutes(): void {
 
     let attachmentRows: Row[] = [];
     if (effectiveAttachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      const { rows } = await validateAttachmentIds(String(project.id), effectiveAttachmentIds);
       attachmentRows = rows ?? [];
     }
 
@@ -495,9 +489,9 @@ export function registerGeneratedDocRoutes(): void {
       linkAttachmentsToParent(effectiveAttachmentIds, 'doc', String(d.id));
     }
 
-    const updated = getDoc(String(d.id), String(project.id));
-    const v = latestVersion(String(d.id));
-    sendJson(res, 202, { doc: docView(updated, v) });
+    const updated = await getDoc(String(d.id), String(project.id));
+    const v = await latestVersion(String(d.id));
+    sendJson(res, 202, { doc: await docView(updated, v) });
   });
 
   // GET /api/projects/:id/generated-docs/:docId/versions
@@ -505,11 +499,8 @@ export function registerGeneratedDocRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const d = getDoc(req.params.docId, String(project.id));
-    const versions = all<Row>(
-      'SELECT * FROM generated_doc_versions WHERE doc_id = ? ORDER BY version_num DESC',
-      String(d.id),
-    );
+    const d = await getDoc(req.params.docId, String(project.id));
+    const versions = (await getGeneratedDocRepository().listVersions(String(d.id))) as unknown as Row[];
 
     sendJson(res, 200, { versions: versions.map(versionView) });
   });
@@ -519,7 +510,7 @@ export function registerGeneratedDocRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const d = getDoc(req.params.docId, String(project.id));
+    const d = await getDoc(req.params.docId, String(project.id));
     const format = (req.query.get('format') ?? 'md') as 'md' | 'docx';
 
     if (!d.latest_version_id) {
@@ -527,7 +518,7 @@ export function registerGeneratedDocRoutes(): void {
       return;
     }
 
-    const v = one<Row>('SELECT * FROM generated_doc_versions WHERE id = ?', String(d.latest_version_id));
+    const v = (await getGeneratedDocRepository().getVersionById(String(d.latest_version_id))) as unknown as Row | null;
     if (!v) {
       sendJson(res, 404, { error: 'Version not found' });
       return;

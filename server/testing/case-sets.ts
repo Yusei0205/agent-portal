@@ -484,7 +484,7 @@ export async function runCaseSetGeneration(
     let images: Array<{ data: Buffer; mimeType: string; filename: string }> = [];
     let attachmentNames: string[] = [];
     if (resolvedAttachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(tp.project_id, resolvedAttachmentIds);
+      const { rows } = await validateAttachmentIds(tp.project_id, resolvedAttachmentIds);
       if (rows) attachmentNames = rows.map((r) => String(r.filename));
       const ctx = await buildAttachmentContext(rows ?? []);
       textBlock = ctx.textBlock;
@@ -881,7 +881,7 @@ export function registerCaseSetRoutes(): void {
       : [];
 
     if (rawAttachmentIds.length > 0) {
-      const { error } = validateAttachmentIds(req.params.pid, rawAttachmentIds);
+      const { error } = await validateAttachmentIds(req.params.pid, rawAttachmentIds);
       if (error) { sendJson(res, 400, { error }); return; }
     }
 

@@ -157,7 +157,7 @@ function iconExportCapability(): { drawio: boolean; png: boolean; svg: boolean; 
   return { drawio: true, png: reason === null, svg: reason === null, previewReason: reason };
 }
 
-function diagramView(d: Row): object {
+async function diagramView(d: Row): Promise<object> {
   const attIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
   return {
     id: d.id,
@@ -183,7 +183,7 @@ function diagramView(d: Row): object {
     created_by: d.created_by ?? null,
     created_at: d.created_at,
     updated_at: d.updated_at,
-    attachments: attIds.length > 0 ? getAttachmentsView(String(d.project_id), attIds) : [],
+    attachments: attIds.length > 0 ? await getAttachmentsView(String(d.project_id), attIds) : [],
   };
 }
 
@@ -522,7 +522,7 @@ export function registerDiagramRoutes(): void {
     const stylesInfo = await styleChoices();
 
     sendJson(res, 200, {
-      diagrams: rows.map(diagramView),
+      diagrams: await Promise.all(rows.map(diagramView)),
       kinds: DIAGRAM_KINDS.map((id) => ({ id, label: KIND_LABELS[id] })),
       styles: stylesInfo,
       clouds: CLOUDS.map((id) => ({ id, label: CLOUD_LABELS[id] })),
@@ -586,7 +586,7 @@ export function registerDiagramRoutes(): void {
     // Validate attachment IDs before inserting the diagram
     let attachmentRows: Row[] = [];
     if (rawAttachmentIds.length > 0) {
-      const { error, rows } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+      const { error, rows } = await validateAttachmentIds(String(project.id), rawAttachmentIds);
       if (error) throw badRequest(error);
       attachmentRows = rows!;
     }
@@ -636,7 +636,7 @@ export function registerDiagramRoutes(): void {
 
     const diagram = one<Row>('SELECT * FROM diagrams WHERE id = ?', id)!;
     sendJson(res, 200, {
-      diagram: diagramView(diagram),
+      diagram: await diagramView(diagram),
       workflowId,
     });
   });
@@ -652,7 +652,7 @@ export function registerDiagramRoutes(): void {
 
     sendJson(res, 200, {
       diagram: {
-        ...diagramView(d),
+        ...(await diagramView(d)),
         mermaid: latest?.format === 'mermaid' ? (latest.mermaid ?? '') : '',
         drawio: latest?.format === 'drawio' ? (latest.drawio ?? null) : null,
       },
@@ -698,7 +698,7 @@ export function registerDiagramRoutes(): void {
     let effectiveAttachmentIds: string[];
     if (rawAttachmentIds !== null) {
       if (rawAttachmentIds.length > 0) {
-        const { error } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+        const { error } = await validateAttachmentIds(String(project.id), rawAttachmentIds);
         if (error) { sendJson(res, 400, { error }); return; }
       }
       // Replace: unlink old attachments, link new ones
@@ -714,7 +714,7 @@ export function registerDiagramRoutes(): void {
     const dUpdated = getDiagramRow(String(project.id), req.params.did);
     let attachmentRows: Row[] = [];
     if (effectiveAttachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      const { rows } = await validateAttachmentIds(String(project.id), effectiveAttachmentIds);
       attachmentRows = rows ?? [];
     }
 
@@ -727,7 +727,7 @@ export function registerDiagramRoutes(): void {
 
     const updated = one<Row>('SELECT * FROM diagrams WHERE id = ?', String(dUpdated.id))!;
     sendJson(res, 200, {
-      diagram: diagramView(updated),
+      diagram: await diagramView(updated),
       workflowId: gen.workflowId,
     });
   });
@@ -746,14 +746,14 @@ export function registerDiagramRoutes(): void {
     const effectiveAttachmentIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
     let attachmentRows: Row[] = [];
     if (effectiveAttachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      const { rows } = await validateAttachmentIds(String(project.id), effectiveAttachmentIds);
       attachmentRows = rows ?? [];
     }
 
     const gen = await startDiagramGeneration(String(d.id), req.user!.id, attachmentRows);
 
     const updated = one<Row>('SELECT * FROM diagrams WHERE id = ?', String(d.id))!;
-    sendJson(res, 202, { diagram: diagramView(updated), workflowId: gen.workflowId });
+    sendJson(res, 202, { diagram: await diagramView(updated), workflowId: gen.workflowId });
   });
 
   // GET /api/projects/:id/diagrams/:did/versions — list versions

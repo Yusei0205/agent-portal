@@ -337,8 +337,8 @@ export async function startServer(
   sessionCleanupTimer.unref();
 
   // 8b. Periodic AI attachment orphan cleanup (every 6 hours)
-  const attachmentCleanupTimer = setInterval(() => {
-    if (!onLambda && isDbOpen()) cleanupOrphanedAttachments();
+  const attachmentCleanupTimer = setInterval(async () => {
+    if (!onLambda && isDbOpen()) await cleanupOrphanedAttachments();
   }, 6 * 3600_000);
   attachmentCleanupTimer.unref();
 

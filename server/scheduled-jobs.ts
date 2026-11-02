@@ -17,7 +17,7 @@ export const SCHEDULED_EVENT_PATH = '/internal/events';
 
 export const JOBS = {
   'idle-stop': async (): Promise<void> => { await checkIdleSessions(); },
-  'attachment-cleanup': async (): Promise<void> => { cleanupOrphanedAttachments(); },
+  'attachment-cleanup': async (): Promise<void> => { await cleanupOrphanedAttachments(); },
   'session-cleanup': async (): Promise<void> => { cleanupSessions(); },
 } as const;
 

@@ -9,11 +9,12 @@
  *   POST   /api/projects/:id/presentations/:presId/refresh — re-run
  *   GET    /api/projects/:id/presentations/:presId/download — download .pptx
  */
+import { getPresentationRepository } from './repositories/presentations-data.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, insert, run as dbRun, update } from './db.ts';
 import type { Row } from './db.ts';
 import { newId, now, badRequest, notFound, str, parseJson } from './util.ts';
 import { emit } from './events.ts';
@@ -68,7 +69,7 @@ async function requireProjectAccess(
   return project;
 }
 
-function presView(p: Row) {
+async function presView(p: Row) {
   const attIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
   const status = String(p.status ?? 'ready');
   return {
@@ -94,12 +95,12 @@ function presView(p: Row) {
     created_by: p.created_by ?? null,
     created_at: p.created_at,
     updated_at: p.updated_at,
-    attachments: attIds.length > 0 ? getAttachmentsView(String(p.project_id), attIds) : [],
+    attachments: attIds.length > 0 ? await getAttachmentsView(String(p.project_id), attIds) : [],
   };
 }
 
-function getPresentation(presId: string, projectId: string): Row {
-  const p = one<Row>('SELECT * FROM presentations WHERE id = ? AND project_id = ?', presId, projectId);
+async function getPresentation(presId: string, projectId: string): Promise<Row> {
+  const p = (await getPresentationRepository().getById(presId, projectId)) as unknown as Row | null;
   if (!p) throw notFound('Presentation not found');
   return p;
 }
@@ -116,7 +117,8 @@ async function startPresRun(
   const workflowId = preconfig?.workflowId ?? newId('w_');
   const ts = now();
 
-  insert('p6_workflows', {
+  const sessions = getSessionsRepository();
+  await sessions.createWorkflow({
     id: workflowId,
     project_id: projectId,
     goal,
@@ -129,16 +131,18 @@ async function startPresRun(
     repo_ids: '[]',
     iteration_count: 0,
     max_iterations: 1,
-    work_dir: preconfig?.workDir ?? null,
+    credential_id: null,
+    model: '',
     created_by: userId,
     created_at: ts,
     updated_at: ts,
   });
+  if (preconfig?.workDir) await sessions.updateWorkflow(workflowId, { work_dir: preconfig.workDir });
 
   emit(projectId, { type: 'workflow.created', workflowId });
 
   // Mark the presentation as generating so startup recovery can flip it to failed on crash
-  update('presentations', presId, { status: 'generating', error: null, updated_at: now() });
+  await getPresentationRepository().update(presId, { status: 'generating', error: null, updated_at: now() });
 
   setTimeout(async () => {
     try {
@@ -176,10 +180,7 @@ function buildSourceBlock(p: Row): string {
  */
 export async function processPresentationOutput(workflowId: string, runId: string, workDir: string): Promise<void> {
   // Find the presentation linked to this workflow
-  const p = one<Row>(
-    'SELECT * FROM presentations WHERE workflow_id = ?',
-    workflowId,
-  );
+  const p = (await getPresentationRepository().getByWorkflowId(workflowId)) as unknown as Row | null;
   if (!p) return;
 
   let pptxPath: string | null = null;
@@ -204,7 +205,7 @@ export async function processPresentationOutput(workflowId: string, runId: strin
   } catch { /* best effort */ }
 
   const ts = now();
-  update('presentations', String(p.id), {
+  await getPresentationRepository().update(String(p.id), {
     pptx_path: pptxPath,
     preview_json: previewJson,
     stale: 0,
@@ -222,13 +223,10 @@ export function registerPresentationRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const rows = all<Row>(
-      'SELECT * FROM presentations WHERE project_id = ? ORDER BY created_at DESC',
-      String(project.id),
-    );
+    const rows = (await getPresentationRepository().listByProject(String(project.id))) as unknown as Row[];
 
     sendJson(res, 200, {
-      presentations: rows.map(presView),
+      presentations: await Promise.all(rows.map(presView)),
       source_kinds: [...PRESENTATION_SOURCES],
       limits: { perProject: PRESENTATION_LIMITS.perProject, slidesMin: PRESENTATION_LIMITS.slidesMin, slidesMax: PRESENTATION_LIMITS.slidesMax },
     });
@@ -271,16 +269,13 @@ export function registerPresentationRoutes(): void {
     // Validate attachment IDs
     let attachmentRows: Row[] = [];
     if (rawAttachmentIds.length > 0) {
-      const { error, rows } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+      const { error, rows } = await validateAttachmentIds(String(project.id), rawAttachmentIds);
       if (error) throw badRequest(error);
       attachmentRows = rows!;
     }
 
     // Check per-project limit
-    const count = (one<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM presentations WHERE project_id = ?',
-      String(project.id),
-    )?.n ?? 0);
+    const count = await getPresentationRepository().countByProject(String(project.id));
     if (count >= PRESENTATION_LIMITS.perProject) {
       throw badRequest(`A project can hold at most ${PRESENTATION_LIMITS.perProject} presentations`);
     }
@@ -319,7 +314,7 @@ export function registerPresentationRoutes(): void {
       goal += buildAttachmentPromptBlock(staged);
     }
 
-    insert('presentations', {
+    await getPresentationRepository().create({
       id,
       project_id: String(project.id),
       name,
@@ -332,10 +327,7 @@ export function registerPresentationRoutes(): void {
       diagram_cloud: null,
       lead_agent: leadAgent,
       trust_all_tools: trustAllTools ? 1 : 0,
-      pptx_path: null,
-      preview_json: null,
-      workflow_id: null,
-      stale: 0,
+      status: 'generating',
       attachment_ids: JSON.stringify(rawAttachmentIds),
       created_by: req.user!.id,
       created_at: ts,
@@ -356,10 +348,10 @@ export function registerPresentationRoutes(): void {
     if (rawAttachmentIds.length > 0) {
       await linkAttachmentsToParent(rawAttachmentIds, 'presentation', id);
     }
-    update('presentations', id, { workflow_id: workflowId, updated_at: now() });
+    await getPresentationRepository().update(id, { workflow_id: workflowId, updated_at: now() });
 
-    const p = one<Row>('SELECT * FROM presentations WHERE id = ?', id)!;
-    sendJson(res, 200, { presentation: presView(p), workflowId });
+    const p = await getPresentation(id, String(project.id));
+    sendJson(res, 200, { presentation: await presView(p), workflowId });
   });
 
   // GET /api/projects/:id/presentations/:presId
@@ -367,8 +359,8 @@ export function registerPresentationRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const p = getPresentation(req.params.presId, String(project.id));
-    sendJson(res, 200, { presentation: presView(p) });
+    const p = await getPresentation(req.params.presId, String(project.id));
+    sendJson(res, 200, { presentation: await presView(p) });
   });
 
   // DELETE /api/projects/:id/presentations/:presId
@@ -376,9 +368,9 @@ export function registerPresentationRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const p = getPresentation(req.params.presId, String(project.id));
+    const p = await getPresentation(req.params.presId, String(project.id));
     await deleteAttachmentsForParent('presentation', String(p.id));
-    dbRun('DELETE FROM presentations WHERE id = ?', String(p.id));
+    await getPresentationRepository().delete(String(p.id));
     sendJson(res, 200, { ok: true });
   });
 
@@ -387,7 +379,7 @@ export function registerPresentationRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const p = getPresentation(req.params.presId, String(project.id));
+    const p = await getPresentation(req.params.presId, String(project.id));
     const body = (req.body ?? {}) as Record<string, unknown>;
     const rawAttachmentIds = Array.isArray(body.attachmentIds)
       ? (body.attachmentIds as unknown[]).map(String)
@@ -397,20 +389,20 @@ export function registerPresentationRoutes(): void {
     let effectiveAttachmentIds: string[];
     if (rawAttachmentIds !== null) {
       if (rawAttachmentIds.length > 0) {
-        const { error } = validateAttachmentIds(String(project.id), rawAttachmentIds);
+        const { error } = await validateAttachmentIds(String(project.id), rawAttachmentIds);
         if (error) { sendJson(res, 400, { error }); return; }
       }
       const oldIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
       if (oldIds.length > 0) await deleteAttachmentsForParent('presentation', String(p.id));
       effectiveAttachmentIds = rawAttachmentIds;
-      update('presentations', String(p.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
+      await getPresentationRepository().update(String(p.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
     } else {
       effectiveAttachmentIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
     }
 
     let attachmentRows: Row[] = [];
     if (effectiveAttachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      const { rows } = await validateAttachmentIds(String(project.id), effectiveAttachmentIds);
       attachmentRows = rows ?? [];
     }
 
@@ -449,7 +441,7 @@ export function registerPresentationRoutes(): void {
     if (rawAttachmentIds !== null && rawAttachmentIds.length > 0) {
       linkAttachmentsToParent(rawAttachmentIds, 'presentation', String(p.id));
     }
-    update('presentations', String(p.id), { workflow_id: workflowId, updated_at: now() });
+    await getPresentationRepository().update(String(p.id), { workflow_id: workflowId, updated_at: now() });
     sendJson(res, 200, { workflowId });
   });
 
@@ -458,7 +450,7 @@ export function registerPresentationRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const p = getPresentation(req.params.presId, String(project.id));
+    const p = await getPresentation(req.params.presId, String(project.id));
     const status = String(p.status ?? 'ready');
     if (status !== 'failed') {
       sendJson(res, 409, { error: 'Presentation is not in a failed state' });
@@ -469,7 +461,7 @@ export function registerPresentationRoutes(): void {
 
     let attachmentRows: Row[] = [];
     if (effectiveAttachmentIds.length > 0) {
-      const { rows } = validateAttachmentIds(String(project.id), effectiveAttachmentIds);
+      const { rows } = await validateAttachmentIds(String(project.id), effectiveAttachmentIds);
       attachmentRows = rows ?? [];
     }
 
@@ -508,10 +500,10 @@ export function registerPresentationRoutes(): void {
     if (effectiveAttachmentIds.length > 0) {
       linkAttachmentsToParent(effectiveAttachmentIds, 'presentation', String(p.id));
     }
-    update('presentations', String(p.id), { workflow_id: workflowId, updated_at: now() });
+    await getPresentationRepository().update(String(p.id), { workflow_id: workflowId, updated_at: now() });
 
-    const updated = getPresentation(String(p.id), String(project.id));
-    sendJson(res, 202, { presentation: presView(updated) });
+    const updated = await getPresentation(String(p.id), String(project.id));
+    sendJson(res, 202, { presentation: await presView(updated) });
   });
 
   // GET /api/projects/:id/presentations/:presId/download
@@ -519,7 +511,7 @@ export function registerPresentationRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const p = getPresentation(req.params.presId, String(project.id));
+    const p = await getPresentation(req.params.presId, String(project.id));
 
     if (!p.pptx_path || !fs.existsSync(String(p.pptx_path))) {
       sendJson(res, 404, { error: 'No PPTX file available yet' });
