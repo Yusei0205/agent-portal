@@ -12,8 +12,7 @@
 
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run as dbRun, insert, getDb, update } from './db.ts';
-import type { Row } from './db.ts';
+import { getDb } from './db.ts';
 import { encrypt, decrypt } from './secrets.ts';
 import { getAgentEnv } from './settings.ts';
 import { config } from './config.ts';
@@ -25,7 +24,8 @@ import {
   startAgentCoreLogin,
   pollAgentCoreLogin,
 } from './agent/kiro-agentcore.ts';
-import type { DatabaseSync } from 'node:sqlite';
+import { getCredentialsRepository } from './repositories/credentials.ts';
+import type { CredentialRecord } from './repositories/credentials.ts';
 
 // Re-export the profiles fetcher override so tests can mock the API.
 export { setProfilesFetcherOverride };
@@ -37,21 +37,8 @@ export type KiroMode = 'api_key' | 'identity_center';
 export type ClaudeCodeMode = 'api_key' | 'subscription_token' | 'bedrock_role';
 export type CredentialMode = KiroMode | ClaudeCodeMode;
 
-interface CredentialRow extends Row {
-  id: string;
-  user_id: string;
-  engine: string;
-  name: string;
-  mode: string;
-  secret_enc: string | null;
-  extra_config: string;
-  is_default: number;
-  last4: string;
-  created_at: string;
-  updated_at: string;
-  updated_by: string | null;
-  updated_by_name?: string | null;
-}
+// CredentialRow is an alias for CredentialRecord for internal use
+type CredentialRow = CredentialRecord;
 
 // ── OIDC client abstraction (injectable for tests) ─────────────────────────────
 
@@ -318,7 +305,7 @@ function safeJson(s: string | null | undefined): Record<string, unknown> {
 async function fetchAndStoreProfile(credId: string, accessToken: string, region: string): Promise<void> {
   try {
     const result: FetchProfilesResult = await fetchKiroProfiles(accessToken, region);
-    const cred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', credId);
+    const cred = await getCredentialsRepository().getById(credId);
     if (!cred) return;
     const extra = safeJson(cred.extra_config);
 
@@ -330,10 +317,7 @@ async function fetchAndStoreProfile(credId: string, accessToken: string, region:
       delete newExtra.selectedProfileArn;
       delete newExtra.selectedProfileName;
       delete newExtra.availableProfiles;
-      dbRun(
-        'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
-        JSON.stringify(newExtra), now(), credId,
-      );
+      await getCredentialsRepository().updateExtraConfig(credId, JSON.stringify(newExtra), now());
       return;
     }
 
@@ -345,10 +329,7 @@ async function fetchAndStoreProfile(credId: string, accessToken: string, region:
       delete newExtra.selectedProfileArn;
       delete newExtra.selectedProfileName;
       delete newExtra.availableProfiles;
-      dbRun(
-        'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
-        JSON.stringify(newExtra), now(), credId,
-      );
+      await getCredentialsRepository().updateExtraConfig(credId, JSON.stringify(newExtra), now());
       return;
     }
 
@@ -365,10 +346,7 @@ async function fetchAndStoreProfile(credId: string, accessToken: string, region:
       delete newExtra.availableProfiles;
     }
 
-    dbRun(
-      'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
-      JSON.stringify(newExtra), now(), credId,
-    );
+    await getCredentialsRepository().updateExtraConfig(credId, JSON.stringify(newExtra), now());
   } catch {
     // Non-fatal: best-effort; user can re-authenticate to retry
   }
@@ -386,11 +364,9 @@ async function fetchAndStoreProfile(credId: string, accessToken: string, region:
  * Exported so models.ts can call it before listing models.
  */
 export async function ensureKiroProfileFetched(credId: string): Promise<void> {
-  const cred = one<CredentialRow>(
-    'SELECT * FROM engine_credentials WHERE id = ? AND mode = ?',
-    credId, 'identity_center',
-  );
-  if (!cred || !cred.secret_enc) return;
+  const cred = await getCredentialsRepository().getById(credId);
+  if (!cred || cred.mode !== 'identity_center') return;
+  if (!cred.secret_enc) return;
 
   const extra = safeJson(cred.extra_config);
   if (extra.selectedProfileArn) return; // Already have a profile
@@ -404,20 +380,18 @@ export async function ensureKiroProfileFetched(credId: string): Promise<void> {
   await fetchAndStoreProfile(credId, accessToken, region);
 
   // Re-read to check result
-  const updatedCred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', credId);
+  const updatedCred = await getCredentialsRepository().getById(credId);
   const updatedExtra = safeJson(updatedCred?.extra_config);
   if (!updatedExtra.selectedProfileArn) {
     const fetchErr = updatedExtra.profileFetchError ? String(updatedExtra.profileFetchError) : '';
 
     if (!fetchErr) {
-      // Unexpected — profile was not fetched and no error was recorded
       throw new HttpError(
         400,
         'Kiro profile not found. Open Credentials and click Sign in again.',
       );
     }
 
-    // HTTP 4xx auth/client errors: re-signing-in may produce a fresh token that works
     const isAuthError = /HTTP 40[0-9]/.test(fetchErr);
     const action = isAuthError
       ? 'Open Credentials and click Sign in again.'
@@ -515,13 +489,12 @@ async function attemptTokenRefresh(cred: CredentialRow): Promise<RefreshResult> 
     delete newExtra.pendingExpireAt;
     delete newExtra.pendingClientSecretExpiresAt;
 
-    dbRun(
-      'UPDATE engine_credentials SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ? WHERE id = ?',
+    await getCredentialsRepository().updateToken(
+      String(cred.id),
       tokenEnc,
       JSON.stringify(newExtra),
       result.accessToken.slice(-4),
       now(),
-      String(cred.id),
     );
     return { ok: true };
   } catch (e) {
@@ -549,11 +522,9 @@ async function attemptTokenRefresh(cred: CredentialRow): Promise<RefreshResult> 
  * Exported so models.ts can call it before listing models.
  */
 export async function autoRefreshIdcIfNeeded(credId: string): Promise<void> {
-  const cred = one<CredentialRow>(
-    'SELECT * FROM engine_credentials WHERE id = ? AND mode = ?',
-    credId, 'identity_center',
-  );
-  if (!cred || !cred.secret_enc) return;
+  const cred = await getCredentialsRepository().getById(credId);
+  if (!cred || cred.mode !== 'identity_center') return;
+  if (!cred.secret_enc) return;
 
   const extra = safeJson(cred.extra_config);
   if (!extra.refreshTokenEnc) return; // No refresh token; proceed with existing token
@@ -564,7 +535,7 @@ export async function autoRefreshIdcIfNeeded(credId: string): Promise<void> {
   // Deduplicate: if a refresh is already in flight for this credential, await it
   let promise = _refreshPromises.get(credId);
   if (!promise) {
-    promise = attemptTokenRefresh(cred).finally(() => {
+    promise = attemptTokenRefresh(cred as CredentialRow).finally(() => {
       _refreshPromises.delete(credId);
     });
     _refreshPromises.set(credId, promise);
@@ -602,13 +573,13 @@ function requireBrowser(req: PortalRequest, res: PortalResponse): boolean {
 
 // ── Ownership check ───────────────────────────────────────────────────────────
 
-function requireOwned(
+async function requireOwned(
   res: PortalResponse,
   credId: string,
   userId: string,
-): CredentialRow | null {
-  const cred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', credId);
-  if (!cred || String(cred.user_id) !== userId) {
+): Promise<CredentialRow | null> {
+  const cred = await getCredentialsRepository().getByIdAndUser(credId, userId);
+  if (!cred) {
     sendJson(res, 404, { error: 'Credential not found' });
     return null;
   }
@@ -647,28 +618,21 @@ export async function resolveCredentialEnv(
   engine: 'kiro' | 'claude-code',
   credentialOwnerId: string | null,
   credentialId: string | null,
-  db?: DatabaseSync,
+  _db?: unknown,
 ): Promise<Record<string, string>> {
-  const _db = db ?? getDb();
-
-  let cred: CredentialRow | undefined;
+  let cred: CredentialRecord | null | undefined;
 
   if (credentialId && credentialOwnerId) {
-    cred = one<CredentialRow>(
-      'SELECT * FROM engine_credentials WHERE id = ? AND user_id = ? AND engine = ?',
-      credentialId, credentialOwnerId, engine,
-    );
+    cred = await getCredentialsRepository().getByIdAndUser(credentialId, credentialOwnerId);
+    if (cred && cred.engine !== engine) cred = undefined;
   }
 
   if (!cred && credentialOwnerId) {
-    cred = one<CredentialRow>(
-      'SELECT * FROM engine_credentials WHERE user_id = ? AND engine = ? AND is_default = 1',
-      credentialOwnerId, engine,
-    );
+    cred = await getCredentialsRepository().getDefaultByUserAndEngine(credentialOwnerId, engine);
   }
 
   if (!cred) {
-    return await getAgentEnv(_db);
+    return await getAgentEnv();
   }
 
   return buildEnvFromCred(cred);
@@ -745,7 +709,7 @@ async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, str
       await ensureKiroProfileFetched(String(cred.id));
 
       // Re-read the credential row in case a refresh occurred.
-      const activeCred = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id)) ?? cred;
+      const activeCred = await getCredentialsRepository().getById(String(cred.id)) ?? cred;
       const activeExtra = safeJson(activeCred.extra_config);
 
       let val: string;
@@ -855,11 +819,8 @@ export async function refreshIdcCredentialToken(
   newRefreshToken: string | undefined,
 ): Promise<void> {
   try {
-    const cred = one<CredentialRow>(
-      'SELECT * FROM engine_credentials WHERE id = ? AND mode = ?',
-      credentialId, 'identity_center',
-    );
-    if (!cred) return;
+    const cred = await getCredentialsRepository().getById(credentialId);
+    if (!cred || cred.mode !== 'identity_center') return;
     const extra = safeJson(cred.extra_config);
     const newExtra: Record<string, unknown> = {
       ...extra,
@@ -875,13 +836,12 @@ export async function refreshIdcCredentialToken(
     delete newExtra.pendingClientSecretExpiresAt;
 
     const tokenEnc = encrypt(newAccessToken, config.secretKey);
-    dbRun(
-      'UPDATE engine_credentials SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ? WHERE id = ?',
+    await getCredentialsRepository().updateToken(
+      credentialId,
       tokenEnc,
       JSON.stringify(newExtra),
       newAccessToken.slice(-4),
       now(),
-      credentialId,
     );
   } catch {
     // Non-fatal — worst case the user re-authenticates at the next session
@@ -893,17 +853,10 @@ export async function refreshIdcCredentialToken(
 export function registerCredentialRoutes(): void {
 
   // GET /api/credentials — list (browser only)
-  router.get('/api/credentials', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/credentials', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
 
-    const rows = all<CredentialRow>(
-      `SELECT ec.*, u.name AS updated_by_name
-       FROM engine_credentials ec
-       LEFT JOIN users u ON u.id = ec.updated_by
-       WHERE ec.user_id = ?
-       ORDER BY ec.engine, ec.is_default DESC, ec.created_at ASC`,
-      req.user!.id,
-    );
+    const rows = await getCredentialsRepository().listByUser(req.user!.id);
 
     sendJson(res, 200, { credentials: rows.map(credView) });
   });
@@ -994,12 +947,10 @@ export function registerCredentialRoutes(): void {
       }
 
       if (isDefault) {
-        dbRun(
-          'UPDATE engine_credentials SET is_default = 0 WHERE user_id = ? AND engine = ?',
-          req.user!.id, engine,
-        );
+        await getCredentialsRepository().clearDefaults(req.user!.id, engine);
       }
-      insert('engine_credentials', {
+
+      const created = await getCredentialsRepository().create({
         id, user_id: req.user!.id, engine, name, mode,
         secret_enc: null,
         extra_config: JSON.stringify(extraForStore),
@@ -1011,7 +962,6 @@ export function registerCredentialRoutes(): void {
       appendAudit(getDb(), req.user!.id, 'credential.create', `credential:${id}`,
         { engine, mode, name }, req.ip);
 
-      const created = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', id)!;
       sendJson(res, 201, { credential: credView(created), deviceChallenge });
       return;
     }
@@ -1033,13 +983,10 @@ export function registerCredentialRoutes(): void {
     }
 
     if (isDefault) {
-      dbRun(
-        'UPDATE engine_credentials SET is_default = 0 WHERE user_id = ? AND engine = ?',
-        req.user!.id, engine,
-      );
+      await getCredentialsRepository().clearDefaults(req.user!.id, engine);
     }
 
-    insert('engine_credentials', {
+    const created = await getCredentialsRepository().create({
       id, user_id: req.user!.id, engine, name, mode,
       secret_enc: secretEnc,
       extra_config: JSON.stringify(credConfig),
@@ -1051,25 +998,24 @@ export function registerCredentialRoutes(): void {
     appendAudit(getDb(), req.user!.id, 'credential.create', `credential:${id}`,
       { engine, mode, name }, req.ip);
 
-    const created = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', id)!;
     sendJson(res, 201, { credential: credView(created) });
   });
 
   // PUT /api/credentials/:id — update name or secret (browser only)
-  router.put('/api/credentials/:id', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/credentials/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
-    const cred = requireOwned(res, req.params.id, req.user!.id);
+    const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const ts = now();
-    const patch: Record<string, string | number | null> = {
+    const fields: import('./repositories/credentials.ts').UpdateCredentialFields = {
       updated_at: ts,
       updated_by: req.user!.id,
     };
 
     if (typeof body.name === 'string' && body.name.trim()) {
-      patch.name = body.name.trim().slice(0, 100);
+      fields.name = body.name.trim().slice(0, 100);
     }
 
     if (
@@ -1077,58 +1023,51 @@ export function registerCredentialRoutes(): void {
       body.secret.trim() &&
       String(cred.mode) !== 'bedrock_role'
     ) {
-      patch.secret_enc = encrypt(body.secret.trim(), config.secretKey);
-      patch.last4 = body.secret.trim().slice(-4);
+      fields.secret_enc = encrypt(body.secret.trim(), config.secretKey);
+      fields.last4 = body.secret.trim().slice(-4);
     }
 
     if (typeof body.config === 'object' && body.config !== null && String(cred.mode) === 'bedrock_role') {
-      patch.extra_config = JSON.stringify(body.config);
+      fields.extra_config = JSON.stringify(body.config);
     }
 
-    update('engine_credentials', String(cred.id), patch);
+    const updated = await getCredentialsRepository().update(String(cred.id), fields);
 
     appendAudit(getDb(), req.user!.id, 'credential.update', `credential:${String(cred.id)}`,
-      { name: patch.name }, req.ip);
+      { name: fields.name }, req.ip);
 
-    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
-    sendJson(res, 200, { credential: credView(updated) });
+    sendJson(res, 200, { credential: updated ? credView(updated) : null });
   });
 
   // DELETE /api/credentials/:id (browser only)
-  router.delete('/api/credentials/:id', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/credentials/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
-    const cred = requireOwned(res, req.params.id, req.user!.id);
+    const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
-    dbRun('DELETE FROM engine_credentials WHERE id = ?', String(cred.id));
+    await getCredentialsRepository().delete(String(cred.id));
     appendAudit(getDb(), req.user!.id, 'credential.delete', `credential:${String(cred.id)}`,
       { engine: String(cred.engine), name: String(cred.name) }, req.ip);
     sendJson(res, 200, { ok: true });
   });
 
   // POST /api/credentials/:id/set-default (browser only)
-  router.post('/api/credentials/:id/set-default', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/credentials/:id/set-default', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
-    const cred = requireOwned(res, req.params.id, req.user!.id);
+    const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
-    dbRun(
-      'UPDATE engine_credentials SET is_default = 0 WHERE user_id = ? AND engine = ?',
-      req.user!.id, String(cred.engine),
-    );
-    dbRun(
-      'UPDATE engine_credentials SET is_default = 1, updated_at = ? WHERE id = ?',
-      now(), String(cred.id),
-    );
+    await getCredentialsRepository().clearDefaults(req.user!.id, String(cred.engine));
+    await getCredentialsRepository().setDefault(String(cred.id), now());
 
-    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
-    sendJson(res, 200, { credential: credView(updated) });
+    const updated = await getCredentialsRepository().getById(String(cred.id));
+    sendJson(res, 200, { credential: updated ? credView(updated) : null });
   });
 
   // POST /api/credentials/:id/device-poll — poll for SSO token (browser only)
   router.post('/api/credentials/:id/device-poll', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
-    const cred = requireOwned(res, req.params.id, req.user!.id);
+    const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
     if (String(cred.mode) !== 'identity_center') {
@@ -1185,22 +1124,19 @@ export function registerCredentialRoutes(): void {
         newExtra.refreshTokenEnc = encrypt(tp.refresh_token, config.secretKey);
       }
 
-      dbRun(
-        `UPDATE engine_credentials
-            SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ?
-          WHERE id = ?`,
+      await getCredentialsRepository().updateToken(
+        String(cred.id),
         tokenEnc,
         JSON.stringify(newExtra),
         accessToken.slice(-4),
         now(),
-        String(cred.id),
       );
 
       // Fetch profile asynchronously
       fetchAndStoreProfile(String(cred.id), accessToken, String(newExtra.region)).catch(() => { /* non-fatal */ });
 
-      const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
-      sendJson(res, 200, { status: 'complete', credential: credView(updated) });
+      const updated = await getCredentialsRepository().getById(String(cred.id));
+      sendJson(res, 200, { status: 'complete', credential: updated ? credView(updated) : null });
       return;
     }
 
@@ -1251,15 +1187,12 @@ export function registerCredentialRoutes(): void {
         newExtra.refreshTokenEnc = encrypt(result.refreshToken, config.secretKey);
       }
 
-      dbRun(
-        `UPDATE engine_credentials
-            SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ?
-          WHERE id = ?`,
+      await getCredentialsRepository().updateToken(
+        String(cred.id),
         tokenEnc,
         JSON.stringify(newExtra),
         result.accessToken.slice(-4),
         now(),
-        String(cred.id),
       );
 
       // Fetch and store the user's Kiro profile asynchronously — non-blocking.
@@ -1267,8 +1200,8 @@ export function registerCredentialRoutes(): void {
       // fetched lazily before the first run via ensureKiroProfileFetched().
       fetchAndStoreProfile(String(cred.id), result.accessToken, region).catch(() => { /* non-fatal */ });
 
-      const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
-      sendJson(res, 200, { status: 'complete', credential: credView(updated) });
+      const updated2 = await getCredentialsRepository().getById(String(cred.id));
+      sendJson(res, 200, { status: 'complete', credential: updated2 ? credView(updated2) : null });
     } catch (e) {
       const msg = String((e as Error)?.message ?? e);
       if (matchSdkError(e, 'AuthorizationPendingException', 'authorization_pending')) {
@@ -1286,7 +1219,7 @@ export function registerCredentialRoutes(): void {
   // POST /api/credentials/:id/refresh — refresh IDC access token via refresh_token grant (browser only)
   router.post('/api/credentials/:id/refresh', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
-    const cred = requireOwned(res, req.params.id, req.user!.id);
+    const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
     if (String(cred.mode) !== 'identity_center') {
@@ -1319,14 +1252,14 @@ export function registerCredentialRoutes(): void {
     appendAudit(getDb(), req.user!.id, 'credential.refresh', `credential:${String(cred.id)}`,
       { name: String(cred.name) }, req.ip);
 
-    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
-    sendJson(res, 200, { credential: credView(updated) });
+    const refreshed = await getCredentialsRepository().getById(String(cred.id));
+    sendJson(res, 200, { credential: refreshed ? credView(refreshed) : null });
   });
 
   // POST /api/credentials/:id/reauth — start a new device-code flow for the same credential (browser only)
   router.post('/api/credentials/:id/reauth', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
-    const cred = requireOwned(res, req.params.id, req.user!.id);
+    const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
     if (String(cred.mode) !== 'identity_center') {
@@ -1363,15 +1296,16 @@ export function registerCredentialRoutes(): void {
           pendingDeviceCode: 'agentcore',
           pendingExpireAt: Date.now() + challenge.expiresIn * 1000,
         };
-        dbRun(
-          'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
-          JSON.stringify(extraForStore), now(), String(cred.id),
+        await getCredentialsRepository().updateExtraConfig(
+          String(cred.id),
+          JSON.stringify(extraForStore),
+          now(),
         );
         appendAudit(getDb(), req.user!.id, 'credential.reauth', `credential:${String(cred.id)}`,
           { name: String(cred.name) }, req.ip);
-        const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+        const reauthAcUpdated = await getCredentialsRepository().getById(String(cred.id));
         sendJson(res, 200, {
-          credential: credView(updated),
+          credential: reauthAcUpdated ? credView(reauthAcUpdated) : null,
           deviceChallenge: {
             verificationUri: challenge.verificationUri,
             userCode: challenge.userCode,
@@ -1468,19 +1402,18 @@ export function registerCredentialRoutes(): void {
         pendingExpireAt: Date.now() + da.expiresIn * 1000,
       };
 
-      dbRun(
-        'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
+      await getCredentialsRepository().updateExtraConfig(
+        String(cred.id),
         JSON.stringify(extraForStore),
         now(),
-        String(cred.id),
       );
 
       appendAudit(getDb(), req.user!.id, 'credential.reauth', `credential:${String(cred.id)}`,
         { name: String(cred.name) }, req.ip);
 
-      const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
+      const reauthUpdated = await getCredentialsRepository().getById(String(cred.id));
       sendJson(res, 200, {
-        credential: credView(updated),
+        credential: reauthUpdated ? credView(reauthUpdated) : null,
         deviceChallenge: {
           verificationUri: da.verificationUriComplete ?? da.verificationUri,
           userCode: da.userCode,
@@ -1496,7 +1429,7 @@ export function registerCredentialRoutes(): void {
   // PUT /api/credentials/:id/profile — choose from multiple available profiles (browser only)
   router.put('/api/credentials/:id/profile', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
-    const cred = requireOwned(res, req.params.id, req.user!.id);
+    const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
     if (String(cred.mode) !== 'identity_center') {
@@ -1527,36 +1460,28 @@ export function registerCredentialRoutes(): void {
     };
     delete (newExtra as Record<string, unknown>).profileFetchError;
 
-    dbRun(
-      'UPDATE engine_credentials SET extra_config = ?, updated_at = ? WHERE id = ?',
-      JSON.stringify(newExtra), now(), String(cred.id),
-    );
+    await getCredentialsRepository().updateExtraConfig(String(cred.id), JSON.stringify(newExtra), now());
 
     appendAudit(getDb(), req.user!.id, 'credential.profile', `credential:${String(cred.id)}`,
       { arn }, req.ip);
 
-    const updated = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id))!;
-    sendJson(res, 200, { credential: credView(updated) });
+    const profileUpdated = await getCredentialsRepository().getById(String(cred.id));
+    sendJson(res, 200, { credential: profileUpdated ? credView(profileUpdated) : null });
   });
 
   // GET /api/credentials/summary — for the New Session dialog (browser only)
-  router.get('/api/credentials/summary', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/credentials/summary', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
 
     const engines: Engine[] = ['kiro', 'claude-code'];
-    const summary = engines.map((engine) => {
-      const rows = all<CredentialRow>(
-        `SELECT id, name, mode, last4, is_default
-         FROM engine_credentials
-         WHERE user_id = ? AND engine = ?
-         ORDER BY is_default DESC, created_at ASC`,
-        req.user!.id, engine,
-      );
+    const summary = await Promise.all(engines.map(async (engine) => {
+      const rows = await getCredentialsRepository().listByUser(req.user!.id);
+      const engineRows = rows.filter((r) => r.engine === engine);
 
       return {
         engine,
-        configured: rows.length > 0,
-        credentials: rows.map((r) => ({
+        configured: engineRows.length > 0,
+        credentials: engineRows.map((r) => ({
           id: String(r.id),
           name: String(r.name),
           mode: String(r.mode),
@@ -1564,7 +1489,7 @@ export function registerCredentialRoutes(): void {
           isDefault: Boolean(r.is_default),
         })),
       };
-    });
+    }));
 
     sendJson(res, 200, { summary });
   });

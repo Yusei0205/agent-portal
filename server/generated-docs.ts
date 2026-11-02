@@ -348,7 +348,7 @@ export function registerGeneratedDocRoutes(): void {
 
     // Link attachments to this document
     if (rawAttachmentIds.length > 0) {
-      linkAttachmentsToParent(rawAttachmentIds, 'doc', id);
+      await linkAttachmentsToParent(rawAttachmentIds, 'doc', id);
     }
 
     const d = one<Row>('SELECT * FROM generated_docs WHERE id = ?', id)!;
@@ -371,7 +371,7 @@ export function registerGeneratedDocRoutes(): void {
     if (!project) return;
 
     const d = getDoc(req.params.docId, String(project.id));
-    deleteAttachmentsForParent('doc', String(d.id));
+    await deleteAttachmentsForParent('doc', String(d.id));
     dbRun('DELETE FROM generated_docs WHERE id = ?', String(d.id));
     sendJson(res, 200, { ok: true });
   });
@@ -394,7 +394,7 @@ export function registerGeneratedDocRoutes(): void {
       }
       // Replace old attachments
       const oldIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
-      if (oldIds.length > 0) deleteAttachmentsForParent('doc', String(d.id));
+      if (oldIds.length > 0) await deleteAttachmentsForParent('doc', String(d.id));
       effectiveAttachmentIds = rawAttachmentIds;
       update('generated_docs', String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds) });
     } else {

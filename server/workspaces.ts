@@ -10,8 +10,10 @@
 
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run, insert } from './db.ts';
+import { one } from './db.ts';
 import { generateId, now, str, parseJson } from './util.ts';
+import { getWorkspacesRepository } from './repositories/workspaces.ts';
+import type { WorkspaceRecord } from './repositories/workspaces.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -47,7 +49,7 @@ function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId
   return true;
 }
 
-function parseWorkspace(w: Workspace) {
+function parseWorkspace(w: WorkspaceRecord) {
   return { ...w, repo_ids: parseJson<string[]>(w.repo_ids, []) };
 }
 
@@ -56,24 +58,20 @@ function parseWorkspace(w: Workspace) {
 export function registerWorkspaceRoutes(): void {
 
   // GET /api/projects/:id/workspaces
-  router.get('/api/projects/:id/workspaces', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/workspaces', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
-    const workspaces = all<Workspace>(
-      'SELECT * FROM workspaces_v2 WHERE project_id = ? ORDER BY created_at',
-      req.params.id,
-    );
+    const workspaces = await getWorkspacesRepository().listByProject(req.params.id);
     sendJson(res, 200, { workspaces: workspaces.map(parseWorkspace) });
   });
 
   // POST /api/projects/:id/workspaces
-  router.post('/api/projects/:id/workspaces', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:id/workspaces', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 120 }).trim();
     const repoIds: string[] = Array.isArray(body.repoIds) ? (body.repoIds as string[]) : [];
 
-    // defaultEngine: '' or a known engine id
     const rawDefaultEngine = body.defaultEngine !== undefined
       ? str(body.defaultEngine, 'defaultEngine', { max: 30, optional: true }).trim()
       : '';
@@ -83,12 +81,10 @@ export function registerWorkspaceRoutes(): void {
     }
     const defaultEngine: string = rawDefaultEngine;
 
-    // defaultAgent: trimmed string, max 200 chars (same rules as lead_agent)
     const defaultAgent: string = body.defaultAgent !== undefined
       ? str(body.defaultAgent, 'defaultAgent', { max: 200, optional: true }).trim()
       : '';
 
-    // defaultModel: trimmed model ID matching MODEL_RE, max 200 chars
     const rawDefaultModel = body.defaultModel !== undefined
       ? str(body.defaultModel, 'defaultModel', { max: 200, optional: true }).trim()
       : '';
@@ -101,34 +97,24 @@ export function registerWorkspaceRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('workspaces_v2', {
-      id,
-      project_id: req.params.id,
-      name,
-      repo_ids: JSON.stringify(repoIds),
-      default_engine: defaultEngine,
-      default_agent: defaultAgent,
-      default_model: defaultModel,
+    const workspace = await getWorkspacesRepository().create({
+      id, project_id: req.params.id, name, repo_ids: JSON.stringify(repoIds),
+      default_engine: defaultEngine, default_agent: defaultAgent, default_model: defaultModel,
       created_at: ts,
     });
 
-    const workspace = one<Workspace>('SELECT * FROM workspaces_v2 WHERE id = ?', id);
-    sendJson(res, 201, { workspace: workspace ? parseWorkspace(workspace) : null });
+    sendJson(res, 201, { workspace: parseWorkspace(workspace) });
   });
 
   // PUT /api/projects/:id/workspaces/:wid
-  router.put('/api/projects/:id/workspaces/:wid', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:id/workspaces/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const ws = one<Workspace>(
-      'SELECT * FROM workspaces_v2 WHERE id = ? AND project_id = ?',
-      req.params.wid,
-      req.params.id,
-    );
-    if (!ws) { sendJson(res, 404, { error: 'Workspace not found' }); return; }
+    const existing = await getWorkspacesRepository().getByIdForProject(req.params.wid, req.params.id);
+    if (!existing) { sendJson(res, 404, { error: 'Workspace not found' }); return; }
 
     const body = req.body as Record<string, unknown>;
-    const patch: Record<string, string> = {};
+    const patch: Partial<WorkspaceRecord> = {};
     if (body.name !== undefined) patch.name = str(body.name, 'name', { max: 120 }).trim();
     if (body.repoIds !== undefined) {
       const ids = Array.isArray(body.repoIds) ? (body.repoIds as string[]) : [];
@@ -162,27 +148,16 @@ export function registerWorkspaceRoutes(): void {
       return;
     }
 
-    const keys = Object.keys(patch);
-    run(
-      `UPDATE workspaces_v2 SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      ...keys.map((k) => patch[k]),
-      ws.id,
-    );
-
-    const updated = one<Workspace>('SELECT * FROM workspaces_v2 WHERE id = ?', ws.id);
+    const updated = await getWorkspacesRepository().update(req.params.wid, req.params.id, patch);
     sendJson(res, 200, { workspace: updated ? parseWorkspace(updated) : null });
   });
 
   // DELETE /api/projects/:id/workspaces/:wid
-  router.delete('/api/projects/:id/workspaces/:wid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:id/workspaces/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const result = run(
-      'DELETE FROM workspaces_v2 WHERE id = ? AND project_id = ?',
-      req.params.wid,
-      req.params.id,
-    );
-    if (result.changes === 0) { sendJson(res, 404, { error: 'Workspace not found' }); return; }
+    const deleted = await getWorkspacesRepository().delete(req.params.wid, req.params.id);
+    if (!deleted) { sendJson(res, 404, { error: 'Workspace not found' }); return; }
 
     sendJson(res, 200, { ok: true });
   });

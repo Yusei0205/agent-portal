@@ -18,9 +18,9 @@
 import { createHash } from 'node:crypto';
 import { router, sendJson, requireAuth, requireCookieAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { all, one, run, getDb } from './db.ts';
-import type { Row } from './db.ts';
+import { getDb } from './db.ts';
 import { getSetting, setSetting, getSettings } from './settings.ts';
+import { getThemesRepository } from './repositories/themes.ts';
 import { appendAudit } from './audit.ts';
 import { emitGlobal } from './events.ts';
 import { generateId, now, notFound, badRequest, forbidden } from './util.ts';
@@ -535,18 +535,18 @@ export function getActiveThemeId(): string {
  * Resolve the active template. Falls back to aethrix-night if the active id is
  * missing or its stored JSON is invalid.
  */
-export function resolveActiveTemplate(): { template: ThemeTemplate; etag: string; updatedAt: string | null } {
+export async function resolveActiveTemplate(): Promise<{ template: ThemeTemplate; etag: string; updatedAt: string | null }> {
   const activeId = getActiveThemeId();
 
   // Check built-ins first — but prefer an admin override if one exists
   const builtin = BUILTIN_THEMES.get(activeId);
   if (builtin) {
-    const overrideRow = one<Row>('SELECT template_json, updated_at FROM themes WHERE id = ? AND builtin_override = 1', activeId);
+    const overrideRow = await getThemesRepository().getOverrideById(activeId);
     if (overrideRow) {
       try {
-        const template = JSON.parse(String(overrideRow.template_json)) as ThemeTemplate;
-        const updatedAt = String(overrideRow.updated_at);
-        const etag = `"builtin-override-${activeId}-${createHash('sha256').update(String(overrideRow.template_json)).digest('hex').slice(0, 16)}"`;
+        const template = JSON.parse(overrideRow.template_json) as ThemeTemplate;
+        const updatedAt = overrideRow.updated_at;
+        const etag = `"builtin-override-${activeId}-${createHash('sha256').update(overrideRow.template_json).digest('hex').slice(0, 16)}"`;
         return { template, etag, updatedAt };
       } catch {
         // Corrupt override — fall through to shipped built-in
@@ -560,12 +560,12 @@ export function resolveActiveTemplate(): { template: ThemeTemplate; etag: string
   }
 
   // Check custom DB themes
-  const row = one<Row>('SELECT template_json, updated_at FROM themes WHERE id = ? AND builtin_override = 0', activeId);
+  const row = await getThemesRepository().getCustomById(activeId);
   if (row) {
     try {
-      const template = JSON.parse(String(row.template_json)) as ThemeTemplate;
-      const updatedAt = String(row.updated_at);
-      const etag = `"${activeId}-${createHash('sha256').update(String(row.template_json)).digest('hex').slice(0, 16)}"`;
+      const template = JSON.parse(row.template_json) as ThemeTemplate;
+      const updatedAt = row.updated_at;
+      const etag = `"${activeId}-${createHash('sha256').update(row.template_json).digest('hex').slice(0, 16)}"`;
       return { template, etag, updatedAt };
     } catch {
       // Fall through to default
@@ -726,8 +726,8 @@ function extractJson(text: string): unknown {
 export function registerThemeRoutes(): void {
 
   // ── Public: GET /api/theme ────────────────────────────────────────────────
-  router.get('/api/theme', (req: PortalRequest, res: PortalResponse) => {
-    const { template, etag, updatedAt } = resolveActiveTemplate();
+  router.get('/api/theme', async (req: PortalRequest, res: PortalResponse) => {
+    const { template, etag, updatedAt } = await resolveActiveTemplate();
 
     const ifNoneMatch = String(req.headers?.['if-none-match'] ?? '');
     if (ifNoneMatch && ifNoneMatch === etag) {
@@ -744,14 +744,14 @@ export function registerThemeRoutes(): void {
   });
 
   // ── Admin: GET /api/admin/themes ──────────────────────────────────────────
-  router.get('/api/admin/themes', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/admin/themes', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const activeId = getActiveThemeId();
-    const customRows = all<Row>('SELECT id, name, updated_at, updated_by FROM themes WHERE builtin_override = 0 ORDER BY updated_at DESC');
+    const customRows = await getThemesRepository().listCustom();
 
-    const builtins = Array.from(BUILTIN_THEMES.values()).map((t) => {
-      const hasOverride = !!one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 1', t.id);
+    const builtins = await Promise.all(Array.from(BUILTIN_THEMES.values()).map(async (t) => {
+      const hasOverride = await getThemesRepository().hasOverride(t.id);
       return {
         id: t.id,
         name: t.name,
@@ -761,16 +761,16 @@ export function registerThemeRoutes(): void {
         updatedAt: null,
         updatedBy: null,
       };
-    });
+    }));
 
     const customs = customRows.map((r) => ({
-      id: String(r.id),
-      name: String(r.name),
+      id: r.id,
+      name: r.name,
       builtIn: false,
       overridden: false,
-      active: String(r.id) === activeId,
-      updatedAt: r.updated_at ? String(r.updated_at) : null,
-      updatedBy: r.updated_by ? String(r.updated_by) : null,
+      active: r.id === activeId,
+      updatedAt: r.updated_at || null,
+      updatedBy: r.updated_by || null,
     }));
 
     sendJson(res, 200, { themes: [...builtins, ...customs] });
@@ -931,17 +931,22 @@ export function registerThemeRoutes(): void {
     let responseText: string;
     try {
       const timeoutMs = 3 * 60 * 1000;
-      const raceTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Theme generation timed out (3 minutes). Try again.')), timeoutMs),
-      );
-      responseText = await Promise.race([
-        callTextModel(systemPrompt, userPrompt, {
-          maxTokens: 8192,
-          createdBy: req.user!.id,
-          images: processedImages,
-        }),
-        raceTimeout,
-      ]);
+      let _raceTimer: ReturnType<typeof setTimeout> | undefined;
+      const raceTimeout = new Promise<never>((_, reject) => {
+        _raceTimer = setTimeout(() => reject(new Error('Theme generation timed out (3 minutes). Try again.')), timeoutMs);
+      });
+      try {
+        responseText = await Promise.race([
+          callTextModel(systemPrompt, userPrompt, {
+            maxTokens: 8192,
+            createdBy: req.user!.id,
+            images: processedImages,
+          }),
+          raceTimeout,
+        ]);
+      } finally {
+        if (_raceTimer !== undefined) clearTimeout(_raceTimer);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (
@@ -1008,7 +1013,7 @@ export function registerThemeRoutes(): void {
       attempts++;
     } while (
       attempts < 20 &&
-      (BUILTIN_THEMES.has(newId) || !!one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 0', newId))
+      (BUILTIN_THEMES.has(newId) || !!(await getThemesRepository().getCustomById(newId)))
     );
     theme.id = newId;
 
@@ -1067,30 +1072,27 @@ export function registerThemeRoutes(): void {
     }
 
     const db = getDb();
-    const existing = one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 0', template.id);
+    const existing = await getThemesRepository().getCustomById(template.id);
     const ts = now();
 
     if (existing) {
-      // Update existing custom theme
-      run(
-        'UPDATE themes SET name = ?, template_json = ?, updated_at = ?, updated_by = ? WHERE id = ? AND builtin_override = 0',
-        template.name,
-        JSON.stringify(template),
-        ts,
-        req.user!.id,
-        template.id,
-      );
+      await getThemesRepository().update(template.id, {
+        name: template.name,
+        template_json: JSON.stringify(template),
+        updated_at: ts,
+        updated_by: req.user!.id,
+      });
     } else {
-      run(
-        'INSERT INTO themes (id, name, template_json, created_by, updated_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-        template.id,
-        template.name,
-        JSON.stringify(template),
-        req.user!.id,
-        req.user!.id,
-        ts,
-        ts,
-      );
+      await getThemesRepository().create({
+        id: template.id,
+        name: template.name,
+        template_json: JSON.stringify(template),
+        builtin_override: 0,
+        created_by: req.user!.id,
+        updated_by: req.user!.id,
+        created_at: ts,
+        updated_at: ts,
+      });
     }
 
     appendAudit(db, req.user!.id, 'theme.import', `theme:${template.id}`, { name: template.name }, req.ip);
@@ -1098,7 +1100,7 @@ export function registerThemeRoutes(): void {
   }));
 
   // ── Admin: POST /api/admin/themes ─────────────────────────────────────────
-  router.post('/api/admin/themes', requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+  router.post('/api/admin/themes', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const body = req.body;
@@ -1114,7 +1116,7 @@ export function registerThemeRoutes(): void {
       throw badRequest(`Cannot create a custom template with the built-in id "${template.id}"`);
     }
 
-    const existing = one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 0', template.id);
+    const existing = await getThemesRepository().getCustomById(template.id);
     if (existing) {
       throw badRequest(`A template with id "${template.id}" already exists`);
     }
@@ -1129,16 +1131,16 @@ export function registerThemeRoutes(): void {
 
     const db = getDb();
     const ts = now();
-    run(
-      'INSERT INTO themes (id, name, template_json, created_by, updated_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-      template.id,
-      template.name,
-      JSON.stringify(template),
-      req.user!.id,
-      req.user!.id,
-      ts,
-      ts,
-    );
+    await getThemesRepository().create({
+      id: template.id,
+      name: template.name,
+      template_json: JSON.stringify(template),
+      builtin_override: 0,
+      created_by: req.user!.id,
+      updated_by: req.user!.id,
+      created_at: ts,
+      updated_at: ts,
+    });
 
     appendAudit(db, req.user!.id, 'theme.create', `theme:${template.id}`, { name: template.name }, req.ip);
     sendJson(res, 201, { ok: true, id: template.id, theme: template });
@@ -1157,7 +1159,7 @@ export function registerThemeRoutes(): void {
   }));
 
   // ── Admin: GET /api/admin/themes/:id ─────────────────────────────────────
-  router.get('/api/admin/themes/:id', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/admin/themes/:id', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
@@ -1165,10 +1167,10 @@ export function registerThemeRoutes(): void {
     // Check built-ins
     const builtin = BUILTIN_THEMES.get(id);
     if (builtin) {
-      const overrideRow = one<Row>('SELECT template_json, updated_at, updated_by FROM themes WHERE id = ? AND builtin_override = 1', id);
+      const overrideRow = await getThemesRepository().getOverrideById(id);
       let template: ThemeTemplate = builtin;
       if (overrideRow) {
-        try { template = JSON.parse(String(overrideRow.template_json)) as ThemeTemplate; } catch { template = builtin; }
+        try { template = JSON.parse(overrideRow.template_json) as ThemeTemplate; } catch { template = builtin; }
       }
       sendJson(res, 200, {
         id: builtin.id,
@@ -1176,33 +1178,33 @@ export function registerThemeRoutes(): void {
         builtIn: true,
         overridden: !!overrideRow,
         active: getActiveThemeId() === id,
-        updatedAt: overrideRow ? String(overrideRow.updated_at) : null,
-        updatedBy: overrideRow ? String(overrideRow.updated_by) : null,
+        updatedAt: overrideRow ? overrideRow.updated_at : null,
+        updatedBy: overrideRow ? overrideRow.updated_by : null,
         template,
         defaults: builtin,
       });
       return;
     }
 
-    const row = one<Row>('SELECT * FROM themes WHERE id = ? AND builtin_override = 0', id);
+    const row = await getThemesRepository().getCustomById(id);
     if (!row) throw notFound('Theme not found');
 
     let template: unknown;
-    try { template = JSON.parse(String(row.template_json)); } catch { template = null; }
+    try { template = JSON.parse(row.template_json); } catch { template = null; }
 
     sendJson(res, 200, {
-      id: String(row.id),
-      name: String(row.name),
+      id: row.id,
+      name: row.name,
       builtIn: false,
       active: getActiveThemeId() === id,
-      updatedAt: row.updated_at ? String(row.updated_at) : null,
-      updatedBy: row.updated_by ? String(row.updated_by) : null,
+      updatedAt: row.updated_at || null,
+      updatedBy: row.updated_by || null,
       template,
     });
   }));
 
   // ── Admin: PUT /api/admin/themes/:id ─────────────────────────────────────
-  router.put('/api/admin/themes/:id', requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+  router.put('/api/admin/themes/:id', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
@@ -1236,54 +1238,50 @@ export function registerThemeRoutes(): void {
 
     if (BUILTIN_THEMES.has(id)) {
       // Store or update the built-in override
-      const existingOverride = one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 1', id);
+      const existingOverride = await getThemesRepository().getOverrideById(id);
       if (existingOverride) {
-        run(
-          'UPDATE themes SET name = ?, template_json = ?, updated_at = ?, updated_by = ? WHERE id = ? AND builtin_override = 1',
-          template.name,
-          JSON.stringify(template),
-          ts,
-          req.user!.id,
-          id,
-        );
+        await getThemesRepository().update(id, {
+          name: template.name,
+          template_json: JSON.stringify(template),
+          updated_at: ts,
+          updated_by: req.user!.id,
+        });
       } else {
-        run(
-          'INSERT INTO themes (id, name, template_json, created_by, updated_by, created_at, updated_at, builtin_override) VALUES (?,?,?,?,?,?,?,1)',
+        await getThemesRepository().create({
           id,
-          template.name,
-          JSON.stringify(template),
-          req.user!.id,
-          req.user!.id,
-          ts,
-          ts,
-        );
+          name: template.name,
+          template_json: JSON.stringify(template),
+          builtin_override: 1,
+          created_by: req.user!.id,
+          updated_by: req.user!.id,
+          created_at: ts,
+          updated_at: ts,
+        });
       }
       appendAudit(db, req.user!.id, 'theme.update', `theme:${id}`, { name: template.name, builtinOverride: true }, req.ip);
       if (getActiveThemeId() === id) {
-        const { etag } = resolveActiveTemplate();
+        const { etag } = await resolveActiveTemplate();
         emitGlobal({ type: 'theme.changed', etag });
       }
       sendJson(res, 200, { ok: true, id, theme: template });
       return;
     }
 
-    const existing = one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 0', id);
+    const existing = await getThemesRepository().getCustomById(id);
     if (!existing) throw notFound('Theme not found');
 
-    run(
-      'UPDATE themes SET name = ?, template_json = ?, updated_at = ?, updated_by = ? WHERE id = ? AND builtin_override = 0',
-      template.name,
-      JSON.stringify(template),
-      ts,
-      req.user!.id,
-      id,
-    );
+    await getThemesRepository().update(id, {
+      name: template.name,
+      template_json: JSON.stringify(template),
+      updated_at: ts,
+      updated_by: req.user!.id,
+    });
 
     appendAudit(db, req.user!.id, 'theme.update', `theme:${id}`, { name: template.name }, req.ip);
 
     // Emit event so open clients can refresh if this is the active theme
     if (getActiveThemeId() === id) {
-      const { etag } = resolveActiveTemplate();
+      const { etag } = await resolveActiveTemplate();
       emitGlobal({ type: 'theme.changed', etag });
     }
 
@@ -1291,7 +1289,7 @@ export function registerThemeRoutes(): void {
   }));
 
   // ── Admin: DELETE /api/admin/themes/:id/override — reset built-in to shipped default ──
-  router.delete('/api/admin/themes/:id/override', requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+  router.delete('/api/admin/themes/:id/override', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
@@ -1300,17 +1298,17 @@ export function registerThemeRoutes(): void {
       throw notFound('Not a built-in theme');
     }
 
-    const existing = one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 1', id);
+    const existing = await getThemesRepository().getOverrideById(id);
     if (!existing) {
       throw notFound('No override exists for this theme');
     }
 
     const db = getDb();
-    run('DELETE FROM themes WHERE id = ? AND builtin_override = 1', id);
+    await getThemesRepository().delete(id);
     appendAudit(db, req.user!.id, 'theme.reset', `theme:${id}`, {}, req.ip);
 
     if (getActiveThemeId() === id) {
-      const { etag } = resolveActiveTemplate();
+      const { etag } = await resolveActiveTemplate();
       emitGlobal({ type: 'theme.changed', etag });
     }
 
@@ -1318,7 +1316,7 @@ export function registerThemeRoutes(): void {
   }));
 
   // ── Admin: DELETE /api/admin/themes/:id ───────────────────────────────────
-  router.delete('/api/admin/themes/:id', requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+  router.delete('/api/admin/themes/:id', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
@@ -1327,7 +1325,7 @@ export function registerThemeRoutes(): void {
       throw forbidden('Built-in templates cannot be deleted');
     }
 
-    const existing = one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 0', id);
+    const existing = await getThemesRepository().getCustomById(id);
     if (!existing) throw notFound('Theme not found');
 
     if (getActiveThemeId() === id) {
@@ -1335,7 +1333,7 @@ export function registerThemeRoutes(): void {
     }
 
     const db = getDb();
-    run('DELETE FROM themes WHERE id = ? AND builtin_override = 0', id);
+    await getThemesRepository().delete(id);
     appendAudit(db, req.user!.id, 'theme.delete', `theme:${id}`, {}, req.ip);
     sendJson(res, 200, { ok: true });
   }));
@@ -1349,21 +1347,21 @@ export function registerThemeRoutes(): void {
     // Verify theme exists (built-in or custom)
     const isBuiltin = BUILTIN_THEMES.has(id);
     if (!isBuiltin) {
-      const existing = one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 0', id);
+      const existing = await getThemesRepository().getCustomById(id);
       if (!existing) throw notFound('Theme not found');
     }
 
     const db = getDb();
     await setSetting(db, 'theme.active', JSON.stringify(id));
     appendAudit(db, req.user!.id, 'theme.activate', `theme:${id}`, {}, req.ip);
-    const { etag } = resolveActiveTemplate();
+    const { etag } = await resolveActiveTemplate();
     emitGlobal({ type: 'theme.changed', etag });
 
     sendJson(res, 200, { ok: true, activeId: id });
   }));
 
   // ── Admin: POST /api/admin/themes/:id/duplicate ───────────────────────────
-  router.post('/api/admin/themes/:id/duplicate', requireCookieAuth((req: PortalRequest, res: PortalResponse) => {
+  router.post('/api/admin/themes/:id/duplicate', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
@@ -1371,17 +1369,17 @@ export function registerThemeRoutes(): void {
     let sourceTemplate: ThemeTemplate;
     const builtin = BUILTIN_THEMES.get(id);
     if (builtin) {
-      const overrideRow = one<Row>('SELECT template_json FROM themes WHERE id = ? AND builtin_override = 1', id);
+      const overrideRow = await getThemesRepository().getOverrideById(id);
       if (overrideRow) {
-        try { sourceTemplate = JSON.parse(String(overrideRow.template_json)) as ThemeTemplate; } catch { sourceTemplate = { ...builtin }; }
+        try { sourceTemplate = JSON.parse(overrideRow.template_json) as ThemeTemplate; } catch { sourceTemplate = { ...builtin }; }
       } else {
         sourceTemplate = { ...builtin };
       }
     } else {
-      const row = one<Row>('SELECT template_json FROM themes WHERE id = ? AND builtin_override = 0', id);
+      const row = await getThemesRepository().getCustomById(id);
       if (!row) throw notFound('Theme not found');
       try {
-        sourceTemplate = JSON.parse(String(row.template_json)) as ThemeTemplate;
+        sourceTemplate = JSON.parse(row.template_json) as ThemeTemplate;
       } catch {
         throw badRequest('Source template data is invalid');
       }
@@ -1391,7 +1389,7 @@ export function registerThemeRoutes(): void {
     const baseId = `${id}-copy`;
     let newId = baseId;
     let suffix = 1;
-    while (BUILTIN_THEMES.has(newId) || one<Row>('SELECT id FROM themes WHERE id = ? AND builtin_override = 0', newId)) {
+    while (BUILTIN_THEMES.has(newId) || await getThemesRepository().getCustomById(newId)) {
       newId = `${baseId}-${suffix++}`;
     }
 
@@ -1404,23 +1402,23 @@ export function registerThemeRoutes(): void {
 
     const db = getDb();
     const ts = now();
-    run(
-      'INSERT INTO themes (id, name, template_json, created_by, updated_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-      copy.id,
-      copy.name,
-      JSON.stringify(copy),
-      req.user!.id,
-      req.user!.id,
-      ts,
-      ts,
-    );
+    await getThemesRepository().create({
+      id: copy.id,
+      name: copy.name,
+      template_json: JSON.stringify(copy),
+      builtin_override: 0,
+      created_by: req.user!.id,
+      updated_by: req.user!.id,
+      created_at: ts,
+      updated_at: ts,
+    });
 
     appendAudit(db, req.user!.id, 'theme.duplicate', `theme:${newId}`, { sourceId: id }, req.ip);
     sendJson(res, 201, { ok: true, id: newId, theme: copy });
   }));
 
   // ── Admin: GET /api/admin/themes/:id/export ───────────────────────────────
-  router.get('/api/admin/themes/:id/export', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/admin/themes/:id/export', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
 
     const { id } = req.params;
@@ -1428,17 +1426,17 @@ export function registerThemeRoutes(): void {
     let template: ThemeTemplate;
     const builtin = BUILTIN_THEMES.get(id);
     if (builtin) {
-      const overrideRow = one<Row>('SELECT template_json FROM themes WHERE id = ? AND builtin_override = 1', id);
+      const overrideRow = await getThemesRepository().getOverrideById(id);
       if (overrideRow) {
-        try { template = JSON.parse(String(overrideRow.template_json)) as ThemeTemplate; } catch { template = builtin; }
+        try { template = JSON.parse(overrideRow.template_json) as ThemeTemplate; } catch { template = builtin; }
       } else {
         template = builtin;
       }
     } else {
-      const row = one<Row>('SELECT template_json FROM themes WHERE id = ? AND builtin_override = 0', id);
+      const row = await getThemesRepository().getCustomById(id);
       if (!row) throw notFound('Theme not found');
       try {
-        template = JSON.parse(String(row.template_json)) as ThemeTemplate;
+        template = JSON.parse(row.template_json) as ThemeTemplate;
       } catch {
         throw badRequest('Template data is invalid');
       }

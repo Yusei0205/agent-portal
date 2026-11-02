@@ -20,13 +20,15 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run, insert } from './db.ts';
+import { one } from './db.ts';
 import { generateId, now, str, badRequest, notFound, parseJson } from './util.ts';
 import { config } from './config.ts';
 import { buildGitEnv } from './git-connections.ts';
 import { decrypt } from './secrets.ts';
 import { ProgressTracker, redactCredentials } from './git-progress.ts';
 import type { ProgressInfo } from './git-progress.ts';
+import { getGitReposRepository } from './repositories/git-repos.ts';
+import { getGitConnectionsRepository } from './repositories/git-connections.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -297,11 +299,7 @@ export function _buildCodeCommitSigV4Password(
 async function getCloneEnv(repo: Repository): Promise<Record<string, string>> {
   if (!repo.connection_id) return { GIT_TERMINAL_PROMPT: '0' };
 
-  interface ConnRow { provider: string; credentials_enc: string | null }
-  const conn = one<ConnRow>(
-    'SELECT provider, credentials_enc FROM git_connections_v2 WHERE id = ?',
-    repo.connection_id,
-  );
+  const conn = await getGitConnectionsRepository().getById(repo.connection_id);
   if (!conn?.credentials_enc) return { GIT_TERMINAL_PROMPT: '0' };
 
   let creds: Record<string, string>;
@@ -373,7 +371,7 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
   const tracker = new ProgressTracker();
   repoProgress.set(repoId, tracker);
 
-  const repo = one<Repository>('SELECT * FROM repositories WHERE id = ? AND project_id = ?', repoId, projectId);
+  const repo = await getGitReposRepository().getByIdForProject(repoId, projectId);
   if (!repo) {
     syncInFlight.delete(repoId);
     repoProgress.delete(repoId);
@@ -422,12 +420,11 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
       // Fall back to existing value
     }
 
-    run(
-      `UPDATE repositories SET status = 'ready', last_synced_at = ?, default_branch = ?, last_error = NULL WHERE id = ?`,
-      now(),
+    await getGitReposRepository().updateStatus(repoId, 'ready', {
+      lastSyncedAt: now(),
       defaultBranch,
-      repoId,
-    );
+      lastError: null,
+    });
 
     // Keep progress visible at 100% briefly so pollers catch the finished state
     setTimeout(() => {
@@ -444,11 +441,7 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
         : '';
     const msg = `${phaseContext}${raw}`.slice(0, 1000);
 
-    run(
-      `UPDATE repositories SET status = 'error', last_error = ? WHERE id = ?`,
-      msg,
-      repoId,
-    );
+    await getGitReposRepository().updateStatus(repoId, 'error', { lastError: msg });
     repoProgress.delete(repoId);
   } finally {
     syncInFlight.delete(repoId);
@@ -460,17 +453,14 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
 export function registerRepoRoutes(): void {
 
   // GET /api/projects/:id/repos
-  router.get('/api/projects/:id/repos', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/repos', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
-    const repos = all<Repository>(
-      'SELECT * FROM repositories WHERE project_id = ? ORDER BY created_at',
-      req.params.id,
-    );
+    const repos = await getGitReposRepository().listByProject(req.params.id);
     sendJson(res, 200, { repos: repos.map(withProgress) });
   });
 
   // POST /api/projects/:id/repos
-  router.post('/api/projects/:id/repos', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:id/repos', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -489,41 +479,28 @@ export function registerRepoRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('repositories', {
-      id,
-      project_id: req.params.id,
-      name,
-      url,
-      provider,
-      status: 'cloning',
+    const repo = await getGitReposRepository().create({
+      id, project_id: req.params.id, name, url, provider, status: 'cloning',
       default_branch: typeof body.defaultBranch === 'string' ? body.defaultBranch.trim() : null,
-      identity: null,
-      last_synced_at: null,
-      last_error: null,
-      created_at: ts,
+      identity: null, last_synced_at: null, last_error: null, created_at: ts,
       connection_id: connectionId,
     });
-
-    const repo = one<Repository>('SELECT * FROM repositories WHERE id = ?', id);
 
     // Start background clone immediately
     performSync(id, req.params.id).catch((e: unknown) => {
       console.error(`[repos] initial sync error for ${id}:`, e);
     });
 
-    sendJson(res, 201, { repo: repo ? withProgress(repo) : repo });
+    sendJson(res, 201, { repo: withProgress(repo) });
   });
 
   // GET /api/projects/:id/repos/progress
   // Lightweight polling endpoint — returns only id, status, progress, lastError
   // for every repo in the project. Must be registered before /:repoId so the
   // literal segment "progress" is not captured as a repoId.
-  router.get('/api/projects/:id/repos/progress', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/repos/progress', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
-    const repos = all<Repository>(
-      'SELECT * FROM repositories WHERE project_id = ? ORDER BY created_at',
-      req.params.id,
-    );
+    const repos = await getGitReposRepository().listByProject(req.params.id);
     const result = repos.map((r) => ({
       id: r.id,
       status: r.status,
@@ -534,65 +511,46 @@ export function registerRepoRoutes(): void {
   });
 
   // GET /api/projects/:id/repos/:repoId
-  router.get('/api/projects/:id/repos/:repoId', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/repos/:repoId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const repo = one<Repository>(
-      'SELECT * FROM repositories WHERE id = ? AND project_id = ?',
-      req.params.repoId,
-      req.params.id,
-    );
+    const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
     sendJson(res, 200, { repo: withProgress(repo) });
   });
 
   // DELETE /api/projects/:id/repos/:repoId
-  router.delete('/api/projects/:id/repos/:repoId', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:id/repos/:repoId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const result = run(
-      'DELETE FROM repositories WHERE id = ? AND project_id = ?',
-      req.params.repoId,
-      req.params.id,
-    );
-    if (result.changes === 0) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+    const deleted = await getGitReposRepository().delete(req.params.repoId, req.params.id);
+    if (!deleted) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
     sendJson(res, 200, { ok: true });
   });
 
   // POST /api/projects/:id/repos/:repoId/sync
-  router.post('/api/projects/:id/repos/:repoId/sync', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:id/repos/:repoId/sync', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const repo = one<Repository>(
-      'SELECT * FROM repositories WHERE id = ? AND project_id = ?',
-      req.params.repoId,
-      req.params.id,
-    );
+    const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
-    // If a sync is already running, attach to it — return 202 with the
-    // current status rather than a 409 which is not actionable for callers.
+    // If a sync is already running, attach to it
     if (syncInFlight.has(repo.id)) {
       sendJson(res, 202, { ok: true, status: repo.status, alreadySyncing: true });
       return;
     }
 
-    // Use 'syncing' for re-fetches so the UI can distinguish from the initial clone
     const slug = getProjectSlug(req.params.id);
     const isReclone = slug
       ? fs.existsSync(path.join(repoCloneDir(slug, repo.name), '.git'))
       : false;
     const nextStatus = isReclone ? 'syncing' : 'cloning';
 
-    run(
-      `UPDATE repositories SET status = ?, last_error = NULL WHERE id = ?`,
-      nextStatus,
-      repo.id,
-    );
+    await getGitReposRepository().updateStatus(repo.id, nextStatus, { lastError: null });
 
-    // Run clone/fetch in background
     performSync(repo.id, req.params.id).catch((e: unknown) => {
       console.error(`[repos] sync error for ${repo.id}:`, e);
     });
@@ -634,31 +592,23 @@ export function registerRepoRoutes(): void {
   });
 
   // PUT /api/projects/:id/repos/:repoId/default-branch
-  router.put('/api/projects/:id/repos/:repoId/default-branch', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:id/repos/:repoId/default-branch', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const repo = one<Repository>(
-      'SELECT * FROM repositories WHERE id = ? AND project_id = ?',
-      req.params.repoId,
-      req.params.id,
-    );
+    const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
     const body = req.body as Record<string, unknown>;
     const branch = str(body.branch, 'branch', { max: 255 }).trim();
 
-    run(
-      'UPDATE repositories SET default_branch = ? WHERE id = ?',
-      branch,
-      repo.id,
-    );
+    await getGitReposRepository().updateDefaultBranch(repo.id, branch);
 
     sendJson(res, 200, { ok: true });
   });
 
   // POST /api/projects/:id/repos/bulk
   // Bulk-add repos from a connection, skipping duplicates (by URL).
-  router.post('/api/projects/:id/repos/bulk', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:id/repos/bulk', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -670,11 +620,7 @@ export function registerRepoRoutes(): void {
     if (repoList.length > 100) { sendJson(res, 400, { error: 'Cannot bulk-add more than 100 repos at once' }); return; }
 
     // Verify connection exists and is accessible
-    interface ConnRow { provider: string; scope: string; owner_id: string | null }
-    const conn = one<ConnRow>(
-      'SELECT provider, scope, owner_id FROM git_connections_v2 WHERE id = ?',
-      connectionId,
-    );
+    const conn = await getGitConnectionsRepository().getById(connectionId);
     if (!conn) { sendJson(res, 404, { error: 'Connection not found' }); return; }
 
     // Access check: personal connections only usable by their owner
@@ -684,8 +630,8 @@ export function registerRepoRoutes(): void {
     }
 
     // Collect existing URLs in this project to detect duplicates
-    const existing = all<{ url: string }>('SELECT url FROM repositories WHERE project_id = ?', req.params.id);
-    const existingUrls = new Set(existing.map((r) => r.url.toLowerCase()));
+    const existingUrlList = await getGitReposRepository().listUrlsByProject(req.params.id);
+    const existingUrls = new Set(existingUrlList.map((u) => u.toLowerCase()));
 
     const added: Array<Record<string, unknown>> = [];
     const skipped: Array<{ url: string; reason: string }> = [];
@@ -704,37 +650,23 @@ export function registerRepoRoutes(): void {
       try {
         let name = typeof repoInput.name === 'string' ? repoInput.name.trim() : '';
         if (!name) {
-          // derive name from URL
           const urlObj = new URL(url);
           name = urlObj.pathname.replace(/\.git$/, '').split('/').filter(Boolean).pop() ?? 'repo';
         }
         const defaultBranch = typeof repoInput.defaultBranch === 'string' ? repoInput.defaultBranch.trim() : null;
 
         const id = generateId();
-        insert('repositories', {
-          id,
-          project_id: req.params.id,
-          name: name.slice(0, 120),
-          url,
-          provider: conn.provider,
-          status: 'cloning',
-          default_branch: defaultBranch,
-          identity: null,
-          last_synced_at: null,
-          last_error: null,
-          created_at: ts,
+        const repo = await getGitReposRepository().create({
+          id, project_id: req.params.id, name: name.slice(0, 120), url,
+          provider: conn.provider, status: 'cloning', default_branch: defaultBranch,
+          identity: null, last_synced_at: null, last_error: null, created_at: ts,
           connection_id: connectionId,
         });
         existingUrls.add(url.toLowerCase());
-
-        const repo = one<Repository>('SELECT * FROM repositories WHERE id = ?', id);
-        if (repo) {
-          added.push(withProgress(repo) as unknown as Record<string, unknown>);
-          // Kick off background clone immediately
-          performSync(id, req.params.id).catch((e: unknown) => {
-            console.error(`[repos] bulk sync error for ${id}:`, e);
-          });
-        }
+        added.push(withProgress(repo) as unknown as Record<string, unknown>);
+        performSync(id, req.params.id).catch((e: unknown) => {
+          console.error(`[repos] bulk sync error for ${id}:`, e);
+        });
       } catch (e: unknown) {
         errors.push({ url, error: e instanceof Error ? e.message : String(e) });
       }

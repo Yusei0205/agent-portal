@@ -39,13 +39,14 @@ import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run as dbRun, insert } from './db.ts';
+import { one } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, badRequest, safeJoin, sha256 } from './util.ts';
 import { config } from './config.ts';
 import { encrypt, decrypt } from './secrets.ts';
 import { appendAudit, auditRaw } from './audit.ts';
 import { getDb } from './db.ts';
+import { getUserConfigRepository } from './repositories/user-config.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -156,30 +157,23 @@ interface UserConfigState {
   teamVersionId: string | null;
 }
 
-function getState(userId: string, folder: ConfigFolder): UserConfigState {
-  const row = one<Row>(
-    'SELECT * FROM user_config_state WHERE user_id = ? AND folder = ?',
-    userId,
-    folder,
-  );
+async function getState(userId: string, folder: ConfigFolder): Promise<UserConfigState> {
+  const row = await getUserConfigRepository().getState(userId, folder);
   if (!row) return { following: true, customisedAt: null, teamVersionId: null };
   return {
     following: Boolean(row.following),
-    customisedAt: (row.customised_at as string | null) ?? null,
-    teamVersionId: (row.team_version_id as string | null) ?? null,
+    customisedAt: row.customised_at ?? null,
+    teamVersionId: row.team_version_id ?? null,
   };
 }
 
-function getLatestTeamVersion(folder: ConfigFolder): Row | undefined {
-  return one<Row>(
-    'SELECT * FROM team_config_versions WHERE folder = ? ORDER BY published_at DESC LIMIT 1',
-    folder,
-  );
+async function getLatestTeamVersion(folder: ConfigFolder) {
+  return getUserConfigRepository().getLatestTeamVersion(folder);
 }
 
-function parseTeamFiles(tv: Row): TeamFile[] {
+function parseTeamFiles(tv: { files_json: string }): TeamFile[] {
   try {
-    const arr = JSON.parse(String(tv.files_json ?? '[]'));
+    const arr = JSON.parse(tv.files_json ?? '[]');
     return Array.isArray(arr) ? arr as TeamFile[] : [];
   } catch {
     return [];
@@ -187,15 +181,13 @@ function parseTeamFiles(tv: Row): TeamFile[] {
 }
 
 /**
- * If the user is currently following the team version, fork them off:
- *   1. Copy team files to the user's disk folder.
- *   2. Mark following=0, customised_at=now().
+ * If the user is currently following the team version, fork them off.
  */
-function ensureNotFollowing(userId: string, folder: ConfigFolder): void {
-  const state = getState(userId, folder);
+async function ensureNotFollowing(userId: string, folder: ConfigFolder): Promise<void> {
+  const state = await getState(userId, folder);
   if (!state.following) return;
 
-  const tv = getLatestTeamVersion(folder);
+  const tv = await getLatestTeamVersion(folder);
   if (tv) {
     const files = parseTeamFiles(tv);
     const root = userConfigRoot(userId, folder);
@@ -205,47 +197,29 @@ function ensureNotFollowing(userId: string, folder: ConfigFolder): void {
         fs.mkdirSync(abs, { recursive: true });
       } else if (f.content !== null) {
         fs.mkdirSync(path.dirname(abs), { recursive: true });
-        // content is already in the right format (encrypted for aws, plain for others)
         fs.writeFileSync(abs, f.content, 'utf8');
       }
     }
   }
 
   const ts = now();
-  const tvId = tv?.id as string | null ?? null;
-  const existing = one<Row>(
-    'SELECT user_id FROM user_config_state WHERE user_id = ? AND folder = ?',
-    userId,
-    folder,
-  );
-  if (existing) {
-    dbRun(
-      'UPDATE user_config_state SET following = 0, customised_at = ?, team_version_id = ? WHERE user_id = ? AND folder = ?',
-      ts,
-      tvId,
-      userId,
-      folder,
-    );
-  } else {
-    insert('user_config_state', {
-      user_id: userId,
-      folder,
-      following: 0,
-      customised_at: ts,
-      team_version_id: tvId,
-    });
-  }
+  const tvId = tv?.id ?? null;
+  await getUserConfigRepository().setState(userId, folder, {
+    following: 0,
+    customised_at: ts,
+    team_version_id: tvId,
+  });
 }
 
 /** Build the status payload for the status endpoint. */
-function buildStatus(userId: string, folder: ConfigFolder): object {
-  const state = getState(userId, folder);
-  const tv = getLatestTeamVersion(folder);
+async function buildStatus(userId: string, folder: ConfigFolder): Promise<object> {
+  const state = await getState(userId, folder);
+  const tv = await getLatestTeamVersion(folder);
   return {
     following: state.following,
     customisedAt: state.customisedAt ?? null,
-    teamVersion: tv ? (tv.id as string) : null,
-    teamPublishedAt: tv ? (tv.published_at as string) : null,
+    teamVersion: tv ? tv.id : null,
+    teamPublishedAt: tv ? tv.published_at : null,
   };
 }
 
@@ -320,10 +294,10 @@ function validateJson(filePath: string, content: string): string | null {
 /** Build a zip of the user's (or team's) effective config folder, omitting cache files. */
 async function buildExportZip(userId: string, folder: ConfigFolder): Promise<Buffer> {
   const zip = new JSZip();
-  const state = getState(userId, folder);
+  const state = await getState(userId, folder);
 
   if (state.following) {
-    const tv = getLatestTeamVersion(folder);
+    const tv = await getLatestTeamVersion(folder);
     if (tv) {
       const files = parseTeamFiles(tv);
       for (const f of files) {
@@ -811,25 +785,11 @@ export async function importLocalConfig(
 
   // Mark config as customised (following = false)
   const ts = now();
-  const stateRow = one<Row>(
-    'SELECT user_id FROM user_config_state WHERE user_id = ? AND folder = ?',
-    userId,
-    folder,
-  );
-  if (stateRow) {
-    dbRun(
-      'UPDATE user_config_state SET following = 0, customised_at = ? WHERE user_id = ? AND folder = ?',
-      ts, userId, folder,
-    );
-  } else {
-    insert('user_config_state', {
-      user_id: userId,
-      folder,
-      following: 0,
-      customised_at: ts,
-      team_version_id: null,
-    });
-  }
+  await getUserConfigRepository().setState(userId, folder, {
+    following: 0,
+    customised_at: ts,
+    team_version_id: null,
+  });
 
   return { imported: importedByTop, skipped, valuesRedacted: allRedacted, backupPath };
 }
@@ -915,11 +875,11 @@ export async function materialiseForRun(
       const destDir = path.join(homeDir, `.${folder}`); // .kiro, .claude, .aws
       await fsp.mkdir(destDir, { recursive: true });
 
-      const state = getState(userId, folder);
+      const state = await getState(userId, folder);
 
       if (state.following) {
         // Use team version
-        const tv = getLatestTeamVersion(folder);
+        const tv = await getLatestTeamVersion(folder);
         if (!tv) continue;
         const files = parseTeamFiles(tv);
         for (const f of files) {
@@ -1013,16 +973,16 @@ interface AgentEntry {
   description?: string;
 }
 
-function listAgentsForEngine(userId: string, engine: string): AgentEntry[] {
+async function listAgentsForEngine(userId: string, engine: string): Promise<AgentEntry[]> {
   const agents: AgentEntry[] = [];
 
   if (engine === 'kiro') {
     // Read kiro agents: ~/.kiro/agents/*.json
-    const state = getState(userId, 'kiro');
+    const state = await getState(userId, 'kiro');
     let agentFiles: Array<{ path: string; content: string }> = [];
 
     if (state.following) {
-      const tv = getLatestTeamVersion('kiro');
+      const tv = await getLatestTeamVersion('kiro');
       if (tv) {
         const files = parseTeamFiles(tv);
         agentFiles = files
@@ -1053,11 +1013,11 @@ function listAgentsForEngine(userId: string, engine: string): AgentEntry[] {
     }
   } else if (engine === 'claude-code') {
     // Read claude agents: ~/.claude/agents/*.md
-    const state = getState(userId, 'claude');
+    const state = await getState(userId, 'claude');
     let agentFiles: Array<{ path: string; content: string }> = [];
 
     if (state.following) {
-      const tv = getLatestTeamVersion('claude');
+      const tv = await getLatestTeamVersion('claude');
       if (tv) {
         const files = parseTeamFiles(tv);
         agentFiles = files
@@ -1106,39 +1066,39 @@ export function registerUserConfigRoutes(): void {
   // ── Agents discovery (must be before /:folder routes) ─────────────────────
 
   // GET /api/user-config/agents?engine=kiro|claude-code
-  router.get('/api/user-config/agents', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/user-config/agents', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     const engine = req.query.get('engine') ?? '';
     if (!['kiro', 'claude-code'].includes(engine)) {
       sendJson(res, 400, { error: 'engine must be kiro or claude-code' });
       return;
     }
-    const agents = listAgentsForEngine(req.user!.id, engine);
+    const agents = await listAgentsForEngine(req.user!.id, engine);
     sendJson(res, 200, { engine, agents });
   }));
 
   // ── Per-folder status ──────────────────────────────────────────────────────
 
   // GET /api/user-config/:folder/status
-  router.get('/api/user-config/:folder/status', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/user-config/:folder/status', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     const folder = validateFolder(req, res);
     if (!folder) return;
-    sendJson(res, 200, buildStatus(req.user!.id, folder));
+    sendJson(res, 200, await buildStatus(req.user!.id, folder));
   }));
 
   // ── Tree listing ───────────────────────────────────────────────────────────
 
   // GET /api/user-config/:folder/tree
-  router.get('/api/user-config/:folder/tree', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/user-config/:folder/tree', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     const folder = validateFolder(req, res);
     if (!folder) return;
 
     const userId = req.user!.id;
     const relPath = req.query.get('path') ?? '';
 
-    const state = getState(userId, folder);
+    const state = await getState(userId, folder);
 
     if (state.following) {
-      const tv = getLatestTeamVersion(folder);
+      const tv = await getLatestTeamVersion(folder);
       const files = tv ? parseTeamFiles(tv) : [];
       sendJson(res, 200, { following: true, entries: buildTreeFromTeamFiles(files, relPath) });
       return;
@@ -1164,7 +1124,7 @@ export function registerUserConfigRoutes(): void {
   // ── File read ──────────────────────────────────────────────────────────────
 
   // GET /api/user-config/:folder/file?path=
-  router.get('/api/user-config/:folder/file', requireAuth((req: PortalRequest, res: PortalResponse) => {
+  router.get('/api/user-config/:folder/file', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     const folder = validateFolder(req, res);
     if (!folder) return;
 
@@ -1178,10 +1138,10 @@ export function registerUserConfigRoutes(): void {
     const relPath = req.query.get('path') ?? '';
     if (!relPath) { sendJson(res, 400, { error: 'path query parameter required' }); return; }
 
-    const state = getState(userId, folder);
+    const state = await getState(userId, folder);
 
     if (state.following) {
-      const tv = getLatestTeamVersion(folder);
+      const tv = await getLatestTeamVersion(folder);
       if (!tv) { sendJson(res, 404, { error: 'File not found' }); return; }
       const files = parseTeamFiles(tv);
       const entry = files.find((f) => !f.isDir && f.path === relPath.replace(/\\/g, '/'));
@@ -1244,7 +1204,7 @@ export function registerUserConfigRoutes(): void {
       sendJson(res, 400, { error: `Invalid JSON: ${jsonError}`, invalidJson: true }); return;
     }
 
-    ensureNotFollowing(userId, folder);
+    await ensureNotFollowing(userId, folder);
 
     let absPath: string;
     try {
@@ -1290,7 +1250,7 @@ export function registerUserConfigRoutes(): void {
       sendJson(res, 400, { error: `Invalid JSON: ${jsonError}`, invalidJson: true }); return;
     }
 
-    ensureNotFollowing(userId, folder);
+    await ensureNotFollowing(userId, folder);
 
     let absPath: string;
     try {
@@ -1328,7 +1288,7 @@ export function registerUserConfigRoutes(): void {
     const relPath = req.query.get('path') ?? '';
     if (!relPath) { sendJson(res, 400, { error: 'path query parameter required' }); return; }
 
-    ensureNotFollowing(userId, folder);
+    await ensureNotFollowing(userId, folder);
 
     let absPath: string;
     try {
@@ -1370,7 +1330,7 @@ export function registerUserConfigRoutes(): void {
     const relPath = String(body.path ?? '');
     if (!relPath) { sendJson(res, 400, { error: 'path required' }); return; }
 
-    ensureNotFollowing(userId, folder);
+    await ensureNotFollowing(userId, folder);
 
     let absPath: string;
     try {
@@ -1401,7 +1361,7 @@ export function registerUserConfigRoutes(): void {
 
     if (!from || !to) { sendJson(res, 400, { error: 'from and to are required' }); return; }
 
-    ensureNotFollowing(userId, folder);
+    await ensureNotFollowing(userId, folder);
 
     let srcPath: string;
     let dstPath: string;
@@ -1434,7 +1394,7 @@ export function registerUserConfigRoutes(): void {
     if (!requireWriteScope(req, res)) return;
 
     const userId = req.user!.id;
-    const tv = getLatestTeamVersion(folder);
+    const tv = await getLatestTeamVersion(folder);
     if (!tv) {
       sendJson(res, 400, { error: 'No team version has been published yet' }); return;
     }
@@ -1459,30 +1419,14 @@ export function registerUserConfigRoutes(): void {
     }
 
     // Mark as following
-    const existing = one<Row>(
-      'SELECT user_id FROM user_config_state WHERE user_id = ? AND folder = ?',
-      userId,
-      folder,
-    );
-    if (existing) {
-      dbRun(
-        'UPDATE user_config_state SET following = 1, customised_at = NULL, team_version_id = ? WHERE user_id = ? AND folder = ?',
-        tv.id as string,
-        userId,
-        folder,
-      );
-    } else {
-      insert('user_config_state', {
-        user_id: userId,
-        folder,
-        following: 1,
-        customised_at: null,
-        team_version_id: tv.id as string,
-      });
-    }
+    await getUserConfigRepository().setState(userId, folder, {
+      following: 1,
+      customised_at: null,
+      team_version_id: tv.id,
+    });
 
     appendAudit(getDb(), userId, 'user-config.reset', `user:${userId}:${folder}`, { folder, teamVersionId: tv.id }, req.ip);
-    sendJson(res, 200, { ok: true, ...buildStatus(userId, folder) });
+    sendJson(res, 200, { ok: true, ...await buildStatus(userId, folder) });
   }));
 
   // ── Zip export ─────────────────────────────────────────────────────────────
@@ -1553,30 +1497,14 @@ export function registerUserConfigRoutes(): void {
 
     // Mark as customised
     const ts = now();
-    const existing = one<Row>(
-      'SELECT user_id FROM user_config_state WHERE user_id = ? AND folder = ?',
-      userId,
-      folder,
-    );
-    if (existing) {
-      dbRun(
-        'UPDATE user_config_state SET following = 0, customised_at = ? WHERE user_id = ? AND folder = ?',
-        ts,
-        userId,
-        folder,
-      );
-    } else {
-      insert('user_config_state', {
-        user_id: userId,
-        folder,
-        following: 0,
-        customised_at: ts,
-        team_version_id: null,
-      });
-    }
+    await getUserConfigRepository().setState(userId, folder, {
+      following: 0,
+      customised_at: ts,
+      team_version_id: null,
+    });
 
     appendAudit(getDb(), userId, 'user-config.import', `user:${userId}:${folder}`, { folder, fileCount: entries.length }, req.ip);
-    sendJson(res, 200, { ok: true, fileCount: entries.length, ...buildStatus(userId, folder) });
+    sendJson(res, 200, { ok: true, fileCount: entries.length, ...await buildStatus(userId, folder) });
   }));
 
   // ── Admin: publish team default ────────────────────────────────────────────
@@ -1618,7 +1546,7 @@ export function registerUserConfigRoutes(): void {
       .slice(0, 8);
     const versionId = `${datePart}-${hash}`;
 
-    insert('team_config_versions', {
+    await getUserConfigRepository().publishTeamVersion({
       id: versionId,
       folder,
       published_by: req.user.id,

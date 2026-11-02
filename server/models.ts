@@ -21,8 +21,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, getDb } from './db.ts';
-import type { Row } from './db.ts';
+import { getDb } from './db.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { decrypt } from './secrets.ts';
 import { config } from './config.ts';
@@ -34,6 +33,7 @@ import { materialiseKiroAuthDb, cleanupKiroAuthDb, KIRO_TEST_DB_ENV, readKiroAut
 import { spawnKiroListModels } from './kiro-list-models.ts';
 import type { KiroModelRaw } from './kiro-list-models.ts';
 import { checkKiroIdcHookSupport } from './kiro-idc-check.ts';
+import { getCredentialsRepository } from './repositories/credentials.ts';
 
 // ── Re-export test hook so tests can inject Bedrock mock here too ─────────────
 
@@ -108,15 +108,8 @@ function toCache(engine: string, credId: string, result: EngineModelsResponse): 
 
 // ── Credential row helper ─────────────────────────────────────────────────────
 
-interface CredentialRow extends Row {
-  id: string;
-  user_id: string;
-  engine: string;
-  name: string;
-  mode: string;
-  secret_enc: string | null;
-  extra_config: string;
-}
+import type { CredentialRecord } from './repositories/credentials.ts';
+type CredentialRow = CredentialRecord;
 
 function safeJson(s: string | null | undefined): Record<string, unknown> {
   if (!s) return {};
@@ -398,11 +391,8 @@ async function getEngineModels(
   let runsAs: EngineModelsResponse['runsAs'];
 
   if (requestedCredentialId) {
-    const found = one<CredentialRow>(
-      'SELECT * FROM engine_credentials WHERE id = ? AND user_id = ? AND engine = ?',
-      requestedCredentialId, userId, engine,
-    );
-    if (!found) {
+    const found = await getCredentialsRepository().getByIdAndUser(requestedCredentialId, userId);
+    if (!found || found.engine !== engine) {
       return {
         models: [],
         source: 'none',
@@ -414,10 +404,7 @@ async function getEngineModels(
     runsAs = { kind: 'credential', label: String(cred.name) };
   } else {
     // Try user's default credential for this engine
-    const defaultCred = one<CredentialRow>(
-      'SELECT * FROM engine_credentials WHERE user_id = ? AND engine = ? AND is_default = 1',
-      userId, engine,
-    );
+    const defaultCred = await getCredentialsRepository().getDefaultByUserAndEngine(userId, engine);
     if (defaultCred) {
       cred = defaultCred;
       runsAs = { kind: 'credential', label: String(defaultCred.name) };
@@ -468,7 +455,7 @@ async function getEngineModels(
         let activeCred: CredentialRow = cred;
         try {
           await autoRefreshIdcIfNeeded(String(cred.id));
-          const refreshed = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id));
+          const refreshed = await getCredentialsRepository().getByIdAndUser(String(cred.id), userId);
           if (refreshed) activeCred = refreshed;
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -478,7 +465,7 @@ async function getEngineModels(
         // Lazy profile fetch — same place as auto-refresh.
         try {
           await ensureKiroProfileFetched(String(cred.id));
-          const afterProfile = one<CredentialRow>('SELECT * FROM engine_credentials WHERE id = ?', String(cred.id));
+          const afterProfile = await getCredentialsRepository().getByIdAndUser(String(cred.id), userId);
           if (afterProfile) activeCred = afterProfile;
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);

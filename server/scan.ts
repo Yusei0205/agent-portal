@@ -22,6 +22,8 @@ import { getSetting, setSetting, getSettings } from './settings.ts';
 import { appendAudit } from './audit.ts';
 import { decrypt } from './secrets.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
+import { getScansRepository } from './repositories/scans.ts';
+import { getGitReposRepository } from './repositories/git-repos.ts';
 import { config } from './config.ts';
 import { computeCost, processReviewOutput } from './review.ts';
 import type { RateCard } from './review.ts';
@@ -200,10 +202,7 @@ async function _doFetchFileTree(
   actorId: string,
   projectId: string,
 ): Promise<{ files: FileEntry[]; pinnedSha: string | null }> {
-  const repo = one<{ url: string; provider: string; default_branch: string | null }>(
-    'SELECT url, provider, default_branch FROM repositories WHERE id = ?',
-    repoId,
-  );
+  const repo = await getGitReposRepository().getById(repoId);
   if (!repo) return { files: [], pinnedSha: null };
 
   const ref = branch || repo.default_branch || 'main';
@@ -516,10 +515,7 @@ async function _doFetchFileContent(
   actorId: string,
   projectId: string,
 ): Promise<string> {
-  const repo = one<{ url: string; provider: string }>(
-    'SELECT url, provider FROM repositories WHERE id = ?',
-    repoId,
-  );
+  const repo = await getGitReposRepository().getById(repoId);
   if (!repo) return '';
 
   if (repo.provider === 'github') {
@@ -1255,11 +1251,8 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    const repo = one<{ id: string; project_id: string }>(
-      'SELECT id, project_id FROM repositories WHERE id = ?',
-      repoId,
-    );
-    if (!repo || repo.project_id !== req.params.id) {
+    const repo = await getGitReposRepository().getByIdForProject(repoId, req.params.id);
+    if (!repo) {
       sendJson(res, 400, { error: 'Repository not found in this project' });
       return;
     }
@@ -1295,44 +1288,22 @@ export function registerScanRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('p10_scans', {
-      id,
-      project_id: req.params.id,
-      repo_id: repoId,
-      branch,
-      pinned_sha: null,
-      include_paths: JSON.stringify(includePats),
-      exclude_paths: JSON.stringify(excludePats),
-      background_doc_ids: JSON.stringify(backgroundDocIds),
-      model_role: modelRole,
-      provider_id: providerId,
-      model_id: modelId,
-      status: 'estimating',
-      fail_reason: null,
-      budget_tokens: null,
-      estimated_files: null,
-      estimated_bytes: null,
-      estimated_tokens: null,
-      estimated_cost_usd: null,
-      estimated_minutes: null,
-      files_total: 0,
-      files_done: 0,
-      tokens_used: 0,
-      cost_usd: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      summary: null,
-      review_id: null,
-      created_by: req.user!.id,
-      created_at: ts,
-      started_at: null,
-      completed_at: null,
-      workflow_id: null,
+    const scan = await getScansRepository().create({
+      id, project_id: req.params.id, repo_id: repoId, branch,
+      pinned_sha: null, include_paths: JSON.stringify(includePats),
+      exclude_paths: JSON.stringify(excludePats), background_doc_ids: JSON.stringify(backgroundDocIds),
+      model_role: modelRole, provider_id: providerId, model_id: modelId,
+      status: 'estimating', fail_reason: null, budget_tokens: null,
+      estimated_files: null, estimated_bytes: null, estimated_tokens: null,
+      estimated_cost_usd: null, estimated_minutes: null,
+      files_total: 0, files_done: 0, tokens_used: 0, cost_usd: 0,
+      input_tokens: 0, output_tokens: 0, summary: null, review_id: null,
+      created_by: req.user!.id, created_at: ts, started_at: null,
+      completed_at: null, workflow_id: null,
     });
 
     appendAudit(getDb(), req.user!.id, 'scan.create', `scan:${id}`, { projectId: req.params.id, repoId, branch }, req.ip);
 
-    const scan = one<Scan>('SELECT * FROM p10_scans WHERE id = ?', id);
     sendJson(res, 201, { scan });
 
     // Start estimation in background
@@ -1340,10 +1311,10 @@ export function registerScanRoutes(): void {
   }));
 
   // ── GET /api/projects/:id/scans/:sid ──────────────────────────────────────
-  router.get('/api/projects/:id/scans/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/scans/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const scan = one<Scan>('SELECT * FROM p10_scans WHERE id = ? AND project_id = ?', req.params.sid, req.params.id);
+    const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
 
     const rateCard = getRateCardForScan();
@@ -1356,10 +1327,10 @@ export function registerScanRoutes(): void {
   });
 
   // ── DELETE /api/projects/:id/scans/:sid ───────────────────────────────────
-  router.delete('/api/projects/:id/scans/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:id/scans/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const scan = one<Scan>('SELECT * FROM p10_scans WHERE id = ? AND project_id = ?', req.params.sid, req.params.id);
+    const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
 
     if (scan.status === 'fetching' || scan.status === 'reviewing') {
@@ -1367,21 +1338,18 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    run('DELETE FROM p10_scans WHERE id = ?', scan.id);
+    await getScansRepository().delete(scan.id, req.params.id);
     sendJson(res, 200, { ok: true });
   });
 
   // ── GET /api/projects/:id/scans/:sid/files ────────────────────────────────
-  router.get('/api/projects/:id/scans/:sid/files', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/scans/:sid/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const scan = one<{ id: string }>('SELECT id FROM p10_scans WHERE id = ? AND project_id = ?', req.params.sid, req.params.id);
+    const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
 
-    const files = all<ScanFile>(
-      'SELECT id, scan_id, file_path, status, tokens_used, done_at FROM p10_scan_files WHERE scan_id = ? ORDER BY file_path',
-      scan.id,
-    );
+    const files = await getScansRepository().listFiles(scan.id);
     sendJson(res, 200, { files });
   });
 
@@ -1398,7 +1366,7 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    const scan = one<Scan>('SELECT * FROM p10_scans WHERE id = ? AND project_id = ?', req.params.sid, req.params.id);
+    const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
 
     if (scan.status !== 'estimate_ready') {
@@ -1425,15 +1393,11 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    run(
-      "UPDATE p10_scans SET status = 'queued', budget_tokens = ? WHERE id = ?",
-      Math.round(budgetTokens),
-      scan.id,
-    );
+    await getScansRepository().update(scan.id, { status: 'queued', budget_tokens: Math.round(budgetTokens) });
 
     appendAudit(getDb(), req.user!.id, 'scan.confirm', `scan:${scan.id}`, { budgetTokens }, req.ip);
 
-    const updated = one<Scan>('SELECT * FROM p10_scans WHERE id = ?', scan.id);
+    const updated = await getScansRepository().getById(scan.id);
     sendJson(res, 200, { scan: updated });
 
     // Start scan in background
@@ -1453,7 +1417,7 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    const scan = one<Scan>('SELECT * FROM p10_scans WHERE id = ? AND project_id = ?', req.params.sid, req.params.id);
+    const scan = await getScansRepository().getByIdForProject(req.params.sid, req.params.id);
     if (!scan) { sendJson(res, 404, { error: 'Scan not found' }); return; }
 
     if (!['failed', 'completed'].includes(scan.status)) {
@@ -1463,7 +1427,6 @@ export function registerScanRoutes(): void {
 
     const body = req.body as Record<string, unknown>;
 
-    // Optionally raise the budget
     let newBudget = scan.budget_tokens;
     if (body.budgetTokens != null) {
       const v = Number(body.budgetTokens);
@@ -1479,7 +1442,6 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    // Check if there are any pending files left
     const pendingCount = (one<{ n: number }>(
       "SELECT COUNT(*) AS n FROM p10_scan_files WHERE scan_id = ? AND status = 'pending'",
       scan.id,
@@ -1490,15 +1452,11 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    run(
-      "UPDATE p10_scans SET status = 'queued', budget_tokens = ?, fail_reason = NULL WHERE id = ?",
-      newBudget,
-      scan.id,
-    );
+    await getScansRepository().update(scan.id, { status: 'queued', budget_tokens: newBudget, fail_reason: null });
 
     appendAudit(getDb(), req.user!.id, 'scan.resume', `scan:${scan.id}`, { newBudget }, req.ip);
 
-    const updated = one<Scan>('SELECT * FROM p10_scans WHERE id = ?', scan.id);
+    const updated = await getScansRepository().getById(scan.id);
     sendJson(res, 200, { scan: updated });
 
     // Continue scan in background

@@ -24,11 +24,13 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run as dbRun, insert, getDb } from './db.ts';
+import { one, all, run as dbRunSync, getDb } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, badRequest } from './util.ts';
 import { config } from './config.ts';
 import { appendAudit } from './audit.ts';
+import { getAiAttachmentRepository } from './repositories/ai-attachments.ts';
+import type { AiAttachmentRecord, AttachmentParentKind } from './repositories/ai-attachments.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -216,13 +218,13 @@ export interface AttachmentView {
   kind: 'image' | 'document' | 'diagram';
 }
 
-function rowToView(row: Row): AttachmentView {
+function rowToView(row: AiAttachmentRecord): AttachmentView {
   return {
-    id: String(row.id),
-    filename: String(row.filename),
-    mimeType: String(row.mime_type),
-    size: Number(row.size),
-    kind: String(row.kind) as 'image' | 'document' | 'diagram',
+    id: row.id,
+    filename: row.filename,
+    mimeType: row.mime_type,
+    size: row.size,
+    kind: row.kind,
   };
 }
 
@@ -231,6 +233,9 @@ function rowToView(row: Row): AttachmentView {
 /**
  * Validate a list of attachment IDs for a project.
  * Returns `{ error, rows: null }` on failure, `{ error: null, rows }` on success.
+ *
+ * Backlog S2: convert to async using getAiAttachmentRepository() once all
+ * callers (diagrams.ts, presentations.ts, etc.) have been made async.
  */
 export function validateAttachmentIds(
   projectId: string,
@@ -250,12 +255,22 @@ export function validateAttachmentIds(
   return { error: null, rows };
 }
 
-/** Return view objects for a list of attachment rows. Silently skips missing rows. */
+/** Return view objects for a list of attachment rows. Silently skips missing rows.
+ *
+ * Backlog S2: convert to async using getAiAttachmentRepository() once
+ * diagramView/presView/docView callers are made async.
+ */
 export function getAttachmentsView(projectId: string, ids: string[]): AttachmentView[] {
   return ids
     .map((id) => one<Row>('SELECT * FROM ai_attachments WHERE id = ? AND project_id = ?', id, projectId))
     .filter((r): r is Row => r !== undefined)
-    .map(rowToView);
+    .map((row: Row) => ({
+      id: String(row.id),
+      filename: String(row.filename),
+      mimeType: String(row.mime_type),
+      size: Number(row.size),
+      kind: String(row.kind) as 'image' | 'document' | 'diagram',
+    }));
 }
 
 /**
@@ -273,7 +288,7 @@ export async function stageAttachmentsToWorkDir(
   const staged: Array<{ filename: string; mimeType: string; kind: string }> = [];
   const usedNames = new Set<string>();
   for (const att of attachmentRows) {
-    const srcPath = String(att.file_path);
+    const srcPath = String(att.file_path ?? att.file_path);
     if (!fs.existsSync(srcPath)) continue;
 
     let stagedName = String(att.filename);
@@ -318,59 +333,53 @@ export function buildAttachmentPromptBlock(
  * Mark attachment rows as linked to a parent resource (diagram / doc / presentation).
  * Call this after the resource row has been inserted/updated.
  */
-export function linkAttachmentsToParent(
+export async function linkAttachmentsToParent(
   ids: string[],
-  parentKind: 'diagram' | 'doc' | 'presentation',
+  parentKind: AttachmentParentKind,
   parentId: string,
-): void {
-  for (const id of ids) {
-    dbRun(
-      'UPDATE ai_attachments SET parent_kind = ?, parent_id = ? WHERE id = ?',
-      parentKind, parentId, id,
-    );
-  }
+): Promise<void> {
+  await getAiAttachmentRepository().linkToParent(ids, parentKind, parentId);
 }
 
 /**
  * Delete attachment files and DB rows for a given parent resource.
  * Called when the parent (diagram / doc / presentation) is deleted.
  */
-export function deleteAttachmentsForParent(
-  parentKind: 'diagram' | 'doc' | 'presentation',
+export async function deleteAttachmentsForParent(
+  parentKind: AttachmentParentKind,
   parentId: string,
-): void {
-  const rows = all<Row>(
-    'SELECT * FROM ai_attachments WHERE parent_kind = ? AND parent_id = ?',
-    parentKind, parentId,
-  );
+): Promise<void> {
+  const repo = getAiAttachmentRepository();
+  const rows = await repo.listByParent(parentKind, parentId);
   for (const row of rows) {
-    try { fs.rmSync(String(row.file_path), { force: true }); } catch { /* best effort */ }
+    try { fs.rmSync(row.file_path, { force: true }); } catch { /* best effort */ }
   }
-  dbRun('DELETE FROM ai_attachments WHERE parent_kind = ? AND parent_id = ?', parentKind, parentId);
+  await repo.deleteByParent(parentKind, parentId);
 }
 
 /**
  * Delete specific attachment files and DB rows by ID.
  * Used by test-generation cleanup (attachments are single-use for tests).
  */
-export function deleteAttachmentsByIds(ids: string[]): void {
+export async function deleteAttachmentsByIds(ids: string[]): Promise<void> {
+  const repo = getAiAttachmentRepository();
   for (const id of ids) {
-    const att = one<Row>('SELECT * FROM ai_attachments WHERE id = ?', id);
+    const att = await repo.getById(id);
     if (!att) continue;
-    try { fs.rmSync(String(att.file_path), { force: true }); } catch { /* best effort */ }
-    dbRun('DELETE FROM ai_attachments WHERE id = ?', id);
+    try { fs.rmSync(att.file_path, { force: true }); } catch { /* best effort */ }
   }
+  await repo.deleteByIds(ids);
 }
 
 /**
  * Sweep orphaned attachments (no parent, uploaded more than 24 h ago).
  * Safe to call on a schedule (every hour, etc.).
+ *
+ * Backlog S2: convert to async using getAiAttachmentRepository() once
+ * the test is updated to await the call (or uses a sync-compatible API).
  */
 export function cleanupOrphanedAttachments(): void {
   try {
-    // Use a JS-side cutoff in ISO format so string comparison works correctly
-    // (SQLite datetime() returns 'YYYY-MM-DD HH:MM:SS' which doesn't sort the same
-    // as ISO 'YYYY-MM-DDTHH:MM:SS.mmmZ').
     const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
     const rows = all<Row>(
       'SELECT * FROM ai_attachments WHERE parent_id IS NULL AND created_at < ?',
@@ -380,7 +389,7 @@ export function cleanupOrphanedAttachments(): void {
       try { fs.rmSync(String(row.file_path), { force: true }); } catch { /* best effort */ }
     }
     if (rows.length > 0) {
-      dbRun('DELETE FROM ai_attachments WHERE parent_id IS NULL AND created_at < ?', cutoff);
+      dbRunSync('DELETE FROM ai_attachments WHERE parent_id IS NULL AND created_at < ?', cutoff);
     }
   } catch { /* non-fatal */ }
 }
@@ -463,7 +472,7 @@ export function registerAiAttachmentRoutes(): void {
       const filePath = path.join(dir, storedName);
       fs.writeFileSync(filePath, data);
 
-      insert('ai_attachments', {
+      await getAiAttachmentRepository().create({
         id,
         project_id: req.params.id,
         filename: safeFilename,
@@ -496,14 +505,11 @@ export function registerAiAttachmentRoutes(): void {
   // DELETE /api/projects/:id/ai-attachments/:attId
   router.delete(
     '/api/projects/:id/ai-attachments/:attId',
-    (req: PortalRequest, res: PortalResponse): void => {
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const project = requireEditorAccess(req, res, req.params.id);
       if (!project) return;
 
-      const att = one<Row>(
-        'SELECT * FROM ai_attachments WHERE id = ? AND project_id = ?',
-        req.params.attId, req.params.id,
-      );
+      const att = await getAiAttachmentRepository().getByIdForProject(req.params.attId, req.params.id);
       if (!att) { sendJson(res, 404, { error: 'Attachment not found' }); return; }
 
       if (att.parent_id !== null && att.parent_id !== undefined) {
@@ -513,8 +519,8 @@ export function registerAiAttachmentRoutes(): void {
         return;
       }
 
-      try { fs.rmSync(String(att.file_path), { force: true }); } catch { /* best effort */ }
-      dbRun('DELETE FROM ai_attachments WHERE id = ?', req.params.attId);
+      try { fs.rmSync(att.file_path, { force: true }); } catch { /* best effort */ }
+      await getAiAttachmentRepository().deleteByIds([req.params.attId]);
 
       appendAudit(
         getDb(),

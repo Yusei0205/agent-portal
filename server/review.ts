@@ -28,6 +28,8 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, insert, getDb } from './db.ts';
 import { generateId, now, parseJson, newId } from './util.ts';
 import { getSetting, setSetting, getSettings } from './settings.ts';
+import { getReviewsRepository } from './repositories/reviews.ts';
+import type { ReviewRecord, FindingRecord } from './repositories/reviews.ts';
 import { emit } from './events.ts';
 import { appendAudit } from './audit.ts';
 import { buildXlsx, buildDocx } from './docgen.ts';
@@ -1126,7 +1128,7 @@ async function checkAutoPostShouldSkip(
  * Applies the same dedupe rules as the /post route.
  */
 export async function triggerAutoPost(reviewId: string, _projectId?: string): Promise<{ posted: number; skipped: number }> {
-  const review = one<Review>('SELECT * FROM p10_reviews WHERE id = ?', reviewId);
+  const review = await getReviewsRepository().getById(reviewId);
   if (!review || review.status !== 'done') return { posted: 0, skipped: 0 };
   // Auto-post when either the review-level mode is 'auto' OR the global prCommentMode is 'automatic'.
   if (review.post_mode !== 'auto' && getPrCommentMode() !== 'automatic') return { posted: 0, skipped: 0 };
@@ -1135,26 +1137,20 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
 
   // Skip if already posted for this PR revision
   if (review.source_sha && review.repo_id && review.pr_number != null) {
-    const alreadyPosted = one<{ id: string }>(
-      `SELECT r.id FROM p10_reviews r
-       JOIN p10_findings f ON f.review_id = r.id
-       WHERE r.repo_id = ? AND r.pr_number = ? AND r.source_sha = ?
-         AND r.id != ? AND f.posted_at IS NOT NULL
-       LIMIT 1`,
-      review.repo_id, review.pr_number, review.source_sha, review.id,
-    );
+    const alreadyPosted = await getReviewsRepository().checkAlreadyPosted(review.repo_id, review.pr_number, review.source_sha, review.id);
     if (alreadyPosted) return { posted: 0, skipped: 0 };
   }
 
   const minSevRank = SEVERITIES.indexOf(review.min_severity as Severity);
-  const findings = all<Finding>('SELECT * FROM p10_findings WHERE review_id = ? AND accepted != -1', review.id);
-  const toPost = findings.filter((f) => {
+  const findings = await getReviewsRepository().listFindings(review.id);
+  const activeFindings = findings.filter((f) => f.accepted !== -1);
+  const toPost = activeFindings.filter((f) => {
     if (f.posted_at) return false;
     if (f.accepted === 1) return true;
     return SEVERITIES.indexOf(f.severity as Severity) <= minSevRank;
   });
 
-  if (toPost.length === 0) return { posted: 0, skipped: findings.length };
+  if (toPost.length === 0) return { posted: 0, skipped: activeFindings.length };
 
   const ts = now();
   const repo = review.repo_id
@@ -1166,7 +1162,7 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
   }
 
   // Use the shared helper to check if the PR head has moved since the review ran.
-  const skipCheck = await checkAutoPostShouldSkip(review, actorId);
+  const skipCheck = await checkAutoPostShouldSkip(review as unknown as Review, actorId);
   if (skipCheck.skip) {
     return { posted: 0, skipped: toPost.length };
   }
@@ -1184,12 +1180,12 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
           review.source_sha, f.file_path || null, f.line_number, token,
         );
         if (result.ok) {
-          run('UPDATE p10_findings SET posted_at = ? WHERE id = ?', ts, f.id);
+          await getReviewsRepository().markFindingPosted(f.id, ts);
           postedCount++;
         }
       } catch { /* best-effort */ }
     }
-    return { posted: postedCount, skipped: findings.length - postedCount };
+    return { posted: postedCount, skipped: activeFindings.length - postedCount };
   }
 
   if (repo.provider === 'codecommit' && review.dest_sha) {
@@ -1205,11 +1201,11 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
           `**[${f.severity.toUpperCase()}] ${f.title}**\n\n${f.body}`,
           f.file_path || null, f.line_number, f.id, creds,
         );
-        run('UPDATE p10_findings SET posted_at = ? WHERE id = ?', ts, f.id);
+        await getReviewsRepository().markFindingPosted(f.id, ts);
         postedCount++;
       } catch { /* best-effort */ }
     }
-    return { posted: postedCount, skipped: findings.length - postedCount };
+    return { posted: postedCount, skipped: activeFindings.length - postedCount };
   }
 
   return { posted: 0, skipped: toPost.length };
@@ -1318,13 +1314,7 @@ export function registerReviewRoutes(): void {
       return;
     }
 
-    const placeholders = projectIds.map(() => '?').join(',');
-
-    const reviews = all<Review>(
-      `SELECT * FROM p10_reviews WHERE project_id IN (${placeholders}) AND created_at >= ? ORDER BY created_at DESC`,
-      ...projectIds,
-      since,
-    );
+    const reviews = await getReviewsRepository().listByProjectIds(projectIds, since);
 
     const rateCard = getRateCard();
     let totalEstimatedUsd = 0;
@@ -1350,31 +1340,20 @@ export function registerReviewRoutes(): void {
       if (r.created_by) peopleSet.add(r.created_by);
     }
 
-    const recentReviews = reviews.slice(0, 20).map((r) => {
-      const findings = all<Pick<Finding, 'accepted' | 'severity'>>(
-        'SELECT accepted, severity FROM p10_findings WHERE review_id = ?',
-        r.id,
-      );
-      const verdict = computeMergeVerdict(r, findings, getMergeThreshold());
-      const { estimatedUsd } = computeCost(r, rateCard);
-      interface RepoRow { name: string }
-      const repoName = one<RepoRow>('SELECT name FROM repositories WHERE id = ?', r.repo_id ?? '')?.name ?? null;
+    const recentReviews = await Promise.all(reviews.slice(0, 20).map(async (r) => {
+      const findings = await getReviewsRepository().listFindings(r.id);
+      const verdict = computeMergeVerdict(r as unknown as Review, findings as unknown as Array<Pick<Finding, 'accepted' | 'severity'>>, getMergeThreshold());
+      const { estimatedUsd } = computeCost(r as unknown as Review, rateCard);
+      const repoName = r.repo_id
+        ? one<{ name: string }>('SELECT name FROM repositories WHERE id = ?', r.repo_id)?.name ?? null
+        : null;
       return {
-        id: r.id,
-        project_id: r.project_id,
-        base_ref: r.base_ref,
-        head_ref: r.head_ref,
-        pr_number: r.pr_number,
-        repo_id: r.repo_id,
-        repo_name: repoName,
-        status: r.status,
-        finding_count: findings.length,
-        verdict: verdict.verdict,
-        estimatedUsd,
-        merged_at: r.merged_at,
-        created_at: r.created_at,
+        id: r.id, project_id: r.project_id, base_ref: r.base_ref, head_ref: r.head_ref,
+        pr_number: r.pr_number, repo_id: r.repo_id, repo_name: repoName, status: r.status,
+        finding_count: findings.length, verdict: verdict.verdict, estimatedUsd,
+        merged_at: r.merged_at, created_at: r.created_at,
       };
-    });
+    }));
 
     sendJson(res, 200, {
       period,
@@ -1595,123 +1574,77 @@ export function registerReviewRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('p10_reviews', {
-      id,
-      project_id: req.params.id,
-      base_ref: baseRef,
-      head_ref: headRef,
-      pr_number: prNumber,
-      repo_id: repoId,
-      status: 'pending',
-      post_mode: postMode,
-      from_loop: null,
-      workflow_id: workflowId,
-      min_severity: minSeverity,
-      summary: null,
-      created_by: req.user!.id,
-      created_at: ts,
-      parent_review_id: null,
-      source_sha: resolvedSourceSha,
-      dest_sha: resolvedDestSha,
+    const review = await getReviewsRepository().create({
+      id, project_id: req.params.id, base_ref: baseRef, head_ref: headRef,
+      pr_number: prNumber, repo_id: repoId, status: 'pending', post_mode: postMode,
+      from_loop: null, workflow_id: workflowId, min_severity: minSeverity,
+      summary: null, raw_output: null, created_by: req.user!.id, created_at: ts,
+      parent_review_id: null, source_sha: resolvedSourceSha, dest_sha: resolvedDestSha,
       head_commit_sha: headCommitSha ?? resolvedSourceSha,
-      provider_id: providerId,
-      model_id: modelId,
-      jira_context: JSON.stringify(jiraCtx),
-      run_log: '[]',
-      input_tokens: 0,
-      cache_write_tokens: 0,
-      cache_read_tokens: 0,
-      output_tokens: 0,
-      llm_requests: 0,
-      retry_count: 0,
-      tool_calls: 0,
-      files_reviewed: 0,
-      duration_ms: null,
-      started_at: null,
-      merged_at: null,
-      merged_by: null,
+      provider_id: providerId, model_id: modelId, jira_context: JSON.stringify(jiraCtx),
+      run_log: '[]', input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0,
+      output_tokens: 0, llm_requests: 0, retry_count: 0, tool_calls: 0,
+      files_reviewed: 0, duration_ms: null, started_at: null,
+      merged_at: null, merged_by: null,
     });
 
-    const review = one<Review>('SELECT * FROM p10_reviews WHERE id = ?', id);
     sendJson(res, 201, { review });
   });
 
   // ── GET /api/projects/:id/reviews/:rid ────────────────────────────────────
-  router.get('/api/projects/:id/reviews/:rid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/reviews/:rid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const review = one<Review>(
-      'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
-    if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
+    const review = await getReviewsRepository().getById(req.params.rid);
+    if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
 
-    const findings = all<Finding>(
-      `SELECT * FROM p10_findings WHERE review_id = ?
-       ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, file_path, line_number`,
-      review.id,
-    );
+    const findings = await getReviewsRepository().listFindings(review.id);
+    const sorted = [...findings].sort((a, b) => {
+      const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+      const sa = severityOrder[a.severity] ?? 4;
+      const sb = severityOrder[b.severity] ?? 4;
+      if (sa !== sb) return sa - sb;
+      return a.file_path.localeCompare(b.file_path);
+    });
 
-    const reviewOut = addComputedFields(review, findings);
-    sendJson(res, 200, { review: reviewOut, findings });
+    const reviewOut = addComputedFields(review as unknown as Review, sorted as unknown as Array<Pick<Finding, 'accepted' | 'severity'>>);
+    sendJson(res, 200, { review: reviewOut, findings: sorted });
   });
 
   // ── DELETE /api/projects/:id/reviews/:rid ─────────────────────────────────
-  router.delete('/api/projects/:id/reviews/:rid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:id/reviews/:rid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
-    const review = one<Review>(
-      'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
-    if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
+    const review = await getReviewsRepository().getById(req.params.rid);
+    if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
     if (review.status === 'running') {
       sendJson(res, 400, { error: 'Wait for the review to finish before deleting it' });
       return;
     }
 
-    run('DELETE FROM p10_reviews WHERE id = ?', review.id);
+    await getReviewsRepository().delete(review.id, req.params.id);
     sendJson(res, 200, { ok: true });
   });
 
   // ── GET /api/projects/:id/reviews/:rid/findings ───────────────────────────
-  router.get('/api/projects/:id/reviews/:rid/findings', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/reviews/:rid/findings', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const review = one<{ id: string }>(
-      'SELECT id FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
-    if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
+    const review = await getReviewsRepository().getById(req.params.rid);
+    if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
 
-    const findings = all<Finding>(
-      `SELECT * FROM p10_findings WHERE review_id = ?
-       ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, file_path, line_number`,
-      review.id,
-    );
-
+    const findings = await getReviewsRepository().listFindings(review.id);
     sendJson(res, 200, { findings });
   });
 
   // ── PUT /api/projects/:id/reviews/:rid/findings/:fid ─────────────────────
-  router.put('/api/projects/:id/reviews/:rid/findings/:fid', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:id/reviews/:rid/findings/:fid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
-    const review = one<{ id: string }>(
-      'SELECT id FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
-    if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
+    const review = await getReviewsRepository().getById(req.params.rid);
+    if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
 
-    const finding = one<Finding>(
-      'SELECT * FROM p10_findings WHERE id = ? AND review_id = ?',
-      req.params.fid,
-      review.id,
-    );
+    const finding = await getReviewsRepository().getFindingById(req.params.fid, review.id);
     if (!finding) { sendJson(res, 404, { error: 'Finding not found' }); return; }
 
     const body = req.body as Record<string, unknown>;
@@ -1721,8 +1654,8 @@ export function registerReviewRoutes(): void {
       return;
     }
 
-    run('UPDATE p10_findings SET accepted = ? WHERE id = ?', accepted, finding.id);
-    const updated = one<Finding>('SELECT * FROM p10_findings WHERE id = ?', finding.id);
+    await getReviewsRepository().updateFinding(finding.id, { accepted, review_id: review.id });
+    const updated = await getReviewsRepository().getFindingById(finding.id, review.id);
     sendJson(res, 200, { finding: updated, ok: true });
   });
 
@@ -1744,12 +1677,8 @@ export function registerReviewRoutes(): void {
       }
     }
 
-    const review = one<Review>(
-      'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
-    if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
+    const review = await getReviewsRepository().getById(req.params.rid);
+    if (!review || review.project_id !== req.params.id) { sendJson(res, 404, { error: 'Review not found' }); return; }
     if (review.status !== 'done') {
       sendJson(res, 400, { error: 'Wait for the review to finish before posting' });
       return;
@@ -1759,12 +1688,7 @@ export function registerReviewRoutes(): void {
 
     // R2: Auto-post dedupe + live head check
     if (isAutoMode) {
-      // Live PR head check — fetch current head from provider and skip if it has moved
-      // since the review ran. Falls back to the static head_commit_sha guard if the
-      // provider is unreachable. This replaces the previous unreachable static check
-      // (source_sha === head_commit_sha is always true when headCommitSha is not
-      // explicitly overridden by the client).
-      const skipCheck = await checkAutoPostShouldSkip(review, req.user!.id);
+      const skipCheck = await checkAutoPostShouldSkip(review as unknown as Review, req.user!.id);
       if (skipCheck.skip) {
         sendJson(res, 200, { posted: 0, skipped: 0, message: skipCheck.reason ?? 'Skipped', autoSkipped: true });
         return;
@@ -1772,17 +1696,7 @@ export function registerReviewRoutes(): void {
 
       // If another review for the same (repo, pr, source_sha) already posted, skip
       if (review.source_sha && review.repo_id && review.pr_number != null) {
-        const alreadyPosted = one<{ id: string }>(
-          `SELECT r.id FROM p10_reviews r
-           JOIN p10_findings f ON f.review_id = r.id
-           WHERE r.repo_id = ? AND r.pr_number = ? AND r.source_sha = ?
-             AND r.id != ? AND f.posted_at IS NOT NULL
-           LIMIT 1`,
-          review.repo_id,
-          review.pr_number,
-          review.source_sha,
-          review.id,
-        );
+        const alreadyPosted = await getReviewsRepository().checkAlreadyPosted(review.repo_id, review.pr_number, review.source_sha, review.id);
         if (alreadyPosted) {
           sendJson(res, 200, { posted: 0, skipped: 0, message: 'Skipped: already posted for this PR revision', autoSkipped: true });
           return;
@@ -1791,20 +1705,18 @@ export function registerReviewRoutes(): void {
     }
 
     const minSevRank = SEVERITIES.indexOf(review.min_severity as Severity);
-    const findings = all<Finding>(
-      'SELECT * FROM p10_findings WHERE review_id = ? AND accepted != -1',
-      review.id,
-    );
+    const findings = await getReviewsRepository().listFindings(review.id);
+    const activeFindings = findings.filter((f) => f.accepted !== -1);
 
     // For manual mode: deduplicate findings already posted
-    const toPost = findings.filter((f) => {
+    const toPost = activeFindings.filter((f) => {
       if (f.posted_at) return false;
       if (f.accepted === 1) return true;
       const rank = SEVERITIES.indexOf(f.severity as Severity);
       return rank <= minSevRank;
     });
 
-    const skipped = findings.length - toPost.length;
+    const skipped = activeFindings.length - toPost.length;
     const ts = now();
 
     // If there is nothing to post, skip all provider interaction

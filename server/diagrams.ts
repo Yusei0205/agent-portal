@@ -634,7 +634,7 @@ export function registerDiagramRoutes(): void {
 
     // Link attachments to this diagram
     if (rawAttachmentIds.length > 0) {
-      linkAttachmentsToParent(rawAttachmentIds, 'diagram', id);
+      await linkAttachmentsToParent(rawAttachmentIds, 'diagram', id);
     }
 
     const diagram = one<Row>('SELECT * FROM diagrams WHERE id = ?', id)!;
@@ -666,12 +666,12 @@ export function registerDiagramRoutes(): void {
   });
 
   // DELETE /api/projects/:id/diagrams/:did
-  router.delete('/api/projects/:id/diagrams/:did', (req: PortalRequest, res: PortalResponse) => {
+  router.delete('/api/projects/:id/diagrams/:did', async (req: PortalRequest, res: PortalResponse) => {
     const project = requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
     const d = getDiagramRow(String(project.id), req.params.did);
-    deleteAttachmentsForParent('diagram', String(d.id));
+    await deleteAttachmentsForParent('diagram', String(d.id));
     dbRun('DELETE FROM diagrams WHERE id = ?', String(d.id));
 
     notifyProject(String(project.id), 'diagrams.updated', { id: d.id });
@@ -706,7 +706,7 @@ export function registerDiagramRoutes(): void {
       }
       // Replace: unlink old attachments, link new ones
       const oldIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
-      if (oldIds.length > 0) deleteAttachmentsForParent('diagram', String(d.id));
+      if (oldIds.length > 0) await deleteAttachmentsForParent('diagram', String(d.id));
       effectiveAttachmentIds = rawAttachmentIds;
       update('diagrams', String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
     } else {

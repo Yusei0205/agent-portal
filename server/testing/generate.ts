@@ -629,7 +629,7 @@ export async function runGeneration(
 
     // Delete attachments on success (single-use)
     if (attachmentIds.length > 0) {
-      try { deleteAttachmentsByIds(attachmentIds); } catch { /* best effort */ }
+      try { await deleteAttachmentsByIds(attachmentIds); } catch { /* best effort */ }
     }
   } catch (err) {
     traceFail(String((err as Error).message ?? err));

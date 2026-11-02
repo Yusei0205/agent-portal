@@ -357,7 +357,7 @@ export function registerPresentationRoutes(): void {
 
     // Link attachments and the workflow to the presentation
     if (rawAttachmentIds.length > 0) {
-      linkAttachmentsToParent(rawAttachmentIds, 'presentation', id);
+      await linkAttachmentsToParent(rawAttachmentIds, 'presentation', id);
     }
     update('presentations', id, { workflow_id: workflowId, updated_at: now() });
 
@@ -380,7 +380,7 @@ export function registerPresentationRoutes(): void {
     if (!project) return;
 
     const p = getPresentation(req.params.presId, String(project.id));
-    deleteAttachmentsForParent('presentation', String(p.id));
+    await deleteAttachmentsForParent('presentation', String(p.id));
     dbRun('DELETE FROM presentations WHERE id = ?', String(p.id));
     sendJson(res, 200, { ok: true });
   });
@@ -404,7 +404,7 @@ export function registerPresentationRoutes(): void {
         if (error) { sendJson(res, 400, { error }); return; }
       }
       const oldIds = parseJson<string[]>(String(p.attachment_ids ?? '[]'), []);
-      if (oldIds.length > 0) deleteAttachmentsForParent('presentation', String(p.id));
+      if (oldIds.length > 0) await deleteAttachmentsForParent('presentation', String(p.id));
       effectiveAttachmentIds = rawAttachmentIds;
       update('presentations', String(p.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
     } else {

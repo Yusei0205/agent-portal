@@ -121,12 +121,16 @@
       "sources": [
         "server/workspaces.ts",
         "server/workflows/crud.ts",
+        "server/repositories/workspaces.ts",
+        "server/repositories/workspaces-sqlite.ts",
+        "server/repositories/workspaces-dynamodb.ts",
         "web/src/pages/Workspaces.jsx",
         "web/src/components/WorkspaceHeader.jsx",
         "web/src/styles/workspace.css"
       ],
       "tests": [
-        "test/workspaces.test.ts"
+        "test/workspaces.test.ts",
+        "test/workspaces-repo.test.ts"
       ],
       "smokeIds": ["workspaces"]
     },
@@ -251,13 +255,17 @@
         "server/repositories/knowledge.ts",
         "server/repositories/knowledge-sqlite.ts",
         "server/repositories/knowledge-dynamodb.ts",
+        "server/repositories/learn.ts",
+        "server/repositories/learn-sqlite.ts",
+        "server/repositories/learn-dynamodb.ts",
         "web/src/pages/Knowledge.jsx",
         "web/src/pages/Learn.jsx",
         "web/src/lib/templates/index.js"
       ],
       "tests": [
         "test/knowledge.test.ts",
-        "test/knowledge-repo.test.ts"
+        "test/knowledge-repo.test.ts",
+        "test/learn-repo.test.ts"
       ],
       "smokeIds": ["knowledge"]
     },
@@ -266,13 +274,18 @@
       "sources": [
         "web/src/pages/Create.jsx"
       ],
-      "tests": [],
+      "tests": [
+        "test/create-repos.test.ts"
+      ],
       "smokeIds": ["create"]
     },
     "diagrams": {
       "description": "Diagram creation and rendering — draw.io, mermaid, and icon packs",
       "sources": [
         "server/diagrams.ts",
+        "server/repositories/diagrams-data.ts",
+        "server/repositories/diagrams-data-sqlite.ts",
+        "server/repositories/diagrams-data-dynamodb.ts",
         "server/drawio.ts",
         "server/drawio-cloud.ts",
         "server/drawio-pack.ts",
@@ -295,11 +308,17 @@
       "description": "AI-generated documents — Word/PDF/HTML generation pipeline",
       "sources": [
         "server/generated-docs.ts",
+        "server/repositories/generated-docs-data.ts",
+        "server/repositories/generated-docs-data-sqlite.ts",
+        "server/repositories/generated-docs-data-dynamodb.ts",
         "server/generated-doc-text.ts",
         "server/docgen.ts",
         "server/docimage.ts",
         "server/docs-pack.ts",
         "server/doc-templates.ts",
+        "server/repositories/doc-templates-data.ts",
+        "server/repositories/doc-templates-data-sqlite.ts",
+        "server/repositories/doc-templates-data-dynamodb.ts",
         "server/docx-template.ts",
         "server/ooxml.ts",
         "server/template-check.ts",
@@ -317,6 +336,9 @@
       "description": "AI-generated presentations — PPTX creation and preview",
       "sources": [
         "server/presentations.ts",
+        "server/repositories/presentations-data.ts",
+        "server/repositories/presentations-data-sqlite.ts",
+        "server/repositories/presentations-data-dynamodb.ts",
         "server/presentation-text.ts",
         "server/pptx-preview.ts",
         "server/pptx-template.ts",
@@ -396,12 +418,16 @@
       "description": "Git provider connections management",
       "sources": [
         "server/git-connections.ts",
+        "server/repositories/git-connections.ts",
+        "server/repositories/git-connections-sqlite.ts",
+        "server/repositories/git-connections-dynamodb.ts",
         "web/src/pages/Connections.jsx",
         "web/src/pages/ConnectionsPage.jsx",
         "web/src/styles/connections.css"
       ],
       "tests": [
-        "test/git-connections.test.ts"
+        "test/git-connections.test.ts",
+        "test/git-connections-repo.test.ts"
       ],
       "smokeIds": ["connections"]
     },
@@ -409,11 +435,15 @@
       "description": "Repository listing, cloning, and clone progress tracking",
       "sources": [
         "server/repos.ts",
-        "server/git-progress.ts"
+        "server/git-progress.ts",
+        "server/repositories/git-repos.ts",
+        "server/repositories/git-repos-sqlite.ts",
+        "server/repositories/git-repos-dynamodb.ts"
       ],
       "tests": [
         "test/repos.test.ts",
-        "test/repos-progress.test.ts"
+        "test/repos-progress.test.ts",
+        "test/git-repos-repo.test.ts"
       ],
       "smokeIds": ["repos"]
     },
@@ -421,9 +451,14 @@
       "description": "Third-party integrations (Atlassian, etc.)",
       "sources": [
         "server/integrations.ts",
+        "server/repositories/integrations.ts",
+        "server/repositories/integrations-sqlite.ts",
+        "server/repositories/integrations-dynamodb.ts",
         "web/src/pages/Integrations.jsx"
       ],
-      "tests": [],
+      "tests": [
+        "test/integrations-repo.test.ts"
+      ],
       "smokeIds": ["integrations"]
     },
     "jira": {
@@ -445,11 +480,16 @@
       "description": "AWS account management and region selection",
       "sources": [
         "server/aws-accounts.ts",
+        "server/repositories/aws-accounts.ts",
+        "server/repositories/aws-accounts-sqlite.ts",
+        "server/repositories/aws-accounts-dynamodb.ts",
         "web/src/pages/AwsAccounts.jsx",
         "web/src/components/AwsRegionSelect.jsx",
         "web/src/lib/awsRegions.js"
       ],
-      "tests": [],
+      "tests": [
+        "test/aws-accounts-repo.test.ts"
+      ],
       "smokeIds": ["aws-accounts"]
     },
     "credentials": {
@@ -457,13 +497,17 @@
       "sources": [
         "server/credentials.ts",
         "server/kiro-idc.ts",
+        "server/repositories/credentials.ts",
+        "server/repositories/credentials-sqlite.ts",
+        "server/repositories/credentials-dynamodb.ts",
         "web/src/pages/Credentials.jsx",
         "web/src/lib/awsCredParser.js",
         "web/src/styles/credentials.css"
       ],
       "tests": [
         "test/credentials.test.ts",
-        "test/aws-cred-parser.test.ts"
+        "test/aws-cred-parser.test.ts",
+        "test/credentials-repo.test.ts"
       ],
       "smokeIds": ["credentials"]
     },
@@ -523,7 +567,10 @@
         "server/kiro-cmd.ts",
         "server/kiro-settings.ts",
         "server/mcp-server.ts",
-        "server/agent/kiro-agentcore.ts"
+        "server/agent/kiro-agentcore.ts",
+        "server/repositories/agentcore-login.ts",
+        "server/repositories/agentcore-login-sqlite.ts",
+        "server/repositories/agentcore-login-dynamodb.ts"
       ],
       "tests": [
         "test/kiro-cmd.test.ts",
@@ -531,7 +578,8 @@
         "test/kiro-models-parser.test.ts",
         "test/kiro-settings.test.ts",
         "test/kiro-win-env.test.ts",
-        "test/kiro-agentcore.test.ts"
+        "test/kiro-agentcore.test.ts",
+        "test/agentcore-login-repo.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
@@ -542,13 +590,17 @@
         "server/review.ts",
         "server/review-lifecycle.ts",
         "server/control-plane.ts",
+        "server/repositories/reviews.ts",
+        "server/repositories/reviews-sqlite.ts",
+        "server/repositories/reviews-dynamodb.ts",
         "web/src/pages/Review.jsx",
         "web/src/pages/ReviewDashboard.jsx",
         "web/src/pages/ReviewDetail.jsx",
         "web/src/pages/ReviewsPage.jsx"
       ],
       "tests": [
-        "test/review.test.ts"
+        "test/review.test.ts",
+        "test/reviews-repo.test.ts"
       ],
       "smokeIds": ["reviews"]
     },
@@ -556,11 +608,15 @@
       "description": "Branch scan creation and detail views",
       "sources": [
         "server/scan.ts",
+        "server/repositories/scans.ts",
+        "server/repositories/scans-sqlite.ts",
+        "server/repositories/scans-dynamodb.ts",
         "web/src/pages/BranchScans.jsx",
         "web/src/pages/BranchScanDetail.jsx"
       ],
       "tests": [
-        "test/scan.test.ts"
+        "test/scan.test.ts",
+        "test/scans-repo.test.ts"
       ],
       "smokeIds": ["branch-scans"]
     },
@@ -581,6 +637,9 @@
         "server/testing/case-sets.ts",
         "server/testing/curl.ts",
         "server/testing/trace.ts",
+        "server/repositories/testing-data.ts",
+        "server/repositories/testing-data-sqlite.ts",
+        "server/repositories/testing-data-dynamodb.ts",
         "server/mcp-routes.ts",
         "web/src/pages/tests/TestsPage.jsx",
         "web/src/pages/tests/GenerationTracker.jsx",
@@ -601,7 +660,8 @@
         "test/curl-builder.test.ts",
         "test/testing-trace.test.ts",
         "test/testing-generation-progress.test.ts",
-        "test/resume-retry.test.ts"
+        "test/resume-retry.test.ts",
+        "test/testing-data-repo.test.ts"
       ],
       "smokeIds": ["testing-module"]
     },
@@ -618,10 +678,14 @@
       "description": "Loop specifications for multi-agent orchestration",
       "sources": [
         "server/loop-specs.ts",
+        "server/repositories/loop-specs.ts",
+        "server/repositories/loop-specs-sqlite.ts",
+        "server/repositories/loop-specs-dynamodb.ts",
         "web/src/pages/LoopSpecs.jsx"
       ],
       "tests": [
-        "test/loop-specs.test.ts"
+        "test/loop-specs.test.ts",
+        "test/loop-specs-repo.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Loop Specs yet."
@@ -631,7 +695,13 @@
       "sources": [
         "server/models.ts",
         "server/kiro-list-models.ts",
-        "server/user-config.ts"
+        "server/user-config.ts",
+        "server/repositories/credentials.ts",
+        "server/repositories/credentials-sqlite.ts",
+        "server/repositories/credentials-dynamodb.ts",
+        "server/repositories/user-config.ts",
+        "server/repositories/user-config-sqlite.ts",
+        "server/repositories/user-config-dynamodb.ts"
       ],
       "tests": [
         "test/engines.test.ts",
@@ -670,6 +740,9 @@
       "description": "Theme system — theme cycling, persistence, and custom CSS templates",
       "sources": [
         "server/themes.ts",
+        "server/repositories/themes.ts",
+        "server/repositories/themes-sqlite.ts",
+        "server/repositories/themes-dynamodb.ts",
         "server/testing/model-provider.ts",
         "web/src/lib/theme.js",
         "web/src/lib/shortcuts.js",
@@ -695,7 +768,8 @@
         "web/src/components/Rail.jsx"
       ],
       "tests": [
-        "test/themes.test.ts"
+        "test/themes.test.ts",
+        "test/themes-repo.test.ts"
       ],
       "smokeIds": ["theme"]
     },
@@ -703,12 +777,16 @@
       "description": "AI attachments — file upload, preview, and picker for session context",
       "sources": [
         "server/ai-attachments.ts",
+        "server/repositories/ai-attachments.ts",
+        "server/repositories/ai-attachments-sqlite.ts",
+        "server/repositories/ai-attachments-dynamodb.ts",
         "web/src/components/AttachmentPicker.jsx",
         "web/src/components/FilePreviewModal.jsx",
         "web/src/styles/file-preview.css"
       ],
       "tests": [
-        "test/ai-attachments.test.ts"
+        "test/ai-attachments.test.ts",
+        "test/ai-attachments-repo.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for attachments yet."
@@ -808,10 +886,14 @@
     "user-config": {
       "description": "Per-user configuration storage and retrieval",
       "sources": [
-        "server/user-config.ts"
+        "server/user-config.ts",
+        "server/repositories/user-config.ts",
+        "server/repositories/user-config-sqlite.ts",
+        "server/repositories/user-config-dynamodb.ts"
       ],
       "tests": [
-        "test/user-config.test.ts"
+        "test/user-config.test.ts",
+        "test/user-config-repo.test.ts"
       ],
       "smokeIds": []
     },

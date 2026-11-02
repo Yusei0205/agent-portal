@@ -40,8 +40,9 @@ import https from 'node:https';
 import http from 'node:http';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { encrypt, decrypt } from '../secrets.ts';
-import { one, run as dbRun } from '../db.ts';
-import type { Row } from '../db.ts';
+import { getCredentialsRepository } from '../repositories/credentials.ts';
+import { getAgentcoreLoginRepository, clearAgentcoreLoginRepository } from '../repositories/agentcore-login.ts';
+import { usesDynamoDb } from '../repositories/backend.ts';
 import { now, HttpError, generateId } from '../util.ts';
 import { config } from '../config.ts';
 import type { RunContext } from './types.ts';
@@ -397,12 +398,8 @@ async function* invokeAgentCore(
 
 // ── Token write-back ───────────────────────────────────────────────────────────
 
-interface CredentialRow extends Row {
-  id: string;
-  mode: string;
-  secret_enc: string | null;
-  extra_config: string;
-}
+import type { CredentialRecord } from '../repositories/credentials.ts';
+type CredentialRow = CredentialRecord;
 
 function safeJson(s: string | null | undefined): Record<string, unknown> {
   if (!s) return {};
@@ -425,11 +422,8 @@ export async function saveRefreshedTokenConditional(
   expectedCiphertext: string,
 ): Promise<void> {
   try {
-    const cred = one<CredentialRow>(
-      "SELECT id, mode, secret_enc, extra_config FROM engine_credentials WHERE id = ? AND mode = 'identity_center'",
-      credentialId,
-    );
-    if (!cred) return;
+    const cred = await getCredentialsRepository().getById(credentialId);
+    if (!cred || cred.mode !== 'identity_center') return;
 
     // Conditional: skip if the stored ciphertext changed (another run won)
     if (cred.secret_enc !== expectedCiphertext) return;
@@ -446,15 +440,12 @@ export async function saveRefreshedTokenConditional(
     delete newExtra.pendingClientSecretExpiresAt;
 
     const tokenEnc = encrypt(newAccessToken, config.secretKey);
-    dbRun(
-      `UPDATE engine_credentials
-          SET secret_enc = ?, extra_config = ?, last4 = ?, updated_at = ?
-        WHERE id = ? AND secret_enc = ?`,
+    await getCredentialsRepository().updateTokenConditional(
+      credentialId,
       tokenEnc,
       JSON.stringify(newExtra),
       newAccessToken.slice(-4),
       now(),
-      credentialId,
       expectedCiphertext,
     );
   } catch {
@@ -611,8 +602,9 @@ export interface AgentCoreLoginResult {
 }
 
 /**
- * Per-credential pending AgentCore login state.
- * Keyed by credentialId; cleaned up after poll completes.
+ * In-memory login state map (backward compat + single-instance fast path).
+ * Used by pollAgentCoreLogin (sync) and as test injection point.
+ * In DynamoDB mode, state is ALSO written to the repository for cross-Lambda polling.
  */
 interface PendingLogin {
   settled: boolean;
@@ -623,16 +615,11 @@ interface PendingLogin {
 export const _agentCoreLoginState = new Map<string, PendingLogin>();
 
 /**
- * Invoke AgentCore kiro-login, wait for the verification challenge, and start
+ * Start an AgentCore kiro-login, wait for the verification challenge, and start
  * a background promise that resolves when login completes.
  *
- * Returns the challenge (verificationUri, userCode) so the caller can surface
- * it to the user immediately — exactly as the existing device-code flow does.
- *
- * The background promise populates _agentCoreLoginState[credentialId] when done.
- * device-poll checks this state to decide when to mark the credential complete.
- *
- * Never logs token values.
+ * The background result is stored in both the in-memory map (fast sync poll)
+ * and the AgentcoreLoginRepository (DynamoDB cross-Lambda poll).
  */
 export async function startAgentCoreLogin(
   runtimeArn: string,
@@ -651,11 +638,14 @@ export async function startAgentCoreLogin(
 
   // Clean up any leftover state from a previous attempt for the same credential
   _agentCoreLoginState.delete(credentialId);
+  if (usesDynamoDb()) {
+    await getAgentcoreLoginRepository().delete(credentialId);
+    await getAgentcoreLoginRepository().create(credentialId, now());
+  }
 
   const pending: PendingLogin = { settled: false, result: null, err: null };
   _agentCoreLoginState.set(credentialId, pending);
 
-  // Run the login as a streaming operation — first wait for the verification event
   return new Promise<AgentCoreLoginChallenge>((resolve, reject) => {
     let challengeResolved = false;
 
@@ -669,7 +659,7 @@ export async function startAgentCoreLogin(
               resolve({
                 verificationUri: vEv.verificationUri,
                 userCode: vEv.userCode,
-                expiresIn: 900,   // 15 min default (kiro-cli uses 15 min)
+                expiresIn: 900,
                 interval: 5,
               });
             }
@@ -678,13 +668,22 @@ export async function startAgentCoreLogin(
             pending.settled = true;
             if (rEv.success && rEv.tokenPayload) {
               pending.result = { state: 'complete', tokenPayload: rEv.tokenPayload };
+              if (usesDynamoDb()) {
+                await getAgentcoreLoginRepository().complete(credentialId, rEv.tokenPayload).catch(() => {});
+              }
             } else {
               pending.result = { state: 'failed', error: 'Login did not complete' };
+              if (usesDynamoDb()) {
+                await getAgentcoreLoginRepository().fail(credentialId, 'Login did not complete').catch(() => {});
+              }
             }
           } else if (ev.type === 'error') {
             const errEv = ev as { type: 'error'; message: string };
             pending.settled = true;
             pending.result = { state: 'failed', error: errEv.message };
+            if (usesDynamoDb()) {
+              await getAgentcoreLoginRepository().fail(credentialId, errEv.message).catch(() => {});
+            }
             if (!challengeResolved) {
               challengeResolved = true;
               reject(new HttpError(502, `AgentCore kiro-login error: ${errEv.message}`));
@@ -694,6 +693,9 @@ export async function startAgentCoreLogin(
       } catch (e) {
         pending.settled = true;
         pending.err = e as Error;
+        if (usesDynamoDb()) {
+          await getAgentcoreLoginRepository().fail(credentialId, (e as Error).message ?? 'Unknown error').catch(() => {});
+        }
         if (!challengeResolved) {
           challengeResolved = true;
           reject(e);
@@ -716,11 +718,11 @@ export async function startAgentCoreLogin(
 
 /**
  * Poll the AgentCore login state for a credential.
- * Returns:
- *   'pending'  — still waiting for user approval
- *   'complete' — login succeeded; tokenPayload contains the new token
- *   'failed'   — login failed; errorMessage describes why
- *   'unknown'  — no pending login for this credential (timed out or never started)
+ *
+ * Synchronous for single-instance (SQLite) mode — reads from the in-memory map.
+ * In DynamoDB mode, returns a sync result from the map if available, else 'unknown'.
+ * For true cross-Lambda polling in DynamoDB mode, callers should use
+ * getAgentcoreLoginRepository().get(credentialId) directly.
  */
 export function pollAgentCoreLogin(credentialId: string): {
   status: 'pending' | 'complete' | 'failed' | 'unknown';
@@ -733,6 +735,9 @@ export function pollAgentCoreLogin(credentialId: string): {
 
   // Remove from map once consumed
   _agentCoreLoginState.delete(credentialId);
+  if (usesDynamoDb()) {
+    getAgentcoreLoginRepository().delete(credentialId).catch(() => {});
+  }
 
   if (pending.err) {
     return { status: 'failed', errorMessage: pending.err.message };

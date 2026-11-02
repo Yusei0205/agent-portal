@@ -136,6 +136,51 @@ export async function startServer(
   await initVaultFilesRepository();
   await initOutputFilesRepository();
 
+  // 6g. Initialise P10 module repositories (reviews, scans, loop-specs, git-repos, git-connections, workspaces)
+  const { initReviewsRepository } = await import('./repositories/reviews.ts');
+  const { initScansRepository } = await import('./repositories/scans.ts');
+  const { initLoopSpecsRepository } = await import('./repositories/loop-specs.ts');
+  const { initGitReposRepository } = await import('./repositories/git-repos.ts');
+  const { initGitConnectionsRepository } = await import('./repositories/git-connections.ts');
+  const { initWorkspacesRepository } = await import('./repositories/workspaces.ts');
+  await initReviewsRepository();
+  await initScansRepository();
+  await initLoopSpecsRepository();
+  await initGitReposRepository();
+  await initGitConnectionsRepository();
+  await initWorkspacesRepository();
+
+  // 6g. Initialise credentials, aws-accounts, integrations, themes, user-config, agentcore-login repositories
+  const { initCredentialsRepository } = await import('./repositories/credentials.ts');
+  const { initAwsAccountsRepository } = await import('./repositories/aws-accounts.ts');
+  const { initIntegrationsRepository } = await import('./repositories/integrations.ts');
+  const { initThemesRepository } = await import('./repositories/themes.ts');
+  const { initUserConfigRepository } = await import('./repositories/user-config.ts');
+  const { initAgentcoreLoginRepository } = await import('./repositories/agentcore-login.ts');
+  await initCredentialsRepository();
+  await initAwsAccountsRepository();
+  await initIntegrationsRepository();
+  await initThemesRepository();
+  await initUserConfigRepository();
+  await initAgentcoreLoginRepository();
+
+  // 6h. Initialise pathb repositories (ai-attachments, presentations, generated-docs,
+  //     diagrams, doc-templates, learn, testing-data)
+  const { initAiAttachmentRepository } = await import('./repositories/ai-attachments.ts');
+  const { initPresentationRepository } = await import('./repositories/presentations-data.ts');
+  const { initGeneratedDocRepository } = await import('./repositories/generated-docs-data.ts');
+  const { initDiagramRepository } = await import('./repositories/diagrams-data.ts');
+  const { initDocTemplateRepository } = await import('./repositories/doc-templates-data.ts');
+  const { initLearnRepository } = await import('./repositories/learn.ts');
+  const { initTestingRepository } = await import('./repositories/testing-data.ts');
+  await initAiAttachmentRepository();
+  await initPresentationRepository();
+  await initGeneratedDocRepository();
+  await initDiagramRepository();
+  await initDocTemplateRepository();
+  await initLearnRepository();
+  await initTestingRepository();
+
   // 7. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)
   const { setPreRequestHook } = await import('./http.ts');

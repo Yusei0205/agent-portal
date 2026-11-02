@@ -776,7 +776,7 @@ export async function runCaseSetGeneration(
 
     // Delete attachments now that the set is done
     if (resolvedAttachmentIds.length > 0) {
-      try { deleteAttachmentsByIds(resolvedAttachmentIds); } catch { /* best effort */ }
+      try { await deleteAttachmentsByIds(resolvedAttachmentIds); } catch { /* best effort */ }
     }
   } catch (err) {
     if (isCancelled(csId)) return;
@@ -960,7 +960,7 @@ export function registerCaseSetRoutes(): void {
   });
 
   // DELETE /case-sets/:csid — delete + cancel
-  router.delete('/api/projects/:pid/tests/:tpid/case-sets/:csid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:pid/tests/:tpid/case-sets/:csid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
@@ -972,7 +972,7 @@ export function registerCaseSetRoutes(): void {
     // Clean up any stored attachments
     try {
       const attIds = JSON.parse(cs.attachment_ids || '[]') as string[];
-      if (attIds.length > 0) deleteAttachmentsByIds(attIds);
+      if (attIds.length > 0) await deleteAttachmentsByIds(attIds);
     } catch { /* best effort */ }
     run('DELETE FROM test_case_sets WHERE id = ?', cs.id);
     sendJson(res, 200, { ok: true });

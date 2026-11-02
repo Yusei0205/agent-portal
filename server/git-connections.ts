@@ -15,24 +15,18 @@
 import { spawn } from 'node:child_process';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run, insert, getDb } from './db.ts';
+import { one, getDb } from './db.ts';
 import { generateId, now, str, parseJson } from './util.ts';
 import { encrypt, decrypt } from './secrets.ts';
 import { config } from './config.ts';
 import { appendAudit } from './audit.ts';
 import { getSetting } from './settings.ts';
+import { getGitConnectionsRepository } from './repositories/git-connections.ts';
+import type { GitConnectionRecord } from './repositories/git-connections.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface GitConnection {
-  id: string;
-  name: string;
-  provider: string;
-  credentials_enc: string | null;
-  scope: string;
-  owner_id: string | null;
-  created_at: string;
-}
+export type GitConnection = GitConnectionRecord;
 
 export interface DiscoveredRepo {
   name: string;
@@ -994,7 +988,7 @@ export function registerGitConnectionRoutes(): void {
         const id = generateId();
         const ts = now();
 
-        insert('git_connections_v2', {
+        const conn = await getGitConnectionsRepository().create({
           id,
           name: state.name,
           provider: 'github',
@@ -1013,10 +1007,9 @@ export function registerGitConnectionRoutes(): void {
           req.ip,
         );
 
-        const conn = one<GitConnection>('SELECT * FROM git_connections_v2 WHERE id = ?', id);
         sendJson(res, 200, {
           status: 'complete',
-          connection: conn ? safeConnection(conn) : null,
+          connection: safeConnection(conn),
         });
       } catch (e: unknown) {
         const error = e instanceof Error ? e.message : String(e);
@@ -1026,21 +1019,16 @@ export function registerGitConnectionRoutes(): void {
   );
 
   // GET /api/git-connections
-  router.get('/api/git-connections', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/git-connections', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
-    const connections = all<GitConnection>(
-      `SELECT * FROM git_connections_v2
-        WHERE owner_id = ? OR scope = 'shared'
-        ORDER BY created_at`,
-      req.user.id,
-    );
+    const connections = await getGitConnectionsRepository().listByUserOrShared(req.user.id);
 
     sendJson(res, 200, { connections: connections.map(safeConnection) });
   });
 
   // POST /api/git-connections
-  router.post('/api/git-connections', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/git-connections', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowserAuth(req, res)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -1091,7 +1079,7 @@ export function registerGitConnectionRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('git_connections_v2', {
+    const conn = await getGitConnectionsRepository().create({
       id,
       name,
       provider,
@@ -1110,23 +1098,19 @@ export function registerGitConnectionRoutes(): void {
       req.ip,
     );
 
-    const conn = one<GitConnection>('SELECT * FROM git_connections_v2 WHERE id = ?', id);
-    sendJson(res, 201, { connection: conn ? safeConnection(conn) : null });
+    sendJson(res, 201, { connection: safeConnection(conn) });
   });
 
   // PUT /api/git-connections/:id
-  router.put('/api/git-connections/:id', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/git-connections/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
-    const conn = one<GitConnection>(
-      'SELECT * FROM git_connections_v2 WHERE id = ?',
-      req.params.id,
-    );
+    const conn = await getGitConnectionsRepository().getById(req.params.id);
     if (!conn) { sendJson(res, 404, { error: 'Connection not found' }); return; }
     if (!requireConnectionAccess(req, res, conn)) return;
 
     const body = req.body as Record<string, unknown>;
-    const patch: Record<string, string | null> = {};
+    const patch: Partial<GitConnectionRecord> = {};
 
     if (body.name !== undefined) patch.name = str(body.name, 'name', { max: 120 }).trim();
     if (body.scope !== undefined) {
@@ -1168,29 +1152,19 @@ export function registerGitConnectionRoutes(): void {
       return;
     }
 
-    const keys = Object.keys(patch);
-    run(
-      `UPDATE git_connections_v2 SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      ...keys.map((k) => patch[k]),
-      conn.id,
-    );
-
-    const updated = one<GitConnection>('SELECT * FROM git_connections_v2 WHERE id = ?', conn.id);
+    const updated = await getGitConnectionsRepository().update(conn.id, patch);
     sendJson(res, 200, { connection: updated ? safeConnection(updated) : null });
   });
 
   // DELETE /api/git-connections/:id
-  router.delete('/api/git-connections/:id', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/git-connections/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
-    const conn = one<GitConnection>(
-      'SELECT * FROM git_connections_v2 WHERE id = ?',
-      req.params.id,
-    );
+    const conn = await getGitConnectionsRepository().getById(req.params.id);
     if (!conn) { sendJson(res, 404, { error: 'Connection not found' }); return; }
     if (!requireConnectionAccess(req, res, conn)) return;
 
-    run('DELETE FROM git_connections_v2 WHERE id = ?', conn.id);
+    await getGitConnectionsRepository().delete(conn.id);
     sendJson(res, 200, { ok: true });
   });
 
@@ -1201,10 +1175,7 @@ export function registerGitConnectionRoutes(): void {
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
-      const conn = one<GitConnection>(
-        'SELECT * FROM git_connections_v2 WHERE id = ?',
-        req.params.id,
-      );
+      const conn = await getGitConnectionsRepository().getById(req.params.id);
       if (!conn) { sendJson(res, 404, { error: 'Connection not found' }); return; }
 
       // Personal connections: owner or admin only.
@@ -1294,16 +1265,14 @@ export function registerGitConnectionRoutes(): void {
   );
 
   // GET /api/git-connections/:id/repos
+  // GET /api/git-connections/:id/repos
   // Discover repos via the provider API (with 2-min server-side cache).
   router.get(
     '/api/git-connections/:id/repos',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
-      const conn = one<GitConnection>(
-        'SELECT * FROM git_connections_v2 WHERE id = ?',
-        req.params.id,
-      );
+      const conn = await getGitConnectionsRepository().getById(req.params.id);
       if (!conn) { sendJson(res, 404, { error: 'Connection not found' }); return; }
 
       if (conn.scope === 'personal' && !req.user.is_admin && conn.owner_id !== req.user.id) {

@@ -16,9 +16,11 @@
 
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run, insert } from './db.ts';
+import { one, insert } from './db.ts';
 import { generateId, now, str, parseJson, newId } from './util.ts';
 import { emit } from './events.ts';
+import { getLoopSpecsRepository } from './repositories/loop-specs.ts';
+import type { LoopSpecRecord } from './repositories/loop-specs.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -97,7 +99,7 @@ function requireProjectEditor(req: PortalRequest, res: PortalResponse, projectId
   return true;
 }
 
-function serializeSpec(s: LoopSpec) {
+function serializeSpec(s: LoopSpec | LoopSpecRecord) {
   return {
     ...s,
     trigger_config: parseJson(s.trigger_config, {}),
@@ -111,32 +113,22 @@ export function registerLoopSpecRoutes(): void {
 
   // GET /api/projects/:id/loop-specs
   // Returns built-in specs (project_id IS NULL) + project-specific specs
-  router.get('/api/projects/:id/loop-specs', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/loop-specs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    const builtins = all<LoopSpec>(
-      'SELECT * FROM p10_loop_specs WHERE project_id IS NULL AND is_builtin = 1 ORDER BY name',
-    );
-    const projectSpecs = all<LoopSpec>(
-      'SELECT * FROM p10_loop_specs WHERE project_id = ? AND is_builtin = 0 ORDER BY created_at',
-      req.params.id,
-    );
+    const allSpecs = await getLoopSpecsRepository().listSpecsByProject(req.params.id);
 
     // Attach last run status to each spec
-    const allSpecs = [...builtins, ...projectSpecs];
-    const specsWithRuns = allSpecs.map((s) => {
-      const lastRun = one<LoopRun>(
-        'SELECT * FROM p10_loop_runs WHERE spec_id = ? ORDER BY started_at DESC LIMIT 1',
-        s.id,
-      );
+    const specsWithRuns = await Promise.all(allSpecs.map(async (s) => {
+      const lastRun = await getLoopSpecsRepository().getLastRunBySpec(s.id);
       return { ...serializeSpec(s), last_run: lastRun ?? null };
-    });
+    }));
 
     sendJson(res, 200, { specs: specsWithRuns });
   });
 
   // POST /api/projects/:id/loop-specs
-  router.post('/api/projects/:id/loop-specs', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:id/loop-specs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -160,51 +152,29 @@ export function registerLoopSpecRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('p10_loop_specs', {
-      id,
-      project_id: req.params.id,
-      name,
-      description,
-      trigger_type: triggerType,
-      trigger_config: triggerConfig,
-      goal_template: goalTemplate,
-      rules,
-      stop_config: stopConfig,
-      max_iterations: maxIterations,
-      enabled: 1,
-      is_builtin: 0,
-      created_at: ts,
+    const spec = await getLoopSpecsRepository().createSpec({
+      id, project_id: req.params.id, name, description, trigger_type: triggerType,
+      trigger_config: triggerConfig, goal_template: goalTemplate, rules, stop_config: stopConfig,
+      max_iterations: maxIterations, enabled: 1, is_builtin: 0, created_at: ts,
     });
-
-    const spec = one<LoopSpec>('SELECT * FROM p10_loop_specs WHERE id = ?', id);
-    sendJson(res, 201, { spec: spec ? serializeSpec(spec) : null });
+    sendJson(res, 201, { spec: serializeSpec(spec) });
   });
 
   // GET /api/projects/:id/loop-specs/:sid
-  router.get('/api/projects/:id/loop-specs/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/loop-specs/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    // Allow access to built-in specs or project-specific specs
-    const spec = one<LoopSpec>(
-      'SELECT * FROM p10_loop_specs WHERE id = ? AND (project_id = ? OR project_id IS NULL)',
-      req.params.sid,
-      req.params.id,
-    );
-    if (!spec) { sendJson(res, 404, { error: 'Loop spec not found' }); return; }
+    const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
+    if (!spec || (spec.project_id !== null && spec.project_id !== req.params.id)) {
+      sendJson(res, 404, { error: 'Loop spec not found' }); return;
+    }
 
     sendJson(res, 200, { spec: serializeSpec(spec) });
   });
 
   // PUT /api/projects/:id/loop-specs/:sid
-  router.put('/api/projects/:id/loop-specs/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.put('/api/projects/:id/loop-specs/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectEditor(req, res, req.params.id)) return;
-
-    const spec = one<LoopSpec>(
-      'SELECT * FROM p10_loop_specs WHERE id = ? AND project_id = ? AND is_builtin = 0',
-      req.params.sid,
-      req.params.id,
-    );
-    if (!spec) { sendJson(res, 404, { error: 'Loop spec not found or cannot be modified' }); return; }
 
     const body = req.body as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
@@ -232,32 +202,22 @@ export function registerLoopSpecRoutes(): void {
       return;
     }
 
-    const keys = Object.keys(patch);
-    run(
-      `UPDATE p10_loop_specs SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      ...keys.map((k) => patch[k] as string | number | null),
-      spec.id,
-    );
+    const updated = await getLoopSpecsRepository().updateSpec(req.params.sid, req.params.id, patch as Partial<LoopSpecRecord>);
+    if (!updated) { sendJson(res, 404, { error: 'Loop spec not found or cannot be modified' }); return; }
 
-    const updated = one<LoopSpec>('SELECT * FROM p10_loop_specs WHERE id = ?', spec.id);
-    sendJson(res, 200, { spec: updated ? serializeSpec(updated) : null });
+    sendJson(res, 200, { spec: serializeSpec(updated) });
   });
 
   // DELETE /api/projects/:id/loop-specs/:sid
-  router.delete('/api/projects/:id/loop-specs/:sid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:id/loop-specs/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
-    const spec = one<LoopSpec>(
-      'SELECT * FROM p10_loop_specs WHERE id = ? AND project_id = ? AND is_builtin = 0',
-      req.params.sid,
-      req.params.id,
-    );
-    if (!spec) {
+    const deleted = await getLoopSpecsRepository().deleteSpec(req.params.sid, req.params.id);
+    if (!deleted) {
       sendJson(res, 404, { error: 'Loop spec not found or built-in specs cannot be deleted' });
       return;
     }
 
-    run('DELETE FROM p10_loop_specs WHERE id = ?', spec.id);
     sendJson(res, 200, { ok: true });
   });
 
@@ -266,88 +226,54 @@ export function registerLoopSpecRoutes(): void {
     if (!requireProjectEditor(req, res, req.params.id)) return;
 
     // Find built-in or project spec
-    const spec = one<LoopSpec>(
-      'SELECT * FROM p10_loop_specs WHERE id = ? AND (project_id = ? OR project_id IS NULL)',
-      req.params.sid,
-      req.params.id,
-    );
-    if (!spec) { sendJson(res, 404, { error: 'Loop spec not found' }); return; }
+    const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
+    if (!spec || (spec.project_id !== null && spec.project_id !== req.params.id)) {
+      sendJson(res, 404, { error: 'Loop spec not found' }); return;
+    }
     if (!spec.enabled) { sendJson(res, 400, { error: 'This loop spec is disabled' }); return; }
 
     const body = req.body as Record<string, unknown>;
     const vars = body.vars && typeof body.vars === 'object' ? body.vars as Record<string, string> : {};
 
-    // Fill in goal template with any provided vars
     let goal = spec.goal_template;
     for (const [k, v] of Object.entries(vars)) {
       goal = goal.replace(new RegExp(`\\{\\{${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}\\}`, 'g'), String(v));
     }
 
-    // Create a loop run record
     const runId = generateId();
     const ts = now();
 
-    // Optionally create a p6_workflow to track this run
     let workflowId: string | null = null;
     try {
       const wid = generateId();
       insert('p6_workflows', {
-        id: wid,
-        project_id: req.params.id,
-        goal: goal.slice(0, 2000),
-        status: 'pending',
-        engine: 'demo',
-        trust_tools: 0,
-        lead_agent: null,
-        workspace_id: null,
-        output_files_enabled: 0,
-        repo_ids: '[]',
-        iteration_count: 0,
-        max_iterations: spec.max_iterations,
-        created_by: req.user!.id,
-        created_at: ts,
-        updated_at: ts,
+        id: wid, project_id: req.params.id, goal: goal.slice(0, 2000), status: 'pending',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0,
+        max_iterations: spec.max_iterations, created_by: req.user!.id, created_at: ts, updated_at: ts,
       });
       workflowId = wid;
       emit(req.params.id, { type: 'workflow.created', workflowId: wid });
     } catch { /* if workflow insert fails, continue */ }
 
-    insert('p10_loop_runs', {
-      id: runId,
-      spec_id: spec.id,
-      status: 'running',
-      iteration: 0,
-      last_workflow_id: workflowId,
-      started_at: ts,
-      finished_at: null,
+    const loopRun = await getLoopSpecsRepository().createRun({
+      id: runId, spec_id: spec.id, status: 'running', iteration: 0,
+      last_workflow_id: workflowId, started_at: ts, finished_at: null,
     });
-
-    const loopRun = one<LoopRun>('SELECT * FROM p10_loop_runs WHERE id = ?', runId);
-    sendJson(res, 201, {
-      run: loopRun,
-      workflow_id: workflowId,
-      goal,
-    });
+    sendJson(res, 201, { run: loopRun, workflow_id: workflowId, goal });
   });
 
   // GET /api/projects/:id/loop-specs/:sid/runs — list loop run history
-  router.get('/api/projects/:id/loop-specs/:sid/runs', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/loop-specs/:sid/runs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireProjectAccess(req, res, req.params.id)) return;
 
-    // Find built-in or project spec
-    const spec = one<LoopSpec>(
-      'SELECT * FROM p10_loop_specs WHERE id = ? AND (project_id = ? OR project_id IS NULL)',
-      req.params.sid,
-      req.params.id,
-    );
-    if (!spec) { sendJson(res, 404, { error: 'Loop spec not found' }); return; }
+    const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
+    if (!spec || (spec.project_id !== null && spec.project_id !== req.params.id)) {
+      sendJson(res, 404, { error: 'Loop spec not found' }); return;
+    }
 
     const limit = Math.min(100, Math.max(1, Number(req.query.get('limit') ?? '20')));
-    const runs = all<LoopRun>(
-      'SELECT * FROM p10_loop_runs WHERE spec_id = ? ORDER BY started_at DESC LIMIT ?',
-      spec.id,
-      limit,
-    );
+    const runs = await getLoopSpecsRepository().listRunsBySpec(spec.id, limit);
 
     sendJson(res, 200, { runs });
   });
