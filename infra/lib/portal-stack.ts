@@ -23,6 +23,7 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as budgets from 'aws-cdk-lib/aws-budgets';
+import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as appsync from 'aws-cdk-lib/aws-appsync';
 import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
@@ -230,6 +231,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.storageBucket
           ? { STORAGE_BACKEND: 's3', STORAGE_S3_BUCKET: props.storageBucket, STORAGE_S3_PREFIX: 'data', STORAGE_S3_REGION: this.region }
           : {}),
+        // Lambda Web Adapter forwards non-HTTP events (EventBridge Scheduler) to this path.
+        AWS_LWA_PASS_THROUGH_PATH: '/internal/events',
         PORTAL_GOOGLE_SECRET_ARN: googleSecret.secretArn,
         ...(props.publicUrl ? { PORTAL_PUBLIC_URL: props.publicUrl } : {}),
         ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
@@ -295,6 +298,29 @@ export class AgentPortalCloudStack extends cdk.Stack {
         },
       },
     });
+
+    // ── Scheduled jobs ────────────────────────────────────────────────────────
+    // Replaces the in-process timers (setInterval) that cannot run on Lambda. Each schedule invokes the
+    // function with {job, secret}; server/scheduled-jobs.ts checks the secret and runs the job.
+    const schedulerRole = new iam.Role(this, 'SchedulerRole', { assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com') });
+    fn.grantInvoke(schedulerRole);
+    const jobs: Array<{ name: string; job: string; every: string }> = [
+      { name: 'idle-stop', job: 'idle-stop', every: 'rate(1 minute)' },
+      { name: 'attachment-cleanup', job: 'attachment-cleanup', every: 'rate(6 hours)' },
+    ];
+    for (const j of jobs) {
+      new scheduler.CfnSchedule(this, `Job-${j.name}`, {
+        name: `agent-portal-${j.name}`,
+        scheduleExpression: j.every,
+        flexibleTimeWindow: { mode: 'OFF' },
+        target: {
+          arn: fn.functionArn,
+          roleArn: schedulerRole.roleArn,
+          input: JSON.stringify({ job: j.job, secret: originSecret.secretValue.unsafeUnwrap() }),
+          retryPolicy: { maximumRetryAttempts: 0 },
+        },
+      });
+    }
 
     // ── Web files ─────────────────────────────────────────────────────────────
     // Uploads the built web app (npm run build:web -> dist/web) and clears the CDN cache on every deploy.

@@ -59,6 +59,12 @@ Two separate causes:
 ### In-memory state is lost or per-instance
 Lambda can run many instances, and an instance is **frozen** as soon as its response ends. Anything kept in memory (login state, the event bus) is invisible to other instances, and background work in a frozen instance does not progress. Store shared state in DynamoDB, and finish work before the response ends (`flushRealtime()` runs before each response so queued events are sent).
 
+### Periodic jobs (idle session stop, attachment cleanup) do not run
+- **Cause:** `setInterval` timers need a long-lived process. A Lambda instance is frozen between requests, so timers never fire reliably.
+- **Fix:** EventBridge Scheduler schedules `agent-portal-idle-stop` (every minute) and `agent-portal-attachment-cleanup` (every 6 hours) invoke the Lambda with `{"job": "...", "secret": "..."}`. Lambda Web Adapter forwards that event as `POST /internal/events` (`AWS_LWA_PASS_THROUGH_PATH`), handled by `server/scheduled-jobs.ts`, which checks the secret (same value as the CloudFront `x-portal-origin` header) and runs the job from a whitelist. In-process timers are skipped when `AWS_LAMBDA_FUNCTION_NAME` is set.
+- **Check it works:** `aws scheduler list-schedules --name-prefix agent-portal`; invoke by hand with `aws lambda invoke --payload fileb://event.json` (expect `{"ok":true,"job":"idle-stop"}`; a wrong secret gives 403). Add a new job by adding it to `JOBS` in `scheduled-jobs.ts` and to the `jobs` list in `infra/lib/portal-stack.ts`.
+- **Not scheduled:** loop-spec `cron` triggers (nightly test fixer etc.) are stored but nothing executes them yet, on any backend.
+
 ### "Secret key must be a 64-character hex string"
 - **Cause:** the master key secret was a random string, not hex.
 - **Fix:** the CDK secret `MasterKeyHex` (`agent-portal/master-key-hex`) generates 64 hex characters. Changing the master key makes previously stored encrypted values (credentials, integrations) unreadable; re-enter them.

@@ -327,20 +327,23 @@ export async function startServer(
     console.log('Open the address above to create the first admin account.');
   }
 
+  // On Lambda there is no long-lived process: EventBridge Scheduler runs these jobs (see scheduled-jobs.ts).
+  const onLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+
   // 8. Periodic session cleanup every 6 hours
   const sessionCleanupTimer = setInterval(() => {
-    if (isDbOpen()) cleanupSessions();
+    if (!onLambda && isDbOpen()) cleanupSessions();
   }, 6 * 3600_000);
   sessionCleanupTimer.unref();
 
   // 8b. Periodic AI attachment orphan cleanup (every 6 hours)
   const attachmentCleanupTimer = setInterval(() => {
-    if (isDbOpen()) cleanupOrphanedAttachments();
+    if (!onLambda && isDbOpen()) cleanupOrphanedAttachments();
   }, 6 * 3600_000);
   attachmentCleanupTimer.unref();
 
   // 9. Idle-session stop timer (checks every minute)
-  startIdleStopTimer();
+  if (!onLambda) startIdleStopTimer();
 
   // 10. Graceful shutdown
   server.on('close', () => {

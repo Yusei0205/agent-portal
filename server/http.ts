@@ -9,6 +9,7 @@
  *   router.sse('/api/foo/stream', (req, res) => { ... });
  */
 
+import { SCHEDULED_EVENT_PATH, handleScheduledEvent } from './scheduled-jobs.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import http from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -587,6 +588,11 @@ export function createServer(): http.Server {
     if (realtimeEnabled()) {
       const end = res.end.bind(res) as (...a: unknown[]) => http.ServerResponse;
       res.end = ((...a: unknown[]) => { void flushRealtime().finally(() => end(...a)); return res; }) as typeof res.end;
+    }
+    // EventBridge Scheduler events (forwarded by Lambda Web Adapter) carry their own secret in the body.
+    if (req.url === SCHEDULED_EVENT_PATH) {
+      void handleScheduledEvent(req, res, originSecret);
+      return;
     }
     if (originSecret && !req.url?.startsWith('/api/health')) {
       const a = Buffer.from(String(req.headers['x-portal-origin'] ?? ''));
