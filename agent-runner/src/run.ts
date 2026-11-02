@@ -40,6 +40,7 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
+import { emitRunnerFiles } from '../shared/runner-files.js';
 import {
   type InvocationPayload,
   DEFAULT_MODEL,
@@ -175,6 +176,9 @@ export async function runInvocation(
       throw new Error(`git clone failed: ${msg.slice(0, 300)}`);
     }
   }
+
+  // Files changed from here on are what the agent produced (the clone above is not sent back).
+  const filesSinceMs = Date.now();
 
   // ── SDK env ─────────────────────────────────────────────────────────────────
   const region =
@@ -495,6 +499,9 @@ export async function runInvocation(
       metrics,
     }) + '\n',
   );
+
+  // Send back the files the agent wrote (documents, images, spreadsheets...), within size limits.
+  try { emitRunnerFiles(workDir, emit, filesSinceMs); } catch { /* best effort */ }
 
   // Final SSE event — includes full metrics
   emit({

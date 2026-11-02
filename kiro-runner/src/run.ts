@@ -14,6 +14,7 @@
  *   - Temp DB and temp dirs are deleted at the end regardless of outcome.
  */
 
+import { emitRunnerFiles } from '../shared/runner-files.js';
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -412,6 +413,9 @@ export async function runKiroRun(
       tokenRefreshed, timedOut, acpError: acpError?.message?.slice(0, 200),
       prompt_preview: prompt.slice(0, 200) + (prompt.length > 200 ? '…' : ''),
     }) + '\n');
+
+    // Send back the files kiro wrote in the work folder, within size limits.
+    try { emitRunnerFiles(workDir, emit); } catch { /* best effort */ }
 
     emit({
       type: 'result',

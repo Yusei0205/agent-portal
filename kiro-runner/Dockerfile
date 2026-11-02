@@ -27,6 +27,7 @@ RUN npm install
 COPY kiro-runner/src/ ./src/
 COPY kiro-runner/tsconfig.json ./
 COPY kiro-runner/build.mjs ./
+COPY server/agent/runner-files.ts ./shared/runner-files.ts
 
 # Compile + bundle → dist/index.mjs (no external runtime deps; node:* built-ins only)
 RUN node build.mjs

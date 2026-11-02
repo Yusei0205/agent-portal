@@ -39,6 +39,8 @@
 import https from 'node:https';
 import http from 'node:http';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { createFileReceiver } from './runner-files.ts';
+import { persistFile } from '../durable-files.ts';
 import { encrypt, decrypt } from '../secrets.ts';
 import { getCredentialsRepository } from '../repositories/credentials.ts';
 import { getAgentcoreLoginRepository, clearAgentcoreLoginRepository } from '../repositories/agentcore-login.ts';
@@ -504,8 +506,14 @@ export async function runKiroViaAgentCore(
       token: opts.token,
     };
 
+    const fileReceiver = ctx.run?.workDir ? createFileReceiver(ctx.run.workDir, (abs) => persistFile(abs)) : null;
+
     for await (const ev of invokeAgentCore(opts.runtimeArn, sessionId, payload, merged)) {
       if (signal?.aborted) break;
+      if ((ev as { type: string }).type === 'file') {
+        await fileReceiver?.handle(ev as unknown as Record<string, unknown>);
+        continue;
+      }
 
       switch (ev.type) {
         case 'text': {

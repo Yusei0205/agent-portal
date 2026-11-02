@@ -16,6 +16,8 @@ import { randomUUID } from 'node:crypto';
 import { invokeAgentCore } from './kiro-agentcore.ts';
 import { HttpError } from '../util.ts';
 import type { RunContext } from './types.ts';
+import { createFileReceiver } from './runner-files.ts';
+import { persistFile } from '../durable-files.ts';
 
 export interface ClaudeAgentCoreOpts {
   runtimeArn: string;
@@ -84,6 +86,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.maxTurns && opts.maxTurns > 0 ? { maxTurns: Math.min(opts.maxTurns, 200) } : {}),
   };
 
+  // Files the agent wrote come back as 'file' events and land in the run's work folder (then mirrored to S3).
+  const receiver = ctx.run?.workDir ? createFileReceiver(ctx.run.workDir, (abs) => persistFile(abs)) : null;
+
   try {
     for await (const raw of invokeAgentCore(opts.runtimeArn, sessionId, payload, merged)) {
       if (signal?.aborted) break;
@@ -111,6 +116,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
           if (text && !text.startsWith('Work dir:')) emit('status', { text });
           break;
         }
+        case 'file':
+          await receiver?.handle(ev);
+          break;
         case 'error':
           // Never echo the credential: the runner does not log it, but cut anything that looks like a key anyway.
           throw new HttpError(502, `AgentCore Claude run error: ${String(ev.message ?? '').replace(/sk-ant-[\w-]+/g, 'sk-ant-…')}`);
@@ -135,6 +143,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   if (timedOut) throw new HttpError(504, 'AgentCore Claude run timed out');
   if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
 
+  if (receiver?.received.length) emit('status', { text: `Received ${receiver.received.length} file${receiver.received.length === 1 ? '' : 's'} from the agent` });
   emit('status', { state: 'idle' });
   out.text = parts.join('\n').trim();
   return out;
