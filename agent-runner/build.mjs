@@ -25,6 +25,8 @@ await esbuild.build({
   // Keep the SDK external — install it in the container via npm ci
   external: ['@anthropic-ai/claude-agent-sdk', 'playwright-core', 'zod'],
   // node: built-ins stay external automatically with platform: 'node'
+  // The AWS SDK (bundled for the browser tools) is CommonJS and calls require() on node: built-ins.
+  banner: { js: "import{createRequire as __cr}from'module';const require=__cr(import.meta.url);" },
   sourcemap: false,
   logLevel: 'info',
 });
