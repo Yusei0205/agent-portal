@@ -7,6 +7,7 @@
  * that CloudFront sends as x-portal-origin, so only the schedule (or CloudFront) can trigger jobs.
  */
 
+import { hasBackgroundJob, runBackgroundJobNow } from './background-jobs.ts';
 import { timingSafeEqual } from 'node:crypto';
 import type http from 'node:http';
 import { checkIdleSessions } from './session-lifecycle.ts';
@@ -60,16 +61,28 @@ export async function handleScheduledEvent(
   expectedSecret: string | undefined,
 ): Promise<void> {
   if (req.method !== 'POST' || !expectedSecret) { reply(res, 403, { error: 'Forbidden' }); return; }
-  let payload: { job?: unknown; secret?: unknown };
+  let payload: { job?: unknown; secret?: unknown; args?: unknown };
   try {
-    payload = JSON.parse(await readBody(req)) as { job?: unknown; secret?: unknown };
+    payload = JSON.parse(await readBody(req)) as { job?: unknown; secret?: unknown; args?: unknown };
   } catch {
     reply(res, 400, { error: 'Invalid event' });
     return;
   }
   if (!secretMatches(payload.secret, expectedSecret)) { reply(res, 403, { error: 'Forbidden' }); return; }
-  if (!isJobName(payload.job)) { reply(res, 400, { error: 'Unknown job' }); return; }
   const started = Date.now();
+  if (hasBackgroundJob(payload.job)) {
+    // Work another request started and handed to this invocation (see background-jobs.ts).
+    try {
+      const args = payload.args && typeof payload.args === 'object' ? (payload.args as Record<string, unknown>) : {};
+      await runBackgroundJobNow(payload.job, args);
+      reply(res, 200, { ok: true, job: payload.job, ms: Date.now() - started });
+    } catch (e) {
+      console.error(`[background-job] ${payload.job} failed:`, e instanceof Error ? e.message : e);
+      reply(res, 500, { ok: false, job: payload.job });
+    }
+    return;
+  }
+  if (!isJobName(payload.job)) { reply(res, 400, { error: 'Unknown job' }); return; }
   try {
     await JOBS[payload.job]();
     reply(res, 200, { ok: true, job: payload.job, ms: Date.now() - started });

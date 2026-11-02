@@ -50,6 +50,8 @@ export interface ReviewRecord {
   merged_at: string | null;
   merged_by: string | null;
   head_commit_sha: string | null;
+  /** Set when the review belongs to a full-repository scan. */
+  scan_id?: string | null;
 }
 
 export interface FindingRecord {

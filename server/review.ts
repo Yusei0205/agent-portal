@@ -21,6 +21,11 @@
  *   PUT    /api/settings/review                     (R1/R3, admin)
  */
 
+import { getSessionsRepository } from './repositories/sessions.ts';
+import { getGitConnectionsRepository } from './repositories/git-connections.ts';
+import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
+import { getIntegrationsRepository } from './repositories/integrations.ts';
+import { getReviewsRepository } from './repositories/reviews.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson, requireAuth } from './http.ts';
@@ -28,7 +33,6 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, insert, getDb } from './db.ts';
 import { generateId, now, parseJson, newId } from './util.ts';
 import { getSetting, setSetting, getSettings } from './settings.ts';
-import { getReviewsRepository } from './repositories/reviews.ts';
 import type { ReviewRecord, FindingRecord } from './repositories/reviews.ts';
 import { emit } from './events.ts';
 import { appendAudit } from './audit.ts';
@@ -312,10 +316,7 @@ async function resolveJiraContext(
   const source = explicitKey?.trim() ? 'explicit' : 'branch';
 
   interface McpRow { config_enc: string | null }
-  const integration = one<McpRow>(
-    "SELECT config_enc FROM mcp_integrations WHERE project_id = ? AND type = 'atlassian' AND enabled = 1 LIMIT 1",
-    projectId,
-  );
+  const integration = ((await getIntegrationsRepository().listByProject(projectId)).find((i) => i.type === 'atlassian' && i.enabled === 1));
 
   if (!integration || !integration.config_enc) {
     return { key, summary: null, description: null, source, reason: 'No Jira integration configured for this project' };
@@ -598,12 +599,9 @@ function parseBitbucketOwnerRepoFromUrl(url: string): { workspace: string; repoS
   return { workspace: m[1], repoSlug: m[2] };
 }
 
-function findBitbucketCredsForUser(userId: string): { email: string; apiToken: string } | null {
+async function findBitbucketCredsForUser(userId: string): Promise<{ email: string; apiToken: string } | null> {
   interface ConnRow { credentials_enc: string | null }
-  const conns = all<ConnRow>(
-    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'bitbucket' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
-    userId,
-  );
+  const conns = (await getGitConnectionsRepository().listByProviderForUser('bitbucket', userId));
   for (const c of conns) {
     if (!c.credentials_enc) continue;
     try {
@@ -734,12 +732,9 @@ function parseCodeCommitRepoName(url: string): string | null {
   return match ? match[1] : null;
 }
 
-function findGitHubToken(userId: string): string | null {
+async function findGitHubToken(userId: string): Promise<string | null> {
   interface ConnRow { credentials_enc: string | null }
-  const conns = all<ConnRow>(
-    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'github' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
-    userId,
-  );
+  const conns = (await getGitConnectionsRepository().listByProviderForUser('github', userId));
   for (const c of conns) {
     if (!c.credentials_enc) continue;
     try {
@@ -751,13 +746,10 @@ function findGitHubToken(userId: string): string | null {
   return null;
 }
 
-function findCodeCommitCreds(projectId: string, actorId: string): CodeCommitCreds | null {
+async function findCodeCommitCreds(projectId: string, actorId: string): Promise<CodeCommitCreds | null> {
   // 1. Check aws_accounts for any supported auth method
   interface AccRow { credentials_enc: string | null; region: string | null; auth_method: string; profile_name: string | null }
-  const accounts = all<AccRow>(
-    "SELECT credentials_enc, region, auth_method, profile_name FROM aws_accounts WHERE project_id = ? ORDER BY created_at",
-    projectId,
-  );
+  const accounts = (await getAwsAccountsRepository().listByProject(projectId));
   for (const a of accounts) {
     const method = a.auth_method as CodeCommitCreds['authMethod'];
     const region = a.region ?? 'us-east-1';
@@ -784,10 +776,7 @@ function findCodeCommitCreds(projectId: string, actorId: string): CodeCommitCred
   //    Mirror findGitHubToken: only scope='shared' OR owner_id matches the acting user.
   //    Never use another user's personal connection.
   interface ConnRow { credentials_enc: string | null }
-  const conns = all<ConnRow>(
-    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'codecommit' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
-    actorId,
-  );
+  const conns = (await getGitConnectionsRepository().listByProviderForUser('codecommit', actorId));
   for (const c of conns) {
     if (!c.credentials_enc) continue;
     try {
@@ -804,7 +793,7 @@ function findCodeCommitCreds(projectId: string, actorId: string): CodeCommitCred
       }
       if (mode === 'aws-account' && typeof creds.awsAccountId === 'string') {
         interface AccRow { credentials_enc: string | null; auth_method: string }
-        const acc = one<AccRow>('SELECT credentials_enc, auth_method FROM aws_accounts WHERE id = ? LIMIT 1', creds.awsAccountId);
+        const acc = ((await getAwsAccountsRepository().getById(creds.awsAccountId)) ?? undefined);
         if (acc && acc.auth_method === 'keys' && acc.credentials_enc) {
           try {
             const accPlain = decrypt(acc.credentials_enc, config.secretKey);
@@ -989,8 +978,25 @@ function deduplicateFindings(incoming: Array<Partial<Finding>>, existingKey: Set
   return result;
 }
 
-export function processReviewOutput(reviewId: string, workDir?: string): number {
-  const review = one<Review>('SELECT * FROM p10_reviews WHERE id = ?', reviewId);
+async function getReviewInProject(id: string, projectId: string): Promise<Review | undefined> {
+  const r = await getReviewsRepository().getById(id);
+  return r && r.project_id === projectId ? (r as unknown as Review) : undefined;
+}
+
+const FINDING_SORT_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+/** Findings of a review, worst first, then by file and line. */
+async function listFindingsSorted(reviewId: string): Promise<Finding[]> {
+  const rows = await getReviewsRepository().listFindings(reviewId);
+  return rows.sort((a, b) =>
+    (FINDING_SORT_RANK[a.severity] ?? 4) - (FINDING_SORT_RANK[b.severity] ?? 4)
+    || a.file_path.localeCompare(b.file_path)
+    || (a.line_number ?? 0) - (b.line_number ?? 0)) as unknown as Finding[];
+}
+
+export async function processReviewOutput(reviewId: string, workDir?: string): Promise<number> {
+  const reviewsRepo = getReviewsRepository();
+  const review = await reviewsRepo.getById(reviewId);
   if (!review) return 0;
 
   // Prefer raw_output (full untruncated transcript) over summary (bounded display text)
@@ -1011,7 +1017,7 @@ export function processReviewOutput(reviewId: string, workDir?: string): number 
 
   const parsed = parseFindingsFromText(text);
 
-  const existing = all<Finding>('SELECT file_path, line_number, body FROM p10_findings WHERE review_id = ?', reviewId);
+  const existing = await reviewsRepo.listFindings(reviewId);
   const existingKeys = new Set(
     existing.map((f) => `${f.file_path}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim().slice(0, 100)}`),
   );
@@ -1020,7 +1026,7 @@ export function processReviewOutput(reviewId: string, workDir?: string): number 
   const ts = now();
   for (const f of toInsert) {
     if (!f.file_path && !f.body) continue;
-    insert('p10_findings', {
+    await reviewsRepo.createFinding({
       id: newId('f_'),
       review_id: reviewId,
       file_path: f.file_path ?? '',
@@ -1084,12 +1090,12 @@ async function checkAutoPostShouldSkip(
         let currentHead: string | null = null;
         if (repo.provider === 'github') {
           const ownerRepo = parseGitHubOwnerRepo(repo.url);
-          const token = findGitHubToken(actorId);
+          const token = await findGitHubToken(actorId);
           if (ownerRepo && token) {
             currentHead = await _providers.githubGetPrHead(ownerRepo.owner, ownerRepo.repo, review.pr_number, token);
           }
         } else if (repo.provider === 'codecommit') {
-          const creds = findCodeCommitCreds(review.project_id ?? '', actorId);
+          const creds = await findCodeCommitCreds(review.project_id ?? '', actorId);
           const repoName = parseCodeCommitRepoName(repo.url);
           if (creds && repoName) {
             currentHead = await _providers.codecommitGetPrHead(repoName, String(review.pr_number), creds);
@@ -1160,7 +1166,7 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
 
   if (repo.provider === 'github') {
     const ownerRepo = parseGitHubOwnerRepo(repo.url);
-    const token = findGitHubToken(actorId);
+    const token = await findGitHubToken(actorId);
     if (!ownerRepo || !token) return { posted: 0, skipped: toPost.length };
     let postedCount = 0;
     for (const f of toPost) {
@@ -1180,7 +1186,7 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
   }
 
   if (repo.provider === 'codecommit' && review.dest_sha) {
-    const creds = findCodeCommitCreds(review.project_id ?? '', actorId);
+    const creds = await findCodeCommitCreds(review.project_id ?? '', actorId);
     const repoName = parseCodeCommitRepoName(repo.url);
     if (!creds || !repoName) return { posted: 0, skipped: toPost.length };
     let postedCount = 0;
@@ -1413,34 +1419,34 @@ export function registerReviewRoutes(): void {
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
-    const where = conditions.join(' AND ');
+    // Filter in the app: works the same on SQLite and DynamoDB (review lists per project are small).
+    const all = (await getReviewsRepository().listByProject(req.params.id, { limit: 100000, offset: 0 })).items;
+    const needle = search ? search.toLowerCase() : '';
+    const matching = all.filter((r) => {
+      if (runBy === 'me') { if (r.created_by !== req.user!.id) return false; }
+      else if (runBy !== 'everyone' && r.created_by !== runBy) return false;
+      if (account && r.provider_id !== account) return false;
+      if (status && r.status !== status) return false;
+      if (type === 'pr' && !(r.pr_number != null && !r.scan_id)) return false;
+      if (type === 'scan' && !r.scan_id) return false;
+      if (repoId && r.repo_id !== repoId) return false;
+      if (dateFrom && r.created_at < dateFrom) return false;
+      if (dateTo && r.created_at > dateTo) return false;
+      if (needle && !`${r.head_ref}\n${r.base_ref}\n${r.summary ?? ''}`.toLowerCase().includes(needle)) return false;
+      return true;
+    }).sort((x, y) => y.created_at.localeCompare(x.created_at));
+    const total = matching.length;
 
-    const total = (one<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM p10_reviews r WHERE ${where}`,
-      ...params,
-    ) ?? { n: 0 }).n;
-
-    type ReviewListRow = Omit<Review, 'run_log' | 'raw_output'> & { finding_count?: number; repo_name?: string };
-    const reviews = all<ReviewListRow>(
-      `SELECT
-         r.id, r.project_id, r.base_ref, r.head_ref, r.pr_number, r.repo_id,
-         r.status, r.post_mode, r.from_loop, r.workflow_id, r.min_severity,
-         r.summary, r.created_by, r.created_at, r.parent_review_id, r.source_sha,
-         r.dest_sha, r.provider_id, r.model_id, r.jira_context,
-         r.input_tokens, r.cache_write_tokens, r.cache_read_tokens, r.output_tokens,
-         r.llm_requests, r.retry_count, r.tool_calls, r.files_reviewed,
-         r.duration_ms, r.started_at, r.merged_at, r.merged_by, r.head_commit_sha,
-         (SELECT COUNT(*) FROM p10_findings f WHERE f.review_id = r.id) AS finding_count,
-         repos.name AS repo_name
-       FROM p10_reviews r
-       LEFT JOIN repositories repos ON repos.id = r.repo_id
-       WHERE ${where}
-       ORDER BY r.created_at DESC
-       LIMIT ? OFFSET ?`,
-      ...params,
-      limit,
-      offset,
-    );
+    const repoNames = new Map<string, string | null>();
+    const reviews = await Promise.all(matching.slice(offset, offset + limit).map(async (r) => {
+      const { run_log: _log, raw_output: _raw, ...rest } = r;
+      if (r.repo_id && !repoNames.has(r.repo_id)) repoNames.set(r.repo_id, (await getRepoInfo(r.repo_id))?.name ?? null);
+      return {
+        ...rest,
+        finding_count: (await getReviewsRepository().listFindings(r.id)).length,
+        repo_name: r.repo_id ? repoNames.get(r.repo_id) ?? null : null,
+      };
+    }));
 
     sendJson(res, 200, { reviews, total, page, limit });
   });
@@ -1489,14 +1495,14 @@ export function registerReviewRoutes(): void {
         const repoRow = await getRepoInfo(repoId);
         if (repoRow?.provider === 'github') {
           const ownerRepo = parseGitHubOwnerRepo(repoRow.url);
-          const ghToken = findGitHubToken(req.user!.id);
+          const ghToken = await findGitHubToken(req.user!.id);
           if (ownerRepo && ghToken) {
             const shas = await _providers.githubGetPrShas(ownerRepo.owner, ownerRepo.repo, prNumber, ghToken);
             if (!resolvedSourceSha && shas.sourceSha) resolvedSourceSha = shas.sourceSha.slice(0, 64);
             if (!resolvedDestSha && shas.destSha) resolvedDestSha = shas.destSha.slice(0, 64);
           }
         } else if (repoRow?.provider === 'codecommit') {
-          const ccCreds = findCodeCommitCreds(req.params.id, req.user!.id);
+          const ccCreds = await findCodeCommitCreds(req.params.id, req.user!.id);
           const ccRepoName = parseCodeCommitRepoName(repoRow.url);
           if (ccCreds && ccRepoName) {
             const shas = await _providers.codecommitGetPrShas(ccRepoName, String(prNumber), ccCreds);
@@ -1528,7 +1534,7 @@ export function registerReviewRoutes(): void {
         : (effectiveProvider === 'anthropic' || effectiveProvider === 'bedrock') ? 'claude-code'
         : effectiveProvider === 'kiro' ? 'kiro'
         : 'demo';
-      insert('p6_workflows', {
+      await getSessionsRepository().createWorkflow({
         id: wid,
         project_id: req.params.id,
         goal,
@@ -1541,6 +1547,8 @@ export function registerReviewRoutes(): void {
         repo_ids: repoId ? JSON.stringify([repoId]) : '[]',
         iteration_count: 0,
         max_iterations: 1,
+        credential_id: null,
+        model: '',
         kind: 'review',
         created_by: req.user!.id,
         created_at: ts0,
@@ -1722,7 +1730,7 @@ export function registerReviewRoutes(): void {
         sendJson(res, 400, { error: 'Cannot post: review is missing source or destination SHA', reason: 'missing_sha' });
         return;
       }
-      const creds = findCodeCommitCreds(req.params.id, req.user!.id);
+      const creds = await findCodeCommitCreds(req.params.id, req.user!.id);
       if (!creds) {
         sendJson(res, 400, { error: 'No AWS credentials found for CodeCommit. Add an AWS account or a shared CodeCommit git connection.', reason: 'no_credentials' });
         return;
@@ -1748,7 +1756,7 @@ export function registerReviewRoutes(): void {
             creds,
           );
           // Only stamp posted_at if the provider accepted the comment
-          run('UPDATE p10_findings SET posted_at = ? WHERE id = ?', ts, f.id);
+          await getReviewsRepository().markFindingPosted(f.id, ts);
         } catch {
           postFailures.push({ findingId: f.id, status: 0 });
         }
@@ -1796,7 +1804,7 @@ export function registerReviewRoutes(): void {
         sendJson(res, 400, { error: 'Cannot parse GitHub owner/repo from URL', reason: 'bad_url' });
         return;
       }
-      const token = findGitHubToken(req.user!.id);
+      const token = await findGitHubToken(req.user!.id);
       if (!token) {
         sendJson(res, 400, { error: 'No GitHub credentials found. Add a GitHub git connection.', reason: 'no_credentials' });
         return;
@@ -1814,7 +1822,7 @@ export function registerReviewRoutes(): void {
             token,
           );
           if (result.ok) {
-            run('UPDATE p10_findings SET posted_at = ? WHERE id = ?', ts, f.id);
+            await getReviewsRepository().markFindingPosted(f.id, ts);
           } else {
             postFailures.push({ findingId: f.id, status: result.status });
           }
@@ -1853,11 +1861,7 @@ export function registerReviewRoutes(): void {
     if (!hasTokenScope(req, 'merge')) { sendJson(res, 403, { error: 'merge scope required' }); return; }
     if (!await requireProjectEditor(req, res, req.params.id)) return;
 
-    const review = one<Review>(
-      'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
+    const review = (await getReviewInProject(req.params.rid, req.params.id));
     if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
 
     const body = req.body as Record<string, unknown>;
@@ -1869,7 +1873,7 @@ export function registerReviewRoutes(): void {
       return;
     }
 
-    const findings = all<Finding>('SELECT * FROM p10_findings WHERE review_id = ?', review.id);
+    const findings = ((await getReviewsRepository().listFindings(review.id)) as unknown as Finding[]);
     const threshold = getMergeThreshold();
     const verdict = computeMergeVerdict(review, findings, threshold);
 
@@ -1905,14 +1909,14 @@ export function registerReviewRoutes(): void {
       let lookupAttempted = false;
       try {
         if (repo.provider === 'github') {
-          const ghToken = findGitHubToken(req.user!.id);
+          const ghToken = await findGitHubToken(req.user!.id);
           const ownerRepoStale = parseGitHubOwnerRepo(repo.url);
           if (ghToken && ownerRepoStale) {
             lookupAttempted = true;
             currentHead = await _providers.githubGetPrHead(ownerRepoStale.owner, ownerRepoStale.repo, review.pr_number, ghToken);
           }
         } else if (repo.provider === 'codecommit') {
-          const ccCreds = findCodeCommitCreds(req.params.id, req.user!.id);
+          const ccCreds = await findCodeCommitCreds(req.params.id, req.user!.id);
           const ccRepoNameStale = parseCodeCommitRepoName(repo.url);
           if (ccCreds && ccRepoNameStale) {
             lookupAttempted = true;
@@ -1949,7 +1953,7 @@ export function registerReviewRoutes(): void {
           sendJson(res, 400, { error: 'Could not parse GitHub owner/repo from URL' });
           return;
         }
-        const token = findGitHubToken(req.user!.id);
+        const token = await findGitHubToken(req.user!.id);
         if (!token) {
           sendJson(res, 400, { error: 'No GitHub credentials found. Add a GitHub git connection.' });
           return;
@@ -1962,7 +1966,7 @@ export function registerReviewRoutes(): void {
           sendJson(res, 400, { error: 'Could not parse CodeCommit repository name from URL' });
           return;
         }
-        const creds = findCodeCommitCreds(req.params.id, req.user!.id);
+        const creds = await findCodeCommitCreds(req.params.id, req.user!.id);
         if (!creds) {
           sendJson(res, 400, { error: 'No AWS credentials found for CodeCommit. Add an AWS account (keys, profile, instance-role, or SSO) or a CodeCommit git connection with AWS keys.' });
           return;
@@ -1985,12 +1989,7 @@ export function registerReviewRoutes(): void {
     }
 
     const mergedAt = now();
-    run(
-      'UPDATE p10_reviews SET merged_at = ?, merged_by = ? WHERE id = ?',
-      mergedAt,
-      req.user!.id,
-      review.id,
-    );
+    await getReviewsRepository().update(review.id, { merged_at: mergedAt, merged_by: req.user!.id });
 
     appendAudit(
       getDb(),
@@ -2009,11 +2008,7 @@ export function registerReviewRoutes(): void {
     if (!hasTokenScope(req, 'review')) { sendJson(res, 403, { error: 'review scope required' }); return; }
     if (!await requireProjectEditor(req, res, req.params.id)) return;
 
-    const parent = one<Review>(
-      'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
+    const parent = (await getReviewInProject(req.params.rid, req.params.id));
     if (!parent) { sendJson(res, 404, { error: 'Review not found' }); return; }
 
     const body = req.body as Record<string, unknown>;
@@ -2035,7 +2030,7 @@ export function registerReviewRoutes(): void {
         if (jiraCtx.description) rerunGoal += `\n\nBackground: ${jiraCtx.description.slice(0, 1000)}`;
       }
       const wid = generateId();
-      insert('p6_workflows', {
+      await getSessionsRepository().createWorkflow({
         id: wid,
         project_id: req.params.id,
         goal: rerunGoal,
@@ -2048,6 +2043,8 @@ export function registerReviewRoutes(): void {
         repo_ids: parent.repo_id ? JSON.stringify([parent.repo_id]) : '[]',
         iteration_count: 0,
         max_iterations: 1,
+        credential_id: null,
+        model: '',
         kind: 'review',
         created_by: req.user!.id,
         created_at: ts,
@@ -2067,14 +2064,14 @@ export function registerReviewRoutes(): void {
         const repoRow = await getRepoInfo(parent.repo_id);
         if (repoRow?.provider === 'github') {
           const ownerRepo = parseGitHubOwnerRepo(repoRow.url);
-          const token = findGitHubToken(req.user!.id);
+          const token = await findGitHubToken(req.user!.id);
           if (ownerRepo && token) {
             const shas = await _providers.githubGetPrShas(ownerRepo.owner, ownerRepo.repo, parent.pr_number, token);
             if (shas.sourceSha) refreshedSourceSha = shas.sourceSha.slice(0, 64);
             if (shas.destSha) refreshedDestSha = shas.destSha.slice(0, 64);
           }
         } else if (repoRow?.provider === 'codecommit') {
-          const creds = findCodeCommitCreds(req.params.id, req.user!.id);
+          const creds = await findCodeCommitCreds(req.params.id, req.user!.id);
           const repoName = parseCodeCommitRepoName(repoRow.url);
           if (creds && repoName) {
             const shas = await _providers.codecommitGetPrShas(repoName, String(parent.pr_number), creds);
@@ -2085,7 +2082,7 @@ export function registerReviewRoutes(): void {
       } catch { /* best-effort: use parent shas */ }
     }
 
-    insert('p10_reviews', {
+    await getReviewsRepository().create({
       id,
       project_id: req.params.id,
       base_ref: parent.base_ref,
@@ -2098,6 +2095,7 @@ export function registerReviewRoutes(): void {
       workflow_id: workflowId,
       min_severity: minSeverity,
       summary: null,
+      raw_output: null,
       created_by: req.user!.id,
       created_at: ts,
       parent_review_id: parent.id,
@@ -2122,7 +2120,7 @@ export function registerReviewRoutes(): void {
       merged_by: null,
     });
 
-    const review = one<Review>('SELECT * FROM p10_reviews WHERE id = ?', id);
+    const review = ((await getReviewsRepository().getById(id)) as unknown as Review | undefined ?? undefined);
     sendJson(res, 201, { review, parentReviewId: parent.id });
   });
 
@@ -2130,18 +2128,10 @@ export function registerReviewRoutes(): void {
   router.get('/api/projects/:id/reviews/:rid/export/xlsx', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!await requireProjectAccess(req, res, req.params.id)) return;
 
-    const review = one<Review>(
-      'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
+    const review = (await getReviewInProject(req.params.rid, req.params.id));
     if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
 
-    const findings = all<Finding>(
-      `SELECT * FROM p10_findings WHERE review_id = ?
-       ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, file_path, line_number`,
-      review.id,
-    );
+    const findings = (await listFindingsSorted(review.id));
 
     const rateCard = getRateCard();
     const { estimatedUsd, cacheSavedUsd } = computeCost(review, rateCard);
@@ -2199,18 +2189,10 @@ export function registerReviewRoutes(): void {
   router.get('/api/projects/:id/reviews/:rid/export/docx', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!await requireProjectAccess(req, res, req.params.id)) return;
 
-    const review = one<Review>(
-      'SELECT * FROM p10_reviews WHERE id = ? AND project_id = ?',
-      req.params.rid,
-      req.params.id,
-    );
+    const review = (await getReviewInProject(req.params.rid, req.params.id));
     if (!review) { sendJson(res, 404, { error: 'Review not found' }); return; }
 
-    const findings = all<Finding>(
-      `SELECT * FROM p10_findings WHERE review_id = ?
-       ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, file_path, line_number`,
-      review.id,
-    );
+    const findings = (await listFindingsSorted(review.id));
 
     const rateCard = getRateCard();
     const { estimatedUsd, cacheSavedUsd } = computeCost(review, rateCard);

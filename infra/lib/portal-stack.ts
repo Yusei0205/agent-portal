@@ -29,6 +29,9 @@ import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import tablesJson from '../tables.json';
 
+/** Fixed so the function can be granted permission to invoke itself without a circular dependency. */
+const PORTAL_FUNCTION_NAME = 'agent-portal';
+
 interface KeyDef { AttributeName: string; KeyType: 'HASH' | 'RANGE' }
 interface TableSpec {
   TableName: string;
@@ -215,7 +218,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
     });
 
     const fn = new lambda.DockerImageFunction(this, 'Portal', {
-      functionName: 'agent-portal',
+      functionName: PORTAL_FUNCTION_NAME,
       code: lambda.DockerImageCode.fromImageAsset(props.repoRoot, {
         file: 'Dockerfile.lambda',
         platform: ecrAssets.Platform.LINUX_AMD64,
@@ -255,6 +258,12 @@ export class AgentPortalCloudStack extends cdk.Stack {
         resources: [props.kiroRuntimeArn, `${props.kiroRuntimeArn}/*`],
       }));
     }
+    // Background work (scans, document conversion) invokes this function asynchronously. The ARN is built
+    // from the fixed function name: granting fn.grantInvoke(fn) would make the role depend on itself.
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:${PORTAL_FUNCTION_NAME}`],
+    }));
     if (props.claudeRuntimeArn) {
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],

@@ -14,6 +14,10 @@
  *   GET    /api/settings/bedrock-cross-account-policy — cross-account trust/perms (admin)
  */
 
+import { registerBackgroundJob, runInBackground } from './background-jobs.ts';
+import { getReviewsRepository } from './repositories/reviews.ts';
+import { getGitConnectionsRepository } from './repositories/git-connections.ts';
+import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all, run, insert, getDb } from './db.ts';
@@ -223,12 +227,9 @@ async function _doFetchFileTree(
   return { files: [], pinnedSha: null };
 }
 
-function findGitHubToken(actorId: string): string | null {
+async function findGitHubToken(actorId: string): Promise<string | null> {
   interface ConnRow { credentials_enc: string | null }
-  const conns = all<ConnRow>(
-    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'github' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
-    actorId,
-  );
+  const conns = (await getGitConnectionsRepository().listByProviderForUser('github', actorId));
   for (const c of conns) {
     if (!c.credentials_enc) continue;
     try {
@@ -253,7 +254,7 @@ async function _fetchGitHubTree(
 ): Promise<{ files: FileEntry[]; pinnedSha: string | null }> {
   const ownerRepo = parseGitHubOwnerRepo(repoUrl);
   if (!ownerRepo) return { files: [], pinnedSha: null };
-  const token = findGitHubToken(actorId);
+  const token = await findGitHubToken(actorId);
   if (!token) return { files: [], pinnedSha: null };
 
   const headers: Record<string, string> = {
@@ -297,12 +298,9 @@ interface CodeCommitCreds {
   profileName?: string;
 }
 
-function findCodeCommitCreds(projectId: string, actorId: string): CodeCommitCreds | null {
+async function findCodeCommitCreds(projectId: string, actorId: string): Promise<CodeCommitCreds | null> {
   interface AccRow { credentials_enc: string | null; region: string | null; auth_method: string; profile_name: string | null }
-  const accounts = all<AccRow>(
-    'SELECT credentials_enc, region, auth_method, profile_name FROM aws_accounts WHERE project_id = ? ORDER BY created_at',
-    projectId,
-  );
+  const accounts = (await getAwsAccountsRepository().listByProject(projectId));
   for (const a of accounts) {
     const method = a.auth_method as CodeCommitCreds['authMethod'];
     const region = a.region ?? 'us-east-1';
@@ -324,10 +322,7 @@ function findCodeCommitCreds(projectId: string, actorId: string): CodeCommitCred
     }
   }
   interface ConnRow { credentials_enc: string | null }
-  const conns = all<ConnRow>(
-    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'codecommit' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
-    actorId,
-  );
+  const conns = (await getGitConnectionsRepository().listByProviderForUser('codecommit', actorId));
   for (const c of conns) {
     if (!c.credentials_enc) continue;
     try {
@@ -343,7 +338,7 @@ function findCodeCommitCreds(projectId: string, actorId: string): CodeCommitCred
       }
       if (mode === 'aws-account' && typeof creds.awsAccountId === 'string') {
         interface AccRow2 { credentials_enc: string | null; auth_method: string }
-        const acc = one<AccRow2>('SELECT credentials_enc, auth_method FROM aws_accounts WHERE id = ? LIMIT 1', creds.awsAccountId);
+        const acc = ((await getAwsAccountsRepository().getById(creds.awsAccountId)) ?? undefined);
         if (acc?.auth_method === 'keys' && acc.credentials_enc) {
           try {
             const accPlain = decrypt(acc.credentials_enc, config.secretKey);
@@ -395,7 +390,7 @@ async function _fetchCodeCommitTree(
 ): Promise<{ files: FileEntry[]; pinnedSha: string | null }> {
   const repoName = parseCodeCommitRepoName(repoUrl);
   if (!repoName) return { files: [], pinnedSha: null };
-  const creds = findCodeCommitCreds(projectId, actorId);
+  const creds = await findCodeCommitCreds(projectId, actorId);
   if (!creds) return { files: [], pinnedSha: null };
 
   const { GetBranchCommand, GetFolderCommand } = await import('@aws-sdk/client-codecommit');
@@ -435,12 +430,9 @@ function parseBitbucketOwnerRepo(url: string): { workspace: string; repoSlug: st
   return { workspace: m[1], repoSlug: m[2] };
 }
 
-function findBitbucketCreds(actorId: string): { email: string; apiToken: string } | null {
+async function findBitbucketCreds(actorId: string): Promise<{ email: string; apiToken: string } | null> {
   interface ConnRow { credentials_enc: string | null }
-  const conns = all<ConnRow>(
-    "SELECT credentials_enc FROM git_connections_v2 WHERE provider = 'bitbucket' AND (owner_id = ? OR scope = 'shared') ORDER BY created_at",
-    actorId,
-  );
+  const conns = (await getGitConnectionsRepository().listByProviderForUser('bitbucket', actorId));
   for (const c of conns) {
     if (!c.credentials_enc) continue;
     try {
@@ -461,7 +453,7 @@ async function _fetchBitbucketTree(
 ): Promise<{ files: FileEntry[]; pinnedSha: string | null }> {
   const ownerRepo = parseBitbucketOwnerRepo(repoUrl);
   if (!ownerRepo) return { files: [], pinnedSha: null };
-  const creds = findBitbucketCreds(actorId);
+  const creds = await findBitbucketCreds(actorId);
   if (!creds) return { files: [], pinnedSha: null };
 
   const auth = 'Basic ' + Buffer.from(`${creds.email}:${creds.apiToken}`).toString('base64');
@@ -521,7 +513,7 @@ async function _doFetchFileContent(
 
   if (repo.provider === 'github') {
     const ownerRepo = parseGitHubOwnerRepo(repo.url);
-    const token = findGitHubToken(actorId);
+    const token = await findGitHubToken(actorId);
     if (!ownerRepo || !token) return '';
     const resp = await fetch(
       `https://api.github.com/repos/${ownerRepo.owner}/${ownerRepo.repo}/contents/${encodeURIComponent(filePath)}`,
@@ -537,7 +529,7 @@ async function _doFetchFileContent(
 
   if (repo.provider === 'codecommit') {
     const repoName = parseCodeCommitRepoName(repo.url);
-    const creds = findCodeCommitCreds(projectId, actorId);
+    const creds = await findCodeCommitCreds(projectId, actorId);
     if (!repoName || !creds) return '';
     const { GetFileCommand } = await import('@aws-sdk/client-codecommit');
     const client = await makeCodeCommitClient(creds);
@@ -548,7 +540,7 @@ async function _doFetchFileContent(
 
   if (repo.provider === 'bitbucket') {
     const ownerRepo = parseBitbucketOwnerRepo(repo.url);
-    const bbCreds = findBitbucketCreds(actorId);
+    const bbCreds = await findBitbucketCreds(actorId);
     if (!ownerRepo || !bbCreds) return '';
     const resp = await fetch(
       `https://api.bitbucket.org/2.0/repositories/${ownerRepo.workspace}/${ownerRepo.repoSlug}/src/HEAD/${encodeURIComponent(filePath)}`,
@@ -772,7 +764,7 @@ function getAnthropicKeyForScan(): string {
 }
 
 async function runEstimation(scanId: string): Promise<void> {
-  const scan = one<Scan>('SELECT * FROM p10_scans WHERE id = ?', scanId);
+  const scan = (await getScansRepository().getById(scanId)) as unknown as Scan | null;
   if (!scan || scan.status !== 'estimating') return;
 
   try {
@@ -796,34 +788,30 @@ async function runEstimation(scanId: string): Promise<void> {
     const estimatedCostUsd = (estimatedTokens / M) * (rateCard.inputUsd + rateCard.outputUsd * 0.3);
     const estimatedMinutes = (filtered.length * SECONDS_PER_FILE) / 60;
 
-    run(
-      `UPDATE p10_scans SET
-         status = 'estimate_ready',
-         pinned_sha = ?,
-         estimated_files = ?,
-         estimated_bytes = ?,
-         estimated_tokens = ?,
-         estimated_cost_usd = ?,
-         estimated_minutes = ?
-       WHERE id = ? AND status = 'estimating'`,
-      pinnedSha,
-      filtered.length,
-      totalBytes,
-      estimatedTokens,
-      estimatedCostUsd,
-      estimatedMinutes,
-      scanId,
-    );
+    {
+      const current = await getScansRepository().getById(scanId);
+      if (current?.status === 'estimating') {
+        await getScansRepository().update(scanId, {
+          status: 'estimate_ready',
+          pinned_sha: pinnedSha,
+          estimated_files: filtered.length,
+          estimated_bytes: totalBytes,
+          estimated_tokens: estimatedTokens,
+          estimated_cost_usd: estimatedCostUsd,
+          estimated_minutes: estimatedMinutes,
+        });
+      }
+    }
 
     // Pre-populate the file list for the estimate
     if (filtered.length > 0) {
       const ts = now();
       const existing = new Set(
-        all<{ file_path: string }>('SELECT file_path FROM p10_scan_files WHERE scan_id = ?', scanId).map((r) => r.file_path),
+        (await getScansRepository().listFiles(scanId)).map((r) => r.file_path),
       );
       for (const f of filtered) {
         if (existing.has(f.path)) continue;
-        insert('p10_scan_files', {
+        await getScansRepository().createFile({
           id: newId('sf_'),
           scan_id: scanId,
           file_path: f.path,
@@ -834,30 +822,22 @@ async function runEstimation(scanId: string): Promise<void> {
           done_at: null,
         });
       }
-      run('UPDATE p10_scans SET files_total = ? WHERE id = ?', filtered.length, scanId);
+      await getScansRepository().update(scanId, { files_total: filtered.length });
     }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    run(
-      "UPDATE p10_scans SET status = 'failed', fail_reason = ? WHERE id = ?",
-      `Estimation failed: ${msg.slice(0, 500)}`,
-      scanId,
-    );
+    await getScansRepository().update(scanId, { status: 'failed', fail_reason: `Estimation failed: ${msg.slice(0, 500)}` });
   }
 }
 
 // ── Scan runner ───────────────────────────────────────────────────────────────
 
 async function runScan(scanId: string): Promise<void> {
-  const scan = one<Scan>('SELECT * FROM p10_scans WHERE id = ?', scanId);
+  const scan = (await getScansRepository().getById(scanId)) as unknown as Scan | null;
   if (!scan) return;
   if (!['queued', 'fetching', 'reviewing'].includes(scan.status)) return;
 
-  run(
-    "UPDATE p10_scans SET status = 'fetching', started_at = COALESCE(started_at, ?) WHERE id = ?",
-    now(),
-    scanId,
-  );
+  await getScansRepository().update(scanId, { status: 'fetching', started_at: scan.started_at ?? now() });
 
   const actorId = scan.created_by ?? '';
   const projectId = scan.project_id ?? '';
@@ -869,7 +849,7 @@ async function runScan(scanId: string): Promise<void> {
   if (!reviewId) {
     reviewId = generateId();
     const ts = now();
-    insert('p10_reviews', {
+    await getReviewsRepository().create({
       id: reviewId,
       project_id: projectId,
       base_ref: scan.pinned_sha ?? scan.branch ?? 'HEAD',
@@ -907,9 +887,10 @@ async function runScan(scanId: string): Promise<void> {
       merged_by: null,
       scan_id: scanId,
     });
-    run('UPDATE p10_scans SET review_id = ? WHERE id = ?', reviewId, scanId);
+    await getScansRepository().update(scanId, { review_id: reviewId });
   } else {
-    run("UPDATE p10_reviews SET status = 'running' WHERE id = ? AND status != 'running'", reviewId);
+    const linked = await getReviewsRepository().getById(reviewId);
+    if (linked && linked.status !== 'running') await getReviewsRepository().update(reviewId, { status: 'running' });
   }
 
   // Resolve background documents
@@ -923,13 +904,13 @@ async function runScan(scanId: string): Promise<void> {
   const anthropicModel = scan.model_id ?? (getSettings().defaultModel || 'claude-sonnet-4-5');
   const anthropicBaseUrl = getSettings().headroomProxyUrl || undefined;
 
-  run("UPDATE p10_scans SET status = 'reviewing' WHERE id = ?", scanId);
+  await getScansRepository().update(scanId, { status: 'reviewing' });
 
   // Process pending files
-  const pendingFiles = all<{ id: string; file_path: string; file_sha: string | null; file_size: number | null }>(
-    "SELECT id, file_path, file_sha, file_size FROM p10_scan_files WHERE scan_id = ? AND status = 'pending' ORDER BY file_path",
-    scanId,
-  );
+  const pendingFiles = (await getScansRepository().listFiles(scanId))
+    .filter((f) => f.status === 'pending')
+    .sort((a, b) => a.file_path.localeCompare(b.file_path))
+    .map((f) => ({ id: f.id, file_path: f.file_path, file_sha: f.file_sha ?? null, file_size: f.file_size ?? null }));
 
   let tokensUsed = scan.tokens_used ?? 0;
   let filesDone = scan.files_done ?? 0;
@@ -938,10 +919,7 @@ async function runScan(scanId: string): Promise<void> {
 
   for (const file of pendingFiles) {
     // Re-read current token usage
-    const current = one<{ tokens_used: number; budget_tokens: number | null; status: string }>(
-      'SELECT tokens_used, budget_tokens, status FROM p10_scans WHERE id = ?',
-      scanId,
-    );
+    const current = await getScansRepository().getById(scanId);
     if (!current || current.status === 'failed') return;
 
     tokensUsed = current.tokens_used;
@@ -956,12 +934,12 @@ async function runScan(scanId: string): Promise<void> {
     try {
       fileContent = await _scanProviders.fetchFileContent(repoId, file.file_path, file.file_sha ?? '', actorId, projectId);
     } catch {
-      run("UPDATE p10_scan_files SET status = 'skipped', done_at = ? WHERE id = ?", now(), file.id);
+      await getScansRepository().updateFile(file.id, { status: 'skipped', done_at: now() });
       continue;
     }
 
     if (!fileContent.trim()) {
-      run("UPDATE p10_scan_files SET status = 'skipped', done_at = ? WHERE id = ?", now(), file.id);
+      await getScansRepository().updateFile(file.id, { status: 'skipped', done_at: now() });
       continue;
     }
 
@@ -1001,7 +979,7 @@ async function runScan(scanId: string): Promise<void> {
         fileTokens = 0;
       }
     } catch {
-      run("UPDATE p10_scan_files SET status = 'skipped', done_at = ? WHERE id = ?", now(), file.id);
+      await getScansRepository().updateFile(file.id, { status: 'skipped', done_at: now() });
       continue;
     }
 
@@ -1012,49 +990,27 @@ async function runScan(scanId: string): Promise<void> {
     tokensUsed += fileTokens;
     filesDone++;
 
-    run(
-      "UPDATE p10_scan_files SET status = 'done', tokens_used = ?, done_at = ? WHERE id = ?",
-      fileTokens,
-      now(),
-      file.id,
-    );
-
-    run(
-      'UPDATE p10_scans SET tokens_used = ?, files_done = ? WHERE id = ?',
-      tokensUsed,
-      filesDone,
-      scanId,
-    );
+    await getScansRepository().updateFile(file.id, { status: 'done', tokens_used: fileTokens, done_at: now() });
+    await getScansRepository().update(scanId, { tokens_used: tokensUsed, files_done: filesDone });
   }
 
   // Flush accumulated review text to the linked review record and extract findings
   if (rawOutputAccumulator && reviewId) {
-    run(
-      'UPDATE p10_reviews SET raw_output = COALESCE(raw_output, \'\') || ?, files_reviewed = ? WHERE id = ?',
-      rawOutputAccumulator,
-      filesDone,
-      reviewId,
-    );
-    processReviewOutput(reviewId);
+    const target = await getReviewsRepository().getById(reviewId);
+    await getReviewsRepository().update(reviewId, {
+      raw_output: `${target?.raw_output ?? ''}${rawOutputAccumulator}`,
+      files_reviewed: filesDone,
+    });
+    await processReviewOutput(reviewId);
   }
 
   const finalStatus = budgetExhausted ? 'failed' : 'completed';
   const failReason = budgetExhausted ? 'budget_exhausted' : null;
 
-  run(
-    `UPDATE p10_scans SET status = ?, fail_reason = ?, completed_at = ? WHERE id = ?`,
-    finalStatus,
-    failReason,
-    now(),
-    scanId,
-  );
+  await getScansRepository().update(scanId, { status: finalStatus, fail_reason: failReason, completed_at: now() });
 
   if (reviewId) {
-    run(
-      "UPDATE p10_reviews SET status = ? WHERE id = ?",
-      budgetExhausted ? 'failed' : 'done',
-      reviewId,
-    );
+    await getReviewsRepository().update(reviewId, { status: budgetExhausted ? 'failed' : 'done' });
   }
 }
 
@@ -1083,6 +1039,8 @@ function requireAdmin(req: PortalRequest, res: PortalResponse): boolean {
 // ── Route registration ────────────────────────────────────────────────────────
 
 export function registerScanRoutes(): void {
+  registerBackgroundJob('scan-estimate', async (a) => { await runEstimation(String(a.id)); });
+  registerBackgroundJob('scan-run', async (a) => { await runScan(String(a.id)); });
 
   // ── GET /api/scans/allowlist ──────────────────────────────────────────────
   router.get('/api/scans/allowlist', requireAuth((req: PortalRequest, res: PortalResponse): void => {
@@ -1213,16 +1171,20 @@ export function registerScanRoutes(): void {
       params.push(`%${search}%`, `%${search}%`);
     }
 
-    const where = conditions.join(' AND ');
-
-    const total = (one<{ n: number }>(`SELECT COUNT(*) AS n FROM p10_scans s WHERE ${where}`, ...params) ?? { n: 0 }).n;
-
-    const scans = all<Scan>(
-      `SELECT s.* FROM p10_scans s WHERE ${where} ORDER BY s.created_at DESC LIMIT ? OFFSET ?`,
-      ...params,
-      limit,
-      offset,
-    );
+    const all = (await getScansRepository().listByProject(req.params.id, { limit: 100000, offset: 0 })).items;
+    const needle = search ? search.toLowerCase() : '';
+    const matching = all.filter((x) => {
+      if (runBy === 'me') { if (x.created_by !== req.user!.id) return false; }
+      else if (runBy !== 'everyone' && x.created_by !== runBy) return false;
+      if (status && x.status !== status) return false;
+      if (repoId && x.repo_id !== repoId) return false;
+      if (dateFrom && x.created_at < dateFrom) return false;
+      if (dateTo && x.created_at > dateTo) return false;
+      if (needle && !`${x.branch ?? ''}\n${x.include_paths ?? ''}`.toLowerCase().includes(needle)) return false;
+      return true;
+    }).sort((x, y) => y.created_at.localeCompare(x.created_at));
+    const total = matching.length;
+    const scans = matching.slice(offset, offset + limit);
 
     sendJson(res, 200, { scans, total, page, limit });
   });
@@ -1301,10 +1263,10 @@ export function registerScanRoutes(): void {
 
     appendAudit(getDb(), req.user!.id, 'scan.create', `scan:${id}`, { projectId: req.params.id, repoId, branch }, req.ip);
 
-    sendJson(res, 201, { scan });
+    // Start estimation in the background (before replying: on Lambda the instance freezes after the reply).
+    await runInBackground('scan-estimate', { id });
 
-    // Start estimation in background
-    setImmediate(() => { runEstimation(id).catch(() => { /* best effort */ }); });
+    sendJson(res, 201, { scan });
   }));
 
   // ── GET /api/projects/:id/scans/:sid ──────────────────────────────────────
@@ -1394,11 +1356,10 @@ export function registerScanRoutes(): void {
 
     appendAudit(getDb(), req.user!.id, 'scan.confirm', `scan:${scan.id}`, { budgetTokens }, req.ip);
 
+    await runInBackground('scan-run', { id: scan.id });
+
     const updated = await getScansRepository().getById(scan.id);
     sendJson(res, 200, { scan: updated });
-
-    // Start scan in background
-    setImmediate(() => { runScan(scan.id).catch(() => { /* best effort */ }); });
   }));
 
   // ── POST /api/projects/:id/scans/:sid/resume ──────────────────────────────
@@ -1439,10 +1400,7 @@ export function registerScanRoutes(): void {
       return;
     }
 
-    const pendingCount = (one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM p10_scan_files WHERE scan_id = ? AND status = 'pending'",
-      scan.id,
-    ) ?? { n: 0 }).n;
+    const pendingCount = (await getScansRepository().listFiles(scan.id)).filter((f) => f.status === 'pending').length;
 
     if (pendingCount === 0) {
       sendJson(res, 400, { error: 'No pending files to resume. All files have been processed.' });
@@ -1453,10 +1411,9 @@ export function registerScanRoutes(): void {
 
     appendAudit(getDb(), req.user!.id, 'scan.resume', `scan:${scan.id}`, { newBudget }, req.ip);
 
+    await runInBackground('scan-run', { id: scan.id });
+
     const updated = await getScansRepository().getById(scan.id);
     sendJson(res, 200, { scan: updated });
-
-    // Continue scan in background
-    setImmediate(() => { runScan(scan.id).catch(() => { /* best effort */ }); });
   }));
 }

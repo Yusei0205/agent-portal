@@ -237,7 +237,7 @@ describe('processReviewOutput', () => {
   before(async () => { await createTestServer(); });
   after(async () => { await cleanup(); });
 
-  it('creates findings from JSON block in review summary', () => {
+  it('creates findings from JSON block in review summary', async () => {
     const pid = insertProject('processOutput test');
     const rid = generateId();
     run(
@@ -252,7 +252,7 @@ describe('processReviewOutput', () => {
       ] }),
       rid,
     );
-    const count = processReviewOutput(rid);
+    const count = await processReviewOutput(rid);
     assert.equal(count, 2);
     const findings = all('SELECT * FROM p10_findings WHERE review_id = ?', rid);
     assert.equal(findings.length, 2);
@@ -262,7 +262,7 @@ describe('processReviewOutput', () => {
     assert.equal(f0!.line_number, 42);
   });
 
-  it('deduplicates findings on repeated calls', () => {
+  it('deduplicates findings on repeated calls', async () => {
     const pid = insertProject('dedup test');
     const rid = generateId();
     run(
@@ -273,11 +273,11 @@ describe('processReviewOutput', () => {
     run(`UPDATE p10_reviews SET summary = ? WHERE id = ?`,
       '```json\n[{"file":"a.ts","line":1,"severity":"low","title":"T","body":"B"}]\n```', rid,
     );
-    assert.equal(processReviewOutput(rid), 1);
-    assert.equal(processReviewOutput(rid), 0, 'should not duplicate');
+    assert.equal(await processReviewOutput(rid), 1);
+    assert.equal(await processReviewOutput(rid), 0, 'should not duplicate');
   });
 
-  it('parses markdown table findings', () => {
+  it('parses markdown table findings', async () => {
     const pid = insertProject('markdown test');
     const rid = generateId();
     run(
@@ -289,7 +289,7 @@ describe('processReviewOutput', () => {
       `| filepath | line | severity | title | body |\n|----------|------|----------|-------|------|\n| app.ts | 10 | critical | XSS | Unsanitized |\n| utils.ts | 5 | low | Style | Minor |`,
       rid,
     );
-    assert.ok(processReviewOutput(rid) >= 1);
+    assert.ok(await processReviewOutput(rid) >= 1);
   });
 });
 

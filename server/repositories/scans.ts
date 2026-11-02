@@ -55,6 +55,8 @@ export interface ScanFileRecord {
   status: string;
   tokens_used: number;
   done_at: string | null;
+  file_sha?: string | null;
+  file_size?: number | null;
 }
 
 export interface CreateScanInput {
@@ -99,6 +101,8 @@ export interface CreateScanFileInput {
   status: string;
   tokens_used: number;
   done_at: string | null;
+  file_sha?: string | null;
+  file_size?: number | null;
 }
 
 export interface ScansRepository {

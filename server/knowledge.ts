@@ -11,6 +11,7 @@
  *   POST   /api/projects/:id/knowledge/decisions   — add decision
  */
 
+import { registerBackgroundJob, runInBackground } from './background-jobs.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
@@ -119,6 +120,8 @@ async function processKnowledgeDoc(
 ): Promise<void> {
   const repo = getKnowledgeRepository();
   try {
+    // May run in another Lambda invocation than the upload: bring the file back from S3 first.
+    await restoreFile(filePath);
     const markdown = await convertToMarkdown(filePath, mimeType);
 
     // Save markdown
@@ -143,6 +146,9 @@ async function processKnowledgeDoc(
 // ── Route registration ────────────────────────────────────────────────────────
 
 export function registerKnowledgeRoutes(): void {
+  registerBackgroundJob('knowledge-process', async (a) => {
+    await processKnowledgeDoc(String(a.docId), String(a.projectId), String(a.filePath), String(a.mimeType), String(a.mdPath));
+  });
 
   // GET /api/projects/:id/knowledge
   router.get('/api/projects/:id/knowledge', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
@@ -202,13 +208,11 @@ export function registerKnowledgeRoutes(): void {
         created_at: now(),
       });
 
-      sendJson(res, 200, { doc });
-
-      // Background conversion
+      // Background conversion (started before replying: on Lambda the instance freezes after the reply).
       const mdPath = knowledgeDir(slug, `docs/md/${docId}.md`);
-      setImmediate(() => {
-        processKnowledgeDoc(docId, req.params.id, filePath, mimeType, mdPath).catch(() => {});
-      });
+      await runInBackground('knowledge-process', { docId, projectId: req.params.id, filePath, mimeType, mdPath });
+
+      sendJson(res, 200, { doc });
     },
   );
 

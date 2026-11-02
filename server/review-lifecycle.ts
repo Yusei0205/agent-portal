@@ -8,6 +8,11 @@
  * Imported by server/index.ts to activate at startup.
  */
 
+import { getReviewsRepository } from './repositories/reviews.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
+import { getDiagramRepository } from './repositories/diagrams-data.ts';
+import { getGeneratedDocRepository } from './repositories/generated-docs-data.ts';
+import { getPresentationRepository } from './repositories/presentations-data.ts';
 import path from 'node:path';
 import { one, all, run as dbRun } from './db.ts';
 import type { Row } from './db.ts';
@@ -16,7 +21,7 @@ import { setRunLifecycleHook } from './agent/runner.ts';
 import { processReviewOutput, triggerAutoPost, getPrCommentMode } from './review.ts';
 import { config } from './config.ts';
 
-import { getProjectRow, getWorkflowRow } from './project-access.ts';
+import { getLatestRunRow, getProjectRow, getWorkflowRow } from './project-access.ts';
 // ── Run-log entry ─────────────────────────────────────────────────────────────
 
 export interface RunLogEntry {
@@ -36,14 +41,12 @@ export interface RunLogEntry {
 
 /**
  * Concatenate the full (untruncated) text from all assistant-text events for a
- * run. This is stored as the review summary so processReviewOutput() can parse
+ * run. This is stored as the review summary so await processReviewOutput() can parse
  * findings from it.
  */
-function collectAssistantText(runId: string): string {
-  const events = all<Row>(
-    "SELECT payload FROM p6_events WHERE run_id = ? AND type = 'assistant-text' ORDER BY id ASC",
-    runId,
-  );
+async function collectAssistantText(runId: string): Promise<string> {
+  const events = (await getSessionsRepository().listRunEvents(runId, 20000))
+    .filter((e) => e.type === 'assistant-text') as unknown as Row[];
   const parts: string[] = [];
   for (const ev of events) {
     try {
@@ -57,7 +60,7 @@ function collectAssistantText(runId: string): string {
 
 // ── Log builder ───────────────────────────────────────────────────────────────
 
-function buildRunLog(runId: string): {
+async function buildRunLog(runId: string): Promise<{
   log: RunLogEntry[];
   toolCalls: number;
   llmRequests: number;
@@ -65,11 +68,8 @@ function buildRunLog(runId: string): {
   filesReviewed: number;
   cacheWriteTokens: number;
   cacheReadTokens: number;
-} {
-  const events = all<Row>(
-    'SELECT type, payload, created_at FROM p6_events WHERE run_id = ? ORDER BY id ASC',
-    runId,
-  );
+}> {
+  const events = (await getSessionsRepository().listRunEvents(runId, 20000)) as unknown as Row[];
 
   const log: RunLogEntry[] = [];
   let toolCalls = 0;
@@ -155,29 +155,13 @@ export async function handleReviewLifecycle(
   runId: string,
   event: 'start' | 'done' | 'failed' | 'cancelled',
 ): Promise<void> {
-  interface ReviewRow {
-    id: string;
-    started_at: string | null;
-    post_mode: string;
-    project_id: string | null;
-    provider_id: string | null;
-    model_id: string | null;
-    status: string;
-  }
-
-  const review = one<ReviewRow>(
-    'SELECT id, started_at, post_mode, project_id, provider_id, model_id, status FROM p10_reviews WHERE workflow_id = ?',
-    workflowId,
-  );
+  const reviews = getReviewsRepository();
+  const review = await reviews.getByWorkflowId(workflowId);
   if (!review) return;
 
   if (event === 'start') {
     if (review.status !== 'running') {
-      dbRun(
-        "UPDATE p10_reviews SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?",
-        now(),
-        review.id,
-      );
+      await reviews.update(review.id, { status: 'running', started_at: review.started_at ?? now() });
     }
     return;
   }
@@ -186,18 +170,15 @@ export async function handleReviewLifecycle(
   // The review never completed, so mark it failed so it can be deleted or re-run.
   if (event === 'cancelled') {
     if (review.status === 'running' || review.status === 'pending') {
-      dbRun(
-        "UPDATE p10_reviews SET status = 'failed' WHERE id = ?",
-        review.id,
-      );
+      await reviews.update(review.id, { status: 'failed' });
     }
     return;
   }
 
   const succeeded = event === 'done';
 
-  // Read aggregate token counts from p6_runs
-  const runRow = one<Row>('SELECT * FROM p6_runs WHERE id = ?', runId);
+  // Read aggregate token counts from the run
+  const runRow = (await getSessionsRepository().getRunById(runId)) as unknown as Row | null;
   const inputTokens = Number(runRow?.input_tokens ?? 0);
   const outputTokens = Number(runRow?.output_tokens ?? 0);
 
@@ -221,62 +202,44 @@ export async function handleReviewLifecycle(
     filesReviewed,
     cacheWriteTokens,
     cacheReadTokens,
-  } = buildRunLog(runId);
+  } = await buildRunLog(runId);
 
   // provider_id / model_id: prefer what's already on the review (set at creation),
   // fall back to what the run row reports
   const providerId = review.provider_id ?? (String(runRow?.provider ?? '') || null);
   const modelId = review.model_id ?? (String(runRow?.model ?? '') || null);
 
-  dbRun(
-    `UPDATE p10_reviews SET
-       status          = ?,
-       started_at      = ?,
-       duration_ms     = ?,
-       input_tokens    = ?,
-       cache_write_tokens = ?,
-       cache_read_tokens  = ?,
-       output_tokens   = ?,
-       llm_requests    = ?,
-       retry_count     = ?,
-       tool_calls      = ?,
-       files_reviewed  = ?,
-       run_log         = ?,
-       provider_id     = COALESCE(provider_id, ?),
-       model_id        = COALESCE(model_id, ?)
-     WHERE id = ?`,
-    succeeded ? 'done' : 'failed',
-    startedAt,
-    durationMs,
-    inputTokens,
-    cacheWriteTokens,
-    cacheReadTokens,
-    outputTokens,
-    llmRequests,
-    retryCount,
-    toolCalls,
-    filesReviewed,
-    JSON.stringify(log),
-    providerId,
-    modelId,
-    review.id,
-  );
+  await reviews.update(review.id, {
+    status: succeeded ? 'done' : 'failed',
+    started_at: startedAt,
+    duration_ms: durationMs,
+    input_tokens: inputTokens,
+    cache_write_tokens: cacheWriteTokens,
+    cache_read_tokens: cacheReadTokens,
+    output_tokens: outputTokens,
+    llm_requests: llmRequests,
+    retry_count: retryCount,
+    tool_calls: toolCalls,
+    files_reviewed: filesReviewed,
+    run_log: JSON.stringify(log),
+    provider_id: providerId,
+    model_id: modelId,
+  });
 
   if (succeeded) {
     // Capture the agent's full text output.
-    // raw_output  — full untruncated transcript, used by processReviewOutput() for
+    // raw_output  — full untruncated transcript, used by await processReviewOutput() for
     //               finding extraction and kept for audit/re-parsing.
     // summary     — bounded human-readable snippet (≤ 4 KB) for list-view display.
-    const assistantText = collectAssistantText(runId);
+    const assistantText = await collectAssistantText(runId);
     if (assistantText) {
-      dbRun('UPDATE p10_reviews SET raw_output = ? WHERE id = ?', assistantText, review.id);
       const humanSummary = assistantText.length > 4000
         ? assistantText.slice(0, 4000) + '\n…[truncated]'
         : assistantText;
-      dbRun('UPDATE p10_reviews SET summary = ? WHERE id = ?', humanSummary, review.id);
+      await reviews.update(review.id, { raw_output: assistantText, summary: humanSummary });
     }
 
-    // Derive the run's work directory so processReviewOutput() can also scan
+    // Derive the run's work directory so await processReviewOutput() can also scan
     // any findings files the agent wrote (findings.json, review.md, etc.).
     const projectRow = review.project_id
       ? (await getProjectRow(review.project_id))
@@ -285,16 +248,13 @@ export async function handleReviewLifecycle(
     const workDir = path.join(config.dataDir, 'projects', slug, 'work', runId);
 
     // Parse findings from whatever the agent produced.
-    const findingCount = processReviewOutput(review.id, workDir);
+    const findingCount = await processReviewOutput(review.id, workDir);
 
     // If the agent produced no text output at all (not just zero findings),
     // the run cannot be considered a valid review — mark it failed so an
     // empty finding set is never mistaken for a clean review.
     if (!assistantText && findingCount === 0) {
-      dbRun(
-        "UPDATE p10_reviews SET status = 'failed' WHERE id = ?",
-        review.id,
-      );
+      await reviews.update(review.id, { status: 'failed' });
       return;
     }
 
@@ -329,60 +289,46 @@ async function handleArtifactLifecycle(
   const wf = await getWorkflowRow(workflowId);
   const workDir = wf ? String(wf.work_dir ?? '') : '';
 
+  const projectId = wf?.project_id ? String(wf.project_id) : null;
+  const diagrams = projectId ? ((await getDiagramRepository().listByProject(projectId)) as unknown as Row[]) : [];
+  const gdocs = projectId ? ((await getGeneratedDocRepository().listByProject(projectId)) as unknown as Row[]) : [];
+  const diagram = diagrams.find((d) => d.pending_workflow_id === workflowId);
+  const gdoc = gdocs.find((d) => d.workflow_id === workflowId && d.status === 'generating');
+  const pres = (await getPresentationRepository().getByWorkflowId(workflowId)) as unknown as Row | null;
+
   if (event === 'done') {
-    // Diagrams
-    const diagram = one<Row>(
-      'SELECT id FROM diagrams WHERE pending_workflow_id = ?',
-      workflowId,
-    );
+    const latestRunId = async (): Promise<string> => {
+      const r = await getLatestRunRow(workflowId);
+      return r ? String(r.id) : '';
+    };
+
     if (diagram) {
-      import('./diagrams.ts').then(({ processDiagramOutput }) => {
-        const runRow = one<Row>('SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1', workflowId);
-        const runId = runRow ? String(runRow.id) : '';
-        processDiagramOutput(workflowId, runId, workDir).catch(() => { /* best effort */ });
+      import('./diagrams.ts').then(async ({ processDiagramOutput }) => {
+        await processDiagramOutput(workflowId, await latestRunId(), workDir).catch(() => { /* best effort */ });
       }).catch(() => { /* best effort */ });
     }
-
-    // Generated docs (linked by workflow_id column added in M43)
-    const gdoc = one<Row>(
-      "SELECT id FROM generated_docs WHERE workflow_id = ? AND status = 'generating'",
-      workflowId,
-    );
     if (gdoc) {
-      import('./generated-docs.ts').then(({ processDocOutput }) => {
-        const runRow = one<Row>('SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1', workflowId);
-        const runId = runRow ? String(runRow.id) : '';
-        processDocOutput(workflowId, runId, workDir).catch(() => { /* best effort */ });
+      import('./generated-docs.ts').then(async ({ processDocOutput }) => {
+        await processDocOutput(workflowId, await latestRunId(), workDir).catch(() => { /* best effort */ });
       }).catch(() => { /* best effort */ });
     }
-
-    // Presentations
-    const pres = one<Row>(
-      'SELECT id FROM presentations WHERE workflow_id = ?',
-      workflowId,
-    );
     if (pres) {
-      import('./presentations.ts').then(({ processPresentationOutput }) => {
-        const runRow = one<Row>('SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1', workflowId);
-        const runId = runRow ? String(runRow.id) : '';
-        processPresentationOutput(workflowId, runId, workDir).catch(() => { /* best effort */ });
+      import('./presentations.ts').then(async ({ processPresentationOutput }) => {
+        await processPresentationOutput(workflowId, await latestRunId(), workDir).catch(() => { /* best effort */ });
       }).catch(() => { /* best effort */ });
     }
   } else {
     // failed or cancelled — mark artifacts as failed
     try {
-      dbRun(
-        "UPDATE diagrams SET status = 'error', error = 'Generation failed', pending_workflow_id = NULL WHERE pending_workflow_id = ?",
-        workflowId,
-      );
-      dbRun(
-        "UPDATE generated_docs SET status = 'failed', error = 'Generation failed' WHERE workflow_id = ? AND status = 'generating'",
-        workflowId,
-      );
-      dbRun(
-        "UPDATE presentations SET status = 'failed', error = 'Generation failed' WHERE workflow_id = ? AND status = 'generating'",
-        workflowId,
-      );
+      if (diagram) {
+        await getDiagramRepository().update(String(diagram.id), { status: 'error', error: 'Generation failed', pending_workflow_id: null });
+      }
+      if (gdoc) {
+        await getGeneratedDocRepository().update(String(gdoc.id), { status: 'failed', error: 'Generation failed' });
+      }
+      if (pres && pres.status === 'generating') {
+        await getPresentationRepository().update(String(pres.id), { status: 'failed', error: 'Generation failed' });
+      }
     } catch { /* best effort */ }
   }
 }

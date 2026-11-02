@@ -43,6 +43,8 @@ function toFile(row: Row): ScanFileRecord {
     id: String(row.id), scan_id: String(row.scan_id ?? ''), file_path: String(row.file_path ?? ''),
     status: String(row.status ?? 'pending'), tokens_used: Number(row.tokens_used ?? 0),
     done_at: row.done_at != null ? String(row.done_at) : null,
+    file_sha: row.file_sha != null ? String(row.file_sha) : null,
+    file_size: row.file_size != null ? Number(row.file_size) : null,
   };
 }
 
@@ -121,6 +123,7 @@ export class SqliteScansRepository implements ScansRepository {
     insert('p10_scan_files', {
       id: input.id, scan_id: input.scan_id, file_path: input.file_path,
       status: input.status, tokens_used: input.tokens_used, done_at: input.done_at,
+      file_sha: input.file_sha ?? null, file_size: input.file_size ?? null,
     });
     return toFile(one<Row>('SELECT * FROM p10_scan_files WHERE id = ?', input.id)!);
   }

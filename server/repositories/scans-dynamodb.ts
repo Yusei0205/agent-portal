@@ -58,6 +58,8 @@ function itemToFile(item: Record<string, AttributeValue>): ScanFileRecord {
     id: getString(item, 'id') ?? '', scan_id: getString(item, 'scan_id') ?? '',
     file_path: getString(item, 'file_path') ?? '', status: getString(item, 'status') ?? 'pending',
     tokens_used: getNumber(item, 'tokens_used'), done_at: getString(item, 'done_at'),
+    file_sha: getString(item, 'file_sha'),
+    file_size: item['file_size'] ? getNumber(item, 'file_size') : null,
   };
 }
 
@@ -219,8 +221,9 @@ export class DynamoDbScansRepository implements ScansRepository {
     const item: Record<string, AttributeValue> = {
       PK: av(filesPk(input.scan_id)), SK: av(fileSk(input.id)),
       id: av(input.id), entityType: av('scanfile'),
-      ...marshalItem({ scan_id: input.scan_id, file_path: input.file_path, status: input.status, done_at: input.done_at }),
+      ...marshalItem({ scan_id: input.scan_id, file_path: input.file_path, status: input.status, done_at: input.done_at, file_sha: input.file_sha ?? null }),
       tokens_used: { N: String(input.tokens_used) },
+      ...(input.file_size != null ? { file_size: { N: String(input.file_size) } } : {}),
     };
     await this.client.send(new PutItemCommand({ TableName: table(), Item: item }));
     return itemToFile(item);

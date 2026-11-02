@@ -555,6 +555,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         created_at: input.created_at,
         updated_at: input.updated_at,
         parent_id: input.parent_id ?? null,
+        kind: input.kind ?? null,
         wfGsiSk,
         statusGsiSk,
       }),

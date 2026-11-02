@@ -38,6 +38,7 @@ function toReview(row: Row): ReviewRecord {
     merged_at: row.merged_at != null ? String(row.merged_at) : null,
     merged_by: row.merged_by != null ? String(row.merged_by) : null,
     head_commit_sha: row.head_commit_sha != null ? String(row.head_commit_sha) : null,
+    scan_id: row.scan_id != null ? String(row.scan_id) : null,
   };
 }
 
@@ -69,6 +70,7 @@ export class SqliteReviewsRepository implements ReviewsRepository {
       tool_calls: input.tool_calls, files_reviewed: input.files_reviewed, duration_ms: input.duration_ms,
       started_at: input.started_at, merged_at: input.merged_at, merged_by: input.merged_by,
       head_commit_sha: input.head_commit_sha,
+      scan_id: input.scan_id ?? null,
     });
     return toReview(one<Row>('SELECT * FROM p10_reviews WHERE id = ?', input.id)!);
   }

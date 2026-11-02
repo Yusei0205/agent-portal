@@ -160,6 +160,8 @@ export interface CreateWorkflowInput {
   created_at: string;
   updated_at: string;
   parent_id?: string | null;
+  /** 'review' for code-review sessions; null for ordinary sessions. */
+  kind?: string | null;
 }
 
 export interface CreateRunInput {

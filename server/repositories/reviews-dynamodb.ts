@@ -47,6 +47,7 @@ function itemToReview(item: Record<string, AttributeValue>): ReviewRecord {
     duration_ms: item.duration_ms?.N != null ? Number(item.duration_ms.N) : null,
     started_at: getString(item, 'started_at'), merged_at: getString(item, 'merged_at'),
     merged_by: getString(item, 'merged_by'), head_commit_sha: getString(item, 'head_commit_sha'),
+    scan_id: getString(item, 'scan_id'),
   };
 }
 
@@ -117,6 +118,7 @@ export class DynamoDbReviewsRepository implements ReviewsRepository {
         model_id: input.model_id, jira_context: input.jira_context, run_log: input.run_log,
         started_at: input.started_at, merged_at: input.merged_at, merged_by: input.merged_by,
         head_commit_sha: input.head_commit_sha,
+        scan_id: input.scan_id ?? null,
       }),
       input_tokens: { N: String(input.input_tokens) }, cache_write_tokens: { N: String(input.cache_write_tokens) },
       cache_read_tokens: { N: String(input.cache_read_tokens) }, output_tokens: { N: String(input.output_tokens) },

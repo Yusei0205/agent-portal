@@ -261,6 +261,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
       created_at: input.created_at,
       updated_at: input.updated_at,
       parent_id: input.parent_id ?? null,
+      kind: input.kind ?? null,
     });
     // If this is a child workflow, notify the repository of the child-count change.
     // In SQLite mode this is a no-op (child_count is computed via COUNT(*) subquery),
