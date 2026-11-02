@@ -30,7 +30,7 @@ import type { ProgressInfo } from './git-progress.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getGitConnectionsRepository } from './repositories/git-connections.ts';
 
-import { getMemberRow, getProjectRow } from './project-access.ts';
+import { getMemberRow, getProjectRow, getRepoRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Repository {
@@ -123,10 +123,10 @@ export async function repoDir(repo: Repo): Promise<string> {
 }
 
 /** Look up a repo by id. Throws notFound if missing. */
-export function getRepo(id: string): Repo {
-  const r = one<Repo>('SELECT * FROM repositories WHERE id = ?', id);
+export async function getRepo(id: string): Promise<Repo> {
+  const r = await getRepoRow(id);
   if (!r) throw notFound('Repository not found');
-  return r;
+  return r as unknown as Repo;
 }
 
 /** Get the project slug for a project id. */

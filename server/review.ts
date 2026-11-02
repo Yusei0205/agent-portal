@@ -36,7 +36,7 @@ import { buildXlsx, buildDocx } from './docgen.ts';
 import { decrypt } from './secrets.ts';
 import { config } from './config.ts';
 
-import { getMemberRow, getProjectRow } from './project-access.ts';
+import { getMemberRow, getProjectRow, getRepoInfo } from './project-access.ts';
 import { getProjectRepository } from './repositories/projects.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1079,10 +1079,7 @@ async function checkAutoPostShouldSkip(
 ): Promise<{ skip: boolean; reason?: string }> {
   if (review.source_sha && review.repo_id && review.pr_number != null) {
     try {
-      const repo = one<{ url: string; provider: string }>(
-        'SELECT url, provider FROM repositories WHERE id = ?',
-        review.repo_id,
-      );
+      const repo = await getRepoInfo(review.repo_id);
       if (repo) {
         let currentHead: string | null = null;
         if (repo.provider === 'github') {
@@ -1148,7 +1145,7 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
 
   const ts = now();
   const repo = review.repo_id
-    ? one<{ url: string; provider: string }>('SELECT url, provider FROM repositories WHERE id = ?', review.repo_id)
+    ? (await getRepoInfo(review.repo_id))
     : null;
 
   if (!repo || !review.source_sha || review.pr_number == null) {
@@ -1330,7 +1327,7 @@ export function registerReviewRoutes(): void {
       const verdict = computeMergeVerdict(r as unknown as Review, findings as unknown as Array<Pick<Finding, 'accepted' | 'severity'>>, getMergeThreshold());
       const { estimatedUsd } = computeCost(r as unknown as Review, rateCard);
       const repoName = r.repo_id
-        ? one<{ name: string }>('SELECT name FROM repositories WHERE id = ?', r.repo_id)?.name ?? null
+        ? (await getRepoInfo(r.repo_id))?.name ?? null
         : null;
       return {
         id: r.id, project_id: r.project_id, base_ref: r.base_ref, head_ref: r.head_ref,
@@ -1462,10 +1459,7 @@ export function registerReviewRoutes(): void {
     if (!headRef) { sendJson(res, 400, { error: 'headRef is required' }); return; }
 
     if (repoId) {
-      const repo = one<{ id: string; project_id: string }>(
-        'SELECT id, project_id FROM repositories WHERE id = ?',
-        repoId,
-      );
+      const repo = await getRepoInfo(repoId);
       if (!repo || repo.project_id !== req.params.id) {
         sendJson(res, 400, { error: 'That repository belongs to another project' });
         return;
@@ -1492,7 +1486,7 @@ export function registerReviewRoutes(): void {
     let resolvedDestSha = destSha;
     if ((!resolvedSourceSha || !resolvedDestSha) && repoId && prNumber != null) {
       try {
-        const repoRow = one<{ url: string; provider: string }>('SELECT url, provider FROM repositories WHERE id = ?', repoId);
+        const repoRow = await getRepoInfo(repoId);
         if (repoRow?.provider === 'github') {
           const ownerRepo = parseGitHubOwnerRepo(repoRow.url);
           const ghToken = findGitHubToken(req.user!.id);
@@ -1711,7 +1705,7 @@ export function registerReviewRoutes(): void {
     }
 
     // Load the repo now — we definitely need it
-    const repo = review.repo_id ? one<{ url: string; provider: string }>('SELECT url, provider FROM repositories WHERE id = ?', review.repo_id) : null;
+    const repo = review.repo_id ? (await getRepoInfo(review.repo_id)) : null;
 
     if (!repo) {
       sendJson(res, 400, { error: 'Review has no associated repository', reason: 'no_repository' });
@@ -1893,7 +1887,7 @@ export function registerReviewRoutes(): void {
       return;
     }
 
-    const repo = one<{ url: string; provider: string }>('SELECT url, provider FROM repositories WHERE id = ?', review.repo_id);
+    const repo = await getRepoInfo(review.repo_id);
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
     // Item 2b: refuse merge when source_sha is unknown — we cannot pin the merge
@@ -2070,10 +2064,7 @@ export function registerReviewRoutes(): void {
     let refreshedDestSha = parent.dest_sha;
     if (parent.repo_id && parent.pr_number != null) {
       try {
-        const repoRow = one<{ url: string; provider: string }>(
-          'SELECT url, provider FROM repositories WHERE id = ?',
-          parent.repo_id,
-        );
+        const repoRow = await getRepoInfo(parent.repo_id);
         if (repoRow?.provider === 'github') {
           const ownerRepo = parseGitHubOwnerRepo(repoRow.url);
           const token = findGitHubToken(req.user!.id);

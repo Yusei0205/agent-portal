@@ -162,7 +162,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   const agentEnv = await resolveCredentialEnv('claude-code', run.credentialOwnerId, run.credentialId);
 
   // ── Materialised home dir (F5) ─────────────────────────────────────────────
-  // materialiseForRun() is called before the engine by runner.ts.
+  // await materialiseForRun() is called before the engine by runner.ts.
   // Set HOME (and USERPROFILE on Windows) so claude-code reads agents/, steering/,
   // and mcp.json from the materialised directory rather than the portal process home.
   const homeDir = getRunHomeDir(run.runId);

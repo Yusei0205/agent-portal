@@ -48,6 +48,7 @@ import { appendAudit, auditRaw } from './audit.ts';
 import { getDb } from './db.ts';
 import { getUserConfigRepository } from './repositories/user-config.ts';
 
+import { getWorkflowRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const VALID_FOLDERS = ['kiro', 'claude', 'aws'] as const;
@@ -859,7 +860,7 @@ export async function materialiseForRun(
   workDir: string,
 ): Promise<void> {
   try {
-    const wf = one<Row>('SELECT created_by FROM p6_workflows WHERE id = ?', workflowId);
+    const wf = await getWorkflowRow(workflowId);
     if (!wf || !wf.created_by) return;
     const userId = String(wf.created_by);
 

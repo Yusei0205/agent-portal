@@ -16,7 +16,7 @@ import { setRunLifecycleHook } from './agent/runner.ts';
 import { processReviewOutput, triggerAutoPost, getPrCommentMode } from './review.ts';
 import { config } from './config.ts';
 
-import { getProjectRow } from './project-access.ts';
+import { getProjectRow, getWorkflowRow } from './project-access.ts';
 // ── Run-log entry ─────────────────────────────────────────────────────────────
 
 export interface RunLogEntry {
@@ -310,7 +310,7 @@ export async function handleReviewLifecycle(
 // Register hook when this module is imported
 setRunLifecycleHook(async (workflowId, runId, event) => {
   await handleReviewLifecycle(workflowId, runId, event);
-  handleArtifactLifecycle(workflowId, event);
+  await handleArtifactLifecycle(workflowId, event);
 });
 
 // ── Artifact lifecycle (diagrams / generated-docs / presentations) ────────────
@@ -320,13 +320,13 @@ setRunLifecycleHook(async (workflowId, runId, event) => {
  * (diagram, generated_doc, presentation) that references this workflow.
  * This runs fire-and-forget so it never blocks the runner.
  */
-function handleArtifactLifecycle(
+async function handleArtifactLifecycle(
   workflowId: string,
   event: 'start' | 'done' | 'failed' | 'cancelled',
-): void {
+): Promise<void> {
   if (event === 'start') return;
 
-  const wf = one<Row>('SELECT work_dir FROM p6_workflows WHERE id = ?', workflowId);
+  const wf = await getWorkflowRow(workflowId);
   const workDir = wf ? String(wf.work_dir ?? '') : '';
 
   if (event === 'done') {

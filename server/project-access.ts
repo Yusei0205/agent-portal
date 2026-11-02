@@ -48,3 +48,8 @@ export async function getRepoRow(repoId: string): Promise<Row | undefined> {
   const r = await getGitReposRepository().getById(repoId);
   return r ? (r as unknown as Row) : undefined;
 }
+
+/** A repository connection record (typed), or undefined. */
+export async function getRepoInfo(repoId: string) {
+  return (await getGitReposRepository().getById(repoId)) ?? undefined;
+}
