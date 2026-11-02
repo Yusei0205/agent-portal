@@ -23,6 +23,7 @@ import { checkDelegationChildIdleStop } from './delegation.ts';
 import { getSessionBrowserState, shutdownSessionBrowser } from './agent/browser-manager.ts';
 import { getSetting } from './settings.ts';
 import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
 
 // ── Idle stop ─────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,9 @@ export function checkIdleSessions(): void {
     const timeoutMinutes = getIdleTimeoutMinutes();
     const cutoff = new Date(Date.now() - timeoutMinutes * 60_000).toISOString();
 
+    // S1-TODO(sessions): listIdleWorkflows is a no-op in DynamoDB mode.
+    // Idle detection requires cross-project last_turn_at queries not yet in the GSI.
+    // In SQLite mode this continues to use db.ts directly for performance.
     const idleSessions = all<Row>(
       `SELECT id, project_id FROM p6_workflows
         WHERE status IN ('done', 'pending')
@@ -66,25 +70,22 @@ export function checkIdleSessions(): void {
       cutoff,
     );
 
+    const repo = getSessionsRepository();
     for (const session of idleSessions) {
       const wid = String(session.id);
       const projectId = session.project_id ? String(session.project_id) : null;
 
-      dbRun(
-        `UPDATE p6_workflows
-            SET status = 'paused', stop_reason = 'idle', updated_at = ?
-          WHERE id = ?`,
-        now(),
-        wid,
-      );
+      // Update workflow status (fire-and-forget repo call)
+      const updateTs = now();
+      repo.updateWorkflow(wid, { status: 'paused', stop_reason: 'idle', updated_at: updateTs }).catch(() => {});
 
-      insert('p6_workflow_events', {
+      repo.appendWorkflowEvent({
         workflow_id: wid,
         kind: 'system',
         body: `Session stopped — idle for ${timeoutMinutes} minutes`,
         data: JSON.stringify({ reason: 'idle', timeoutMinutes }),
-        created_at: now(),
-      });
+        created_at: updateTs,
+      }).catch(() => {});
 
       appendAudit(
         getDb(),
@@ -95,23 +96,16 @@ export function checkIdleSessions(): void {
         null,
       );
 
-      // Shut down the live browser for this session (fire-and-forget)
       shutdownSessionBrowser(wid).catch(() => {/* non-fatal */});
 
       if (projectId) {
-        emit(projectId, {
-          type: 'workflow.idle-stopped',
-          workflowId: wid,
-          timeoutMinutes,
-        });
+        emit(projectId, { type: 'workflow.idle-stopped', workflowId: wid, timeoutMinutes });
         emit(projectId, { type: 'workflow.updated', workflowId: wid, status: 'paused' });
       }
     }
 
-    // Also check child session idle stop (F7)
     checkDelegationChildIdleStop();
   } catch (e: unknown) {
-    // Idle check errors must not crash the server
     console.error('[idle-stop] Error during idle check:', e);
   }
 }
@@ -223,48 +217,37 @@ export function registerSessionLifecycleRoutes(): void {
   //   }
   router.get(
     '/api/projects/:id/workflows/:wid/status-bar',
-    (req: PortalRequest, res: PortalResponse): void => {
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const w = requireProjectAndWorkflow(req, res, req.params.id, req.params.wid);
       if (!w) return;
 
       const engine = String(w.engine ?? 'demo');
       const isKiro = engine === 'kiro';
 
-      // Latest run (this turn)
-      const latestRun = one<Row>(
-        `SELECT * FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1`,
-        String(w.id),
-      );
+      const repo = getSessionsRepository();
+      const wid = String(w.id);
 
-      // Session totals
-      const totals = one<{ total_cost: number; total_input: number; total_output: number }>(
-        `SELECT
-           COALESCE(SUM(cost_usd), 0)        AS total_cost,
-           COALESCE(SUM(input_tokens), 0)    AS total_input,
-           COALESCE(SUM(output_tokens), 0)   AS total_output
-         FROM p6_runs WHERE workflow_id = ?`,
-        String(w.id),
-      );
+      const latestRun = await repo.getLatestRun(wid);
+      const totals = await repo.getRunTotals(wid);
 
       const thisTurn = latestRun
         ? {
-            costUsd: Number(latestRun.cost_usd ?? 0),
-            // Kiro reports credits not tokens; surface as null so UI renders 'not reported'
-            inputTokens: isKiro ? null : Number(latestRun.input_tokens ?? 0),
-            outputTokens: isKiro ? null : Number(latestRun.output_tokens ?? 0),
+            costUsd: latestRun.cost_usd ?? 0,
+            inputTokens: isKiro ? null : (latestRun.input_tokens ?? 0),
+            outputTokens: isKiro ? null : (latestRun.output_tokens ?? 0),
           }
         : null;
 
       const thisSession = {
-        costUsd: Number(totals?.total_cost ?? 0),
-        inputTokens: isKiro ? null : Number(totals?.total_input ?? 0),
-        outputTokens: isKiro ? null : Number(totals?.total_output ?? 0),
+        costUsd: totals.total_cost,
+        inputTokens: isKiro ? null : totals.total_input,
+        outputTokens: isKiro ? null : totals.total_output,
       };
 
       sendJson(res, 200, {
         agent: w.lead_agent ?? null,
         engine,
-        model: latestRun ? (latestRun.model as string | null ?? null) : null,
+        model: latestRun?.model ?? null,
         toolApprovalMode: w.trust_tools ? 'trust-all' : 'ask',
         thisTurn,
         thisSession,
@@ -283,20 +266,15 @@ export function registerSessionLifecycleRoutes(): void {
   //   { url: string|null, screenshotBase64: string|null, recordedAt: string|null }
   router.get(
     '/api/workflows/:wid/browser',
-    (req: PortalRequest, res: PortalResponse): void => {
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const wf = requireWorkflowReadAccess(req, res, req.params.wid);
       if (!wf) return;
 
-      // Walk run events newest-first looking for navigate / screenshot events
-      const events = all<Row>(
-        `SELECT e.type, e.payload, e.created_at
-           FROM p6_events e
-           JOIN p6_runs r ON r.id = e.run_id
-          WHERE r.workflow_id = ?
-            AND e.type IN ('tool-start', 'tool-end', 'assistant-text', 'browser-navigate', 'browser-screenshot')
-          ORDER BY e.id DESC
-          LIMIT 200`,
+      const repo = getSessionsRepository();
+      const events = await repo.listWorkflowRunEventsByType(
         String(wf.id),
+        ['tool-start', 'tool-end', 'assistant-text', 'browser-navigate', 'browser-screenshot'],
+        200,
       );
 
       let lastUrl: string | null = null;
@@ -306,7 +284,7 @@ export function registerSessionLifecycleRoutes(): void {
       for (const ev of events) {
         let payload: Record<string, unknown> = {};
         try {
-          payload = JSON.parse(String(ev.payload ?? '{}'));
+          payload = JSON.parse(ev.payload ?? '{}');
         } catch {
           continue;
         }
@@ -391,9 +369,12 @@ export function registerSessionLifecycleRoutes(): void {
   //           'session' — a child p6_workflow (F7)
   router.get(
     '/api/workflows/:wid/agents',
-    (req: PortalRequest, res: PortalResponse): void => {
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const wf = requireWorkflowReadAccess(req, res, req.params.wid);
       if (!wf) return;
+
+      const repo = getSessionsRepository();
+      const wid = String(wf.id);
 
       const agents: Array<{
         name: string;
@@ -404,47 +385,34 @@ export function registerSessionLifecycleRoutes(): void {
         sessionId?: string;
       }> = [];
 
-      // ── From child sessions (F7 delegated sessions) ──────────────────────
-      const childSessions = all<Row>(
-        `SELECT id, title, goal, status, created_at, updated_at
-           FROM p6_workflows
-          WHERE parent_id = ?
-          ORDER BY created_at ASC`,
-        String(wf.id),
-      );
+      const childSessions = await repo.listChildWorkflows(wid);
 
       for (const child of childSessions) {
         const finishedAt =
-          ['done', 'failed', 'paused'].includes(String(child.status))
-            ? String(child.updated_at)
+          ['done', 'failed', 'paused'].includes(child.status)
+            ? child.updated_at
             : null;
-
         agents.push({
-          name: String(child.title || (child.goal as string).slice(0, 60)),
-          status: String(child.status),
-          startedAt: String(child.created_at),
+          name: child.title || child.goal.slice(0, 60),
+          status: child.status,
+          startedAt: child.created_at,
           finishedAt,
           source: 'session',
-          sessionId: String(child.id),
+          sessionId: child.id,
         });
       }
 
-      // ── From run events (subagent-started / subagent-finished) ────────────
-      const agentEvents = all<Row>(
-        `SELECT e.type, e.payload, e.created_at
-           FROM p6_events e
-           JOIN p6_runs r ON r.id = e.run_id
-          WHERE r.workflow_id = ?
-            AND e.type IN ('subagent-started', 'subagent-finished', 'subagent-failed')
-          ORDER BY e.id ASC`,
-        String(wf.id),
+      const agentEvents = await repo.listWorkflowRunEventsByType(
+        wid,
+        ['subagent-started', 'subagent-finished', 'subagent-failed'],
+        1000,
       );
 
       const eventMap = new Map<string, (typeof agents)[number]>();
       for (const ev of agentEvents) {
         let payload: Record<string, unknown> = {};
         try {
-          payload = JSON.parse(String(ev.payload ?? '{}'));
+          payload = JSON.parse(ev.payload ?? '{}');
         } catch {
           continue;
         }

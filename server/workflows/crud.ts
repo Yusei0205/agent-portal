@@ -31,6 +31,8 @@ import { appendAudit } from '../audit.ts';
 import { createChildSession, checkDelegationLimits, getDelegationSettings, stopAndDeleteChildren } from '../delegation.ts';
 import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
 import { checkKey, issueDetail, mustMapping } from '../jira.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
+import type { WorkflowRecord } from '../repositories/sessions.ts';
 
 // ── Constant ───────────────────────────────────────────────────────────────────
 
@@ -46,7 +48,7 @@ function hasTokenScope(req: PortalRequest, scope: string): boolean {
 
 // ── View helpers ───────────────────────────────────────────────────────────────
 
-function workflowView(w: Row) {
+function workflowView(w: Row | WorkflowRecord) {
   return {
     id: w.id,
     project_id: w.project_id,
@@ -55,13 +57,13 @@ function workflowView(w: Row) {
     status: w.status,
     stop_reason: (w.stop_reason as string | undefined) ?? '',
     engine: w.engine,
-    trust_tools: Boolean(w.trust_tools),
+    trust_tools: Boolean((w as Row).trust_tools),
     lead_agent: w.lead_agent ?? null,
     workspace_id: w.workspace_id ?? null,
-    output_files_enabled: Boolean(w.output_files_enabled),
-    repo_ids: safeJson(w.repo_ids as string, []),
-    iteration_count: w.iteration_count ?? 0,
-    max_iterations: w.max_iterations ?? 10,
+    output_files_enabled: Boolean((w as Row).output_files_enabled),
+    repo_ids: safeJson((w as Row).repo_ids as string, []),
+    iteration_count: (w as WorkflowRecord).iteration_count ?? 0,
+    max_iterations: (w as WorkflowRecord).max_iterations ?? 10,
     last_turn_at: w.last_turn_at ?? null,
     credential_id: w.credential_id ?? null,
     model: (w.model as string | undefined) ?? '',
@@ -69,46 +71,39 @@ function workflowView(w: Row) {
     created_by: w.created_by ?? null,
     created_at: w.created_at,
     updated_at: w.updated_at,
-    parent_id: w.parent_id ?? null,
-    parent_title: (w.parent_title as string | undefined) ?? null,
-    child_count: (w.child_count as number | undefined) ?? 0,
-    jira_key: (w.jira_key as string | undefined) ?? '',
-    jira_summary: (w.jira_summary as string | undefined) ?? '',
-    jira_url: (w.jira_url as string | undefined) ?? '',
-    resumable: Boolean(w.resumable),
-    lastRunStatus: (w.lastRunStatus as string | undefined) ?? null,
+    parent_id: (w as WorkflowRecord).parent_id ?? null,
+    parent_title: (w as WorkflowRecord).parent_title ?? null,
+    child_count: (w as WorkflowRecord).child_count ?? 0,
+    jira_key: (w as WorkflowRecord).jira_key ?? '',
+    jira_summary: (w as WorkflowRecord).jira_summary ?? '',
+    jira_url: (w as WorkflowRecord).jira_url ?? '',
+    resumable: Boolean((w as WorkflowRecord).resumable),
+    lastRunStatus: (w as WorkflowRecord).lastRunStatus ?? null,
   };
 }
 
 /**
  * Enrich a single workflow row with parent_title, child_count, resumable, and lastRunStatus.
- * Two bounded queries — safe for detail endpoints (not N+1).
+ * Uses the sessions repository.
  */
-function enrichWorkflowRow(w: Row): Row {
+async function enrichWorkflowRow(w: Row | WorkflowRecord): Promise<WorkflowRecord> {
+  const repo = getSessionsRepository();
+  const id = String(w.id);
+  const parentId = (w as WorkflowRecord).parent_id ?? (w as Row).parent_id ?? null;
   let parentTitle: string | null = null;
-  if (w.parent_id) {
-    const parent = one<Row>(
-      'SELECT title, goal FROM p6_workflows WHERE id = ?',
-      String(w.parent_id),
-    );
+  if (parentId) {
+    const parent = await repo.getWorkflowById(String(parentId));
     if (parent) {
-      const t = (parent.title as string | undefined) ?? '';
-      parentTitle = t || String(parent.goal ?? '').slice(0, 60);
+      parentTitle = parent.title?.trim() || parent.goal.slice(0, 60);
     }
   }
   const childCount =
-    (one<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM p6_workflows WHERE parent_id = ?',
-      String(w.id),
-    )?.n) ?? 0;
+    (w as WorkflowRecord).child_count !== undefined
+      ? ((w as WorkflowRecord).child_count ?? 0)
+      : (await repo.listChildWorkflows(id)).length;
 
-  // Compute resumable: allowed when workflow status is failed/paused/stopped/cancelled
-  // OR when the latest run is failed/cancelled (workflow in any terminal state with failed/cancelled last run).
   const wfStatus = String(w.status ?? '');
-  const latestRun = one<{ status: string }>(
-    'SELECT status FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1',
-    String(w.id),
-  );
+  const latestRun = await repo.getLatestRun(id);
   const lastRunStatus = latestRun?.status ?? null;
   const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
   const resumableRunStatuses = new Set(['failed', 'cancelled']);
@@ -116,10 +111,45 @@ function enrichWorkflowRow(w: Row): Row {
     resumableStatuses.has(wfStatus) ||
     (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus));
 
-  return { ...w, parent_title: parentTitle, child_count: childCount, resumable, lastRunStatus };
+  // Build a WorkflowRecord merging enrichment with the original row
+  const base: WorkflowRecord = typeof (w as WorkflowRecord).iteration_count === 'number'
+    ? (w as WorkflowRecord)
+    : {
+        id: String(w.id),
+        project_id: w.project_id != null ? String(w.project_id) : null,
+        title: String((w as Row).title ?? ''),
+        goal: String(w.goal ?? ''),
+        status: String(w.status ?? ''),
+        stop_reason: String((w as Row).stop_reason ?? ''),
+        engine: String(w.engine ?? ''),
+        trust_tools: Number((w as Row).trust_tools ?? 0),
+        lead_agent: (w as Row).lead_agent != null ? String((w as Row).lead_agent) : null,
+        workspace_id: (w as Row).workspace_id != null ? String((w as Row).workspace_id) : null,
+        output_files_enabled: Number((w as Row).output_files_enabled ?? 0),
+        repo_ids: String((w as Row).repo_ids ?? '[]'),
+        iteration_count: Number((w as Row).iteration_count ?? 0),
+        max_iterations: Number((w as Row).max_iterations ?? 10),
+        last_turn_at: (w as Row).last_turn_at != null ? String((w as Row).last_turn_at) : null,
+        credential_id: (w as Row).credential_id != null ? String((w as Row).credential_id) : null,
+        model: String((w as Row).model ?? ''),
+        engine_session_id: (w as Row).engine_session_id != null ? String((w as Row).engine_session_id) : null,
+        engine_session_engine: null,
+        created_by: w.created_by != null ? String(w.created_by) : null,
+        created_at: String(w.created_at ?? ''),
+        updated_at: String(w.updated_at ?? ''),
+        parent_id: parentId != null ? String(parentId) : null,
+        work_dir: null,
+        jira_key: String((w as Row).jira_key ?? ''),
+        jira_summary: String((w as Row).jira_summary ?? ''),
+        jira_url: String((w as Row).jira_url ?? ''),
+        kind: (w as Row).kind != null ? String((w as Row).kind) : null,
+        run_timeout_minutes: null,
+      };
+
+  return { ...base, parent_title: parentTitle, child_count: childCount, resumable, lastRunStatus };
 }
 
-function runView(r: Row) {
+function runView(r: Row | import('../repositories/sessions.ts').RunRecord) {
   return {
     id: r.id,
     workflow_id: r.workflow_id,
@@ -129,16 +159,18 @@ function runView(r: Row) {
     cost_usd: r.cost_usd ?? 0,
     input_tokens: r.input_tokens ?? 0,
     output_tokens: r.output_tokens ?? 0,
+    cache_write_tokens: (r as import('../repositories/sessions.ts').RunRecord).cache_write_tokens ?? 0,
+    cache_read_tokens: (r as import('../repositories/sessions.ts').RunRecord).cache_read_tokens ?? 0,
     created_at: r.created_at,
   };
 }
 
-function eventView(e: Row) {
+function eventView(e: Row | import('../repositories/sessions.ts').EventRecord) {
   return {
-    id: e.id,
+    id: typeof e.id === 'number' ? e.id : Number(e.id),
     run_id: e.run_id,
     type: e.type,
-    payload: safeJson(e.payload as string, {}),
+    payload: safeJson(typeof e.payload === 'string' ? e.payload : JSON.stringify(e.payload), {}),
     created_at: e.created_at,
   };
 }
@@ -186,12 +218,97 @@ function requireWorkflow(
   return w;
 }
 
+// ── Transcript helpers ─────────────────────────────────────────────────────────
+
+type TxRow = {
+  src: string; id: number; created_at: string; kind: string;
+  body: string; run_id: string | null;
+};
+
+/**
+ * Coalesce consecutive streamed assistant-text rows from the same run into a
+ * single row.  Rows are passed newest-first (as returned by the DB query).
+ *
+ * Why: Kiro emits one p6_events row per stream chunk, so a single agent reply
+ * of ~100 chunks consumes 100 of the 200-row page limit.  After coalescing, a
+ * page covers turns rather than tokens, making the >200-row case uncommon.
+ *
+ * Algorithm:
+ *   Walk the newest-first array.  When we encounter a contiguous run of
+ *   assistant-text rows (src='r', payload.stream=true) from the same run_id,
+ *   we collect the group, reverse it to chronological order, concatenate the
+ *   text, and emit a single row with the OLDEST chunk's id/created_at so the
+ *   event sorts correctly in the timeline.  The payload retains stream:true so
+ *   the client's mergeConsecutiveAssistantText recognises it.
+ *
+ * Cursor correctness: the caller computes nextCursor from the raw rows BEFORE
+ * calling this function, so pagination positions are unaffected.
+ */
+export function coalesceStreamedRows(rows: TxRow[]): TxRow[] {
+  if (rows.length === 0) return rows;
+
+  const result: TxRow[] = [];
+  let i = 0;
+
+  while (i < rows.length) {
+    const row = rows[i];
+
+    // Only coalesce src='r' (p6_events) assistant-text rows that carry stream:true
+    if (row.kind === 'assistant-text' && row.src === 'r') {
+      let payload: Record<string, unknown>;
+      try { payload = JSON.parse(row.body) as Record<string, unknown>; } catch { payload = {}; }
+
+      if (payload.stream === true) {
+        // Collect the full group (current order: newest → oldest)
+        const group: TxRow[] = [row];
+        let j = i + 1;
+        while (j < rows.length) {
+          const next = rows[j];
+          if (next.kind !== 'assistant-text' || next.src !== 'r' || next.run_id !== row.run_id) break;
+          let np: Record<string, unknown>;
+          try { np = JSON.parse(next.body) as Record<string, unknown>; } catch { np = {}; }
+          if (np.stream !== true) break;
+          group.push(next);
+          j++;
+        }
+
+        if (group.length === 1) {
+          result.push(row);
+        } else {
+          // Reverse to chronological order (oldest first) for text concatenation
+          const chron = group.slice().reverse();
+          let text = '';
+          for (const r of chron) {
+            let p: Record<string, unknown>;
+            try { p = JSON.parse(r.body) as Record<string, unknown>; } catch { p = {}; }
+            text += String(p.text ?? p.content ?? '');
+          }
+          // Keep the oldest chunk's id/created_at so the event sorts to the
+          // correct timeline position; retain stream:true for client merge logic.
+          const oldest = chron[0];
+          let oldestPayload: Record<string, unknown>;
+          try { oldestPayload = JSON.parse(oldest.body) as Record<string, unknown>; } catch { oldestPayload = {}; }
+          result.push({ ...oldest, body: JSON.stringify({ ...oldestPayload, text, stream: true }) });
+        }
+
+        i = j;
+        continue;
+      }
+    }
+
+    result.push(row);
+    i++;
+  }
+
+  return result;
+}
+
 // ── Route registration ─────────────────────────────────────────────────────────
 
 export function registerWorkflowRoutes(): void {
 
   // GET /api/projects/:id/workflows
-  router.get('/api/projects/:id/workflows', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/workflows', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
 
@@ -202,37 +319,16 @@ export function registerWorkflowRoutes(): void {
     const search = req.query.get('search') ?? '';
     const projectId = String(project.id);
 
-    // Build query dynamically with typed parameters
-    const conditions: string[] = ['w.project_id = ?'];
-    const params: (string | number)[] = [projectId];
-
-    if (statusFilter) { conditions.push('w.status = ?'); params.push(statusFilter); }
-    if (engineFilter) { conditions.push('w.engine = ?'); params.push(engineFilter); }
-    if (search) { conditions.push('w.goal LIKE ?'); params.push(`%${search}%`); }
-
-    const where = conditions.join(' AND ');
-
-    const total = (one<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM p6_workflows w WHERE ${where}`,
-      ...params,
-    )?.n) ?? 0;
-
-    const workflows = all<Row>(
-      `SELECT w.*,
-        CASE WHEN w.parent_id IS NOT NULL THEN
-          SUBSTR(COALESCE(NULLIF(p.title, ''), p.goal), 1, 60)
-        ELSE NULL END AS parent_title,
-        (SELECT COUNT(*) FROM p6_workflows c WHERE c.parent_id = w.id) AS child_count
-      FROM p6_workflows w
-      LEFT JOIN p6_workflows p ON p.id = w.parent_id
-      WHERE ${where}
-      ORDER BY w.updated_at DESC LIMIT ? OFFSET ?`,
-      ...params,
+    const repo = getSessionsRepository();
+    const result = await repo.listWorkflowsByProject(projectId, {
       limit,
       offset,
-    );
+      status: statusFilter || undefined,
+      engine: engineFilter || undefined,
+      search: search || undefined,
+    });
 
-    sendJson(res, 200, { workflows: workflows.map(workflowView), total });
+    sendJson(res, 200, { workflows: result.workflows.map(workflowView), total: result.total });
   });
 
   // POST /api/projects/:id/workflows
@@ -365,7 +461,8 @@ export function registerWorkflowRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('p6_workflows', {
+    const repo = getSessionsRepository();
+    const wfRecord = await repo.createWorkflow({
       id,
       project_id: projectId,
       goal,
@@ -388,53 +485,61 @@ export function registerWorkflowRoutes(): void {
       updated_at: ts,
     });
 
+    // If this is a child workflow, increment parent child count
+    const parentId = (wfRecord as WorkflowRecord).parent_id ?? null;
+    if (parentId) {
+      await repo.incrementWorkflowChildCount(parentId, 1).catch(() => {});
+    }
+
     emit(projectId, { type: 'workflow.created', workflowId: id });
 
-    const workflow = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', id)!;
-    sendJson(res, 201, { workflow: workflowView(enrichWorkflowRow(workflow)) });
+    const enriched = await enrichWorkflowRow(wfRecord);
+    sendJson(res, 201, { workflow: workflowView(enriched) });
   });
 
   // GET /api/projects/:id/workflows/:wid
-  router.get('/api/projects/:id/workflows/:wid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/workflows/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    const latestRun = one<Row>(
-      'SELECT * FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1',
-      String(w.id),
-    );
+    const latestRun = await repo.getLatestRun(w.id);
 
     sendJson(res, 200, {
-      workflow: workflowView(enrichWorkflowRow(w)),
+      workflow: workflowView(await enrichWorkflowRow(w)),
       latestRun: latestRun ? runView(latestRun) : null,
     });
   });
 
   // DELETE /api/projects/:id/workflows/:wid
-  router.delete('/api/projects/:id/workflows/:wid', (req: PortalRequest, res: PortalResponse): void => {
+  router.delete('/api/projects/:id/workflows/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
     // Cancel any active run first
-    const activeRun = one<Row>(
-      "SELECT id FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running')",
-      String(w.id),
-    );
-    if (activeRun) cancelRun(String(activeRun.id));
+    const activeRun = await repo.getActiveRun(w.id);
+    if (activeRun) cancelRun(activeRun.id);
 
-    // Stop and delete child sessions recursively (F7)
-    stopAndDeleteChildren(String(w.id));
+    // Stop and delete child sessions recursively
+    stopAndDeleteChildren(w.id);
 
-    // Close the session's live browser, if one is running
-    shutdownSessionBrowser(String(w.id)).catch(() => {/* non-fatal */});
+    // Close the session's live browser
+    shutdownSessionBrowser(w.id).catch(() => {/* non-fatal */});
 
-    dbRun('DELETE FROM p6_workflows WHERE id = ?', String(w.id));
-    emit(String(project.id), { type: 'workflow.deleted', workflowId: String(w.id) });
+    await repo.deleteWorkflow(w.id);
+
+    // Decrement parent child count
+    if (w.parent_id) {
+      await repo.incrementWorkflowChildCount(w.parent_id, -1).catch(() => {});
+    }
+
+    emit(String(project.id), { type: 'workflow.deleted', workflowId: w.id });
     sendJson(res, 200, { ok: true });
   });
 
@@ -451,8 +556,9 @@ export function registerWorkflowRoutes(): void {
       if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
       const project = requireProjectMember(req, res, req.params.id);
       if (!project) return;
-      const w = requireWorkflow(res, req.params.id, req.params.wid);
-      if (!w) return;
+      const repo = getSessionsRepository();
+      const wf = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+      if (!wf) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
       if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
       const body = (req.body ?? {}) as Record<string, unknown>;
@@ -467,8 +573,8 @@ export function registerWorkflowRoutes(): void {
       }
 
       try {
-        const child = await createChildSession(String(w.id), req.user.id, task, { title, leadAgent });
-        sendJson(res, 201, { workflow: workflowView(enrichWorkflowRow(child)) });
+        const child = await createChildSession(wf.id, req.user.id, task, { title, leadAgent });
+        sendJson(res, 201, { workflow: workflowView(await enrichWorkflowRow(child)) });
       } catch (e: unknown) {
         const status = (e as { status?: number })?.status ?? 400;
         const msg = (e as { message?: string })?.message ?? String(e);
@@ -482,42 +588,27 @@ export function registerWorkflowRoutes(): void {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    // Idempotent: if a run is already active for this workflow (e.g. the /message
-    // route started one just before the composer UI called /start), return it with
-    // HTTP 200 instead of creating a duplicate.  Callers should treat 200 as
-    // "already running, nothing to do" and 201 as "new run created".
-    // IMPORTANT: check for an active run BEFORE checking workflow status so that
-    // the second call always gets 200 (idempotent), not 409.
-    const existingRun = one<Row>(
-      "SELECT * FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
-      String(w.id),
-    );
+    const existingRun = await repo.getActiveRun(w.id);
     if (existingRun) {
-      sendJson(res, 200, { runId: String(existingRun.id), run: runView(existingRun), alreadyRunning: true });
+      sendJson(res, 200, { runId: existingRun.id, run: runView(existingRun), alreadyRunning: true });
       return;
     }
 
-    // No active run record exists. If the workflow row says 'running' the DB is
-    // in an inconsistent state — refuse rather than create a duplicate run.
     if (w.status === 'running') {
       sendJson(res, 409, { error: 'This session is already running' });
       return;
     }
 
     try {
-      const runId = await startRun(String(w.id));
-      // Track last user interaction
-      dbRun(
-        'UPDATE p6_workflows SET last_turn_at = ?, stop_reason = \'\', updated_at = ? WHERE id = ?',
-        now(),
-        now(),
-        String(w.id),
-      );
-      const run = one<Row>('SELECT * FROM p6_runs WHERE id = ?', runId)!;
-      sendJson(res, 201, { runId, run: runView(run) });
+      const runId = await startRun(w.id);
+      const ts = now();
+      await repo.updateWorkflow(w.id, { last_turn_at: ts, stop_reason: '', updated_at: ts });
+      const run = await repo.getRunById(runId);
+      sendJson(res, 201, { runId, run: run ? runView(run) : null });
     } catch (e: unknown) {
       const msg = (e as { message?: string })?.message ?? String(e);
       sendJson(res, 429, { error: msg });
@@ -525,37 +616,28 @@ export function registerWorkflowRoutes(): void {
   });
 
   // GET /api/projects/:id/workflows/:wid/runs
-  router.get('/api/projects/:id/workflows/:wid/runs', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/workflows/:wid/runs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
-
-    const runs = all<Row>(
-      'SELECT * FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 100',
-      String(w.id),
-    );
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    const runs = await repo.listRunsByWorkflow(w.id, 100);
     sendJson(res, 200, { runs: runs.map(runView) });
   });
 
   // GET /api/projects/:id/workflows/:wid/runs/:rid
-  router.get('/api/projects/:id/workflows/:wid/runs/:rid', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/workflows/:wid/runs/:rid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    const r = one<Row>(
-      'SELECT * FROM p6_runs WHERE id = ? AND workflow_id = ?',
-      req.params.rid,
-      String(w.id),
-    );
+    const r = await repo.getRunByWorkflowAndId(w.id, req.params.rid);
     if (!r) { sendJson(res, 404, { error: 'Run not found' }); return; }
 
-    const events = all<Row>(
-      'SELECT * FROM p6_events WHERE run_id = ? ORDER BY id ASC LIMIT 500',
-      String(r.id),
-    );
+    const events = await repo.listRunEvents(r.id, 500);
 
     sendJson(res, 200, { run: runView(r), events: events.map(eventView) });
   });
@@ -567,14 +649,15 @@ export function registerWorkflowRoutes(): void {
     const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', req.params.id);
     if (!p) { sendJson(res, 404, { error: 'Project not found' }); return; }
 
-    const w = one<Row>('SELECT * FROM p6_workflows WHERE id = ? AND project_id = ?', req.params.wid, String(p.id));
-    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    // S1-TODO(sessions): SSE access check uses db.ts for project/workflow lookup
+    // (projects are in the projects repository, not sessions)
+    const wRow = one<Row>('SELECT * FROM p6_workflows WHERE id = ? AND project_id = ?', req.params.wid, String(p.id));
+    if (!wRow) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    const r = one<Row>('SELECT * FROM p6_runs WHERE id = ? AND workflow_id = ?', req.params.rid, String(w.id));
-    if (!r) { sendJson(res, 404, { error: 'Run not found' }); return; }
+    const rRow = one<Row>('SELECT * FROM p6_runs WHERE id = ? AND workflow_id = ?', req.params.rid, String(wRow.id));
+    if (!rRow) { sendJson(res, 404, { error: 'Run not found' }); return; }
 
-    // Replay historical events
-    const past = all<Row>('SELECT * FROM p6_events WHERE run_id = ? ORDER BY id ASC', String(r.id));
+    const rid = String(rRow.id);
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -584,25 +667,28 @@ export function registerWorkflowRoutes(): void {
     });
     res.write(': connected\n\n');
 
-    for (const e of past) {
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ type: 'event', event: eventView(e) })}\n\n`);
+    const repo = getSessionsRepository();
+    repo.listRunEvents(rid).then((past) => {
+      for (const e of past) {
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ type: 'event', event: eventView(e) })}\n\n`);
+        }
       }
-    }
+    }).catch(() => {});
 
-    // Subscribe to live project events — addLiveSubscriber does NOT write headers
-    // (they are already sent above), but keeps the connection alive and cleans up.
+    // Subscribe to live project events
     addLiveSubscriber(String(p.id), res);
   });
 
   // POST /api/projects/:id/workflows/:wid/runs/:rid/input
-  router.post('/api/projects/:id/workflows/:wid/runs/:rid/input', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:id/workflows/:wid/runs/:rid/input', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    const r = one<Row>('SELECT * FROM p6_runs WHERE id = ? AND workflow_id = ?', req.params.rid, String(w.id));
+    const r = await repo.getRunByWorkflowAndId(w.id, req.params.rid);
     if (!r) { sendJson(res, 404, { error: 'Run not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -616,21 +702,18 @@ export function registerWorkflowRoutes(): void {
       return;
     }
 
-    // Load the input record for fingerprint and status checks.
-    const inputRow = one<Row>('SELECT * FROM p6_inputs WHERE id = ? AND run_id = ?', inputId, String(r.id));
+    // Load the input record
+    // S1-TODO(sessions): getInputById requires run_id in DynamoDB mode; using direct db.ts for now
+    const inputRow = one<Row>('SELECT * FROM p6_inputs WHERE id = ? AND run_id = ?', inputId, r.id);
     if (!inputRow) { sendJson(res, 404, { error: 'Input not found' }); return; }
 
-    // An expired input cannot be answered.
     if (inputRow.status === 'expired') {
       sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
       return;
     }
 
-    // Fingerprint check: an approval must send back the exact hash the server stored.
-    // This ensures the call that runs is always the one the person reviewed.
     if (response === 'approve') {
       let storedHash = (inputRow.input_hash as string | null) ?? null;
-      // If not stored separately, re-derive from payload.
       if (!storedHash) {
         try {
           const p = JSON.parse(inputRow.payload as string ?? '{}');
@@ -647,57 +730,48 @@ export function registerWorkflowRoutes(): void {
       }
     }
 
-    // Claim atomically — prevents two simultaneous answers both winning,
-    // and prevents an expiry timer overtaking an in-flight answer.
-    const claimed = dbRun(
-      "UPDATE p6_inputs SET status = 'answered', response = ?, allow_all = ?, answered_by = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
-      JSON.stringify(response),
-      allowAll ? 1 : 0,
-      req.user?.id ?? null,
-      now(),
-      inputId,
-    );
-    if (!claimed.changes) {
+    const claimed = await repo.updateInputConditional(inputId, 'pending', {
+      status: 'answered',
+      response: JSON.stringify(response),
+      allow_all: allowAll ? 1 : 0,
+      answered_by: req.user?.id ?? null,
+      answered_at: now(),
+      run_id: r.id,
+    });
+
+    if (!claimed) {
       sendJson(res, 409, { error: 'Someone answered this a moment ago.' });
       return;
     }
 
     const decision: 'allow' | 'deny' = response === 'approve' ? 'allow' : 'deny';
     const message = typeof body.message === 'string' ? body.message.slice(0, 2000) : '';
-    resolveApproval(String(r.id), inputId, decision, { remember: allowAll, message });
+    resolveApproval(r.id, inputId, decision, { remember: allowAll, message });
 
     if (w.project_id) {
-      emit(String(w.project_id), { type: 'input.resolved', inputId, status: 'answered' });
+      emit(w.project_id, { type: 'input.resolved', inputId, status: 'answered' });
     }
 
     sendJson(res, 200, { ok: true });
   });
 
   // POST /api/projects/:id/workflows/:wid/cancel
-  router.post('/api/projects/:id/workflows/:wid/cancel', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/projects/:id/workflows/:wid/cancel', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    // Find the active run
-    const activeRun = one<Row>(
-      "SELECT id FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running')",
-      String(w.id),
-    );
-    if (activeRun) {
-      cancelRun(String(activeRun.id));
-    }
+    const activeRun = await repo.getActiveRun(w.id);
+    if (activeRun) cancelRun(activeRun.id);
 
-    dbRun(
-      `UPDATE p6_workflows SET status = 'paused', updated_at = ? WHERE id = ?`,
-      now(),
-      String(w.id),
-    );
+    const ts = now();
+    await repo.updateWorkflow(w.id, { status: 'paused', updated_at: ts });
 
     if (w.project_id) {
-      emit(String(w.project_id), { type: 'workflow.updated', workflowId: String(w.id), status: 'paused' });
+      emit(w.project_id, { type: 'workflow.updated', workflowId: w.id, status: 'paused' });
     }
 
     sendJson(res, 200, { ok: true });
@@ -708,25 +782,18 @@ export function registerWorkflowRoutes(): void {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    // Idempotent: if a run is already active, return 200 with alreadyRunning: true
-    const existingRun = one<Row>(
-      "SELECT * FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
-      String(w.id),
-    );
+    const existingRun = await repo.getActiveRun(w.id);
     if (existingRun) {
-      sendJson(res, 200, { runId: String(existingRun.id), run: runView(existingRun), alreadyRunning: true });
+      sendJson(res, 200, { runId: existingRun.id, run: runView(existingRun), alreadyRunning: true });
       return;
     }
 
-    // Check that the workflow is in a resumable state
-    const wfStatus = String(w.status ?? '');
-    const latestRun = one<{ status: string }>(
-      'SELECT status FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1',
-      String(w.id),
-    );
+    const wfStatus = w.status ?? '';
+    const latestRun = await repo.getLatestRun(w.id);
     const lastRunStatus = latestRun?.status ?? null;
     const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
     const resumableRunStatuses = new Set(['failed', 'cancelled']);
@@ -739,35 +806,26 @@ export function registerWorkflowRoutes(): void {
       return;
     }
 
-    // Queue a visible human message so the transcript shows the resume context
     const resumeMessage = 'Continue where you left off. The previous run was interrupted.';
-    insert('p6_workflow_events', {
-      workflow_id: String(w.id),
+    await repo.appendWorkflowEvent({
+      workflow_id: w.id,
       kind: 'human',
       body: resumeMessage,
       data: JSON.stringify({ by: req.user!.id, resume: true }),
       created_at: now(),
     });
 
-    // Track last user interaction
-    dbRun(
-      'UPDATE p6_workflows SET last_turn_at = ?, stop_reason = \'\', updated_at = ? WHERE id = ?',
-      now(), now(), String(w.id),
-    );
+    const ts = now();
+    await repo.updateWorkflow(w.id, { last_turn_at: ts, stop_reason: '', updated_at: ts });
 
     if (w.project_id) {
-      emit(String(w.project_id), {
-        type: 'workflow.message',
-        workflowId: String(w.id),
-        body: resumeMessage,
-        by: req.user!.id,
-      });
+      emit(w.project_id, { type: 'workflow.message', workflowId: w.id, body: resumeMessage, by: req.user!.id });
     }
 
     try {
-      const runId = await startRun(String(w.id));
-      const run = one<Row>('SELECT * FROM p6_runs WHERE id = ?', runId)!;
-      sendJson(res, 201, { runId, run: runView(run) });
+      const runId = await startRun(w.id);
+      const run = await repo.getRunById(runId);
+      sendJson(res, 201, { runId, run: run ? runView(run) : null });
     } catch (e: unknown) {
       const msg = (e as { message?: string })?.message ?? String(e);
       sendJson(res, 429, { error: msg });
@@ -779,113 +837,84 @@ export function registerWorkflowRoutes(): void {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const message = str(body.message as string, 'message', { max: 10_000 }).trim();
 
-    // Slash commands are recorded with kind='command'; everything else is 'human'
     const isCommand = message.startsWith('/');
     const kind = isCommand ? 'command' : 'human';
+    const ts = now();
 
-    // Store the follow-up message as a p6 workflow event (avoids FK issue with legacy workflow_events)
-    insert('p6_workflow_events', {
-      workflow_id: String(w.id),
+    await repo.appendWorkflowEvent({
+      workflow_id: w.id,
       kind,
       body: message,
       data: JSON.stringify({ by: req.user!.id }),
-      created_at: now(),
+      created_at: ts,
     });
 
     // For demo-engine slash commands, immediately process and record result event
-    if (isCommand && String(w.engine) === 'demo') {
+    if (isCommand && w.engine === 'demo') {
       const cmdResult = processDemoSlashCommand(message);
-      insert('p6_workflow_events', {
-        workflow_id: String(w.id),
+      await repo.appendWorkflowEvent({
+        workflow_id: w.id,
         kind: 'command-result',
         body: cmdResult,
         data: JSON.stringify({ command: message, by: req.user!.id }),
         created_at: now(),
       });
       if (w.project_id) {
-        emit(String(w.project_id), {
-          type: 'workflow.command-result',
-          workflowId: String(w.id),
-          command: message,
-          result: cmdResult,
-        });
+        emit(w.project_id, { type: 'workflow.command-result', workflowId: w.id, command: message, result: cmdResult });
       }
     }
 
-    // For kiro/claude-code engines, /clear is handled server-side:
-    // mark all pending unconsumed messages consumed so the next run starts fresh,
-    // and clear the engine session ID so the next run begins a new conversation.
-    if (isCommand && message.toLowerCase().trim() === '/clear' && String(w.engine) !== 'demo') {
-      dbRun(
-        'UPDATE p6_workflow_events SET consumed = 1 WHERE workflow_id = ? AND consumed = 0 AND kind IN (\'human\', \'command\')',
-        String(w.id),
-      );
-      dbRun(
-        'UPDATE p6_workflows SET engine_session_id = NULL, engine_session_engine = NULL, updated_at = ? WHERE id = ?',
-        now(),
-        String(w.id),
-      );
+    // For kiro/claude-code engines, /clear is handled server-side
+    if (isCommand && message.toLowerCase().trim() === '/clear' && w.engine !== 'demo') {
+      await repo.markAllWorkflowEventsConsumed(w.id);
+      await repo.updateWorkflow(w.id, { engine_session_id: null, engine_session_engine: null, updated_at: ts });
     }
 
     // Track last user interaction (resets idle timer)
-    const ts = now();
-    dbRun(
-      'UPDATE p6_workflows SET last_turn_at = ?, stop_reason = \'\', updated_at = ? WHERE id = ?',
-      ts,
-      ts,
-      String(w.id),
-    );
+    await repo.updateWorkflow(w.id, { last_turn_at: ts, stop_reason: '', updated_at: ts });
 
-    // Emit live event so open clients see the message immediately
     if (w.project_id) {
-      emit(String(w.project_id), {
+      emit(w.project_id, {
         type: isCommand ? 'workflow.command' : 'workflow.message',
-        workflowId: String(w.id),
+        workflowId: w.id,
         body: message,
         by: req.user!.id,
       });
     }
 
-    // Resume idle-stopped (paused) sessions when a HUMAN message arrives.
-    // Commands NEVER trigger a run start — they are forwarded to the engine
-    // on the next turn as part of the pending messages prompt.
+    // Resume idle-stopped (paused) sessions when a HUMAN message arrives
     let resumed = false;
-    if (String(w.status) === 'paused' && !isCommand) {
-      // Guard against concurrent double-start (message + /start racing)
-      const hasActive = one<Row>(
-        "SELECT 1 FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running')",
-        String(w.id),
-      );
+    if (w.status === 'paused' && !isCommand) {
+      const hasActive = await repo.getActiveRun(w.id);
       if (!hasActive) {
         try {
-          await startRun(String(w.id));
+          await startRun(w.id);
           resumed = true;
-        } catch {
-          // Concurrency limit or other transient error — don't fail the message send
-        }
+        } catch { /* non-fatal — auto-resume failure doesn't block the message ack */ }
       }
     }
 
     sendJson(res, 200, { ok: true, kind, resumed });
   });
 
-  // PATCH /api/projects/:id/workflows/:wid — update session settings (title, goal, trust-tools, max-iterations)
-  router.patch('/api/projects/:id/workflows/:wid', (req: PortalRequest, res: PortalResponse): void => {
+  // PATCH /api/projects/:id/workflows/:wid — update session settings
+  router.patch('/api/projects/:id/workflows/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
 
-    // At least one settable field must be present
     const hasTitle       = body.title !== undefined;
     const hasGoal        = body.goal !== undefined;
     const hasTrustTools  = body.trustTools !== undefined;
@@ -896,60 +925,49 @@ export function registerWorkflowRoutes(): void {
       return;
     }
 
-    const updates: Record<string, unknown> = {};
+    const patch: Partial<WorkflowRecord> = {};
     let title: string | undefined;
 
     if (hasTitle) {
       title = str(body.title as string, 'title', { max: 200, optional: true }).trim();
-      updates.title = title;
+      patch.title = title;
     }
     if (hasGoal) {
-      updates.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
+      patch.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
     }
     if (hasTrustTools) {
-      updates.trust_tools = body.trustTools ? 1 : 0;
+      patch.trust_tools = body.trustTools ? 1 : 0;
     }
     if (hasMaxIter) {
-      updates.max_iterations = int(body.maxIterations, 'maxIterations', 10, 1, 100);
+      patch.max_iterations = int(body.maxIterations, 'maxIterations', 10, 1, 100);
     }
 
     const ts = now();
-    updates.updated_at = ts;
+    patch.updated_at = ts;
 
-    const keys = Object.keys(updates);
-    dbRun(
-      `UPDATE p6_workflows SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      ...keys.map((k) => updates[k] as string | number),
-      String(w.id),
-    );
+    await repo.updateWorkflow(w.id, patch);
 
     if (title !== undefined) {
       appendAudit(
         getDb(),
         req.user!.id,
         'session.rename',
-        `workflow:${String(w.id)}`,
+        `workflow:${w.id}`,
         { title },
         req.ip,
       );
-
-      // Emit project event so all open clients update their session list
       if (w.project_id) {
-        emit(String(w.project_id), {
-          type: 'workflow.renamed',
-          workflowId: String(w.id),
-          title,
-        });
+        emit(w.project_id, { type: 'workflow.renamed', workflowId: w.id, title });
       }
     }
 
-    // Emit workflow.updated for any patch so the session list reloads
     if (w.project_id) {
-      emit(String(w.project_id), { type: 'workflow.updated', workflowId: String(w.id) });
+      emit(w.project_id, { type: 'workflow.updated', workflowId: w.id });
     }
 
-    const updated = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', String(w.id))!;
-    sendJson(res, 200, { workflow: workflowView(enrichWorkflowRow(updated)) });
+    const updated = await repo.getWorkflowById(w.id);
+    const enriched = updated ? await enrichWorkflowRow(updated) : w;
+    sendJson(res, 200, { workflow: workflowView(enriched) });
   });
 
   // GET /api/projects/:id/workflows/:wid/transcript  — newest-first, cursor-based paging
@@ -985,11 +1003,16 @@ export function registerWorkflowRoutes(): void {
   //     src — source table of that event ('r' before 'w' at the same timestamp, per ASC sort)
   //     id  — primary key of that event in its source table
   //   Sort order within a page: created_at DESC, src ASC ('r' before 'w'), id DESC
-  router.get('/api/projects/:id/workflows/:wid/transcript', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/projects/:id/workflows/:wid/transcript', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const project = requireProjectMember(req, res, req.params.id);
     if (!project) return;
-    const w = requireWorkflow(res, req.params.id, req.params.wid);
-    if (!w) return;
+    const repo = getSessionsRepository();
+    const wf = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!wf) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+
+    // S1-TODO(sessions): transcript query uses db.ts directly — complex multi-source
+    // cursor-based merge of p6_events + p6_workflow_events not yet in repository.
+    const w: Row = { ...wf, id: wf.id } as unknown as Row;
 
     const cursorStr = req.query.get('cursor');
     const limit = Math.min(int(req.query.get('limit'), 'limit', 100, 1, 200), 200);
@@ -1057,15 +1080,8 @@ export function registerWorkflowRoutes(): void {
       `).all(wid, wid, limit) as typeof rows;
     }
 
-    const events = rows.map((e) => ({
-      src: e.src,
-      id: e.id,
-      kind: e.kind,
-      payload: e.src === 'r' ? safeJson(e.body, {}) : e.body,
-      run_id: e.run_id ?? null,
-      created_at: e.created_at,
-    }));
-
+    // Compute the cursor from raw rows BEFORE coalescing — it references the
+    // actual DB row position so pagination is unaffected by merging.
     const nextCursor =
       rows.length === limit
         ? encodeCursor({
@@ -1074,6 +1090,19 @@ export function registerWorkflowRoutes(): void {
             id: Number(rows[rows.length - 1].id),
           })
         : null;
+
+    // Coalesce consecutive streamed assistant-text rows so each agent reply
+    // is one event rather than O(stream-chunks) events.
+    const coalescedRows = coalesceStreamedRows(rows);
+
+    const events = coalescedRows.map((e) => ({
+      src: e.src,
+      id: e.id,
+      kind: e.kind,
+      payload: e.src === 'r' ? safeJson(e.body, {}) : e.body,
+      run_id: e.run_id ?? null,
+      created_at: e.created_at,
+    }));
 
     sendJson(res, 200, { events, nextCursor });
   });

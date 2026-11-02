@@ -12,15 +12,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all } from './db.ts';
+import { one } from './db.ts';
 import type { Row } from './db.ts';
 import { config } from './config.ts';
 import { subscribeRun } from './events.ts';
 import type { RunEventRow } from './events.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
+import type { EventRecord, RunRecord } from './repositories/sessions.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function runView(r: Row) {
+function runView(r: Row | RunRecord) {
   return {
     id: r.id,
     workflow_id: r.workflow_id,
@@ -30,25 +32,25 @@ function runView(r: Row) {
     cost_usd: r.cost_usd ?? 0,
     input_tokens: r.input_tokens ?? 0,
     output_tokens: r.output_tokens ?? 0,
-    stop_reason: (r.stop_reason as string | null) ?? null,
-    time_limit_at: (r.time_limit_at as string | null) ?? null,
+    stop_reason: (r as RunRecord).stop_reason ?? null,
+    time_limit_at: (r as RunRecord).time_limit_at ?? null,
     created_at: r.created_at,
   };
 }
 
-function eventView(e: Row) {
+function eventView(e: EventRecord | Row) {
   let payload: unknown = {};
   try {
-    payload = JSON.parse(e.payload as string);
+    payload = JSON.parse(typeof e.payload === 'string' ? e.payload : String(e.payload ?? '{}'));
   } catch {
     // keep empty object
   }
   return {
-    id: e.id,
-    run_id: e.run_id,
-    type: e.type,
+    id: typeof e.id === 'number' ? e.id : Number(e.id),
+    run_id: typeof e.run_id === 'string' ? e.run_id : String(e.run_id),
+    type: typeof e.type === 'string' ? e.type : String(e.type ?? ''),
     payload,
-    created_at: e.created_at,
+    created_at: typeof e.created_at === 'string' ? e.created_at : String(e.created_at),
   };
 }
 
@@ -128,16 +130,19 @@ function filePreviewType(ext: string): 'text' | 'binary' | 'image' {
 export function registerRunRoutes(): void {
 
   // GET /api/runs/:id
-  router.get('/api/runs/:id', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/runs/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const workflow = requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
-    const r = one<Row>('SELECT * FROM p6_runs WHERE id = ?', req.params.id)!;
+    const repo = getSessionsRepository();
+    const r = await repo.getRunById(req.params.id);
+    if (!r) { sendJson(res, 404, { error: 'Run not found' }); return; }
     sendJson(res, 200, { run: runView(r) });
   });
 
   // GET /api/inputs/:id — poll input status (used by AgentCore containers and tests)
-  // Returns the current status and (once answered) the response so a container
-  // can block-poll without an in-memory callback.
+  // S1-TODO(sessions): This route uses db.ts directly for the input lookup because
+  // the DynamoDB implementation of getInputById requires knowing the run_id.
+  // Full conversion is deferred until the GSI-InputId is added to portal-runs.
   router.get('/api/inputs/:id', (req: PortalRequest, res: PortalResponse): void => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     const row = one<Row>('SELECT * FROM p6_inputs WHERE id = ?', req.params.id);
@@ -194,12 +199,7 @@ export function registerRunRoutes(): void {
       send(ev);
     });
 
-    const past = all<Row>(
-      'SELECT * FROM p6_events WHERE run_id = ? ORDER BY id ASC',
-      runId,
-    );
-
-    // Write SSE headers
+    // Write SSE headers first
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store',
@@ -208,15 +208,24 @@ export function registerRunRoutes(): void {
     });
     res.write(': connected\n\n');
 
-    // Replay historical events, then anything that arrived meanwhile
-    for (const e of past) {
-      lastId = Math.max(lastId, Number(e.id));
-      send(eventView(e));
-    }
-    replayed = true;
-    for (const ev of queued) {
-      if (ev.id > lastId) { lastId = ev.id; send(ev); }
-    }
+    // Replay historical events from repository (async, but headers already sent)
+    const repo = getSessionsRepository();
+    repo.listRunEvents(runId).then((past) => {
+      for (const e of past) {
+        lastId = Math.max(lastId, e.id);
+        if (!res.writableEnded) send(eventView(e));
+      }
+      replayed = true;
+      for (const ev of queued) {
+        if (ev.id > lastId) { lastId = ev.id; send(ev); }
+      }
+    }).catch(() => {
+      // If replay fails, at least the live stream continues
+      replayed = true;
+      for (const ev of queued) {
+        if (ev.id > lastId) { lastId = ev.id; send(ev); }
+      }
+    });
 
     const heartbeat = setInterval(() => {
       if (!res.writableEnded) res.write(': ping\n\n');
@@ -229,7 +238,7 @@ export function registerRunRoutes(): void {
   });
 
   // GET /api/runs/:id/files
-  router.get('/api/runs/:id/files', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/runs/:id/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const workflow = requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
     const workDir = resolveWorkDir(workflow, req.params.id);
@@ -242,7 +251,7 @@ export function registerRunRoutes(): void {
   });
 
   // GET /api/runs/:id/file/preview
-  router.get('/api/runs/:id/file/preview', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/runs/:id/file/preview', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const workflow = requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
 

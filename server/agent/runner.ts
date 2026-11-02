@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import { one, all, run as dbRun, insert } from '../db.ts';
+import { one, insert } from '../db.ts';
 import type { Row } from '../db.ts';
 import { generateId, now } from '../util.ts';
 import { emit, emitGlobal, publishRunEvent } from '../events.ts';
@@ -38,6 +38,9 @@ import { collectOutputFiles } from '../output-files.ts';
 import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
 import { ticketMarkdown, composeRunPrompt } from '../jira-text.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
+import { usesDynamoDb } from '../repositories/backend.ts';
+import { registerBackgroundWrite } from '../http.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
 
@@ -159,23 +162,52 @@ export { resolveApproval } from './approvals.ts';
 
 // ── SSE event emission ────────────────────────────────────────────────────────
 
+// ── In-memory per-run event sequence counter ───────────────────────────────────
+// Used in DynamoDB mode where the DB sequence is assigned asynchronously.
+// In SQLite mode the counter is overwritten by the actual rowid for de-dup.
+const _runInMemSeq = new Map<string, number>();
+
 /**
- * Emit an event for a run: writes to p6_events and to the SSE channel.
- * workflowId is included in the SSE payload so clients can match run events
- * to a specific workflow without a separate lookup.
+ * Emit an event for a run: writes to the event store and to the SSE channel.
+ *
+ * SQLite mode: synchronous DB write via db.ts + last_insert_rowid() for correct id.
+ * DynamoDB mode: in-memory counter for the event bus (immediate SSE), fire-and-
+ *   forget async write to portal-events table via registerBackgroundWrite.
+ *
+ * S1-TODO(sessions): emitRunEvent uses db.ts directly for SQLite fast path so it
+ * can stay synchronous. Full async conversion (await repo.appendRunEvent) requires
+ * making RunContext.emit async and updating all engine callers — deferred to S2.
  */
 export function emitRunEvent(runId: string, projectId: string | null, workflowId: string | null, type: string, payload: object): void {
   const createdAt = now();
-  insert('p6_events', {
-    run_id: runId,
-    type,
-    payload: JSON.stringify(payload),
-    created_at: createdAt,
-  });
-  // Same row shape as the history replayed by GET /api/runs/:id/events, so the
-  // session view can show live events and de-duplicate them by id.
-  const idRow = one<{ id: number }>('SELECT last_insert_rowid() AS id');
-  publishRunEvent({ id: Number(idRow?.id ?? 0), run_id: runId, type, payload, created_at: createdAt });
+  const payloadStr = JSON.stringify(payload);
+
+  let id: number;
+
+  if (!usesDynamoDb()) {
+    // SQLite mode: synchronous insert gives us the real rowid for event bus de-dup
+    insert('p6_events', {
+      run_id: runId,
+      type,
+      payload: payloadStr,
+      created_at: createdAt,
+    });
+    const idRow = one<{ id: number }>('SELECT last_insert_rowid() AS id');
+    id = Number(idRow?.id ?? 0);
+  } else {
+    // DynamoDB mode: in-memory counter (approximate; DynamoDB assigns real seq async)
+    const seq = (_runInMemSeq.get(runId) ?? 0) + 1;
+    _runInMemSeq.set(runId, seq);
+    id = seq;
+    const repo = getSessionsRepository();
+    const p = repo.appendRunEvent(runId, type, payloadStr, createdAt).catch((e) => {
+      console.error('[emitRunEvent] DynamoDB write failed:', e);
+    });
+    try { registerBackgroundWrite(p); } catch { /* outside request context — best-effort */ }
+  }
+
+  // Same row shape as the history replayed by GET /api/runs/:id/events
+  publishRunEvent({ id, run_id: runId, type, payload, created_at: createdAt });
   // Publish to project SSE channel so connected UIs see it live
   if (projectId) {
     emit(projectId, { type: 'run.event', runId, workflowId, eventType: type, payload });
@@ -190,9 +222,10 @@ export function emitRunEvent(runId: string, projectId: string | null, workflowId
  */
 export async function executeRun(runId: string, workflowId: string): Promise<void> {
   // Load workflow and project
-  const workflow = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  const repo = getSessionsRepository();
+  const workflow = await repo.getWorkflowById(workflowId);
   if (!workflow) {
-    dbRun('UPDATE p6_runs SET status = ?, finished_at = ? WHERE id = ?', 'failed', now(), runId);
+    await repo.updateRun(runId, { status: 'failed', finished_at: now() }).catch(() => {});
     return;
   }
 
@@ -208,47 +241,26 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   // Each workflow gets ONE working copy for its entire lifetime so file
   // artefacts (repos, generated files, agent configs) survive across runs.
   // The path is stored in p6_workflows.work_dir after the first run creates it.
-  let workDir = ''; // assigned below before try block; must be '' not undefined for finally guard
+  let workDir = '';
   if (workflow.work_dir) {
     workDir = String(workflow.work_dir);
-    // Ensure the directory exists (defensive; it should already)
     await fsp.mkdir(workDir, { recursive: true });
   } else {
-    // First run: create a persistent working copy keyed to the workflow
     workDir = await createWorkDir(workflowId, projectDir);
-    dbRun(
-      'UPDATE p6_workflows SET work_dir = ?, updated_at = ? WHERE id = ?',
-      workDir,
-      now(),
-      workflowId,
-    );
+    await repo.updateWorkflow(workflowId, { work_dir: workDir, updated_at: now() });
   }
 
-  // ── Determine the prompt for this run ─────────────────────────────────────
-  //
-  // On first run (no unconsumed events), use the original goal.
-  // On resume, use the unconsumed human/command messages that arrived since
-  // the last run.  Mark them consumed so they are not replayed.
-  const pendingEvents = all<Row>(
-    `SELECT id, kind, body FROM p6_workflow_events
-      WHERE workflow_id = ? AND consumed = 0 AND kind IN ('human', 'command', 'child-result')
-      ORDER BY id ASC`,
-    workflowId,
-  );
+  // Load unconsumed workflow events for the prompt
+  const pendingEvents = await repo.listUnconsumedWorkflowEvents(workflowId);
 
   let prompt: string;
   if (pendingEvents.length > 0) {
     // Mark all fetched events consumed before the run starts (atomic intent)
-    const maxId = Number(pendingEvents[pendingEvents.length - 1].id);
-    dbRun(
-      `UPDATE p6_workflow_events SET consumed = 1
-        WHERE workflow_id = ? AND id <= ? AND kind IN ('human', 'command', 'child-result') AND consumed = 0`,
-      workflowId,
-      maxId,
-    );
-    prompt = pendingEvents.map((m) => String(m.body)).join('\n\n');
+    const maxId = pendingEvents[pendingEvents.length - 1].id;
+    await repo.markWorkflowEventsConsumedUpTo(workflowId, maxId);
+    prompt = pendingEvents.map((m) => m.body).join('\n\n');
   } else {
-    prompt = String(workflow.goal);
+    prompt = workflow.goal;
   }
 
   // ── Jira ticket context ───────────────────────────────────────────────────
@@ -300,12 +312,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   }
 
   // Update run to running
-  dbRun(
-    'UPDATE p6_runs SET status = ?, started_at = ? WHERE id = ?',
-    'running',
-    now(),
-    runId,
-  );
+  await repo.updateRun(runId, { status: 'running', started_at: now() });
 
   // Emit to project channel
   if (workflow.project_id) {
@@ -399,7 +406,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     let _stopReason: string | null = null;
     if (effectiveTimeoutMinutes != null && effectiveTimeoutMinutes > 0) {
       const limitAt = new Date(Date.now() + effectiveTimeoutMinutes * 60_000).toISOString();
-      dbRun('UPDATE p6_runs SET time_limit_at = ? WHERE id = ?', limitAt, runId);
+      await repo.updateRun(runId, { time_limit_at: limitAt });
       timeLimitTimer = setTimeout(() => {
         _stopReason = `time limit reached (${effectiveTimeoutMinutes} minutes)`;
         ctrl.abort();
@@ -426,27 +433,16 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
     // Record stop_reason if the abort was from a limit (vs user cancel)
     if (_stopReason) {
-      dbRun('UPDATE p6_runs SET stop_reason = ? WHERE id = ?', _stopReason, runId);
+      await repo.updateRun(runId, { stop_reason: _stopReason });
     }
 
     // Success: update run record
-    dbRun(
-      'UPDATE p6_runs SET status = ?, finished_at = ? WHERE id = ?',
-      'done',
-      now(),
-      runId,
-    );
+    await repo.updateRun(runId, { status: 'done', finished_at: now() });
 
-    // Update workflow: iteration count, status, and last_turn_at (item 5: set on completion)
-    dbRun(
-      `UPDATE p6_workflows
-          SET status = 'done', iteration_count = iteration_count + 1,
-              last_turn_at = ?, updated_at = ?
-        WHERE id = ?`,
-      now(),
-      now(),
-      workflowId,
-    );
+    // Update workflow: iteration count + 1, status done, last_turn_at
+    const ts = now();
+    await repo.updateWorkflow(workflowId, { status: 'done', last_turn_at: ts, updated_at: ts });
+    await repo.incrementWorkflowIteration(workflowId);
 
     // Notify lifecycle hook (e.g. finalises associated review stats and auto-post)
     fireHook(workflowId, runId, 'done');
@@ -466,11 +462,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     const aborted = (e as { name?: string })?.name === 'AbortError' || ctrl.signal.aborted;
     const msg = aborted ? 'Cancelled' : String((e as { message?: string })?.message ?? e);
 
-    // Guard: if the run no longer exists in the current DB (e.g. test cleanup
-    // replaced the in-memory DB while this background task was still running),
-    // skip all DB writes to avoid FOREIGN KEY constraint errors.
-    const runStillExists = (() => {
-      try { return !!one<{ id: string }>('SELECT id FROM p6_runs WHERE id = ?', runId); }
+    // Guard: if the run no longer exists, skip all DB writes to avoid constraint errors.
+    const runStillExists = await (async () => {
+      try { return !!(await repo.getRunById(runId)); }
       catch { return false; }
     })();
 
@@ -479,24 +473,18 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       return;
     }
 
-    dbRun(
-      'UPDATE p6_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?',
-      aborted ? 'cancelled' : 'failed',
-      now(),
-      aborted ? '' : msg.slice(0, 2000),
-      runId,
-    );
+    const failTs = now();
+    await repo.updateRun(runId, {
+      status: aborted ? 'cancelled' : 'failed',
+      finished_at: failTs,
+      error: aborted ? '' : msg.slice(0, 2000),
+    });
 
-    // Update workflow status and last_turn_at (item 5: also set on failure/cancellation)
-    dbRun(
-      `UPDATE p6_workflows
-          SET status = ?, last_turn_at = ?, updated_at = ?
-        WHERE id = ?`,
-      aborted ? 'paused' : 'failed',
-      now(),
-      now(),
-      workflowId,
-    );
+    await repo.updateWorkflow(workflowId, {
+      status: aborted ? 'paused' : 'failed',
+      last_turn_at: failTs,
+      updated_at: failTs,
+    });
 
     emitRunEvent(runId, workflow.project_id ? String(workflow.project_id) : null, workflowId, 'run-failed', { error: msg });
     notifyDashboard(workflow.project_id ? String(workflow.project_id) : null);
@@ -535,8 +523,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     // Collect output files produced by this run (best effort — must never affect run status)
     if (workDir) {
       try {
-        const runRow = one<{ started_at: string | null }>('SELECT started_at FROM p6_runs WHERE id = ?', runId);
-        const startedAt = String(runRow?.started_at ?? new Date(0).toISOString());
+        const runRow = await repo.getRunById(runId);
+        const startedAt = runRow?.started_at ?? new Date(0).toISOString();
         await collectOutputFiles(runId, workflowId, workDir, startedAt);
       } catch { /* non-fatal */ }
     }
@@ -558,6 +546,7 @@ async function awaitApproval(
   signal: AbortSignal,
 ): Promise<{ decision: 'allow' | 'deny'; remember: boolean; message: string; expired?: boolean }> {
   const inputId = generateId();
+  const repo = getSessionsRepository();
 
   // Fingerprint — the approver must send this back so the call that runs is always the one they saw.
   const hash = inputFingerprint(toolName, toolInput);
@@ -578,7 +567,8 @@ async function awaitApproval(
   };
 
   // Record in p6_inputs with full status tracking (DB is source of truth for AgentCore polling).
-  insert('p6_inputs', {
+  const inputCreatedAt = now();
+  await repo.createInput({
     id: inputId,
     run_id: runId,
     project_id: run.projectId,
@@ -590,7 +580,7 @@ async function awaitApproval(
     status: 'pending',
     allow_all: 0,
     expires_at: expiresAt,
-    created_at: now(),
+    created_at: inputCreatedAt,
   });
 
   // Create inbox item for UI notification.
@@ -602,7 +592,7 @@ async function awaitApproval(
     runId,
   });
 
-  dbRun('UPDATE p6_runs SET status = ? WHERE id = ?', 'running', runId);
+  await repo.updateRun(runId, { status: 'running' });
 
   emitRunEvent(runId, run.projectId, workflowId, 'approval-request', {
     inputId,
@@ -624,21 +614,21 @@ async function awaitApproval(
     if (minutes > 0) {
       pending.timer = setTimeout(() => {
         if (runApprovals.get(inputId) !== pending) return; // already answered
-        const claimed = dbRun(
-          "UPDATE p6_inputs SET status = 'expired', answered_at = ? WHERE id = ? AND status = 'pending'",
-          now(),
-          inputId,
-        );
-        if (!claimed.changes) return;
-        runApprovals.delete(inputId);
-        if (run.projectId) emit(run.projectId, { type: 'input.resolved', inputId, status: 'expired' });
-        emitRunEvent(runId, run.projectId, workflowId, 'approval-expired', { inputId, minutes });
-        resolve({
-          decision: 'deny',
-          remember: false,
-          message: `Nobody answered within ${minutes} minutes, so this was declined. Carry on without it, or report blocked and say what you need.`,
-          expired: true,
-        });
+        // Conditional update: only mark expired if still pending
+        repo.updateInputConditional(inputId, 'pending', {
+          status: 'expired', answered_at: now(), run_id: runId,
+        }).then((changed) => {
+          if (!changed) return;
+          runApprovals.delete(inputId);
+          if (run.projectId) emit(run.projectId, { type: 'input.resolved', inputId, status: 'expired' });
+          emitRunEvent(runId, run.projectId, workflowId, 'approval-expired', { inputId, minutes });
+          resolve({
+            decision: 'deny',
+            remember: false,
+            message: `Nobody answered within ${minutes} minutes, so this was declined. Carry on without it, or report blocked and say what you need.`,
+            expired: true,
+          });
+        }).catch(() => {});
       }, minutes * 60_000);
       pending.timer.unref?.();
     }
@@ -647,7 +637,9 @@ async function awaitApproval(
       clearTimeout(pending.timer);
       if (runApprovals.get(inputId) !== pending) return;
       runApprovals.delete(inputId);
-      dbRun("UPDATE p6_inputs SET status = 'cancelled' WHERE id = ? AND status = 'pending'", inputId);
+      repo.updateInputConditional(inputId, 'pending', {
+        status: 'cancelled', run_id: runId,
+      }).catch(() => {});
       if (run.projectId) emit(run.projectId, { type: 'input.resolved', inputId, status: 'cancelled' });
       reject(new DOMException('Run cancelled', 'AbortError'));
     };

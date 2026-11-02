@@ -3,12 +3,12 @@
  * and spawns the agent runner in the background.
  */
 
-import { one, insert, run as dbRun, setBeforeCloseHook } from '../db.ts';
-import type { Row } from '../db.ts';
+import { setBeforeCloseHook } from '../db.ts';
 import { generateId, now, badRequest } from '../util.ts';
 import { emit } from '../events.ts';
 import { activeRunCount, abortAllRuns } from './controls.ts';
 import { executeRun } from '../agent/runner.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
 // ── Before-close hook ─────────────────────────────────────────────────────────
 // Abort all active runs when the database is closed so background executeRun
@@ -29,31 +29,24 @@ const MAX_CONCURRENT_RUNS = 5;
  * Throws an HttpError(429) if the concurrency limit is reached.
  */
 export async function startRun(workflowId: string): Promise<string> {
-  const workflow = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  const repo = getSessionsRepository();
+  const workflow = await repo.getWorkflowById(workflowId);
   if (!workflow) throw badRequest('Workflow not found');
 
   // Idempotency: if a run is already active for this workflow, return it.
-  // This prevents double-starts when the /message route and the composer UI
-  // both call /start in rapid succession.
-  const activeRun = one<Row>(
-    "SELECT id FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
-    workflowId,
-  );
+  const activeRun = await repo.getActiveRun(workflowId);
   if (activeRun) {
-    return String(activeRun.id);
+    return activeRun.id;
   }
 
-  // max_iterations enforcement: if the workflow has already exhausted its
-  // iteration budget, refuse to start a new run with a clear stop reason.
-  const maxIter = Number(workflow.max_iterations ?? 0);
-  const iterCount = Number(workflow.iteration_count ?? 0);
+  // max_iterations enforcement
+  const maxIter = workflow.max_iterations ?? 0;
+  const iterCount = workflow.iteration_count ?? 0;
   if (maxIter > 0 && iterCount >= maxIter) {
-    // Mark workflow done with stop_reason='max_iterations' if not already
-    dbRun(
-      `UPDATE p6_workflows SET status = 'done', stop_reason = 'max_iterations', updated_at = ? WHERE id = ? AND stop_reason != 'max_iterations'`,
-      now(),
-      workflowId,
-    );
+    const ts = now();
+    if (workflow.stop_reason !== 'max_iterations') {
+      await repo.updateWorkflow(workflowId, { status: 'done', stop_reason: 'max_iterations', updated_at: ts });
+    }
     throw badRequest(
       `Workflow has reached its maximum iteration limit (${maxIter}). ` +
       `Create a new session or increase max_iterations to continue.`,
@@ -69,7 +62,8 @@ export async function startRun(workflowId: string): Promise<string> {
 
   // Create run record in pending state
   const runId = generateId();
-  insert('p6_runs', {
+  const ts = now();
+  await repo.createRun({
     id: runId,
     workflow_id: workflowId,
     status: 'pending',
@@ -78,49 +72,29 @@ export async function startRun(workflowId: string): Promise<string> {
     cost_usd: 0,
     input_tokens: 0,
     output_tokens: 0,
-    created_at: now(),
+    created_at: ts,
   });
 
   // Update workflow to running
-  dbRun(
-    `UPDATE p6_workflows SET status = 'running', updated_at = ? WHERE id = ?`,
-    now(),
-    workflowId,
-  );
+  await repo.updateWorkflow(workflowId, { status: 'running', updated_at: ts });
 
   // Notify project channel
   if (workflow.project_id) {
-    emit(String(workflow.project_id), {
-      type: 'workflow.started',
-      workflowId,
-      runId,
-    });
-    emit(String(workflow.project_id), { type: 'workflow.updated', workflowId, status: 'running' });
-    emit(String(workflow.project_id), { type: 'run.updated', workflowId, runId, status: 'pending' });
+    emit(workflow.project_id, { type: 'workflow.started', workflowId, runId });
+    emit(workflow.project_id, { type: 'workflow.updated', workflowId, status: 'running' });
+    emit(workflow.project_id, { type: 'run.updated', workflowId, runId, status: 'pending' });
   }
 
   // Spawn the run in the background (fire-and-forget)
   executeRun(runId, workflowId).catch((e: unknown) => {
     console.error(`[driver] Unhandled error in run ${runId}:`, e);
     // Best-effort: mark the run failed
-    try {
-      dbRun(
-        'UPDATE p6_runs SET status = ?, finished_at = ? WHERE id = ?',
-        'failed',
-        now(),
-        runId,
-      );
-      dbRun(
-        `UPDATE p6_workflows SET status = 'failed', updated_at = ? WHERE id = ?`,
-        now(),
-        workflowId,
-      );
-      if (workflow.project_id) {
-        emit(String(workflow.project_id), { type: 'run.updated', workflowId, runId, status: 'failed' });
-        emit(String(workflow.project_id), { type: 'workflow.updated', workflowId, status: 'failed' });
-      }
-    } catch {
-      // DB may be closed during shutdown — ignore
+    const errTs = now();
+    repo.updateRun(runId, { status: 'failed', finished_at: errTs }).catch(() => {});
+    repo.updateWorkflow(workflowId, { status: 'failed', updated_at: errTs }).catch(() => {});
+    if (workflow.project_id) {
+      emit(workflow.project_id, { type: 'run.updated', workflowId, runId, status: 'failed' });
+      emit(workflow.project_id, { type: 'workflow.updated', workflowId, status: 'failed' });
     }
   });
 

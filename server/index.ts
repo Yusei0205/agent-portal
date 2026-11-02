@@ -112,6 +112,10 @@ export async function startServer(
   await initSettingsRepository();
   await initProjectRepository();
 
+  // 6b. Initialise sessions repository (p6_workflows, p6_runs, p6_events, p6_inputs, p6_workflow_events)
+  const { initSessionsRepository } = await import('./repositories/sessions.ts');
+  await initSessionsRepository();
+
   // 7. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)
   const { setPreRequestHook } = await import('./http.ts');

@@ -135,6 +135,9 @@
         "server/runs.ts",
         "server/portal-events.ts",
         "server/superpowers-skills.ts",
+        "server/repositories/sessions.ts",
+        "server/repositories/sessions-sqlite.ts",
+        "server/repositories/sessions-dynamodb.ts",
         "web/src/pages/sessions/SessionList.jsx",
         "web/src/pages/sessions/SessionLive.jsx",
         "web/src/pages/sessions/SessionsShell.jsx",
@@ -153,7 +156,8 @@
         "test/session-files.test.ts",
         "test/sanitize-merge.test.ts",
         "test/output-files-match.test.ts",
-        "test/output-file-utils.test.ts"
+        "test/output-file-utils.test.ts",
+        "test/sessions-repo.test.ts"
       ],
       "smokeIds": ["sessions"]
     },
@@ -165,14 +169,18 @@
         "server/workflows/driver.ts",
         "server/workflows/working-copies.ts",
         "server/tool-packs.ts",
-        "server/review-lifecycle.ts"
+        "server/review-lifecycle.ts",
+        "server/repositories/sessions.ts",
+        "server/repositories/sessions-sqlite.ts",
+        "server/repositories/sessions-dynamodb.ts"
       ],
       "tests": [
         "test/workflows.test.ts",
         "test/session-sse.test.ts",
         "test/run-events-sse.test.ts",
         "test/working-copies.test.ts",
-        "test/resume-retry.test.ts"
+        "test/resume-retry.test.ts",
+        "test/transcript-coalesce.test.ts"
       ],
       "smokeIds": ["sessions"],
       "note": "No dedicated smoke section. Session creation (section 31) exercises workflow engine; use sessions smoke ID."

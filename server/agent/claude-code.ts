@@ -19,8 +19,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
-import { one, run as dbRun, insert } from '../db.ts';
-import type { Row } from '../db.ts';
+import { insert } from '../db.ts';
 import { now, generateId, HttpError } from '../util.ts';
 import { evaluateCommand } from '../guardrails.ts';
 import { getSettings, getAgentEnv } from '../settings.ts';
@@ -45,6 +44,7 @@ import {
   restoreClaudeTranscripts,
   claudeProjectDirName,
 } from './claude-sessions.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -251,9 +251,11 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   const model = resolveModel(run.model);
 
   // ── Run budget limit (FR-GUARD-10) ─────────────────────────────────────────
-  // Per-workflow override takes priority over the global setting.
-  const wfRow = one<Row>('SELECT budget_usd FROM p6_workflows WHERE id = ?', run.workflowId);
-  const wfBudget = wfRow?.budget_usd != null ? Number(wfRow.budget_usd) : null;
+  const repo = getSessionsRepository();
+  const wfForBudget = await repo.getWorkflowById(run.workflowId);
+  const wfBudget = (wfForBudget as Record<string, unknown>)?.['budget_usd'] != null
+    ? Number((wfForBudget as Record<string, unknown>)['budget_usd'])
+    : null;
   const globalBudget = getSettings().agents.maxBudgetUsdPerRun;
   const maxBudgetUsd = wfBudget ?? globalBudget;
 
@@ -580,16 +582,17 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         const stopReason = String((msg as Record<string, unknown>).stop_reason ?? '');
         if (stopReason === 'error_max_budget_usd') {
           const capLabel = maxBudgetUsd != null ? ` ($${maxBudgetUsd})` : '';
-          dbRun('UPDATE p6_runs SET stop_reason = ? WHERE id = ?', `spend cap reached${capLabel}`, run.runId);
+          await repo.updateRun(run.runId, { stop_reason: `spend cap reached${capLabel}` });
           emit('status', { text: `Spend cap reached${capLabel}. Run stopped cleanly.` });
         }
         // Capture session_id for conversation continuity (F-SESSION-RESUME)
         const sdkSessionId = (msg as Record<string, unknown>).session_id;
         if (typeof sdkSessionId === 'string' && sdkSessionId) {
-          dbRun(
-            'UPDATE p6_workflows SET engine_session_id = ?, engine_session_engine = ?, updated_at = ? WHERE id = ?',
-            sdkSessionId, 'claude-code', now(), run.workflowId,
-          );
+          await repo.updateWorkflow(run.workflowId, {
+            engine_session_id: sdkSessionId,
+            engine_session_engine: 'claude-code',
+            updated_at: now(),
+          });
         }
       }
     }
@@ -663,28 +666,22 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     });
   }
 
-  // ── Persist totals to p6_runs ──────────────────────────────────────────────
-  dbRun(
-    `UPDATE p6_runs
-        SET cost_usd = ?, input_tokens = ?, output_tokens = ?,
-            cache_write_tokens = ?, cache_read_tokens = ?,
-            model = ?
-      WHERE id = ?`,
-    totalCostUsd,
-    totalInputTokens,
-    totalOutputTokens,
-    totalCacheWriteTokens,
-    totalCacheReadTokens,
+  // Persist totals to p6_runs
+  await repo.updateRun(run.runId, {
+    cost_usd: totalCostUsd,
+    input_tokens: totalInputTokens,
+    output_tokens: totalOutputTokens,
+    cache_write_tokens: totalCacheWriteTokens,
+    cache_read_tokens: totalCacheReadTokens,
     model,
-    run.runId,
-  );
+  });
 
   // ── Insert budget_usage record ─────────────────────────────────────────────
   if (totalCostUsd > 0 || totalInputTokens > 0 || totalOutputTokens > 0) {
-    // Look up the workflow creator for budget attribution
-    const wfRow = one<Row>('SELECT created_by FROM p6_workflows WHERE id = ?', run.workflowId);
+    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    const wfRowCC = await repo.getWorkflowById(run.workflowId);
     insert('budget_usage', {
-      user_id: (wfRow?.created_by as string | null) ?? null,
+      user_id: wfRowCC?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,

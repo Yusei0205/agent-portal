@@ -65,6 +65,7 @@ import {
   saveRefreshedTokenConditional,
 } from './kiro-agentcore.ts';
 import type { KiroTokenPayload } from './kiro-agentcore.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -608,10 +609,12 @@ async function runKiroAcp(
         const loadedId = loadResult?.sessionId ?? engineSessionId;
         sessionId = loadedId;
         // Store immediately (before prompt) so a crash still preserves the ID
-        dbRun(
-          'UPDATE p6_workflows SET engine_session_id = ?, engine_session_engine = ?, updated_at = ? WHERE id = ?',
-          sessionId, 'kiro', now(), workflowId,
-        );
+        const repo = getSessionsRepository();
+        await repo.updateWorkflow(workflowId, {
+          engine_session_id: sessionId,
+          engine_session_engine: 'kiro',
+          updated_at: now(),
+        });
         emit('status', { text: 'Continuing the previous Kiro session' });
       } catch (loadErr: unknown) {
         const reason = String((loadErr as Error)?.message ?? loadErr).slice(0, 200);
@@ -625,10 +628,14 @@ async function runKiroAcp(
         }) as { sessionId?: string };
         sessionId = newResult?.sessionId ?? '';
         if (!sessionId) throw new HttpError(502, 'kiro-cli ACP did not return a sessionId');
-        dbRun(
-          'UPDATE p6_workflows SET engine_session_id = ?, engine_session_engine = ?, updated_at = ? WHERE id = ?',
-          sessionId, 'kiro', now(), workflowId,
-        );
+        {
+          const repoNew = getSessionsRepository();
+          await repoNew.updateWorkflow(workflowId, {
+            engine_session_id: sessionId,
+            engine_session_engine: 'kiro',
+            updated_at: now(),
+          });
+        }
       }
     } else {
       // No stored session ID (first run, old session before this feature, or after /clear).
@@ -646,10 +653,14 @@ async function runKiroAcp(
       sessionId = sessionResult?.sessionId ?? '';
       if (!sessionId) throw new HttpError(502, 'kiro-cli ACP did not return a sessionId');
       // Store immediately so a crash still preserves the ID
-      dbRun(
-        'UPDATE p6_workflows SET engine_session_id = ?, engine_session_engine = ?, updated_at = ? WHERE id = ?',
-        sessionId, 'kiro', now(), workflowId,
-      );
+      {
+        const repoS = getSessionsRepository();
+        await repoS.updateWorkflow(workflowId, {
+          engine_session_id: sessionId,
+          engine_session_engine: 'kiro',
+          updated_at: now(),
+        });
+      }
     }
     // Resume/replay window is over — notifications from here on are live events
     isReplaying = false;
@@ -963,21 +974,19 @@ async function runKiroViaAgentCoreAdapter(
 
   // Persist run stats (same as the local path)
   const approxCostUsd = Number(kiroCredits.toFixed(4));
-  dbRun(
-    `UPDATE p6_runs
-        SET cost_usd = ?, input_tokens = ?, output_tokens = ?,
-            cache_write_tokens = ?, cache_read_tokens = ?,
-            model = ?
-      WHERE id = ?`,
-    approxCostUsd, 0, 0, 0, 0,
-    run.model ?? run.leadAgent ?? 'kiro',
-    run.runId,
-  );
+  const repoKiro = getSessionsRepository();
+  await repoKiro.updateRun(run.runId, {
+    cost_usd: approxCostUsd,
+    input_tokens: 0,
+    output_tokens: 0,
+    model: run.model ?? run.leadAgent ?? 'kiro',
+  });
 
   if (approxCostUsd > 0) {
-    const wfRow = one<Row>('SELECT created_by FROM p6_workflows WHERE id = ?', run.workflowId);
+    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    const wfRow = await repoKiro.getWorkflowById(run.workflowId);
     insert('budget_usage', {
-      user_id: (wfRow?.created_by as string | null) ?? null,
+      user_id: wfRow?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,
@@ -1274,21 +1283,19 @@ export async function runKiro(ctx: RunContext): Promise<string> {
 
   // ── Persist run stats ──────────────────────────────────────────────────────
   const approxCostUsd = Number(kiroCredits.toFixed(4));
-  dbRun(
-    `UPDATE p6_runs
-        SET cost_usd = ?, input_tokens = ?, output_tokens = ?,
-            cache_write_tokens = ?, cache_read_tokens = ?,
-            model = ?
-      WHERE id = ?`,
-    approxCostUsd, 0, 0, 0, 0,
-    run.model ?? run.leadAgent ?? 'kiro',
-    run.runId,
-  );
+  const repoKiro2 = getSessionsRepository();
+  await repoKiro2.updateRun(run.runId, {
+    cost_usd: approxCostUsd,
+    input_tokens: 0,
+    output_tokens: 0,
+    model: run.model ?? run.leadAgent ?? 'kiro',
+  });
 
   if (approxCostUsd > 0) {
-    const wfRow = one<Row>('SELECT created_by FROM p6_workflows WHERE id = ?', run.workflowId);
+    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    const wfRowK = await repoKiro2.getWorkflowById(run.workflowId);
     insert('budget_usage', {
-      user_id: (wfRow?.created_by as string | null) ?? null,
+      user_id: wfRowK?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,

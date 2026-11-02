@@ -16,14 +16,14 @@
  *   Import: import { runLiteLLM } from './litellm.ts';
  */
 
-import { run as dbRun, insert, one } from '../db.ts';
-import type { Row } from '../db.ts';
+import { insert } from '../db.ts';
 import { now, HttpError } from '../util.ts';
 import { getSetting, getSettings } from '../settings.ts';
 import { getDb } from '../db.ts';
 import { decrypt } from '../secrets.ts';
 import { config } from '../config.ts';
 import type { RunContext } from './types.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -148,23 +148,19 @@ export async function runLiteLLM(ctx: RunContext): Promise<string> {
 
   const costUsd = 0; // LiteLLM cost varies by backend; leave as 0 (billing via LiteLLM)
 
-  dbRun(
-    `UPDATE p6_runs
-        SET cost_usd = ?, input_tokens = ?, output_tokens = ?,
-            cache_write_tokens = 0, cache_read_tokens = 0,
-            model = ?
-      WHERE id = ?`,
-    costUsd,
-    inputTokens,
-    outputTokens,
+  const repo = getSessionsRepository();
+  await repo.updateRun(run.runId, {
+    cost_usd: costUsd,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
     model,
-    run.runId,
-  );
+  });
 
   if (inputTokens > 0 || outputTokens > 0) {
-    const wfRow = one<Row>('SELECT created_by FROM p6_workflows WHERE id = ?', run.workflowId);
+    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    const wfRow = await repo.getWorkflowById(run.workflowId);
     insert('budget_usage', {
-      user_id: (wfRow?.created_by as string | null) ?? null,
+      user_id: wfRow?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,

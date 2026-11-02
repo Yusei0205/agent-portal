@@ -258,6 +258,33 @@ To use a custom table: `DYNAMODB_TABLE_PORTAL_USERS=my-table DYNAMODB_ENDPOINT=.
 
 ---
 
+## Oversized-item strategy (sessions / events)
+
+Event payloads in `p6_events` can exceed the DynamoDB 400 KB item limit
+(large tool outputs, long text chunks).  For phase S1 the strategy is
+**truncation with a marker**:
+
+```typescript
+const MAX_PAYLOAD_BYTES = 380_000;
+function truncatePayload(payload: string): string {
+  if (payload.length <= MAX_PAYLOAD_BYTES) return payload;
+  const marker = `\n[PAYLOAD TRUNCATED — original size: ${payload.length} bytes]`;
+  return payload.slice(0, MAX_PAYLOAD_BYTES - marker.length) + marker;
+}
+```
+
+This ensures every item stays within the 400 KB limit without requiring S3.
+The truncated item is still stored and retrievable — the truncation marker
+lets callers detect the loss.
+
+**Phase S2 improvement (documented in data-design doc section 4.8):**
+If `len(payload) > 300_000`: write the full payload to
+`s3://portal-data/events/<runId>/<seq>.json` and store the S3 key as
+`payloadS3Key` in the DynamoDB item.  The `largeTextStrategy` helper in
+the repository transparently resolves S3 keys on read.
+
+---
+
 ## Known limitations
 
 ### TOKEN_INDEX denormalization

@@ -9,11 +9,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { sleep } from '../util.ts';
-import { run as dbRun } from '../db.ts';
 import { evaluateCommand } from '../guardrails.ts';
 import type { RunContext } from './types.ts';
 import { createChildSession } from '../delegation.ts';
 import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -197,9 +197,9 @@ export async function runDemo(ctx: RunContext): Promise<string> {
   }
 
   emit('run-complete', { result: summary, cost_usd: 0 });
-  // Record model used for this run (gap 9)
+  // Record model used for this run
   try {
-    dbRun('UPDATE p6_runs SET model = ? WHERE id = ?', 'demo', run.runId);
+    await getSessionsRepository().updateRun(run.runId, { model: 'demo' });
   } catch { /* non-fatal */ }
   return summary;
 }

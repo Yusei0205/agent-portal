@@ -4,22 +4,11 @@
  * Used when starting a fresh session (no stored engine_session_id, or after a
  * failed resume) to provide the engine with context from earlier turns.
  *
- * Verified facts about where each engine stores sessions:
- *
- *   Kiro — kiro-cli ACP saves sessions to the REAL user profile at
- *     %USERPROFILE%\.kiro\sessions\cli\<sessionId>.json/.jsonl (Windows),
- *     regardless of where HOME is pointed.  Nothing is written under the
- *     materialised temp HOME.  The portal does NOT need to copy or restore
- *     these files; see the removed preserve/restoreKiroSessions code.
- *     The isReplaying guard in kiro.ts is kept because it is harmless and
- *     protects against future replay if the behaviour ever changes.
- *
- *   Claude Code — The Agent SDK / CLI stores transcripts under:
- *     <home>/.claude/projects/<CLAUDE_CODE_PROJECT_DIR_NAME>/<sessionId>.jsonl
- *     (source: bridge.mjs, SDK 0.3.303 / CLI 2.1.303).
- *     Because the materialised HOME is a fresh temp dir every run, the portal
- *     persists those .jsonl files into <workDir>/.portal/claude-sessions/ after
- *     each run and restores them before the next.  See claude-sessions.ts.
+ * S1-TODO(sessions): buildConversationRecap uses db.ts directly because it is
+ * called synchronously from kiro.ts and claude-code.ts, and its callers in
+ * test/kiro-session.test.ts also call it synchronously.  Full async conversion
+ * (using getSessionsRepository()) is deferred to S2 when the RunContext.emit
+ * type is made async and the agent engines are updated.
  */
 
 import { one, all } from '../db.ts';

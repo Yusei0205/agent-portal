@@ -850,6 +850,9 @@ export function SessionLive({
   const [nextCursor, setNextCursor]                   = useState(null);
   const [loadingEarlier, setLoadingEarlier]           = useState(false);
   const [loadedInitialTranscript, setLoadedInitialTranscript] = useState(false);
+  // True once we have loaded the oldest page (nextCursor became null).
+  // The goal bubble is only shown when we know there is no earlier history.
+  const [reachedStart, setReachedStart]               = useState(false);
 
   // Ref that always mirrors current `events` — readable inside effects on runId
   // change before useRunStream resets its state.
@@ -879,7 +882,10 @@ export function SessionLive({
   const displayEarlierEvents = mergeConsecutiveAssistantText(pairedEarlierEvents);
 
   const goalText = typeof workflow?.goal === 'string' ? workflow.goal.trim() : '';
-  const showGoal = Boolean(goalText) && loadedInitialTranscript && !nextCursor;
+  // Show the goal bubble only once we know there is no earlier history (i.e.
+  // the oldest page has been loaded).  This prevents the bubble from
+  // disappearing or flickering when a session has more than one page of events.
+  const showGoal = Boolean(goalText) && loadedInitialTranscript && reachedStart;
 
   // Reasoning paragraphs from the current stream (streamed chunks joined as sent)
   const agentThoughts = collectThoughtParagraphs(events);
@@ -929,20 +935,44 @@ export function SessionLive({
     const prevRunId = prevRunIdRef.current;
     prevRunIdRef.current = runId;
 
-    if (prevRunId && prevRunId !== runId && latestEventsRef.current.length > 0) {
-      const toSave = latestEventsRef.current;
-      // Merge the full stream copy (toSave) with the existing transcript snapshot
-      // (prev).  mergeEventLists deduplicates by (src, id) so the tail that
-      // appears in both is kept exactly once, and the head that was missing from
-      // the 200-event snapshot is added from the stream.  The result is sorted
-      // chronologically — oldest first.  Stream events (b) win on conflict.
-      setEarlierEvents((prev) => mergeEventLists(prev, toSave));
+    if (prevRunId && prevRunId !== runId) {
+      // 1. Merge the completed run's full stream events into earlierEvents so they
+      //    survive the stream reset that follows.
+      if (latestEventsRef.current.length > 0) {
+        const toSave = latestEventsRef.current;
+        setEarlierEvents((prev) => mergeEventLists(prev, toSave));
+      }
+
+      // 2. Re-fetch the newest transcript page to pick up any new
+      //    p6_workflow_events entries (e.g. a human follow-up that triggered
+      //    this new run).  mergeEventLists deduplicates by src+id, so there
+      //    will be no duplicates with events already in earlierEvents.
+      if (workflowId && projectId) {
+        api.get(
+          `/api/projects/${projectId}/workflows/${workflowId}/transcript?limit=50`,
+        ).then((data) => {
+          // Only take workflow events (src 'w': human follow-ups, commands).
+          // Run events are already covered by the saved stream copy above, and
+          // the transcript coalesces streamed text into one event keyed by the
+          // first chunk's id, so merging it with per-chunk stream events would
+          // duplicate the previous answer.
+          const normalised = (data.events ?? [])
+            .filter((e) => e.src === 'w')
+            .map(normaliseTranscriptEvent)
+            .reverse();
+          if (normalised.length > 0) {
+            setEarlierEvents((prev) => mergeEventLists(prev, normalised));
+          }
+        }).catch(() => {}); // non-critical: transcript is a best-effort overlay
+      }
     }
 
     // Reset browser-notification tracker for the new run
     notifiedBrowserEventsRef.current = new Set();
+  // workflowId and projectId are stable for the lifetime of this component
+  // mount.  runId is the only value that triggers a meaningful re-run.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
+  }, [runId, workflowId, projectId]);
 
   // ── Browser events: notify parent ────────────────────────────────────────
 
@@ -984,14 +1014,13 @@ export function SessionLive({
     if (!workflowId || !projectId || loadedInitialTranscript) return;
     setLoadedInitialTranscript(true);
 
-    // Server max is 200 events per page (see transcript route in server/workflows/crud.ts).
-    // We request the maximum to capture as many events from the previous run as
-    // possible in a single round-trip.  If the first page still doesn't contain a
-    // human message from before the active run, we keep fetching older pages
-    // automatically (up to MAX_AUTO_PAGES) so the complete previous turn is visible
-    // without the user having to click "Load earlier turns".
+    // Server max is 200 raw events per page, but consecutive streamed
+    // assistant-text chunks are coalesced server-side, so each page typically
+    // covers many turns.  We auto-load up to MAX_AUTO_PAGES pages so the full
+    // history is visible without the user having to click "Load earlier turns".
+    // Beyond this cap the "Load earlier" button lets them go further.
     const PAGE_LIMIT = 200;
-    const MAX_AUTO_PAGES = 5;
+    const MAX_AUTO_PAGES = 20;
 
     let cancelled = false;
 
@@ -1018,31 +1047,26 @@ export function SessionLive({
           accEvents = [...normalised, ...accEvents];
           cursor = data.nextCursor ?? null;
 
-          if (!cursor) break; // no more history
-
-          // Stop early once we have at least one human message that is NOT from
-          // the currently-active run.  Human events in the transcript come from
-          // p6_workflow_events (src='w') and always carry run_id: null, so the
-          // check `e.run_id !== runId` is always true when runId is a non-null
-          // string — meaning any human event satisfies the condition.  When runId
-          // is null (no active run) we keep loading until MAX_AUTO_PAGES.
-          const hasEarlierHuman = accEvents.some(
-            (e) => e.type === 'human' && e.run_id !== runId,
-          );
-          if (hasEarlierHuman) break;
+          if (!cursor) {
+            // Reached the very beginning of the session — goal bubble can show.
+            setReachedStart(true);
+            break;
+          }
         }
 
         if (!cancelled && accEvents.length > 0) {
           setEarlierEvents(accEvents);
           setNextCursor(cursor);
+        } else if (!cancelled && accEvents.length === 0) {
+          // Empty session (no events yet): still mark start reached so the
+          // goal bubble shows immediately.
+          setReachedStart(true);
         }
       } catch { /* ignore — transcript is non-critical */ }
     })();
 
     return () => { cancelled = true; };
   // runId is intentionally NOT in deps: this effect runs once per session mount.
-  // The closure captures the initial runId which is the "current" run we want to
-  // look behind.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflowId, projectId, loadedInitialTranscript]);
 
@@ -1059,7 +1083,12 @@ export function SessionLive({
         (data.events ?? []).map(normaliseTranscriptEvent).reverse(),
         prev,
       ));
-      setNextCursor(data.nextCursor ?? null);
+      const newCursor = data.nextCursor ?? null;
+      setNextCursor(newCursor);
+      if (!newCursor) {
+        // Reached the very beginning — show the goal bubble.
+        setReachedStart(true);
+      }
       if (el) {
         requestAnimationFrame(() => { el.scrollTop = el.scrollHeight - scrollBottom; });
       }
