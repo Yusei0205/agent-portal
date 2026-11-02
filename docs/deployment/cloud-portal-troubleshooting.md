@@ -96,6 +96,23 @@ Lambda can run many instances, and an instance is **frozen** as soon as its resp
 ### AgentCore invocation returns 409 `RetryableConflictException`
 - The runner handles one operation per session at a time. Status checks (`kiro-login-status`) are exempt; retry other calls.
 
+## Claude (AgentCore runner)
+
+How it works: with `PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN` set (deploy context `claudeRuntimeArn`), a Claude Code session whose credential is an Anthropic API key or a Claude subscription token runs on the `agent-runner` AgentCore runtime (stack `AgentPortalSpikeA`) instead of a local process. The portal sends the credential in the request (`auth`), the runner streams events back (`server/agent/claude-agentcore.ts`), and cost/tokens are recorded like a local run. Bedrock credentials keep using the local SDK path. To use it: Credentials > add a Claude credential (API key or subscription token), then start a session with the Claude Code engine.
+
+### "Invalid API key" in the session
+- The credential reached Anthropic and was rejected. Re-enter it in Credentials. (The runner never echoes the key.)
+
+### Claude session says a tool "needs approval"
+- A cloud run cannot stop and ask for approval mid-run. Without **Trust all tools** only read-only tools (Read, Glob, Grep, LS, WebSearch, WebFetch, TodoWrite) run. Turn on Trust all tools for sessions that must edit files or run commands.
+
+### Claude runs but nothing changes / files missing afterwards
+- The agent works inside the AgentCore microVM (`/tmp/agent-sessions/<id>/work`), which is released after about 5 idle minutes. Files it writes there are not copied back to the portal yet; only the text, tool activity and cost come back.
+
+### Changing the runner
+- Build from the repo root: `docker buildx build --platform linux/arm64 -f agent-runner/Dockerfile -t <ecr>/agent-portal/agent-runner:<tag> --push .`, set `IMAGE_TAG` in `infra/lib/spike-a-stack.ts`, `cdk deploy AgentPortalSpikeA`.
+- Quick check without the portal: `aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn <arn> --runtime-session-id <33+ chars> --payload fileb://payload.json out.txt`. A fake key should return `Invalid API key`.
+
 ## Storage
 
 ### Setup wizard Storage step: S3 test fails with 403 / "request failed"

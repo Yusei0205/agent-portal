@@ -388,7 +388,7 @@ async function* invokeAgentCoreReal(
 /**
  * Entry point for AgentCore invocations — uses the real HTTP path or a test override.
  */
-async function* invokeAgentCore(
+export async function* invokeAgentCore(
   runtimeArn: string,
   sessionId: string,
   payload: Record<string, unknown>,

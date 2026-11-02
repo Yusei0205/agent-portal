@@ -23,6 +23,7 @@
  *   session/request_permission → approval flow → option response
  */
 
+import { getCredentialsRepository } from '../repositories/credentials.ts';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -934,10 +935,7 @@ async function runKiroViaAgentCoreAdapter(
   let expectedCiphertext: string | null = null;
   if (run.credentialId) {
     try {
-      const credRow = one<{ secret_enc: string | null }>(
-        'SELECT secret_enc FROM engine_credentials WHERE id = ?',
-        run.credentialId,
-      );
+      const credRow = await getCredentialsRepository().getById(run.credentialId);
       expectedCiphertext = credRow?.secret_enc ?? null;
     } catch { /* non-fatal */ }
   }

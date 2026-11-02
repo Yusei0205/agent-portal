@@ -43,6 +43,7 @@ import { scrubEnvForShell } from '../shared/env-scrub.js';
 import {
   type InvocationPayload,
   DEFAULT_MODEL,
+  DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_MAX_TURNS,
   DEFAULT_MAX_BUDGET_USD,
   DEFAULT_MAX_MINUTES,
@@ -71,6 +72,12 @@ interface RunMetrics {
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
   'write', 'edit', 'str_replace_editor',
+]);
+
+/** Tools that only read: allowed even when the session does not trust all tools. */
+const READ_ONLY_TOOLS = new Set([
+  'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebSearch', 'WebFetch', 'TodoWrite',
+  'read', 'glob', 'grep', 'ls',
 ]);
 
 // ── Disk usage helper ─────────────────────────────────────────────────────────
@@ -133,7 +140,7 @@ export async function runInvocation(
   const invokeStart = Date.now();
   let firstTokenMs: number | null = null;
 
-  const model = payload.model ?? DEFAULT_MODEL;
+  const model = payload.model ?? (payload.auth ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_MODEL);
   const maxTurns = payload.maxTurns ?? DEFAULT_MAX_TURNS;
   const maxBudgetUsd = payload.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD;
   const maxMinutes = payload.maxMinutes ?? DEFAULT_MAX_MINUTES;
@@ -182,7 +189,6 @@ export async function runInvocation(
   const scrubbed = scrubEnvForShell(process.env as Record<string, string | undefined>);
   const sdkEnv: Record<string, string> = {
     ...scrubbed,
-    CLAUDE_CODE_USE_BEDROCK: '1',
     AWS_DEFAULT_REGION: region,
     AWS_REGION: region,
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
@@ -191,7 +197,16 @@ export async function runInvocation(
     USERPROFILE: workDir, // Windows compatibility (not needed in the container)
   };
 
-  // Re-add AWS credential chain vars needed by Claude Code itself.
+  if (payload.auth) {
+    // The user's own Anthropic credential, valid for this run only (the microVM is isolated per session).
+    if (payload.auth.kind === 'api_key') sdkEnv.ANTHROPIC_API_KEY = payload.auth.secret;
+    else sdkEnv.CLAUDE_CODE_OAUTH_TOKEN = payload.auth.secret;
+  } else {
+    sdkEnv.CLAUDE_CODE_USE_BEDROCK = '1';
+  }
+
+  // Re-add AWS credential chain vars needed by Claude Code itself (Bedrock path).
+  // (Harmless with an Anthropic credential: the SDK ignores them.)
   // In AgentCore prod these are typically absent (IAM role via metadata service).
   // In local testing they are set via --env-file and needed for Bedrock auth.
   const credVarsToRestore = [
@@ -272,6 +287,13 @@ export async function runInvocation(
     if (guardReason) {
       emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: guardReason });
       return { behavior: 'deny', message: guardReason };
+    }
+
+    // A one-shot invocation cannot ask the user for approval, so without "trust all tools" only reads run.
+    if (payload.trustTools === false && !READ_ONLY_TOOLS.has(toolName)) {
+      const reason = `"${toolName}" needs approval. Turn on "Trust all tools" for this session to let the agent change files or run commands.`;
+      emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason });
+      return { behavior: 'deny', message: reason };
     }
 
     // No interactive approvals in this spike — allow everything else

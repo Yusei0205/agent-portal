@@ -22,6 +22,15 @@ export interface PortalConfig {
   runToken: string;
 }
 
+/**
+ * Anthropic credential supplied by the portal for this run (the user's own key or subscription token).
+ * When present the run uses Anthropic directly instead of Amazon Bedrock. NEVER log or echo `secret`.
+ */
+export interface AuthConfig {
+  kind: 'api_key' | 'oauth_token';
+  secret: string;
+}
+
 export interface InvocationPayload {
   /** Unique run ID provided by the caller. */
   runId: string;
@@ -36,11 +45,21 @@ export interface InvocationPayload {
   maxMinutes?: number;
   repo?: RepoConfig;
   portal?: PortalConfig;
+  /** Anthropic credential; without it the run uses Bedrock through the execution role. */
+  auth?: AuthConfig;
+  /**
+   * false = only read-only tools run (a one-shot invocation cannot ask for approval). Undefined/true = all tools
+   * run after the guard checks.
+   */
+  trustTools?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const DEFAULT_MODEL = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
+/** Model used when an Anthropic credential is supplied and no model was asked for. */
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5';
+const MAX_SECRET_LENGTH = 4_096;
 export const DEFAULT_MAX_TURNS = 10;
 export const DEFAULT_MAX_BUDGET_USD = 0.5;
 export const DEFAULT_MAX_MINUTES = 10;
@@ -49,8 +68,9 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal',
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal', 'auth', 'trustTools',
 ]);
+const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
 const KNOWN_PORTAL_FIELDS = new Set(['url', 'runToken']);
 
@@ -171,6 +191,32 @@ export function validatePayload(raw: unknown): ValidationResult {
     portal = { url: p.url.trim(), runToken: p.runToken };
   }
 
+  if (obj.trustTools !== undefined && typeof obj.trustTools !== 'boolean') {
+    return err('"trustTools" must be a boolean');
+  }
+
+  // auth — optional object { kind, secret }
+  let auth: AuthConfig | undefined;
+  if (obj.auth !== undefined) {
+    if (typeof obj.auth !== 'object' || obj.auth === null || Array.isArray(obj.auth)) {
+      return err('"auth" must be an object');
+    }
+    const a = obj.auth as Record<string, unknown>;
+    for (const key of Object.keys(a)) {
+      if (!KNOWN_AUTH_FIELDS.has(key)) return err(`Unknown field in "auth": "${key}"`);
+    }
+    if (a.kind !== 'api_key' && a.kind !== 'oauth_token') {
+      return err('"auth.kind" must be "api_key" or "oauth_token"');
+    }
+    if (typeof a.secret !== 'string' || !a.secret.trim()) {
+      return err('"auth.secret" must be a non-empty string');
+    }
+    if (a.secret.length > MAX_SECRET_LENGTH) {
+      return err(`"auth.secret" exceeds maximum length of ${MAX_SECRET_LENGTH}`);
+    }
+    auth = { kind: a.kind, secret: a.secret.trim() };
+  }
+
   return {
     ok: true,
     payload: {
@@ -182,6 +228,8 @@ export function validatePayload(raw: unknown): ValidationResult {
       maxMinutes: typeof obj.maxMinutes === 'number' ? obj.maxMinutes : undefined,
       repo,
       portal,
+      auth,
+      trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,
     },
   };
 }

@@ -97,6 +97,8 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   /** Existing S3 bucket the portal may read and write for file storage (optional). */
   storageBucket?: string;
   /** https://<cloudfront domain>; needed for Google sign-in (redirect URI). */
+  /** AgentCore runtime that runs Claude (the agent-runner image); enables Claude sessions on the cloud portal. */
+  claudeRuntimeArn?: string;
   publicUrl?: string;
   /** Emails / @domains allowed to sign in with Google without an invite, comma separated. */
   googleAllowed?: string;
@@ -236,6 +238,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
         PORTAL_GOOGLE_SECRET_ARN: googleSecret.secretArn,
         ...(props.publicUrl ? { PORTAL_PUBLIC_URL: props.publicUrl } : {}),
         ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
+        ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
         ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
       },
     });
@@ -250,6 +253,12 @@ export class AgentPortalCloudStack extends cdk.Stack {
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],
         resources: [props.kiroRuntimeArn, `${props.kiroRuntimeArn}/*`],
+      }));
+    }
+    if (props.claudeRuntimeArn) {
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],
+        resources: [props.claudeRuntimeArn, `${props.claudeRuntimeArn}/*`],
       }));
     }
     if (props.storageBucket) {

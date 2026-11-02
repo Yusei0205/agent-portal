@@ -260,3 +260,39 @@ describe('validatePayload — portal', () => {
     assert.equal(p.portal, undefined);
   });
 });
+
+describe('validatePayload — auth (Anthropic credential)', () => {
+  test('accepts an API key or an OAuth token and trims the secret', () => {
+    const a = ok({ ...minPayload(), auth: { kind: 'api_key', secret: '  sk-ant-test  ' } });
+    assert.deepEqual(a.auth, { kind: 'api_key', secret: 'sk-ant-test' });
+    const b = ok({ ...minPayload(), auth: { kind: 'oauth_token', secret: 'tok' } });
+    assert.equal(b.auth?.kind, 'oauth_token');
+  });
+
+  test('is optional (Bedrock path keeps working)', () => {
+    assert.equal(ok(minPayload()).auth, undefined);
+  });
+
+  test('rejects bad kind, empty/oversized secret, unknown fields, non-objects', () => {
+    for (const auth of [
+      { kind: 'password', secret: 'x' },
+      { kind: 'api_key', secret: '' },
+      { kind: 'api_key', secret: 'x'.repeat(5000) },
+      { kind: 'api_key', secret: 'x', extra: 1 },
+      'sk-ant',
+      null,
+      [],
+    ]) {
+      assert.equal(validatePayload({ ...minPayload(), auth }).ok, false, JSON.stringify(auth));
+    }
+  });
+});
+
+describe('validatePayload — trustTools', () => {
+  test('accepts a boolean and rejects other types', () => {
+    assert.equal(ok({ ...minPayload(), trustTools: false }).trustTools, false);
+    assert.equal(ok({ ...minPayload(), trustTools: true }).trustTools, true);
+    assert.equal(ok(minPayload()).trustTools, undefined);
+    assert.equal(validatePayload({ ...minPayload(), trustTools: 'yes' }).ok, false);
+  });
+});

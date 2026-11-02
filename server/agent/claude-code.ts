@@ -44,6 +44,7 @@ import {
   claudeProjectDirName,
 } from './claude-sessions.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { runClaudeViaAgentCore, anthropicAuthFromEnv } from './claude-agentcore.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -154,12 +155,89 @@ Only include real findings — an empty array [] is correct when the diff is cle
  * Run a workflow using the Claude Code SDK. Emits events via ctx.emit() and
  * returns the final summary text.
  */
+/** Run Claude on the AgentCore runtime and record cost/usage like the local path does. */
+async function runClaudeViaAgentCoreAdapter(
+  ctx: RunContext,
+  runtimeArn: string,
+  auth: { kind: 'api_key' | 'oauth_token'; secret: string },
+): Promise<string> {
+  const { run, emit } = ctx;
+  const repo = getSessionsRepository();
+  const model = resolveModel(run.model);
+
+  const wf = await repo.getWorkflowById(run.workflowId);
+  const wfRow = wf as unknown as Record<string, unknown> | null;
+  const wfBudget = wfRow?.['budget_usd'] != null ? Number(wfRow['budget_usd']) : null;
+  const maxBudgetUsd = wfBudget ?? getSettings().agents.maxBudgetUsdPerRun;
+
+  let prompt = run.goal;
+  if (run.kind === 'review') prompt = `${run.goal}
+
+${REVIEW_SYSTEM_APPEND}`;
+
+  const res = await runClaudeViaAgentCore(ctx, {
+    runtimeArn,
+    runId: run.runId,
+    prompt,
+    model,
+    auth,
+    trustTools: Boolean(run.trusted),
+    maxBudgetUsd,
+  });
+
+  let costUsd = res.costUsd;
+  if (costUsd === 0 && (res.inputTokens > 0 || res.outputTokens > 0)) {
+    costUsd = estimateCost(model, {
+      input_tokens: res.inputTokens,
+      output_tokens: res.outputTokens,
+      cache_read_input_tokens: res.cacheReadTokens,
+      cache_creation_input_tokens: res.cacheWriteTokens,
+    });
+  }
+
+  await repo.updateRun(run.runId, {
+    cost_usd: costUsd,
+    input_tokens: res.inputTokens,
+    output_tokens: res.outputTokens,
+    cache_write_tokens: res.cacheWriteTokens,
+    cache_read_tokens: res.cacheReadTokens,
+    model,
+  });
+
+  if (costUsd > 0 || res.inputTokens > 0 || res.outputTokens > 0) {
+    const { getBudgetRepository } = await import('../repositories/budget.ts');
+    await getBudgetRepository().record({
+      user_id: wf?.created_by ?? null,
+      project_id: run.projectId,
+      workflow_id: run.workflowId,
+      run_id: null,
+      cost_usd: costUsd,
+      input_tokens: res.inputTokens,
+      output_tokens: res.outputTokens,
+      provider: auth.kind === 'oauth_token' ? 'subscription' : 'anthropic',
+      model,
+      created_at: now(),
+    });
+  }
+
+  const summary = res.text || 'Run complete.';
+  emit('run-complete', { result: summary, cost_usd: costUsd });
+  return summary;
+}
+
 export async function runClaudeCode(ctx: RunContext): Promise<string> {
   const { run, emit, awaitInput } = ctx;
 
   // ── Pre-flight: credentials check ─────────────────────────────────────────
   // Resolve env from per-user credential, default credential, or portal provider.
   const agentEnv = await resolveCredentialEnv('claude-code', run.credentialOwnerId, run.credentialId);
+
+  // ── Cloud: run on an AgentCore runtime instead of a local SDK process ─────
+  const claudeRuntimeArn = process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
+  const cloudAuth = claudeRuntimeArn ? anthropicAuthFromEnv(agentEnv as Record<string, string | undefined>) : null;
+  if (claudeRuntimeArn && cloudAuth) {
+    return runClaudeViaAgentCoreAdapter(ctx, claudeRuntimeArn, cloudAuth);
+  }
 
   // ── Materialised home dir (F5) ─────────────────────────────────────────────
   // await materialiseForRun() is called before the engine by runner.ts.
