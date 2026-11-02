@@ -116,6 +116,14 @@ export async function startServer(
   const { initSessionsRepository } = await import('./repositories/sessions.ts');
   await initSessionsRepository();
 
+  // 6c. Initialise inbox repository (p6_inbox)
+  const { initInboxRepository } = await import('./repositories/inbox.ts');
+  await initInboxRepository();
+
+  // 6d. Initialise budget repository (budget_usage)
+  const { initBudgetRepository } = await import('./repositories/budget.ts');
+  await initBudgetRepository();
+
   // 7. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)
   const { setPreRequestHook } = await import('./http.ts');

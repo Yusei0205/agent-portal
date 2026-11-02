@@ -49,7 +49,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
-import { now } from '../util.ts';
+import { now, HttpError } from '../util.ts';
 import type {
   SessionsRepository,
   WorkflowRecord,
@@ -338,6 +338,14 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
             ],
             Projection: { ProjectionType: 'ALL' },
           },
+          {
+            IndexName: 'GSI-ChildIdle',
+            KeySchema: [
+              { AttributeName: 'childIdleCandidate', KeyType: 'HASH' },
+              { AttributeName: 'updated_at_child_idle', KeyType: 'RANGE' },
+            ],
+            Projection: { ProjectionType: 'ALL' },
+          },
         ] : [];
         await this.client.send(new CreateTableCommand({
           TableName: tableName,
@@ -360,6 +368,8 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
             { AttributeName: 'inputId', AttributeType: 'S' },
             { AttributeName: 'idleCandidate', AttributeType: 'S' },
             { AttributeName: 'last_turn_at_idle', AttributeType: 'S' },
+            { AttributeName: 'childIdleCandidate', AttributeType: 'S' },
+            { AttributeName: 'updated_at_child_idle', AttributeType: 'S' },
           ] : [
             { AttributeName: 'PK', AttributeType: 'S' },
             { AttributeName: 'SK', AttributeType: 'S' },
@@ -590,6 +600,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     id: string,
     expectedStatus: string,
     patch: Partial<WorkflowRecord>,
+    opts?: { hintParentId?: string | null },
   ): Promise<boolean> {
     const allowed: (keyof WorkflowRecord)[] = [
       'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
@@ -623,7 +634,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       ? undefined  // already in patch, _buildGsiKeyExprs uses it directly
       : expectedStatus;
 
-    this._buildGsiKeyExprs(id, patch, setExprs, names, vals, removeExprs, currentStatusForIdle);
+    this._buildGsiKeyExprs(id, patch, setExprs, names, vals, removeExprs, currentStatusForIdle, undefined, undefined, opts?.hintParentId);
 
     if (setExprs.length === 0 && removeExprs.length === 0) return false;
 
@@ -676,6 +687,8 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     // When last_turn_at or stop_reason changes but status is NOT in the patch,
     // we need to read the current item to decide whether the idle candidate
     // should be set or removed.
+    // When status changes (with or without stop_reason), we need parent_id for
+    // the child-idle-candidate decision.
     const hasStatus = 'status' in patch && patch.status !== undefined;
     const hasLastTurnAt = 'last_turn_at' in patch && patch.last_turn_at !== undefined;
     const hasStopReason = 'stop_reason' in patch && patch.stop_reason !== undefined;
@@ -683,16 +696,18 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     let currentStatus: string | undefined;
     let currentStopReason: string | undefined;
     let currentLastTurnAt: string | null | undefined;
+    let currentParentId: string | null | undefined;
 
-    if (!hasStatus && (hasLastTurnAt || hasStopReason)) {
-      // Read the current item so we can make a correct idle-candidate decision.
+    if (hasStatus || hasLastTurnAt || hasStopReason) {
+      // Read the current item so we can make correct idle-candidate decisions.
       const current = await this.getWorkflowById(id);
-      currentStatus = current?.status ?? undefined;
-      currentStopReason = current?.stop_reason ?? undefined;
-      currentLastTurnAt = current?.last_turn_at ?? null;
+      if (!hasStatus) currentStatus = current?.status ?? undefined;
+      if (!hasStopReason) currentStopReason = current?.stop_reason ?? undefined;
+      if (!hasLastTurnAt) currentLastTurnAt = current?.last_turn_at ?? null;
+      currentParentId = current?.parent_id ?? null;
     }
 
-    this._buildGsiKeyExprs(id, patch, setExprs, names, vals, removeExprs, currentStatus, currentStopReason, currentLastTurnAt);
+    this._buildGsiKeyExprs(id, patch, setExprs, names, vals, removeExprs, currentStatus, currentStopReason, currentLastTurnAt, currentParentId);
 
     // Handle gParentId: set when parent_id becomes non-null, remove when nulled
     if ('parent_id' in patch) {
@@ -734,6 +749,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     currentStatus?: string,
     currentStopReason?: string,
     currentLastTurnAt?: string | null,
+    currentParentId?: string | null,
   ): void {
     const hasStatus = 'status' in patch && patch.status !== undefined;
     const hasUpdatedAt = 'updated_at' in patch && patch.updated_at !== undefined;
@@ -806,6 +822,43 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       } else {
         removeExprs.push('#idleC');
         removeExprs.push('#ltidle');
+      }
+    }
+
+    // ── GSI-ChildIdle management ───────────────────────────────────────────────
+    // Child idle candidates are workflows with parent_id IS NOT NULL,
+    // status IN ('done','failed','paused'), and stop_reason=''.
+    // The sparse GSI-ChildIdle has PK=childIdleCandidate='CHILD_IDLE',
+    // SK=updated_at_child_idle=updated_at+'#'+id.
+    // Attributes are SET when conditions are met, REMOVED otherwise.
+    //
+    // currentParentId (from patch, read, or hint) determines whether this
+    // workflow is a child. If undefined, we skip to avoid a stale REMOVE.
+
+    const haveParentInfo = currentParentId !== undefined;
+    const effectiveUpdatedAt = ('updated_at' in patch && patch.updated_at !== undefined)
+      ? (patch.updated_at as string)
+      : undefined;
+
+    if (haveEnoughInfo && haveParentInfo && removeExprs !== undefined && effectiveUpdatedAt !== undefined) {
+      const terminalStatuses = new Set(['done', 'failed', 'paused']);
+      const shouldBeChildIdle =
+        effectiveStatus !== undefined &&
+        terminalStatuses.has(effectiveStatus) &&
+        effectiveStopReason === '' &&
+        currentParentId !== null;
+
+      names['#cic'] = 'childIdleCandidate';
+      names['#atci'] = 'updated_at_child_idle';
+
+      if (shouldBeChildIdle) {
+        vals[':cic'] = av('CHILD_IDLE');
+        vals[':atci'] = av(`${effectiveUpdatedAt}#${id}`);
+        setExprs.push('#cic = :cic');
+        setExprs.push('#atci = :atci');
+      } else {
+        removeExprs.push('#cic');
+        removeExprs.push('#atci');
       }
     }
   }
@@ -1605,6 +1658,337 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         : null;
 
     return { rows: page, nextCursor };
+  }
+
+  // ── Delegation ──────────────────────────────────────────────────────────────
+
+  async countRunningChildWorkflows(parentId: string): Promise<number> {
+    const res = await this.client.send(new GetItemCommand({
+      TableName: runsTable(),
+      Key: marshalItem({ PK: `DLGPARENT#${parentId}`, SK: '#RUNNING' }),
+    }));
+    return res.Item ? Math.max(0, getNumber(res.Item, 'count')) : 0;
+  }
+
+  async countRunningChildrenByUser(userId: string): Promise<number> {
+    const res = await this.client.send(new GetItemCommand({
+      TableName: runsTable(),
+      Key: marshalItem({ PK: `DLGUSER#${userId}`, SK: '#RUNNING' }),
+    }));
+    return res.Item ? Math.max(0, getNumber(res.Item, 'count')) : 0;
+  }
+
+  async createChildWorkflowChecked(
+    input: CreateWorkflowInput,
+    opts: { parentId: string; userId: string; maxRunningPerParent: number; maxRunningPerUser: number },
+  ): Promise<WorkflowRecord> {
+    const { parentId, userId, maxRunningPerParent, maxRunningPerUser } = opts;
+
+    const wfGsiSk = `WF#${input.updated_at}#${input.id}`;
+    const statusGsiSk = `STATUS#${input.status}#${input.updated_at}`;
+    const wfItem: Record<string, AttributeValue> = {
+      PK: av(`WF#${input.id}`),
+      SK: av('#META'),
+      id: av(input.id),
+      gStatus: av(input.status),
+      childCount: { N: '0' },
+      ...marshalItem({
+        project_id: input.project_id,
+        title: input.title ?? '',
+        goal: input.goal,
+        status: input.status,
+        stop_reason: input.stop_reason ?? '',
+        engine: input.engine,
+        trust_tools: input.trust_tools,
+        lead_agent: input.lead_agent,
+        workspace_id: input.workspace_id,
+        output_files_enabled: input.output_files_enabled,
+        repo_ids: input.repo_ids,
+        iteration_count: input.iteration_count,
+        max_iterations: input.max_iterations,
+        credential_id: input.credential_id,
+        model: input.model,
+        jira_key: input.jira_key ?? '',
+        jira_summary: input.jira_summary ?? '',
+        jira_url: input.jira_url ?? '',
+        created_by: input.created_by,
+        created_at: input.created_at,
+        updated_at: input.updated_at,
+        parent_id: parentId,
+        wfGsiSk,
+        statusGsiSk,
+      }),
+    };
+    if (input.project_id) wfItem['projectId'] = av(input.project_id);
+    wfItem['gParentId'] = av(parentId);
+    // Mark slot as held: this child currently occupies one slot in both
+    // DLGPARENT and DLGUSER counters.
+    wfItem['dlgSlotHeld'] = { N: '1' };
+
+    // Build TransactItems: Put workflow + increment parent counter + increment user counter
+    type TransactItem = NonNullable<ConstructorParameters<typeof TransactWriteItemsCommand>[0]['TransactItems']>[number];
+    const transactItems: TransactItem[] = [
+      {
+        Put: {
+          TableName: runsTable(),
+          Item: wfItem,
+          ConditionExpression: 'attribute_not_exists(PK)',
+        },
+      },
+    ];
+
+    // Parent running-children counter
+    if (maxRunningPerParent > 0) {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGPARENT#${parentId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ConditionExpression: 'attribute_not_exists(#cnt) OR #cnt < :maxParent',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' }, ':maxParent': { N: String(maxRunningPerParent) } },
+        },
+      });
+    } else {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGPARENT#${parentId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' } },
+        },
+      });
+    }
+
+    // User running-children counter
+    if (maxRunningPerUser > 0) {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGUSER#${userId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ConditionExpression: 'attribute_not_exists(#cnt) OR #cnt < :maxUser',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' }, ':maxUser': { N: String(maxRunningPerUser) } },
+        },
+      });
+    } else {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGUSER#${userId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' } },
+        },
+      });
+    }
+
+    try {
+      await this.client.send(new TransactWriteItemsCommand({ TransactItems: transactItems }));
+    } catch (e: unknown) {
+      const name = (e as { name?: string }).name ?? '';
+      if (name === 'TransactionCanceledException') {
+        const reasons = (e as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons ?? [];
+        // Index 1: parent counter condition; Index 2: user counter condition
+        if (reasons[1]?.Code === 'ConditionalCheckFailed') {
+          throw new HttpError(
+            429,
+            `The maximum running children per parent (${maxRunningPerParent}) has been reached. Wait for a child to finish.`,
+          );
+        }
+        if (reasons[2]?.Code === 'ConditionalCheckFailed') {
+          throw new HttpError(
+            429,
+            `The maximum running delegated sessions per user (${maxRunningPerUser}) has been reached. Wait for a child to finish.`,
+          );
+        }
+        if (reasons[0]?.Code === 'ConditionalCheckFailed') {
+          throw new HttpError(409, 'Child workflow ID conflict — try again.');
+        }
+      }
+      throw e;
+    }
+
+    // Increment parent total child count (distinct from the running-child counter)
+    await this.incrementWorkflowChildCount(parentId, 1);
+
+    return itemToWorkflow(wfItem);
+  }
+
+  async releaseChildDelegationSlot(childId: string, parentId: string, userId: string): Promise<void> {
+    // TransactWriteItems:
+    //   [0] Child item: condition dlgSlotHeld = 1 → SET dlgSlotHeld = 0
+    //   [1] DLGPARENT counter: ADD count -1
+    //   [2] DLGUSER counter:  ADD count -1
+    //
+    // If condition [0] fails (slot already 0 or attribute absent), the whole
+    // transaction is cancelled — idempotent no-op.
+    type TransactItem = NonNullable<ConstructorParameters<typeof TransactWriteItemsCommand>[0]['TransactItems']>[number];
+    const transactItems: TransactItem[] = [
+      {
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `WF#${childId}`, SK: '#META' }),
+          UpdateExpression: 'SET #slot = :zero',
+          ConditionExpression: 'attribute_exists(PK) AND #slot = :one',
+          ExpressionAttributeNames: { '#slot': 'dlgSlotHeld' },
+          ExpressionAttributeValues: { ':zero': { N: '0' }, ':one': { N: '1' } },
+        },
+      },
+      {
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGPARENT#${parentId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :neg',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':neg': { N: '-1' } },
+        },
+      },
+      {
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGUSER#${userId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :neg',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':neg': { N: '-1' } },
+        },
+      },
+    ];
+
+    try {
+      await this.client.send(new TransactWriteItemsCommand({ TransactItems: transactItems }));
+    } catch (e: unknown) {
+      const name = (e as { name?: string }).name ?? '';
+      if (name === 'TransactionCanceledException') {
+        // Check if the child condition failed (slot already 0 — idempotent)
+        const reasons = (e as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons ?? [];
+        if (reasons[0]?.Code === 'ConditionalCheckFailed') return; // already released
+      }
+      throw e;
+    }
+  }
+
+  async acquireChildDelegationSlot(
+    childId: string,
+    parentId: string,
+    userId: string,
+    maxRunningPerParent: number,
+    maxRunningPerUser: number,
+  ): Promise<void> {
+    // TransactWriteItems:
+    //   [0] Child item: condition dlgSlotHeld = 0 (or absent) → SET dlgSlotHeld = 1
+    //   [1] DLGPARENT counter: ADD count +1 (with cap condition if maxParent > 0)
+    //   [2] DLGUSER counter:  ADD count +1 (with cap condition if maxUser > 0)
+    //
+    // If condition [0] fails (slot already 1): idempotent no-op.
+    // If condition [1] fails: parent cap exceeded → throw 429.
+    // If condition [2] fails: user cap exceeded → throw 429.
+    type TransactItem = NonNullable<ConstructorParameters<typeof TransactWriteItemsCommand>[0]['TransactItems']>[number];
+    const transactItems: TransactItem[] = [
+      {
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `WF#${childId}`, SK: '#META' }),
+          UpdateExpression: 'SET #slot = :one',
+          ConditionExpression: 'attribute_exists(PK) AND (attribute_not_exists(#slot) OR #slot = :zero)',
+          ExpressionAttributeNames: { '#slot': 'dlgSlotHeld' },
+          ExpressionAttributeValues: { ':zero': { N: '0' }, ':one': { N: '1' } },
+        },
+      },
+    ];
+
+    if (maxRunningPerParent > 0) {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGPARENT#${parentId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ConditionExpression: 'attribute_not_exists(#cnt) OR #cnt < :maxParent',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' }, ':maxParent': { N: String(maxRunningPerParent) } },
+        },
+      });
+    } else {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGPARENT#${parentId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' } },
+        },
+      });
+    }
+
+    if (maxRunningPerUser > 0) {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGUSER#${userId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ConditionExpression: 'attribute_not_exists(#cnt) OR #cnt < :maxUser',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' }, ':maxUser': { N: String(maxRunningPerUser) } },
+        },
+      });
+    } else {
+      transactItems.push({
+        Update: {
+          TableName: runsTable(),
+          Key: marshalItem({ PK: `DLGUSER#${userId}`, SK: '#RUNNING' }),
+          UpdateExpression: 'ADD #cnt :one',
+          ExpressionAttributeNames: { '#cnt': 'count' },
+          ExpressionAttributeValues: { ':one': { N: '1' } },
+        },
+      });
+    }
+
+    try {
+      await this.client.send(new TransactWriteItemsCommand({ TransactItems: transactItems }));
+    } catch (e: unknown) {
+      const name = (e as { name?: string }).name ?? '';
+      if (name === 'TransactionCanceledException') {
+        const reasons = (e as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons ?? [];
+        // Index 0: child slot condition (already held — idempotent)
+        if (reasons[0]?.Code === 'ConditionalCheckFailed') return;
+        // Index 1: parent cap exceeded
+        if (reasons[1]?.Code === 'ConditionalCheckFailed') {
+          throw new HttpError(
+            429,
+            `The maximum running children per parent (${maxRunningPerParent}) has been reached. Wait for a child to finish.`,
+          );
+        }
+        // Index 2: user cap exceeded
+        if (reasons[2]?.Code === 'ConditionalCheckFailed') {
+          throw new HttpError(
+            429,
+            `The maximum running delegated sessions per user (${maxRunningPerUser}) has been reached. Wait for a child to finish.`,
+          );
+        }
+      }
+      throw e;
+    }
+  }
+
+  async listTerminalChildWorkflows(cutoff: string): Promise<WorkflowRecord[]> {
+    // Query GSI-ChildIdle (sparse): only child workflows in terminal state with
+    // stop_reason='' are indexed here. Once child-idle-stopped (stop_reason='child-idle')
+    // the childIdleCandidate attribute is removed so they never appear again.
+    // The SK < cutoff condition uses updated_at_child_idle = updated_at + '#' + id,
+    // which is lexicographically equivalent to updated_at < cutoff for ISO timestamps.
+    const items = await paginateQuery(this.client, {
+      TableName: runsTable(),
+      IndexName: 'GSI-ChildIdle',
+      KeyConditionExpression: '#cic = :cic AND #atci < :cutoff',
+      ExpressionAttributeNames: { '#cic': 'childIdleCandidate', '#atci': 'updated_at_child_idle' },
+      ExpressionAttributeValues: {
+        ':cic': av('CHILD_IDLE'),
+        ':cutoff': av(cutoff),
+      },
+    });
+    return items.map((item) => itemToWorkflow(item));
   }
 }
 

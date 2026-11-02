@@ -517,7 +517,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         stop_reason: '',
         last_turn_at: ts,
         updated_at: ts,
-      });
+      }, { hintParentId: workflow.parent_id });
 
       if (wfFinished) {
         await repo.incrementWorkflowIteration(workflowId);
@@ -529,7 +529,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
     // Deliver child-result to parent if this is a child session (F7)
     if (workflow.parent_id) {
-      deliverChildResult(workflowId);
+      await deliverChildResult(workflowId);
     }
 
     if (agentRun.projectId) {
@@ -571,7 +571,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       status: aborted ? 'paused' : 'failed',
       last_turn_at: failTs,
       updated_at: failTs,
-    });
+    }, { hintParentId: workflow.parent_id });
 
     emitRunEvent(runId, workflow.project_id ? String(workflow.project_id) : null, workflowId, 'run-failed', { error: msg });
     notifyDashboard(workflow.project_id ? String(workflow.project_id) : null);
@@ -589,7 +589,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       fireHook(workflowId, runId, 'failed');
       // Deliver child-result to parent even on failure (F7)
       if (workflow.parent_id) {
-        deliverChildResult(workflowId);
+        await deliverChildResult(workflowId);
       }
     }
 
@@ -672,13 +672,21 @@ async function awaitApproval(
     created_at: inputCreatedAt,
   });
 
-  // Create inbox item for UI notification.
-  createInboxItem({
+  // Create inbox item for UI notification (awaited — approval must appear in inbox).
+  // Uses createInboxItem which also emits inbox.created to the project channel.
+  await createInboxItem({
     type: 'approval',
     payload: { inputId, toolName, toolInput: view, inputHash: hash },
-    projectId: run.projectId,
-    workflowId,
-    runId,
+    projectId: run.projectId ?? null,
+    workflowId: workflowId ?? null,
+    runId: runId ?? null,
+  }).catch((e: unknown) => {
+    // Non-fatal: log the failure and emit a visible run event so the agent output
+    // records the write failure. registerBackgroundWrite not needed since awaited.
+    console.error('[runner] Failed to create inbox item:', e);
+    emitRunEvent(runId, run.projectId, workflowId, 'status', {
+      text: `[approval] inbox item write failed: ${String((e as { message?: string })?.message ?? e).slice(0, 200)}`,
+    });
   });
 
   await repo.updateRun(runId, { status: 'running' });

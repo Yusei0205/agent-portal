@@ -336,12 +336,12 @@ describe('Item 6 — max_iterations enforcement', () => {
     assert.equal(Number(wf?.max_iterations), 0);
   });
 
-  it('deliverChildResult does not resume parent when parent iterations exhausted', () => {
+  it('deliverChildResult does not resume parent when parent iterations exhausted', async () => {
     const userId = insertUser('6d');
     const parentId = insertWorkflow(userId, { status: 'paused', iteration_count: 5, max_iterations: 5 });
     const childId = insertWorkflow(userId, { status: 'done', parent_id: parentId });
 
-    deliverChildResult(childId);
+    await deliverChildResult(childId);
 
     const parent = one<Row>('SELECT status, stop_reason FROM p6_workflows WHERE id = ?', parentId);
     assert.notEqual(parent?.status, 'pending', 'parent must not be resumed when iterations exhausted');

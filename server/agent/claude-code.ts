@@ -19,7 +19,6 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
-import { insert } from '../db.ts';
 import { now, generateId, HttpError } from '../util.ts';
 import { evaluateCommand } from '../guardrails.ts';
 import { getSettings, getAgentEnv } from '../settings.ts';
@@ -678,9 +677,10 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
 
   // ── Insert budget_usage record ─────────────────────────────────────────────
   if (totalCostUsd > 0 || totalInputTokens > 0 || totalOutputTokens > 0) {
-    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
+    const { getBudgetRepository } = await import('../repositories/budget.ts');
     const wfRowCC = await repo.getWorkflowById(run.workflowId);
-    insert('budget_usage', {
+    await getBudgetRepository().record({
+      user_id: wfRowCC?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,

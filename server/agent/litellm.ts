@@ -16,7 +16,6 @@
  *   Import: import { runLiteLLM } from './litellm.ts';
  */
 
-import { insert } from '../db.ts';
 import { now, HttpError } from '../util.ts';
 import { getSetting, getSettings } from '../settings.ts';
 import { getDb } from '../db.ts';
@@ -157,9 +156,9 @@ export async function runLiteLLM(ctx: RunContext): Promise<string> {
   });
 
   if (inputTokens > 0 || outputTokens > 0) {
-    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
+    const { getBudgetRepository } = await import('../repositories/budget.ts');
     const wfRow = await repo.getWorkflowById(run.workflowId);
-    insert('budget_usage', {
+    await getBudgetRepository().record({
       user_id: wfRow?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,

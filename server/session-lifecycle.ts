@@ -73,7 +73,7 @@ export async function checkIdleSessions(): Promise<void> {
         status: 'paused',
         stop_reason: 'idle',
         updated_at: updateTs,
-      });
+      }, { hintParentId: session.parent_id });
 
       if (!applied) {
         // Workflow status changed between listIdleWorkflows and now — skip.

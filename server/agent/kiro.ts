@@ -983,9 +983,9 @@ async function runKiroViaAgentCoreAdapter(
   });
 
   if (approxCostUsd > 0) {
-    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
+    const { getBudgetRepository } = await import('../repositories/budget.ts');
     const wfRow = await repoKiro.getWorkflowById(run.workflowId);
-    insert('budget_usage', {
+    await getBudgetRepository().record({
       user_id: wfRow?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
@@ -1292,9 +1292,9 @@ export async function runKiro(ctx: RunContext): Promise<string> {
   });
 
   if (approxCostUsd > 0) {
-    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
+    const { getBudgetRepository } = await import('../repositories/budget.ts');
     const wfRowK = await repoKiro2.getWorkflowById(run.workflowId);
-    insert('budget_usage', {
+    await getBudgetRepository().record({
       user_id: wfRowK?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,

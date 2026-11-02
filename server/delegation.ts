@@ -2,32 +2,40 @@
  * Delegation service — F7.
  *
  * Manages the lifecycle of delegated child sessions:
- *   - createChildSession()      — creates and starts a child workflow that inherits
- *                                 project, workspace, engine, credential, integrations
- *   - checkDelegationLimits()   — enforces per-parent and per-user caps (throws 429)
- *   - deliverChildResult()      — inserts child-result event into parent and resumes parent
- *   - stopAndDeleteChildren()   — recursive cleanup when parent is deleted
- *   - checkDelegationChildIdleStop() — periodic idle-stop for finished children
+ *   - createChildSession()            — creates and starts a child workflow that inherits
+ *                                       project, workspace, engine, credential, integrations
+ *   - checkDelegationLimits()         — enforces per-parent and per-user caps (throws 429)
+ *   - deliverChildResult()            — inserts child-result event into parent and resumes parent
+ *   - stopAndDeleteChildren()         — recursive cleanup when parent is deleted
+ *   - checkDelegationChildIdleStop()  — periodic idle-stop for finished children
+ *
+ * All data access for p6_workflows, p6_runs, p6_workflow_events goes through the
+ * sessions repository so this module works on both SQLite and DynamoDB backends.
  */
 
-import { one, all, insert, run as dbRun, getDb, tx } from './db.ts';
-import type { Row } from './db.ts';
-import type { DatabaseSync } from 'node:sqlite';
 import { generateId, now, HttpError, sha256 } from './util.ts';
 import { emit } from './events.ts';
+import { getDb } from './db.ts';
+import type { DatabaseSync } from 'node:sqlite';
 import { startRun } from './workflows/driver.ts';
 import { cancelRun } from './workflows/controls.ts';
 import { randomBytes } from 'node:crypto';
 import { getApiTokenRepository } from './repositories/api-tokens.ts';
 import { getDelegationSettingsRepository } from './repositories/delegation-settings.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
 import type { DelegationSettings } from './repositories/delegation-settings.ts';
 import { DELEGATION_DEFAULTS } from './repositories/delegation-settings.ts';
 
 // Re-export DelegationSettings type for callers that import it from here
 export type { DelegationSettings };
 
-// ── Settings ──────────────────────────────────────────────────────────────────
+// ── Settings (synchronous, SQLite-only compatibility helpers) ─────────────────
 
+/**
+ * Read delegation settings synchronously from the settings table.
+ * Works in both SQLite mode and for tests that read settings via direct DB.
+ * In DynamoDB mode, use getDelegationSettingsRepository().get() instead.
+ */
 export function getDelegationSettings(db?: DatabaseSync): DelegationSettings {
   const d = db ?? getDb();
   const out = { ...DELEGATION_DEFAULTS };
@@ -70,6 +78,10 @@ export function getDelegationSettings(db?: DatabaseSync): DelegationSettings {
   return out;
 }
 
+/**
+ * Write delegation settings synchronously to the settings table.
+ * Works in SQLite mode. For DynamoDB mode, use getDelegationSettingsRepository().patch(patch).
+ */
 export function setDelegationSettings(patch: Partial<DelegationSettings>, db?: DatabaseSync): void {
   const d = db ?? getDb();
   const set = (key: string, value: string): void => {
@@ -89,49 +101,25 @@ export function setDelegationSettings(patch: Partial<DelegationSettings>, db?: D
 // ── Limit checks ──────────────────────────────────────────────────────────────
 
 /**
- * Count running children of the given parent workflow.
- * 'running' here means status = 'running' | 'pending'.
- */
-function countRunningChildren(parentWorkflowId: string): number {
-  const r = one<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM p6_workflows
-      WHERE parent_id = ? AND status IN ('running','pending')`,
-    parentWorkflowId,
-  );
-  return Number(r?.n ?? 0);
-}
-
-/**
- * Count all running child sessions across all workflows created by the given user.
- */
-function countRunningChildrenForUser(userId: string): number {
-  const r = one<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM p6_workflows
-      WHERE parent_id IS NOT NULL
-        AND created_by = ?
-        AND status IN ('running','pending')`,
-    userId,
-  );
-  return Number(r?.n ?? 0);
-}
-
-/**
  * Assert delegation limits are not exceeded.
  * Throws HttpError 429 with a descriptive message if they are.
- * Pass `settings` when calling from inside a transaction (avoids a second DB read).
+ * Async in DynamoDB mode (reads counter items); fast synchronous COUNT in SQLite mode.
+ *
+ * Pass `settings` when you already have the settings (avoids a second async read).
  */
-export function checkDelegationLimits(
+export async function checkDelegationLimits(
   parentWorkflowId: string,
   userId: string,
   settings?: DelegationSettings,
-): void {
-  const s = settings ?? getDelegationSettings();
+): Promise<void> {
+  const s = settings ?? await getDelegationSettingsRepository().get();
 
   if (!s.enabled) {
     throw new HttpError(429, 'Delegation is disabled by the portal administrator.');
   }
 
-  const runningChildren = countRunningChildren(parentWorkflowId);
+  const repo = getSessionsRepository();
+  const runningChildren = await repo.countRunningChildWorkflows(parentWorkflowId);
   if (s.maxRunningPerParent > 0 && runningChildren >= s.maxRunningPerParent) {
     throw new HttpError(
       429,
@@ -140,7 +128,7 @@ export function checkDelegationLimits(
     );
   }
 
-  const userRunning = countRunningChildrenForUser(userId);
+  const userRunning = await repo.countRunningChildrenByUser(userId);
   if (s.maxRunningPerUser > 0 && userRunning >= s.maxRunningPerUser) {
     throw new HttpError(
       429,
@@ -156,19 +144,18 @@ export function checkDelegationLimits(
  * Create and start a child session that inherits the parent's project,
  * workspace, repos, engine, credential, integrations, and lead agent.
  *
- * Returns the child workflow row.
+ * Returns the child workflow record.
  */
 export async function createChildSession(
   parentWorkflowId: string,
   userId: string,
   task: string,
   opts: { title?: string; leadAgent?: string } = {},
-): Promise<Row> {
-  const parent = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', parentWorkflowId);
+): Promise<import('./repositories/sessions.ts').WorkflowRecord> {
+  const repo = getSessionsRepository();
+  const parent = await repo.getWorkflowById(parentWorkflowId);
   if (!parent) throw new HttpError(404, 'Parent session not found');
 
-  // Fetch delegation settings async via repository so DynamoDB mode reads
-  // from the correct store.
   const settings = await getDelegationSettingsRepository().get();
 
   // Nested delegation check
@@ -179,95 +166,71 @@ export async function createChildSession(
     );
   }
 
-  // Check delegation limits before the transaction to avoid async inside tx()
   if (!settings.enabled) {
     throw new HttpError(429, 'Delegation is disabled by the portal administrator.');
   }
 
-  const runningChildren = countRunningChildren(parentWorkflowId);
-  if (settings.maxRunningPerParent > 0 && runningChildren >= settings.maxRunningPerParent) {
-    throw new HttpError(
-      429,
-      `This session already has ${runningChildren} running child session(s). ` +
-        `The maximum per parent is ${settings.maxRunningPerParent}. Wait for a child to finish.`,
-    );
-  }
-
-  const userRunning = countRunningChildrenForUser(userId);
-  if (settings.maxRunningPerUser > 0 && userRunning >= settings.maxRunningPerUser) {
-    throw new HttpError(
-      429,
-      `You already have ${userRunning} running delegated sessions. ` +
-        `The maximum per user is ${settings.maxRunningPerUser}. Wait for a child to finish.`,
-    );
-  }
-
-  // Atomically check limits + insert the child row to avoid TOCTOU races
-  // where two concurrent createChildSession calls both pass the count check.
+  // Atomically check limits and create the child workflow.
+  // SQLite: uses tx() to check counts + insert atomically (TOCTOU-safe).
+  // DynamoDB: uses TransactWriteItems with conditional counter increments.
   const childId = generateId();
   const ts = now();
 
-  tx(() => {
-    // Re-check limits inside the transaction so the count is accurate under concurrency.
-    // Pass the already-fetched settings so the in-transaction check uses the same source,
-    // avoiding a second (synchronous SQLite) read that would be wrong in DynamoDB mode.
-    checkDelegationLimits(parentWorkflowId, userId, settings);
-
-    // S1-TODO(delegation): child-count is not tracked here because createChildSession
-    // uses a direct SQLite insert rather than repo.createWorkflow().  The parent's
-    // childCount counter (DynamoDB) and the computed COUNT(*) (SQLite) diverge until
-    // this module is converted to the sessions repository.  Convert this insert to
-    // await repo.createWorkflow({ ..., parent_id: parentWorkflowId }) and the
-    // increment will be automatic on both backends.
-    insert('p6_workflows', {
+  const child = await repo.createChildWorkflowChecked(
+    {
       id: childId,
-      project_id: parent.project_id != null ? String(parent.project_id) : null,
+      project_id: parent.project_id,
       goal: task,
       title: opts.title ?? '',
       status: 'pending',
-      engine: parent.engine ? String(parent.engine) : 'demo',
-      trust_tools: parent.trust_tools ? 1 : 0,
-      lead_agent: opts.leadAgent ?? (parent.lead_agent != null ? String(parent.lead_agent) : null),
-      workspace_id: parent.workspace_id != null ? String(parent.workspace_id) : null,
+      engine: parent.engine || 'demo',
+      trust_tools: parent.trust_tools,
+      lead_agent: opts.leadAgent ?? parent.lead_agent,
+      workspace_id: parent.workspace_id,
       output_files_enabled: 0,
-      repo_ids: parent.repo_ids ? String(parent.repo_ids) : '[]',
+      repo_ids: parent.repo_ids || '[]',
       iteration_count: 0,
-      max_iterations: Number(parent.max_iterations ?? 10),
-      credential_id: parent.credential_id != null ? String(parent.credential_id) : null,
-      model: parent.model != null ? String(parent.model) : '',
-      parent_id: parentWorkflowId,
+      max_iterations: parent.max_iterations,
+      credential_id: parent.credential_id,
+      model: parent.model || '',
       created_by: userId,
       created_at: ts,
       updated_at: ts,
-    });
-  });
+    },
+    {
+      parentId: parentWorkflowId,
+      userId,
+      maxRunningPerParent: settings.maxRunningPerParent,
+      maxRunningPerUser: settings.maxRunningPerUser,
+    },
+  );
 
   // Start the run
   try {
     await startRun(childId);
-    dbRun(
-      "UPDATE p6_workflows SET last_turn_at = ?, stop_reason = '', updated_at = ? WHERE id = ?",
-      ts,
-      ts,
-      childId,
-    );
+    await repo.updateWorkflow(childId, {
+      last_turn_at: ts,
+      stop_reason: '',
+      updated_at: ts,
+    });
   } catch (e: unknown) {
     // startRun can throw if the concurrency limit is hit
-    // Delete the child we just created to avoid zombie rows
-    dbRun('DELETE FROM p6_workflows WHERE id = ?', childId);
+    // Delete the child and release the delegation slot
+    await repo.deleteWorkflow(childId).catch(() => {});
+    await repo.releaseChildDelegationSlot(childId, parentWorkflowId, userId).catch(() => {});
     throw e;
   }
 
   if (parent.project_id) {
-    emit(String(parent.project_id), {
+    emit(parent.project_id, {
       type: 'workflow.child-started',
       parentWorkflowId,
       childWorkflowId: childId,
     });
-    emit(String(parent.project_id), { type: 'workflow.created', workflowId: childId });
+    emit(parent.project_id, { type: 'workflow.created', workflowId: childId });
   }
 
-  return one<Row>('SELECT * FROM p6_workflows WHERE id = ?', childId)!;
+  return child;
 }
 
 // ── Child result delivery ─────────────────────────────────────────────────────
@@ -277,40 +240,47 @@ export async function createChildSession(
  * Called after a child run finishes (done or failed).
  *
  * If the parent is paused or done, it is resumed (new run started).
+ * The delegation slot is released so the per-parent and per-user counters
+ * are updated.
  */
-export function deliverChildResult(childWorkflowId: string): void {
+export async function deliverChildResult(childWorkflowId: string): Promise<void> {
   try {
-    const child = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', childWorkflowId);
+    const repo = getSessionsRepository();
+    const child = await repo.getWorkflowById(childWorkflowId);
     if (!child || !child.parent_id) return;
 
-    const parentId = String(child.parent_id);
-    const parent = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', parentId);
+    const parentId = child.parent_id;
+    const parent = await repo.getWorkflowById(parentId);
     if (!parent) return;
 
-    const childTitle =
-      String(child.title || (child.goal as string).slice(0, 60));
-    const childStatus = String(child.status ?? 'done');
-    const childSummary = String(child.summary ?? '');
+    const childTitle = child.title || child.goal.slice(0, 60);
+    const childStatus = child.status ?? 'done';
 
-    // Insert child-result event into parent's event log (unconsumed: will be
-    // picked up as the next turn's prompt)
-    insert('p6_workflow_events', {
+    // Release delegation running-child slot — idempotent via dlgSlotHeld flag.
+    // SQLite: no-op. DynamoDB: TransactWriteItems clearing dlgSlotHeld + decrement counters.
+    if (child.created_by) {
+      await repo.releaseChildDelegationSlot(childWorkflowId, parentId, child.created_by).catch((e: unknown) => {
+        console.error('[delegation] releaseChildDelegationSlot failed:', e);
+      });
+    }
+
+    // Insert child-result event into parent's event log
+    await repo.appendWorkflowEvent({
       workflow_id: parentId,
       kind: 'child-result',
-      body: `Child session "${childTitle}" finished with status: ${childStatus}.\n${childSummary}`.trim(),
+      body: `Child session "${childTitle}" finished with status: ${childStatus}.\n${String((child as { summary?: string }).summary ?? '')}`.trim(),
       data: JSON.stringify({
         childId: childWorkflowId,
         childTitle,
         status: childStatus,
-        summary: childSummary,
+        summary: (child as { summary?: string }).summary ?? '',
       }),
-      consumed: 0,
       created_at: now(),
     });
 
     // Emit project event
     if (parent.project_id) {
-      emit(String(parent.project_id), {
+      emit(parent.project_id, {
         type: 'workflow.child-finished',
         parentWorkflowId: parentId,
         childWorkflowId,
@@ -319,42 +289,38 @@ export function deliverChildResult(childWorkflowId: string): void {
       });
     }
 
-    // Resume parent if it is paused or done, and only when it has iterations left.
-    // Guard: parent may not auto-resume more than max_iterations times from child
-    // results without a human turn — prevents infinite delegation loops.
-    const parentStatus = String(parent.status ?? '');
-    const parentMaxIter = Number(parent.max_iterations ?? 0);
-    const parentIterCount = Number(parent.iteration_count ?? 0);
-    const parentHasIterations = parentMaxIter <= 0 || parentIterCount < parentMaxIter;
+    const parentStatus = parent.status ?? '';
+    const parentHasIterations =
+      parent.max_iterations <= 0 || parent.iteration_count < parent.max_iterations;
 
     if ((parentStatus === 'paused' || parentStatus === 'done') && parentHasIterations) {
-      const ts = now();
-      dbRun(
-        "UPDATE p6_workflows SET status = 'pending', stop_reason = '', last_turn_at = ?, updated_at = ? WHERE id = ?",
-        ts,
-        ts,
-        parentId,
-      );
-      if (parent.project_id) {
-        emit(String(parent.project_id), { type: 'workflow.updated', workflowId: parentId, status: 'pending' });
+      const resumeTs = now();
+      const resumed = await repo.updateWorkflowConditional(parentId, parentStatus, {
+        status: 'pending',
+        stop_reason: '',
+        last_turn_at: resumeTs,
+        updated_at: resumeTs,
+      }, { hintParentId: parent.parent_id });
+      if (resumed) {
+        if (parent.project_id) {
+          emit(parent.project_id, { type: 'workflow.updated', workflowId: parentId, status: 'pending' });
+        }
+        startRun(parentId).catch((e: unknown) => {
+          console.error(`[delegation] Failed to resume parent ${parentId} after child result:`, e);
+        });
       }
-      // Fire-and-forget resume
-      startRun(parentId).catch((e: unknown) => {
-        console.error(`[delegation] Failed to resume parent ${parentId} after child result:`, e);
-      });
     } else if ((parentStatus === 'paused' || parentStatus === 'done') && !parentHasIterations) {
-      // Parent has exhausted its iterations — mark it done with max_iterations stop reason
-      dbRun(
-        `UPDATE p6_workflows SET status = 'done', stop_reason = 'max_iterations', updated_at = ? WHERE id = ? AND stop_reason != 'max_iterations'`,
-        now(),
-        parentId,
-      );
+      const doneTs = now();
+      await repo.updateWorkflowConditional(parentId, parentStatus, {
+        status: 'done',
+        stop_reason: 'max_iterations',
+        updated_at: doneTs,
+      }, { hintParentId: parent.parent_id }).catch(() => {/* already updated */});
       if (parent.project_id) {
-        emit(String(parent.project_id), { type: 'workflow.updated', workflowId: parentId, status: 'done' });
+        emit(parent.project_id, { type: 'workflow.updated', workflowId: parentId, status: 'done' });
       }
     }
   } catch (e: unknown) {
-    // deliverChildResult errors must not propagate — child run should still complete cleanly
     console.error('[delegation] Error delivering child result:', e);
   }
 }
@@ -365,31 +331,31 @@ export function deliverChildResult(childWorkflowId: string): void {
  * Stop and delete all direct and nested children of a workflow.
  * Called when a parent session is deleted.
  */
-export function stopAndDeleteChildren(parentWorkflowId: string): void {
-  const children = all<Row>(
-    'SELECT id, project_id FROM p6_workflows WHERE parent_id = ?',
-    parentWorkflowId,
-  );
+export async function stopAndDeleteChildren(parentWorkflowId: string): Promise<void> {
+  const repo = getSessionsRepository();
+  const children = await repo.listChildWorkflows(parentWorkflowId);
 
   for (const child of children) {
-    const childId = String(child.id);
+    const childId = child.id;
 
     // Recurse first (nested children)
-    stopAndDeleteChildren(childId);
+    await stopAndDeleteChildren(childId);
 
     // Cancel any active runs
-    const activeRun = one<Row>(
-      "SELECT id FROM p6_runs WHERE workflow_id = ? AND status IN ('pending','running')",
-      childId,
-    );
+    const activeRun = await repo.getActiveRun(childId);
     if (activeRun) {
-      try { cancelRun(String(activeRun.id)); } catch { /* ignore */ }
+      try { cancelRun(activeRun.id); } catch { /* ignore */ }
     }
 
-    // Delete the child (runs + events cascade via FK; p10_scans.repo_id is unrelated)
-    dbRun('DELETE FROM p6_workflows WHERE id = ?', childId);
+    // Release delegation slot before deleting (idempotent — no-op if slot not held)
+    if (child.created_by) {
+      await repo.releaseChildDelegationSlot(childId, parentWorkflowId, child.created_by).catch(() => {});
+    }
+
+    // Delete the child (cascades to runs + events via FK in SQLite; explicit in DynamoDB)
+    await repo.deleteWorkflow(childId);
     if (child.project_id) {
-      emit(String(child.project_id), { type: 'workflow.deleted', workflowId: childId });
+      emit(child.project_id, { type: 'workflow.deleted', workflowId: childId });
     }
   }
 }
@@ -406,30 +372,25 @@ export async function checkDelegationChildIdleStop(): Promise<void> {
     const idleMinutes = settings.idleStopMinutes;
     const cutoff = new Date(Date.now() - idleMinutes * 60_000).toISOString();
 
-    // Find children in terminal states that need cleanup (done/failed/paused)
-    const children = all<Row>(
-      `SELECT id, project_id FROM p6_workflows
-        WHERE parent_id IS NOT NULL
-          AND status IN ('done','failed','paused')
-          AND updated_at < ?`,
-      cutoff,
-    );
+    const repo = getSessionsRepository();
+    const children = await repo.listTerminalChildWorkflows(cutoff);
 
     for (const child of children) {
-      const childId = String(child.id);
-      // Mark as paused with stop_reason = 'child-idle'
-      dbRun(
-        `UPDATE p6_workflows SET status = 'paused', stop_reason = 'child-idle', updated_at = ? WHERE id = ?`,
-        now(),
-        childId,
-      );
+      const childId = child.id;
+      const ts = now();
+      const updated = await repo.updateWorkflowConditional(childId, child.status, {
+        status: 'paused',
+        stop_reason: 'child-idle',
+        updated_at: ts,
+      }, { hintParentId: child.parent_id });
+      if (!updated) continue; // concurrent update, skip
 
       if (child.project_id) {
-        emit(String(child.project_id), {
+        emit(child.project_id, {
           type: 'workflow.child-idle-stopped',
           childWorkflowId: childId,
         });
-        emit(String(child.project_id), { type: 'workflow.updated', workflowId: childId, status: 'paused' });
+        emit(child.project_id, { type: 'workflow.updated', workflowId: childId, status: 'paused' });
       }
     }
   } catch (e: unknown) {

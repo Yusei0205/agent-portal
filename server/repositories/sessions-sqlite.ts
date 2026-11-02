@@ -7,8 +7,9 @@
  * lives here.  The existing SQL is preserved exactly so behaviour is unchanged.
  */
 
-import { one, all, run as dbRun, insert, getDb } from '../db.ts';
+import { one, all, run as dbRun, insert, getDb, tx } from '../db.ts';
 import type { Row } from '../db.ts';
+import { HttpError } from '../util.ts';
 import type {
   SessionsRepository,
   WorkflowRecord,
@@ -276,6 +277,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     id: string,
     expectedStatus: string,
     patch: Partial<WorkflowRecord>,
+    _opts?: { hintParentId?: string | null },
   ): Promise<boolean> {
     const allowed: (keyof WorkflowRecord)[] = [
       'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
@@ -757,5 +759,111 @@ export class SqliteSessionsRepository implements SessionsRepository {
       })),
       nextCursor,
     };
+  }
+
+  // ── Delegation ──────────────────────────────────────────────────────────────
+
+  async countRunningChildWorkflows(parentId: string): Promise<number> {
+    const r = one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM p6_workflows WHERE parent_id = ? AND status IN ('running','pending')",
+      parentId,
+    );
+    return Number(r?.n ?? 0);
+  }
+
+  async countRunningChildrenByUser(userId: string): Promise<number> {
+    const r = one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM p6_workflows WHERE parent_id IS NOT NULL AND created_by = ? AND status IN ('running','pending')",
+      userId,
+    );
+    return Number(r?.n ?? 0);
+  }
+
+  async createChildWorkflowChecked(
+    input: CreateWorkflowInput,
+    opts: { parentId: string; userId: string; maxRunningPerParent: number; maxRunningPerUser: number },
+  ): Promise<WorkflowRecord> {
+    const { parentId, userId, maxRunningPerParent, maxRunningPerUser } = opts;
+    tx(() => {
+      if (maxRunningPerParent > 0) {
+        const pc = one<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM p6_workflows WHERE parent_id = ? AND status IN ('running','pending')",
+          parentId,
+        );
+        if (Number(pc?.n ?? 0) >= maxRunningPerParent) {
+          throw new HttpError(
+            429,
+            `This session already has ${pc?.n ?? 0} running child session(s). ` +
+              `The maximum per parent is ${maxRunningPerParent}. Wait for a child to finish.`,
+          );
+        }
+      }
+      if (maxRunningPerUser > 0) {
+        const uc = one<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM p6_workflows WHERE parent_id IS NOT NULL AND created_by = ? AND status IN ('running','pending')",
+          userId,
+        );
+        if (Number(uc?.n ?? 0) >= maxRunningPerUser) {
+          throw new HttpError(
+            429,
+            `You already have ${uc?.n ?? 0} running delegated sessions. ` +
+              `The maximum per user is ${maxRunningPerUser}. Wait for a child to finish.`,
+          );
+        }
+      }
+      insert('p6_workflows', {
+        id: input.id,
+        project_id: input.project_id,
+        title: input.title ?? '',
+        goal: input.goal,
+        status: input.status,
+        stop_reason: input.stop_reason ?? '',
+        engine: input.engine,
+        trust_tools: input.trust_tools,
+        lead_agent: input.lead_agent,
+        workspace_id: input.workspace_id,
+        output_files_enabled: input.output_files_enabled,
+        repo_ids: input.repo_ids,
+        iteration_count: input.iteration_count,
+        max_iterations: input.max_iterations,
+        credential_id: input.credential_id,
+        model: input.model,
+        jira_key: input.jira_key ?? '',
+        jira_summary: input.jira_summary ?? '',
+        jira_url: input.jira_url ?? '',
+        created_by: input.created_by,
+        created_at: input.created_at,
+        updated_at: input.updated_at,
+        parent_id: parentId,
+      });
+    });
+    const row = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', input.id)!;
+    return toWorkflow(row);
+  }
+
+  async releaseChildDelegationSlot(_childId: string, _parentId: string, _userId: string): Promise<void> {
+    // SQLite: counts are computed live from the DB — no counters to maintain
+  }
+
+  async acquireChildDelegationSlot(
+    _childId: string,
+    _parentId: string,
+    _userId: string,
+    _maxRunningPerParent: number,
+    _maxRunningPerUser: number,
+  ): Promise<void> {
+    // SQLite: counts are computed live from the DB — cap re-checked by createChildWorkflowChecked
+  }
+
+  async listTerminalChildWorkflows(cutoff: string): Promise<WorkflowRecord[]> {
+    const rows = all<Row>(
+      `SELECT id, project_id, created_by, status, updated_at, stop_reason FROM p6_workflows
+        WHERE parent_id IS NOT NULL
+          AND status IN ('done','failed','paused')
+          AND stop_reason != 'child-idle'
+          AND updated_at < ?`,
+      cutoff,
+    );
+    return rows.map(toWorkflow);
   }
 }

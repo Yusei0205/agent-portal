@@ -590,8 +590,8 @@ describe('Child-result events reach parent', () => {
 
   after(async () => cleanup());
 
-  it('deliverChildResult inserts child-result event into parent', () => {
-    deliverChildResult(childId1);
+  it('deliverChildResult inserts child-result event into parent', async () => {
+    await deliverChildResult(childId1);
 
     const events = all<Row>(
       "SELECT * FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'child-result'",
@@ -604,8 +604,8 @@ describe('Child-result events reach parent', () => {
     assert.equal(data.status, 'done');
   });
 
-  it('deliverChildResult for second child adds another child-result event', () => {
-    deliverChildResult(childId2);
+  it('deliverChildResult for second child adds another child-result event', async () => {
+    await deliverChildResult(childId2);
 
     const events = all<Row>(
       "SELECT * FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'child-result'",
@@ -703,7 +703,7 @@ describe('stopAndDeleteChildren() — unit test', () => {
 
   after(async () => cleanup());
 
-  it('deletes direct children and nested grandchildren', () => {
+  it('deletes direct children and nested grandchildren', async () => {
     const parentId = generateId();
     const childId = generateId();
     const grandChildId = generateId();
@@ -759,7 +759,7 @@ describe('stopAndDeleteChildren() — unit test', () => {
       updated_at: now(),
     });
 
-    stopAndDeleteChildren(parentId);
+    await stopAndDeleteChildren(parentId);
 
     const c = one<Row>('SELECT id FROM p6_workflows WHERE id = ?', childId);
     const gc = one<Row>('SELECT id FROM p6_workflows WHERE id = ?', grandChildId);
@@ -888,21 +888,21 @@ describe('checkDelegationLimits() — unit tests', () => {
 
   after(async () => cleanup());
 
-  it('no error when under limits', () => {
+  it('no error when under limits', async () => {
     setDelegationSettings({ maxRunningPerParent: 3, maxRunningPerUser: 5 });
-    assert.doesNotThrow(() => checkDelegationLimits(parentWfId, generateId()));
+    await assert.doesNotReject(checkDelegationLimits(parentWfId, generateId()));
   });
 
-  it('throws 429 when delegation is disabled', () => {
+  it('throws 429 when delegation is disabled', async () => {
     setDelegationSettings({ enabled: false });
-    assert.throws(
-      () => checkDelegationLimits(parentWfId, generateId()),
+    await assert.rejects(
+      checkDelegationLimits(parentWfId, generateId()),
       (err: unknown) => (err as { status?: number }).status === 429,
     );
     setDelegationSettings({ enabled: true });
   });
 
-  it('throws 429 when per-parent limit reached', () => {
+  it('throws 429 when per-parent limit reached', async () => {
     // Insert 3 running children (created_by = null to avoid FK)
     const childIds = [generateId(), generateId(), generateId()];
     for (const id of childIds) {
@@ -923,8 +923,8 @@ describe('checkDelegationLimits() — unit tests', () => {
       });
     }
     setDelegationSettings({ maxRunningPerParent: 3, maxRunningPerUser: 10 });
-    assert.throws(
-      () => checkDelegationLimits(parentWfId, generateId()),
+    await assert.rejects(
+      checkDelegationLimits(parentWfId, generateId()),
       (err: unknown) => (err as { status?: number }).status === 429,
     );
   });

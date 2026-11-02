@@ -507,8 +507,9 @@ export function registerWorkflowRoutes(): void {
     const activeRun = await repo.getActiveRun(w.id);
     if (activeRun) cancelRun(activeRun.id);
 
-    // Stop and delete child sessions recursively
-    stopAndDeleteChildren(w.id);
+    // Stop and delete child sessions recursively (must complete before deleteWorkflow
+    // so delegation slot counters are released and FK constraints are satisfied).
+    await stopAndDeleteChildren(w.id);
 
     // Close the session's live browser
     shutdownSessionBrowser(w.id).catch(() => {/* non-fatal */});
@@ -804,6 +805,17 @@ export function registerWorkflowRoutes(): void {
     }
 
     try {
+      // Re-acquire delegation slot if this is a child being resumed (idempotent).
+      if (w.parent_id && w.created_by) {
+        const dlgSettings = await getDelegationSettingsRepository().get();
+        await repo.acquireChildDelegationSlot(
+          w.id,
+          w.parent_id,
+          String(w.created_by),
+          dlgSettings.maxRunningPerParent,
+          dlgSettings.maxRunningPerUser,
+        );
+      }
       const runId = await startRun(w.id);
       const run = await repo.getRunById(runId);
       sendJson(res, 201, { runId, run: run ? runView(run) : null });
@@ -876,6 +888,17 @@ export function registerWorkflowRoutes(): void {
       const hasActive = await repo.getActiveRun(w.id);
       if (!hasActive) {
         try {
+          // Re-acquire delegation slot if this is a child being resumed (idempotent).
+          if (w.parent_id && w.created_by) {
+            const dlgSettings = await getDelegationSettingsRepository().get();
+            await repo.acquireChildDelegationSlot(
+              w.id,
+              w.parent_id,
+              String(w.created_by),
+              dlgSettings.maxRunningPerParent,
+              dlgSettings.maxRunningPerUser,
+            );
+          }
           await startRun(w.id);
           resumed = true;
         } catch { /* non-fatal — auto-resume failure doesn't block the message ack */ }

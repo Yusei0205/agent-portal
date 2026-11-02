@@ -303,11 +303,16 @@ export interface SessionsRepository {
    *
    * SQLite: UPDATE ... WHERE status = ? and checks changes > 0.
    * DynamoDB: ConditionExpression #status = :expected.
+   *
+   * opts.hintParentId: caller-supplied parent_id (avoids an extra GetItem when
+   * the caller already has the workflow loaded). Used by DynamoDB to manage the
+   * GSI-ChildIdle sparse index (childIdleCandidate attribute).
    */
   updateWorkflowConditional(
     id: string,
     expectedStatus: string,
     patch: Partial<WorkflowRecord>,
+    opts?: { hintParentId?: string | null },
   ): Promise<boolean>;
 
   /**
@@ -561,6 +566,97 @@ export interface SessionsRepository {
     cursor: TranscriptCursor | null,
     limit: number,
   ): Promise<{ rows: TranscriptRow[]; nextCursor: TranscriptCursor | null }>;
+
+  // ── Delegation ──────────────────────────────────────────────────────────────
+
+  /**
+   * Count running child workflows of a parent (status in running/pending).
+   * Used by delegation limit checks.
+   * SQLite: COUNT query.
+   * DynamoDB: reads a counter item maintained by createChildWorkflowChecked /
+   *           releaseChildDelegationSlot.
+   */
+  countRunningChildWorkflows(parentId: string): Promise<number>;
+
+  /**
+   * Count all running delegated sessions (children) created by a user.
+   * Used by delegation per-user limit checks.
+   * SQLite: COUNT query.
+   * DynamoDB: reads a per-user counter item.
+   */
+  countRunningChildrenByUser(userId: string): Promise<number>;
+
+  /**
+   * Atomically check delegation limits and create a child workflow.
+   * Throws HttpError 429 if maxRunningPerParent or maxRunningPerUser is exceeded.
+   *
+   * SQLite: uses tx() to check counts + insert atomically.
+   * DynamoDB: uses TransactWriteItems — Put new workflow + conditional ADD on
+   *           two counter items (PK=DLGPARENT#<parentId>/SK=#RUNNING and
+   *           PK=DLGUSER#<userId>/SK=#RUNNING in the portal-runs table).
+   *
+   * A limit of 0 means unlimited (no condition check on that counter).
+   */
+  createChildWorkflowChecked(
+    input: CreateWorkflowInput,
+    opts: {
+      parentId: string;
+      userId: string;
+      maxRunningPerParent: number;
+      maxRunningPerUser: number;
+    },
+  ): Promise<WorkflowRecord>;
+
+  /**
+   * Decrement the delegation running-child counters when a child transitions
+   * to a terminal state (done / failed / paused).
+   *
+   * The child item records whether it currently holds a slot (dlgSlotHeld=1).
+   * Release is a single transaction that clears the flag on the child AND
+   * decrements both counters — so each child releases at most once and the
+   * operation is idempotent (second call is a no-op).
+   *
+   * SQLite: no-op — counts are computed live from the DB.
+   * DynamoDB: TransactWriteItems — condition dlgSlotHeld=1 on child → set 0;
+   *           ADD -1 to DLGPARENT#<parentId>/SK=#RUNNING and
+   *           DLGUSER#<userId>/SK=#RUNNING.
+   */
+  releaseChildDelegationSlot(childId: string, parentId: string, userId: string): Promise<void>;
+
+  /**
+   * Increment the delegation running-child counters when a child is re-started
+   * (resumed from terminal back to pending/running), subject to cap check.
+   *
+   * Acquire is a single transaction: condition dlgSlotHeld=0 on child → set 1;
+   * ADD +1 to both counters (with conditional cap check when max > 0).
+   * If the child already holds a slot (dlgSlotHeld=1) the call is idempotent.
+   * Throws HttpError 429 if a cap would be exceeded.
+   *
+   * SQLite: no-op — counts are computed live, cap is re-checked by SQLite's
+   *         createChildWorkflowChecked before each run starts.
+   * DynamoDB: TransactWriteItems as described above.
+   */
+  acquireChildDelegationSlot(
+    childId: string,
+    parentId: string,
+    userId: string,
+    maxRunningPerParent: number,
+    maxRunningPerUser: number,
+  ): Promise<void>;
+
+  /**
+   * List terminal child workflows (status in done/failed/paused) whose
+   * updated_at is older than the given cutoff AND whose stop_reason is NOT
+   * 'child-idle' (i.e., they have not yet been idle-stopped by delegation).
+   * Used by the delegation idle-stop checker.
+   *
+   * SQLite: direct query.
+   * DynamoDB: queries GSI-ChildIdle (sparse index — PK=childIdleCandidate='CHILD_IDLE',
+   *   SK=updated_at_child_idle < cutoff). Only child workflows that are terminal
+   *   with stop_reason='' are in the index. Removing the item from the index
+   *   (clearing childIdleCandidate) once child-idle-stopped prevents re-selection.
+   */
+  listTerminalChildWorkflows(cutoff: string): Promise<WorkflowRecord[]>;
 }
 
 // ── Singleton ─────────────────────────────────────────────────────────────────

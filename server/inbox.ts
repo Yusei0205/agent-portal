@@ -5,15 +5,18 @@
  *   GET  /api/inbox            — list unresolved items for the current user
  *   GET  /api/inbox/count      — { count } unresolved items (for nav badge)
  *   POST /api/inbox/:id/resolve — resolve (approve/dismiss) an inbox item
+ *
+ * All data access goes through InboxRepository and ProjectRepository.
  */
 
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, insert, run } from './db.ts';
-import type { Row } from './db.ts';
-import { generateId, now, badRequest } from './util.ts';
+import { generateId, now } from './util.ts';
 import { emit } from './events.ts';
 import { resolveApproval } from './agent/approvals.ts';
+import { getInboxRepository } from './repositories/inbox.ts';
+import { getProjectRepository } from './repositories/projects.ts';
+import type { InboxRecord } from './repositories/inbox.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,23 +34,20 @@ export interface InboxItemCreate {
 
 /**
  * Create a new inbox item and notify the project channel.
- * Returns the created row id.
+ * Returns the created record id.
  */
-export function createInboxItem(opts: InboxItemCreate): string {
+export async function createInboxItem(opts: InboxItemCreate): Promise<string> {
   const id = generateId();
-  insert('p6_inbox', {
+  const repo = getInboxRepository();
+  await repo.create({
     id,
     project_id: opts.projectId ?? null,
     workflow_id: opts.workflowId ?? null,
     run_id: opts.runId ?? null,
     type: opts.type,
     payload: JSON.stringify(opts.payload),
-    resolved: 0,
-    resolved_by: null,
-    resolved_at: null,
     created_at: now(),
   });
-  // Notify project subscribers
   if (opts.projectId) {
     emit(opts.projectId, {
       type: 'inbox.created',
@@ -62,31 +62,74 @@ export function createInboxItem(opts: InboxItemCreate): string {
 
 // ── View helper ───────────────────────────────────────────────────────────────
 
-function inboxView(row: Row, projectName?: string, workflowGoal?: string) {
+function inboxView(
+  item: InboxRecord,
+  projectName?: string | null,
+  workflowGoal?: string | null,
+): Record<string, unknown> {
   return {
-    id: row.id,
-    project_id: row.project_id,
+    id: item.id,
+    project_id: item.project_id,
     project_name: projectName ?? null,
-    workflow_id: row.workflow_id,
+    workflow_id: item.workflow_id,
     workflow_goal: workflowGoal ?? null,
-    run_id: row.run_id,
-    type: row.type,
-    payload: safeJson(row.payload as string, {}),
-    resolved: Boolean(row.resolved),
-    resolved_by: row.resolved_by ?? null,
-    resolved_at: row.resolved_at ?? null,
-    created_at: row.created_at,
-    elapsed_ms: Date.now() - new Date(String(row.created_at)).getTime(),
+    run_id: item.run_id,
+    type: item.type,
+    payload: safeJson(item.payload, {}),
+    resolved: Boolean(item.resolved),
+    resolved_by: item.resolved_by ?? null,
+    resolved_at: item.resolved_at ?? null,
+    created_at: item.created_at,
+    elapsed_ms: Date.now() - new Date(item.created_at).getTime(),
   };
 }
 
 function safeJson(s: string | null | undefined, fallback: unknown): unknown {
   if (!s) return fallback;
-  try {
-    return JSON.parse(s);
-  } catch {
-    return fallback;
+  try { return JSON.parse(s); } catch { return fallback; }
+}
+
+// ── Enrich helper ──────────────────────────────────────────────────────────────
+
+async function enrichItems(items: InboxRecord[]): Promise<Array<Record<string, unknown>>> {
+  const sessionRepo = getInboxRepository();
+  void sessionRepo; // suppress if unused
+  // Collect unique project/workflow IDs
+  const projectIds = [...new Set(items.map((i) => i.project_id).filter(Boolean) as string[])];
+  const workflowIds = [...new Set(items.map((i) => i.workflow_id).filter(Boolean) as string[])];
+
+  // Load project names in batch using the projects repository
+  const projectNames = new Map<string, string>();
+  if (projectIds.length > 0) {
+    const projRepo = getProjectRepository();
+    await Promise.all(
+      projectIds.map(async (pid) => {
+        const p = await projRepo.getProjectById(pid);
+        if (p) projectNames.set(pid, p.name);
+      }),
+    );
   }
+
+  // Load workflow goals using the sessions repository
+  const workflowGoals = new Map<string, string>();
+  if (workflowIds.length > 0) {
+    const { getSessionsRepository } = await import('./repositories/sessions.ts');
+    const sessRepo = getSessionsRepository();
+    await Promise.all(
+      workflowIds.map(async (wid) => {
+        const wf = await sessRepo.getWorkflowById(wid);
+        if (wf) workflowGoals.set(wid, wf.goal);
+      }),
+    );
+  }
+
+  return items.map((item) =>
+    inboxView(
+      item,
+      item.project_id ? projectNames.get(item.project_id) ?? null : null,
+      item.workflow_id ? workflowGoals.get(item.workflow_id) ?? null : null,
+    ),
+  );
 }
 
 // ── Route registration ─────────────────────────────────────────────────────────
@@ -94,92 +137,52 @@ function safeJson(s: string | null | undefined, fallback: unknown): unknown {
 export function registerInboxRoutes(): void {
 
   // GET /api/inbox
-  router.get('/api/inbox', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/inbox', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
     const limit = Math.min(Number(req.query.get('limit') ?? 100), 200);
     const offset = Number(req.query.get('offset') ?? 0);
+    const inboxRepo = getInboxRepository();
 
-    // Load items the user has access to: all projects they are a member of (or all for admins)
-    let items: Row[];
+    let result: { items: InboxRecord[]; total: number };
     if (req.user.is_admin) {
-      items = all<Row>(
-        `SELECT i.* FROM p6_inbox i
-          WHERE i.resolved = 0
-          ORDER BY i.created_at DESC
-          LIMIT ? OFFSET ?`,
-        limit,
-        offset,
-      );
+      result = await inboxRepo.listAllUnresolved({ limit, offset });
     } else {
-      // S1-TODO(projects): This JOIN should use getProjectRepository().listMyProjects(userId)
-      // to get projectIds and then filter p6_inbox with WHERE project_id IN (...).
-      // Converting this requires making the route handler async and splitting the query.
-      // Leave on direct SQLite until the inbox module is converted.
-      items = all<Row>(
-        `SELECT i.* FROM p6_inbox i
-           JOIN project_members pm ON pm.project_id = i.project_id AND pm.user_id = ?
-          WHERE i.resolved = 0
-          ORDER BY i.created_at DESC
-          LIMIT ? OFFSET ?`,
-        req.user.id as string,
-        limit,
-        offset,
-      );
+      // Use projects repository to get the user's project IDs
+      const projRepo = getProjectRepository();
+      const myProjects = await projRepo.listMyProjects(String(req.user.id));
+      const projectIds = myProjects.map((p) => p.id);
+      result = await inboxRepo.listUnresolvedByProjects(projectIds, { limit, offset });
     }
 
-    const enriched = items.map((item) => {
-      const project = item.project_id
-        ? one<Row>('SELECT name FROM projects WHERE id = ?', item.project_id as string)
-        : null;
-      const workflow = item.workflow_id
-        ? one<Row>('SELECT goal FROM p6_workflows WHERE id = ?', item.workflow_id as string)
-        : null;
-      return inboxView(item, project?.name as string | undefined, workflow?.goal as string | undefined);
-    });
-
-    // Total count
-    let total: number;
-    if (req.user.is_admin) {
-      total = (one<{ n: number }>('SELECT COUNT(*) AS n FROM p6_inbox WHERE resolved = 0')?.n ?? 0);
-    } else {
-      // S1-TODO(projects): This COUNT JOIN should use the project repository once inbox is async.
-      total = (one<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM p6_inbox i
-           JOIN project_members pm ON pm.project_id = i.project_id AND pm.user_id = ?
-          WHERE i.resolved = 0`,
-        req.user.id as string,
-      )?.n ?? 0);
-    }
-
-    sendJson(res, 200, { items: enriched, total });
+    const enriched = await enrichItems(result.items);
+    sendJson(res, 200, { items: enriched, total: result.total });
   });
 
   // GET /api/inbox/count
-  router.get('/api/inbox/count', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/inbox/count', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
+    const inboxRepo = getInboxRepository();
     let count: number;
     if (req.user.is_admin) {
-      count = one<{ n: number }>('SELECT COUNT(*) AS n FROM p6_inbox WHERE resolved = 0')?.n ?? 0;
+      count = await inboxRepo.countAllUnresolved();
     } else {
-      // S1-TODO(projects): This COUNT JOIN should use the project repository once inbox is async.
-      count = one<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM p6_inbox i
-           JOIN project_members pm ON pm.project_id = i.project_id AND pm.user_id = ?
-          WHERE i.resolved = 0`,
-        req.user.id as string,
-      )?.n ?? 0;
+      const projRepo = getProjectRepository();
+      const myProjects = await projRepo.listMyProjects(String(req.user.id));
+      const projectIds = myProjects.map((p) => p.id);
+      count = await inboxRepo.countUnresolvedByProjects(projectIds);
     }
 
     sendJson(res, 200, { count });
   });
 
   // POST /api/inbox/:id/resolve
-  router.post('/api/inbox/:id/resolve', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/inbox/:id/resolve', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
-    const item = one<Row>('SELECT * FROM p6_inbox WHERE id = ?', req.params.id);
+    const inboxRepo = getInboxRepository();
+    const item = await inboxRepo.getById(req.params.id);
     if (!item) { sendJson(res, 404, { error: 'Inbox item not found' }); return; }
 
     if (item.resolved) {
@@ -189,48 +192,43 @@ export function registerInboxRoutes(): void {
 
     // Check project membership
     if (!req.user.is_admin && item.project_id) {
-      // S1-TODO(projects): This should use getProjectRepository().isMember() once the
-      // POST /api/inbox/:id/resolve route handler is converted to async.
-      const member = one<Row>(
-        'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-        item.project_id as string,
-        req.user.id as string,
-      );
-      if (!member) { sendJson(res, 403, { error: 'Not a project member' }); return; }
+      const projRepo = getProjectRepository();
+      const isMember = await projRepo.isMember(item.project_id, String(req.user.id));
+      if (!isMember) { sendJson(res, 403, { error: 'Not a project member' }); return; }
     }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const response = body.response ?? null;
 
-    // ── Approval-specific checks (mirrors the fingerprint/expiry/atomic-claim
-    //    logic in crud.ts POST /runs/:rid/input so the two paths cannot drift).
+    // ── Approval-specific checks
     if (item.type === 'approval') {
       const clientHash = typeof body.inputHash === 'string' ? body.inputHash : null;
-      const pl = safeJson(item.payload as string, {}) as Record<string, unknown>;
+      const pl = safeJson(item.payload, {}) as Record<string, unknown>;
       const inputId = typeof pl.inputId === 'string' ? pl.inputId : null;
-      const runId   = item.run_id ? String(item.run_id) : null;
+      const runId = item.run_id ? String(item.run_id) : null;
 
       if (!inputId || !runId) {
         sendJson(res, 400, { error: 'Inbox item is missing inputId or runId' });
         return;
       }
 
-      const inputRow = one<Row>('SELECT * FROM p6_inputs WHERE id = ? AND run_id = ?', inputId, runId);
+      const { getSessionsRepository } = await import('./repositories/sessions.ts');
+      const sessRepo = getSessionsRepository();
+      const inputRow = await sessRepo.getInputByRunAndId(runId, inputId);
       if (!inputRow) {
         sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
         return;
       }
-
       if (inputRow.status === 'expired') {
         sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
         return;
       }
 
       if (response === 'approve') {
-        let storedHash = (inputRow.input_hash as string | null) ?? null;
+        let storedHash = inputRow.input_hash ?? null;
         if (!storedHash) {
           try {
-            const ipl = JSON.parse(inputRow.payload as string ?? '{}') as Record<string, unknown>;
+            const ipl = JSON.parse(inputRow.payload ?? '{}') as Record<string, unknown>;
             storedHash = typeof ipl.inputHash === 'string' ? ipl.inputHash : null;
           } catch { /* skip */ }
         }
@@ -240,14 +238,14 @@ export function registerInboxRoutes(): void {
         }
       }
 
-      const claimed = run(
-        "UPDATE p6_inputs SET status = 'answered', response = ?, allow_all = 0, answered_by = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
-        JSON.stringify(response),
-        req.user.id as string,
-        now(),
-        inputId,
-      );
-      if (!claimed.changes) {
+      const claimed = await sessRepo.updateInputConditional(inputId, 'pending', {
+        status: 'answered',
+        response: JSON.stringify(response),
+        allow_all: 0,
+        answered_by: String(req.user.id),
+        answered_at: now(),
+      });
+      if (!claimed) {
         sendJson(res, 409, { error: 'Someone answered this a moment ago.' });
         return;
       }
@@ -256,19 +254,23 @@ export function registerInboxRoutes(): void {
       resolveApproval(runId, inputId, decision, { remember: false, message: '' });
 
       if (item.project_id) {
-        emit(String(item.project_id), { type: 'input.resolved', inputId, status: 'answered' });
+        emit(item.project_id, { type: 'input.resolved', inputId, status: 'answered' });
       }
     }
 
-    run(
-      'UPDATE p6_inbox SET resolved = 1, resolved_by = ?, resolved_at = ? WHERE id = ?',
-      req.user.id as string,
-      now(),
+    // Atomic resolve (race-safe — only one winner)
+    const resolved = await inboxRepo.resolveConditional(
       req.params.id,
+      String(req.user.id),
+      now(),
     );
+    if (!resolved) {
+      sendJson(res, 409, { error: 'Someone resolved this a moment ago.' });
+      return;
+    }
 
     if (item.project_id) {
-      emit(String(item.project_id), {
+      emit(item.project_id, {
         type: 'inbox.resolved',
         inboxId: item.id,
         resolvedBy: req.user.id,

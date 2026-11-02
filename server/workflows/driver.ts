@@ -81,7 +81,7 @@ export async function startRun(workflowId: string): Promise<string> {
   const claimed = await repo.updateWorkflowConditional(workflowId, workflow.status, {
     status: 'running',
     updated_at: ts,
-  });
+  }, { hintParentId: workflow.parent_id });
 
   if (!claimed) {
     // Another caller transitioned the workflow before us.

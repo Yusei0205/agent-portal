@@ -88,12 +88,16 @@
         "server/delegation.ts",
         "server/repositories/delegation-settings.ts",
         "server/repositories/delegation-settings-sqlite.ts",
-        "server/repositories/delegation-settings-dynamodb.ts"
+        "server/repositories/delegation-settings-dynamodb.ts",
+        "server/repositories/sessions.ts",
+        "server/repositories/sessions-sqlite.ts",
+        "server/repositories/sessions-dynamodb.ts"
       ],
       "tests": [
         "test/delegate-token.test.ts",
         "test/delegation.test.ts",
-        "test/delegation-repo.test.ts"
+        "test/delegation-repo.test.ts",
+        "test/delegation-session-repo.test.ts"
       ],
       "smokeIds": ["delegation"]
     },
@@ -338,13 +342,33 @@
       ],
       "smokeIds": ["insights"]
     },
+    "budget": {
+      "description": "Budget usage tracking repository layer (budget_usage table)",
+      "sources": [
+        "server/repositories/budget.ts",
+        "server/repositories/budget-sqlite.ts",
+        "server/repositories/budget-dynamodb.ts",
+        "server/agent/litellm.ts",
+        "server/agent/claude-code.ts",
+        "server/agent/kiro.ts"
+      ],
+      "tests": [
+        "test/budget-repo.test.ts"
+      ],
+      "smokeIds": []
+    },
     "inbox": {
-      "description": "Agent inbox for incoming tasks and messages",
+      "description": "Agent inbox — approval requests, notifications, and the p6_inbox repository layer",
       "sources": [
         "server/inbox.ts",
+        "server/repositories/inbox.ts",
+        "server/repositories/inbox-sqlite.ts",
+        "server/repositories/inbox-dynamodb.ts",
         "web/src/pages/Inbox.jsx"
       ],
-      "tests": [],
+      "tests": [
+        "test/inbox-repo.test.ts"
+      ],
       "smokeIds": ["inbox"]
     },
     "connections": {
