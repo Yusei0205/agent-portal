@@ -78,3 +78,18 @@ Details: `docs/plans/2026-11-03-pathb-bug-backlog.md`.
 - DynamoDB tests: `docker run -d --rm --name ddb -p 8000:8000 amazon/dynamodb-local`, set `DYNAMODB_ENDPOINT=http://localhost:8000` and `REQUIRE_DYNAMODB=1`, run the `test/*-repo.test.ts` files directly with `node --import tsx --test`, then stop the container.
 - Rules learned: section 9 of `2026-11-02-full-cloud-portal-plan.md`. Repository how-to: `2026-11-02-repository-pattern.md`.
 - AWS profile `agentcore`; rotate the access key from `cytan_accessKeys.csv` before any CI setup.
+
+## 7. Progress log (2026-11-03, updated)
+
+Live at https://d1tah6dqw2fe9f.cloudfront.net (stack `AgentPortalCloud`, branch `main_v3`, not pushed). Troubleshooting: `docs/deployment/cloud-portal-troubleshooting.md`; Google sign-in: `docs/deployment/google-sign-in.md`.
+
+| Step | State |
+|---|---|
+| 1 Deploy first cloud version | Done (Lambda, CloudFront, DynamoDB, S3, AppSync, budget; web files deploy with the stack) |
+| 2 Files to S3 | Done for vault, knowledge, attachments, doc templates. Not done: output files, session files, working copies |
+| 3 Google sign-in + allow-list | Built and deployed. Needs the Google OAuth client in secret `agent-portal/google-oauth` and the allow-list (`-c googleAllowed=...`) |
+| 4 Timers | Done: EventBridge Scheduler runs idle-stop (1 min) and attachment cleanup (6 h). Loop-spec cron triggers are not executed on any backend |
+| 5 Live updates | Done (AppSync Events, signed tokens) |
+| 6 Claude runner on AgentCore | Not started. Needs a decision: the Spike A runner uses Bedrock (blocked until the Anthropic use-case form is submitted); the portal's Claude engine uses an Anthropic API key/token and needs a runner that takes it in the payload, like Kiro |
+| 7 Caller conversion | Done: projects, members, sessions lookups, workspaces, doc templates, attachments, generated docs, presentations, diagrams, learn, repo/workflow lookups. Remaining raw SQL: testing module (~120 calls), review.ts / review-lifecycle.ts / scan.ts internals (findings, scans, settings), MCP server (`mcp-server.ts`, depends on those), terminal and browser-live (need AgentCore shell/browser) |
+| 8 Backlog | Items 12-15 (attachments, learn, diagrams/presentations/docs/templates) done. Open: 1-4, 6-7 (reviews/scans), 9 (`checkAlreadyPosted` on DynamoDB), 10, 16-18 (testing), 20, 21, 25 |
