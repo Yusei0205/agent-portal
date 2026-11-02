@@ -29,9 +29,9 @@
  *   GET    /api/projects/:pid/learn/progress            — team progress (editor+)
  */
 
+import { getLearnRepository } from './repositories/learn.ts';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run as dbRun, insert, update } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, str, badRequest, notFound, parseJson } from './util.ts';
 import type { SQLInputValue } from 'node:sqlite';
@@ -104,8 +104,8 @@ function notifyLearn(projectId: string, detail: Record<string, unknown> = {}): v
 
 // ── Learn docs ────────────────────────────────────────────────────────────────
 
-function getLearnDoc(id: string): Row {
-  const r = one<Row>('SELECT * FROM learn_docs WHERE id = ?', id);
+async function getLearnDoc(id: string): Promise<Row> {
+  const r = (await getLearnRepository().getDocById(id)) as unknown as Row | null;
   if (!r) throw notFound('Document not found');
   return r;
 }
@@ -138,8 +138,8 @@ function docView(r: Row): Record<string, unknown> {
 
 // ── Quizzes ───────────────────────────────────────────────────────────────────
 
-function getQuiz(id: string): Row {
-  const r = one<Row>('SELECT * FROM quizzes WHERE id = ?', id);
+async function getQuiz(id: string): Promise<Row> {
+  const r = (await getLearnRepository().getQuizById(id)) as unknown as Row | null;
   if (!r) throw notFound('Quiz not found');
   return r;
 }
@@ -192,25 +192,25 @@ function gradeAnswer(q: any, given: unknown): boolean {
 
 interface Step { type: 'doc' | 'quiz'; id: string; }
 
-function stepDone(userId: string, s: Step): boolean {
-  if (s.type === 'doc') {
-    return Boolean(one('SELECT 1 FROM doc_reads WHERE user_id = ? AND learn_doc_id = ?', userId, s.id));
-  }
-  const best = one<{ r: number }>(
-    'SELECT MAX(CAST(score AS REAL) / total) AS r FROM quiz_attempts WHERE user_id = ? AND quiz_id = ? AND total > 0',
-    userId, s.id,
-  );
-  return (best?.r ?? 0) >= PASS_RATE;
+async function stepDone(userId: string, s: Step): Promise<boolean> {
+  if (s.type === 'doc') return getLearnRepository().isRead(s.id, userId);
+  const best = await getLearnRepository().getBestAttemptScore(s.id, userId);
+  return best != null && best.total > 0 && best.score / best.total >= PASS_RATE;
 }
 
-function pathView(r: Row, userId: string): Record<string, unknown> {
-  const steps = parseJson<Step[]>(S(r.steps ?? '[]'), []).map((s) => {
-    const item =
-      s.type === 'doc'
-        ? one('SELECT id, title, doc_type, published, stale FROM learn_docs WHERE id = ?', s.id)
-        : one('SELECT id, title, audience, difficulty, status, stale FROM quizzes WHERE id = ?', s.id);
-    return { ...s, item: item ?? null, done: item ? stepDone(userId, s) : false };
-  });
+async function pathView(r: Row, userId: string): Promise<Record<string, unknown>> {
+  const repo = getLearnRepository();
+  const steps = await Promise.all(parseJson<Step[]>(S(r.steps ?? '[]'), []).map(async (s) => {
+    let item: Record<string, unknown> | null = null;
+    if (s.type === 'doc') {
+      const d = await repo.getDocById(s.id);
+      item = d ? { id: d.id, title: d.title, doc_type: d.kind, published: d.status === 'published' ? 1 : 0, stale: d.stale } : null;
+    } else {
+      const q = await repo.getQuizById(s.id);
+      item = q ? { id: q.id, title: q.title, audience: q.audience, difficulty: q.difficulty, status: q.status, stale: q.stale } : null;
+    }
+    return { ...s, item, done: item ? await stepDone(userId, s) : false };
+  }));
   const live = steps.filter((s) => s.item);
   return {
     id: r.id,
@@ -238,16 +238,8 @@ export function registerLearnRoutes(): void {
       if (!project) return;
 
       const editor = await isEditorOf(req, project.id);
-      const rows = all<Row>(
-        `SELECT l.*, u.name AS created_by_name,
-                EXISTS(SELECT 1 FROM doc_reads r WHERE r.learn_doc_id = l.id AND r.user_id = ?) AS read_flag
-         FROM learn_docs l
-         LEFT JOIN users u ON u.id = l.created_by
-         WHERE l.project_id = ? ${editor ? '' : "AND l.status = 'published'"}
-         ORDER BY l.updated_at DESC`,
-        req.user!.id,
-        S(project.id),
-      );
+      const rows = ((await getLearnRepository().listDocsByProject(S(project.id), !editor)) as unknown as Row[])
+        .sort((x, y) => S(y.updated_at).localeCompare(S(x.updated_at)));
       sendJson(res, 200, { docs: rows.map(docView) });
     }),
   );
@@ -266,33 +258,39 @@ export function registerLearnRoutes(): void {
       const id = generateId();
       // M3 schema: kind (not doc_type), slug required, status (not published boolean)
       const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-      insert('learn_docs', {
+      await getLearnRepository().createDoc({
         id,
         project_id: S(project.id),
         title,
         slug,
-        kind: doc_type,   // M3 column name
+        kind: doc_type,
         focus: '',
         doc_ids: '[]',
         source_refs: '[]',
+        source_hash: null,
         business_md: '',
         technical_md: '',
         glossary: '[]',
         status: 'draft',
         stale: 0,
+        error: null,
+        run_id: null,
         created_by: req.user!.id,
         created_at: now(),
         updated_at: now(),
+        approved_by: null,
+        published_at: null,
+        audience,
       });
       notifyLearn(S(project.id), { id });
-      sendJson(res, 201, { doc: docView(getLearnDoc(id)) });
+      sendJson(res, 201, { doc: docView(await getLearnDoc(id)) });
     }),
   );
 
   router.get(
     '/api/learn/docs/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const d = getLearnDoc(req.params.id);
+      const d = await getLearnDoc(req.params.id);
       const project = await requireProjectAccess(req, res, S(d.project_id));
       if (!project) return;
 
@@ -302,13 +300,9 @@ export function registerLearnRoutes(): void {
         return;
       }
 
-      const read = Boolean(
-        one('SELECT 1 FROM doc_reads WHERE user_id = ? AND learn_doc_id = ?', req.user!.id, S(d.id)),
-      );
-      const quizzes = all<Row>(
-        'SELECT id, title, audience, difficulty, status FROM quizzes WHERE learn_doc_id = ?',
-        S(d.id),
-      );
+      const read = await getLearnRepository().isRead(S(d.id), req.user!.id);
+      const quizzes = (await getLearnRepository().listQuizzesByDoc(S(d.id)))
+        .map((q) => ({ id: q.id, title: q.title, audience: q.audience, difficulty: q.difficulty, status: q.status }));
       sendJson(res, 200, { doc: { ...docView(d), read }, quizzes });
     }),
   );
@@ -316,7 +310,7 @@ export function registerLearnRoutes(): void {
   router.patch(
     '/api/learn/docs/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const d = getLearnDoc(req.params.id);
+      const d = await getLearnDoc(req.params.id);
       const project = await requireProjectAccess(req, res, S(d.project_id), 'editor');
       if (!project) return;
 
@@ -325,18 +319,18 @@ export function registerLearnRoutes(): void {
       if (body.title !== undefined) patch.title = str(body.title, 'Title', { max: 200 }).trim();
       if (body.content !== undefined) patch.content = str(body.content, 'Content', { max: 500_000, optional: true }) || null;
       if (body.audience !== undefined) patch.audience = pick(body.audience, AUDIENCES, 'Audience');
-      update('learn_docs', S(d.id), patch);
+      await getLearnRepository().updateDoc(S(d.id), patch as never);
       notifyLearn(S(d.project_id), { id: d.id });
-      sendJson(res, 200, { doc: docView(getLearnDoc(S(d.id))) });
+      sendJson(res, 200, { doc: docView(await getLearnDoc(S(d.id))) });
     }),
   );
 
   router.delete(
     '/api/learn/docs/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const d = getLearnDoc(req.params.id);
+      const d = await getLearnDoc(req.params.id);
       await requireProjectAccess(req, res, S(d.project_id), 'editor');
-      dbRun('DELETE FROM learn_docs WHERE id = ?', S(d.id));
+      await getLearnRepository().deleteDoc(S(d.id));
       notifyLearn(S(d.project_id), { id: d.id });
       sendJson(res, 200, { ok: true });
     }),
@@ -345,20 +339,20 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/learn/docs/:id/publish',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const d = getLearnDoc(req.params.id);
+      const d = await getLearnDoc(req.params.id);
       await requireProjectAccess(req, res, S(d.project_id), 'editor');
-      update('learn_docs', S(d.id), { status: 'published', published_at: now(), updated_at: now() });
+      await getLearnRepository().updateDoc(S(d.id), { status: 'published', published_at: now(), updated_at: now() });
       notifyLearn(S(d.project_id), { id: d.id });
-      sendJson(res, 200, { doc: docView(getLearnDoc(S(d.id))) });
+      sendJson(res, 200, { doc: docView(await getLearnDoc(S(d.id))) });
     }),
   );
 
   router.post(
     '/api/learn/docs/:id/unpublish',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const d = getLearnDoc(req.params.id);
+      const d = await getLearnDoc(req.params.id);
       await requireProjectAccess(req, res, S(d.project_id), 'editor');
-      update('learn_docs', S(d.id), { status: 'draft', updated_at: now() });
+      await getLearnRepository().updateDoc(S(d.id), { status: 'draft', updated_at: now() });
       notifyLearn(S(d.project_id), { id: d.id });
       sendJson(res, 200, { ok: true });
     }),
@@ -367,12 +361,9 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/learn/docs/:id/read',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const d = getLearnDoc(req.params.id);
+      const d = await getLearnDoc(req.params.id);
       await requireProjectAccess(req, res, S(d.project_id));
-      dbRun(
-        'INSERT OR REPLACE INTO doc_reads (learn_doc_id, user_id, read_at) VALUES (?, ?, ?)',
-        S(d.id), req.user!.id, now(),
-      );
+      await getLearnRepository().markRead(S(d.id), req.user!.id, now());
       sendJson(res, 200, { ok: true });
     }),
   );
@@ -386,17 +377,8 @@ export function registerLearnRoutes(): void {
       if (!project) return;
 
       const editor = await isEditorOf(req, project.id);
-      const rows = all<Row>(
-        `SELECT q.*,
-                json_array_length(COALESCE(q.questions, q.questions_json, '[]')) AS question_count,
-                (SELECT MAX(CAST(a.score AS REAL) / a.total) FROM quiz_attempts a
-                 WHERE a.quiz_id = q.id AND a.user_id = ? AND a.total > 0) AS my_best
-         FROM quizzes q
-         WHERE q.project_id = ? ${editor ? '' : "AND q.status = 'published'"}
-         ORDER BY q.updated_at DESC`,
-        req.user!.id,
-        S(project.id),
-      );
+      const rows = ((await getLearnRepository().listQuizzesByProject(S(project.id), !editor)) as unknown as Row[])
+        .sort((x, y) => S(y.updated_at).localeCompare(S(x.updated_at)));
       sendJson(res, 200, { quizzes: rows.map((r) => quizView(r)) });
     }),
   );
@@ -413,39 +395,45 @@ export function registerLearnRoutes(): void {
       const learnDocId = body.learnDocId ? String(body.learnDocId) : null;
 
       if (learnDocId) {
-        const doc = one('SELECT 1 FROM learn_docs WHERE id = ? AND project_id = ?', learnDocId, S(project.id));
-        if (!doc) {
+        const doc = await getLearnRepository().getDocById(learnDocId);
+        if (!doc || doc.project_id !== S(project.id)) {
           sendJson(res, 400, { error: 'That document is not in this project' });
           return;
         }
       }
 
       const id = generateId();
-      insert('quizzes', {
+      await getLearnRepository().createQuiz({
         id,
         project_id: S(project.id),
         learn_doc_id: learnDocId,
         title,
         audience,
         difficulty: String(body.difficulty ?? 'medium'),
-        questions: '[]',  // M3 column name
+        doc_ids: '[]',
+        source_refs: '[]',
+        source_hash: null,
+        questions: '[]',
+        dropped: 0,
         status: 'draft',
         stale: 0,
-        dropped: 0,
-        source_refs: '[]',
+        error: null,
+        run_id: null,
         created_by: req.user!.id,
         created_at: now(),
         updated_at: now(),
+        approved_by: null,
+        published_at: null,
       });
       notifyLearn(S(project.id), { id });
-      sendJson(res, 201, { quiz: quizView(getQuiz(id)) });
+      sendJson(res, 201, { quiz: quizView(await getQuiz(id)) });
     }),
   );
 
   router.get(
     '/api/learn/quizzes/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const q = getQuiz(req.params.id);
+      const q = await getQuiz(req.params.id);
       const project = await requireProjectAccess(req, res, S(q.project_id));
       if (!project) return;
 
@@ -462,24 +450,24 @@ export function registerLearnRoutes(): void {
   router.patch(
     '/api/learn/quizzes/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const q = getQuiz(req.params.id);
+      const q = await getQuiz(req.params.id);
       await requireProjectAccess(req, res, S(q.project_id), 'editor');
 
       const body = req.body as Record<string, unknown>;
       const patch: Record<string, SQLInputValue | boolean | undefined> = { updated_at: now() };
       if (body.title !== undefined) patch.title = str(body.title, 'Title', { max: 200 }).trim();
-      update('quizzes', S(q.id), patch);
+      await getLearnRepository().updateQuiz(S(q.id), patch as never);
       notifyLearn(S(q.project_id), { id: q.id });
-      sendJson(res, 200, { quiz: quizView(getQuiz(S(q.id)), true) });
+      sendJson(res, 200, { quiz: quizView(await getQuiz(S(q.id)), true) });
     }),
   );
 
   router.delete(
     '/api/learn/quizzes/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const q = getQuiz(req.params.id);
+      const q = await getQuiz(req.params.id);
       await requireProjectAccess(req, res, S(q.project_id), 'editor');
-      dbRun('DELETE FROM quizzes WHERE id = ?', S(q.id));
+      await getLearnRepository().deleteQuiz(S(q.id));
       notifyLearn(S(q.project_id), { id: q.id });
       sendJson(res, 200, { ok: true });
     }),
@@ -488,9 +476,9 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/learn/quizzes/:id/publish',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const q = getQuiz(req.params.id);
+      const q = await getQuiz(req.params.id);
       await requireProjectAccess(req, res, S(q.project_id), 'editor');
-      update('quizzes', S(q.id), { status: 'published', published_at: now(), updated_at: now() });
+      await getLearnRepository().updateQuiz(S(q.id), { status: 'published', published_at: now(), updated_at: now() });
       notifyLearn(S(q.project_id), { id: q.id });
       sendJson(res, 200, { ok: true });
     }),
@@ -499,9 +487,9 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/learn/quizzes/:id/unpublish',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const q = getQuiz(req.params.id);
+      const q = await getQuiz(req.params.id);
       await requireProjectAccess(req, res, S(q.project_id), 'editor');
-      update('quizzes', S(q.id), { status: 'draft', updated_at: now() });
+      await getLearnRepository().updateQuiz(S(q.id), { status: 'draft', updated_at: now() });
       notifyLearn(S(q.project_id), { id: q.id });
       sendJson(res, 200, { ok: true });
     }),
@@ -511,7 +499,7 @@ export function registerLearnRoutes(): void {
   router.post(
     '/api/learn/quizzes/:id/attempts',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const q = getQuiz(req.params.id);
+      const q = await getQuiz(req.params.id);
       const project = await requireProjectAccess(req, res, S(q.project_id));
       if (!project) return;
 
@@ -523,7 +511,7 @@ export function registerLearnRoutes(): void {
 
       const body = req.body as Record<string, unknown>;
       const answers = (body.answers ?? {}) as Record<string, unknown>;
-      const questions = parseJson<any[]>(S(q.questions_json ?? '[]'), []);
+      const questions = parseJson<any[]>(S(q.questions_json ?? q.questions ?? '[]'), []);
 
       const results = questions.map((x: any) => ({
         id: x.id,
@@ -536,7 +524,7 @@ export function registerLearnRoutes(): void {
       const score = results.filter((r) => r.correct).length;
       const id = generateId();
 
-      insert('quiz_attempts', {
+      await getLearnRepository().createAttempt({
         id,
         quiz_id: S(q.id),
         user_id: req.user!.id,
@@ -558,20 +546,21 @@ export function registerLearnRoutes(): void {
   router.get(
     '/api/learn/quizzes/:id/attempts',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const q = getQuiz(req.params.id);
+      const q = await getQuiz(req.params.id);
       const project = await requireProjectAccess(req, res, S(q.project_id));
       if (!project) return;
 
       const editor = await isEditorOf(req, q.project_id);
-      const rows = editor
-        ? all<Row>(
-            'SELECT a.id, a.score, a.total, a.created_at AS completed_at, u.name FROM quiz_attempts a JOIN users u ON u.id = a.user_id WHERE a.quiz_id = ? ORDER BY a.created_at DESC LIMIT 200',
-            S(q.id),
-          )
-        : all<Row>(
-            'SELECT id, score, total, created_at AS completed_at FROM quiz_attempts WHERE quiz_id = ? AND user_id = ? ORDER BY created_at DESC',
-            S(q.id), req.user!.id,
-          );
+      const attempts = await getLearnRepository().listAttemptsByQuiz(S(q.id), editor ? undefined : req.user!.id);
+      attempts.sort((x, y) => y.created_at.localeCompare(x.created_at));
+      let rows: Array<Record<string, unknown>>;
+      if (editor) {
+        const users = await getAuthRepository().getUsersByIds([...new Set(attempts.map((a) => a.user_id))]);
+        const nameById = new Map(users.map((u) => [u.id, u.name]));
+        rows = attempts.slice(0, 200).map((a) => ({ id: a.id, score: a.score, total: a.total, completed_at: a.created_at, name: nameById.get(a.user_id) ?? '' }));
+      } else {
+        rows = attempts.map((a) => ({ id: a.id, score: a.score, total: a.total, completed_at: a.created_at }));
+      }
       sendJson(res, 200, { attempts: rows });
     }),
   );
@@ -585,11 +574,10 @@ export function registerLearnRoutes(): void {
       if (!project) return;
 
       const editor = await isEditorOf(req, project.id);
-      const rows = all<Row>(
-        `SELECT * FROM paths WHERE project_id = ? ${editor ? '' : "AND status = 'published'"} ORDER BY title`,
-        S(project.id),
-      );
-      sendJson(res, 200, { paths: rows.map((r) => pathView(r, req.user!.id)) });
+      const rows = ((await getLearnRepository().listPathsByProject(S(project.id))) as unknown as Row[])
+        .filter((r) => editor || r.status === 'published')
+        .sort((x, y) => S(x.title).localeCompare(S(y.title)));
+      sendJson(res, 200, { paths: await Promise.all(rows.map((r) => pathView(r, req.user!.id))) });
     }),
   );
 
@@ -603,12 +591,12 @@ export function registerLearnRoutes(): void {
       const title = str(body.title, 'Title', { max: 200 }).trim();
       const audience = pick(body.audience ?? 'everyone', AUDIENCES, 'Audience');
       const id = generateId();
-      insert('paths', {
+      await getLearnRepository().createPath({
         id,
         project_id: S(project.id),
         title,
         audience,
-        description: str(body.description, 'Description', { max: 2000, optional: true }) || null,
+        description: str(body.description, 'Description', { max: 2000, optional: true }) || '',
         steps: JSON.stringify(Array.isArray(body.steps) ? body.steps : []),
         status: body.publish ? 'published' : 'draft',
         created_by: req.user!.id,
@@ -616,15 +604,15 @@ export function registerLearnRoutes(): void {
         updated_at: now(),
       });
       notifyLearn(S(project.id), { id });
-      const r = one<Row>('SELECT * FROM paths WHERE id = ?', id)!;
-      sendJson(res, 201, { path: pathView(r, req.user!.id) });
+      const r = ((await getLearnRepository().getPathById(id)) as unknown as Row);
+      sendJson(res, 201, { path: await pathView(r, req.user!.id) });
     }),
   );
 
   router.patch(
     '/api/learn/paths/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const r = one<Row>('SELECT * FROM paths WHERE id = ?', req.params.id);
+      const r = ((await getLearnRepository().getPathById(req.params.id)) as unknown as Row | null);
       if (!r) { sendJson(res, 404, { error: 'Path not found' }); return; }
       await requireProjectAccess(req, res, S(r.project_id), 'editor');
 
@@ -635,20 +623,20 @@ export function registerLearnRoutes(): void {
       if (body.audience !== undefined) patch.audience = pick(body.audience, AUDIENCES, 'Audience');
       if (body.steps !== undefined) patch.steps = JSON.stringify(Array.isArray(body.steps) ? body.steps : []);
       if (body.status !== undefined) patch.status = body.status === 'published' ? 'published' : 'draft';
-      update('paths', S(r.id), patch);
+      await getLearnRepository().updatePath(S(r.id), patch as never);
       notifyLearn(S(r.project_id), { id: r.id });
-      const updated = one<Row>('SELECT * FROM paths WHERE id = ?', S(r.id))!;
-      sendJson(res, 200, { path: pathView(updated, req.user!.id) });
+      const updated = ((await getLearnRepository().getPathById(S(r.id))) as unknown as Row);
+      sendJson(res, 200, { path: await pathView(updated, req.user!.id) });
     }),
   );
 
   router.delete(
     '/api/learn/paths/:id',
     requireAuth(async (req: PortalRequest, res: PortalResponse) => {
-      const r = one<Row>('SELECT * FROM paths WHERE id = ?', req.params.id);
+      const r = ((await getLearnRepository().getPathById(req.params.id)) as unknown as Row | null);
       if (!r) { sendJson(res, 404, { error: 'Path not found' }); return; }
       await requireProjectAccess(req, res, S(r.project_id), 'editor');
-      dbRun('DELETE FROM paths WHERE id = ?', S(r.id));
+      await getLearnRepository().deletePath(S(r.id));
       notifyLearn(S(r.project_id), { id: r.id });
       sendJson(res, 200, { ok: true });
     }),
@@ -667,27 +655,25 @@ export function registerLearnRoutes(): void {
       const members: Row[] = memberRecords
         .map((m) => ({ id: m.user_id, name: nameById.get(m.user_id) ?? '', role: m.role }) as Row)
         .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      const paths = all<Row>(
-        "SELECT * FROM paths WHERE project_id = ? AND status = 'published' ORDER BY title",
-        S(project.id),
-      );
+      const paths = ((await getLearnRepository().listPathsByProject(S(project.id))) as unknown as Row[])
+        .filter((p) => p.status === 'published')
+        .sort((x, y) => S(x.title).localeCompare(S(y.title)));
+      const quizzes = await getLearnRepository().listQuizzesByProject(S(project.id));
+
+      const memberRows = await Promise.all(members.map(async (m) => {
+        const progress: Record<string, unknown> = {};
+        for (const p of paths) progress[S(p.id)] = (await pathView(p, S(m.id))).progress;
+        let quizzesPassed = 0;
+        for (const q of quizzes) {
+          const best = await getLearnRepository().getBestAttemptScore(q.id, S(m.id));
+          if (best && best.total > 0 && best.score / best.total >= PASS_RATE) quizzesPassed += 1;
+        }
+        return { id: m.id, name: m.name, role: m.role, progress, quizzesPassed };
+      }));
 
       sendJson(res, 200, {
         paths: paths.map((p) => ({ id: p.id, title: p.title, audience: p.audience })),
-        members: members.map((m) => ({
-          id: m.id,
-          name: m.name,
-          role: m.role,
-          progress: Object.fromEntries(
-            paths.map((p) => [S(p.id), pathView(p, S(m.id)).progress]),
-          ),
-          quizzesPassed: N(
-            one<{ n: number }>(
-              'SELECT COUNT(DISTINCT quiz_id) AS n FROM quiz_attempts a JOIN quizzes q ON q.id = a.quiz_id WHERE a.user_id = ? AND q.project_id = ? AND a.total > 0 AND CAST(a.score AS REAL) / a.total >= ?',
-              S(m.id), S(project.id), PASS_RATE,
-            )?.n,
-          ),
-        })),
+        members: memberRows,
       });
     }),
   );
