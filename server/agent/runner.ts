@@ -20,6 +20,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { one, insert } from '../db.ts';
 import type { Row } from '../db.ts';
+import { getProjectSlug } from '../project-access.ts';
+import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { generateId, now } from '../util.ts';
 import { emit, emitGlobal, publishRunEvent } from '../events.ts';
 import { loadRunPermissions, evaluateCommand } from '../guardrails.ts';
@@ -287,11 +289,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     return;
   }
 
-  const project = workflow.project_id
-    ? one<Row>('SELECT * FROM projects WHERE id = ?', String(workflow.project_id))
-    : null;
-
-  const slug = project ? String(project.slug) : 'unknown';
+  const slug = (workflow.project_id ? await getProjectSlug(String(workflow.project_id)) : null) ?? 'unknown';
   const projectDir = path.join(config.dataDir, 'projects', slug);
 
   // ── Working copy: reuse persistent dir or create on first run ────────────
@@ -340,7 +338,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       let repoName: string | null = null;
       const repoIds = parseJsonArray(String(workflow.repo_ids ?? '[]'));
       if (repoIds.length > 0) {
-        const repo = one<Row>('SELECT name FROM repositories WHERE id = ?', repoIds[0]);
+        const repo = await getGitReposRepository().getById(repoIds[0]);
         repoName = repo ? String(repo.name) : null;
       }
 
@@ -803,14 +801,14 @@ async function populateRepoWorkDirs(
 ): Promise<string[]> {
   if (!repoIds.length || !projectId) return [];
 
-  const projectRow = one<Row>('SELECT slug FROM projects WHERE id = ?', projectId);
-  if (!projectRow) return [];
-  const slug = String(projectRow.slug ?? 'unknown');
+  const projectSlug = await getProjectSlug(projectId);
+  if (!projectSlug) return [];
+  const slug = projectSlug;
 
   const available: string[] = [];
 
   for (const repoId of repoIds) {
-    const repo = one<Row>('SELECT * FROM repositories WHERE id = ?', repoId);
+    const repo = await getGitReposRepository().getById(repoId);
     if (!repo) continue;
     if (String(repo.project_id) !== projectId) continue;  // wrong project — skip silently
 
@@ -879,13 +877,10 @@ async function prepareReviewWorkDir(agentRun: AgentRun, workDir: string): Promis
   const repoId = agentRun.repoIds[0] ?? (review.repo_id ? String(review.repo_id) : null);
   if (!repoId) return;
 
-  const repo = one<Row>('SELECT * FROM repositories WHERE id = ?', repoId);
+  const repo = await getGitReposRepository().getById(repoId);
   if (!repo) return;
 
-  const projectRow = agentRun.projectId
-    ? one<Row>('SELECT slug FROM projects WHERE id = ?', agentRun.projectId)
-    : null;
-  const slug = String(projectRow?.slug ?? 'unknown');
+  const slug = (agentRun.projectId ? await getProjectSlug(agentRun.projectId) : null) ?? 'unknown';
 
   // Derive the clone directory using the canonical path helper (raw repo name, no slugification)
   const cloneDir = repoRefDir(slug, String(repo.name ?? ''));

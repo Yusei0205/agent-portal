@@ -16,6 +16,8 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, run as dbRun, insert, getDb } from './db.ts';
 import type { Row } from './db.ts';
+import { getMembership } from './project-access.ts';
+import { getProjectRepository } from './repositories/projects.ts';
 import { now } from './util.ts';
 import { emit } from './events.ts';
 import { appendAudit } from './audit.ts';
@@ -151,11 +153,7 @@ async function requireWorkflowReadAccess(
     sendJson(res, 403, { error: 'Not authorized to access this session' });
     return null;
   }
-  const member = one<Row>(
-    'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    wf.project_id,
-    req.user.id,
-  );
+  const member = await getMembership(String(wf.project_id), req.user.id);
   if (!member) {
     sendJson(res, 403, { error: 'Not a project member' });
     return null;
@@ -174,17 +172,13 @@ async function requireProjectAndWorkflow(
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const p = await getProjectRepository().getProjectById(projectId);
   if (!p) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (!req.user.is_admin) {
-    const m = one<Row>(
-      'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-      projectId,
-      req.user.id,
-    );
+    const m = await getMembership(projectId, req.user.id);
     if (!m) {
       sendJson(res, 404, { error: 'Project not found' });
       return null;

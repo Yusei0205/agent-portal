@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one } from './db.ts';
+import { getMembership, getProjectSlug } from './project-access.ts';
 import type { Row } from './db.ts';
 import { config } from './config.ts';
 import { subscribeRun } from './events.ts';
@@ -76,11 +76,7 @@ async function requireRunAccess(req: PortalRequest, res: PortalResponse, runId: 
   }
   if (req.user.is_admin) return workflow;
   if (!workflow.project_id) return workflow;
-  const member = one<Row>(
-    'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-    workflow.project_id as string,
-    req.user.id as string,
-  );
+  const member = await getMembership(workflow.project_id as string, req.user.id as string);
   if (!member) {
     sendJson(res, 403, { error: 'Not a project member' });
     return null;
@@ -90,11 +86,11 @@ async function requireRunAccess(req: PortalRequest, res: PortalResponse, runId: 
 
 // ── File helpers ───────────────────────────────────────────────────────────────
 
-function resolveWorkDir(workflow: import('./repositories/sessions.ts').WorkflowRecord, runId: string): string | null {
+async function resolveWorkDir(workflow: import('./repositories/sessions.ts').WorkflowRecord, runId: string): Promise<string | null> {
   if (!workflow.project_id) return null;
-  const project = one<Row>('SELECT slug FROM projects WHERE id = ?', workflow.project_id);
-  if (!project) return null;
-  return path.join(config.dataDir, 'projects', String(project.slug), 'work', runId);
+  const slug = await getProjectSlug(workflow.project_id);
+  if (!slug) return null;
+  return path.join(config.dataDir, 'projects', slug, 'work', runId);
 }
 
 function listWorkDirFiles(workDir: string, base = ''): string[] {
@@ -148,11 +144,7 @@ export function registerRunRoutes(): void {
     if (!row) { sendJson(res, 404, { error: 'Input not found' }); return; }
     // Access check: must be a member of the input's project (or admin)
     if (!req.user.is_admin && row.project_id) {
-      const member = one<Row>(
-        'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-        row.project_id,
-        req.user.id as string,
-      );
+      const member = await getMembership(row.project_id, req.user.id as string);
       if (!member) { sendJson(res, 403, { error: 'Not a project member' }); return; }
     }
     let payload: unknown = {};
@@ -253,7 +245,7 @@ export function registerRunRoutes(): void {
   router.get('/api/runs/:id/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const workflow = await requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
-    const workDir = resolveWorkDir(workflow, req.params.id);
+    const workDir = await resolveWorkDir(workflow, req.params.id);
     if (!workDir || !fs.existsSync(workDir)) {
       sendJson(res, 200, { files: [] });
       return;
@@ -273,7 +265,7 @@ export function registerRunRoutes(): void {
       return;
     }
 
-    const workDir = resolveWorkDir(workflow, req.params.id);
+    const workDir = await resolveWorkDir(workflow, req.params.id);
     if (!workDir) {
       sendJson(res, 404, { error: 'Work directory not found' });
       return;

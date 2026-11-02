@@ -254,6 +254,17 @@ export class AgentPortalCloudStack extends cdk.Stack {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(webBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        // Single-page app: paths without a file extension serve index.html. This only applies to the web
+        // files; a distribution-wide error response would also turn API 404s into the HTML page.
+        functionAssociations: [{
+          eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+          function: new cloudfront.Function(this, 'SpaRewrite', {
+            code: cloudfront.FunctionCode.fromInline(
+              "function handler(event) { var r = event.request; if (r.uri.indexOf('.') === -1) { r.uri = '/index.html'; } return r; }",
+            ),
+            runtime: cloudfront.FunctionRuntime.JS_2_0,
+          }),
+        }],
       },
       additionalBehaviors: {
         '/api/*': {
@@ -266,8 +277,6 @@ export class AgentPortalCloudStack extends cdk.Stack {
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         },
       },
-      // Single-page app: unknown paths serve index.html.
-      errorResponses: [{ httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' }],
     });
 
     // ── Budget ────────────────────────────────────────────────────────────────

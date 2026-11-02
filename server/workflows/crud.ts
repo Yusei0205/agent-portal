@@ -32,6 +32,9 @@ import { createChildSession, checkDelegationLimits, getDelegationSettings, stopA
 import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
 import { checkKey, issueDetail, mustMapping } from '../jira.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { getProjectRepository } from '../repositories/projects.ts';
+import { getWorkspacesRepository } from '../repositories/workspaces.ts';
+import { getGitReposRepository } from '../repositories/git-repos.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 
 // ── Constant ───────────────────────────────────────────────────────────────────
@@ -186,22 +189,18 @@ function safeJson(s: string | null | undefined, fallback: unknown): unknown {
  * Verify the user has at least 'viewer' access to the project.
  * Returns the project row, or null (response already sent).
  */
-function requireProjectMember(
+async function requireProjectMember(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): Row | null {
+): Promise<Row | null> {
   if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return null; }
-  const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
+  const projects = getProjectRepository();
+  const p = await projects.getProjectById(projectId);
   if (!p) { sendJson(res, 404, { error: 'Project not found' }); return null; }
-  if (req.user.is_admin) return p;
-  const m = one<Row>(
-    'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
-  if (!m) { sendJson(res, 404, { error: 'Project not found' }); return null; }
-  return p;
+  if (req.user.is_admin) return p as unknown as Row;
+  if (!(await projects.isMember(projectId, req.user.id))) { sendJson(res, 404, { error: 'Project not found' }); return null; }
+  return p as unknown as Row;
 }
 
 // ── Transcript helpers ─────────────────────────────────────────────────────────
@@ -295,7 +294,7 @@ export function registerWorkflowRoutes(): void {
 
   // GET /api/projects/:id/workflows
   router.get('/api/projects/:id/workflows', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
 
     const limit = Math.min(int(req.query.get('limit'), 'limit', 50, 1, 200), 200);
@@ -320,7 +319,7 @@ export function registerWorkflowRoutes(): void {
   // POST /api/projects/:id/workflows
   router.post('/api/projects/:id/workflows', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -390,11 +389,7 @@ export function registerWorkflowRoutes(): void {
     let wsDefaultModel: string | null = null;
 
     if (workspaceId) {
-      const ws = one<{ repo_ids: string | null; default_engine: string; default_agent: string; default_model: string }>(
-        'SELECT repo_ids, default_engine, default_agent, default_model FROM workspaces_v2 WHERE id = ? AND project_id = ?',
-        workspaceId,
-        projectId,
-      );
+      const ws = await getWorkspacesRepository().getByIdForProject(workspaceId, projectId);
       if (!ws) {
         sendJson(res, 400, { error: 'Workspace not found' });
         return;
@@ -407,13 +402,9 @@ export function registerWorkflowRoutes(): void {
       const wsRepoIds = safeJson(ws.repo_ids, []) as string[];
       const combined = [...new Set([...wsRepoIds, ...explicitRepoIds])];
       if (combined.length > 0) {
-        const placeholders = combined.map(() => '?').join(', ');
-        const validRows = all<{ id: string }>(
-          `SELECT id FROM repositories WHERE project_id = ? AND id IN (${placeholders})`,
-          projectId,
-          ...combined,
-        );
-        repoIds = validRows.map((r) => r.id);
+        const projectRepos = await getGitReposRepository().listByProject(projectId);
+        const validIds = new Set(projectRepos.map((r) => r.id));
+        repoIds = combined.filter((id) => validIds.has(id));
       } else {
         repoIds = [];
       }
@@ -480,7 +471,7 @@ export function registerWorkflowRoutes(): void {
 
   // GET /api/projects/:id/workflows/:wid
   router.get('/api/projects/:id/workflows/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -497,7 +488,7 @@ export function registerWorkflowRoutes(): void {
   // DELETE /api/projects/:id/workflows/:wid
   router.delete('/api/projects/:id/workflows/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -532,7 +523,7 @@ export function registerWorkflowRoutes(): void {
     '/api/projects/:id/workflows/:wid/delegate',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-      const project = requireProjectMember(req, res, req.params.id);
+      const project = await requireProjectMember(req, res, req.params.id);
       if (!project) return;
       const repo = getSessionsRepository();
       const wf = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -564,7 +555,7 @@ export function registerWorkflowRoutes(): void {
   // POST /api/projects/:id/workflows/:wid/start
   router.post('/api/projects/:id/workflows/:wid/start', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -589,13 +580,14 @@ export function registerWorkflowRoutes(): void {
       sendJson(res, 201, { runId, run: run ? runView(run) : null });
     } catch (e: unknown) {
       const msg = (e as { message?: string })?.message ?? String(e);
+      console.error(`[workflows] start failed for ${req.params.wid}:`, e instanceof Error ? e.stack : e);
       sendJson(res, 429, { error: msg });
     }
   });
 
   // GET /api/projects/:id/workflows/:wid/runs
   router.get('/api/projects/:id/workflows/:wid/runs', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -606,7 +598,7 @@ export function registerWorkflowRoutes(): void {
 
   // GET /api/projects/:id/workflows/:wid/runs/:rid
   router.get('/api/projects/:id/workflows/:wid/runs/:rid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -665,7 +657,7 @@ export function registerWorkflowRoutes(): void {
 
   // POST /api/projects/:id/workflows/:wid/runs/:rid/input
   router.post('/api/projects/:id/workflows/:wid/runs/:rid/input', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -740,7 +732,7 @@ export function registerWorkflowRoutes(): void {
   // POST /api/projects/:id/workflows/:wid/cancel
   router.post('/api/projects/:id/workflows/:wid/cancel', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -762,7 +754,7 @@ export function registerWorkflowRoutes(): void {
   // POST /api/projects/:id/workflows/:wid/resume — resume a failed/paused/stopped/cancelled workflow
   router.post('/api/projects/:id/workflows/:wid/resume', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -828,7 +820,7 @@ export function registerWorkflowRoutes(): void {
   // POST /api/projects/:id/workflows/:wid/message
   router.post('/api/projects/:id/workflows/:wid/message', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -911,7 +903,7 @@ export function registerWorkflowRoutes(): void {
   // PATCH /api/projects/:id/workflows/:wid — update session settings
   router.patch('/api/projects/:id/workflows/:wid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
@@ -995,7 +987,7 @@ export function registerWorkflowRoutes(): void {
   //     base64url( JSON({ ts: string, src: 'r'|'w', id: number }) )
   //   Sort order within a page: created_at DESC, src ASC ('r' before 'w'), id DESC
   router.get('/api/projects/:id/workflows/:wid/transcript', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const project = requireProjectMember(req, res, req.params.id);
+    const project = await requireProjectMember(req, res, req.params.id);
     if (!project) return;
     const repo = getSessionsRepository();
     const wf = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
