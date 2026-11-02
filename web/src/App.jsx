@@ -582,7 +582,7 @@ export function App() {
   const load = useCallback(async () => {
     try {
       const s = await api.get('/api/auth/state');
-      setAuth({ loading: false, needsSetup: s.needsSetup, user: s.user });
+      setAuth({ loading: false, needsSetup: s.needsSetup, user: s.user, googleEnabled: Boolean(s.googleEnabled) });
     } catch (e) {
       setAuth({ loading: false, error: e });
     }
@@ -616,7 +616,7 @@ export function App() {
     if (window.location.hash.startsWith('#/accept-invite')) {
       return <AcceptInvite onDone={() => { window.location.hash = '#/'; load(); }} />;
     }
-    return <Login onDone={load} />;
+    return <Login onDone={load} googleEnabled={auth.googleEnabled} />;
   }
 
   return <Shell user={auth.user} onSignOut={load} />;

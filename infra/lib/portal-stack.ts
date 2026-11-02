@@ -95,6 +95,10 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   budgetEmail: string;
   /** Existing S3 bucket the portal may read and write for file storage (optional). */
   storageBucket?: string;
+  /** https://<cloudfront domain>; needed for Google sign-in (redirect URI). */
+  publicUrl?: string;
+  /** Emails / @domains allowed to sign in with Google without an invite, comma separated. */
+  googleAllowed?: string;
 }
 
 export class AgentPortalCloudStack extends cdk.Stack {
@@ -201,6 +205,12 @@ export class AgentPortalCloudStack extends cdk.Stack {
     });
 
     // ── Lambda ────────────────────────────────────────────────────────────────
+    // Google sign-in client. Created empty; paste the OAuth client id/secret into it (see docs/deployment/google-sign-in.md).
+    const googleSecret = new secretsmanager.Secret(this, 'GoogleOAuth', {
+      secretName: 'agent-portal/google-oauth',
+      secretStringValue: cdk.SecretValue.unsafePlainText('{"clientId":"","clientSecret":""}'),
+    });
+
     const fn = new lambda.DockerImageFunction(this, 'Portal', {
       functionName: 'agent-portal',
       code: lambda.DockerImageCode.fromImageAsset(props.repoRoot, {
@@ -220,11 +230,15 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.storageBucket
           ? { STORAGE_BACKEND: 's3', STORAGE_S3_BUCKET: props.storageBucket, STORAGE_S3_PREFIX: 'data', STORAGE_S3_REGION: this.region }
           : {}),
+        PORTAL_GOOGLE_SECRET_ARN: googleSecret.secretArn,
+        ...(props.publicUrl ? { PORTAL_PUBLIC_URL: props.publicUrl } : {}),
+        ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
         ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
       },
     });
     tables.forEach((t) => t.grantReadWriteData(fn));
     masterKey.grantRead(fn);
+    googleSecret.grantRead(fn);
     fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['appsync:EventPublish'],
       resources: [`arn:aws:appsync:${this.region}:${this.account}:apis/${eventsApi.attrApiId}/channelNamespace/*`],

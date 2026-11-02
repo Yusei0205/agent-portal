@@ -47,5 +47,7 @@ if (budgetEmail) {
     kiroRuntimeArn: app.node.tryGetContext('kiroRuntimeArn'),
     budgetEmail,
     storageBucket: app.node.tryGetContext('storageBucket'),
+    publicUrl: app.node.tryGetContext('publicUrl'),
+    googleAllowed: app.node.tryGetContext('googleAllowed'),
   });
 }

@@ -37,11 +37,16 @@ function AuthFrame({ title, intro, children }) {
  * Login form.
  * @param {{ onDone: () => void }} props
  */
-export function Login({ onDone }) {
+export function Login({ onDone, googleEnabled = false }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(/** @type {string|null} */ (null));
+  // Google sign-in sends failures back as #/login?error=...
+  const hashError = (() => {
+    const h = window.location.hash;
+    return h.includes('?') ? new URLSearchParams(h.slice(h.indexOf('?') + 1)).get('error') : null;
+  })();
+  const [error, setError] = useState(/** @type {string|null} */ (hashError));
 
   const submit = async (e) => {
     e.preventDefault();
@@ -95,6 +100,11 @@ export function Login({ onDone }) {
         >
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
+        {googleEnabled && (
+          <a className="btn" href="/api/auth/google/start" style={{ textAlign: 'center' }}>
+            Continue with Google
+          </a>
+        )}
         <p className="muted small">
           Ask your admin to create an account or send you an invite link.
         </p>

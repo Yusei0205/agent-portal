@@ -12,6 +12,7 @@
  *   requireAuth(handler)          — ensure user is authenticated
  */
 
+import { registerGoogleAuthRoutes, googleSignInEnabled } from './google-auth.ts';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import { router, sendJson, setCookie, parseCookies, setAuthenticator, registerBackgroundWrite } from './http.ts';
 import type { PortalRequest, PortalResponse, PortalUser, AuthInfo } from './http.ts';
@@ -207,6 +208,7 @@ function detectPlatform(): PlatformInfo {
 export function registerAuthRoutes(): void {
   // Set the authenticator on the HTTP router
   setAuthenticator(authenticate);
+  registerGoogleAuthRoutes(startSession);
 
   // GET /api/auth/state
   router.get('/api/auth/state', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
@@ -224,6 +226,7 @@ export function registerAuthRoutes(): void {
           }
         : undefined,
       deployTarget: config.deployTarget ?? null,
+      googleEnabled: await googleSignInEnabled(),
     });
   });
 
