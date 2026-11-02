@@ -1,6 +1,6 @@
 // Dumps every DynamoDB table the repositories create (name, keys, GSIs, TTL) to infra/tables.json,
 // so the CDK stack provisions exactly what the code expects. Run: node --import tsx scripts/dump-dynamo-tables.ts
-import { readdirSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { DynamoDBClient, ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 
 for (const n of ['USERS','PROJECTS','CONFIG','RUNS','EVENTS','CODE','CONTENT','SEARCH','CREATE','LEARN','TESTING']) {
@@ -44,6 +44,10 @@ const created = new Set<string>();
 
 // Which table each repository's ensure function should create (matches the table it uses at runtime).
 function tableFor(file: string): string {
+  // A repository that names exactly one portal table uses that one.
+  const src = readFileSync(new URL(`../server/repositories/${file}`, import.meta.url), 'utf8');
+  const named = [...new Set(src.match(/DYNAMODB_TABLE_PORTAL_[A-Z]+/g) ?? [])];
+  if (named.length === 1) return `portal-${named[0].replace('DYNAMODB_TABLE_PORTAL_', '').toLowerCase()}`;
   if (/^(ai-attachments|diagrams-data|doc-templates-data|generated-docs-data|presentations-data)/.test(file)) return 'portal-create';
   if (file.startsWith('learn-')) return 'portal-learn';
   if (file.startsWith('testing-data-')) return 'portal-testing';

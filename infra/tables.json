@@ -501,14 +501,6 @@
       {
         "AttributeName": "ts",
         "AttributeType": "S"
-      },
-      {
-        "AttributeName": "slug",
-        "AttributeType": "S"
-      },
-      {
-        "AttributeName": "projectId",
-        "AttributeType": "S"
       }
     ],
     "GlobalSecondaryIndexes": [
@@ -559,7 +551,47 @@
         "Projection": {
           "ProjectionType": "ALL"
         }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "Ttl": null
+  },
+  {
+    "TableName": "portal-projects",
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+      {
+        "AttributeName": "PK",
+        "KeyType": "HASH"
       },
+      {
+        "AttributeName": "SK",
+        "KeyType": "RANGE"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "PK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "SK",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "slug",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "projectId",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "userId",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
       {
         "IndexName": "GSI-ProjectSlug",
         "KeySchema": [
@@ -591,32 +623,6 @@
         "Projection": {
           "ProjectionType": "ALL"
         }
-      }
-    ],
-    "BillingMode": "PAY_PER_REQUEST",
-    "Ttl": null
-  },
-  {
-    "TableName": "portal-projects",
-    "BillingMode": "PAY_PER_REQUEST",
-    "KeySchema": [
-      {
-        "AttributeName": "PK",
-        "KeyType": "HASH"
-      },
-      {
-        "AttributeName": "SK",
-        "KeyType": "RANGE"
-      }
-    ],
-    "AttributeDefinitions": [
-      {
-        "AttributeName": "PK",
-        "AttributeType": "S"
-      },
-      {
-        "AttributeName": "SK",
-        "AttributeType": "S"
       }
     ],
     "Ttl": null

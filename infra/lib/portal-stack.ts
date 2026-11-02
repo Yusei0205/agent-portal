@@ -16,6 +16,9 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -277,6 +280,20 @@ export class AgentPortalCloudStack extends cdk.Stack {
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         },
       },
+    });
+
+    // ── Web files ─────────────────────────────────────────────────────────────
+    // Uploads the built web app (npm run build:web -> dist/web) and clears the CDN cache on every deploy.
+    const webDir = path.join(props.repoRoot, 'dist', 'web');
+    if (!fs.existsSync(path.join(webDir, 'index.html'))) {
+      throw new Error(`Web build not found at ${webDir}. Run "npm run build:web" before deploying.`);
+    }
+    new s3deploy.BucketDeployment(this, 'WebFiles', {
+      sources: [s3deploy.Source.asset(webDir)],
+      destinationBucket: webBucket,
+      distribution: dist,
+      distributionPaths: ['/*'],
+      memoryLimit: 512,
     });
 
     // ── Budget ────────────────────────────────────────────────────────────────
