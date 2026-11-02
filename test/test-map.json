@@ -145,6 +145,9 @@
         "server/repositories/stats.ts",
         "server/repositories/stats-sqlite.ts",
         "server/repositories/stats-dynamodb.ts",
+        "server/repositories/vault-files.ts",
+        "server/repositories/vault-files-sqlite.ts",
+        "server/repositories/vault-files-dynamodb.ts",
         "web/src/pages/sessions/SessionList.jsx",
         "web/src/pages/sessions/SessionLive.jsx",
         "web/src/pages/sessions/SessionsShell.jsx",
@@ -245,12 +248,16 @@
       "sources": [
         "server/knowledge.ts",
         "server/learn.ts",
+        "server/repositories/knowledge.ts",
+        "server/repositories/knowledge-sqlite.ts",
+        "server/repositories/knowledge-dynamodb.ts",
         "web/src/pages/Knowledge.jsx",
         "web/src/pages/Learn.jsx",
         "web/src/lib/templates/index.js"
       ],
       "tests": [
-        "test/knowledge.test.ts"
+        "test/knowledge.test.ts",
+        "test/knowledge-repo.test.ts"
       ],
       "smokeIds": ["knowledge"]
     },
@@ -328,13 +335,17 @@
         "server/vault.ts",
         "server/vault-generated.ts",
         "server/secrets.ts",
+        "server/repositories/vault-files.ts",
+        "server/repositories/vault-files-sqlite.ts",
+        "server/repositories/vault-files-dynamodb.ts",
         "web/src/pages/Vault.jsx",
         "web/src/lib/vaultFolders.js",
         "web/src/styles/components.css"
       ],
       "tests": [
         "test/vault.test.ts",
-        "test/vault-folders.test.ts"
+        "test/vault-folders.test.ts",
+        "test/vault-files-repo.test.ts"
       ],
       "smokeIds": ["vault"]
     },
@@ -780,13 +791,17 @@
       "description": "Session output file management — collection, versioning, Vault copy, and routes",
       "sources": [
         "server/output-files.ts",
+        "server/repositories/output-files.ts",
+        "server/repositories/output-files-sqlite.ts",
+        "server/repositories/output-files-dynamodb.ts",
         "web/src/lib/outputFileMatch.js",
         "web/src/lib/outputFileUtils.js"
       ],
       "tests": [
         "test/output-files.test.ts",
         "test/output-files-match.test.ts",
-        "test/output-file-utils.test.ts"
+        "test/output-file-utils.test.ts",
+        "test/output-files-repo.test.ts"
       ],
       "smokeIds": []
     },

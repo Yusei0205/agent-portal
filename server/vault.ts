@@ -22,12 +22,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { all, one, run, insert, tx } from './db.ts';
-import type { Row } from './db.ts';
 import { generateId, now, badRequest } from './util.ts';
 import { config } from './config.ts';
+import { getProjectRepository } from './repositories/projects.ts';
+import { getVaultFilesRepository } from './repositories/vault-files.ts';
+import type { VaultFileRecord } from './repositories/vault-files.ts';
 
-// ── Multipart parser (uses req.rawBody — already read by HTTP framework) ──────
+// ── Multipart parser ──────────────────────────────────────────────────────────
 
 interface UploadedFile {
   filename: string;
@@ -95,26 +96,22 @@ function parseMultipart(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function requireMember(
+async function requireMember(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
-): Row | null {
+) {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const project = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', projectId);
-  if (!project) {
+  const project = await getProjectRepository().getProjectById(projectId);
+  if (!project || project.archived) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
   }
   if (req.user.is_admin) return project;
-  const member = one<Row>(
-    'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-    projectId,
-    req.user.id,
-  );
+  const member = await getProjectRepository().isMember(projectId, req.user.id);
   if (!member) {
     sendJson(res, 404, { error: 'Project not found' });
     return null;
@@ -165,9 +162,8 @@ function mimeFromExt(filename: string): string {
 }
 
 /**
- * Clean a client-supplied Vault folder ("Sessions/My run (abc12345)").
+ * Clean a client-supplied Vault folder.
  * Drops empty, "." and ".." segments and odd characters; null means the root.
- * The folder is only a label in the database, never part of a disk path.
  */
 function sanitiseFolder(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -178,12 +174,12 @@ function sanitiseFolder(raw: unknown): string | null {
   return segs.length ? segs.slice(0, 8).join('/') : null;
 }
 
-function doUpload(
+async function doUpload(
   req: PortalRequest,
   res: PortalResponse,
   defaultScope: VaultScope,
   projectId: string | null,
-): void {
+): Promise<void> {
   if (!req.rawBody || !req.rawBody.length) {
     sendJson(res, 400, { error: 'No file data received' });
     return;
@@ -221,7 +217,7 @@ function doUpload(
 
   const relPath = path.relative(config.dataDir, absPath);
 
-  insert('vault_files', {
+  const vaultFile = await getVaultFilesRepository().create({
     id: fileId,
     project_id: effectiveScope === 'portal' ? null : projectId,
     user_id: userId,
@@ -231,10 +227,10 @@ function doUpload(
     mime_type: mimeType || mimeFromExt(filename),
     uploaded_by: req.user!.id,
     folder,
+    source_workflow_id: null,
     created_at: now(),
   });
 
-  const vaultFile = one<Row>('SELECT * FROM vault_files WHERE id = ?', fileId);
   sendJson(res, 200, { vault_file: vaultFile });
 }
 
@@ -245,88 +241,50 @@ export function registerVaultRoutes(): void {
   // ── Project-scoped vault ─────────────────────────────────────────────────
 
   // GET /api/projects/:id/vault
-  router.get('/api/projects/:id/vault', (req: PortalRequest, res: PortalResponse): void => {
-    const project = requireMember(req, res, req.params.id);
+  router.get('/api/projects/:id/vault', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const project = await requireMember(req, res, req.params.id);
     if (!project) return;
 
-    const scopeFilter = req.query.get('scope');
+    const scopeFilter = req.query.get('scope') as VaultScope | null;
     const userId = req.user!.id;
     const projectId = req.params.id;
 
-    if (scopeFilter === 'project') {
-      const files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL ORDER BY created_at DESC',
-        projectId,
-      );
-      sendJson(res, 200, { files });
-      return;
-    }
-    if (scopeFilter === 'personal') {
-      const files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC',
-        projectId,
-        userId,
-      );
-      sendJson(res, 200, { files });
-      return;
-    }
-    if (scopeFilter === 'portal') {
-      const files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id IS NULL ORDER BY created_at DESC',
-      );
-      sendJson(res, 200, { files });
-      return;
-    }
-
-    // Return all combined
-    const files = all<Row>(
-      `SELECT * FROM vault_files
-        WHERE (project_id = ? AND user_id IS NULL)
-           OR (project_id = ? AND user_id = ?)
-           OR project_id IS NULL
-        ORDER BY created_at DESC`,
-      projectId, projectId, userId,
-    );
+    const files = await getVaultFilesRepository().listByProject(projectId, userId, scopeFilter);
     sendJson(res, 200, { files });
   });
 
   // POST /api/projects/:id/vault/upload
   router.post(
     '/api/projects/:id/vault/upload',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const project = requireMember(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireMember(req, res, req.params.id);
       if (!project) return;
-      doUpload(req, res, 'project', req.params.id);
+      await doUpload(req, res, 'project', req.params.id);
     },
   );
 
   // DELETE /api/projects/:id/vault/:fileId
   router.delete(
     '/api/projects/:id/vault/:fileId',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const project = requireMember(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireMember(req, res, req.params.id);
       if (!project) return;
 
-      const vf = one<Row>(
-        'SELECT * FROM vault_files WHERE id = ? AND project_id = ?',
-        req.params.fileId,
-        req.params.id,
-      );
-      if (!vf) {
+      const vf = await getVaultFilesRepository().getById(req.params.fileId);
+      if (!vf || vf.project_id !== req.params.id) {
         sendJson(res, 404, { error: 'File not found' });
         return;
       }
 
-      // Check ownership for personal files
       if (vf.user_id && vf.user_id !== req.user!.id && !req.user!.is_admin) {
         sendJson(res, 403, { error: 'You can only delete your own files' });
         return;
       }
 
-      const absPath = path.join(config.dataDir, String(vf.path));
+      const absPath = path.join(config.dataDir, vf.path);
       try { fs.rmSync(absPath, { force: true }); } catch { /* non-fatal */ }
 
-      run('DELETE FROM vault_files WHERE id = ?', req.params.fileId);
+      await getVaultFilesRepository().delete(req.params.fileId);
       sendJson(res, 200, { ok: true });
     },
   );
@@ -334,27 +292,21 @@ export function registerVaultRoutes(): void {
   // GET /api/projects/:id/vault/:fileId/download
   router.get(
     '/api/projects/:id/vault/:fileId/download',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const project = requireMember(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireMember(req, res, req.params.id);
       if (!project) return;
 
-      const vf = one<Row>(
-        `SELECT * FROM vault_files
-          WHERE id = ?
-            AND (project_id = ? OR project_id IS NULL)`,
-        req.params.fileId,
-        req.params.id,
-      );
+      const vf = await getVaultFilesRepository().getByIdForProject(req.params.fileId, req.params.id);
       if (!vf) { sendJson(res, 404, { error: 'File not found' }); return; }
 
-      const absPath = path.join(config.dataDir, String(vf.path));
+      const absPath = path.join(config.dataDir, vf.path);
       if (!fs.existsSync(absPath)) { sendJson(res, 404, { error: 'File not on disk' }); return; }
 
       const stat = fs.statSync(absPath);
       res.writeHead(200, {
         'Content-Type': String(vf.mime_type || 'application/octet-stream'),
         'Content-Length': stat.size,
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(String(vf.name))}"`,
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(vf.name)}"`,
         'Cache-Control': 'no-store',
       });
       fs.createReadStream(absPath).pipe(res);
@@ -365,7 +317,7 @@ export function registerVaultRoutes(): void {
   router.get(
     '/api/projects/:id/vault/zip',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const project = requireMember(req, res, req.params.id);
+      const project = await requireMember(req, res, req.params.id);
       if (!project) return;
 
       const scope = (req.query.get('scope') as VaultScope | null) ?? 'project';
@@ -373,49 +325,15 @@ export function registerVaultRoutes(): void {
       const userId = req.user!.id;
       const projectId = req.params.id;
 
-      let files: Row[];
-      if (scope === 'portal') {
-        if (folderFilter) {
-          files = all<Row>(
-            'SELECT * FROM vault_files WHERE project_id IS NULL AND (folder = ? OR folder LIKE ?)',
-            folderFilter, `${folderFilter}/%`,
-          );
-        } else {
-          files = all<Row>('SELECT * FROM vault_files WHERE project_id IS NULL');
-        }
-      } else if (scope === 'personal') {
-        if (folderFilter) {
-          files = all<Row>(
-            'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ? AND (folder = ? OR folder LIKE ?)',
-            projectId, userId, folderFilter, `${folderFilter}/%`,
-          );
-        } else {
-          files = all<Row>(
-            'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ?',
-            projectId, userId,
-          );
-        }
-      } else {
-        if (folderFilter) {
-          files = all<Row>(
-            'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL AND (folder = ? OR folder LIKE ?)',
-            projectId, folderFilter, `${folderFilter}/%`,
-          );
-        } else {
-          files = all<Row>(
-            'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL',
-            projectId,
-          );
-        }
-      }
+      const files = await getVaultFilesRepository().listByScope(scope, projectId, userId, folderFilter);
 
       const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
 
       for (const f of files) {
-        const absPath = path.join(config.dataDir, String(f.path));
+        const absPath = path.join(config.dataDir, f.path);
         if (fs.existsSync(absPath)) {
-          zip.file(String(f.name), fs.readFileSync(absPath));
+          zip.file(f.name, fs.readFileSync(absPath));
         }
       }
 
@@ -433,8 +351,8 @@ export function registerVaultRoutes(): void {
   // POST /api/projects/:id/vault/move
   router.post(
     '/api/projects/:id/vault/move',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const project = requireMember(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireMember(req, res, req.params.id);
       if (!project) return;
 
       const body = req.body as Record<string, unknown>;
@@ -453,29 +371,15 @@ export function registerVaultRoutes(): void {
       const folder = sanitiseFolder(body.folder);
       const projectId = req.params.id;
 
-      // Validate all files first — any unknown or non-project-scope id aborts with no changes.
-      for (const id of fileIds) {
-        const vf = one<Row>(
-          'SELECT id FROM vault_files WHERE id = ? AND project_id = ? AND user_id IS NULL',
-          id,
-          projectId,
-        );
-        if (!vf) {
-          sendJson(res, 404, { error: `File not found: ${id}` });
-          return;
-        }
+      const missing = await getVaultFilesRepository().validateProjectFiles(fileIds, projectId);
+      if (missing) {
+        sendJson(res, 404, { error: `File not found: ${missing}` });
+        return;
       }
 
-      // All valid — update inside a transaction.
-      tx(() => {
-        for (const id of fileIds) {
-          run('UPDATE vault_files SET folder = ? WHERE id = ?', folder, id);
-        }
-      });
+      await getVaultFilesRepository().bulkUpdateFolder(fileIds, folder);
 
-      const files = fileIds.map(
-        (id) => one<Row>('SELECT * FROM vault_files WHERE id = ?', id)!,
-      );
+      const files = await getVaultFilesRepository().getByIds(fileIds);
       sendJson(res, 200, { moved: fileIds.length, files });
     },
   );
@@ -483,8 +387,8 @@ export function registerVaultRoutes(): void {
   // POST /api/projects/:id/vault/delete
   router.post(
     '/api/projects/:id/vault/delete',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const project = requireMember(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireMember(req, res, req.params.id);
       if (!project) return;
 
       const body = req.body as Record<string, unknown>;
@@ -502,15 +406,10 @@ export function registerVaultRoutes(): void {
       const fileIds = rawIds.map(String);
       const projectId = req.params.id;
 
-      // Validate all files first — same permission logic as single DELETE.
-      const vaultFiles: Row[] = [];
+      const vaultFiles: VaultFileRecord[] = [];
       for (const id of fileIds) {
-        const vf = one<Row>(
-          'SELECT * FROM vault_files WHERE id = ? AND project_id = ?',
-          id,
-          projectId,
-        );
-        if (!vf) {
+        const vf = await getVaultFilesRepository().getById(id);
+        if (!vf || vf.project_id !== projectId) {
           sendJson(res, 404, { error: `File not found: ${id}` });
           return;
         }
@@ -521,16 +420,10 @@ export function registerVaultRoutes(): void {
         vaultFiles.push(vf);
       }
 
-      // All valid — delete rows in a transaction.
-      tx(() => {
-        for (const id of fileIds) {
-          run('DELETE FROM vault_files WHERE id = ?', id);
-        }
-      });
+      await getVaultFilesRepository().bulkDelete(fileIds);
 
-      // Remove stored files from disk (best-effort, mirrors single DELETE).
       for (const vf of vaultFiles) {
-        const absPath = path.join(config.dataDir, String(vf.path));
+        const absPath = path.join(config.dataDir, vf.path);
         try { fs.rmSync(absPath, { force: true }); } catch { /* non-fatal */ }
       }
 
@@ -541,23 +434,61 @@ export function registerVaultRoutes(): void {
   // ── Portal-wide vault ─────────────────────────────────────────────────────
 
   // GET /api/vault
-  router.get('/api/vault', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/vault', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user?.is_admin) {
       sendJson(res, 403, { error: 'Admin only' });
       return;
     }
-    const files = all<Row>(
-      'SELECT * FROM vault_files WHERE project_id IS NULL ORDER BY created_at DESC',
-    );
+    const files = await getVaultFilesRepository().listPortal();
     sendJson(res, 200, { files });
   });
 
   // POST /api/vault/upload
-  router.post('/api/vault/upload', (req: PortalRequest, res: PortalResponse): void => {
+  router.post('/api/vault/upload', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user?.is_admin) {
       sendJson(res, 403, { error: 'Admin only' });
       return;
     }
-    doUpload(req, res, 'portal', null);
+    await doUpload(req, res, 'portal', null);
   });
+}
+
+// ── vault-generated.ts compatibility exports ─────────────────────────────────
+
+/** Maximum file size allowed in the vault (25 MB). */
+export const MAX_FILE = 25 * 1024 * 1024;
+
+/** Maximum total vault size per project (500 MB). */
+export const MAX_VAULT = 500 * 1024 * 1024;
+
+/**
+ * Return the absolute path to the vault storage directory for the given scope.
+ * Used by vault-generated.ts for direct filesystem access to the vault storage tree.
+ *
+ * Note: file metadata is always in the repository; this path is for byte storage only.
+ */
+export function vaultDir(scope: VaultScope, userId: string, projectId: string): string {
+  if (scope === 'portal') {
+    return path.join(config.dataDir, 'vault', 'portal');
+  }
+  if (scope === 'personal') {
+    return path.join(config.dataDir, 'vault', 'projects', projectId, 'personal');
+  }
+  return path.join(config.dataDir, 'vault', 'projects', projectId, 'project');
+}
+
+/** List files in a vault directory with their sizes (used by vault-generated.ts). */
+export function listVault(dir: string): Array<{ name: string; size: number }> {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isFile())
+      .map((e) => {
+        const full = path.join(dir, e.name);
+        const stat = fs.statSync(full);
+        return { name: e.name, size: stat.size };
+      });
+  } catch {
+    return [];
+  }
 }

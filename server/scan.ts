@@ -21,6 +21,7 @@ import { generateId, now, newId, parseJson } from './util.ts';
 import { getSetting, setSetting, getSettings } from './settings.ts';
 import { appendAudit } from './audit.ts';
 import { decrypt } from './secrets.ts';
+import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { config } from './config.ts';
 import { computeCost, processReviewOutput } from './review.ts';
 import type { RateCard } from './review.ts';
@@ -713,11 +714,7 @@ async function resolveBackgroundText(
   let totalBytes = 0;
 
   for (const docId of docIds) {
-    const file = one<{ name: string; path: string; mime_type: string | null; size_bytes: number | null }>(
-      'SELECT name, path, mime_type, size_bytes FROM vault_files WHERE id = ? AND (project_id = ? OR project_id IS NULL)',
-      docId,
-      projectId,
-    );
+    const file = await getVaultFilesRepository().getByIdForProject(docId, projectId);
     if (!file) continue;
     const fileSize = file.size_bytes ?? 0;
     if (totalBytes + fileSize > MAX_BACKGROUND_BYTES) break;

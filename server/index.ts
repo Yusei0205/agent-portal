@@ -128,6 +128,14 @@ export async function startServer(
   const { initStatsRepository } = await import('./repositories/stats.ts');
   await initStatsRepository();
 
+  // 6f. Initialise knowledge, vault-files, and output-files repositories
+  const { initKnowledgeRepository } = await import('./repositories/knowledge.ts');
+  const { initVaultFilesRepository } = await import('./repositories/vault-files.ts');
+  const { initOutputFilesRepository } = await import('./repositories/output-files.ts');
+  await initKnowledgeRepository();
+  await initVaultFilesRepository();
+  await initOutputFilesRepository();
+
   // 7. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)
   const { setPreRequestHook } = await import('./http.ts');

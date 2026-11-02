@@ -181,7 +181,7 @@ In the cloud the code that produces an event (an AgentCore run or another Lambda
 | S0 Spike C (AppSync Events) | Done, deployed, PASS | 61f3f67 |
 | S1 DynamoDB data design | Done | 836e8de |
 | S1 modules converted | api-tokens, auth (users, sessions, invitations), permissions, audit, delegation settings, settings + secrets, projects + members + teams, **sessions/workflows/runs/events** (p6_workflows, p6_runs, p6_events, p6_inputs, p6_workflow_events), **delegation** (createChildSession, checkDelegationLimits, deliverChildResult, stopAndDeleteChildren, checkDelegationChildIdleStop all use sessions repo; race-safe caps via TransactWriteItems counters), **inbox** (p6_inbox full repository layer; admin + user-scoped list; atomic resolve; DynamoDB counters + GSI), **budget** (budget_usage writes; per-project/per-user/global day-level rollup counters for H1–H6 without scans) | c88c001, f993e25, 7ff92db, f982d7c, ac7c5de, *sessions PR*, *pathb-serverless PR* |
-| S1 remaining | reviews/scans, knowledge/vault/docs/diagrams, learn, testing module, dashboard/insights, repos/workspaces/git connections, integrations, credentials, themes, MCP server | — |
+| S1 remaining | reviews/scans, ~~knowledge/vault~~ (done), docs/diagrams, learn, ~~testing module~~ (no tables remaining), reviews, repos/workspaces/git connections, integrations, credentials, themes, MCP server | — |
 | **S1 sessions — second-round hardening** | **Done (branch pathb-serverless)** — conditional status transitions, transcript repository method, sparse idle GSI, cursor fix, emitRunEvent retry. See detail below. | — |
 | **S1 delegation/inbox/budget — second-round hardening** | **Done (branch pathb-serverless)** — delegation slot tracking, GSI-ChildIdle sparse index, inbox await, budget TransactWrite. See detail below. | — |
 
@@ -420,3 +420,121 @@ If the condition fails (`ConditionalCheckFailed` / `TransactionCanceledException
 - Stats contract (SQLite suite): 9 pass
 - Stats contract (DynamoDB Local, REQUIRE_DYNAMODB=1): 9 pass, 0 skip
 - All other DynamoDB repo contract tests: 158 total pass, 0 skip
+
+### S1 knowledge/vault/output-files — repository layer (done 2026-11-03, branch pathb-serverless)
+
+**Progress update (2026-11-03)**
+
+| Module | Status |
+|---|---|
+| S1 knowledge base + search | Done — all SQL removed; knowledge, vault-files, output-files repositories introduced |
+| DynamoDB contract tests (all repo modules) | **268 pass, 0 skip** (REQUIRE_DYNAMODB=1, DynamoDB Local) |
+
+**What was built**
+
+Three new repository groups:
+
+1. `KnowledgeRepository` (`server/repositories/knowledge.ts`, `knowledge-sqlite.ts`, `knowledge-dynamodb.ts`)
+   - Covers: `knowledge_docs`, `knowledge_search` (FTS5 on SQLite), `knowledge_decisions`
+   - DynamoDB tables: `portal-content` (docs + decisions) + `portal-search` (inverted keyword index)
+
+2. `VaultFilesRepository` (`server/repositories/vault-files.ts`, `vault-files-sqlite.ts`, `vault-files-dynamodb.ts`)
+   - Covers: `vault_files` (all three scopes: project, personal, portal)
+   - DynamoDB table: `portal-content` (three partition prefixes: VAULTPROJ, VAULTPERS, VAULTPORTAL)
+
+3. `OutputFilesRepository` (`server/repositories/output-files.ts`, `output-files-sqlite.ts`, `output-files-dynamodb.ts`)
+   - Covers: `output_files`
+   - DynamoDB table: `portal-content` (partition: WFOUT#<workflowId>)
+
+**Search design (DynamoDB inverted index in portal-search)**
+
+FTS5 (SQLite mode) is unchanged. In DynamoDB mode, FTS5 is replaced by a keyword inverted index:
+
+```
+portal-search table:
+  Term postings:  PK=TERM#<projectId>#<normalizedToken>  SK=DOC#<docId>
+    Attributes: docId, projectId, matchCount, excerpt (500 chars), docVersion
+  Doc term sets:  PK=DOCTERMS#<docId>                    SK=#TERMS
+    Attributes: terms (StringSet), projectId, docVersion
+  GSI-DocId:      PK=postingDocId  SK=postingTerm  (KEYS_ONLY projection)
+```
+
+**Tokenization:**
+- Lowercase, strip punctuation, split on whitespace, remove stopwords
+- Only first MAX_INDEX_BYTES (100 KB) of content is indexed per document
+- Max MAX_INDEX_TERMS (3,000) unique tokens per doc; max MAX_QUERY_TERMS (10) per query
+- Max MAX_POSTINGS_PER_TERM (100) postings read per query term
+
+**Ranking (DynamoDB mode):**
+- Primary: count of distinct matched query terms per doc (higher = more relevant)
+- Secondary: sum of matchCount (term-frequency proxy) across matched postings
+- This is simpler than FTS5's BM25 but gives reasonable ordering for small corpora (< 1,000 docs)
+
+**Concurrent update safety:**
+- `knowledge_docs` items carry a `docVersion` attribute (Number, starts at 0)
+- `indexDoc` atomically increments docVersion via `UpdateItem ADD docVersion :one`
+- Postings store the docVersion when written; stale postings (docVersion mismatch) are skipped on search and lazily removed
+- `DOCTERMS#<docId>` helper item stores the current token set for efficient O(|terms|) deletion on update
+
+**Large-text handling (S1 → S2 seam):**
+- S1: Only the first MAX_INDEX_BYTES (100 KB) is indexed; full markdown stays on disk as today (markdown_path)
+- S2 seam: the `contentS3Key` attribute on `knowledge_docs` will hold the S3 key when S3 phase is enabled; the repository reads it transparently
+
+**Callers converted:**
+- `server/knowledge.ts` — all direct SQL replaced; `requireMember` now uses `getProjectRepository()`
+- `server/vault.ts` — all `vault_files` SQL replaced; `requireMember` now uses `getProjectRepository()`
+- `server/output-files.ts` — all `vault_files` and `output_files` SQL replaced; `requireWorkflowAccess` and `resolveWorkDir` now use sessions + projects repositories
+- `server/session-files.ts` — two vault listing queries replaced with `getVaultFilesRepository()`
+- `server/scan.ts` — one vault_files lookup replaced with `getVaultFilesRepository().getByIdForProject()`
+
+**New rules learned (apply to every remaining module):**
+- **DynamoDB FilterExpression must include all referenced attributes in ExpressionAttributeValues.** The KeyConditionExpression's `:pk` binding does NOT automatically satisfy bindings used in FilterExpression. Every `:placeholder` referenced in FilterExpression must appear in ExpressionAttributeValues.
+- **Three-partition vault design for nullable project_id.** Since DynamoDB GSI keys cannot be NULL, vault files with three scopes (project, personal, portal) are stored under three separate PK prefixes. Combined listings run 3 parallel queries and merge in-app. No scan.
+- **DOCTERMS helper item enables O(|terms|) deletion.** Without a reverse index from docId → term list, deleting all postings for a doc would require either a full GSI scan or a DOCTERMS helper item. The helper item is the correct pattern.
+- **S3 seam: leave contentS3Key attribute on doc items.** Even if not populated in S1, documenting the attribute name in the interface (`contentS3Key?: string`) avoids a schema change in S2.
+
+**Files changed**
+
+| File | Change |
+|---|---|
+| `server/repositories/knowledge.ts` | NEW — interface + factory (K1–K5 access patterns) |
+| `server/repositories/knowledge-sqlite.ts` | NEW — SQLite impl (FTS5 unchanged) |
+| `server/repositories/knowledge-dynamodb.ts` | NEW — DynamoDB impl (portal-content + portal-search inverted index) |
+| `server/repositories/vault-files.ts` | NEW — interface + factory |
+| `server/repositories/vault-files-sqlite.ts` | NEW — SQLite impl |
+| `server/repositories/vault-files-dynamodb.ts` | NEW — DynamoDB impl (portal-content, 3-partition design) |
+| `server/repositories/output-files.ts` | NEW — interface + factory |
+| `server/repositories/output-files-sqlite.ts` | NEW — SQLite impl |
+| `server/repositories/output-files-dynamodb.ts` | NEW — DynamoDB impl (portal-content, WFOUT partition) |
+| `server/knowledge.ts` | Converted — all SQL replaced with repository calls |
+| `server/vault.ts` | Converted — all vault_files SQL replaced; added vaultDir/listVault/MAX_FILE/MAX_VAULT exports for vault-generated.ts |
+| `server/output-files.ts` | Converted — all vault_files + output_files SQL replaced |
+| `server/session-files.ts` | Converted — two vault_files queries replaced |
+| `server/scan.ts` | Converted — one vault_files query replaced |
+| `server/index.ts` | Add 3 new initXxx calls (knowledge, vault-files, output-files) |
+| `test/knowledge-repo.test.ts` | NEW — 18 SQLite + 18 DynamoDB assertions |
+| `test/vault-files-repo.test.ts` | NEW — 19 SQLite + 19 DynamoDB assertions |
+| `test/output-files-repo.test.ts` | NEW — 10 SQLite + 10 DynamoDB assertions |
+| `test/test-map.json` | Add sources to knowledge/vault/output-files/sessions modules |
+| `package.json` | Add knowledge, vault, output-files to test:repo-contracts |
+
+**Test counts**
+- knowledge-repo (SQLite): 18 pass, 0 fail
+- vault-files-repo (SQLite): 19 pass, 0 fail
+- output-files-repo (SQLite): 10 pass, 0 fail
+- DynamoDB Local (REQUIRE_DYNAMODB=1, all repo modules combined): **268 pass, 0 skip, 0 fail**
+
+**Approximations vs FTS5 (documented):**
+
+| Aspect | FTS5 (SQLite) | Inverted index (DynamoDB) |
+|---|---|---|
+| Ranking algorithm | BM25 with IDF | Matched-term count + TF proxy |
+| Phrase search | Yes | No (term-level only) |
+| Stemming | Porter unicode61 (FTS5 built-in) | None (exact lowercase match) |
+| Partial matches | Prefix (`match "auth*"`) | No |
+| Snippet extraction | Native `snippet()` function | First 500 chars of first chunk |
+| IDF (inverse doc freq) | Yes (FTS5 native) | No (would require doc-count tracking) |
+| Index size | FTS5 virtual table | portal-search items: ~|unique tokens| per doc |
+| Query latency | Single SQL JOIN | N parallel DynamoDB Queries (N = query terms) |
+
+The inverted index is adequate for a single-user portal with < 1,000 documents. For larger corpora or when recall quality becomes a problem, the documented upgrade path is Bedrock Knowledge Bases (~$0 idle, $0.02/query at low volume).

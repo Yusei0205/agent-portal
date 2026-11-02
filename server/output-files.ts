@@ -9,14 +9,6 @@
  *
  * collectOutputFiles(runId, workflowId, workDir, runStartedAt?)
  *   Called at the end of every run (success, failure and cancel).
- *   Detects outputs two ways:
- *     - repos/ subdirectories: git status --porcelain (untracked + modified)
- *       plus git log since origin/HEAD for committed files.
- *     - Everything else in workDir: files whose mtime >= runStartedAt.
- *   Allowed extensions: png, jpg, jpeg, gif, svg, pdf, md, docx, xlsx, pptx, csv, html, drawio.
- *   Skips files whose content hash matches the last recorded version (no duplicate rows).
- *   Copies eligible files to the project Vault under a per-session folder.
- *   Emits output-files.updated on the project SSE channel.
  */
 
 import fs from 'node:fs';
@@ -25,44 +17,31 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { all, one, run, insert } from './db.ts';
-import type { Row } from './db.ts';
 import { generateId, now } from './util.ts';
 import { config } from './config.ts';
 import { convertToMarkdown, pptxSlides } from './convert.ts';
 import { emit } from './events.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
+import { getProjectRepository } from './repositories/projects.ts';
+import { getVaultFilesRepository } from './repositories/vault-files.ts';
+import { getOutputFilesRepository } from './repositories/output-files.ts';
 
-// ── Extension allow-list (document / image files only) ────────────────────────
+// ── Extension allow-list ──────────────────────────────────────────────────────
 
-// Collected as outputs: documents and images only (user decision, 2026-11-01).
-// .txt/.json/.yaml are previewable but deliberately NOT collected, because agents
-// routinely edit config files such as package.json or cdk.json.
 const ALLOWED_EXTS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.pdf',
   '.md', '.docx', '.xlsx', '.pptx', '.csv', '.html', '.drawio',
 ]);
 
-// ── Internal directories that must never be treated as session outputs ────────
-// repos/  — handled separately via git status
-// home/   — materialised user config (contains decrypted .aws, .kiro, .claude)
-// .browser — browser-automation state
-// .claude — skills / agent config copied in at run start
-// .kiro   — kiro config copied in at run start
-// .git, node_modules — never outputs
-
 const EXCLUDED_WORK_DIRS = new Set([
   'repos', 'home', '.browser', '.claude', '.kiro', '.git', 'node_modules',
 ]);
 
-// Project skeleton files the portal copies into every new session work dir
-// (server/workflows/working-copies.ts). They are inputs, not outputs.
 const SKELETON_FILES = new Set(['CLAUDE.md', 'docs/decisions.md']);
 
-// ── File limits ───────────────────────────────────────────────────────────────
-
 const MAX_FILES = 50;
-const MAX_FILE_BYTES = 25 * 1024 * 1024;   // 25 MB per file
-const MAX_TOTAL_BYTES = 100 * 1024 * 1024; // 100 MB total
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 
 // ── MIME helpers ──────────────────────────────────────────────────────────────
 
@@ -91,23 +70,10 @@ function mimeForExt(ext: string): string {
   return EXT_MIME[ext] ?? 'application/octet-stream';
 }
 
-// ── Inline-eligible extensions ────────────────────────────────────────────────
-
 const INLINE_EXTS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf',
 ]);
 
-// ── Content-Disposition builder (RFC 6266 / RFC 5987) ────────────────────────
-
-/**
- * Build a Content-Disposition header value that is safe for non-ASCII filenames.
- *
- * Pure-ASCII names:  disposition; filename="<escaped>"
- * Non-ASCII names:   disposition; filename="<ascii-fallback>"; filename*=UTF-8''<rfc5987>
- *
- * The legacy `filename=` uses an ASCII fallback (non-ASCII replaced with `_`)
- * so older clients get a reasonable name. Modern clients use `filename*=`.
- */
 function buildContentDisposition(disposition: 'attachment' | 'inline', filename: string): string {
   const safe = filename.replace(/[\x00-\x1f]/g, '_');
   const ascii = safe.replace(/[^\x20-\x7E]/g, '_');
@@ -115,26 +81,11 @@ function buildContentDisposition(disposition: 'attachment' | 'inline', filename:
   if (ascii === safe) {
     return `${disposition}; filename="${escapedAscii}"`;
   }
-  // RFC 5987 percent-encoding: encode everything except attr-char.
-  // encodeURIComponent leaves !, ~, *, ', ( ) — encode the disallowed ones.
   const encoded = encodeURIComponent(safe)
     .replace(/[*'()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
   return `${disposition}; filename="${escapedAscii}"; filename*=UTF-8''${encoded}`;
 }
 
-// ── CSP for inline responses ──────────────────────────────────────────────────
-
-/**
- * Return a tight Content-Security-Policy for directly-opened inline files.
- *
- * SVG and raster images get `sandbox` — SVG can embed scripts, and sandbox
- * is the strongest containment available at the document level.
- *
- * PDF intentionally omits `sandbox` so Chrome's native PDF viewer is not
- * blocked (the viewer runs as a privileged process, not as a sandboxed iframe,
- * but the CSP `sandbox` directive still restricts the outer page in a way that
- * can prevent the viewer from initialising in some Chrome versions).
- */
 function inlineCsp(mime: string): string {
   if (mime === 'application/pdf') {
     return "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'";
@@ -142,15 +93,12 @@ function inlineCsp(mime: string): string {
   return "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox";
 }
 
-// ── File hash ─────────────────────────────────────────────────────────────────
-
 function hashFile(absPath: string): string {
   return createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
 }
 
 // ── git helpers ───────────────────────────────────────────────────────────────
 
-/** Run a git command without a shell; resolve to '' on any error. */
 function spawnGitSafe(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve) => {
     const proc = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
@@ -161,12 +109,6 @@ function spawnGitSafe(args: string[], cwd: string): Promise<string> {
   });
 }
 
-/**
- * Parse `git status --porcelain -z` output and return absolute paths.
- * Entries are NUL-separated, so paths with spaces or quotes are safe.
- * For renames and copies (`R`/`C`) the entry holds the new path and the next
- * entry is the old path, which is skipped. Ignored and deleted files are skipped.
- */
 function parseGitPorcelain(output: string, repoDir: string): string[] {
   const files: string[] = [];
   const entries = output.split('\0');
@@ -175,24 +117,17 @@ function parseGitPorcelain(output: string, repoDir: string): string[] {
     if (entry.length < 4) continue;
     const xy = entry.slice(0, 2);
     const filePath = entry.slice(3);
-    if (xy[0] === 'R' || xy[0] === 'C') i++;          // skip the old path
-    if (xy === '!!') continue;                        // ignored
-    if (xy[0] === 'D' || xy[1] === 'D') continue;    // deleted
+    if (xy[0] === 'R' || xy[0] === 'C') i++;
+    if (xy === '!!') continue;
+    if (xy[0] === 'D' || xy[1] === 'D') continue;
     if (filePath && !filePath.endsWith('/')) files.push(path.join(repoDir, filePath));
   }
   return files;
 }
 
-/**
- * Collect output-eligible files from a git working copy.
- * Uses git status (modified + every untracked file, not just new folders) plus
- * git log for any commits made since the remote origin baseline (best effort).
- */
 async function collectFromRepo(repoDir: string): Promise<string[]> {
   const statusOut = await spawnGitSafe(['status', '--porcelain', '-z', '--untracked-files=all'], repoDir);
   const fromStatus = parseGitPorcelain(statusOut, repoDir);
-
-  // Files committed since origin/HEAD (cheap baseline — fails gracefully)
   const logOut = await spawnGitSafe(
     ['log', '--pretty=format:', '--name-only', 'origin/HEAD..HEAD'],
     repoDir,
@@ -204,15 +139,9 @@ async function collectFromRepo(repoDir: string): Promise<string[]> {
       if (f) fromLog.push(path.join(repoDir, f));
     }
   }
-
-  // Union, deduped
   return [...new Set([...fromStatus, ...fromLog])];
 }
 
-/**
- * Walk workDir (excluding EXCLUDED_WORK_DIRS) and return absolute paths of
- * files whose mtime is >= cutoffMs.
- */
 function collectFromWorkDir(workDir: string, cutoffMs: number): string[] {
   const results: string[] = [];
   const walk = (dir: string): void => {
@@ -239,30 +168,20 @@ function collectFromWorkDir(workDir: string, cutoffMs: number): string[] {
 
 // ── Vault helpers ─────────────────────────────────────────────────────────────
 
-/**
- * Build the vault folder name for a workflow.
- * Format: "Sessions/<title or goal, sanitised> (<first 8 chars of workflowId>)"
- */
-function computeVaultFolder(wf: Row): string {
+function computeVaultFolder(wf: { id: string; title?: string | null; goal?: string | null }): string {
   const raw = String(wf.title || wf.goal || '').trim();
   const sanitised = raw
     .replace(/[^\w\s.\-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80);
-  return `Sessions/${sanitised || 'Session'} (${String(wf.id).slice(0, 8)})`;
+  return `Sessions/${sanitised || 'Session'} (${wf.id.slice(0, 8)})`;
 }
 
-/**
- * Compute a unique vault display name for every file in the list.
- * Files are sorted by path first so the mapping is deterministic.
- * When two files share the same basename, the second gets "(2)" suffix, etc.
- */
 function vaultDisplayNames(relPaths: string[]): Map<string, string> {
   const sorted = [...relPaths].sort();
   const usedCounts = new Map<string, number>();
   const result = new Map<string, string>();
-
   for (const relPath of sorted) {
     const base = path.basename(relPath);
     const ext = path.extname(base);
@@ -275,22 +194,13 @@ function vaultDisplayNames(relPaths: string[]): Map<string, string> {
 }
 
 interface VaultCandidate {
-  id: string;         // output_files.id
-  relPath: string;    // relative to workDir, forward slashes
+  id: string;
+  relPath: string;
   absPath: string;
   mime: string;
   size: number;
 }
 
-/**
- * Copy output files to the project Vault.
- * - Respects the project's vault_generated flag (default on).
- * - Creates one vault_files row per unique display name in the session folder.
- * - If the row already exists (same folder + name + workflow), overwrites the
- *   physical file and updates size_bytes (replace-in-place, same id).
- * - Updates output_files.vault_file_id for each copied file.
- * - Best-effort: individual errors are silently swallowed.
- */
 async function copyToVault(
   workflowId: string,
   projectId: string,
@@ -298,42 +208,31 @@ async function copyToVault(
 ): Promise<void> {
   if (!files.length) return;
 
-  const { getProjectRepository } = await import('./repositories/projects.ts');
   const proj = await getProjectRepository().getProjectById(projectId);
   if (!proj || proj.vault_generated === 0) return;
 
-  const wf = one<Row>('SELECT id, title, goal FROM p6_workflows WHERE id = ?', workflowId);
+  const wf = await getSessionsRepository().getWorkflowById(workflowId);
   if (!wf) return;
 
   const folder = computeVaultFolder(wf);
   const displayNames = vaultDisplayNames(files.map((f) => f.relPath));
+  const vaultRepo = getVaultFilesRepository();
+  const outputRepo = getOutputFilesRepository();
 
   for (const f of files) {
     const displayName = displayNames.get(f.relPath) ?? path.basename(f.relPath);
     const safeName = path.basename(displayName).replace(/[^\w.\-]/g, '_').slice(0, 200);
 
     try {
-      const existing = one<Row>(
-        `SELECT id, path FROM vault_files
-          WHERE project_id = ? AND folder = ? AND name = ? AND source_workflow_id = ?`,
-        projectId,
-        folder,
-        safeName,
-        workflowId,
-      );
+      const existing = await vaultRepo.findByWorkflowFolderName(projectId, folder, safeName, workflowId);
 
       if (existing) {
-        // Replace in place: overwrite file on disk, update size/mime
-        const absVault = path.join(config.dataDir, String(existing.path));
+        const absVault = path.join(config.dataDir, existing.path);
         fs.mkdirSync(path.dirname(absVault), { recursive: true });
         fs.copyFileSync(f.absPath, absVault);
-        run(
-          'UPDATE vault_files SET size_bytes = ?, mime_type = ? WHERE id = ?',
-          f.size, f.mime, String(existing.id),
-        );
-        run('UPDATE output_files SET vault_file_id = ? WHERE id = ?', String(existing.id), f.id);
+        await vaultRepo.updateSizeAndMime(existing.id, f.size, f.mime);
+        await outputRepo.updateVaultFileId(f.id, existing.id);
       } else {
-        // Create new vault_files row
         const vaultFileId = generateId();
         const relVault = path.posix.join(
           'vault', 'projects', projectId, 'project', `${vaultFileId}-${safeName}`,
@@ -341,7 +240,7 @@ async function copyToVault(
         const absVault = path.join(config.dataDir, ...relVault.split('/'));
         fs.mkdirSync(path.dirname(absVault), { recursive: true });
         fs.copyFileSync(f.absPath, absVault);
-        insert('vault_files', {
+        await vaultRepo.create({
           id: vaultFileId,
           project_id: projectId,
           user_id: null,
@@ -354,26 +253,16 @@ async function copyToVault(
           source_workflow_id: workflowId,
           created_at: now(),
         });
-        run('UPDATE output_files SET vault_file_id = ? WHERE id = ?', vaultFileId, f.id);
+        await outputRepo.updateVaultFileId(f.id, vaultFileId);
       }
     } catch {
-      // Best effort — vault copy failure must not propagate
+      // Best effort
     }
   }
 }
 
 // ── Main collection function ──────────────────────────────────────────────────
 
-/**
- * Collect output files produced during a run and save them to output_files.
- * Called by the runner at the end of every run (success, failure, cancel).
- *
- * @param runId          The run whose output is being collected.
- * @param workflowId     The workflow owning this run.
- * @param workDir        Absolute path to the session's persistent work directory.
- * @param runStartedAt   ISO timestamp of when the run started (used as mtime
- *                       cutoff for non-repo files). Defaults to epoch (collect all).
- */
 export async function collectOutputFiles(
   runId: string,
   workflowId: string,
@@ -382,17 +271,14 @@ export async function collectOutputFiles(
 ): Promise<void> {
   if (!workDir || !fs.existsSync(workDir)) return;
 
-  const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  const wf = await getSessionsRepository().getWorkflowById(workflowId);
   if (!wf) return;
 
   const projectId = wf.project_id ? String(wf.project_id) : null;
   const cutoffMs = new Date(runStartedAt).getTime() || 0;
 
-  // ── 1. Collect candidate absolute paths ─────────────────────────────────────
-
   const allCandidates: string[] = [];
 
-  // Repo working copies: detect via git status + git log
   const reposDir = path.join(workDir, 'repos');
   if (fs.existsSync(reposDir)) {
     try {
@@ -407,18 +293,15 @@ export async function collectOutputFiles(
     } catch { /* skip */ }
   }
 
-  // Non-repo work dir files: scan by mtime
   const nonRepoFiles = collectFromWorkDir(workDir, cutoffMs);
   allCandidates.push(...nonRepoFiles);
 
-  // Dedup
   const unique = [...new Set(allCandidates)];
-
-  // ── 2. Filter, hash, record ──────────────────────────────────────────────────
 
   let fileCount = 0;
   let totalBytes = 0;
   const vaultCandidates: VaultCandidate[] = [];
+  const outputRepo = getOutputFilesRepository();
 
   for (const absPath of unique) {
     if (fileCount >= MAX_FILES) break;
@@ -431,11 +314,10 @@ export async function collectOutputFiles(
     let stat: fs.Stats;
     try { stat = fs.statSync(absPath); } catch { continue; }
 
-    // Relative path, always forward slashes
     const relPath = path.relative(workDir, absPath).replace(/\\/g, '/');
 
     if (stat.size > MAX_FILE_BYTES) {
-      insert('output_files', {
+      await outputRepo.create({
         id: generateId(),
         workflow_id: workflowId,
         run_id: runId,
@@ -446,7 +328,6 @@ export async function collectOutputFiles(
         version: 1,
         refused_reason: `File exceeds 25 MB limit (${Math.round(stat.size / 1024 / 1024)} MB)`,
         hash: null,
-        vault_file_id: null,
         created_at: now(),
       });
       continue;
@@ -457,23 +338,15 @@ export async function collectOutputFiles(
     let hash: string;
     try { hash = hashFile(absPath); } catch { continue; }
 
-    // Check for existing row by path (latest version)
-    const existing = one<Row>(
-      `SELECT id, version, hash FROM output_files
-        WHERE workflow_id = ? AND path = ? AND refused_reason IS NULL
-        ORDER BY version DESC LIMIT 1`,
-      workflowId,
-      relPath,
-    );
+    const existing = await outputRepo.getLatestByPath(workflowId, relPath);
 
-    // Skip if content is identical
     if (existing && existing.hash === hash) continue;
 
-    const version = existing ? (existing.version as number) + 1 : 1;
+    const version = existing ? existing.version + 1 : 1;
     const mime = mimeForExt(ext);
     const fileId = generateId();
 
-    insert('output_files', {
+    await outputRepo.create({
       id: fileId,
       workflow_id: workflowId,
       run_id: runId,
@@ -484,7 +357,6 @@ export async function collectOutputFiles(
       version,
       refused_reason: null,
       hash,
-      vault_file_id: null,
       created_at: now(),
     });
 
@@ -493,52 +365,37 @@ export async function collectOutputFiles(
     vaultCandidates.push({ id: fileId, relPath, absPath, mime, size: stat.size });
   }
 
-  // ── 3. Vault copy ────────────────────────────────────────────────────────────
-
   if (vaultCandidates.length && projectId) {
     try { await copyToVault(workflowId, projectId, vaultCandidates); } catch { /* non-fatal */ }
   }
 
-  // ── 4. SSE notification ──────────────────────────────────────────────────────
-
   if (projectId && fileCount > 0) {
     try {
-      const countRow = one<{ c: number }>(
-        'SELECT COUNT(*) AS c FROM output_files WHERE workflow_id = ? AND refused_reason IS NULL',
-        workflowId,
-      );
-      emit(projectId, {
-        type: 'output-files.updated',
-        workflowId,
-        count: Number(countRow?.c ?? 0),
-      });
+      const count = await outputRepo.countByWorkflow(workflowId);
+      emit(projectId, { type: 'output-files.updated', workflowId, count });
     } catch { /* non-fatal */ }
   }
 }
 
 // ── Access helper ─────────────────────────────────────────────────────────────
 
-function requireWorkflowAccess(
+async function requireWorkflowAccess(
   req: PortalRequest,
   res: PortalResponse,
   workflowId: string,
-): Row | null {
+) {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  const wf = await getSessionsRepository().getWorkflowById(workflowId);
   if (!wf) {
     sendJson(res, 404, { error: 'Workflow not found' });
     return null;
   }
   if (req.user.is_admin) return wf;
   if (!wf.project_id) return wf;
-  const member = one<Row>(
-    'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-    wf.project_id as string,
-    req.user.id,
-  );
+  const member = await getProjectRepository().isMember(wf.project_id, req.user.id);
   if (!member) {
     sendJson(res, 403, { error: 'Not a project member' });
     return null;
@@ -548,20 +405,15 @@ function requireWorkflowAccess(
 
 /**
  * Resolve the work directory for a workflow.
- * Uses the persistent work_dir column (M21+); falls back to a path derived
- * from the latest run's id for pre-M21 workflows.
  */
-function resolveWorkDir(wf: Row): string | null {
-  if (wf.work_dir) return String(wf.work_dir);
+async function resolveWorkDir(wf: { id: string; work_dir?: string | null; project_id?: string | null }): Promise<string | null> {
+  if (wf.work_dir) return wf.work_dir;
   if (!wf.project_id) return null;
-  const project = one<Row>('SELECT slug FROM projects WHERE id = ?', wf.project_id as string);
+  const project = await getProjectRepository().getProjectById(wf.project_id);
   if (!project) return null;
-  const latestRun = one<Row>(
-    'SELECT id FROM p6_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1',
-    String(wf.id),
-  );
+  const latestRun = await getSessionsRepository().getLatestRun(wf.id);
   if (!latestRun) return null;
-  return path.join(config.dataDir, 'projects', String(project.slug), 'work', String(latestRun.id));
+  return path.join(config.dataDir, 'projects', project.slug, 'work', latestRun.id);
 }
 
 // ── Route registration ────────────────────────────────────────────────────────
@@ -571,28 +423,12 @@ export function registerOutputFileRoutes(): void {
   // GET /api/workflows/:id/output-files
   router.get(
     '/api/workflows/:id/output-files',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const wf = requireWorkflowAccess(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const wf = await requireWorkflowAccess(req, res, req.params.id);
       if (!wf) return;
 
-      // Latest version per path, excluding refused files
-      const files = all<Row>(
-        `SELECT of1.*
-           FROM output_files of1
-          WHERE of1.workflow_id = ?
-            AND of1.refused_reason IS NULL
-            AND of1.version = (
-              SELECT MAX(of2.version)
-                FROM output_files of2
-               WHERE of2.workflow_id = of1.workflow_id
-                 AND of2.path = of1.path
-                 AND of2.refused_reason IS NULL
-            )
-          ORDER BY of1.created_at DESC`,
-        req.params.id,
-      );
+      const files = await getOutputFilesRepository().listLatestByWorkflow(req.params.id);
 
-      // Build response with computed URL fields
       const enriched = files.map((f) => ({
         id: f.id,
         name: f.name,
@@ -607,13 +443,9 @@ export function registerOutputFileRoutes(): void {
         preview_url: `/api/workflows/${req.params.id}/output-files/${f.id}/preview`,
       }));
 
-      // Compute the vault folder for this session
       let vaultFolderName: string | null = null;
       if (wf.project_id) {
-        const proj = one<{ vault_generated: number | null }>(
-          'SELECT vault_generated FROM projects WHERE id = ?',
-          String(wf.project_id),
-        );
+        const proj = await getProjectRepository().getProjectById(wf.project_id);
         if (!proj || proj.vault_generated !== 0) {
           vaultFolderName = computeVaultFolder(wf);
         }
@@ -626,24 +458,19 @@ export function registerOutputFileRoutes(): void {
   // GET /api/workflows/:id/output-files/:fileId/download
   router.get(
     '/api/workflows/:id/output-files/:fileId/download',
-    (req: PortalRequest, res: PortalResponse): void => {
-      const wf = requireWorkflowAccess(req, res, req.params.id);
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const wf = await requireWorkflowAccess(req, res, req.params.id);
       if (!wf) return;
 
-      const file = one<Row>(
-        'SELECT * FROM output_files WHERE id = ? AND workflow_id = ?',
-        req.params.fileId,
-        req.params.id,
-      );
+      const file = await getOutputFilesRepository().getById(req.params.fileId, req.params.id);
       if (!file) { sendJson(res, 404, { error: 'File not found' }); return; }
-      if (file.refused_reason) { sendJson(res, 403, { error: String(file.refused_reason) }); return; }
+      if (file.refused_reason) { sendJson(res, 403, { error: file.refused_reason }); return; }
 
-      const workDir = resolveWorkDir(wf);
-      const name = String(file.name);
+      const workDir = await resolveWorkDir(wf);
+      const name = file.name;
       const ext  = path.extname(name).toLowerCase();
       const mime = String(file.mime_type || mimeForExt(ext) || 'application/octet-stream');
 
-      // ?inline=1 — only honoured for images and PDF
       const wantsInline = req.query.get('inline') === '1';
       const useInline   = wantsInline && INLINE_EXTS.has(ext);
       const disposition = useInline ? 'inline' : 'attachment';
@@ -666,9 +493,8 @@ export function registerOutputFileRoutes(): void {
         return true;
       };
 
-      // Try work dir first
       if (workDir) {
-        const absPath = path.resolve(workDir, String(file.path));
+        const absPath = path.resolve(workDir, file.path);
         if (!absPath.startsWith(path.resolve(workDir))) {
           sendJson(res, 403, { error: 'Path traversal detected' });
           return;
@@ -676,11 +502,10 @@ export function registerOutputFileRoutes(): void {
         if (tryServeAbsPath(absPath)) return;
       }
 
-      // Fall back to vault copy
       if (file.vault_file_id) {
-        const vf = one<Row>('SELECT * FROM vault_files WHERE id = ?', file.vault_file_id as string);
+        const vf = await getVaultFilesRepository().getById(file.vault_file_id);
         if (vf) {
-          const absVault = path.join(config.dataDir, String(vf.path));
+          const absVault = path.join(config.dataDir, vf.path);
           if (tryServeAbsPath(absVault)) return;
         }
       }
@@ -693,39 +518,34 @@ export function registerOutputFileRoutes(): void {
   router.get(
     '/api/workflows/:id/output-files/:fileId/preview',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const wf = requireWorkflowAccess(req, res, req.params.id);
+      const wf = await requireWorkflowAccess(req, res, req.params.id);
       if (!wf) return;
 
-      const file = one<Row>(
-        'SELECT * FROM output_files WHERE id = ? AND workflow_id = ?',
-        req.params.fileId,
-        req.params.id,
-      );
+      const file = await getOutputFilesRepository().getById(req.params.fileId, req.params.id);
       if (!file) { sendJson(res, 404, { error: 'File not found' }); return; }
-      if (file.refused_reason) { sendJson(res, 403, { error: String(file.refused_reason) }); return; }
+      if (file.refused_reason) { sendJson(res, 403, { error: file.refused_reason }); return; }
 
-      // Resolve actual file path (work dir, then vault fallback)
       let absPath: string | null = null;
-      const workDir = resolveWorkDir(wf);
+      const workDir = await resolveWorkDir(wf);
       if (workDir) {
-        const candidate = path.resolve(workDir, String(file.path));
+        const candidate = path.resolve(workDir, file.path);
         if (candidate.startsWith(path.resolve(workDir)) && fs.existsSync(candidate)) {
           absPath = candidate;
         }
       }
       if (!absPath && file.vault_file_id) {
-        const vf = one<Row>('SELECT * FROM vault_files WHERE id = ?', file.vault_file_id as string);
+        const vf = await getVaultFilesRepository().getById(file.vault_file_id);
         if (vf) {
-          const candidate = path.join(config.dataDir, String(vf.path));
+          const candidate = path.join(config.dataDir, vf.path);
           if (fs.existsSync(candidate)) absPath = candidate;
         }
       }
 
       if (!absPath) { sendJson(res, 200, { type: 'none' }); return; }
 
-      const ext = path.extname(String(file.name)).toLowerCase();
+      const ext = path.extname(file.name).toLowerCase();
       const mime = String(file.mime_type || mimeForExt(ext));
-      const name = String(file.name);
+      const name = file.name;
       const downloadUrl = `/api/workflows/${req.params.id}/output-files/${req.params.fileId}/download`;
       const inlineUrl   = `${downloadUrl}?inline=1`;
 
@@ -775,48 +595,32 @@ export function registerOutputFileRoutes(): void {
   router.get(
     '/api/workflows/:id/output-files/zip',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const wf = requireWorkflowAccess(req, res, req.params.id);
+      const wf = await requireWorkflowAccess(req, res, req.params.id);
       if (!wf) return;
 
-      const files = all<Row>(
-        `SELECT of1.*
-           FROM output_files of1
-          WHERE of1.workflow_id = ?
-            AND of1.refused_reason IS NULL
-            AND of1.version = (
-              SELECT MAX(of2.version)
-                FROM output_files of2
-               WHERE of2.workflow_id = of1.workflow_id
-                 AND of2.path = of1.path
-                 AND of2.refused_reason IS NULL
-            )
-          ORDER BY of1.created_at DESC`,
-        req.params.id,
-      );
-
-      const workDir = resolveWorkDir(wf);
+      const files = await getOutputFilesRepository().listLatestByWorkflow(req.params.id);
+      const workDir = await resolveWorkDir(wf);
       const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
 
       for (const f of files) {
-        // Try work dir first, then vault fallback
         let content: Buffer | null = null;
         if (workDir) {
-          const absPath = path.resolve(workDir, String(f.path));
+          const absPath = path.resolve(workDir, f.path);
           if (absPath.startsWith(path.resolve(workDir)) && fs.existsSync(absPath)) {
             try { content = fs.readFileSync(absPath); } catch { /* skip */ }
           }
         }
         if (!content && f.vault_file_id) {
-          const vf = one<Row>('SELECT * FROM vault_files WHERE id = ?', f.vault_file_id as string);
+          const vf = await getVaultFilesRepository().getById(f.vault_file_id);
           if (vf) {
-            const absVault = path.join(config.dataDir, String(vf.path));
+            const absVault = path.join(config.dataDir, vf.path);
             if (fs.existsSync(absVault)) {
               try { content = fs.readFileSync(absVault); } catch { /* skip */ }
             }
           }
         }
-        if (content) zip.file(String(f.name), content);
+        if (content) zip.file(f.name, content);
       }
 
       const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });

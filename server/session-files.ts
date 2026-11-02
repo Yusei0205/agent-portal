@@ -33,6 +33,7 @@ import type { Row } from './db.ts';
 import { safeJoin, now, generateId, badRequest, notFound } from './util.ts';
 import { config } from './config.ts';
 import { appendAudit } from './audit.ts';
+import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { getDb } from './db.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -433,26 +434,20 @@ export function registerSessionFileRoutes(): void {
       // Vault listing — delegate to vault query
       const projectId = roots.projectId;
       const userId = req.user!.id;
-      const files = all<Row>(
-        `SELECT * FROM vault_files
-          WHERE (project_id = ? AND user_id IS NULL)
-             OR (project_id = ? AND user_id = ?)
-             OR project_id IS NULL
-          ORDER BY name`,
-        projectId, projectId, userId,
-      );
+      const files = await getVaultFilesRepository().listByProject(projectId, userId, null);
+      files.sort((a, b) => a.name.localeCompare(b.name));
       sendJson(res, 200, {
         scope: 'vault',
         path: '',
         readOnly: true,
         entries: files.map((f) => ({
-          name: String(f.name),
-          path: String(f.id),
+          name: f.name,
+          path: f.id,
           type: 'file',
           size: f.size_bytes,
           mtime: undefined,
           readOnly: true,
-          vaultId: String(f.id),
+          vaultId: f.id,
           downloadUrl: `/api/projects/${projectId}/vault/${f.id}/download`,
         })),
       });
@@ -1235,7 +1230,7 @@ export function registerSessionFileRoutes(): void {
   });
 
   // GET /api/workflows/:id/ide/vault — list vault files (read-only overlay)
-  router.get('/api/workflows/:id/ide/vault', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/workflows/:id/ide/vault', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const wf = requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
@@ -1247,34 +1242,20 @@ export function registerSessionFileRoutes(): void {
 
     const projectId = roots.projectId;
     const userId = req.user!.id;
-    const scope = req.query.get('scope') ?? 'all';
+    const scope = (req.query.get('scope') ?? 'all') as 'project' | 'personal' | 'portal' | 'all';
 
-    let files: Row[];
+    let files;
     if (scope === 'project') {
-      files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id = ? AND user_id IS NULL ORDER BY name',
-        projectId,
-      );
+      files = await getVaultFilesRepository().listByProject(projectId, userId, 'project');
     } else if (scope === 'personal') {
-      files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id = ? AND user_id = ? ORDER BY name',
-        projectId,
-        userId,
-      );
+      files = await getVaultFilesRepository().listByProject(projectId, userId, 'personal');
     } else if (scope === 'portal') {
-      files = all<Row>(
-        'SELECT * FROM vault_files WHERE project_id IS NULL ORDER BY name',
-      );
+      files = await getVaultFilesRepository().listPortal();
     } else {
-      files = all<Row>(
-        `SELECT * FROM vault_files
-          WHERE (project_id = ? AND user_id IS NULL)
-             OR (project_id = ? AND user_id = ?)
-             OR project_id IS NULL
-          ORDER BY name`,
-        projectId, projectId, userId,
-      );
+      files = await getVaultFilesRepository().listByProject(projectId, userId, null);
     }
+
+    files.sort((a, b) => a.name.localeCompare(b.name));
 
     sendJson(res, 200, {
       files: files.map((f) => ({
