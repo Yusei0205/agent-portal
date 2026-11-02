@@ -22,7 +22,7 @@ import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from '
 import type { FetchProfilesResult } from './kiro-idc.ts';
 import {
   startAgentCoreLogin,
-  pollAgentCoreLogin,
+  pollAgentCoreLoginShared,
 } from './agent/kiro-agentcore.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 import type { CredentialRecord } from './repositories/credentials.ts';
@@ -212,8 +212,9 @@ function computeIdcStatus(row: CredentialRow): { status: CredentialStatus; canRe
     return { status: 'pending', canRefresh: false };
   }
 
-  // Old credential without clientId (created with outdated scopes)
-  if (!extra.clientId) {
+  // Old credential without clientId (created with outdated scopes). A credential signed in through
+  // AgentCore has no clientId (the client registration lives inside the runtime) but records signedInAt.
+  if (!extra.clientId && !extra.signedInAt) {
     return { status: 'needs_sign_in', canRefresh: false };
   }
 
@@ -693,7 +694,7 @@ async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, str
 
       // Detect credentials created with old scopes (sso:account:access).
       // These lack clientId in extra_config after sign-in completed.
-      if (!extra.clientId) {
+      if (!extra.clientId && !extra.signedInAt) {
         throw new HttpError(400,
           `Kiro Identity Center credential ${label} was created with outdated authentication scopes. ` +
           `Use Sign in again in Credentials to re-authenticate.`,
@@ -1082,7 +1083,13 @@ export function registerCredentialRoutes(): void {
     // When kiro-login was started via AgentCore, pendingDeviceCode is set to
     // 'agentcore' as a sentinel.  We check the in-process login state map.
     if (deviceCode === 'agentcore') {
-      const poll = pollAgentCoreLogin(String(cred.id));
+      let poll = await pollAgentCoreLoginShared(String(cred.id));
+      // Long-poll while pending: on Lambda the background login stream only makes progress while a
+      // request is active, so holding this request open (up to ~6s; kept short because the account allows few concurrent Lambdas) lets it finish.
+      for (let waited = 0; poll.status === 'pending' && waited < 6_000; waited += 1_000) {
+        await new Promise((r) => setTimeout(r, 1_000));
+        poll = await pollAgentCoreLoginShared(String(cred.id));
+      }
       if (poll.status === 'pending') {
         sendJson(res, 200, { status: 'pending' });
         return;

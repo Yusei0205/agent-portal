@@ -87,6 +87,16 @@ function parsePlainOutput(output: string): KiroRawListResult {
   return { models };
 }
 
+/** Parse `kiro-cli chat --list-models --format json` output (JSON first, then the plain-text table). */
+export function parseKiroModelsStdout(stdout: string): KiroRawListResult {
+  const trimmed = stdout.trim();
+  if (trimmed.startsWith('{')) {
+    const jsonResult = parseJsonOutput(trimmed);
+    if (!jsonResult.error) return jsonResult;
+  }
+  return parsePlainOutput(stdout);
+}
+
 // ── Public spawner ────────────────────────────────────────────────────────────
 
 const DEFAULT_TIMEOUT_MS = 15_000;

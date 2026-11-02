@@ -41,7 +41,13 @@ export interface KiroLoginPayload {
   region: string;
 }
 
-export type KiroPayload = KiroRunPayload | KiroLoginPayload;
+export interface KiroListModelsPayload {
+  mode: 'kiro-list-models';
+  runId: string;
+  token: KiroTokenInput;
+}
+
+export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload;
 
 export type ValidationResult =
   | { ok: true; payload: KiroPayload }
@@ -62,8 +68,8 @@ export function validatePayload(raw: unknown): ValidationResult {
   const obj = raw as Record<string, unknown>;
 
   const mode = obj.mode;
-  if (mode !== 'kiro-run' && mode !== 'kiro-login') {
-    return err('"mode" must be "kiro-run" or "kiro-login"');
+  if (mode !== 'kiro-run' && mode !== 'kiro-login' && mode !== 'kiro-list-models') {
+    return err('"mode" must be "kiro-run", "kiro-login" or "kiro-list-models"');
   }
 
   if (typeof obj.runId !== 'string' || !obj.runId.trim()) {
@@ -75,6 +81,12 @@ export function validatePayload(raw: unknown): ValidationResult {
 
   if (mode === 'kiro-run') {
     return validateKiroRun(obj);
+  }
+  if (mode === 'kiro-list-models') {
+    const r = validateKiroRun({ ...obj, prompt: 'list-models' });
+    if (!r.ok) return r;
+    const run = r.payload as KiroRunPayload;
+    return { ok: true, payload: { mode: 'kiro-list-models', runId: run.runId, token: run.token } };
   }
   return validateKiroLogin(obj);
 }

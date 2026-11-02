@@ -59,7 +59,7 @@ const SCHEMA_SQL = `
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
-async function materialiseKiroAuthDb(opts: {
+export async function materialiseKiroAuthDb(opts: {
   accessToken: string;
   expiresAt: string;
   region: string;

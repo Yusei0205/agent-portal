@@ -30,7 +30,9 @@ import type { BedrockListingMock } from './settings.ts';
 import { getSetting } from './settings.ts';
 import { IDC_TOKEN_KEY, IDC_REGION_KEY, IDC_EXPIRY_KEY, IDC_START_URL_KEY, IDC_REFRESH_TOKEN_KEY, IDC_CLIENT_ID_KEY, IDC_CLIENT_SECRET_KEY, IDC_CLIENT_SECRET_EXPIRES_AT_KEY, IDC_PROFILE_ARN_KEY, IDC_PROFILE_NAME_KEY, refreshIdcCredentialToken, autoRefreshIdcIfNeeded, ensureKiroProfileFetched } from './credentials.ts';
 import { materialiseKiroAuthDb, cleanupKiroAuthDb, KIRO_TEST_DB_ENV, readKiroAuthDbToken } from './kiro-idc.ts';
-import { spawnKiroListModels } from './kiro-list-models.ts';
+import { spawnKiroListModels, parseKiroModelsStdout } from './kiro-list-models.ts';
+import { listKiroModelsViaAgentCore } from './agent/kiro-agentcore.ts';
+import type { KiroTokenPayload } from './agent/kiro-agentcore.ts';
 import type { KiroModelRaw } from './kiro-list-models.ts';
 import { checkKiroIdcHookSupport } from './kiro-idc-check.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
@@ -444,7 +446,8 @@ async function getEngineModels(
 
         // Detect credentials created with the old sso:account:access scope.
         // These lack clientId in extra_config. The user must sign in again.
-        if (!origExtra.clientId) {
+        // AgentCore sign-ins have no clientId but record signedInAt.
+        if (!origExtra.clientId && !origExtra.signedInAt) {
           return toCache(engine, cacheId, {
             models: [], source: 'none', runsAs,
             error: 'Kiro IAM Identity Center credential was created with outdated scopes. Click Sign in again in Credentials to re-authenticate.',
@@ -506,6 +509,35 @@ async function getEngineModels(
       // For identity_center mode: verify the KIRO_TEST_DB_PATH hook is honoured
       // before calling listKiroModels.  If it isn't, kiro-cli would silently use
       // the portal machine's own session — a silent identity leak.
+      const acRuntimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+      if (mode === 'identity_center' && acRuntimeArn) {
+        // Cloud portal: kiro-cli is not installed locally, so list models inside the AgentCore runtime.
+        const token: KiroTokenPayload = {
+          accessToken: String(env[IDC_TOKEN_KEY] ?? ''),
+          expiresAt: String(env[IDC_EXPIRY_KEY] ?? ''),
+          region: String(env[IDC_REGION_KEY] ?? 'us-east-1'),
+          startUrl: String(env[IDC_START_URL_KEY] ?? ''),
+          ...(env[IDC_REFRESH_TOKEN_KEY] ? { refreshToken: String(env[IDC_REFRESH_TOKEN_KEY]) } : {}),
+          ...(env[IDC_CLIENT_ID_KEY] ? { clientId: String(env[IDC_CLIENT_ID_KEY]) } : {}),
+          ...(env[IDC_CLIENT_SECRET_KEY] ? { clientSecret: String(env[IDC_CLIENT_SECRET_KEY]) } : {}),
+          ...(env[IDC_CLIENT_SECRET_EXPIRES_AT_KEY] ? { clientSecretExpiresAt: Number(env[IDC_CLIENT_SECRET_EXPIRES_AT_KEY]) } : {}),
+          ...(env[IDC_PROFILE_ARN_KEY] ? { profileArn: String(env[IDC_PROFILE_ARN_KEY]) } : {}),
+          ...(env[IDC_PROFILE_NAME_KEY] ? { profileName: String(env[IDC_PROFILE_NAME_KEY]) } : {}),
+        };
+        const listed = await listKiroModelsViaAgentCore(acRuntimeArn, token);
+        const parsed = listed.stdout ? parseKiroModelsStdout(listed.stdout) : { models: [], error: listed.error };
+        if (parsed.error || parsed.models.length === 0) {
+          // Keep sessions usable with Kiro's automatic model choice, and say why the list is missing.
+          return toCache(engine, cacheId, {
+            models: [{ id: 'auto', label: 'Auto', default: true }],
+            source: 'static',
+            runsAs,
+            error: `Could not list Kiro models: ${parsed.error ?? 'no models returned'}`,
+          });
+        }
+        return toCache(engine, cacheId, { models: parsed.models.map(kiroRawToEngineEntry), source: 'kiro-cli', runsAs });
+      }
+
       if (mode === 'identity_center') {
         const hookCheck = await checkKiroIdcHookSupport();
         const idcIsolation: KiroIdcIsolation = {

@@ -11,12 +11,14 @@
  * Payload modes:
  *   kiro-run   — materialise temp IdC DB, run `kiro-cli chat --no-interactive`
  *   kiro-login — run `kiro-cli login --use-device-flow`, stream verification URL/code
+ *   kiro-list-models — run `kiro-cli chat --list-models --format json` with the user's token
  */
 
 import http from 'node:http';
 import { validatePayload } from './validate.js';
 import { runKiroRun } from './run.js';
 import { runKiroLogin } from './login.js';
+import { runKiroListModels } from './list-models.js';
 
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
@@ -109,6 +111,8 @@ const server = http.createServer(async (req, res) => {
       const { payload } = validation;
       if (payload.mode === 'kiro-run') {
         await runKiroRun(payload, emit, processStartMs);
+      } else if (payload.mode === 'kiro-list-models') {
+        await runKiroListModels(payload, emit);
       } else {
         await runKiroLogin(payload, emit, processStartMs);
       }

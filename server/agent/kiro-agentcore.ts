@@ -68,6 +68,7 @@ export type AgentCoreSSEEvent =
   | { type: 'tool'; name: string }
   | { type: 'status'; text: string }
   | { type: 'error'; message: string }
+  | { type: 'models'; stdout: string }
   | { type: 'verification'; verificationUri: string; userCode: string }
   | {
       type: 'result';
@@ -748,6 +749,52 @@ export function pollAgentCoreLogin(credentialId: string): {
     return { status: 'complete', tokenPayload: result.tokenPayload };
   }
   return { status: 'failed', errorMessage: result.error ?? 'Login failed' };
+}
+
+/**
+ * Like pollAgentCoreLogin, but also works when the poll lands on a different Lambda instance than the one
+ * that started the login: with no in-memory entry it reads the shared repository (DynamoDB mode).
+ */
+export async function pollAgentCoreLoginShared(credentialId: string): Promise<ReturnType<typeof pollAgentCoreLogin>> {
+  const local = pollAgentCoreLogin(credentialId);
+  if (local.status !== 'unknown' || !usesDynamoDb()) return local;
+
+  const repo = getAgentcoreLoginRepository();
+  const entry = await repo.get(credentialId);
+  if (!entry) return { status: 'unknown' };
+  if (!entry.settled) return { status: 'pending' };
+
+  await repo.delete(credentialId).catch(() => {});
+  if (entry.state === 'complete' && entry.tokenPayload) {
+    return { status: 'complete', tokenPayload: entry.tokenPayload };
+  }
+  return { status: 'failed', errorMessage: entry.errorMessage ?? 'Login failed' };
+}
+
+/**
+ * List the Kiro models available to a credential by running `kiro-cli chat --list-models` inside the
+ * AgentCore runtime (the portal itself has no kiro-cli on Lambda). Returns the raw CLI output.
+ */
+export async function listKiroModelsViaAgentCore(
+  runtimeArn: string,
+  token: KiroTokenPayload,
+  signal?: AbortSignal,
+): Promise<{ stdout?: string; error?: string }> {
+  const sessionId = randomUUID();
+  const payload: Record<string, unknown> = {
+    mode: 'kiro-list-models',
+    runId: `models-${generateId()}`,
+    token,
+  };
+  try {
+    for await (const ev of invokeAgentCore(runtimeArn, sessionId, payload, signal)) {
+      if (ev.type === 'models') return { stdout: String((ev as { stdout?: string }).stdout ?? '') };
+      if (ev.type === 'error') return { error: String((ev as { message?: string }).message ?? 'Listing models failed') };
+    }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+  return { error: 'The Kiro runtime returned no model list.' };
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
