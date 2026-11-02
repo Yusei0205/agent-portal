@@ -17,6 +17,7 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { generateId, now, str, badRequest, notFound, forbidden } from './util.ts';
 import { config } from './config.ts';
+import { persistFile, restoreFile, forgetFile } from './durable-files.ts';
 import { emit } from './events.ts';
 import { convertToMarkdown } from './convert.ts';
 import { getProjectRepository } from './repositories/projects.ts';
@@ -123,6 +124,7 @@ async function processKnowledgeDoc(
     // Save markdown
     fs.mkdirSync(path.dirname(mdPath), { recursive: true });
     fs.writeFileSync(mdPath, markdown, 'utf8');
+    await persistFile(mdPath, 'text/markdown');
 
     // Index in search
     await repo.indexDoc(docId, projectId, markdown);
@@ -186,6 +188,7 @@ export function registerKnowledgeRoutes(): void {
       const safeFilename = path.basename(filename).replace(/[^\w.\-]/g, '_').slice(0, 200);
       const filePath = path.join(uploadsDir, `${docId}-${safeFilename}`);
       fs.writeFileSync(filePath, data);
+      await persistFile(filePath);
 
       const doc = await getKnowledgeRepository().createDoc({
         id: docId,
@@ -231,6 +234,7 @@ export function registerKnowledgeRoutes(): void {
         for (const f of fs.readdirSync(uploadsDir)) {
           if (f.startsWith(req.params.docId + '-')) {
             fs.rmSync(path.join(uploadsDir, f), { force: true });
+            await forgetFile(path.join(uploadsDir, f)).catch(() => {});
           }
         }
       } catch {
@@ -239,6 +243,7 @@ export function registerKnowledgeRoutes(): void {
       if (doc.markdown_path) {
         try {
           fs.rmSync(String(doc.markdown_path), { force: true });
+          await forgetFile(String(doc.markdown_path)).catch(() => {});
         } catch {
           // non-fatal
         }

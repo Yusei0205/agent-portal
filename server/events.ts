@@ -9,6 +9,7 @@
  */
 
 import type { ServerResponse } from 'node:http';
+import { publishToChannel } from './realtime.ts';
 
 interface Subscriber {
   projectId: string | null;
@@ -70,6 +71,7 @@ export function subscribe(
  * @param event      The event payload (will be JSON-serialised).
  */
 export function emit(projectId: string | null, event: object): void {
+  if (projectId !== null) publishToChannel(`/project/${projectId}`, event);
   const data = `data: ${JSON.stringify(event)}\n\n`;
 
   for (const sub of subscribers) {
@@ -102,6 +104,7 @@ export function emit(projectId: string | null, event: object): void {
  * client needs to receive.
  */
 export function emitGlobal(event: object): void {
+  publishToChannel('/global/portal', event);
   const data = `data: ${JSON.stringify(event)}\n\n`;
   for (const sub of subscribers) {
     if (sub.res.writableEnded) continue;
@@ -227,6 +230,7 @@ export function subscribeRun(runId: string, fn: RunListener): () => void {
 
 /** Deliver a newly stored run event to listeners of that run. */
 export function publishRunEvent(ev: RunEventRow): void {
+  publishToChannel(`/run/${ev.run_id}`, ev);
   const set = runListeners.get(ev.run_id);
   if (!set) return;
   for (const fn of [...set]) {

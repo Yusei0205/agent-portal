@@ -12,6 +12,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import http from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { timingSafeEqual } from 'node:crypto';
+import { realtimeEnabled, flushRealtime } from './realtime.ts';
 import { HttpError } from './util.ts';
 
 // ── Request / Response types ──────────────────────────────────────────────────
@@ -577,7 +579,23 @@ export function setWsUpgradeHandler(fn: WsUpgradeHandler): void {
 
 export function createServer(): http.Server {
   const handler = createRequestHandler();
+  // Behind CloudFront the Lambda Function URL is public, so only requests carrying CloudFront's
+  // secret header are served (/api/health stays open for the Lambda readiness check).
+  const originSecret = process.env.PORTAL_ORIGIN_SECRET;
   const server = http.createServer((req, res) => {
+    // Lambda freezes once the response ends, so send queued live-update events first.
+    if (realtimeEnabled()) {
+      const end = res.end.bind(res) as (...a: unknown[]) => http.ServerResponse;
+      res.end = ((...a: unknown[]) => { void flushRealtime().finally(() => end(...a)); return res; }) as typeof res.end;
+    }
+    if (originSecret && !req.url?.startsWith('/api/health')) {
+      const a = Buffer.from(String(req.headers['x-portal-origin'] ?? ''));
+      const b = Buffer.from(originSecret);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        sendJson(res, 403, { error: 'Forbidden' });
+        return;
+      }
+    }
     handler(req, res).catch((err: unknown) => {
       console.error('[http] Unhandled error in request handler', err);
       if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });

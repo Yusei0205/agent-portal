@@ -39,6 +39,8 @@ import { registerLoopSpecRoutes } from './loop-specs.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerDashboardRoutes } from './dashboard.ts';
 import { registerApiTokenRoutes } from './api-tokens.ts';
+import { registerStorageTestRoutes } from './storage-test.ts';
+import { registerRealtimeRoutes } from './realtime-routes.ts';
 import { registerAuditRoutes } from './audit.ts';
 import { registerLearnRoutes } from './learn.ts';
 import { registerControlPlaneRoutes } from './control-plane.ts';
@@ -245,6 +247,8 @@ export async function startServer(
   registerInsightsRoutes();
   registerDashboardRoutes();
   registerApiTokenRoutes();
+  registerStorageTestRoutes();
+  registerRealtimeRoutes();
   registerAuditRoutes();
   registerLearnRoutes();
   registerControlPlaneRoutes();

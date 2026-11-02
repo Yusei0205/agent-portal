@@ -28,6 +28,7 @@ import { one, all, run as dbRunSync, getDb } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, badRequest } from './util.ts';
 import { config } from './config.ts';
+import { persistFile, restoreFile, forgetFile } from './durable-files.ts';
 import { appendAudit } from './audit.ts';
 import { getAiAttachmentRepository } from './repositories/ai-attachments.ts';
 import type { AiAttachmentRecord, AttachmentParentKind } from './repositories/ai-attachments.ts';
@@ -289,7 +290,7 @@ export async function stageAttachmentsToWorkDir(
   const usedNames = new Set<string>();
   for (const att of attachmentRows) {
     const srcPath = String(att.file_path ?? att.file_path);
-    if (!fs.existsSync(srcPath)) continue;
+    if (!(await restoreFile(srcPath))) continue;
 
     let stagedName = String(att.filename);
     if (usedNames.has(stagedName)) {
@@ -353,6 +354,7 @@ export async function deleteAttachmentsForParent(
   const rows = await repo.listByParent(parentKind, parentId);
   for (const row of rows) {
     try { fs.rmSync(row.file_path, { force: true }); } catch { /* best effort */ }
+    await forgetFile(row.file_path).catch(() => {});
   }
   await repo.deleteByParent(parentKind, parentId);
 }
@@ -367,6 +369,7 @@ export async function deleteAttachmentsByIds(ids: string[]): Promise<void> {
     const att = await repo.getById(id);
     if (!att) continue;
     try { fs.rmSync(att.file_path, { force: true }); } catch { /* best effort */ }
+    await forgetFile(att.file_path).catch(() => {});
   }
   await repo.deleteByIds(ids);
 }
@@ -471,6 +474,7 @@ export function registerAiAttachmentRoutes(): void {
       const storedName = `${id}-${safeFilename}`;
       const filePath = path.join(dir, storedName);
       fs.writeFileSync(filePath, data);
+      await persistFile(filePath);
 
       await getAiAttachmentRepository().create({
         id,
@@ -520,6 +524,7 @@ export function registerAiAttachmentRoutes(): void {
       }
 
       try { fs.rmSync(att.file_path, { force: true }); } catch { /* best effort */ }
+      await forgetFile(att.file_path).catch(() => {});
       await getAiAttachmentRepository().deleteByIds([req.params.attId]);
 
       appendAudit(

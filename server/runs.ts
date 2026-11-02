@@ -175,6 +175,14 @@ export function registerRunRoutes(): void {
     });
   });
 
+  // GET /api/runs/:id/events/history: the stored events as JSON (used with AppSync live updates in the cloud portal)
+  router.get('/api/runs/:id/events/history', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const workflow = await requireRunAccess(req, res, req.params.id);
+    if (!workflow) return;
+    const past = await getSessionsRepository().listRunEvents(req.params.id);
+    sendJson(res, 200, { events: past.map(eventView) });
+  });
+
   // GET /api/runs/:id/events (SSE stream)
   router.sse('/api/runs/:id/events', (req: PortalRequest, res: PortalResponse): void => {
     const runId = req.params.id;

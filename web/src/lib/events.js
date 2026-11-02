@@ -7,6 +7,8 @@
  * Both return an unsubscribe function that closes the connection.
  */
 
+import { realtimeAvailable, subscribeChannel } from './realtime.js';
+
 /**
  * @param {string} url
  * @param {(event: Record<string, unknown>) => void} onEvent
@@ -46,6 +48,27 @@ function subscribe(url, onEvent) {
 }
 
 /**
+ * Use AppSync Events when the server has it enabled (cloud portal), otherwise Server-Sent Events.
+ *
+ * @param {string} channel AppSync channel
+ * @param {string} sseUrl  SSE endpoint used when realtime is not enabled
+ * @param {(event: Record<string, unknown>) => void} onEvent
+ * @returns {() => void} unsubscribe
+ */
+function subscribeViaRealtimeOrSse(channel, sseUrl, onEvent) {
+  let closed = false;
+  let unsub = null;
+  realtimeAvailable().then((enabled) => {
+    if (closed) return;
+    unsub = enabled ? subscribeChannel(channel, onEvent) : subscribe(sseUrl, onEvent);
+  });
+  return function unsubscribe() {
+    closed = true;
+    if (unsub) { unsub(); unsub = null; }
+  };
+}
+
+/**
  * Subscribe to the project's SSE channel.
  *
  * @param {string} projectId
@@ -53,7 +76,8 @@ function subscribe(url, onEvent) {
  * @returns {() => void} unsubscribe function
  */
 export function subscribeProject(projectId, onEvent) {
-  return subscribe(
+  return subscribeViaRealtimeOrSse(
+    `/project/${projectId}`,
     `/api/projects/${encodeURIComponent(projectId)}/events`,
     onEvent,
   );
@@ -67,5 +91,5 @@ export function subscribeProject(projectId, onEvent) {
  * @returns {() => void} unsubscribe function
  */
 export function subscribeGlobal(onEvent) {
-  return subscribe('/api/events', onEvent);
+  return subscribeViaRealtimeOrSse('/global/portal', '/api/events', onEvent);
 }

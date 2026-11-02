@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { realtimeAvailable, subscribeChannel } from './realtime.js';
 
 /**
  * @param {string | null | undefined} runId
@@ -81,13 +82,44 @@ export function useRunStream(runId) {
     setState({ events: [], connected: false, error: null });
 
     const alive = { v: true };
-    connect(runId, alive);
+    let unsubRealtime = null;
+
+    const addEvent = (ev) => {
+      if (!alive.v || !ev) return;
+      const key = ev.id ?? `${ev.type}-${ev.created_at}`;
+      if (ev.id && seen.current.has(key)) return;
+      if (ev.id) seen.current.add(key);
+      setState((s) => ({ ...s, events: [...s.events, ev] }));
+    };
+
+    realtimeAvailable().then(async (enabled) => {
+      if (!alive.v) return;
+      if (!enabled) { connect(runId, alive); return; }
+
+      // Cloud portal: subscribe first so nothing is missed, then load the stored history and merge by id.
+      const queued = [];
+      let historyLoaded = false;
+      unsubRealtime = subscribeChannel(`/run/${runId}`, (ev) => {
+        if (!historyLoaded) queued.push(ev); else addEvent(ev);
+      });
+      setState((s) => ({ ...s, connected: true, error: null }));
+      try {
+        const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/events/history`, { credentials: 'include' });
+        if (res.ok) {
+          const body = await res.json();
+          for (const ev of body.events ?? []) addEvent(ev);
+        }
+      } catch { /* live events still arrive */ }
+      historyLoaded = true;
+      for (const ev of queued) addEvent(ev);
+    });
 
     return () => {
       alive.v = false;
       clearTimeout(retryTimer.current);
       esRef.current?.close();
       esRef.current = null;
+      if (unsubRealtime) unsubRealtime();
     };
   }, [runId, connect]);
 

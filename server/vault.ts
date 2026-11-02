@@ -24,6 +24,7 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { generateId, now, badRequest } from './util.ts';
 import { config } from './config.ts';
+import { persistFile, restoreFile, forgetFile } from './durable-files.ts';
 import { getProjectRepository } from './repositories/projects.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import type { VaultFileRecord } from './repositories/vault-files.ts';
@@ -214,6 +215,7 @@ async function doUpload(
 
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, data);
+  await persistFile(absPath);
 
   const relPath = path.relative(config.dataDir, absPath);
 
@@ -283,6 +285,7 @@ export function registerVaultRoutes(): void {
 
       const absPath = path.join(config.dataDir, vf.path);
       try { fs.rmSync(absPath, { force: true }); } catch { /* non-fatal */ }
+      await forgetFile(absPath).catch(() => {});
 
       await getVaultFilesRepository().delete(req.params.fileId);
       sendJson(res, 200, { ok: true });
@@ -300,7 +303,7 @@ export function registerVaultRoutes(): void {
       if (!vf) { sendJson(res, 404, { error: 'File not found' }); return; }
 
       const absPath = path.join(config.dataDir, vf.path);
-      if (!fs.existsSync(absPath)) { sendJson(res, 404, { error: 'File not on disk' }); return; }
+      if (!(await restoreFile(absPath))) { sendJson(res, 404, { error: 'File not on disk' }); return; }
 
       const stat = fs.statSync(absPath);
       res.writeHead(200, {
@@ -332,7 +335,7 @@ export function registerVaultRoutes(): void {
 
       for (const f of files) {
         const absPath = path.join(config.dataDir, f.path);
-        if (fs.existsSync(absPath)) {
+        if (await restoreFile(absPath)) {
           zip.file(f.name, fs.readFileSync(absPath));
         }
       }
