@@ -102,6 +102,12 @@ Lambda can run many instances, and an instance is **frozen** as soon as its resp
 - **Cause:** the wizard's POST was blocked by the CloudFront POST problem above, and the `/api/admin/test-storage` route did not exist.
 - **Fix:** route added (`server/storage-test.ts`); the Lambda role gets read/write on the configured bucket (`storageBucket` context).
 
+### Files disappear after a while (uploads, edited session files, output files, generated documents)
+- **Cause:** Lambda's disk (`/tmp`) is wiped whenever the instance is recycled.
+- **Fix:** with `STORAGE_BACKEND=s3`, files under DATA_DIR are mirrored to the bucket (`server/durable-files.ts`): `persistFile` after writing, `restoreFile` before reading one file, `restoreTree` before listing a session's folders, `forgetFile`/`forgetTree` on delete. Mirrored: vault, knowledge, attachments, doc templates, session files (work and uploads folders, create/edit/upload/rename/delete), output files (their vault copies), generated documents and presentations. The key in the bucket is the path relative to DATA_DIR.
+- **Not mirrored on purpose:** git working copies and repository clones (large, can be cloned again) and agent scratch folders (`home`, `.kiro`, `.claude`).
+- **Check:** `aws s3 ls s3://<bucket>/data/ --recursive | head`.
+
 ## Sign-in and accounts
 
 - The first-admin setup page is public until the first admin exists. Create the admin right after the first deploy, before sharing the URL.

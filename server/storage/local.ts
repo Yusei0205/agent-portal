@@ -36,6 +36,22 @@ export class LocalStorageBackend implements StorageBackend {
     }
   }
 
+  async list(prefix: string): Promise<string[]> {
+    const root = path.join(this.dataDir, prefix);
+    const out: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      let entries: import('node:fs').Dirent[];
+      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) await walk(full);
+        else out.push(path.relative(this.dataDir, full).split(path.sep).join('/'));
+      }
+    };
+    await walk(root);
+    return out;
+  }
+
   async publicUrl(logicalPath: string, _filename?: string): Promise<string> {
     // Returns a path the portal proxies: /api/storage-file?path=<encoded>
     return `/api/storage-file?path=${encodeURIComponent(logicalPath)}`;

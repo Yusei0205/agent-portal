@@ -25,6 +25,7 @@ import { getSessionsRepository } from './repositories/sessions.ts';
 import { getProjectRepository } from './repositories/projects.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { getOutputFilesRepository } from './repositories/output-files.ts';
+import { persistFile, restoreFile } from './durable-files.ts';
 
 // ── Extension allow-list ──────────────────────────────────────────────────────
 
@@ -230,6 +231,7 @@ async function copyToVault(
         const absVault = path.join(config.dataDir, existing.path);
         fs.mkdirSync(path.dirname(absVault), { recursive: true });
         fs.copyFileSync(f.absPath, absVault);
+        await persistFile(absVault, f.mime);
         await vaultRepo.updateSizeAndMime(existing.id, f.size, f.mime);
         await outputRepo.updateVaultFileId(f.id, existing.id);
       } else {
@@ -240,6 +242,7 @@ async function copyToVault(
         const absVault = path.join(config.dataDir, ...relVault.split('/'));
         fs.mkdirSync(path.dirname(absVault), { recursive: true });
         fs.copyFileSync(f.absPath, absVault);
+        await persistFile(absVault, f.mime);
         await vaultRepo.create({
           id: vaultFileId,
           project_id: projectId,
@@ -475,8 +478,8 @@ export function registerOutputFileRoutes(): void {
       const useInline   = wantsInline && INLINE_EXTS.has(ext);
       const disposition = useInline ? 'inline' : 'attachment';
 
-      const tryServeAbsPath = (absPath: string): boolean => {
-        if (!fs.existsSync(absPath)) return false;
+      const tryServeAbsPath = async (absPath: string): Promise<boolean> => {
+        if (!(await restoreFile(absPath))) return false;
         const stat = fs.statSync(absPath);
         const headers: Record<string, string | number> = {
           'Content-Type': mime,
@@ -499,14 +502,14 @@ export function registerOutputFileRoutes(): void {
           sendJson(res, 403, { error: 'Path traversal detected' });
           return;
         }
-        if (tryServeAbsPath(absPath)) return;
+        if (await tryServeAbsPath(absPath)) return;
       }
 
       if (file.vault_file_id) {
         const vf = await getVaultFilesRepository().getById(file.vault_file_id);
         if (vf) {
           const absVault = path.join(config.dataDir, vf.path);
-          if (tryServeAbsPath(absVault)) return;
+          if (await tryServeAbsPath(absVault)) return;
         }
       }
 
@@ -537,7 +540,7 @@ export function registerOutputFileRoutes(): void {
         const vf = await getVaultFilesRepository().getById(file.vault_file_id);
         if (vf) {
           const candidate = path.join(config.dataDir, vf.path);
-          if (fs.existsSync(candidate)) absPath = candidate;
+          if (await restoreFile(candidate)) absPath = candidate;
         }
       }
 
@@ -615,7 +618,7 @@ export function registerOutputFileRoutes(): void {
           const vf = await getVaultFilesRepository().getById(f.vault_file_id);
           if (vf) {
             const absVault = path.join(config.dataDir, vf.path);
-            if (fs.existsSync(absVault)) {
+            if (await restoreFile(absVault)) {
               try { content = fs.readFileSync(absVault); } catch { /* skip */ }
             }
           }

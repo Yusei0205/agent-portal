@@ -10,6 +10,7 @@
  *   GET    /api/projects/:id/generated-docs/:docId/versions  — list versions
  *   GET    /api/projects/:id/generated-docs/:docId/download  — download .md or .docx
  */
+import { persistFile, restoreFile } from './durable-files.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
@@ -198,6 +199,9 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
       if (docxFile) docxPath = path.join(workDir, docxFile);
     }
   } catch { /* best effort */ }
+
+  if (mdPath) await persistFile(mdPath, 'text/markdown');
+  if (docxPath) await persistFile(docxPath);
 
   // Get next version number
   const versionNum = (await getGeneratedDocRepository().getMaxVersionNum(String(d.id))) + 1;
@@ -525,7 +529,7 @@ export function registerGeneratedDocRoutes(): void {
     }
 
     const filePath = format === 'docx' ? v.docx_path : v.md_path;
-    if (!filePath || !fs.existsSync(String(filePath))) {
+    if (!filePath || !(await restoreFile(String(filePath)))) {
       sendJson(res, 404, { error: `No ${format.toUpperCase()} file available` });
       return;
     }

@@ -35,6 +35,7 @@ import { config } from './config.ts';
 import { appendAudit } from './audit.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { getDb } from './db.ts';
+import { persistFile, forgetFile, restoreTree, forgetTree, persistTree } from './durable-files.ts';
 
 import { getLatestRunRow, getMemberRow, getProjectRow, getWorkflowRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -178,6 +179,10 @@ async function resolveWorkingCopyRoots(workflowId: string): Promise<WorkingCopyR
   }
 
   const uploadsDir = path.join(projectDir, 'uploads', workflowId);
+
+  // On Lambda the local disk starts empty: bring back what was mirrored to S3 for this session.
+  await restoreTree(runWorkDir);
+  await restoreTree(uploadsDir);
 
   return {
     workDir: runWorkDir,
@@ -596,6 +601,7 @@ export function registerSessionFileRoutes(): void {
     }
 
     await fsp.writeFile(absPath, content, 'utf8');
+    await persistFile(absPath);
     const newStat = fs.statSync(absPath);
 
     appendAudit(
@@ -654,6 +660,7 @@ export function registerSessionFileRoutes(): void {
 
     await fsp.mkdir(path.dirname(absPath), { recursive: true });
     await fsp.writeFile(absPath, content, 'utf8');
+    await persistFile(absPath);
     const stat = fs.statSync(absPath);
 
     appendAudit(
@@ -758,8 +765,10 @@ export function registerSessionFileRoutes(): void {
     const stat = fs.statSync(absPath);
     if (stat.isDirectory()) {
       await fsp.rm(absPath, { recursive: true, force: true });
+      await forgetTree(absPath);
     } else {
       await fsp.rm(absPath, { force: true });
+      await forgetFile(absPath);
     }
 
     appendAudit(
@@ -824,7 +833,15 @@ export function registerSessionFileRoutes(): void {
     }
 
     await fsp.mkdir(path.dirname(destPath), { recursive: true });
+    const movedDir = fs.statSync(srcPath).isDirectory();
     await fsp.rename(srcPath, destPath);
+    if (movedDir) {
+      await forgetTree(srcPath);
+      await persistTree(destPath);
+    } else {
+      await forgetFile(srcPath);
+      await persistFile(destPath);
+    }
 
     appendAudit(
       getDb(),
@@ -897,6 +914,7 @@ export function registerSessionFileRoutes(): void {
       assertPathContained(destPath, roots.uploadsDir);
 
       await fsp.writeFile(destPath, uploaded.data);
+      await persistFile(destPath);
       const stat = fs.statSync(destPath);
 
       appendAudit(

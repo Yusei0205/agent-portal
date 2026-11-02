@@ -25,6 +25,9 @@ export interface StorageBackend {
   /** Returns true if the file exists. */
   exists(logicalPath: string): Promise<boolean>;
 
+  /** Logical paths of every file whose path starts with `prefix` (recursive, no ordering guarantee). */
+  list(prefix: string): Promise<string[]>;
+
   /**
    * Returns a URL the browser can use to access the file.
    * Local backend → proxied via /api/storage-file

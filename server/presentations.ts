@@ -9,6 +9,7 @@
  *   POST   /api/projects/:id/presentations/:presId/refresh — re-run
  *   GET    /api/projects/:id/presentations/:presId/download — download .pptx
  */
+import { persistFile, restoreFile } from './durable-files.ts';
 import { getPresentationRepository } from './repositories/presentations-data.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
 import fs from 'node:fs';
@@ -204,6 +205,7 @@ export async function processPresentationOutput(workflowId: string, runId: strin
     }
   } catch { /* best effort */ }
 
+  if (pptxPath) await persistFile(pptxPath);
   const ts = now();
   await getPresentationRepository().update(String(p.id), {
     pptx_path: pptxPath,
@@ -513,7 +515,7 @@ export function registerPresentationRoutes(): void {
 
     const p = await getPresentation(req.params.presId, String(project.id));
 
-    if (!p.pptx_path || !fs.existsSync(String(p.pptx_path))) {
+    if (!p.pptx_path || !(await restoreFile(String(p.pptx_path)))) {
       sendJson(res, 404, { error: 'No PPTX file available yet' });
       return;
     }

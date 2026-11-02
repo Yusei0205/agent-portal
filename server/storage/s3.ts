@@ -49,6 +49,7 @@ async function s3Sdk(): Promise<{
   DeleteObjectCommand: new (opts: object) => AnyCommand;
   HeadObjectCommand: new (opts: object) => AnyCommand;
   HeadBucketCommand: new (opts: object) => AnyCommand;
+  ListObjectsV2Command: new (opts: object) => AnyCommand;
 }> {
   return dynamicImport('@aws-sdk/client-s3') as Promise<ReturnType<typeof s3Sdk>>;
 }
@@ -145,6 +146,24 @@ export class S3StorageBackend implements StorageBackend {
       }
       throw e;
     }
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    const mod = await s3Sdk();
+    const client = await this.client();
+    const base = this.prefix ? `${this.prefix.replace(/\/$/, '')}/` : '';
+    const out: string[] = [];
+    let token: string | undefined;
+    do {
+      const res = (await client.send(
+        new mod.ListObjectsV2Command({ Bucket: this.bucket, Prefix: this.key(prefix), ...(token ? { ContinuationToken: token } : {}) }),
+      )) as { Contents?: Array<{ Key?: string }>; IsTruncated?: boolean; NextContinuationToken?: string };
+      for (const o of res.Contents ?? []) {
+        if (o.Key && !o.Key.endsWith('/')) out.push(base && o.Key.startsWith(base) ? o.Key.slice(base.length) : o.Key);
+      }
+      token = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (token);
+    return out;
   }
 
   async publicUrl(logicalPath: string, filename?: string): Promise<string> {

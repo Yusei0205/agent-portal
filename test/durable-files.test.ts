@@ -11,7 +11,7 @@ import { setConfig } from '../server/config.ts';
 import { createTestConfig } from './fixtures.ts';
 import { setStorage } from '../server/storage-instance.ts';
 import type { StorageBackend } from '../server/storage/index.ts';
-import { persistFile, restoreFile, forgetFile } from '../server/durable-files.ts';
+import { persistFile, restoreFile, forgetFile, restoreTree, forgetTree, persistTree } from '../server/durable-files.ts';
 
 function memoryStorage(): StorageBackend & { objects: Map<string, Buffer> } {
   const objects = new Map<string, Buffer>();
@@ -21,6 +21,7 @@ function memoryStorage(): StorageBackend & { objects: Map<string, Buffer> } {
     async read(p) { const v = objects.get(p); if (!v) throw new Error('missing'); return v; },
     async delete(p) { objects.delete(p); },
     async exists(p) { return objects.has(p); },
+    async list(prefix) { return [...objects.keys()].filter((k) => k.startsWith(prefix)); },
     async publicUrl(p) { return p; },
     async ping() {},
   };
@@ -78,5 +79,33 @@ describe('durable-files', () => {
     await persistFile(outside);
     assert.equal(store.objects.size, 0);
     fs.rmSync(outside);
+  });
+
+  test('restores a whole folder after local loss, but not other folders', async () => {
+    process.env.STORAGE_BACKEND = 's3';
+    const work = path.join(dir, 'projects', 'p', 'work', 'r1');
+    fs.mkdirSync(path.join(work, 'uploads'), { recursive: true });
+    fs.writeFileSync(path.join(work, 'notes.md'), 'n');
+    fs.writeFileSync(path.join(work, 'uploads', 'a.txt'), 'a');
+    const other = path.join(dir, 'projects', 'p', 'work', 'r2', 'x.txt');
+    fs.mkdirSync(path.dirname(other), { recursive: true });
+    fs.writeFileSync(other, 'x');
+    await persistTree(path.join(dir, 'projects', 'p', 'work'));
+    assert.equal(store.objects.size, 3);
+
+    fs.rmSync(path.join(dir, 'projects'), { recursive: true });
+    await restoreTree(work);
+    assert.equal(fs.readFileSync(path.join(work, 'uploads', 'a.txt'), 'utf8'), 'a');
+    assert.equal(fs.readFileSync(path.join(work, 'notes.md'), 'utf8'), 'n');
+    assert.equal(fs.existsSync(other), false);
+  });
+
+  test('forgetTree removes every mirrored file under a folder', async () => {
+    process.env.STORAGE_BACKEND = 's3';
+    const a = path.join(dir, 'w', 'one', 'a.txt');
+    const b = path.join(dir, 'w', 'keep', 'b.txt');
+    for (const f of [a, b]) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'x'); await persistFile(f); }
+    await forgetTree(path.join(dir, 'w', 'one'));
+    assert.deepEqual([...store.objects.keys()], ['w/keep/b.txt']);
   });
 });

@@ -55,3 +55,55 @@ export async function forgetFile(absPath: string): Promise<void> {
   if (!key) return;
   await getStorage().delete(key);
 }
+
+// ── Whole folders ─────────────────────────────────────────────────────────────
+
+const restoredTrees = new Map<string, number>();
+const TREE_FRESH_MS = 30_000;
+
+/**
+ * Make sure every mirrored file under `absDir` exists locally (needed after a Lambda restart, before
+ * listing or reading a folder). Repeat calls within a few seconds are skipped.
+ */
+export async function restoreTree(absDir: string): Promise<void> {
+  if (!enabled()) return;
+  const key = keyFor(absDir);
+  if (!key) return;
+  const last = restoredTrees.get(key);
+  if (last && Date.now() - last < TREE_FRESH_MS && fs.existsSync(absDir)) return;
+  restoredTrees.set(key, Date.now());
+  const storage = getStorage();
+  for (const k of await storage.list(`${key}/`)) {
+    const abs = path.join(config.dataDir, ...k.split('/'));
+    if (fs.existsSync(abs)) continue;
+    try {
+      await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+      await fs.promises.writeFile(abs, await storage.read(k));
+    } catch (e) {
+      console.error('[durable-files] restore failed for', k, e instanceof Error ? e.message : e);
+    }
+  }
+}
+
+/** Remove every mirrored file under `absDir` (after the folder was deleted or moved). */
+export async function forgetTree(absDir: string): Promise<void> {
+  if (!enabled()) return;
+  const key = keyFor(absDir);
+  if (!key) return;
+  restoredTrees.delete(key);
+  const storage = getStorage();
+  for (const k of await storage.list(`${key}/`)) await storage.delete(k);
+}
+
+/** Mirror every file under a local folder (used after a folder is moved). */
+export async function persistTree(absDir: string): Promise<void> {
+  if (!enabled()) return;
+  const walk = async (dir: string): Promise<void> => {
+    for (const e of await fs.promises.readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(full);
+      else await persistFile(full);
+    }
+  };
+  if (fs.existsSync(absDir)) await walk(absDir);
+}
