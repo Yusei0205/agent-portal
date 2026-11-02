@@ -307,7 +307,7 @@ describe('markDiagramStale', () => {
     assert.equal(before?.stale, 0);
 
     // Mark stale
-    markDiagramStale(diagramId);
+    await markDiagramStale(diagramId);
 
     // Verify stale=1
     const after = one<Row>('SELECT * FROM diagrams WHERE id = ?', diagramId);

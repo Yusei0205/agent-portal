@@ -15,11 +15,13 @@
  *   GET    /api/projects/:id/diagrams/:did/versions/:vid/download   — download source file
  */
 
+import { getDiagramRepository } from './repositories/diagrams-data.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
+import { getGitReposRepository } from './repositories/git-repos.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, insert, run as dbRun, update } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, str, badRequest, notFound, parseJson, newId, slugify } from './util.ts';
 import { config } from './config.ts';
@@ -120,17 +122,17 @@ function readCloud(v: unknown): Cloud | undefined {
   return v as Cloud;
 }
 
-function uniqueSlug(projectId: string, title: string): string {
+async function uniqueSlug(projectId: string, title: string): Promise<string> {
   const base = slugify(title) || 'diagram';
   let slug = base;
-  for (let n = 2; one('SELECT 1 FROM diagrams WHERE project_id = ? AND slug = ?', projectId, slug); n++) {
+  for (let n = 2; await getDiagramRepository().slugExists(projectId, slug); n++) {
     slug = `${base}-${n}`;
   }
   return slug;
 }
 
-function getDiagramRow(projectId: string, diagramId: string): Row {
-  const d = one<Row>('SELECT * FROM diagrams WHERE project_id = ? AND id = ?', projectId, diagramId);
+async function getDiagramRow(projectId: string, diagramId: string): Promise<Row> {
+  const d = (await getDiagramRepository().getByProjectAndId(projectId, diagramId)) as unknown as Row | null;
   if (!d) throw notFound('Diagram not found');
   return d;
 }
@@ -237,14 +239,14 @@ async function startDiagramGeneration(
   userId: string,
   attachmentRows: Row[] = [],
 ): Promise<{ workflowId: string }> {
-  const d = one<Row>('SELECT * FROM diagrams WHERE id = ?', diagramId);
+  const d = (await getDiagramRepository().getById(diagramId)) as unknown as Row | null;
   if (!d) throw notFound('Diagram not found');
 
   // Gather repos
   const repoIds = parseJson<string[]>(d.repo_ids as string, []);
   const repos: Repo[] = [];
   for (const id of repoIds) {
-    const r = one<Repo>('SELECT * FROM repositories WHERE id = ?', id);
+    const r = (await getGitReposRepository().getById(id)) as unknown as Repo | null;
     if (!r) throw badRequest('A repository of this diagram was removed. Create the diagram again.');
     repos.push(r);
   }
@@ -272,7 +274,8 @@ async function startDiagramGeneration(
     }
   }
 
-  insert('p6_workflows', {
+  const sessions = getSessionsRepository();
+  await sessions.createWorkflow({
     id: workflowId,
     project_id: String(d.project_id),
     goal,
@@ -285,14 +288,16 @@ async function startDiagramGeneration(
     repo_ids: String(d.repo_ids),
     iteration_count: 0,
     max_iterations: 1,
-    work_dir: preWorkDir,
+    credential_id: null,
+    model: '',
     created_by: userId,
     created_at: ts,
     updated_at: ts,
   });
+  if (preWorkDir) await sessions.updateWorkflow(workflowId, { work_dir: preWorkDir });
 
   // Mark diagram as generating
-  update('diagrams', String(d.id), {
+  await getDiagramRepository().update(String(d.id), {
     status: 'generating',
     error: null,
     pending_workflow_id: workflowId,
@@ -326,7 +331,10 @@ export async function processDiagramOutput(
   runId: string,
   workDir: string,
 ): Promise<void> {
-  const d = one<Row>('SELECT * FROM diagrams WHERE workflow_id = ? OR pending_workflow_id = ?', workflowId, workflowId);
+  const wf = await getSessionsRepository().getWorkflowById(workflowId);
+  if (!wf?.project_id) return;
+  const d = ((await getDiagramRepository().listByProject(wf.project_id)) as unknown as Row[])
+    .find((x) => x.workflow_id === workflowId || x.pending_workflow_id === workflowId);
   if (!d) return;
 
   const style = (d.style ?? 'mermaid') as DiagramStyle;
@@ -338,7 +346,7 @@ export async function processDiagramOutput(
       // Look for .drawio file in workDir
       const drawioFile = findDrawioFile(workDir);
       if (!drawioFile) {
-        update('diagrams', String(d.id), {
+        await getDiagramRepository().update(String(d.id), {
           status: currentVersion > 0 ? 'ready' : 'error',
           error: 'No .drawio file found in run folder',
           pending_workflow_id: null,
@@ -351,7 +359,7 @@ export async function processDiagramOutput(
       try {
         info = validateDrawio(xml);
       } catch (e: unknown) {
-        update('diagrams', String(d.id), {
+        await getDiagramRepository().update(String(d.id), {
           status: currentVersion > 0 ? 'ready' : 'error',
           error: e instanceof DrawioError ? e.message : `Invalid draw.io file: ${String((e as { message?: string })?.message ?? e)}`,
           pending_workflow_id: null,
@@ -360,7 +368,7 @@ export async function processDiagramOutput(
         return;
       }
       const newVersion = currentVersion + 1;
-      insert('diagram_versions', {
+      await getDiagramRepository().createVersion({
         diagram_id: String(d.id),
         version: newVersion,
         format: 'drawio',
@@ -372,12 +380,13 @@ export async function processDiagramOutput(
         citations: '[]',
         sources: '[]',
         source_hash: '',
+        stats: '{}',
         workflow_id: workflowId,
         run_id: runId,
         created_by: d.created_by ? String(d.created_by) : null,
         created_at: ts,
       });
-      update('diagrams', String(d.id), {
+      await getDiagramRepository().update(String(d.id), {
         version: newVersion,
         format: 'drawio',
         status: 'ready',
@@ -391,7 +400,7 @@ export async function processDiagramOutput(
       const mmdSource = mmdFile ? fs.readFileSync(mmdFile, 'utf8') : null;
 
       // Try to get mermaid from run result if no file found
-      const run = one<Row>('SELECT * FROM p6_runs WHERE id = ?', runId);
+      const run = (await getSessionsRepository().getRunById(runId)) as unknown as Row | null;
       const result = String(run?.status === 'done' ? (run.result ?? '') : (mmdSource ?? ''));
 
       // Try to extract from a mermaid fence in the result
@@ -401,7 +410,7 @@ export async function processDiagramOutput(
         if (fenced) mermaidSource = fenced[1].trim();
       }
       if (!mermaidSource) {
-        update('diagrams', String(d.id), {
+        await getDiagramRepository().update(String(d.id), {
           status: currentVersion > 0 ? 'ready' : 'error',
           error: 'No Mermaid diagram found in agent output',
           pending_workflow_id: null,
@@ -414,7 +423,7 @@ export async function processDiagramOutput(
       try {
         validated = await validateMermaid(mermaidSource);
       } catch (e: unknown) {
-        update('diagrams', String(d.id), {
+        await getDiagramRepository().update(String(d.id), {
           status: currentVersion > 0 ? 'ready' : 'error',
           error: e instanceof DiagramError ? e.message : `Invalid Mermaid: ${String((e as { message?: string })?.message ?? e)}`,
           pending_workflow_id: null,
@@ -424,7 +433,7 @@ export async function processDiagramOutput(
       }
 
       const newVersion = currentVersion + 1;
-      insert('diagram_versions', {
+      await getDiagramRepository().createVersion({
         diagram_id: String(d.id),
         version: newVersion,
         format: 'mermaid',
@@ -436,12 +445,13 @@ export async function processDiagramOutput(
         citations: '[]',
         sources: '[]',
         source_hash: '',
+        stats: '{}',
         workflow_id: workflowId,
         run_id: runId,
         created_by: d.created_by ? String(d.created_by) : null,
         created_at: ts,
       });
-      update('diagrams', String(d.id), {
+      await getDiagramRepository().update(String(d.id), {
         version: newVersion,
         format: 'mermaid',
         status: 'ready',
@@ -453,7 +463,7 @@ export async function processDiagramOutput(
 
     notifyProject(String(d.project_id), 'diagrams.updated', { id: d.id });
   } catch (e: unknown) {
-    update('diagrams', String(d.id), {
+    await getDiagramRepository().update(String(d.id), {
       status: currentVersion > 0 ? 'ready' : 'error',
       error: String((e as { message?: string })?.message ?? e).slice(0, 600),
       pending_workflow_id: null,
@@ -463,10 +473,10 @@ export async function processDiagramOutput(
 }
 
 /** Set a diagram's stale flag and emit an SSE event. */
-export function markDiagramStale(diagramId: string): void {
-  const d = one<Row>('SELECT * FROM diagrams WHERE id = ?', diagramId);
+export async function markDiagramStale(diagramId: string): Promise<void> {
+  const d = (await getDiagramRepository().getById(diagramId)) as unknown as Row | null;
   if (!d) return;
-  update('diagrams', String(d.id), { stale: 1, updated_at: now() });
+  await getDiagramRepository().update(String(d.id), { stale: 1, updated_at: now() });
   notifyProject(String(d.project_id), 'diagrams.updated', { id: d.id, stale: true });
 }
 
@@ -518,7 +528,8 @@ export function registerDiagramRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const rows = all<Row>('SELECT * FROM diagrams WHERE project_id = ? ORDER BY updated_at DESC', String(project.id));
+    const rows = ((await getDiagramRepository().listByProject(String(project.id))) as unknown as Row[])
+      .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
     const stylesInfo = await styleChoices();
 
     sendJson(res, 200, {
@@ -567,14 +578,14 @@ export function registerDiagramRoutes(): void {
     // Validate repos belong to this project
     const repos: Repo[] = [];
     for (const id of repoIds) {
-      const r = one<Repo>('SELECT * FROM repositories WHERE id = ?', id);
+      const r = (await getGitReposRepository().getById(id)) as unknown as Repo | null;
       if (!r) throw badRequest(`Repository ${id} not found`);
       if (String(r.project_id) !== String(project.id)) throw badRequest('That repository belongs to another project');
       repos.push(r);
     }
 
     // Check per-project limit
-    const count = one<{ n: number }>('SELECT COUNT(*) AS n FROM diagrams WHERE project_id = ?', String(project.id))?.n ?? 0;
+    const count = (await getDiagramRepository().listByProject(String(project.id))).length;
     if (count >= DIAGRAM_LIMITS.perProject) {
       throw badRequest(`A project can hold at most ${DIAGRAM_LIMITS.perProject} diagrams. Delete one first.`);
     }
@@ -594,12 +605,12 @@ export function registerDiagramRoutes(): void {
     const id = newId('dg_');
     const ts = now();
 
-    insert('diagrams', {
+    await getDiagramRepository().create({
       id,
       project_id: String(project.id),
       kind,
       title,
-      slug: uniqueSlug(String(project.id), title),
+      slug: await uniqueSlug(String(project.id), title),
       focus,
       repo_ids: JSON.stringify(repoIds),
       style,
@@ -607,13 +618,8 @@ export function registerDiagramRoutes(): void {
       cloud: cloud ?? (style === 'icon' ? DEFAULT_CLOUD : ''),
       status: 'generating',
       error: null,
-      version: 0,
-      source_hash: '',
-      stale: 0,
-      pending_workflow_id: null,
-      lead_agent: leadAgent,
+      lead_agent: leadAgent ?? '',
       trust_tools: trustAllTools ? 1 : 0,
-      workflow_id: null,
       attachment_ids: JSON.stringify(rawAttachmentIds),
       created_by: req.user!.id,
       created_at: ts,
@@ -625,7 +631,7 @@ export function registerDiagramRoutes(): void {
       const gen = await startDiagramGeneration(id, req.user!.id, attachmentRows);
       workflowId = gen.workflowId;
     } catch (e) {
-      dbRun('DELETE FROM diagrams WHERE id = ?', id);
+      await getDiagramRepository().delete(id);
       throw e;
     }
 
@@ -634,7 +640,7 @@ export function registerDiagramRoutes(): void {
       await linkAttachmentsToParent(rawAttachmentIds, 'diagram', id);
     }
 
-    const diagram = one<Row>('SELECT * FROM diagrams WHERE id = ?', id)!;
+    const diagram = ((await getDiagramRepository().getById(id)) as unknown as Row);
     sendJson(res, 200, {
       diagram: await diagramView(diagram),
       workflowId,
@@ -646,8 +652,9 @@ export function registerDiagramRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const d = getDiagramRow(String(project.id), req.params.did);
-    const versions = all<Row>('SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC', String(d.id));
+    const d = await getDiagramRow(String(project.id), req.params.did);
+    const versions = ((await getDiagramRepository().listVersions(String(d.id))) as unknown as Row[])
+      .sort((a, b) => Number(b.version) - Number(a.version));
     const latest = versions[0] ?? null;
 
     sendJson(res, 200, {
@@ -667,9 +674,9 @@ export function registerDiagramRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const d = getDiagramRow(String(project.id), req.params.did);
+    const d = await getDiagramRow(String(project.id), req.params.did);
     await deleteAttachmentsForParent('diagram', String(d.id));
-    dbRun('DELETE FROM diagrams WHERE id = ?', String(d.id));
+    await getDiagramRepository().delete(String(d.id));
 
     notifyProject(String(project.id), 'diagrams.updated', { id: d.id });
     sendJson(res, 200, { ok: true });
@@ -680,7 +687,7 @@ export function registerDiagramRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const d = getDiagramRow(String(project.id), req.params.did);
+    const d = await getDiagramRow(String(project.id), req.params.did);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const style = readStyle(body.style);
     const cloud = readCloud(body.cloud);
@@ -689,9 +696,9 @@ export function registerDiagramRoutes(): void {
       : null; // null = use existing
 
     if (style) {
-      update('diagrams', String(d.id), { style, cloud: cloud ?? (style === 'icon' ? DEFAULT_CLOUD : ''), updated_at: now() });
+      await getDiagramRepository().update(String(d.id), { style, cloud: cloud ?? (style === 'icon' ? DEFAULT_CLOUD : ''), updated_at: now() });
     } else if (cloud) {
-      update('diagrams', String(d.id), { cloud, updated_at: now() });
+      await getDiagramRepository().update(String(d.id), { cloud, updated_at: now() });
     }
 
     // Determine which attachment IDs to use: new ones (if provided) or existing
@@ -705,13 +712,13 @@ export function registerDiagramRoutes(): void {
       const oldIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
       if (oldIds.length > 0) await deleteAttachmentsForParent('diagram', String(d.id));
       effectiveAttachmentIds = rawAttachmentIds;
-      update('diagrams', String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
+      await getDiagramRepository().update(String(d.id), { attachment_ids: JSON.stringify(rawAttachmentIds), updated_at: now() });
     } else {
       effectiveAttachmentIds = parseJson<string[]>(String(d.attachment_ids ?? '[]'), []);
     }
 
     // Reload updated diagram row and resolve attachment rows
-    const dUpdated = getDiagramRow(String(project.id), req.params.did);
+    const dUpdated = await getDiagramRow(String(project.id), req.params.did);
     let attachmentRows: Row[] = [];
     if (effectiveAttachmentIds.length > 0) {
       const { rows } = await validateAttachmentIds(String(project.id), effectiveAttachmentIds);
@@ -725,7 +732,7 @@ export function registerDiagramRoutes(): void {
       linkAttachmentsToParent(rawAttachmentIds, 'diagram', String(dUpdated.id));
     }
 
-    const updated = one<Row>('SELECT * FROM diagrams WHERE id = ?', String(dUpdated.id))!;
+    const updated = ((await getDiagramRepository().getById(String(dUpdated.id))) as unknown as Row);
     sendJson(res, 200, {
       diagram: await diagramView(updated),
       workflowId: gen.workflowId,
@@ -737,7 +744,7 @@ export function registerDiagramRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id, 'editor');
     if (!project) return;
 
-    const d = getDiagramRow(String(project.id), req.params.did);
+    const d = await getDiagramRow(String(project.id), req.params.did);
     if (String(d.status) !== 'error') {
       sendJson(res, 409, { error: 'Diagram is not in an error state' });
       return;
@@ -752,7 +759,7 @@ export function registerDiagramRoutes(): void {
 
     const gen = await startDiagramGeneration(String(d.id), req.user!.id, attachmentRows);
 
-    const updated = one<Row>('SELECT * FROM diagrams WHERE id = ?', String(d.id))!;
+    const updated = ((await getDiagramRepository().getById(String(d.id))) as unknown as Row);
     sendJson(res, 202, { diagram: await diagramView(updated), workflowId: gen.workflowId });
   });
 
@@ -761,8 +768,9 @@ export function registerDiagramRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const d = getDiagramRow(String(project.id), req.params.did);
-    const versions = all<Row>('SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC', String(d.id));
+    const d = await getDiagramRow(String(project.id), req.params.did);
+    const versions = ((await getDiagramRepository().listVersions(String(d.id))) as unknown as Row[])
+      .sort((a, b) => Number(b.version) - Number(a.version));
 
     sendJson(res, 200, { versions: versions.map(versionView) });
   });
@@ -772,9 +780,9 @@ export function registerDiagramRoutes(): void {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
-    const d = getDiagramRow(String(project.id), req.params.did);
+    const d = await getDiagramRow(String(project.id), req.params.did);
     const vid = Number(req.params.vid);
-    const v = one<Row>('SELECT * FROM diagram_versions WHERE diagram_id = ? AND version = ?', String(d.id), vid);
+    const v = (await getDiagramRepository().getVersionByNumber(String(d.id), vid)) as unknown as Row | null;
     if (!v) throw notFound('Version not found');
 
     const format = (req.query.get('format') || v.format || 'mermaid') as string;
