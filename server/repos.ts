@@ -12,6 +12,7 @@
  *   PUT    /api/projects/:id/repos/:repoId/default-branch  — update default branch
  */
 
+import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -321,11 +322,7 @@ async function getCloneEnv(repo: Repository): Promise<Record<string, string>> {
       secretAccessKey = creds.secretAccessKey;
       sessionToken = creds.sessionToken;
     } else if (mode === 'aws-account' && creds.awsAccountId) {
-      interface AccRow { credentials_enc: string | null; auth_method: string }
-      const acc = one<AccRow>(
-        'SELECT credentials_enc, auth_method FROM aws_accounts WHERE id = ? LIMIT 1',
-        creds.awsAccountId,
-      );
+      const acc = await getAwsAccountsRepository().getById(creds.awsAccountId);
       if (acc?.auth_method === 'keys' && acc.credentials_enc) {
         const plain = decrypt(acc.credentials_enc, config.secretKey);
         const c = parseJson<Record<string, string>>(plain, {});
@@ -560,11 +557,8 @@ export function registerRepoRoutes(): void {
   router.get('/api/projects/:id/repos/:repoId/branches', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!await requireProjectAccess(req, res, req.params.id)) return;
 
-    const repo = one<Repository>(
-      'SELECT * FROM repositories WHERE id = ? AND project_id = ?',
-      req.params.repoId,
-      req.params.id,
-    );
+    const found = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
+    const repo = (found ?? undefined) as unknown as Repository | undefined;
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
     const slug = await getProjectSlug(req.params.id);

@@ -10,10 +10,11 @@
  *   oauth     — Atlassian 3LO; requires an Atlassian developer app with client ID/secret.
  *   api_token — Atlassian email + API token + site URL; Basic auth; no OAuth app needed.
  */
+import { getSetting, setSetting } from './settings.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { all, one, run as exec } from './db.ts';
+import { all, one, run as exec, getDb } from './db.ts';
 import type { Row } from './db.ts';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
@@ -284,7 +285,17 @@ async function jira(projectId: string, apiPath: string, init: { method?: string;
 
 // ── DB helpers ─────────────────────────────────────────────────────────────────
 
+const mappingKey = (projectId: string): string => `jira.mapping.${projectId}`;
+
 function getMapping(projectId: string): Mapping | null {
+  // Stored in the settings store (persistent on DynamoDB). Older local installs keep it in project_jira.
+  const raw = getSetting(getDb(), mappingKey(projectId));
+  if (raw) {
+    try {
+      const m = JSON.parse(raw) as { projectKeys?: string[]; jql?: string };
+      return { projectKeys: Array.isArray(m.projectKeys) ? m.projectKeys : [], jql: m.jql ?? '' };
+    } catch { /* fall through to the old table */ }
+  }
   const r = one<Row>('SELECT project_keys, jql FROM project_jira WHERE project_id = ?', projectId);
   if (!r) return null;
   return {
@@ -964,13 +975,7 @@ export function registerJiraRoutes(): void {
     const jql = str((body.jql as string) ?? '', 'Extra JQL', { max: 500, optional: true }).trim();
     if (/order\s+by/i.test(jql)) throw badRequest('Leave ORDER BY out of the extra JQL; the list is always newest first.');
 
-    exec(
-      'INSERT INTO project_jira (project_id, project_keys, jql, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET project_keys = excluded.project_keys, jql = excluded.jql, updated_at = excluded.updated_at',
-      projectId,
-      JSON.stringify(rawKeys),
-      jql,
-      now(),
-    );
+    await setSetting(getDb(), mappingKey(projectId), JSON.stringify({ projectKeys: rawKeys, jql }));
     sendJson(res, 200, { mapping: { projectKeys: rawKeys, jql } });
   });
 
@@ -978,6 +983,7 @@ export function registerJiraRoutes(): void {
   router.delete('/api/projects/:pid/jira', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const p = await requireOwnerAccess(req, res, req.params.pid);
     if (!p) return;
+    await setSetting(getDb(), mappingKey(String(p.id)), '');
     exec('DELETE FROM project_jira WHERE project_id = ?', String(p.id));
     sendJson(res, 200, { ok: true });
   });

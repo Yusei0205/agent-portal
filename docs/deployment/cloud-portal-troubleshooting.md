@@ -81,7 +81,8 @@ Lambda can run many instances, and an instance is **frozen** as soon as its resp
 ### "Project not found" / 403 on sessions, files, terminal, reviews (non-SQLite code paths)
 - **Cause:** many modules still ran raw SQLite queries (`SELECT ... FROM projects / project_members`). In DynamoDB mode those return nothing.
 - **Fix:** use the repositories. `server/project-access.ts` has `getProjectRow`, `getMemberRow`, `getProjectSlug`, `getMembership`, `getWorkflowRow`, `getLatestRunRow`, `getRepoRow` (plain-row results, same shape the old queries returned). All project and membership lookups now go through them (2026-11-03). Helpers are async: every caller must `await` (a missing `await` on an `async` access check is always truthy and silently lets requests through).
-- **Still raw SQL (domain tables), will fail on the cloud portal:** learn, diagrams, doc templates, generated docs, presentations, reviews, scans, testing, MCP server, themes, terminal and browser-live. Find them with `grep -rnE "(one|all)(<[^>]*>)?\(" server | grep -v repositories/`. Terminal and browser-live also need local shells/WebSockets, which belong to the AgentCore step.
+- **Still on local SQL, by design:** terminal and live browser (need an AgentCore shell or browser), the health ping, and the SQLite-only event insert in `agent/runner.ts`. Everything else the cloud portal uses goes through repositories. Check with `grep -rnE "\b(one|all)(<[^>]*>)?\(" server | grep -v repositories/`.
+- **Browser test runs are not available on the cloud portal yet:** test runs start, then end with "Browser test runs are not available on the cloud portal yet". Everything around them (projects, scripts, groups, vault, case sets, script generation) works.
 - **Tip:** the Lambda log does not record request paths. Reproduce with the browser Network tab and read the JSON error body.
 
 ## Kiro (AgentCore runner)
@@ -104,6 +105,12 @@ Lambda can run many instances, and an instance is **frozen** as soon as its resp
 
 ### AgentCore invocation returns 409 `RetryableConflictException`
 - The runner handles one operation per session at a time. Status checks (`kiro-login-status`) are exempt; retry other calls.
+
+## Testing module on DynamoDB
+
+- Cases are stored under their case set and order, trace steps under their parent and sequence number, so editing or deleting them needs that context: `updateCase`/`deleteCase`/`getCaseById` take the case set id, `updateTraceStep` takes `{case_set_id|generation_id, seq}`. SQLite ignores the extra argument.
+- Deleting a test project, group, case set or script removes its children explicitly (`server/testing/data.ts`, routes); SQLite does it by cascade, DynamoDB does not.
+- Test generation, case-set generation and test runs start as background jobs; cancelling reads the flag from the database, so it works across invocations.
 
 ## Claude (AgentCore runner)
 

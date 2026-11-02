@@ -12,6 +12,8 @@
  *   POST   /api/git-connections/github/device/poll       — poll GitHub OAuth device flow
  */
 
+import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
+import { getAuthRepository } from './repositories/auth.ts';
 import { spawn } from 'node:child_process';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
@@ -577,21 +579,14 @@ export async function resolveCodeCommitAwsCreds(creds: {
     };
   }
   if (creds.mode === 'aws-account' && creds.awsAccountId) {
-    interface AccRow { credentials_enc: string | null; auth_method: string; project_id: string | null }
-    const acc = one<AccRow>(
-      'SELECT credentials_enc, auth_method, project_id FROM aws_accounts WHERE id = ? LIMIT 1',
-      creds.awsAccountId,
-    );
+    const acc = await getAwsAccountsRepository().getById(creds.awsAccountId);
     if (!acc) throw new Error(`AWS account ${creds.awsAccountId} not found`);
 
     // Authorization: the requesting user must be a member (or admin) of the project
     // that owns this AWS account. Admins may access any account.
     if (!creds.callerIsAdmin && acc.project_id && creds.connectionOwnerId) {
       const isMember = await getMemberRow(acc.project_id, creds.connectionOwnerId);
-      const isProjectAdmin = one<{ id: string }>(
-        'SELECT id FROM users WHERE id = ? AND is_admin = 1 LIMIT 1',
-        creds.connectionOwnerId,
-      );
+      const isProjectAdmin = (await getAuthRepository().getUserById(creds.connectionOwnerId))?.is_admin ? true : null;
       if (!isMember && !isProjectAdmin) {
         throw new Error(`Access denied: you do not have access to AWS account ${creds.awsAccountId}`);
       }

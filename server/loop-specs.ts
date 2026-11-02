@@ -14,6 +14,7 @@
  *   GET  /api/projects/:id/loop-specs/:sid/runs    — list loop run history
  */
 
+import { getSessionsRepository } from './repositories/sessions.ts';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, insert } from './db.ts';
@@ -239,11 +240,12 @@ export function registerLoopSpecRoutes(): void {
     let workflowId: string | null = null;
     try {
       const wid = generateId();
-      insert('p6_workflows', {
+      await getSessionsRepository().createWorkflow({
         id: wid, project_id: req.params.id, goal: goal.slice(0, 2000), status: 'pending',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0,
-        max_iterations: spec.max_iterations, created_by: req.user!.id, created_at: ts, updated_at: ts,
+        max_iterations: spec.max_iterations, credential_id: null, model: '',
+        created_by: req.user!.id, created_at: ts, updated_at: ts,
       });
       workflowId = wid;
       emit(req.params.id, { type: 'workflow.created', workflowId: wid });

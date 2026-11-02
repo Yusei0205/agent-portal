@@ -14,6 +14,7 @@
  * ALL decisions route through evaluateCommand() from guardrails.ts.
  */
 
+import { getReviewsRepository } from '../repositories/reviews.ts';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -863,10 +864,7 @@ async function populateRepoWorkDirs(
  */
 async function prepareReviewWorkDir(agentRun: AgentRun, workDir: string): Promise<void> {
   // Find the review record linked to this workflow
-  const review = one<Row>(
-    'SELECT base_ref, head_ref, repo_id FROM p10_reviews WHERE workflow_id = ?',
-    agentRun.workflowId,
-  );
+  const review = (await getReviewsRepository().getByWorkflowId(agentRun.workflowId)) as unknown as Row | null;
   if (!review) return;
 
   const baseRef = String(review.base_ref ?? '');
