@@ -14,7 +14,7 @@
 
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
-import { one, all, run as dbRun, insert, getDb } from './db.ts';
+import { one, run as dbRun, insert, getDb } from './db.ts';
 import type { Row } from './db.ts';
 import { now } from './util.ts';
 import { emit } from './events.ts';
@@ -53,31 +53,32 @@ function getIdleTimeoutMinutes(): number {
  *
  * Survives server restarts because last_turn_at is persisted in the DB.
  */
-export function checkIdleSessions(): void {
+export async function checkIdleSessions(): Promise<void> {
   try {
     const timeoutMinutes = getIdleTimeoutMinutes();
     const cutoff = new Date(Date.now() - timeoutMinutes * 60_000).toISOString();
 
-    // S1-TODO(sessions): listIdleWorkflows is a no-op in DynamoDB mode.
-    // Idle detection requires cross-project last_turn_at queries not yet in the GSI.
-    // In SQLite mode this continues to use db.ts directly for performance.
-    const idleSessions = all<Row>(
-      `SELECT id, project_id FROM p6_workflows
-        WHERE status IN ('done', 'pending')
-          AND last_turn_at IS NOT NULL
-          AND last_turn_at < ?
-          AND stop_reason = ''`,
-      cutoff,
-    );
-
     const repo = getSessionsRepository();
+    const idleSessions = await repo.listIdleWorkflows(cutoff);
+
     for (const session of idleSessions) {
       const wid = String(session.id);
       const projectId = session.project_id ? String(session.project_id) : null;
 
-      // Update workflow status (fire-and-forget repo call)
+      // Conditionally update workflow status: only applies if the workflow is
+      // still in the expected state (done or pending).  A concurrent resume or
+      // manual change wins the race and this idle-stop is treated as a no-op.
       const updateTs = now();
-      repo.updateWorkflow(wid, { status: 'paused', stop_reason: 'idle', updated_at: updateTs }).catch(() => {});
+      const applied = await repo.updateWorkflowConditional(wid, session.status, {
+        status: 'paused',
+        stop_reason: 'idle',
+        updated_at: updateTs,
+      });
+
+      if (!applied) {
+        // Workflow status changed between listIdleWorkflows and now — skip.
+        continue;
+      }
 
       repo.appendWorkflowEvent({
         workflow_id: wid,
@@ -113,7 +114,7 @@ export function checkIdleSessions(): void {
 /** Start the periodic idle-session checker. Safe to call multiple times. */
 export function startIdleStopTimer(): void {
   if (_idleTimer) return;
-  _idleTimer = setInterval(checkIdleSessions, IDLE_CHECK_INTERVAL_MS);
+  _idleTimer = setInterval(() => { checkIdleSessions().catch((e) => console.error('[idle-stop] Error:', e)); }, IDLE_CHECK_INTERVAL_MS);
   _idleTimer.unref();
 }
 
@@ -128,16 +129,17 @@ export function stopIdleStopTimer(): void {
 // ── Access helpers ─────────────────────────────────────────────────────────────
 
 /** Returns the workflow row after access check, or null (response already sent). */
-function requireWorkflowReadAccess(
+async function requireWorkflowReadAccess(
   req: PortalRequest,
   res: PortalResponse,
   workflowId: string,
-): Row | null {
+): Promise<import('./repositories/sessions.ts').WorkflowRecord | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const wf = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', workflowId);
+  const repo = getSessionsRepository();
+  const wf = await repo.getWorkflowById(workflowId);
   if (!wf) {
     sendJson(res, 404, { error: 'Session not found' });
     return null;
@@ -151,7 +153,7 @@ function requireWorkflowReadAccess(
   }
   const member = one<Row>(
     'SELECT access FROM project_members WHERE project_id = ? AND user_id = ?',
-    String(wf.project_id),
+    wf.project_id,
     req.user.id,
   );
   if (!member) {
@@ -162,12 +164,12 @@ function requireWorkflowReadAccess(
 }
 
 /** Require the user to be a member of the project that owns the workflow. */
-function requireProjectAndWorkflow(
+async function requireProjectAndWorkflow(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,
   workflowId: string,
-): Row | null {
+): Promise<import('./repositories/sessions.ts').WorkflowRecord | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
@@ -188,11 +190,8 @@ function requireProjectAndWorkflow(
       return null;
     }
   }
-  const w = one<Row>(
-    'SELECT * FROM p6_workflows WHERE id = ? AND project_id = ?',
-    workflowId,
-    projectId,
-  );
+  const repo = getSessionsRepository();
+  const w = await repo.getWorkflowByProjectId(projectId, workflowId);
   if (!w) {
     sendJson(res, 404, { error: 'Session not found' });
     return null;
@@ -218,7 +217,7 @@ export function registerSessionLifecycleRoutes(): void {
   router.get(
     '/api/projects/:id/workflows/:wid/status-bar',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const w = requireProjectAndWorkflow(req, res, req.params.id, req.params.wid);
+      const w = await requireProjectAndWorkflow(req, res, req.params.id, req.params.wid);
       if (!w) return;
 
       const engine = String(w.engine ?? 'demo');
@@ -267,7 +266,7 @@ export function registerSessionLifecycleRoutes(): void {
   router.get(
     '/api/workflows/:wid/browser',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const wf = requireWorkflowReadAccess(req, res, req.params.wid);
+      const wf = await requireWorkflowReadAccess(req, res, req.params.wid);
       if (!wf) return;
 
       const repo = getSessionsRepository();
@@ -370,7 +369,7 @@ export function registerSessionLifecycleRoutes(): void {
   router.get(
     '/api/workflows/:wid/agents',
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-      const wf = requireWorkflowReadAccess(req, res, req.params.wid);
+      const wf = await requireWorkflowReadAccess(req, res, req.params.wid);
       if (!wf) return;
 
       const repo = getSessionsRepository();

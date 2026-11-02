@@ -377,7 +377,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   // When there's no engine_session_id but there are prior completed runs
   // (and no /clear since the last one), give the engine a context recap.
   if (!run.engineSessionId) {
-    const recap = buildConversationRecap(run.workflowId, run.runId);
+    const recap = await buildConversationRecap(run.workflowId, run.runId);
     if (recap) {
       prompt = recap + prompt;
       emit('status', { text: 'Started a new session with a recap of earlier turns' });
@@ -610,7 +610,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     // If we tried to resume and it failed, retry once without resume
     if (resumeId && !didRetryWithoutResume) {
       const reason = String((e as Error)?.message ?? e).slice(0, 200);
-      const recap = buildConversationRecap(run.workflowId, run.runId);
+      const recap = await buildConversationRecap(run.workflowId, run.runId);
       const basePrompt = run.kind === 'review' ? `${run.goal}\n\n${REVIEW_SYSTEM_APPEND}` : run.goal;
       activePrompt = recap ? recap + basePrompt : basePrompt;
       emit('status', {
@@ -678,10 +678,9 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
 
   // ── Insert budget_usage record ─────────────────────────────────────────────
   if (totalCostUsd > 0 || totalInputTokens > 0 || totalOutputTokens > 0) {
-    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
     const wfRowCC = await repo.getWorkflowById(run.workflowId);
     insert('budget_usage', {
-      user_id: wfRowCC?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,

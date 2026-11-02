@@ -75,8 +75,26 @@ export async function startRun(workflowId: string): Promise<string> {
     created_at: ts,
   });
 
-  // Update workflow to running
-  await repo.updateWorkflow(workflowId, { status: 'running', updated_at: ts });
+  // Conditionally update workflow to running.
+  // Uses the status we just read as the expected value so a concurrent startRun
+  // (or any other status transition) that wins the race is detected here.
+  const claimed = await repo.updateWorkflowConditional(workflowId, workflow.status, {
+    status: 'running',
+    updated_at: ts,
+  });
+
+  if (!claimed) {
+    // Another caller transitioned the workflow before us.
+    // Cancel our orphaned pending run so getActiveRun finds the winner's run.
+    await repo.updateRunConditional(runId, 'pending', {
+      status: 'cancelled',
+      finished_at: now(),
+    });
+    const conflictRun = await repo.getActiveRun(workflowId);
+    if (conflictRun) return conflictRun.id;
+    // Workflow moved to a terminal state between our read and write.
+    throw badRequest('Workflow is no longer in a startable state');
+  }
 
   // Notify project channel
   if (workflow.project_id) {
@@ -88,10 +106,11 @@ export async function startRun(workflowId: string): Promise<string> {
   // Spawn the run in the background (fire-and-forget)
   executeRun(runId, workflowId).catch((e: unknown) => {
     console.error(`[driver] Unhandled error in run ${runId}:`, e);
-    // Best-effort: mark the run failed
+    // Best-effort: mark the run failed using conditional to avoid clobbering
+    // a stop that may have already set the run terminal.
     const errTs = now();
-    repo.updateRun(runId, { status: 'failed', finished_at: errTs }).catch(() => {});
-    repo.updateWorkflow(workflowId, { status: 'failed', updated_at: errTs }).catch(() => {});
+    repo.updateRunConditional(runId, 'running', { status: 'failed', finished_at: errTs }).catch(() => {});
+    repo.updateWorkflowConditional(workflowId, 'running', { status: 'failed', updated_at: errTs }).catch(() => {});
     if (workflow.project_id) {
       emit(workflow.project_id, { type: 'run.updated', workflowId, runId, status: 'failed' });
       emit(workflow.project_id, { type: 'workflow.updated', workflowId, status: 'failed' });

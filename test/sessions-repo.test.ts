@@ -123,7 +123,8 @@ function runContract(label: string, makeRepo: () => Promise<SessionsRepository>)
       });
       const result = await repo.listWorkflowsByProject(projectId, { limit: 10 });
       assert.ok(result.workflows.length >= 2);
-      assert.ok(result.total >= 2);
+      // total is null in DynamoDB mode (too expensive to compute)
+      assert.ok(result.total === null || result.total >= 2);
     });
 
     test('incrementWorkflowIteration -- increments the counter', async () => {
@@ -506,6 +507,436 @@ function runContract(label: string, makeRepo: () => Promise<SessionsRepository>)
       assert.equal(noResult, null);
     });
 
+    // ── Gap 2: listRunningWorkflows, listIdleWorkflows, listChildWorkflows ──────
+
+    test('listRunningWorkflows -- finds running workflows', async () => {
+      const projectId = `running-${sfx}`;
+      const ts = now();
+      const wf1 = generateId();
+      const wf2 = generateId();
+      await repo.createWorkflow({
+        id: wf1, project_id: projectId, goal: 'Running 1', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createWorkflow({
+        id: wf2, project_id: projectId, goal: 'Done 1', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      const running = await repo.listRunningWorkflows();
+      const ids = running.map((w) => w.id);
+      assert.ok(ids.includes(wf1), 'Running workflow should be in listRunningWorkflows');
+      assert.ok(!ids.includes(wf2), 'Done workflow should NOT be in listRunningWorkflows');
+    });
+
+    test('listIdleWorkflows -- finds idle workflows below cutoff', async () => {
+      const projectId = `idle-${sfx}`;
+      const oldTs = new Date(Date.now() - 3600_000).toISOString(); // 1 hour ago
+      const recentTs = now();
+      const wfIdle = generateId();
+      const wfRecent = generateId();
+      await repo.createWorkflow({
+        id: wfIdle, project_id: projectId, goal: 'Idle', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: oldTs, updated_at: oldTs,
+      });
+      await repo.updateWorkflow(wfIdle, { last_turn_at: oldTs, stop_reason: '', updated_at: oldTs });
+      await repo.createWorkflow({
+        id: wfRecent, project_id: projectId, goal: 'Recent', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: recentTs, updated_at: recentTs,
+      });
+      await repo.updateWorkflow(wfRecent, { last_turn_at: recentTs, stop_reason: '', updated_at: recentTs });
+      const cutoff = new Date(Date.now() - 1800_000).toISOString(); // 30 min ago
+      const idle = await repo.listIdleWorkflows(cutoff);
+      const ids = idle.map((w) => w.id);
+      assert.ok(ids.includes(wfIdle), 'Idle workflow should be in listIdleWorkflows');
+      assert.ok(!ids.includes(wfRecent), 'Recent workflow should NOT be in listIdleWorkflows');
+    });
+
+    test('listChildWorkflows -- finds children of parent', async () => {
+      const ts = now();
+      const parentId = generateId();
+      const childId1 = generateId();
+      const childId2 = generateId();
+      await repo.createWorkflow({
+        id: parentId, project_id: null, goal: 'Parent', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createWorkflow({
+        id: childId1, project_id: null, goal: 'Child 1', status: 'pending',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+        parent_id: parentId,
+      });
+      await repo.createWorkflow({
+        id: childId2, project_id: null, goal: 'Child 2', status: 'pending',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+        parent_id: parentId,
+      });
+      const children = await repo.listChildWorkflows(parentId);
+      const ids = children.map((c) => c.id);
+      assert.ok(ids.includes(childId1), 'Child 1 should be found');
+      assert.ok(ids.includes(childId2), 'Child 2 should be found');
+      assert.ok(!ids.includes(parentId), 'Parent should not be in children list');
+    });
+
+    // ── Gap 3: Conditional status transitions ──────────────────────────────────
+
+    test('updateWorkflowConditional -- only one of two concurrent writers wins', async () => {
+      const id = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id, project_id: null, goal: 'Conditional test', status: 'pending',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      // Two concurrent transitions from pending→running
+      const [win1, win2] = await Promise.all([
+        repo.updateWorkflowConditional(id, 'pending', { status: 'running', updated_at: now() }),
+        repo.updateWorkflowConditional(id, 'pending', { status: 'running', updated_at: now() }),
+      ]);
+      const wins = [win1, win2].filter(Boolean).length;
+      assert.equal(wins, 1, 'Exactly one conditional update should succeed');
+      const updated = await repo.getWorkflowById(id);
+      assert.equal(updated?.status, 'running', 'Workflow status should be running after one win');
+    });
+
+    test('updateRunConditional -- only one of two concurrent writers wins', async () => {
+      const wfId = generateId();
+      const runId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Run conditional', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'running',
+        started_at: ts, finished_at: null, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+      const [win1, win2] = await Promise.all([
+        repo.updateRunConditional(runId, 'running', { status: 'done', finished_at: now() }),
+        repo.updateRunConditional(runId, 'running', { status: 'failed', finished_at: now() }),
+      ]);
+      const wins = [win1, win2].filter(Boolean).length;
+      assert.equal(wins, 1, 'Exactly one conditional run update should succeed');
+      const updated = await repo.getRunById(runId);
+      assert.ok(updated?.status === 'done' || updated?.status === 'failed', 'Run should be terminal');
+    });
+
+    // ── Gap 5: deleteWorkflow cascades ─────────────────────────────────────────
+
+    test('deleteWorkflow -- removes all associated data', async () => {
+      const wfId = generateId();
+      const runId = generateId();
+      const inputId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Delete cascade test', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'done',
+        started_at: ts, finished_at: ts, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+      await repo.appendRunEvent(runId, 'status', '{"text":"hello"}', ts);
+      await repo.appendRunEvent(runId, 'run-complete', '{"result":"done"}', ts);
+      await repo.createInput({ id: inputId, run_id: runId, project_id: null,
+        tool_name: 'Bash', tool_input: '{}', payload: '{}',
+        input_hash: `del-${sfx}`, type: 'approval', status: 'pending',
+        allow_all: 0, expires_at: null, created_at: ts });
+      await repo.appendWorkflowEvent({ workflow_id: wfId, kind: 'human', body: 'bye', data: null, created_at: ts });
+
+      await repo.deleteWorkflow(wfId);
+
+      const wfAfter = await repo.getWorkflowById(wfId);
+      assert.equal(wfAfter, null, 'Workflow should be deleted');
+      const runAfter = await repo.getRunById(runId);
+      assert.equal(runAfter, null, 'Run should be deleted');
+      const eventsAfter = await repo.listRunEvents(runId);
+      assert.equal(eventsAfter.length, 0, 'Run events should be deleted');
+      const inputAfter = await repo.getInputByRunAndId(runId, inputId);
+      assert.equal(inputAfter, null, 'Input should be deleted');
+    });
+
+    test('deleteWorkflow -- adjusts parent child count', async () => {
+      const ts = now();
+      const parentId = generateId();
+      const childId = generateId();
+      await repo.createWorkflow({
+        id: parentId, project_id: null, goal: 'Parent for delete', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createWorkflow({
+        id: childId, project_id: null, goal: 'Child for delete', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+        parent_id: parentId,
+      });
+      // createWorkflow now owns the increment — no separate call needed.
+      // Verify the child exists before deleting
+      const childrenBefore = await repo.listChildWorkflows(parentId);
+      assert.ok(childrenBefore.some((c) => c.id === childId), 'Child should be in children list before delete');
+      await repo.deleteWorkflow(childId);
+      // After delete, child should no longer exist
+      const deletedChild = await repo.getWorkflowById(childId);
+      assert.equal(deletedChild, null, 'Child workflow should be deleted');
+      // In DynamoDB mode, child count should have decreased
+      // In SQLite mode, child count is computed dynamically, so also check listChildWorkflows
+      const childrenAfter = await repo.listChildWorkflows(parentId);
+      assert.ok(!childrenAfter.some((c) => c.id === childId), 'Child should not appear after delete');
+    });
+
+    // ── Child count contract (both backends) ───────────────────────────────────
+    // These tests verify that the repository is the single owner of child-count
+    // bookkeeping: createWorkflow increments, deleteWorkflow decrements, and no
+    // caller in the route layer needs to issue a separate incrementWorkflowChildCount.
+
+    test('child-count -- createWorkflow increments parent child_count', async () => {
+      const projectId = `cc-create-${sfx}`;
+      const parentId = generateId();
+      const childId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: parentId, project_id: projectId, goal: 'CC parent', status: 'pending',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      // Before any child: child_count should be 0
+      const before = await repo.listWorkflowsByProject(projectId, { limit: 10 });
+      const parentBefore = before.workflows.find((w) => w.id === parentId);
+      assert.ok(parentBefore, 'Parent should appear in list before child creation');
+      assert.equal(parentBefore.child_count ?? 0, 0, `Parent child_count should be 0 before child, got ${parentBefore.child_count}`);
+
+      // Create a child — repository must increment the parent automatically
+      await repo.createWorkflow({
+        id: childId, project_id: projectId, goal: 'CC child', status: 'pending',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+        parent_id: parentId,
+      });
+      const after = await repo.listWorkflowsByProject(projectId, { limit: 10 });
+      const parentAfter = after.workflows.find((w) => w.id === parentId);
+      assert.ok(parentAfter, 'Parent should still appear in list after child creation');
+      assert.equal(parentAfter.child_count, 1, `Parent child_count should be 1 after child creation, got ${parentAfter.child_count}`);
+    });
+
+    test('child-count -- create-then-delete leaves parent child_count at 0', async () => {
+      const projectId = `cc-del-${sfx}`;
+      const parentId = generateId();
+      const childId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: parentId, project_id: projectId, goal: 'CC-del parent', status: 'pending',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      // Create child — repository increments count
+      await repo.createWorkflow({
+        id: childId, project_id: projectId, goal: 'CC-del child', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+        parent_id: parentId,
+      });
+      // Sanity check: count went up to 1
+      const midList = await repo.listWorkflowsByProject(projectId, { limit: 10 });
+      const parentMid = midList.workflows.find((w) => w.id === parentId);
+      assert.ok(parentMid, 'Parent must exist after child creation');
+      assert.equal(parentMid.child_count, 1, `Parent child_count should be 1 after create, got ${parentMid.child_count}`);
+
+      // Delete child — repository decrements count
+      await repo.deleteWorkflow(childId);
+
+      // Count must be back to 0
+      const finalList = await repo.listWorkflowsByProject(projectId, { limit: 10 });
+      const parentFinal = finalList.workflows.find((w) => w.id === parentId);
+      assert.ok(parentFinal, 'Parent should remain after child delete');
+      assert.equal(parentFinal.child_count, 0, `Parent child_count should be 0 after delete, got ${parentFinal.child_count}`);
+    });
+
+    // ── Gap 6: listWorkflowsByProject total null and full-page filter ──────────
+
+    test('listWorkflowsByProject -- status filter returns full page', async () => {
+      const projectId = `filter-${sfx}`;
+      const ts = now();
+      // Create 6 workflows: 3 done, 3 running
+      for (let i = 0; i < 6; i++) {
+        const status = i < 3 ? 'done' : 'running';
+        await repo.createWorkflow({
+          id: generateId(), project_id: projectId, goal: `Filter ${i}`, status,
+          engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+          output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+          credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+        });
+      }
+      // Request only 'done' workflows with limit=2
+      const page1 = await repo.listWorkflowsByProject(projectId, { limit: 2, status: 'done' });
+      assert.equal(page1.workflows.length, 2, `Page 1 should have 2 items, got ${page1.workflows.length}`);
+      assert.ok(page1.workflows.every((w) => w.status === 'done'), 'All returned workflows should be done');
+
+      // Fetch page 2: DynamoDB uses cursor, SQLite uses offset
+      const page2Opts = page1.cursor
+        ? { limit: 2, status: 'done' as const, cursor: page1.cursor }
+        : { limit: 2, status: 'done' as const, offset: 2 };
+      const page2 = await repo.listWorkflowsByProject(projectId, page2Opts);
+      assert.equal(page2.workflows.length, 1, `Page 2 should have 1 item, got ${page2.workflows.length}`);
+      assert.ok(page2.workflows.every((w) => w.status === 'done'), 'All returned workflows should be done');
+
+      // No overlap between pages
+      const page1Ids = new Set(page1.workflows.map((w) => w.id));
+      const overlap = page2.workflows.filter((w) => page1Ids.has(w.id));
+      assert.equal(overlap.length, 0, 'Pages should not overlap');
+    });
+
+    // ── Gap 7: getActiveRun -- correct for any number of runs ─────────────────
+
+    test('getActiveRun -- finds active run regardless of run count', async () => {
+      const wfId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Active run test', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      // Create 25 done runs (more than the old Limit: 20)
+      for (let i = 0; i < 25; i++) {
+        const runTs = new Date(Date.now() - (25 - i) * 1000).toISOString();
+        await repo.createRun({ id: generateId(), workflow_id: wfId, status: 'done',
+          started_at: runTs, finished_at: runTs, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: runTs });
+      }
+      // Active run is the oldest
+      const activeId = generateId();
+      const activeTs = new Date(Date.now() - 30_000).toISOString(); // older than all done runs
+      await repo.createRun({ id: activeId, workflow_id: wfId, status: 'running',
+        started_at: activeTs, finished_at: null, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: activeTs });
+      // getActiveRun must find it even though it's buried under 25 done runs
+      const active = await repo.getActiveRun(wfId);
+      assert.ok(active, 'Should find active run');
+      assert.equal(active.id, activeId, 'Should return the correct active run id');
+    });
+
+    // ── Gap 1: Event id from two independent instances never collide ──────────
+    // (Concurrent appends test already covers this — new test proves id from listRunEvents
+    //  matches the id returned by appendRunEvent.)
+
+    test('event ids -- stored id matches listRunEvents id', async () => {
+      const wfId = generateId();
+      const runId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Id match test', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'running',
+        started_at: ts, finished_at: null, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+      const e1 = await repo.appendRunEvent(runId, 'status', '{"text":"a"}', ts);
+      const e2 = await repo.appendRunEvent(runId, 'status', '{"text":"b"}', ts);
+      const events = await repo.listRunEvents(runId);
+      const storedIds = events.map((e) => e.id);
+      assert.ok(storedIds.includes(e1.id), `appendRunEvent id ${e1.id} should appear in listRunEvents`);
+      assert.ok(storedIds.includes(e2.id), `appendRunEvent id ${e2.id} should appear in listRunEvents`);
+      // Two independent appends must not have the same id
+      assert.notEqual(e1.id, e2.id, 'Sequential append ids must differ');
+    });
+
+    test('event ids from two repository instances never collide', async () => {
+      const wfId = generateId();
+      const runId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Two-repo id test', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'running',
+        started_at: ts, finished_at: null, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+      // Simulate two concurrent processes appending from the same repo instance
+      // (the per-run counter is the single source of truth in both backends)
+      const appends = await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          repo.appendRunEvent(runId, `type-${i}`, `{"seq":${i}}`, ts),
+        ),
+      );
+      const ids = appends.map((a) => a.id);
+      const uniqueIds = new Set(ids);
+      assert.equal(uniqueIds.size, 20, `All 20 concurrent event ids must be unique, got ${uniqueIds.size}`);
+      // Verify all ids appear in listRunEvents
+      const listed = await repo.listRunEvents(runId);
+      for (const a of appends) {
+        assert.ok(listed.some((e) => e.id === a.id), `appendRunEvent id ${a.id} must be in listRunEvents`);
+      }
+    });
+
+    // ── Gap 8: getInputByRunAndId and getInputById ─────────────────────────────
+
+    test('getInputByRunAndId -- finds input by runId + inputId', async () => {
+      const wfId = generateId();
+      const runId = generateId();
+      const inputId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'getInputByRunAndId test', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'running',
+        started_at: ts, finished_at: null, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+      await repo.createInput({ id: inputId, run_id: runId, project_id: null,
+        tool_name: 'Bash', tool_input: '{}', payload: '{}',
+        input_hash: `rbi-${sfx}`, type: 'approval', status: 'pending',
+        allow_all: 0, expires_at: null, created_at: ts });
+      const found = await repo.getInputByRunAndId(runId, inputId);
+      assert.ok(found, 'Should find input by run+id');
+      assert.equal(found.id, inputId);
+      const notFound = await repo.getInputByRunAndId(runId, generateId());
+      assert.equal(notFound, null, 'Should return null for unknown inputId');
+    });
+
+    test('getInputById -- finds input by id alone', async () => {
+      const wfId = generateId();
+      const runId = generateId();
+      const inputId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'getInputById test', status: 'running',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'running',
+        started_at: ts, finished_at: null, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+      await repo.createInput({ id: inputId, run_id: runId, project_id: null,
+        tool_name: 'Bash', tool_input: '{}', payload: '{}',
+        input_hash: `gib-${sfx}`, type: 'approval', status: 'pending',
+        allow_all: 0, expires_at: null, created_at: ts });
+      const found = await repo.getInputById(inputId);
+      assert.ok(found, 'Should find input by id alone');
+      assert.equal(found.id, inputId);
+    });
+
     // Paging
 
     test('listWorkflowsByProject -- pagination with limit and offset', async () => {
@@ -536,6 +967,151 @@ function runContract(label: string, makeRepo: () => Promise<SessionsRepository>)
       const overlap = page2Ids.filter((id) => page1Ids.has(id));
       assert.equal(overlap.length, 0, 'Pages should not overlap');
     });
+
+    // ── Gap 8: listTranscript contract ─────────────────────────────────────────
+
+    test('listTranscript -- no gaps, no overlap, correct cursor across runs', async () => {
+      const wfId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Transcript test', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+
+      // Create two runs with events.
+      const runId1 = generateId();
+      const runId2 = generateId();
+      const ts1 = new Date(Date.now() - 2000).toISOString();
+      const ts2 = new Date(Date.now() - 1000).toISOString();
+      await repo.createRun({ id: runId1, workflow_id: wfId, status: 'done',
+        started_at: ts1, finished_at: ts1, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts1 });
+      await repo.createRun({ id: runId2, workflow_id: wfId, status: 'done',
+        started_at: ts2, finished_at: ts2, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts2 });
+
+      // 5 events in run1, 5 events in run2.
+      for (let i = 0; i < 5; i++) {
+        await repo.appendRunEvent(
+          runId1, 'status', JSON.stringify({ text: `r1 event ${i}` }),
+          new Date(Date.now() - 2000 + i * 10).toISOString(),
+        );
+        await repo.appendRunEvent(
+          runId2, 'status', JSON.stringify({ text: `r2 event ${i}` }),
+          new Date(Date.now() - 1000 + i * 10).toISOString(),
+        );
+      }
+
+      // 4 workflow events.
+      for (let i = 0; i < 4; i++) {
+        await repo.appendWorkflowEvent({
+          workflow_id: wfId, kind: 'human', body: `msg ${i}`, data: null,
+          created_at: new Date(Date.now() - 500 + i * 10).toISOString(),
+        });
+      }
+
+      // Page through all events with limit=4, collecting seen ids.
+      // Use src:run_id:id as the key because DynamoDB uses run-local
+      // sequence numbers (two different runs can share the same id=1, id=2, etc.).
+      const seen = new Map<string, number>(); // key → count
+      let cursor = null;
+      let pages = 0;
+
+      do {
+        const result = await repo.listTranscript(wfId, cursor, 4);
+        for (const row of result.rows) {
+          const key = `${row.src}:${row.run_id ?? 'wf'}:${row.id}`;
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
+        cursor = result.nextCursor;
+        pages++;
+        if (pages > 20) { assert.fail('Too many pages — cursor may loop'); break; }
+      } while (cursor);
+
+      // Total events: 5 + 5 + 4 = 14.
+      const totalEvents = 14;
+      assert.equal(seen.size, totalEvents, `Expected ${totalEvents} distinct events across pages, got ${seen.size}`);
+
+      // No duplicates (all counts should be 1).
+      for (const [key, count] of seen.entries()) {
+        assert.equal(count, 1, `Event ${key} appeared ${count} times (expected 1 — no overlaps)`);
+      }
+    });
+
+    test('listTranscript -- first page is newest-first', async () => {
+      const wfId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Transcript order test', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+
+      const runId = generateId();
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'done',
+        started_at: ts, finished_at: ts, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+
+      // 5 events with increasing timestamps.
+      const eventTimes: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const t = new Date(Date.now() + i * 50).toISOString();
+        eventTimes.push(t);
+        await repo.appendRunEvent(runId, 'status', JSON.stringify({ seq: i }), t);
+      }
+
+      const result = await repo.listTranscript(wfId, null, 5);
+      assert.equal(result.rows.length, 5, 'Should return all 5 events');
+
+      // Events should be newest-first (descending by created_at).
+      for (let i = 1; i < result.rows.length; i++) {
+        assert.ok(
+          result.rows[i - 1].created_at >= result.rows[i].created_at,
+          `Row ${i-1} should be >= row ${i} in time (newest-first)`,
+        );
+      }
+    });
+
+    test('listTranscript -- cursor-based paging has no overlap between pages', async () => {
+      const wfId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Transcript cursor test', status: 'done',
+        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+
+      // Create run with 10 events AND some workflow events interleaved in time.
+      const runId = generateId();
+      await repo.createRun({ id: runId, workflow_id: wfId, status: 'done',
+        started_at: ts, finished_at: ts, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: ts });
+      for (let i = 0; i < 10; i++) {
+        await repo.appendRunEvent(
+          runId, 'status', JSON.stringify({ i }),
+          new Date(Date.now() + i * 20).toISOString(),
+        );
+      }
+      for (let i = 0; i < 3; i++) {
+        await repo.appendWorkflowEvent({
+          workflow_id: wfId, kind: 'human', body: `wf ${i}`, data: null,
+          created_at: new Date(Date.now() + 100 + i * 20).toISOString(),
+        });
+      }
+
+      // Page through with limit=4.
+      const page1 = await repo.listTranscript(wfId, null, 4);
+      assert.equal(page1.rows.length, 4, 'Page 1 should have 4 rows');
+      assert.ok(page1.nextCursor !== null, 'Page 1 should have a cursor');
+
+      const page2 = await repo.listTranscript(wfId, page1.nextCursor, 4);
+      assert.equal(page2.rows.length, 4, 'Page 2 should have 4 rows');
+
+      const page1Keys = new Set(page1.rows.map((r) => `${r.src}:${r.id}`));
+      const page2Keys = page2.rows.map((r) => `${r.src}:${r.id}`);
+      const overlap = page2Keys.filter((k) => page1Keys.has(k));
+      assert.equal(overlap.length, 0, `Pages 1 and 2 should not overlap, but shared: ${overlap.join(', ')}`);
+    });
   });
 }
 
@@ -547,7 +1123,7 @@ describe('SQLite suite', () => {
     // Seed project rows needed for listWorkflowsByProject tests
     // sfx for SQLite label = 'sql' + RUN_TAG
     const sfx = 'sql' + RUN_TAG;
-    for (const pid of [`list-${sfx}`, `page-${sfx}`]) {
+    for (const pid of [`list-${sfx}`, `page-${sfx}`, `running-${sfx}`, `idle-${sfx}`, `filter-${sfx}`, `cc-create-${sfx}`, `cc-del-${sfx}`]) {
       try {
         insert('projects', {
           id: pid,

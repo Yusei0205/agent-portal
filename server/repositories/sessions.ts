@@ -197,6 +197,28 @@ export interface CreateWorkflowEventInput {
   created_at: string;
 }
 
+// ── Transcript types ──────────────────────────────────────────────────────────
+
+/**
+ * One row in the merged transcript (run event or workflow event).
+ * src='r': from p6_events (agent output).
+ * src='w': from p6_workflow_events (human messages, commands, system notes).
+ */
+export type TranscriptRow = {
+  src: 'r' | 'w';
+  id: number;
+  created_at: string;
+  kind: string;
+  body: string;  // raw payload string for run events; body text for workflow events
+  run_id: string | null;
+};
+
+/**
+ * Opaque cursor for transcript pagination.
+ * Encodes the position of the last (oldest) row on the current page.
+ */
+export type TranscriptCursor = { ts: string; src: 'r' | 'w'; id: number };
+
 // ── Options ────────────────────────────────────────────────────────────────────
 
 export interface ListWorkflowsOpts {
@@ -242,11 +264,12 @@ export interface SessionsRepository {
    * Returns rows enriched with parent_title and child_count.
    * Returns { workflows, total, cursor? }.
    * cursor is set when there are more pages (DynamoDB mode); undefined in SQLite.
+   * total: exact count in SQLite; null in DynamoDB (too expensive to compute).
    */
   listWorkflowsByProject(
     projectId: string,
     opts?: ListWorkflowsOpts,
-  ): Promise<{ workflows: WorkflowRecord[]; total: number; cursor?: string }>;
+  ): Promise<{ workflows: WorkflowRecord[]; total: number | null; cursor?: string }>;
 
   /**
    * F10: List all workflows with status='running'.
@@ -273,6 +296,19 @@ export interface SessionsRepository {
    * DynamoDB: also initialises childCount=0 and writes to GSI-ProjectWorkflows index.
    */
   createWorkflow(input: CreateWorkflowInput): Promise<WorkflowRecord>;
+
+  /**
+   * Conditional update on a workflow: only applies the patch when the current
+   * status equals expectedStatus. Returns true when applied, false on lost race.
+   *
+   * SQLite: UPDATE ... WHERE status = ? and checks changes > 0.
+   * DynamoDB: ConditionExpression #status = :expected.
+   */
+  updateWorkflowConditional(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<WorkflowRecord>,
+  ): Promise<boolean>;
 
   /**
    * Apply a partial patch to a workflow row.
@@ -343,6 +379,19 @@ export interface SessionsRepository {
   /** Apply a partial patch to a run row. */
   updateRun(id: string, patch: Partial<RunRecord>): Promise<void>;
 
+  /**
+   * Conditional update on a run: only applies the patch when the current
+   * status equals expectedStatus. Returns true when applied, false on lost race.
+   *
+   * SQLite: UPDATE ... WHERE status = ? and checks changes > 0.
+   * DynamoDB: ConditionExpression #status = :expected.
+   */
+  updateRunConditional(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<RunRecord>,
+  ): Promise<boolean>;
+
   // ── Events ────────────────────────────────────────────────────────────────
 
   /**
@@ -408,6 +457,13 @@ export interface SessionsRepository {
   getInputById(id: string): Promise<InputRecord | null>;
 
   /**
+   * Get input by (runId, inputId) — direct key lookup.
+   * SQLite: SELECT WHERE run_id = ? AND id = ?
+   * DynamoDB: GetItem PK=RUN#<runId>, SK=INPUT#<inputId>
+   */
+  getInputByRunAndId(runId: string, inputId: string): Promise<InputRecord | null>;
+
+  /**
    * F13: Get input by (inputHash, runId).
    * Returns null when not found.
    */
@@ -470,11 +526,13 @@ export interface SessionsRepository {
    * List human-kind workflow events for recap.ts.
    * Filtered to events after afterDate (if given).
    * Filtered to events with id < maxExcludeId (exclusive, if given).
+   * Filtered to events with created_at <= beforeOrAtDate (inclusive, if given).
    */
   listHumanWorkflowEvents(
     workflowId: string,
     afterDate?: string | null,
     maxExcludeId?: number | null,
+    beforeOrAtDate?: string | null,
   ): Promise<Array<{ id: number; body: string; created_at: string }>>;
 
   /**
@@ -483,6 +541,26 @@ export interface SessionsRepository {
    * Returns null when no matching event exists.
    */
   getLastWorkflowEventTime(workflowId: string, kind: string, body: string): Promise<string | null>;
+
+  // ── Transcript ─────────────────────────────────────────────────────────────
+
+  /**
+   * Merged transcript of p6_events (run events) and p6_workflow_events for a
+   * workflow, newest-first with cursor-based pagination.
+   *
+   * Sort order within a page: created_at DESC, src ASC ('r' before 'w'), id DESC.
+   *
+   * Cursor format is opaque to callers; pass nextCursor from the previous response
+   * as cursor in the next request.  Cursor positions are based on the raw row
+   * before coalescing, so pagination is unaffected by coalesceStreamedRows.
+   *
+   * Implementations must guarantee no gaps and no overlaps across pages.
+   */
+  listTranscript(
+    workflowId: string,
+    cursor: TranscriptCursor | null,
+    limit: number,
+  ): Promise<{ rows: TranscriptRow[]; nextCursor: TranscriptCursor | null }>;
 }
 
 // ── Singleton ─────────────────────────────────────────────────────────────────

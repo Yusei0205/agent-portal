@@ -162,27 +162,33 @@ export { resolveApproval } from './approvals.ts';
 
 // ── SSE event emission ────────────────────────────────────────────────────────
 
-// ── In-memory per-run event sequence counter ───────────────────────────────────
-// Used in DynamoDB mode where the DB sequence is assigned asynchronously.
-// In SQLite mode the counter is overwritten by the actual rowid for de-dup.
-const _runInMemSeq = new Map<string, number>();
+// ── Per-run async event chain for DynamoDB mode ────────────────────────────────
+// Each run has a Promise chain so events are written in order and the SSE id
+// always matches the stored id (no in-memory counter).  Clean up by calling
+// cleanupRunEventChain(runId) in the run's finally block.
+const _runEventChain = new Map<string, Promise<void>>();
+
+/** Remove the per-run event chain entry (call from executeRun's finally block). */
+export function cleanupRunEventChain(runId: string): void {
+  _runEventChain.delete(runId);
+}
 
 /**
  * Emit an event for a run: writes to the event store and to the SSE channel.
  *
- * SQLite mode: synchronous DB write via db.ts + last_insert_rowid() for correct id.
- * DynamoDB mode: in-memory counter for the event bus (immediate SSE), fire-and-
- *   forget async write to portal-events table via registerBackgroundWrite.
+ * SQLite mode: synchronous DB write via db.ts + last_insert_rowid() for the id.
+ * DynamoDB mode: chains each event write so:
+ *   1. Events are written to DynamoDB in order (no gaps or collisions).
+ *   2. The stored sequence counter is the single source of the event id.
+ *   3. The live SSE event is published only after the write resolves, using
+ *      the actual stored id — so the stream id always matches listRunEvents.
+ *   Errors are logged; the run continues (non-fatal for SSE).
  *
- * S1-TODO(sessions): emitRunEvent uses db.ts directly for SQLite fast path so it
- * can stay synchronous. Full async conversion (await repo.appendRunEvent) requires
- * making RunContext.emit async and updating all engine callers — deferred to S2.
+ * SQLite behaviour is unchanged from the original synchronous implementation.
  */
 export function emitRunEvent(runId: string, projectId: string | null, workflowId: string | null, type: string, payload: object): void {
   const createdAt = now();
   const payloadStr = JSON.stringify(payload);
-
-  let id: number;
 
   if (!usesDynamoDb()) {
     // SQLite mode: synchronous insert gives us the real rowid for event bus de-dup
@@ -193,25 +199,66 @@ export function emitRunEvent(runId: string, projectId: string | null, workflowId
       created_at: createdAt,
     });
     const idRow = one<{ id: number }>('SELECT last_insert_rowid() AS id');
-    id = Number(idRow?.id ?? 0);
-  } else {
-    // DynamoDB mode: in-memory counter (approximate; DynamoDB assigns real seq async)
-    const seq = (_runInMemSeq.get(runId) ?? 0) + 1;
-    _runInMemSeq.set(runId, seq);
-    id = seq;
-    const repo = getSessionsRepository();
-    const p = repo.appendRunEvent(runId, type, payloadStr, createdAt).catch((e) => {
-      console.error('[emitRunEvent] DynamoDB write failed:', e);
-    });
-    try { registerBackgroundWrite(p); } catch { /* outside request context — best-effort */ }
+    const id = Number(idRow?.id ?? 0);
+    publishRunEvent({ id, run_id: runId, type, payload, created_at: createdAt });
+    if (projectId) {
+      emit(projectId, { type: 'run.event', runId, workflowId, eventType: type, payload });
+    }
+    return;
   }
 
-  // Same row shape as the history replayed by GET /api/runs/:id/events
-  publishRunEvent({ id, run_id: runId, type, payload, created_at: createdAt });
-  // Publish to project SSE channel so connected UIs see it live
-  if (projectId) {
-    emit(projectId, { type: 'run.event', runId, workflowId, eventType: type, payload });
-  }
+  // DynamoDB mode: chain the write on the per-run promise chain.
+  // The SSE event is published AFTER the write, with the real stored id.
+  const prev = _runEventChain.get(runId) ?? Promise.resolve();
+  const repo = getSessionsRepository();
+  const next = prev.then(async () => {
+    // Retry on throttling / transient errors with exponential backoff.
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const appended = await repo.appendRunEvent(runId, type, payloadStr, createdAt);
+        publishRunEvent({ id: appended.id, run_id: runId, type, payload, created_at: appended.created_at });
+        if (projectId) {
+          emit(projectId, { type: 'run.event', runId, workflowId, eventType: type, payload });
+        }
+        return;
+      } catch (e: unknown) {
+        const name = (e as { name?: string }).name ?? '';
+        const isTransient = name === 'ProvisionedThroughputExceededException' ||
+                            name === 'RequestLimitExceeded' ||
+                            name === 'ThrottlingException' ||
+                            name === 'ServiceUnavailable';
+        if (isTransient && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 150 * Math.pow(2, attempt)));
+          lastErr = e;
+          continue;
+        }
+        lastErr = e;
+        break;
+      }
+    }
+    // All retries failed: log, mark the run with an error event (best-effort),
+    // and still publish to the live stream so connected clients see something.
+    console.error('[emitRunEvent] DynamoDB write failed for run', runId, ':', lastErr);
+    // Try to append an event-loss marker so the UI can show a warning.
+    repo.appendRunEvent(
+      runId,
+      'event-loss',
+      JSON.stringify({
+        lostType: type,
+        error: String((lastErr as { message?: string })?.message ?? lastErr).slice(0, 200),
+        at: createdAt,
+      }),
+      now(),
+    ).catch(() => {/* best-effort */});
+    // Publish to live stream with id=0 so connected clients still see the event.
+    publishRunEvent({ id: 0, run_id: runId, type, payload, created_at: createdAt });
+    if (projectId) {
+      emit(projectId, { type: 'run.event', runId, workflowId, eventType: type, payload });
+    }
+  });
+  _runEventChain.set(runId, next);
+  try { registerBackgroundWrite(next); } catch { /* outside request context — best-effort */ }
 }
 
 // ── Main executor ─────────────────────────────────────────────────────────────
@@ -311,8 +358,26 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     }
   }
 
-  // Update run to running
-  await repo.updateRun(runId, { status: 'running', started_at: now() });
+  // Update run to running — conditional on 'pending' to detect if the run
+  // was stopped/cancelled before it even started.
+  const runStarted = await repo.updateRunConditional(runId, 'pending', {
+    status: 'running',
+    started_at: now(),
+  });
+
+  if (!runStarted) {
+    // The conditional update failed. Check the current status.
+    const currentRun = await repo.getRunById(runId);
+    if (currentRun?.status === 'running') {
+      // Run was already transitioned to 'running' (e.g. by the test setup
+      // or another concurrent executeRun call that won the race).  Continue.
+    } else {
+      // Run was stopped, cancelled, or deleted before we could start it.
+      // Exit without touching the workflow status.
+      deregisterRun(runId);
+      return;
+    }
+  }
 
   // Emit to project channel
   if (workflow.project_id) {
@@ -436,16 +501,30 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       await repo.updateRun(runId, { stop_reason: _stopReason });
     }
 
-    // Success: update run record
-    await repo.updateRun(runId, { status: 'done', finished_at: now() });
+    // Success: conditionally update run to done — skip if the run was stopped
+    // while finishing (e.g. stop racing with run completion).
+    const runFinished = await repo.updateRunConditional(runId, 'running', {
+      status: 'done',
+      finished_at: now(),
+    });
 
     // Update workflow: iteration count + 1, status done, last_turn_at
+    // Use conditional to avoid overwriting a stop that arrived concurrently.
     const ts = now();
-    await repo.updateWorkflow(workflowId, { status: 'done', last_turn_at: ts, updated_at: ts });
-    await repo.incrementWorkflowIteration(workflowId);
+    if (runFinished) {
+      const wfFinished = await repo.updateWorkflowConditional(workflowId, 'running', {
+        status: 'done',
+        stop_reason: '',
+        last_turn_at: ts,
+        updated_at: ts,
+      });
 
-    // Notify lifecycle hook (e.g. finalises associated review stats and auto-post)
-    fireHook(workflowId, runId, 'done');
+      if (wfFinished) {
+        await repo.incrementWorkflowIteration(workflowId);
+        // Notify lifecycle hook (e.g. finalises associated review stats and auto-post)
+        fireHook(workflowId, runId, 'done');
+      }
+    }
     notifyDashboard(agentRun.projectId);
 
     // Deliver child-result to parent if this is a child session (F7)
@@ -474,13 +553,21 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     }
 
     const failTs = now();
-    await repo.updateRun(runId, {
+    // Conditional: only update the run if it's still in 'running' state.
+    // If a concurrent stop/cancel already marked it terminal, don't overwrite.
+    await repo.updateRunConditional(runId, 'running', {
+      status: aborted ? 'cancelled' : 'failed',
+      finished_at: failTs,
+      error: aborted ? '' : msg.slice(0, 2000),
+    });
+    // Fallback: if the run is in 'pending' (never transitioned to running), mark it failed too.
+    await repo.updateRunConditional(runId, 'pending', {
       status: aborted ? 'cancelled' : 'failed',
       finished_at: failTs,
       error: aborted ? '' : msg.slice(0, 2000),
     });
 
-    await repo.updateWorkflow(workflowId, {
+    await repo.updateWorkflowConditional(workflowId, 'running', {
       status: aborted ? 'paused' : 'failed',
       last_turn_at: failTs,
       updated_at: failTs,
@@ -531,6 +618,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     // Delete the materialised home directory (contains decrypted ~/.aws and SSO tokens).
     // workDir itself is intentionally kept so session artefacts survive across runs.
     await cleanupRunHome(runId);
+    // Clean up per-run event chain (DynamoDB mode).
+    cleanupRunEventChain(runId);
   }
 }
 

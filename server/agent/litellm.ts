@@ -157,7 +157,7 @@ export async function runLiteLLM(ctx: RunContext): Promise<string> {
   });
 
   if (inputTokens > 0 || outputTokens > 0) {
-    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
     const wfRow = await repo.getWorkflowById(run.workflowId);
     insert('budget_usage', {
       user_id: wfRow?.created_by ?? null,

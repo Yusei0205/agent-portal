@@ -166,7 +166,7 @@ function statusMessages(events: Array<{ type: string; payload: Record<string, un
 
 // -- Kiro: first run stores engine_session_id ----------------------------------
 
-describe('Kiro session — first run stores engine_session_id', () => {
+describe('Kiro session ï¿½ first run stores engine_session_id', () => {
   let t: TestData;
 
   before(() => {
@@ -210,7 +210,7 @@ describe('Kiro session — first run stores engine_session_id', () => {
 
 // -- Kiro: second run uses session/load ----------------------------------------
 
-describe('Kiro session — second run calls session/load, not session/new', () => {
+describe('Kiro session ï¿½ second run calls session/load, not session/new', () => {
   let t: TestData;
 
   before(() => {
@@ -261,7 +261,7 @@ describe('Kiro session — second run calls session/load, not session/new', () => 
 
 // -- Kiro: replayed history is suppressed --------------------------------------
 
-describe('Kiro session — replayed history during session/load is not emitted', () => {
+describe('Kiro session ï¿½ replayed history during session/load is not emitted', () => {
   let t: TestData;
 
   before(() => {
@@ -292,7 +292,7 @@ describe('Kiro session — replayed history during session/load is not emitted', (
 
 // -- Kiro: load failure falls back to session/new with recap -------------------
 
-describe('Kiro session — load failure falls back to session/new with recap', () => {
+describe('Kiro session ï¿½ load failure falls back to session/new with recap', () => {
   let t: TestData;
 
   before(() => {
@@ -374,7 +374,7 @@ describe('Kiro session — load failure falls back to session/new with recap', () 
 
 // -- Kiro: no stored id with prior runs ? recap --------------------------------
 
-describe('Kiro session — no stored id with prior runs prepends recap', () => {
+describe('Kiro session ï¿½ no stored id with prior runs prepends recap', () => {
   let t: TestData;
 
   before(() => {
@@ -507,9 +507,9 @@ describe('Kiro session — no stored id with prior runs prepends recap', () => {
   });
 });
 
-// -- Recap quality — ordering and exclusion ------------------------------------
+// -- Recap quality ï¿½ ordering and exclusion ------------------------------------
 
-describe('buildConversationRecap — time ordering and current message exclusion', () => {
+describe('buildConversationRecap ï¿½ time ordering and current message exclusion', () => {
   let t: TestData;
 
   before(() => {
@@ -519,7 +519,7 @@ describe('buildConversationRecap — time ordering and current message exclusion',
 
   after(async () => { await cleanup(); });
 
-  it('merges completions and messages by created_at (not index pairing)', () => {
+  it('merges completions and messages by created_at (not index pairing)', async () => {
     const db = getDb();
     const ts = (offsetMs: number): string => new Date(Date.now() + offsetMs).toISOString();
 
@@ -538,7 +538,7 @@ describe('buildConversationRecap — time ordering and current message exclusion',
     db.prepare(`INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?, 'run-complete', ?, ?)`)
       .run(run2Id, JSON.stringify({ result: 'Second assistant reply' }), ts(20));
 
-    const recap = buildConversationRecap(t.workflowId, t.runId);
+    const recap = await buildConversationRecap(t.workflowId, t.runId);
 
     assert.ok(recap.includes('First assistant reply'), 'Must include first assistant reply');
     assert.ok(recap.includes('User message A'), 'Must include user message A');
@@ -551,7 +551,7 @@ describe('buildConversationRecap — time ordering and current message exclusion',
     assert.ok(userAIdx < secondIdx, 'User A must come before second reply');
   });
 
-  it('excludes current-run messages when minExcludeEventId is provided', () => {
+  it('excludes current-run messages when minExcludeEventId is provided', async () => {
     const db = getDb();
     const ts = (offsetMs: number): string => new Date(Date.now() + offsetMs + 5000).toISOString();
 
@@ -575,17 +575,17 @@ describe('buildConversationRecap — time ordering and current message exclusion',
 
     // Without an explicit boundary, messages after the last completed reply are the
     // current prompt and are skipped; the prior message (before that reply) stays.
-    const recapAll = buildConversationRecap(t.workflowId, t.runId, null);
+    const recapAll = await buildConversationRecap(t.workflowId, t.runId, null);
     assert.ok(recapAll.includes('Prior run result'), 'Last reply in recap');
     assert.ok(!recapAll.includes('User current message'), 'Message sent after the last reply is the current prompt');
 
     // With exclusion: only prior message
-    const recapExcl = buildConversationRecap(t.workflowId, t.runId, currentMsgId);
+    const recapExcl = await buildConversationRecap(t.workflowId, t.runId, currentMsgId);
     assert.ok(recapExcl.includes('User prior message'), 'Prior message in recap with exclusion');
     assert.ok(!recapExcl.includes('User current message'), 'Current message excluded');
   });
 
-  it('returns empty string when no prior completed runs', () => {
+  it('returns empty string when no prior completed runs', async () => {
     const db = getDb();
     const emptyWfId = `wf-${generateId()}`;
     const emptyRunId = `run-${generateId()}`;
@@ -599,10 +599,10 @@ describe('buildConversationRecap — time ordering and current message exclusion',
     db.prepare(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?, ?, 'running', ?)`)
       .run(emptyRunId, emptyWfId, now());
 
-    assert.equal(buildConversationRecap(emptyWfId, emptyRunId), '', 'Empty recap when no prior runs');
+    assert.equal(await buildConversationRecap(emptyWfId, emptyRunId), '', 'Empty recap when no prior runs');
   });
 
-  it('returns empty string after /clear', () => {
+  it('returns empty string after /clear', async () => {
     const db = getDb();
     const p2Id = `proj-${generateId()}`;
     const wf2Id = `wf-${generateId()}`;
@@ -627,7 +627,7 @@ describe('buildConversationRecap — time ordering and current message exclusion',
     db.prepare(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?, ?, 'running', ?)`)
       .run(run2Id, wf2Id, now());
 
-    assert.equal(buildConversationRecap(wf2Id, run2Id), '', 'Empty recap after /clear');
+    assert.equal(await buildConversationRecap(wf2Id, run2Id), '', 'Empty recap after /clear');
   });
 });
 // -- /clear resets engine_session_id ------------------------------------------
@@ -745,7 +745,7 @@ describe('workflowView includes engineSessionId', () => {
 
 // -- Claude Code: session_id stored and resume option passed ------------------
 
-describe('Claude Code session — session_id stored from SDK result', () => {
+describe('Claude Code session ï¿½ session_id stored from SDK result', () => {
   let t: TestData;
 
   before(() => {
@@ -825,7 +825,7 @@ describe('Claude Code session — session_id stored from SDK result', () => {
 
 // -- Claude Code: resume failure retries without resume ------------------------
 
-describe('Claude Code session — resume failure retries without resume', () => {
+describe('Claude Code session ï¿½ resume failure retries without resume', () => {
   let t: TestData;
 
   before(() => {
@@ -904,7 +904,7 @@ describe('Claude Code session — resume failure retries without resume', () => {
 
 // -- Claude Code transcript persistence ---------------------------------------
 
-describe('Claude Code transcript persistence — persist and restore .jsonl only', () => {
+describe('Claude Code transcript persistence ï¿½ persist and restore .jsonl only', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -957,7 +957,7 @@ describe('Claude Code transcript persistence — persist and restore .jsonl only',
     const sensitiveFiles = [
       'credentials.json',
       'auth.json',
-      'cookie.jsonl',  // .jsonl but still sensitive — but we copy ALL .jsonl by design
+      'cookie.jsonl',  // .jsonl but still sensitive ï¿½ but we copy ALL .jsonl by design
     ];
     for (const f of sensitiveFiles) {
       await fsp.writeFile(

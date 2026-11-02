@@ -56,19 +56,20 @@ function eventView(e: EventRecord | Row) {
 
 /**
  * Check that the authenticated user has access to the run (via its workflow's project).
- * Returns the workflow row or null if access is denied (response already sent).
+ * Returns the workflow record or null if access is denied (response already sent).
  */
-function requireRunAccess(req: PortalRequest, res: PortalResponse, runId: string): Row | null {
+async function requireRunAccess(req: PortalRequest, res: PortalResponse, runId: string): Promise<import('./repositories/sessions.ts').WorkflowRecord | null> {
   if (!req.user) {
     sendJson(res, 401, { error: 'Sign in to continue' });
     return null;
   }
-  const r = one<Row>('SELECT * FROM p6_runs WHERE id = ?', runId);
-  if (!r) {
+  const repo = getSessionsRepository();
+  const run = await repo.getRunById(runId);
+  if (!run) {
     sendJson(res, 404, { error: 'Run not found' });
     return null;
   }
-  const workflow = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', r.workflow_id as string);
+  const workflow = await repo.getWorkflowById(run.workflow_id);
   if (!workflow) {
     sendJson(res, 404, { error: 'Workflow not found' });
     return null;
@@ -89,9 +90,9 @@ function requireRunAccess(req: PortalRequest, res: PortalResponse, runId: string
 
 // ── File helpers ───────────────────────────────────────────────────────────────
 
-function resolveWorkDir(workflow: Row, runId: string): string | null {
+function resolveWorkDir(workflow: import('./repositories/sessions.ts').WorkflowRecord, runId: string): string | null {
   if (!workflow.project_id) return null;
-  const project = one<Row>('SELECT slug FROM projects WHERE id = ?', workflow.project_id as string);
+  const project = one<Row>('SELECT slug FROM projects WHERE id = ?', workflow.project_id);
   if (!project) return null;
   return path.join(config.dataDir, 'projects', String(project.slug), 'work', runId);
 }
@@ -131,7 +132,7 @@ export function registerRunRoutes(): void {
 
   // GET /api/runs/:id
   router.get('/api/runs/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const workflow = requireRunAccess(req, res, req.params.id);
+    const workflow = await requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
     const repo = getSessionsRepository();
     const r = await repo.getRunById(req.params.id);
@@ -140,26 +141,24 @@ export function registerRunRoutes(): void {
   });
 
   // GET /api/inputs/:id — poll input status (used by AgentCore containers and tests)
-  // S1-TODO(sessions): This route uses db.ts directly for the input lookup because
-  // the DynamoDB implementation of getInputById requires knowing the run_id.
-  // Full conversion is deferred until the GSI-InputId is added to portal-runs.
-  router.get('/api/inputs/:id', (req: PortalRequest, res: PortalResponse): void => {
+  router.get('/api/inputs/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
-    const row = one<Row>('SELECT * FROM p6_inputs WHERE id = ?', req.params.id);
+    const repo = getSessionsRepository();
+    const row = await repo.getInputById(req.params.id);
     if (!row) { sendJson(res, 404, { error: 'Input not found' }); return; }
     // Access check: must be a member of the input's project (or admin)
     if (!req.user.is_admin && row.project_id) {
       const member = one<Row>(
         'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
-        row.project_id as string,
+        row.project_id,
         req.user.id as string,
       );
       if (!member) { sendJson(res, 403, { error: 'Not a project member' }); return; }
     }
     let payload: unknown = {};
     let response: unknown = null;
-    try { payload = JSON.parse(row.payload as string); } catch { /* keep empty */ }
-    try { if (row.response) response = JSON.parse(row.response as string); } catch { /* keep null */ }
+    try { payload = JSON.parse(row.payload); } catch { /* keep empty */ }
+    try { if (row.response) response = JSON.parse(row.response); } catch { /* keep null */ }
     sendJson(res, 200, {
       input: {
         id: row.id,
@@ -178,35 +177,36 @@ export function registerRunRoutes(): void {
 
   // GET /api/runs/:id/events (SSE stream)
   router.sse('/api/runs/:id/events', (req: PortalRequest, res: PortalResponse): void => {
-    // Same project-membership check as the other run routes.
-    const workflow = requireRunAccess(req, res, req.params.id);
-    if (!workflow) return;
     const runId = req.params.id;
 
-    // Listen before reading history so an event stored in between isn't lost.
-    // Events seen in the replay are skipped by id.
-    const queued: RunEventRow[] = [];
-    let replayed = false;
-    let lastId = 0;
-    const send = (ev: { id: unknown }): void => {
-      if (res.writableEnded) return;
-      res.write(`data: ${JSON.stringify({ type: 'event', event: ev })}\n\n`);
-    };
-    const unsubscribeRun = subscribeRun(runId, (ev) => {
-      if (!replayed) { queued.push(ev); return; }
-      if (ev.id <= lastId) return;
-      lastId = ev.id;
-      send(ev);
-    });
+    // Async access check
+    requireRunAccess(req, res, runId).then((workflow) => {
+      if (!workflow) return;
 
-    // Write SSE headers first
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    res.write(': connected\n\n');
+      // Listen before reading history so an event stored in between isn't lost.
+      // Events seen in the replay are skipped by id.
+      const queued: RunEventRow[] = [];
+      let replayed = false;
+      let lastId = 0;
+      const send = (ev: { id: unknown }): void => {
+        if (res.writableEnded) return;
+        res.write(`data: ${JSON.stringify({ type: 'event', event: ev })}\n\n`);
+      };
+      const unsubscribeRun = subscribeRun(runId, (ev) => {
+        if (!replayed) { queued.push(ev); return; }
+        if (ev.id <= lastId) return;
+        lastId = ev.id;
+        send(ev);
+      });
+
+      // Write SSE headers first
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(': connected\n\n');
 
     // Replay historical events from repository (async, but headers already sent)
     const repo = getSessionsRepository();
@@ -227,19 +227,23 @@ export function registerRunRoutes(): void {
       }
     });
 
-    const heartbeat = setInterval(() => {
-      if (!res.writableEnded) res.write(': ping\n\n');
-    }, 25_000);
-    heartbeat.unref();
-    res.on('close', () => {
-      clearInterval(heartbeat);
-      unsubscribeRun();
+      const heartbeat = setInterval(() => {
+        if (!res.writableEnded) res.write(': ping\n\n');
+      }, 25_000);
+      heartbeat.unref();
+      res.on('close', () => {
+        clearInterval(heartbeat);
+        unsubscribeRun();
+      });
+    }).catch((e) => {
+      if (!res.writableEnded) sendJson(res, 500, { error: 'Internal error' });
+      console.error('[SSE /runs/events] access check error:', e);
     });
   });
 
   // GET /api/runs/:id/files
   router.get('/api/runs/:id/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const workflow = requireRunAccess(req, res, req.params.id);
+    const workflow = await requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
     const workDir = resolveWorkDir(workflow, req.params.id);
     if (!workDir || !fs.existsSync(workDir)) {
@@ -252,7 +256,7 @@ export function registerRunRoutes(): void {
 
   // GET /api/runs/:id/file/preview
   router.get('/api/runs/:id/file/preview', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const workflow = requireRunAccess(req, res, req.params.id);
+    const workflow = await requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
 
     const filePath = req.query.get('path') ?? '';

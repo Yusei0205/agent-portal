@@ -180,7 +180,8 @@
         "test/run-events-sse.test.ts",
         "test/working-copies.test.ts",
         "test/resume-retry.test.ts",
-        "test/transcript-coalesce.test.ts"
+        "test/transcript-coalesce.test.ts",
+        "test/conditional-transitions.test.ts"
       ],
       "smokeIds": ["sessions"],
       "note": "No dedicated smoke section. Session creation (section 31) exercises workflow engine; use sessions smoke ID."

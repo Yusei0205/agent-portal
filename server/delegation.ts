@@ -213,6 +213,12 @@ export async function createChildSession(
     // avoiding a second (synchronous SQLite) read that would be wrong in DynamoDB mode.
     checkDelegationLimits(parentWorkflowId, userId, settings);
 
+    // S1-TODO(delegation): child-count is not tracked here because createChildSession
+    // uses a direct SQLite insert rather than repo.createWorkflow().  The parent's
+    // childCount counter (DynamoDB) and the computed COUNT(*) (SQLite) diverge until
+    // this module is converted to the sessions repository.  Convert this insert to
+    // await repo.createWorkflow({ ..., parent_id: parentWorkflowId }) and the
+    // increment will be automatic on both backends.
     insert('p6_workflows', {
       id: childId,
       project_id: parent.project_id != null ? String(parent.project_id) : null,

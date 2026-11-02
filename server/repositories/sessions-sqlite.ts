@@ -7,7 +7,7 @@
  * lives here.  The existing SQL is preserved exactly so behaviour is unchanged.
  */
 
-import { one, all, run as dbRun, insert } from '../db.ts';
+import { one, all, run as dbRun, insert, getDb } from '../db.ts';
 import type { Row } from '../db.ts';
 import type {
   SessionsRepository,
@@ -23,7 +23,13 @@ import type {
   CreateWorkflowEventInput,
   ListWorkflowsOpts,
   RunTotals,
+  TranscriptRow,
+  TranscriptCursor,
 } from './sessions.ts';
+// Suppress unused import warning — TranscriptRow and TranscriptCursor are used
+// as return types in listTranscript.
+void (0 as unknown as TranscriptRow);
+void (0 as unknown as TranscriptCursor);
 
 // ── Row converters ─────────────────────────────────────────────────────────────
 
@@ -211,7 +217,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
 
   async listIdleWorkflows(cutoff: string): Promise<WorkflowRecord[]> {
     const rows = all<Row>(
-      `SELECT id, project_id FROM p6_workflows
+      `SELECT * FROM p6_workflows
         WHERE status IN ('done', 'pending')
           AND last_turn_at IS NOT NULL
           AND last_turn_at < ?
@@ -255,8 +261,43 @@ export class SqliteSessionsRepository implements SessionsRepository {
       updated_at: input.updated_at,
       parent_id: input.parent_id ?? null,
     });
+    // If this is a child workflow, notify the repository of the child-count change.
+    // In SQLite mode this is a no-op (child_count is computed via COUNT(*) subquery),
+    // but it mirrors the DynamoDB implementation so the repository owns the bookkeeping
+    // on both backends — no separate call is needed at the route layer.
+    if (input.parent_id) {
+      await this.incrementWorkflowChildCount(input.parent_id, 1);
+    }
     const row = one<Row>('SELECT * FROM p6_workflows WHERE id = ?', input.id)!;
     return toWorkflow(row);
+  }
+
+  async updateWorkflowConditional(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<WorkflowRecord>,
+  ): Promise<boolean> {
+    const allowed: (keyof WorkflowRecord)[] = [
+      'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
+      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids',
+      'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
+      'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
+      'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
+      'kind', 'run_timeout_minutes',
+    ];
+    const clean: Record<string, unknown> = {};
+    for (const k of allowed) {
+      if (k in patch) clean[k] = patch[k];
+    }
+    if (Object.keys(clean).length === 0) return false;
+    const { setSql, values } = buildPatchSet(clean);
+    const result = dbRun(
+      `UPDATE p6_workflows SET ${setSql} WHERE id = ? AND status = ?`,
+      ...values,
+      id,
+      expectedStatus,
+    );
+    return (result as { changes: number }).changes > 0;
   }
 
   async updateWorkflow(id: string, patch: Partial<WorkflowRecord>): Promise<void> {
@@ -278,7 +319,16 @@ export class SqliteSessionsRepository implements SessionsRepository {
   }
 
   async deleteWorkflow(id: string): Promise<void> {
+    // Load parent_id before deleting so the repository can own the child-count
+    // bookkeeping symmetrically with the DynamoDB implementation.
+    const wf = one<Row>('SELECT parent_id FROM p6_workflows WHERE id = ?', id);
+    const parentId = wf?.parent_id != null ? String(wf.parent_id) : null;
     dbRun('DELETE FROM p6_workflows WHERE id = ?', id);
+    // In SQLite mode child_count is computed via a COUNT(*) subquery and this is
+    // a no-op. Kept here so the bookkeeping contract is symmetric across backends.
+    if (parentId) {
+      await this.incrementWorkflowChildCount(parentId, -1);
+    }
   }
 
   async incrementWorkflowIteration(id: string): Promise<void> {
@@ -384,6 +434,31 @@ export class SqliteSessionsRepository implements SessionsRepository {
     dbRun(`UPDATE p6_runs SET ${setSql} WHERE id = ?`, ...values, id);
   }
 
+  async updateRunConditional(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<RunRecord>,
+  ): Promise<boolean> {
+    const allowed: (keyof RunRecord)[] = [
+      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
+      'stop_reason', 'time_limit_at', 'model', 'error',
+    ];
+    const clean: Record<string, unknown> = {};
+    for (const k of allowed) {
+      if (k in patch) clean[k] = patch[k];
+    }
+    if (Object.keys(clean).length === 0) return false;
+    const { setSql, values } = buildPatchSet(clean);
+    const result = dbRun(
+      `UPDATE p6_runs SET ${setSql} WHERE id = ? AND status = ?`,
+      ...values,
+      id,
+      expectedStatus,
+    );
+    return (result as { changes: number }).changes > 0;
+  }
+
   // ── Events ──────────────────────────────────────────────────────────────────
 
   async appendRunEvent(runId: string, type: string, payload: string, createdAt: string): Promise<AppendedEvent> {
@@ -484,6 +559,11 @@ export class SqliteSessionsRepository implements SessionsRepository {
 
   async getInputById(id: string): Promise<InputRecord | null> {
     const row = one<Row>('SELECT * FROM p6_inputs WHERE id = ?', id);
+    return row ? toInput(row) : null;
+  }
+
+  async getInputByRunAndId(runId: string, inputId: string): Promise<InputRecord | null> {
+    const row = one<Row>('SELECT * FROM p6_inputs WHERE id = ? AND run_id = ?', inputId, runId);
     return row ? toInput(row) : null;
   }
 
@@ -589,11 +669,13 @@ export class SqliteSessionsRepository implements SessionsRepository {
     workflowId: string,
     afterDate?: string | null,
     maxExcludeId?: number | null,
+    beforeOrAtDate?: string | null,
   ): Promise<Array<{ id: number; body: string; created_at: string }>> {
     const args: (string | number)[] = [workflowId];
     const clauses: string[] = ["workflow_id = ? AND kind = 'human'"];
     if (afterDate) { clauses.push('created_at > ?'); args.push(afterDate); }
     if (maxExcludeId != null) { clauses.push('id < ?'); args.push(maxExcludeId); }
+    if (beforeOrAtDate != null) { clauses.push('created_at <= ?'); args.push(beforeOrAtDate); }
     return all<{ id: number; body: string; created_at: string }>(
       `SELECT id, body, created_at FROM p6_workflow_events WHERE ${clauses.join(' AND ')} ORDER BY id ASC`,
       ...args,
@@ -609,5 +691,71 @@ export class SqliteSessionsRepository implements SessionsRepository {
       body,
     );
     return row?.ts ?? null;
+  }
+
+  // ── Transcript ──────────────────────────────────────────────────────────────
+
+  async listTranscript(
+    workflowId: string,
+    cursor: TranscriptCursor | null,
+    limit: number,
+  ): Promise<{ rows: TranscriptRow[]; nextCursor: TranscriptCursor | null }> {
+    type R = { src: string; id: number; created_at: string; kind: string; body: string; run_id: string | null };
+    let rows: R[];
+    if (cursor) {
+      rows = getDb().prepare(`
+        WITH merged AS (
+          SELECT 'r' AS src, e.id, e.created_at, e.type AS kind, e.payload AS body, e.run_id
+          FROM p6_events e
+          JOIN p6_runs r ON r.id = e.run_id
+          WHERE r.workflow_id = ?
+          UNION ALL
+          SELECT 'w' AS src, we.id, we.created_at, we.kind, we.body, NULL AS run_id
+          FROM p6_workflow_events we
+          WHERE we.workflow_id = ?
+        )
+        SELECT * FROM merged
+        WHERE (
+          created_at < ?
+          OR (created_at = ? AND src > ?)
+          OR (created_at = ? AND src = ? AND id < ?)
+        )
+        ORDER BY created_at DESC, src ASC, id DESC
+        LIMIT ?
+      `).all(workflowId, workflowId, cursor.ts, cursor.ts, cursor.src, cursor.ts, cursor.src, cursor.id, limit) as R[];
+    } else {
+      rows = getDb().prepare(`
+        WITH merged AS (
+          SELECT 'r' AS src, e.id, e.created_at, e.type AS kind, e.payload AS body, e.run_id
+          FROM p6_events e
+          JOIN p6_runs r ON r.id = e.run_id
+          WHERE r.workflow_id = ?
+          UNION ALL
+          SELECT 'w' AS src, we.id, we.created_at, we.kind, we.body, NULL AS run_id
+          FROM p6_workflow_events we
+          WHERE we.workflow_id = ?
+        )
+        SELECT * FROM merged
+        ORDER BY created_at DESC, src ASC, id DESC
+        LIMIT ?
+      `).all(workflowId, workflowId, limit) as R[];
+    }
+
+    const nextCursor: TranscriptCursor | null =
+      rows.length === limit
+        ? { ts: rows[rows.length - 1].created_at, src: rows[rows.length - 1].src as 'r' | 'w', id: Number(rows[rows.length - 1].id) }
+        : null;
+
+    return {
+      rows: rows.map((r) => ({
+        src: r.src as 'r' | 'w',
+        id: Number(r.id),
+        created_at: r.created_at,
+        kind: r.kind,
+        body: r.body,
+        run_id: r.run_id ?? null,
+      })),
+      nextCursor,
+    };
   }
 }

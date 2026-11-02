@@ -327,7 +327,7 @@ describe('Idle stop — checkIdleSessions()', () => {
       wfId,
     );
 
-    checkIdleSessions(); // should not stop it
+    await checkIdleSessions(); // should not stop it
 
     const wf = one<Row>('SELECT status, stop_reason FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.status, 'done', 'session without last_turn_at should not be stopped');
@@ -345,7 +345,7 @@ describe('Idle stop — checkIdleSessions()', () => {
       wfId,
     );
 
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const wf = one<Row>('SELECT status, stop_reason FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.status, 'paused', 'idle session should be paused');
@@ -361,7 +361,7 @@ describe('Idle stop — checkIdleSessions()', () => {
       wfId,
     );
 
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const events = all<Row>(
       "SELECT * FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'system'",
@@ -385,7 +385,7 @@ describe('Idle stop — checkIdleSessions()', () => {
       wfId,
     );
 
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const wf = one<Row>('SELECT status FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.status, 'done', 'recent session should not be stopped');
@@ -406,7 +406,7 @@ describe('Idle stop — checkIdleSessions()', () => {
       wfId,
     ).length;
 
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const after = all<Row>(
       "SELECT * FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'system'",
@@ -427,7 +427,7 @@ describe('Idle stop — checkIdleSessions()', () => {
 
     // Simulate restart: call checkIdleSessions as if the server just restarted
     // (no in-memory state needed — only DB is checked)
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const wf = one<Row>('SELECT status, stop_reason FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.status, 'paused');
@@ -1425,7 +1425,7 @@ describe('Item 8 — Idle stop never touches running or approval-waiting session
       wfId,
     );
 
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const wf = one<Row>('SELECT status FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.status, 'running', 'running session must not be idle-stopped');
@@ -1441,7 +1441,7 @@ describe('Item 8 — Idle stop never touches running or approval-waiting session
       wfId,
     );
 
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const wf = one<Row>('SELECT status FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.status, 'running', 'approval-wait session (status=running) must not be idle-stopped');
@@ -1456,9 +1456,49 @@ describe('Item 8 — Idle stop never touches running or approval-waiting session
       wfId,
     );
 
-    checkIdleSessions();
+    await checkIdleSessions();
 
     const wf = one<Row>('SELECT status FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.status, 'failed', 'failed sessions are not idle-stopped (only done/pending are eligible)');
+  });
+});
+
+// ── Item 1 (caller-level): double idle-stop is a no-op ───────────────────────
+
+describe('Conditional idle-stop: double call is a no-op', () => {
+  let baseUrl: string;
+  let adminCookie: string;
+  let projectId: string;
+
+  before(async () => {
+    const ts = await createTestServer();
+    baseUrl = ts.baseUrl;
+    adminCookie = await setupAdmin(baseUrl, 'dbl-idle-admin@example.com');
+    projectId = await createProject(baseUrl, adminCookie, 'Dbl Idle Test Project');
+  });
+
+  after(async () => cleanup());
+
+  it('concurrent checkIdleSessions calls produce exactly one system event', async () => {
+    const wfId = await createWorkflow(baseUrl, adminCookie, projectId, 'double idle target');
+    const past = new Date(Date.now() - 2 * 3600_000).toISOString();
+    dbRun(
+      `UPDATE p6_workflows SET status = 'done', last_turn_at = ?, stop_reason = '' WHERE id = ?`,
+      past,
+      wfId,
+    );
+
+    // Two concurrent idle-stop runs — only the first conditional update wins.
+    await Promise.all([checkIdleSessions(), checkIdleSessions()]);
+
+    const wf = one<Row>('SELECT status, stop_reason FROM p6_workflows WHERE id = ?', wfId);
+    assert.equal(wf?.status, 'paused', 'session should be paused');
+    assert.equal(wf?.stop_reason, 'idle');
+
+    const events = all<Row>(
+      "SELECT * FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'system'",
+      wfId,
+    );
+    assert.equal(events.length, 1, 'exactly one system event should be recorded (not two)');
   });
 });

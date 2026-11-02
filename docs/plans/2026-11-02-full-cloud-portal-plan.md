@@ -182,8 +182,51 @@ In the cloud the code that produces an event (an AgentCore run or another Lambda
 | S1 DynamoDB data design | Done | 836e8de |
 | S1 modules converted | api-tokens, auth (users, sessions, invitations), permissions, audit, delegation settings, settings + secrets, projects + members + teams, **sessions/workflows/runs/events** (p6_workflows, p6_runs, p6_events, p6_inputs, p6_workflow_events — this PR) | c88c001, f993e25, 7ff92db, f982d7c, ac7c5de, *sessions PR* |
 | S1 remaining | inbox, reviews/scans, knowledge/vault/docs/diagrams, learn, testing module, dashboard/insights, repos/workspaces/git connections, integrations, credentials, themes, MCP server | — |
+| **S1 sessions — second-round hardening** | **Done (branch pathb-serverless)** — conditional status transitions, transcript repository method, sparse idle GSI, cursor fix, emitRunEvent retry. See detail below. | — |
 
 Known callers still on SQLite are marked `S1-TODO(<module>)` in the code: review.ts, learn.ts, jira.ts, mcp-server.ts, session-files.ts, inbox.ts (project membership checks).
+
+### S1 sessions — second-round hardening (done 2026-11-02)
+
+**Item 1 — Conditional status transitions**
+
+All workflow and run status transitions now go through `updateWorkflowConditional` / `updateRunConditional`:
+- `driver.ts startRun`: workflow pending→running conditional on current status; lost-race returns active run or cancels orphaned pending run.
+- `runner.ts executeRun`: run pending→running, run running→done, run running→failed/cancelled, workflow running→done/failed/paused all conditional. If run was already transitioned to 'running' by the test or another caller, `executeRun` continues (backward-compat).
+- `session-lifecycle.ts checkIdleSessions`: workflow done/pending→paused conditional on session.status; second concurrent idle-stop is a no-op (double-idle-stop test passes).
+- `workflows/crud.ts /cancel` route was already safe (uses unconditional updateWorkflow on already-stopped session which is a no-op).
+
+New caller-level tests: `test/conditional-transitions.test.ts` — double start (concurrent startRun returns same run), stop racing with completion (only one terminal status wins), transcript paging smoke test. Double idle-stop test added to `test/session-lifecycle.test.ts`.
+
+**Item 2 — Transcript route now in repository**
+
+`SessionsRepository.listTranscript(workflowId, cursor, limit)` added to the interface and implemented in both backends:
+- SQLite: exact same CTE SQL, cursor logic unchanged; `coalesceStreamedRows` still applied in the route.
+- DynamoDB: fetches all run events + workflow events, applies cursor filter in-app, returns newest-first. Correct for up to 10 000 events per workflow (S1 cap).
+`server/workflows/crud.ts` transcript route uses `repo.listTranscript()` — zero direct SQL for p6_ tables.
+Contract tests: `listTranscript` — no gaps, no overlap, first page is newest-first, cursor paging has no overlap (both backends, 78 tests total including DynamoDB Local).
+
+**Item 3 — Sparse GSI-IdleCandidate for idle detection**
+
+New sparse GSI `GSI-IdleCandidate` (PK=`idleCandidate='IDLE'`, SK=`last_turn_at_idle=last_turn_at+'#'+id`) replaces the full `done`/`pending` GSI-StatusGlobal scan. Attributes `idleCandidate` and `last_turn_at_idle` are:
+- SET when status ∈ {done,pending}, stop_reason='', last_turn_at is set.
+- REMOVED when status changes to a non-idle-candidate value, or stop_reason becomes non-empty.
+- Managed by `_buildGsiKeyExprs`. When only `last_turn_at`/`stop_reason` changes (not status), `updateWorkflow` does a single GetItem to determine current status.
+`listIdleWorkflows` DynamoDB: queries `GSI-IdleCandidate` with `SK < cutoff`, no full-table-scan. Hot `gStatus='done'` partition is no longer touched for idle detection.
+
+**Item 4 — Cursor built from stored wfGsiSk**
+
+`listWorkflowsByProject` DynamoDB now tracks the raw DynamoDB `wfGsiSk` attribute from each item alongside the converted `WorkflowRecord`. The ExclusiveStartKey cursor encodes the stored value (not recomputed from `updated_at`), so status-only updates that don't touch `updated_at` cannot desync the cursor.
+
+**Item 5 — emitRunEvent failure path with retry**
+
+DynamoDB event writes now retry on throttling errors (`ProvisionedThroughputExceededException`, `RequestLimitExceeded`, `ThrottlingException`, `ServiceUnavailable`) with exponential backoff (up to 3 attempts). On persistent failure: logs the error, attempts to append an `event-loss` marker event so the loss is visible in the run history, and publishes to the live SSE stream with `id=0` so connected clients still see the event.
+
+**Remaining TODOs (explicitly in-scope for later steps)**
+
+`server/session-lifecycle.ts` and `server/runs.ts` access helpers (`requireWorkflowReadAccess`, `requireProjectAndWorkflow`, `requireRunAccess`) have been converted to async repository calls. No more direct `FROM p6_` SQL outside `server/repositories/*-sqlite.ts` and `server/db.ts` (migrations), except in comments.
+
+Files explicitly out of scope for this step and still using direct SQL: dashboard.ts, delegation.ts, inbox.ts, mcp-server.ts, review-lifecycle.ts, output-files.ts, terminal.ts, session-files.ts, browser-live.ts, session-context.ts, review.ts, control-plane.ts, diagrams.ts, generated-docs.ts, user-config.ts, jira.ts, presentations.ts, loop-specs.ts, insights.ts.
 
 ### Rules learned during S1 (apply to every remaining module)
 
@@ -197,8 +240,15 @@ Known callers still on SQLite are marked `S1-TODO(<module>)` in the code: review
 - Contract tests must run the same assertions on both backends with a fresh store where counts matter, and must never skip their success path. CI runs them with `REQUIRE_DYNAMODB=1`.
 - **DynamoDB GSI key attributes cannot be NULL.** When an item has an optional FK (e.g. `project_id`), only add the GSI partition key attribute to the item when the value is non-null. Items without the GSI PK are simply not indexed in that GSI — they are not rejected.
 - **DynamoDB reserved words as attribute names** (`consumed`, `status`, `name`, etc.) must be escaped via `ExpressionAttributeNames` in all UpdateItem and FilterExpression calls.
-- **emitRunEvent stays synchronous.** The `emitRunEvent` function (and `RunContext.emit`) cannot be made async without cascading changes to all agent engines and their tests. In DynamoDB mode it uses an in-memory counter for SSE de-duplication and fires the async write via `registerBackgroundWrite`. Full async conversion (using `await repo.appendRunEvent(...)`) is deferred to S2.
-- **recap.ts uses db.ts directly.** `buildConversationRecap` is synchronous and called synchronously from kiro.ts/claude-code.ts and tests. Full async conversion to use the sessions repository is deferred to S2.
+- **emitRunEvent: DynamoDB mode chains writes per run.** A per-run Promise chain (`_runEventChain`) ensures events are written to DynamoDB in order and the SSE live-stream id always matches the stored id (the atomic counter is the single source of truth). Clean up with `cleanupRunEventChain(runId)` in the run finally block.
+- **recap.ts converted to async.** `buildConversationRecap` is now async and uses `getSessionsRepository()`. Callers (kiro.ts, claude-code.ts, test/kiro-session.test.ts) were updated to `await` it.
 - **Oversized DynamoDB payloads** (events, inputs) exceeding 380 000 bytes are truncated with a `[PAYLOAD TRUNCATED — original size: N bytes]` marker. This keeps every item within the 400 KB limit without requiring S3 in S1. The S3-overflow strategy (write to `s3://portal-data/events/<runId>/<seq>.json`, store S3 key) is documented in the data-design doc section 4.8 and is the planned S2 improvement.
 - **Event sequence ordering.** DynamoDB uses an atomic `ADD seq :one` counter item (`PK=RUN#<runId>, SK=#SEQ`) to assign gap-free integer sequence numbers to events. Zero-padded (`SEQ#0000000001`) sort keys ensure lexicographic order matches numeric order. SQLite uses the autoincrement ROWID. Both expose integers via the repository `AppendedEvent.id` field.
-- **S1-TODO(sessions) sites:** `server/agent/recap.ts` (buildConversationRecap uses db.ts), `server/agent/runner.ts` (emitRunEvent uses db.ts for SQLite fast path), `server/runs.ts` (`GET /api/inputs/:id` needs GSI-InputId for DynamoDB), `server/workflows/crud.ts` (transcript route uses db.ts for complex multi-source cursor merge), `server/session-lifecycle.ts` (idle check uses db.ts in SQLite mode), `server/agent/litellm.ts` and `server/agent/claude-code.ts` and `server/agent/kiro.ts` (budget_usage insert deferred to budget module conversion), `server/agent/runner.ts` (createInput uses repo; awaitApproval expire/cancel are conditional — input claim in crud.ts uses db.ts for the fingerprint check read).
+- **updateWorkflow is read-free when `status` is in the patch.** GSI sort keys are rebuilt from the patch values alone (no GetItem). When only `status` is patched, `gStatus` is updated (for GSI-StatusGlobal correctness); when only `updated_at` is patched, `wfGsiSk` is updated. Both together rebuilds `statusGsiSk` as well. Callers MUST pass `updated_at` whenever `status` changes. When only `last_turn_at` or `stop_reason` changes (without `status`), `updateWorkflow` issues one GetItem to determine the current status before updating the idle-candidate GSI attributes (`idleCandidate`, `last_turn_at_idle`).
+- **ExclusiveStartKey for client-side-filtered pagination.** The cursor for the next page must be the key of the LAST ITEM IN THE CURRENT PAGE, not the first item of the next page. With `ScanIndexForward=false`, DynamoDB resumes from items with smaller sort keys than the cursor.
+- **Global sparse GSIs for cross-project queries.** `GSI-StatusGlobal` (PK=`gStatus`, SK=`wfGsiSk`) enables `listRunningWorkflows` and `listIdleWorkflows` across all projects. `GSI-ChildWorkflows` (PK=`gParentId`, SK=`wfGsiSk`) enables `listChildWorkflows`. Both sparse (gParentId only set when parent_id is non-null).
+- **GSI-InputId for getInputById without run_id.** `GSI-InputId` (PK=`inputId`) on portal-runs lets `GET /api/inputs/:id` resolve an input by its own id without knowing run_id (needed for AgentCore polling).
+- **deleteWorkflow cascades in DynamoDB.** Must manually delete: all WF#<id> items (META, WFEVT, #WFSEQ), all RUN#<runId> items (inputs, #SEQ), and all portal-events items (RUN#<runId>). Decrement parent's `childCount` atomically.
+- **listWorkflowsByProject total is null in DynamoDB.** Computing exact counts requires a full table scan. Return `null`; the web UI uses local array length instead.
+- **S1-TODO(sessions) RESOLVED.** All sites from the S1-TODO(sessions) list have been converted to use the repository. Remaining deferred items:
+  - `server/agent/litellm.ts`, `server/agent/claude-code.ts`, `server/agent/kiro.ts` budget_usage inserts — marked `S1-TODO(budget)`, deferred to the budget module conversion step.

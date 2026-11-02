@@ -3,15 +3,9 @@
  *
  * Used when starting a fresh session (no stored engine_session_id, or after a
  * failed resume) to provide the engine with context from earlier turns.
- *
- * S1-TODO(sessions): buildConversationRecap uses db.ts directly because it is
- * called synchronously from kiro.ts and claude-code.ts, and its callers in
- * test/kiro-session.test.ts also call it synchronously.  Full async conversion
- * (using getSessionsRepository()) is deferred to S2 when the RunContext.emit
- * type is made async and the agent engines are updated.
  */
 
-import { one, all } from '../db.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
 /**
  * Build a compact recap of the conversation so far for injection into a fresh
@@ -39,61 +33,39 @@ import { one, all } from '../db.ts';
  *                          Pass null to include all prior human messages.
  * @param maxChars         Soft character cap (default 8 000).
  */
-export function buildConversationRecap(
+export async function buildConversationRecap(
   workflowId: string,
   runId: string,
   minExcludeEventId: number | null = null,
   maxChars = 8_000,
-): string {
-  const wf = one<{ goal: string }>('SELECT goal FROM p6_workflows WHERE id = ?', workflowId);
+): Promise<string> {
+  const repo = getSessionsRepository();
+
+  const wf = await repo.getWorkflowById(workflowId);
   const goal = wf ? String(wf.goal).slice(0, 800) : '';
 
   // ── Last /clear time ──────────────────────────────────────────────────────
-  const clearRow = one<{ ts: string | null }>(
-    `SELECT MAX(created_at) AS ts FROM p6_workflow_events
-       WHERE workflow_id = ? AND kind = 'command' AND body = '/clear'`,
-    workflowId,
-  );
-  const lastClearTime: string | null = clearRow?.ts ?? null;
+  const lastClearTime = await repo.getLastWorkflowEventTime(workflowId, 'command', '/clear');
 
   // ── Completed run summaries (excluding current run) ───────────────────────
-  const completionArgs: (string | null)[] = [workflowId, runId];
-  if (lastClearTime) completionArgs.push(lastClearTime);
-
-  const completionRows = all<{ payload: string; created_at: string }>(
-    `SELECT e.payload, e.created_at
-       FROM p6_events e
-       JOIN p6_runs r ON e.run_id = r.id
-      WHERE r.workflow_id = ? AND r.id != ? AND e.type = 'run-complete'
-        ${lastClearTime ? 'AND e.created_at > ?' : ''}
-      ORDER BY e.created_at ASC`,
-    ...completionArgs,
-  );
+  const completionRows = await repo.listRunCompletionEvents(workflowId, runId, lastClearTime ?? undefined);
 
   if (completionRows.length === 0) {
-    // Nothing to recap: first run, or first run after /clear
     return '';
   }
 
   // ── Human messages (prior turns only) ────────────────────────────────────
   // Exclude messages that are the current run's input (already in the prompt).
-  // When minExcludeEventId is provided, those messages have id >= minExcludeEventId.
-  // When null, messages sent after the last completed reply are treated as the
-  // current prompt (runner.ts consumes exactly those for this run) and skipped.
   const lastCompletionTs = completionRows[completionRows.length - 1].created_at;
-  const humanArgs: (string | number | null)[] = [workflowId];
-  if (minExcludeEventId !== null) humanArgs.push(minExcludeEventId);
-  else humanArgs.push(lastCompletionTs);
-  if (lastClearTime) humanArgs.push(lastClearTime);
 
-  const humanRows = all<{ body: string; created_at: string }>(
-    `SELECT body, created_at FROM p6_workflow_events
-      WHERE workflow_id = ? AND kind = 'human'
-        ${minExcludeEventId !== null ? 'AND id < ?' : 'AND created_at <= ?'}
-        ${lastClearTime ? 'AND created_at > ?' : ''}
-      ORDER BY created_at ASC`,
-    ...humanArgs,
-  );
+  let humanRows: Array<{ id: number; body: string; created_at: string }>;
+  if (minExcludeEventId !== null) {
+    humanRows = await repo.listHumanWorkflowEvents(workflowId, lastClearTime, minExcludeEventId, null);
+  } else {
+    // When minExcludeEventId is null, exclude messages after the last completed reply
+    // (those are the current prompt). Use beforeOrAtDate to apply the upper bound.
+    humanRows = await repo.listHumanWorkflowEvents(workflowId, lastClearTime, null, lastCompletionTs);
+  }
 
   // ── Merge by created_at ───────────────────────────────────────────────────
   type TurnEntry = { role: 'assistant' | 'user'; text: string; ts: string };

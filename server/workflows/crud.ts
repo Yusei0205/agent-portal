@@ -17,7 +17,7 @@
 
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
-import { one, all, insert, run as dbRun, getDb } from '../db.ts';
+import { one, all, getDb } from '../db.ts';
 import type { Row } from '../db.ts';
 import { generateId, now, str, int, badRequest } from '../util.ts';
 import { subscribe, addLiveSubscriber } from '../events.ts';
@@ -204,20 +204,6 @@ function requireProjectMember(
   return p;
 }
 
-/**
- * Verify the workflow belongs to the project.
- * Returns the workflow row, or null (response already sent).
- */
-function requireWorkflow(
-  res: PortalResponse,
-  projectId: string,
-  workflowId: string,
-): Row | null {
-  const w = one<Row>('SELECT * FROM p6_workflows WHERE id = ? AND project_id = ?', workflowId, projectId);
-  if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return null; }
-  return w;
-}
-
 // ── Transcript helpers ─────────────────────────────────────────────────────────
 
 type TxRow = {
@@ -328,7 +314,7 @@ export function registerWorkflowRoutes(): void {
       search: search || undefined,
     });
 
-    sendJson(res, 200, { workflows: result.workflows.map(workflowView), total: result.total });
+    sendJson(res, 200, { workflows: result.workflows.map(workflowView), total: result.total, cursor: result.cursor ?? null });
   });
 
   // POST /api/projects/:id/workflows
@@ -485,12 +471,7 @@ export function registerWorkflowRoutes(): void {
       updated_at: ts,
     });
 
-    // If this is a child workflow, increment parent child count
-    const parentId = (wfRecord as WorkflowRecord).parent_id ?? null;
-    if (parentId) {
-      await repo.incrementWorkflowChildCount(parentId, 1).catch(() => {});
-    }
-
+    // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });
 
     const enriched = await enrichWorkflowRow(wfRecord);
@@ -532,12 +513,8 @@ export function registerWorkflowRoutes(): void {
     // Close the session's live browser
     shutdownSessionBrowser(w.id).catch(() => {/* non-fatal */});
 
+    // deleteWorkflow owns the child-count decrement internally (both backends).
     await repo.deleteWorkflow(w.id);
-
-    // Decrement parent child count
-    if (w.parent_id) {
-      await repo.incrementWorkflowChildCount(w.parent_id, -1).catch(() => {});
-    }
 
     emit(String(project.id), { type: 'workflow.deleted', workflowId: w.id });
     sendJson(res, 200, { ok: true });
@@ -646,38 +623,43 @@ export function registerWorkflowRoutes(): void {
   router.sse('/api/projects/:id/workflows/:wid/runs/:rid/events', (req: PortalRequest, res: PortalResponse): void => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
-    const p = one<Row>('SELECT * FROM projects WHERE id = ? AND archived = 0', req.params.id);
-    if (!p) { sendJson(res, 404, { error: 'Project not found' }); return; }
+    const projectId = req.params.id;
+    const wfId = req.params.wid;
+    const runId = req.params.rid;
 
-    // S1-TODO(sessions): SSE access check uses db.ts for project/workflow lookup
-    // (projects are in the projects repository, not sessions)
-    const wRow = one<Row>('SELECT * FROM p6_workflows WHERE id = ? AND project_id = ?', req.params.wid, String(p.id));
-    if (!wRow) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
-
-    const rRow = one<Row>('SELECT * FROM p6_runs WHERE id = ? AND workflow_id = ?', req.params.rid, String(wRow.id));
-    if (!rRow) { sendJson(res, 404, { error: 'Run not found' }); return; }
-
-    const rid = String(rRow.id);
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    res.write(': connected\n\n');
-
+    // Async setup: lookup via repository works in both SQLite and DynamoDB mode.
     const repo = getSessionsRepository();
-    repo.listRunEvents(rid).then((past) => {
-      for (const e of past) {
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ type: 'event', event: eventView(e) })}\n\n`);
-        }
-      }
-    }).catch(() => {});
+    (async () => {
+      const w = await repo.getWorkflowByProjectId(projectId, wfId);
+      if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    // Subscribe to live project events
-    addLiveSubscriber(String(p.id), res);
+      const rRow = await repo.getRunByWorkflowAndId(w.id, runId);
+      if (!rRow) { sendJson(res, 404, { error: 'Run not found' }); return; }
+
+      const rid = rRow.id;
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(': connected\n\n');
+
+      repo.listRunEvents(rid).then((past) => {
+        for (const e of past) {
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ type: 'event', event: eventView(e) })}\n\n`);
+          }
+        }
+      }).catch(() => {});
+
+      // Subscribe to live project events
+      if (w.project_id) addLiveSubscriber(w.project_id, res);
+    })().catch((e) => {
+      if (!res.writableEnded) sendJson(res, 500, { error: 'Internal error' });
+      console.error('[SSE /runs/events] Error:', e);
+    });
   });
 
   // POST /api/projects/:id/workflows/:wid/runs/:rid/input
@@ -702,9 +684,8 @@ export function registerWorkflowRoutes(): void {
       return;
     }
 
-    // Load the input record
-    // S1-TODO(sessions): getInputById requires run_id in DynamoDB mode; using direct db.ts for now
-    const inputRow = one<Row>('SELECT * FROM p6_inputs WHERE id = ? AND run_id = ?', inputId, r.id);
+    // Load the input record using the repository (works in both SQLite and DynamoDB mode).
+    const inputRow = await repo.getInputByRunAndId(r.id, inputId);
     if (!inputRow) { sendJson(res, 404, { error: 'Input not found' }); return; }
 
     if (inputRow.status === 'expired') {
@@ -713,13 +694,13 @@ export function registerWorkflowRoutes(): void {
     }
 
     if (response === 'approve') {
-      let storedHash = (inputRow.input_hash as string | null) ?? null;
+      let storedHash = inputRow.input_hash ?? null;
       if (!storedHash) {
         try {
-          const p = JSON.parse(inputRow.payload as string ?? '{}');
+          const p = JSON.parse(inputRow.payload ?? '{}');
           storedHash = p.inputHash ?? null;
           if (!storedHash && inputRow.tool_input) {
-            const ti = JSON.parse(inputRow.tool_input as string);
+            const ti = JSON.parse(inputRow.tool_input);
             storedHash = inputFingerprint(inputRow.tool_name as string, ti);
           }
         } catch { /* skip */ }
@@ -987,21 +968,8 @@ export function registerWorkflowRoutes(): void {
   //       nextCursor: string | null        // pass as ?cursor= to fetch the preceding page
   //     }
   //
-  //   TranscriptEvent shape:
-  //     {
-  //       src:        'r' | 'w',      // 'r' = p6_events (run event), 'w' = p6_workflow_events
-  //       id:         number,         // primary key in source table
-  //       kind:       string,         // event type/kind ('assistant-text', 'human', 'command', …)
-  //       payload:    object | string,// parsed JSON payload for run events; raw body for workflow events
-  //       run_id:     string | null,  // set for src='r'
-  //       created_at: string
-  //     }
-  //
   //   Cursor format (internal, opaque to clients):
   //     base64url( JSON({ ts: string, src: 'r'|'w', id: number }) )
-  //     ts  — created_at of the last (oldest) event on the current page
-  //     src — source table of that event ('r' before 'w' at the same timestamp, per ASC sort)
-  //     id  — primary key of that event in its source table
   //   Sort order within a page: created_at DESC, src ASC ('r' before 'w'), id DESC
   router.get('/api/projects/:id/workflows/:wid/transcript', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const project = requireProjectMember(req, res, req.params.id);
@@ -1010,13 +978,8 @@ export function registerWorkflowRoutes(): void {
     const wf = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
     if (!wf) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
-    // S1-TODO(sessions): transcript query uses db.ts directly — complex multi-source
-    // cursor-based merge of p6_events + p6_workflow_events not yet in repository.
-    const w: Row = { ...wf, id: wf.id } as unknown as Row;
-
     const cursorStr = req.query.get('cursor');
     const limit = Math.min(int(req.query.get('limit'), 'limit', 100, 1, 200), 200);
-    const wid = String(w.id);
 
     interface TxCursor { ts: string; src: 'r' | 'w'; id: number; }
 
@@ -1032,64 +995,11 @@ export function registerWorkflowRoutes(): void {
 
     const cursor = cursorStr ? decodeCursor(cursorStr) : null;
 
-    // Build the merged query.  Sort: created_at DESC, src ASC ('r' < 'w'), id DESC.
-    // The WHERE clause encodes "give me everything older than the cursor" in that
-    // sort order: strictly older by ts, OR same ts but src is later (alphabetically
-    // 'w' > 'r'), OR same ts+src but smaller id.
-    let rows: Array<{
-      src: string; id: number; created_at: string; kind: string;
-      body: string; run_id: string | null;
-    }>;
+    // Use repository to get the merged transcript (works in both SQLite and DynamoDB mode).
+    const { rows, nextCursor: rawNextCursor } = await repo.listTranscript(wf.id, cursor, limit);
 
-    if (cursor) {
-      rows = getDb().prepare(`
-        WITH merged AS (
-          SELECT 'r' AS src, e.id, e.created_at, e.type AS kind, e.payload AS body, e.run_id
-          FROM p6_events e
-          JOIN p6_runs r ON r.id = e.run_id
-          WHERE r.workflow_id = ?
-          UNION ALL
-          SELECT 'w' AS src, we.id, we.created_at, we.kind, we.body, NULL AS run_id
-          FROM p6_workflow_events we
-          WHERE we.workflow_id = ?
-        )
-        SELECT * FROM merged
-        WHERE (
-          created_at < ?
-          OR (created_at = ? AND src > ?)
-          OR (created_at = ? AND src = ? AND id < ?)
-        )
-        ORDER BY created_at DESC, src ASC, id DESC
-        LIMIT ?
-      `).all(wid, wid, cursor.ts, cursor.ts, cursor.src, cursor.ts, cursor.src, cursor.id, limit) as typeof rows;
-    } else {
-      rows = getDb().prepare(`
-        WITH merged AS (
-          SELECT 'r' AS src, e.id, e.created_at, e.type AS kind, e.payload AS body, e.run_id
-          FROM p6_events e
-          JOIN p6_runs r ON r.id = e.run_id
-          WHERE r.workflow_id = ?
-          UNION ALL
-          SELECT 'w' AS src, we.id, we.created_at, we.kind, we.body, NULL AS run_id
-          FROM p6_workflow_events we
-          WHERE we.workflow_id = ?
-        )
-        SELECT * FROM merged
-        ORDER BY created_at DESC, src ASC, id DESC
-        LIMIT ?
-      `).all(wid, wid, limit) as typeof rows;
-    }
-
-    // Compute the cursor from raw rows BEFORE coalescing — it references the
-    // actual DB row position so pagination is unaffected by merging.
-    const nextCursor =
-      rows.length === limit
-        ? encodeCursor({
-            ts: rows[rows.length - 1].created_at,
-            src: rows[rows.length - 1].src as 'r' | 'w',
-            id: Number(rows[rows.length - 1].id),
-          })
-        : null;
+    // Compute the encoded next cursor.
+    const nextCursor = rawNextCursor ? encodeCursor(rawNextCursor) : null;
 
     // Coalesce consecutive streamed assistant-text rows so each agent reply
     // is one event rather than O(stream-chunks) events.

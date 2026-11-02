@@ -12,21 +12,29 @@
  *   WF#<workflowId>          | WFEVT#<isoCreatedAt>#<id>         | p6_workflow_events
  *   RUN#<runId>              | INPUT#<inputId>                   | p6_inputs
  *   RUN#<runId>              | #SEQ                              | atomic event counter
+ *   WF#<workflowId>          | #WFSEQ                            | atomic workflow-event counter
  *
  * Key design (portal-events):
  *   PK           | SK                         | Entity
  *   RUN#<runId>  | SEQ#<10-digit-zero-padded> | p6_events
  *
  * GSIs on portal-runs:
- *   GSI-ProjectWorkflows: PK=projectId, SK=WF#<isoUpdatedAt>#<workflowId>
- *   GSI-WorkflowStatus:   PK=projectId, SK=STATUS#<status>#<isoUpdatedAt>
- *   GSI-RunId:            PK=runId → resolves run without knowing workflowId
- *   GSI-InputHash:        PK=inputHash → resolves input by hash (F13)
+ *   GSI-ProjectWorkflows: PK=projectId,   SK=wfGsiSk       — list workflows per project
+ *   GSI-WorkflowStatus:   PK=projectId,   SK=statusGsiSk   — filter by status per project
+ *   GSI-StatusGlobal:     PK=gStatus,     SK=wfGsiSk       — listRunning/listIdle (cross-project)
+ *   GSI-ChildWorkflows:   PK=gParentId,   SK=wfGsiSk       — listChildWorkflows (sparse)
+ *   GSI-RunId:            PK=runId                         — resolve run without workflowId
+ *   GSI-InputHash:        PK=inputHash,   SK=run_id        — F13 getInputByHash
+ *   GSI-InputId:          PK=inputId                       — getInputById without run_id
+ *
+ * Attribute notes:
+ *   gStatus    — workflow status string; set on every workflow (dense); used for GSI-StatusGlobal
+ *   gParentId  — parent_id string; set only when parent_id is non-null (sparse); GSI-ChildWorkflows
+ *   inputId    — input id string; set on every input item; GSI-InputId
  *
  * Oversized-payload strategy:
  *   If payload JSON exceeds 380 000 bytes it is truncated to 380 000 bytes
  *   and `\n[PAYLOAD TRUNCATED — original size: N bytes]` is appended.
- *   This ensures every item stays within the DynamoDB 400 KB limit.
  */
 
 import {
@@ -41,6 +49,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
+import { now } from '../util.ts';
 import type {
   SessionsRepository,
   WorkflowRecord,
@@ -194,8 +203,7 @@ function itemToWorkflowEvent(item: Record<string, AttributeValue>): WorkflowEven
   };
 }
 
-// ── Auto-increment simulation for workflow events ──────────────────────────────
-// DynamoDB doesn't provide auto-increment. We use a counter item for workflow-events.
+// ── Auto-increment for workflow events ────────────────────────────────────────
 // PK=WF#<workflowId>, SK=#WFSEQ → attribute `seq`
 
 async function nextWorkflowEventId(client: DynamoDBClient, workflowId: string): Promise<number> {
@@ -231,6 +239,19 @@ async function paginateQuery(
   return items;
 }
 
+// ── In-app filters for listWorkflowsByProject ──────────────────────────────────
+
+function applyWorkflowFilters(items: WorkflowRecord[], opts: ListWorkflowsOpts): WorkflowRecord[] {
+  let result = items;
+  if (opts.status) result = result.filter((w) => w.status === opts.status);
+  if (opts.engine) result = result.filter((w) => w.engine === opts.engine);
+  if (opts.search) {
+    const lc = opts.search.toLowerCase();
+    result = result.filter((w) => w.goal.toLowerCase().includes(lc));
+  }
+  return result;
+}
+
 // ── Implementation ─────────────────────────────────────────────────────────────
 
 export class DynamoDbSessionsRepository implements SessionsRepository {
@@ -243,7 +264,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   // ── Table setup (called on first use in tests) ──────────────────────────────
 
   async ensureTables(): Promise<void> {
-    const { CreateTableCommand, DescribeTableCommand, ResourceNotFoundException } =
+    const { CreateTableCommand, DescribeTableCommand } =
       await import('@aws-sdk/client-dynamodb');
     for (const [tableName, extraGsi] of [
       [runsTable(), true],
@@ -262,7 +283,6 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
               { AttributeName: 'wfGsiSk', KeyType: 'RANGE' },
             ],
             Projection: { ProjectionType: 'ALL' },
-            BillingMode: 'PAY_PER_REQUEST',
           },
           {
             IndexName: 'GSI-WorkflowStatus',
@@ -271,7 +291,22 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
               { AttributeName: 'statusGsiSk', KeyType: 'RANGE' },
             ],
             Projection: { ProjectionType: 'ALL' },
-            BillingMode: 'PAY_PER_REQUEST',
+          },
+          {
+            IndexName: 'GSI-StatusGlobal',
+            KeySchema: [
+              { AttributeName: 'gStatus', KeyType: 'HASH' },
+              { AttributeName: 'wfGsiSk', KeyType: 'RANGE' },
+            ],
+            Projection: { ProjectionType: 'ALL' },
+          },
+          {
+            IndexName: 'GSI-ChildWorkflows',
+            KeySchema: [
+              { AttributeName: 'gParentId', KeyType: 'HASH' },
+              { AttributeName: 'wfGsiSk', KeyType: 'RANGE' },
+            ],
+            Projection: { ProjectionType: 'ALL' },
           },
           {
             IndexName: 'GSI-RunId',
@@ -279,7 +314,6 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
               { AttributeName: 'runId', KeyType: 'HASH' },
             ],
             Projection: { ProjectionType: 'ALL' },
-            BillingMode: 'PAY_PER_REQUEST',
           },
           {
             IndexName: 'GSI-InputHash',
@@ -288,7 +322,21 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
               { AttributeName: 'run_id', KeyType: 'RANGE' },
             ],
             Projection: { ProjectionType: 'ALL' },
-            BillingMode: 'PAY_PER_REQUEST',
+          },
+          {
+            IndexName: 'GSI-InputId',
+            KeySchema: [
+              { AttributeName: 'inputId', KeyType: 'HASH' },
+            ],
+            Projection: { ProjectionType: 'ALL' },
+          },
+          {
+            IndexName: 'GSI-IdleCandidate',
+            KeySchema: [
+              { AttributeName: 'idleCandidate', KeyType: 'HASH' },
+              { AttributeName: 'last_turn_at_idle', KeyType: 'RANGE' },
+            ],
+            Projection: { ProjectionType: 'ALL' },
           },
         ] : [];
         await this.client.send(new CreateTableCommand({
@@ -304,9 +352,14 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
             { AttributeName: 'projectId', AttributeType: 'S' },
             { AttributeName: 'wfGsiSk', AttributeType: 'S' },
             { AttributeName: 'statusGsiSk', AttributeType: 'S' },
+            { AttributeName: 'gStatus', AttributeType: 'S' },
+            { AttributeName: 'gParentId', AttributeType: 'S' },
             { AttributeName: 'runId', AttributeType: 'S' },
             { AttributeName: 'inputHash', AttributeType: 'S' },
             { AttributeName: 'run_id', AttributeType: 'S' },
+            { AttributeName: 'inputId', AttributeType: 'S' },
+            { AttributeName: 'idleCandidate', AttributeType: 'S' },
+            { AttributeName: 'last_turn_at_idle', AttributeType: 'S' },
           ] : [
             { AttributeName: 'PK', AttributeType: 'S' },
             { AttributeName: 'SK', AttributeType: 'S' },
@@ -315,7 +368,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         }));
         // Wait for table to become active
         let active = false;
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 60; i++) {
           await new Promise((r) => setTimeout(r, 500));
           const desc = await this.client.send(new DescribeTableCommand({ TableName: tableName }));
           if (desc.Table?.TableStatus === 'ACTIVE') { active = true; break; }
@@ -346,81 +399,117 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   async listWorkflowsByProject(
     projectId: string,
     opts: ListWorkflowsOpts = {},
-  ): Promise<{ workflows: WorkflowRecord[]; total: number; cursor?: string }> {
+  ): Promise<{ workflows: WorkflowRecord[]; total: number | null; cursor?: string }> {
     const limit = Math.min(opts.limit ?? 50, 200);
     let exclusiveStartKey: Record<string, AttributeValue> | undefined;
     if (opts.cursor) {
       try { exclusiveStartKey = JSON.parse(opts.cursor); } catch { /* ignore */ }
     }
 
-    const res = await this.client.send(new QueryCommand({
-      TableName: runsTable(),
-      IndexName: 'GSI-ProjectWorkflows',
-      KeyConditionExpression: 'projectId = :pid AND begins_with(wfGsiSk, :prefix)',
-      ExpressionAttributeValues: {
-        ':pid': av(projectId),
-        ':prefix': av('WF#'),
-      },
-      ScanIndexForward: false,
-      Limit: limit * 3, // over-fetch to allow application-side filtering
-      ExclusiveStartKey: exclusiveStartKey,
-    }));
+    // Loop until we have limit+1 matching items or exhaust all DynamoDB pages.
+    // This ensures full pages even when in-app filters (status/engine/search) remove items.
+    const matching: Array<{ wf: WorkflowRecord; storedWfGsiSk: string }> = [];
+    let lastDdbKey: Record<string, AttributeValue> | undefined = exclusiveStartKey;
+    const batchSize = Math.max(limit * 3, 100);
 
-    let items = (res.Items ?? []).map((item) => itemToWorkflow(item));
+    while (true) {
+      const res = await this.client.send(new QueryCommand({
+        TableName: runsTable(),
+        IndexName: 'GSI-ProjectWorkflows',
+        KeyConditionExpression: 'projectId = :pid AND begins_with(wfGsiSk, :prefix)',
+        ExpressionAttributeValues: {
+          ':pid': av(projectId),
+          ':prefix': av('WF#'),
+        },
+        ScanIndexForward: false,
+        Limit: batchSize,
+        ExclusiveStartKey: lastDdbKey,
+      }));
 
-    // Application-side filtering
-    if (opts.status) items = items.filter((w) => w.status === opts.status);
-    if (opts.engine) items = items.filter((w) => w.engine === opts.engine);
-    if (opts.search) {
-      const lc = opts.search.toLowerCase();
-      items = items.filter((w) => w.goal.toLowerCase().includes(lc));
+      const batch = (res.Items ?? []).map((item) => ({
+        wf: itemToWorkflow(item),
+        // Read stored wfGsiSk directly from the item so the cursor doesn't
+        // diverge from the index key when a status-only update happened
+        // (which updates gStatus but not wfGsiSk).
+        storedWfGsiSk: getString(item, 'wfGsiSk') ?? `WF#${getString(item, 'updated_at') ?? ''}#${getString(item, 'id') ?? ''}`,
+      }));
+      const filtered = batch.filter(({ wf }) => {
+        if (opts.status && wf.status !== opts.status) return false;
+        if (opts.engine && wf.engine !== opts.engine) return false;
+        if (opts.search && !wf.goal.toLowerCase().includes(opts.search.toLowerCase())) return false;
+        return true;
+      });
+      matching.push(...filtered);
+      lastDdbKey = res.LastEvaluatedKey;
+
+      // Stop once we have enough to fill the page and determine if there's a next page.
+      if (matching.length > limit) break;
+      // Stop if DynamoDB has no more data.
+      if (!lastDdbKey) break;
     }
 
-    const page = items.slice(0, limit);
+    const pageRecords = matching.slice(0, limit);
+    const page = pageRecords.map(({ wf }) => wf);
+    const hasMore = matching.length > limit || lastDdbKey != null;
 
-    // Cursor: use DynamoDB's LastEvaluatedKey if available, otherwise
-    // generate one from the last item in the page if more items exist
     let cursor: string | undefined;
-    if (res.LastEvaluatedKey) {
-      cursor = JSON.stringify(res.LastEvaluatedKey);
-    } else if (items.length > limit) {
-      // We have more items than the page size — build cursor from last page item
-      const lastItem = page[page.length - 1];
-      if (lastItem) {
-        const wfGsiSk = `WF#${lastItem.updated_at}#${lastItem.id}`;
-        cursor = JSON.stringify({
-          PK: { S: `WF#${lastItem.id}` },
-          SK: { S: '#META' },
-          projectId: { S: projectId },
-          wfGsiSk: { S: wfGsiSk },
-        });
-      }
+    if (hasMore && pageRecords.length > 0) {
+      // Use the stored wfGsiSk from the last item on this page.
+      // This guarantees the ExclusiveStartKey matches the index key exactly,
+      // even if the item's updated_at was changed by a status-only update
+      // that did not touch wfGsiSk.
+      const last = pageRecords[pageRecords.length - 1];
+      cursor = JSON.stringify({
+        PK: { S: `WF#${last.wf.id}` },
+        SK: { S: '#META' },
+        projectId: { S: projectId },
+        wfGsiSk: { S: last.storedWfGsiSk },
+      });
     }
 
-    const total = page.length + (cursor ? 1 : 0);
-
-    return { workflows: page, total, cursor };
+    return { workflows: page, total: null, cursor };
   }
 
   async listRunningWorkflows(): Promise<WorkflowRecord[]> {
-    // S1-TODO(sessions): This requires scanning or querying GSI-WorkflowStatus across
-    // all projectIds, which is not efficient without maintaining a global index.
-    // For now, return empty in DynamoDB mode — callers that need this for shutdown
-    // (driver.ts abortAllRuns) work off the in-memory controls map, not this query.
-    return [];
+    const items = await paginateQuery(this.client, {
+      TableName: runsTable(),
+      IndexName: 'GSI-StatusGlobal',
+      KeyConditionExpression: '#gs = :running',
+      ExpressionAttributeNames: { '#gs': 'gStatus' },
+      ExpressionAttributeValues: { ':running': av('running') },
+    });
+    return items.map((item) => itemToWorkflow(item));
   }
 
   async listIdleWorkflows(cutoff: string): Promise<WorkflowRecord[]> {
-    // S1-TODO(sessions): Idle detection requires querying workflows by last_turn_at
-    // across projects. In DynamoDB mode this is deferred — the idle-stop timer
-    // checks are currently a best-effort feature and work correctly in SQLite mode.
-    return [];
+    // Query GSI-IdleCandidate: only workflows with status done/pending,
+    // stop_reason='', and last_turn_at set are in this sparse index.
+    // The key condition last_turn_at_idle < cutoff maps to last_turn_at < cutoff
+    // because last_turn_at_idle = last_turn_at + '#' + id and ISO dates are
+    // lexicographically sortable (the appended '#id' sorts after the timestamp
+    // itself, so items with last_turn_at exactly = cutoff are excluded — correct
+    // boundary: only items strictly before the cutoff are returned).
+    const items = await paginateQuery(this.client, {
+      TableName: runsTable(),
+      IndexName: 'GSI-IdleCandidate',
+      KeyConditionExpression: 'idleCandidate = :idle AND last_turn_at_idle < :cutoff',
+      ExpressionAttributeValues: {
+        ':idle': av('IDLE'),
+        ':cutoff': av(cutoff),
+      },
+    });
+    return items.map((item) => itemToWorkflow(item));
   }
 
   async listChildWorkflows(parentId: string): Promise<WorkflowRecord[]> {
-    // S1-TODO(sessions): Requires a GSI on parentId. For now, we can't efficiently
-    // list children without a scan. Return empty; callers handle null gracefully.
-    return [];
+    const items = await paginateQuery(this.client, {
+      TableName: runsTable(),
+      IndexName: 'GSI-ChildWorkflows',
+      KeyConditionExpression: 'gParentId = :pid',
+      ExpressionAttributeValues: { ':pid': av(parentId) },
+      ScanIndexForward: true,
+    });
+    return items.map((item) => itemToWorkflow(item));
   }
 
   async createWorkflow(input: CreateWorkflowInput): Promise<WorkflowRecord> {
@@ -431,6 +520,8 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       PK: av(`WF#${input.id}`),
       SK: av('#META'),
       id: av(input.id),
+      // GSI-StatusGlobal — set on every workflow (dense)
+      gStatus: av(input.status),
       ...marshalItem({
         project_id: input.project_id,
         title: input.title ?? '',
@@ -454,15 +545,29 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         created_at: input.created_at,
         updated_at: input.updated_at,
         parent_id: input.parent_id ?? null,
-        wfGsiSk,     // GSI sort key for GSI-ProjectWorkflows
-        statusGsiSk, // GSI sort key for GSI-WorkflowStatus
+        wfGsiSk,
+        statusGsiSk,
       }),
       childCount: { N: '0' },
     };
 
-    // Only include GSI PK attributes when they have a value (DynamoDB rejects NULL for key attributes)
+    // GSI-ProjectWorkflows — only when project_id is set (non-null)
     if (input.project_id) {
       item['projectId'] = av(input.project_id);
+    }
+
+    // GSI-ChildWorkflows — only when parent_id is set (sparse GSI)
+    if (input.parent_id) {
+      item['gParentId'] = av(input.parent_id);
+    }
+
+    // GSI-IdleCandidate — sparse: only when status is done/pending, stop_reason='', last_turn_at is set
+    const idleCandidateStatuses = new Set(['done', 'pending']);
+    const stopReason = input.stop_reason ?? '';
+    if (idleCandidateStatuses.has(input.status) && stopReason === '' && input.updated_at) {
+      // For a newly-created workflow there is no last_turn_at yet (it's set when a
+      // message is sent or the first run finishes). Skip for now; it will be set
+      // by the first updateWorkflow call that touches last_turn_at.
     }
 
     await this.client.send(new PutItemCommand({
@@ -471,7 +576,75 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       ConditionExpression: 'attribute_not_exists(PK)',
     }));
 
+    // If this is a child workflow, atomically increment the parent's child count.
+    // The repository owns this bookkeeping so every caller gets it automatically —
+    // no separate incrementWorkflowChildCount call is needed at the route layer.
+    if (input.parent_id) {
+      await this.incrementWorkflowChildCount(input.parent_id, 1);
+    }
+
     return itemToWorkflow(item);
+  }
+
+  async updateWorkflowConditional(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<WorkflowRecord>,
+  ): Promise<boolean> {
+    const allowed: (keyof WorkflowRecord)[] = [
+      'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
+      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids',
+      'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
+      'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
+      'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
+      'kind', 'run_timeout_minutes',
+    ];
+    const setExprs: string[] = [];
+    const removeExprs: string[] = [];
+    const names: Record<string, string> = { '#curStatus': 'status' };
+    const vals: Record<string, AttributeValue> = { ':expected': av(expectedStatus) };
+
+    let i = 0;
+    for (const k of allowed) {
+      if (k in patch && patch[k] !== undefined) {
+        const nk = `#a${i}`;
+        const vk = `:v${i}`;
+        names[nk] = k;
+        vals[vk] = av(patch[k] as string | number | null);
+        setExprs.push(`${nk} = ${vk}`);
+        i++;
+      }
+    }
+
+    // For conditional updates: status is always known (it equals expectedStatus when
+    // the condition holds). Pass expectedStatus as currentStatus for the idle-candidate
+    // decision if status is not in the patch.
+    const currentStatusForIdle = ('status' in patch && patch.status !== undefined)
+      ? undefined  // already in patch, _buildGsiKeyExprs uses it directly
+      : expectedStatus;
+
+    this._buildGsiKeyExprs(id, patch, setExprs, names, vals, removeExprs, currentStatusForIdle);
+
+    if (setExprs.length === 0 && removeExprs.length === 0) return false;
+
+    const parts: string[] = [];
+    if (setExprs.length > 0) parts.push(`SET ${setExprs.join(', ')}`);
+    if (removeExprs.length > 0) parts.push(`REMOVE ${removeExprs.join(', ')}`);
+
+    try {
+      await this.client.send(new UpdateItemCommand({
+        TableName: runsTable(),
+        Key: marshalItem({ PK: `WF#${id}`, SK: '#META' }),
+        UpdateExpression: parts.join(' '),
+        ConditionExpression: '#curStatus = :expected AND attribute_exists(PK)',
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: vals,
+      }));
+      return true;
+    } catch (e: unknown) {
+      if ((e as { name?: string }).name === 'ConditionalCheckFailedException') return false;
+      throw e;
+    }
   }
 
   async updateWorkflow(id: string, patch: Partial<WorkflowRecord>): Promise<void> {
@@ -484,67 +657,208 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       'kind', 'run_timeout_minutes',
     ];
     const setExprs: string[] = [];
+    const removeExprs: string[] = [];
     const names: Record<string, string> = {};
     const vals: Record<string, AttributeValue> = {};
 
     let i = 0;
     for (const k of allowed) {
       if (k in patch && patch[k] !== undefined) {
-        const nameKey = `#a${i}`;
-        const valKey = `:v${i}`;
-        names[nameKey] = k;
-        vals[valKey] = av(patch[k] as string | number | null);
-        setExprs.push(`${nameKey} = ${valKey}`);
+        const nk = `#a${i}`;
+        const vk = `:v${i}`;
+        names[nk] = k;
+        vals[vk] = av(patch[k] as string | number | null);
+        setExprs.push(`${nk} = ${vk}`);
         i++;
       }
     }
 
-    // Keep GSI sort keys in sync when status or updated_at changes
-    if ('status' in patch || 'updated_at' in patch) {
-      // We need both values to build the GSI SK — fetch the item to get what's missing
+    // When last_turn_at or stop_reason changes but status is NOT in the patch,
+    // we need to read the current item to decide whether the idle candidate
+    // should be set or removed.
+    const hasStatus = 'status' in patch && patch.status !== undefined;
+    const hasLastTurnAt = 'last_turn_at' in patch && patch.last_turn_at !== undefined;
+    const hasStopReason = 'stop_reason' in patch && patch.stop_reason !== undefined;
+
+    let currentStatus: string | undefined;
+    let currentStopReason: string | undefined;
+    let currentLastTurnAt: string | null | undefined;
+
+    if (!hasStatus && (hasLastTurnAt || hasStopReason)) {
+      // Read the current item so we can make a correct idle-candidate decision.
       const current = await this.getWorkflowById(id);
-      if (current) {
-        const updatedAt = (patch.updated_at as string | undefined) ?? current.updated_at;
-        const status = (patch.status as string | undefined) ?? current.status;
-        names['#wfGsiSk'] = 'wfGsiSk';
-        vals[':wfGsiSk'] = av(`WF#${updatedAt}#${id}`);
-        setExprs.push('#wfGsiSk = :wfGsiSk');
-        names['#statusGsiSk'] = 'statusGsiSk';
-        vals[':statusGsiSk'] = av(`STATUS#${status}#${updatedAt}`);
-        setExprs.push('#statusGsiSk = :statusGsiSk');
+      currentStatus = current?.status ?? undefined;
+      currentStopReason = current?.stop_reason ?? undefined;
+      currentLastTurnAt = current?.last_turn_at ?? null;
+    }
+
+    this._buildGsiKeyExprs(id, patch, setExprs, names, vals, removeExprs, currentStatus, currentStopReason, currentLastTurnAt);
+
+    // Handle gParentId: set when parent_id becomes non-null, remove when nulled
+    if ('parent_id' in patch) {
+      const parentId = patch.parent_id as string | null | undefined;
+      if (parentId) {
+        names['#gPid'] = 'gParentId';
+        vals[':gPid'] = av(parentId);
+        setExprs.push('#gPid = :gPid');
+      } else {
+        names['#gPid'] = 'gParentId';
+        removeExprs.push('#gPid');
       }
     }
 
-    if (setExprs.length === 0) return;
+    if (setExprs.length === 0 && removeExprs.length === 0) return;
+
+    const parts: string[] = [];
+    if (setExprs.length > 0) parts.push(`SET ${setExprs.join(', ')}`);
+    if (removeExprs.length > 0) parts.push(`REMOVE ${removeExprs.join(', ')}`);
 
     await this.client.send(new UpdateItemCommand({
       TableName: runsTable(),
       Key: marshalItem({ PK: `WF#${id}`, SK: '#META' }),
-      UpdateExpression: `SET ${setExprs.join(', ')}`,
-      ExpressionAttributeNames: names,
-      ExpressionAttributeValues: vals,
+      UpdateExpression: parts.join(' '),
       ConditionExpression: 'attribute_exists(PK)',
+      ExpressionAttributeNames: Object.keys(names).length > 0 ? names : undefined,
+      ExpressionAttributeValues: Object.keys(vals).length > 0 ? vals : undefined,
     }));
   }
 
+  /** Build GSI key update expressions from patch without reading the item. */
+  private _buildGsiKeyExprs(
+    id: string,
+    patch: Partial<WorkflowRecord>,
+    setExprs: string[],
+    names: Record<string, string>,
+    vals: Record<string, AttributeValue>,
+    removeExprs?: string[],
+    currentStatus?: string,
+    currentStopReason?: string,
+    currentLastTurnAt?: string | null,
+  ): void {
+    const hasStatus = 'status' in patch && patch.status !== undefined;
+    const hasUpdatedAt = 'updated_at' in patch && patch.updated_at !== undefined;
+    const hasStopReason = 'stop_reason' in patch && patch.stop_reason !== undefined;
+    const hasLastTurnAt = 'last_turn_at' in patch && patch.last_turn_at !== undefined;
+
+    if (hasStatus) {
+      // Update gStatus (dense attribute for GSI-StatusGlobal)
+      names['#gSt'] = 'gStatus';
+      vals[':gSt'] = av(patch.status as string);
+      setExprs.push('#gSt = :gSt');
+    }
+
+    if (hasStatus && hasUpdatedAt) {
+      // Both status and updated_at are known: rebuild both GSI sort keys read-free.
+      const updatedAt = patch.updated_at as string;
+      const status = patch.status as string;
+      names['#wfGsiSk'] = 'wfGsiSk';
+      vals[':wfGsiSk'] = av(`WF#${updatedAt}#${id}`);
+      setExprs.push('#wfGsiSk = :wfGsiSk');
+      names['#statusGsiSk'] = 'statusGsiSk';
+      vals[':statusGsiSk'] = av(`STATUS#${status}#${updatedAt}`);
+      setExprs.push('#statusGsiSk = :statusGsiSk');
+    } else if (hasUpdatedAt) {
+      // updated_at changed but status did not: update wfGsiSk (ordering key) only.
+      const updatedAt = patch.updated_at as string;
+      names['#wfGsiSk'] = 'wfGsiSk';
+      vals[':wfGsiSk'] = av(`WF#${updatedAt}#${id}`);
+      setExprs.push('#wfGsiSk = :wfGsiSk');
+    }
+
+    // ── GSI-IdleCandidate management ───────────────────────────────────────────
+    // Idle candidates are workflows with status in ('done','pending'),
+    // stop_reason='', and last_turn_at set.  The sparse GSI-IdleCandidate
+    // has PK=idleCandidate='IDLE', SK=last_turn_at_idle=last_turn_at+'#'+id.
+    // Attributes are SET when conditions are met, REMOVED otherwise.
+
+    const idleStatuses = new Set(['done', 'pending']);
+
+    // Determine the effective status, stop_reason, and last_turn_at for the
+    // idle-candidate decision.  If a value is in the patch, use it directly;
+    // otherwise fall back to the caller-supplied current state.
+    const effectiveStatus = hasStatus ? (patch.status as string) : currentStatus;
+    const effectiveStopReason = hasStopReason ? (patch.stop_reason as string ?? '') : currentStopReason;
+    const effectiveLastTurnAt = hasLastTurnAt
+      ? (patch.last_turn_at as string | null | undefined) ?? null
+      : (currentLastTurnAt ?? null);
+
+    // Only manage the idle-candidate attributes if we have enough information.
+    // If currentStatus is unknown (not provided and not in patch), we skip — the
+    // caller must call _buildGsiKeyExprs with current* values for that case.
+    const haveEnoughInfo = hasStatus || (currentStatus !== undefined);
+
+    if (haveEnoughInfo && removeExprs !== undefined) {
+      const shouldBeIdle =
+        effectiveStatus !== undefined &&
+        idleStatuses.has(effectiveStatus) &&
+        effectiveStopReason === '' &&
+        effectiveLastTurnAt !== null &&
+        effectiveLastTurnAt !== undefined;
+
+      names['#idleC'] = 'idleCandidate';
+      names['#ltidle'] = 'last_turn_at_idle';
+
+      if (shouldBeIdle) {
+        vals[':idleC'] = av('IDLE');
+        vals[':ltidle'] = av(`${effectiveLastTurnAt}#${id}`);
+        setExprs.push('#idleC = :idleC');
+        setExprs.push('#ltidle = :ltidle');
+      } else {
+        removeExprs.push('#idleC');
+        removeExprs.push('#ltidle');
+      }
+    }
+  }
+
   async deleteWorkflow(id: string): Promise<void> {
-    // Delete main META item — cascade to RUN# items is S1-TODO (DynamoDB has no cascade)
-    // For now delete the workflow META and its WFEVT children
-    const items = await paginateQuery(this.client, {
+    // 1. Load workflow to get parent_id before deleting.
+    const wf = await this.getWorkflowById(id);
+    const parentId = wf?.parent_id ?? null;
+
+    // 2. Query all items under WF#<id> in portal-runs.
+    const wfItems = await paginateQuery(this.client, {
       TableName: runsTable(),
       KeyConditionExpression: 'PK = :pk',
       ExpressionAttributeValues: { ':pk': av(`WF#${id}`) },
     });
-    // BatchWrite in chunks of 25
-    for (let i = 0; i < items.length; i += 25) {
-      const batch = items.slice(i, i + 25);
-      await this.client.send(new BatchWriteItemCommand({
-        RequestItems: {
-          [runsTable()]: batch.map((item) => ({
-            DeleteRequest: { Key: { PK: item.PK, SK: item.SK } },
-          })),
-        },
-      }));
+
+    // 3. Extract run IDs from RUN# SK items.
+    const runIds: string[] = [];
+    for (const item of wfItems) {
+      const sk = getString(item, 'SK') ?? '';
+      if (sk.startsWith('RUN#')) {
+        // SK = RUN#<isoCreatedAt>#<runId>  → extract runId (last segment)
+        const parts = sk.split('#');
+        const runId = parts[parts.length - 1];
+        if (runId) runIds.push(runId);
+      }
+    }
+
+    // 4. For each run: delete events in portal-events and run items in portal-runs.
+    for (const runId of runIds) {
+      // Delete all events for this run in portal-events
+      const eventItems = await paginateQuery(this.client, {
+        TableName: eventsTable(),
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': av(`RUN#${runId}`) },
+      });
+      await batchDelete(this.client, eventsTable(), eventItems);
+
+      // Delete all items under RUN#<runId> in portal-runs (inputs, #SEQ)
+      const runItems = await paginateQuery(this.client, {
+        TableName: runsTable(),
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': av(`RUN#${runId}`) },
+      });
+      await batchDelete(this.client, runsTable(), runItems);
+    }
+
+    // 5. Delete all items under WF#<id> in portal-runs (META, WFEVT, #WFSEQ).
+    await batchDelete(this.client, runsTable(), wfItems);
+
+    // 6. If there was a parent, decrement its child count.
+    if (parentId) {
+      await this.incrementWorkflowChildCount(parentId, -1);
     }
   }
 
@@ -563,7 +877,6 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       TableName: runsTable(),
       Key: marshalItem({ PK: `WF#${parentId}`, SK: '#META' }),
       UpdateExpression: 'ADD childCount :delta',
-      ExpressionAttributeNames: {},
       ExpressionAttributeValues: { ':delta': { N: String(delta) } },
     }));
   }
@@ -571,7 +884,6 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   // ── Runs ────────────────────────────────────────────────────────────────────
 
   async getRunById(id: string): Promise<RunRecord | null> {
-    // Use GSI-RunId to find run without knowing workflowId
     const res = await this.client.send(new QueryCommand({
       TableName: runsTable(),
       IndexName: 'GSI-RunId',
@@ -606,22 +918,28 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   }
 
   async getActiveRun(workflowId: string): Promise<RunRecord | null> {
-    const res = await this.client.send(new QueryCommand({
-      TableName: runsTable(),
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-      FilterExpression: '#status IN (:pending, :running)',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: {
-        ':pk': av(`WF#${workflowId}`),
-        ':prefix': av('RUN#'),
-        ':pending': av('pending'),
-        ':running': av('running'),
-      },
-      ScanIndexForward: false,
-      Limit: 20, // check recent runs; active run should be among them
-    }));
-    if (!res.Items || res.Items.length === 0) return null;
-    return itemToRun(res.Items[0]);
+    // Scan newest-first in small batches; the active run is almost always
+    // among the most recent runs, so this is efficient in practice.
+    let lastKey: Record<string, AttributeValue> | undefined;
+    do {
+      const res = await this.client.send(new QueryCommand({
+        TableName: runsTable(),
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': av(`WF#${workflowId}`),
+          ':prefix': av('RUN#'),
+        },
+        ScanIndexForward: false,
+        Limit: 100,
+        ExclusiveStartKey: lastKey,
+      }));
+      for (const item of (res.Items ?? [])) {
+        const run = itemToRun(item);
+        if (run.status === 'pending' || run.status === 'running') return run;
+      }
+      lastKey = res.LastEvaluatedKey;
+    } while (lastKey);
+    return null;
   }
 
   async listRunsByWorkflow(workflowId: string, limit = 100): Promise<RunRecord[]> {
@@ -694,9 +1012,8 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   }
 
   async updateRun(id: string, patch: Partial<RunRecord>): Promise<void> {
-    // Find the run's partition key (WF#<workflowId>) via GSI-RunId
     const run = await this.getRunById(id);
-    if (!run) return; // run gone (test cleanup)
+    if (!run) return;
 
     const allowed: (keyof RunRecord)[] = [
       'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
@@ -729,12 +1046,60 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     }));
   }
 
+  async updateRunConditional(
+    id: string,
+    expectedStatus: string,
+    patch: Partial<RunRecord>,
+  ): Promise<boolean> {
+    const run = await this.getRunById(id);
+    if (!run) return false;
+
+    const allowed: (keyof RunRecord)[] = [
+      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
+      'stop_reason', 'time_limit_at', 'model', 'error',
+    ];
+    const setExprs: string[] = [];
+    const names: Record<string, string> = { '#curSt': 'status' };
+    const vals: Record<string, AttributeValue> = { ':expected': av(expectedStatus) };
+    let i = 0;
+    for (const k of allowed) {
+      if (k in patch && patch[k] !== undefined) {
+        const nk = `#b${i}`;
+        const vk = `:w${i}`;
+        names[nk] = k;
+        vals[vk] = av(patch[k] as string | number | null);
+        setExprs.push(`${nk} = ${vk}`);
+        i++;
+      }
+    }
+    if (setExprs.length === 0) return false;
+
+    const runSk = `RUN#${run.created_at}#${id}`;
+    try {
+      await this.client.send(new UpdateItemCommand({
+        TableName: runsTable(),
+        Key: marshalItem({ PK: `WF#${run.workflow_id}`, SK: runSk }),
+        UpdateExpression: `SET ${setExprs.join(', ')}`,
+        ConditionExpression: '#curSt = :expected',
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: vals,
+      }));
+      return true;
+    } catch (e: unknown) {
+      if ((e as { name?: string }).name === 'ConditionalCheckFailedException') return false;
+      throw e;
+    }
+  }
+
   // ── Events ──────────────────────────────────────────────────────────────────
 
   async appendRunEvent(runId: string, type: string, payload: string, createdAt: string): Promise<AppendedEvent> {
     const safePayload = truncatePayload(payload);
 
-    // Atomically increment the sequence counter
+    // Atomically increment the per-run sequence counter.
+    // This is the single source of the event id — both the stored item and the
+    // live stream must use this value (not an in-memory counter).
     const res = await this.client.send(new UpdateItemCommand({
       TableName: runsTable(),
       Key: marshalItem({ PK: `RUN#${runId}`, SK: '#SEQ' }),
@@ -812,7 +1177,6 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       const events = await this.listRunEvents(run.id, limit);
       results.push(...events.filter((e) => typeSet.has(e.type)));
     }
-    // Sort descending (newest first) to match the SQLite query order
     results.sort((a, b) => b.id - a.id);
     return results.slice(0, limit);
   }
@@ -858,6 +1222,8 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         expires_at: input.expires_at,
         created_at: input.created_at,
       }),
+      // GSI-InputId PK — always set so getInputById can find it without run_id
+      inputId: av(input.id),
     };
     await this.client.send(new PutItemCommand({
       TableName: runsTable(),
@@ -883,12 +1249,25 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   }
 
   async getInputById(id: string): Promise<InputRecord | null> {
-    // S1-TODO(sessions): Without knowing run_id we can't do a direct GetItem.
-    // Callers in runs.ts pass only the inputId; they need a GSI on 'id'.
-    // For now, the runs.ts input route (`GET /api/inputs/:id`) is left on SQLite
-    // (marked S1-TODO in that file). This method is only called from converter paths
-    // that also provide run_id via getInputByRunAndId.
-    return null;
+    // Use GSI-InputId to find input without knowing run_id.
+    const res = await this.client.send(new QueryCommand({
+      TableName: runsTable(),
+      IndexName: 'GSI-InputId',
+      KeyConditionExpression: 'inputId = :iid',
+      ExpressionAttributeValues: { ':iid': av(id) },
+      Limit: 1,
+    }));
+    if (!res.Items || res.Items.length === 0) return null;
+    return itemToInput(res.Items[0]);
+  }
+
+  async getInputByRunAndId(runId: string, inputId: string): Promise<InputRecord | null> {
+    const res = await this.client.send(new GetItemCommand({
+      TableName: runsTable(),
+      Key: marshalItem({ PK: `RUN#${runId}`, SK: `INPUT#${inputId}` }),
+    }));
+    if (!res.Item) return null;
+    return itemToInput(res.Item);
   }
 
   async getInputByHash(inputHash: string, runId: string): Promise<InputRecord | null> {
@@ -959,12 +1338,8 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     }
     if (setExprs.length === 0) return false;
 
-    // We need to know the run_id to build the PK
     const run_id = (patch as Record<string, unknown>)['run_id'] as string | undefined;
-    if (!run_id) {
-      // Without run_id, fall back to querying (should not normally happen)
-      return false;
-    }
+    if (!run_id) return false;
 
     try {
       await this.client.send(new UpdateItemCommand({
@@ -984,7 +1359,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
 
   async updateInput(id: string, patch: Partial<InputRecord>): Promise<void> {
     const run_id = (patch as Record<string, unknown>)['run_id'] as string | undefined;
-    if (!run_id) return; // defensive
+    if (!run_id) return;
 
     const allowed: (keyof InputRecord)[] = [
       'status', 'response', 'allow_all', 'answered_by', 'answered_at',
@@ -1089,11 +1464,12 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     workflowId: string,
     afterDate?: string | null,
     maxExcludeId?: number | null,
+    beforeOrAtDate?: string | null,
   ): Promise<Array<{ id: number; body: string; created_at: string }>> {
     const items = await paginateQuery(this.client, {
       TableName: runsTable(),
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-      FilterExpression: "#k = :human",
+      FilterExpression: '#k = :human',
       ExpressionAttributeNames: { '#k': 'kind' },
       ExpressionAttributeValues: {
         ':pk': av(`WF#${workflowId}`),
@@ -1109,6 +1485,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     }));
     if (afterDate) results = results.filter((e) => e.created_at > afterDate);
     if (maxExcludeId != null) results = results.filter((e) => e.id < maxExcludeId);
+    if (beforeOrAtDate != null) results = results.filter((e) => e.created_at <= beforeOrAtDate);
     return results;
   }
 
@@ -1129,5 +1506,131 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     const times = items.map((item) => getString(item, 'created_at') ?? '').filter(Boolean);
     if (times.length === 0) return null;
     return times.reduce((max, t) => (t > max ? t : max), times[0]);
+  }
+
+  // ── Transcript ──────────────────────────────────────────────────────────────
+
+  async listTranscript(
+    workflowId: string,
+    cursor: import('./sessions.ts').TranscriptCursor | null,
+    limit: number,
+  ): Promise<{ rows: import('./sessions.ts').TranscriptRow[]; nextCursor: import('./sessions.ts').TranscriptCursor | null }> {
+    // 1. List all run IDs for this workflow.
+    const runSkItems = await paginateQuery(this.client, {
+      TableName: runsTable(),
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: {
+        ':pk': av(`WF#${workflowId}`),
+        ':prefix': av('RUN#'),
+      },
+    });
+    const runEntries: Array<{ runId: string }> = runSkItems.map((item) => {
+      const sk = getString(item, 'SK') ?? '';
+      // SK = RUN#<isoCreatedAt>#<runId> — extract the last segment
+      const parts = sk.split('#');
+      return { runId: parts[parts.length - 1] };
+    });
+
+    // 2. Fetch all run events (paginate each run partition fully for correctness).
+    //    Cap at MAX_TRANSCRIPT_EVENTS total to prevent excessive reads.
+    const MAX_TRANSCRIPT_EVENTS = 10_000;
+    const allRunRows: import('./sessions.ts').TranscriptRow[] = [];
+    for (const { runId } of runEntries) {
+      if (allRunRows.length >= MAX_TRANSCRIPT_EVENTS) break;
+      const evtItems = await paginateQuery(this.client, {
+        TableName: eventsTable(),
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': av(`RUN#${runId}`) },
+        ScanIndexForward: true,
+      }, MAX_TRANSCRIPT_EVENTS - allRunRows.length);
+      for (const item of evtItems) {
+        const sk = getString(item, 'SK') ?? '';
+        allRunRows.push({
+          src: 'r',
+          id: seqFromSk(sk),
+          created_at: getString(item, 'created_at') ?? '',
+          kind: getString(item, 'type') ?? '',
+          body: getString(item, 'payload') ?? '',
+          run_id: runId,
+        });
+      }
+    }
+
+    // 3. Fetch all workflow events.
+    const wfEvtItems = await paginateQuery(this.client, {
+      TableName: runsTable(),
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: {
+        ':pk': av(`WF#${workflowId}`),
+        ':prefix': av('WFEVT#'),
+      },
+      ScanIndexForward: true,
+    });
+    const allWfRows: import('./sessions.ts').TranscriptRow[] = wfEvtItems.map((item) => ({
+      src: 'w' as const,
+      id: getNumber(item, 'evtId'),
+      created_at: getString(item, 'created_at') ?? '',
+      kind: getString(item, 'kind') ?? '',
+      body: getString(item, 'body') ?? '',
+      run_id: null,
+    }));
+
+    // 4. Merge and apply cursor filter.
+    let allRows: import('./sessions.ts').TranscriptRow[] = [...allRunRows, ...allWfRows];
+
+    if (cursor) {
+      allRows = allRows.filter((row) => {
+        if (row.created_at < cursor.ts) return true;
+        if (row.created_at > cursor.ts) return false;
+        if (row.src > cursor.src) return true;
+        if (row.src < cursor.src) return false;
+        return row.id < cursor.id;
+      });
+    }
+
+    // 5. Sort descending: newest first, 'r' before 'w' at same ts, higher id first.
+    allRows.sort((a, b) => {
+      if (b.created_at > a.created_at) return 1;
+      if (b.created_at < a.created_at) return -1;
+      if (a.src < b.src) return -1;  // 'r' < 'w' → 'r' comes first
+      if (a.src > b.src) return 1;
+      return b.id - a.id;
+    });
+
+    // 6. Take limit rows and build next cursor.
+    const page = allRows.slice(0, limit);
+    const nextCursor: import('./sessions.ts').TranscriptCursor | null =
+      page.length === limit
+        ? { ts: page[page.length - 1].created_at, src: page[page.length - 1].src, id: page[page.length - 1].id }
+        : null;
+
+    return { rows: page, nextCursor };
+  }
+}
+
+// ── Batch delete helper ────────────────────────────────────────────────────────
+
+async function batchDelete(
+  client: DynamoDBClient,
+  tableName: string,
+  items: Array<Record<string, AttributeValue>>,
+): Promise<void> {
+  if (items.length === 0) return;
+  for (let i = 0; i < items.length; i += 25) {
+    const batch = items.slice(i, i + 25);
+    let result = await client.send(new BatchWriteItemCommand({
+      RequestItems: {
+        [tableName]: batch.map((item) => ({
+          DeleteRequest: { Key: { PK: item['PK'], SK: item['SK'] } },
+        })),
+      },
+    }));
+    // Retry unprocessed items
+    while (result.UnprocessedItems && Object.keys(result.UnprocessedItems).length > 0) {
+      await new Promise((r) => setTimeout(r, 100));
+      result = await client.send(new BatchWriteItemCommand({
+        RequestItems: result.UnprocessedItems,
+      }));
+    }
   }
 }

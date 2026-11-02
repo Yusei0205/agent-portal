@@ -619,7 +619,7 @@ async function runKiroAcp(
       } catch (loadErr: unknown) {
         const reason = String((loadErr as Error)?.message ?? loadErr).slice(0, 200);
         // Fallback: new session + recap of prior conversation
-        const recap = buildConversationRecap(workflowId, ctx.run.runId);
+        const recap = await buildConversationRecap(workflowId, ctx.run.runId);
         if (recap) activePrompt = recap + prompt;
         emit('status', { text: `Started a new session with a recap of earlier turns (could not resume: ${reason})` });
         const newResult = await acp.sendRequest('session/new', {
@@ -641,7 +641,7 @@ async function runKiroAcp(
       // No stored session ID (first run, old session before this feature, or after /clear).
       // If there are prior completed runs since the last /clear, prepend a recap so the
       // engine has context. buildConversationRecap returns '' when there's nothing to recap.
-      const recap = buildConversationRecap(workflowId, ctx.run.runId);
+      const recap = await buildConversationRecap(workflowId, ctx.run.runId);
       if (recap) {
         activePrompt = recap + prompt;
         emit('status', { text: 'Started a new session with a recap of earlier turns' });
@@ -983,7 +983,7 @@ async function runKiroViaAgentCoreAdapter(
   });
 
   if (approxCostUsd > 0) {
-    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
     const wfRow = await repoKiro.getWorkflowById(run.workflowId);
     insert('budget_usage', {
       user_id: wfRow?.created_by ?? null,
@@ -1292,7 +1292,7 @@ export async function runKiro(ctx: RunContext): Promise<string> {
   });
 
   if (approxCostUsd > 0) {
-    // S1-TODO(sessions): budget_usage insert — budget module conversion deferred
+    // S1-TODO(budget): budget_usage insert — budget module conversion deferred
     const wfRowK = await repoKiro2.getWorkflowById(run.workflowId);
     insert('budget_usage', {
       user_id: wfRowK?.created_by ?? null,
