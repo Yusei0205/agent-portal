@@ -104,6 +104,8 @@ function fromCache(engine: string, credId: string): EngineModelsResponse | null 
 }
 
 function toCache(engine: string, credId: string, result: EngineModelsResponse): EngineModelsResponse {
+  // Never remember failures or empty lists: the user usually fixes the cause (signs in, adds a key) and expects the next load to work.
+  if (result.error || result.models.length === 0) return result;
   _cache.set(cacheKey(engine, credId), { expiry: Date.now() + CACHE_TTL_MS, response: result });
   return result;
 }

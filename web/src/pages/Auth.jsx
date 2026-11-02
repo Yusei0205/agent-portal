@@ -103,4 +103,67 @@ export function Login({ onDone }) {
   );
 }
 
+/**
+ * Accept-invite form: opened from the link an admin shares (#/accept-invite?token=...).
+ * Creates the account, then signs the new user in.
+ * @param {{ onDone: () => void }} props
+ */
+export function AcceptInvite({ onDone }) {
+  const hash = window.location.hash;
+  const token = new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '').get('token') || '';
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(/** @type {string|null} */ (null));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      // The invite may already carry an email; if so the server ignores the one typed here.
+      await api.post('/api/auth/accept-invite', { token, name, email, password });
+      const login = email || undefined;
+      if (login) await api.post('/api/auth/login', { email: login, password }).catch(() => {});
+      onDone();
+    } catch (err) {
+      setError(err.message || 'Could not accept the invitation');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <AuthFrame title="Invitation">
+        <div className="error-note" role="alert">This invitation link is missing its token. Ask your admin for a new link.</div>
+      </AuthFrame>
+    );
+  }
+
+  return (
+    <AuthFrame title="Accept invitation" intro="Choose a name and password to create your account.">
+      <form onSubmit={submit} className="stack" noValidate>
+        <div className="field">
+          <label htmlFor="invite-name">Name</label>
+          <input id="invite-name" value={name} onChange={(e) => setName(e.target.value)} required autoFocus autoComplete="name" />
+        </div>
+        <div className="field">
+          <label htmlFor="invite-email">Email</label>
+          <input id="invite-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" />
+        </div>
+        <div className="field">
+          <label htmlFor="invite-password">Password (at least 10 characters)</label>
+          <input id="invite-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="new-password" />
+        </div>
+        {error && <div className="error-note" role="alert">{error}</div>}
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? 'Creating account…' : 'Create account'}
+        </button>
+      </form>
+    </AuthFrame>
+  );
+}
+
 export { AuthFrame };

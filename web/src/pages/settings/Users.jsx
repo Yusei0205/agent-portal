@@ -9,6 +9,16 @@
 import { useState, useEffect, useId, useRef } from 'react';
 import { api } from '../../lib/api.js';
 
+/** The server sees the internal host behind CloudFront, so rebuild the link on the address the admin is using. */
+function portalInviteLink(url) {
+  try {
+    const u = new URL(url);
+    return window.location.origin + u.pathname + u.search + u.hash;
+  } catch {
+    return url;
+  }
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -220,13 +230,13 @@ function InviteModal({ onClose, onDone }) {
                 <input
                   type="text"
                   readOnly
-                  value={result.inviteUrl}
+                  value={portalInviteLink(result.inviteUrl)}
                   onFocus={(e) => e.target.select()}
                 />
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  onClick={() => navigator.clipboard.writeText(result.inviteUrl).catch(() => {})}
+                  onClick={() => navigator.clipboard.writeText(portalInviteLink(result.inviteUrl)).catch(() => {})}
                 >
                   Copy
                 </button>

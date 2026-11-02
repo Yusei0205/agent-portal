@@ -47,7 +47,13 @@ export interface KiroListModelsPayload {
   token: KiroTokenInput;
 }
 
-export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload;
+/** Asks for the outcome of a kiro-login started earlier in the same session (answered even while that login is still running). */
+export interface KiroLoginStatusPayload {
+  mode: 'kiro-login-status';
+  runId: string;
+}
+
+export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload | KiroLoginStatusPayload;
 
 export type ValidationResult =
   | { ok: true; payload: KiroPayload }
@@ -68,8 +74,8 @@ export function validatePayload(raw: unknown): ValidationResult {
   const obj = raw as Record<string, unknown>;
 
   const mode = obj.mode;
-  if (mode !== 'kiro-run' && mode !== 'kiro-login' && mode !== 'kiro-list-models') {
-    return err('"mode" must be "kiro-run", "kiro-login" or "kiro-list-models"');
+  if (mode !== 'kiro-run' && mode !== 'kiro-login' && mode !== 'kiro-list-models' && mode !== 'kiro-login-status') {
+    return err('"mode" must be "kiro-run", "kiro-login", "kiro-list-models" or "kiro-login-status"');
   }
 
   if (typeof obj.runId !== 'string' || !obj.runId.trim()) {
@@ -79,6 +85,9 @@ export function validatePayload(raw: unknown): ValidationResult {
     return err(`"runId" exceeds maximum length of ${MAX_RUN_ID}`);
   }
 
+  if (mode === 'kiro-login-status') {
+    return { ok: true, payload: { mode: 'kiro-login-status', runId: (obj.runId as string).trim() } };
+  }
   if (mode === 'kiro-run') {
     return validateKiroRun(obj);
   }

@@ -23,6 +23,10 @@ import { runKiroListModels } from './list-models.js';
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
 
+/** Outcome of each kiro-login, kept here so any later request in this session can read it. */
+const loginOutcomes = new Map<string, { state: 'pending' | 'complete' | 'failed'; tokenPayload?: unknown; error?: string; at: number }>();
+const LOGIN_OUTCOME_TTL_MS = 30 * 60_000;
+
 let runActive = false;
 let lastStatusChange = Math.floor(Date.now() / 1000);
 
@@ -84,6 +88,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (validation.payload.mode === 'kiro-login-status') {
+      const o = loginOutcomes.get(validation.payload.runId);
+      for (const [k, v] of loginOutcomes) if (Date.now() - v.at > LOGIN_OUTCOME_TTL_MS) loginOutcomes.delete(k);
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      const ev = o
+        ? { type: 'login-status', state: o.state, ...(o.tokenPayload ? { tokenPayload: o.tokenPayload } : {}), ...(o.error ? { error: o.error } : {}) }
+        : { type: 'login-status', state: 'unknown' };
+      res.end(`data: ${JSON.stringify(ev)}
+
+`);
+      return;
+    }
+
     if (runActive) {
       res.writeHead(409, {
         'Content-Type': 'application/json',
@@ -113,8 +130,19 @@ const server = http.createServer(async (req, res) => {
         await runKiroRun(payload, emit, processStartMs);
       } else if (payload.mode === 'kiro-list-models') {
         await runKiroListModels(payload, emit);
-      } else {
-        await runKiroLogin(payload, emit, processStartMs);
+      } else if (payload.mode === 'kiro-login') {
+        loginOutcomes.set(payload.runId, { state: 'pending', at: Date.now() });
+        const recording = (event: Record<string, unknown>): void => {
+          if (event.type === 'result') {
+            loginOutcomes.set(payload.runId, event.success && event.tokenPayload
+              ? { state: 'complete', tokenPayload: event.tokenPayload, at: Date.now() }
+              : { state: 'failed', error: 'Login did not complete', at: Date.now() });
+          } else if (event.type === 'error') {
+            loginOutcomes.set(payload.runId, { state: 'failed', error: String(event.message ?? 'Login failed'), at: Date.now() });
+          }
+          emit(event);
+        };
+        await runKiroLogin(payload, recording, processStartMs);
       }
     } catch (e: unknown) {
       const msg = (e as Error)?.message ?? String(e);

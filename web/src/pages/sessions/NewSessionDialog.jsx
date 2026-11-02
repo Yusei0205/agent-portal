@@ -146,6 +146,22 @@ function ModelPicker({ engine, credentialId, value, onChange }) {
 
   useEffect(() => { load(false); }, [load]);
 
+  // When loading failed or came back empty (e.g. credentials were still being set up), try again
+  // automatically when the user comes back to this tab and every 10 seconds while the dialog is open.
+  const needsRetry = !loading && (Boolean(error) || models.length === 0);
+  useEffect(() => {
+    if (!needsRetry) return undefined;
+    let attempts = 0;
+    const retry = () => {
+      if (document.visibilityState !== 'visible' || attempts >= 6) return;
+      attempts += 1;
+      load(false);
+    };
+    const timer = setInterval(retry, 10000);
+    window.addEventListener('focus', retry);
+    return () => { clearInterval(timer); window.removeEventListener('focus', retry); };
+  }, [needsRetry, load]);
+
   return (
     <div className="field">
       <label htmlFor="ns-model">Model</label>

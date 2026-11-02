@@ -69,6 +69,7 @@ export type AgentCoreSSEEvent =
   | { type: 'status'; text: string }
   | { type: 'error'; message: string }
   | { type: 'models'; stdout: string }
+  | { type: 'login-status'; state: 'pending' | 'complete' | 'failed' | 'unknown'; tokenPayload?: AgentCoreLoginResult['tokenPayload']; error?: string }
   | { type: 'verification'; verificationUri: string; userCode: string }
   | {
       type: 'result';
@@ -622,14 +623,20 @@ export const _agentCoreLoginState = new Map<string, PendingLogin>();
  * The background result is stored in both the in-memory map (fast sync poll)
  * and the AgentcoreLoginRepository (DynamoDB cross-Lambda poll).
  */
+/** Session and run ids are derived from the credential and start time so any Lambda instance can find the login again. */
+function loginIds(credentialId: string, createdAt: string): { sessionId: string; runId: string } {
+  const h = createHash('sha256').update(`${credentialId}|${createdAt}`).digest('hex');
+  return { sessionId: `kirologin-${h.slice(0, 40)}`, runId: `login-${h.slice(0, 24)}` };
+}
+
 export async function startAgentCoreLogin(
   runtimeArn: string,
   credentialId: string,
   startUrl: string,
   region: string,
 ): Promise<AgentCoreLoginChallenge> {
-  const sessionId = randomUUID();
-  const runId = `login-${generateId()}`;
+  const createdAt = now();
+  const { sessionId, runId } = loginIds(credentialId, createdAt);
   const payload: Record<string, unknown> = {
     mode: 'kiro-login',
     runId,
@@ -641,7 +648,7 @@ export async function startAgentCoreLogin(
   _agentCoreLoginState.delete(credentialId);
   if (usesDynamoDb()) {
     await getAgentcoreLoginRepository().delete(credentialId);
-    await getAgentcoreLoginRepository().create(credentialId, now());
+    await getAgentcoreLoginRepository().create(credentialId, createdAt);
   }
 
   const pending: PendingLogin = { settled: false, result: null, err: null };
@@ -762,7 +769,30 @@ export async function pollAgentCoreLoginShared(credentialId: string): Promise<Re
   const repo = getAgentcoreLoginRepository();
   const entry = await repo.get(credentialId);
   if (!entry) return { status: 'unknown' };
-  if (!entry.settled) return { status: 'pending' };
+  if (!entry.settled) {
+    // The Lambda that started the login is frozen once its response ends, so it cannot record the outcome.
+    // Ask the runner (same AgentCore session) directly.
+    const runtimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+    if (!runtimeArn) return { status: 'pending' };
+    const { sessionId, runId } = loginIds(credentialId, entry.createdAt);
+    try {
+      for await (const ev of invokeAgentCore(runtimeArn, sessionId, { mode: 'kiro-login-status', runId })) {
+        if (ev.type !== 'login-status') continue;
+        if (ev.state === 'complete' && ev.tokenPayload) {
+          await repo.delete(credentialId).catch(() => {});
+          return { status: 'complete', tokenPayload: ev.tokenPayload };
+        }
+        if (ev.state === 'failed') {
+          await repo.delete(credentialId).catch(() => {});
+          return { status: 'failed', errorMessage: ev.error ?? 'Login failed' };
+        }
+        break;
+      }
+    } catch (e) {
+      console.error('[kiro-login] status check failed:', e instanceof Error ? e.message : e);
+    }
+    return { status: 'pending' };
+  }
 
   await repo.delete(credentialId).catch(() => {});
   if (entry.state === 'complete' && entry.tokenPayload) {

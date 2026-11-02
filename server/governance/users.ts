@@ -17,6 +17,7 @@ import { generateId, now, str, badRequest } from '../util.ts';
 import { appendAudit } from '../audit.ts';
 import { hashPassword } from '../auth.ts';
 import { getAuthRepository } from '../repositories/auth.ts';
+import { getProjectRepository } from '../repositories/projects.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -262,15 +263,10 @@ export function registerUserRoutes(): void {
 
     // If invitation had a project, add the user as a member
     if (inv.project_id) {
-      const project = one('SELECT id FROM projects WHERE id = ?', inv.project_id);
-      if (project) {
+      const projects = getProjectRepository();
+      if (await projects.getProjectById(inv.project_id)) {
         try {
-          insert('project_members', {
-            project_id: inv.project_id,
-            user_id: userId,
-            access: 'member',
-            role: '',
-          });
+          await projects.addMember(inv.project_id, userId, 'viewer');
         } catch {
           // ignore duplicate member insertion
         }
