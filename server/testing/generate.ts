@@ -12,6 +12,8 @@
  *   GET  /api/projects/:pid/tests/:tpid/generations/:gid/trace — generation trace steps
  */
 
+import { testingRepo } from './data.ts';
+import { registerBackgroundJob, runInBackground } from '../background-jobs.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from '../http.ts';
@@ -232,16 +234,15 @@ const cancelledGenerations = new Set<string>();
 
 type ProgressPhase = 'preparing' | 'calling' | 'retrying' | 'parsing' | 'saving' | 'done';
 
-function setProgress(
+async function setProgress(
   genId: string,
   phase: ProgressPhase,
   message: string,
   percent: number,
   stepsSoFar = 0,
-): void {
+): Promise<void> {
   try {
-    run('UPDATE test_generations SET progress = ? WHERE id = ?',
-      JSON.stringify({ phase, message, percent, stepsSoFar }), genId);
+    await testingRepo().updateGeneration(genId, { progress: JSON.stringify({ phase, message, percent, stepsSoFar }) });
   } catch { /* DB closed — best effort */ }
 }
 
@@ -373,29 +374,29 @@ export async function runGeneration(
   const mk = (kind: string, label: string, detail?: Record<string, unknown>) =>
     startStep({ parentKind: 'generation', parentId: genId, seq: ++seq, kind, label, detail });
   const fin = finishStep;
-  const traceFail = (error: string) => {
+  const traceFail = async (error: string) => {
     if (_failureStepAdded) return;
     _failureStepAdded = true;
-    const s = mk('failure', 'Generation failed');
-    fin(s.id, s.startedAt, { status: 'failed', error });
+    const s = await mk('failure', 'Generation failed');
+    await fin(s.id, s.startedAt, { status: 'failed', error });
   };
 
-  try { run('UPDATE test_generations SET status = ?, started_at = ? WHERE id = ?', 'running', now(), genId); }
+  try { await testingRepo().updateGeneration(genId, { status: 'running', started_at: now() }); }
   catch { return; } // DB closed
 
-  setProgress(genId, 'preparing', 'Loading context and attachments', 10);
+  await setProgress(genId, 'preparing', 'Loading context and attachments', 10);
 
   try {
-    const existingSteps = existingScriptId
-      ? (() => {
-          const s = one<TestScript>('SELECT steps FROM test_scripts WHERE id = ?', existingScriptId);
-          if (!s) return undefined;
-          try { return JSON.parse(String(s.steps || '[]')) as unknown[]; } catch { return undefined; }
-        })()
-      : undefined;
+    let existingSteps: unknown[] | undefined;
+    if (existingScriptId) {
+      const existing = await testingRepo().getTestScriptById(existingScriptId);
+      if (existing) {
+        try { existingSteps = JSON.parse(String(existing.steps || '[]')) as unknown[]; } catch { existingSteps = undefined; }
+      }
+    }
 
     // ── Trace: context step ───────────────────────────────────────────────
-    const ctxStep = mk('context', 'Building context');
+    const ctxStep = await mk('context', 'Building context');
 
     // Load and process attachments (single-use: cleaned up after generation)
     let attachmentRows: Row[] = [];
@@ -421,7 +422,7 @@ export async function runGeneration(
     const userPrompt = description;
 
     // Store system prompt once on the context step (vault refs only resolved at execution time).
-    fin(ctxStep.id, ctxStep.startedAt, {
+    await fin(ctxStep.id, ctxStep.startedAt, {
       status: 'ok',
       detail: { attachmentNames, textChars: textBlock.length, imageCount: images.length },
       prompt: { system: systemPrompt + textBlock },
@@ -448,16 +449,16 @@ export async function runGeneration(
       return extractJsonArray(text);
     };
 
-    setProgress(genId, 'calling', existingScriptId ? 'Refining existing script' : 'Calling the AI model', 30);
+    await setProgress(genId, 'calling', existingScriptId ? 'Refining existing script' : 'Calling the AI model', 30);
 
     // ── Trace: first model call ────────────────────────────────────────────
-    const callStep = mk('call', existingScriptId ? 'Refining existing script' : 'Generating test steps');
+    const callStep = await mk('call', existingScriptId ? 'Refining existing script' : 'Generating test steps');
 
     let modelOutput: unknown;
     try {
       modelOutput = await callModel(userPrompt);
     } catch (callErr) {
-      fin(callStep.id, callStep.startedAt, {
+      await fin(callStep.id, callStep.startedAt, {
         status: 'failed',
         error: String((callErr as Error).message ?? callErr),
         prompt: { user: userPrompt },
@@ -466,7 +467,7 @@ export async function runGeneration(
     }
 
     if (!Array.isArray(modelOutput)) {
-      fin(callStep.id, callStep.startedAt, {
+      await fin(callStep.id, callStep.startedAt, {
         status: 'failed',
         error: 'Model output must be a JSON array of steps',
         output: JSON.stringify(modelOutput),
@@ -475,7 +476,7 @@ export async function runGeneration(
       throw new Error('Model output must be a JSON array of steps');
     }
 
-    fin(callStep.id, callStep.startedAt, {
+    await fin(callStep.id, callStep.startedAt, {
       status: 'ok',
       detail: { stepCount: (modelOutput as unknown[]).length },
       output: JSON.stringify(modelOutput),
@@ -487,13 +488,13 @@ export async function runGeneration(
     let validatedSteps: Step[];
 
     // ── Trace: validate step ───────────────────────────────────────────────
-    const validateStep2 = mk('validate', 'Validating generated steps');
+    const validateStep2 = await mk('validate', 'Validating generated steps');
 
     try {
       validatedSteps = validateSteps(modelOutput);
       // Empty array → no usable steps; trigger the retry path instead of saving an empty script
       if (validatedSteps.length === 0) throw new Error('no usable steps');
-      fin(validateStep2.id, validateStep2.startedAt, {
+      await fin(validateStep2.id, validateStep2.startedAt, {
         status: 'ok',
         detail: { stepCount: validatedSteps.length, passed: true },
       });
@@ -505,29 +506,29 @@ export async function runGeneration(
         catch (e) { stepErrors.push((e as Error).message); }
       }
 
-      fin(validateStep2.id, validateStep2.startedAt, {
+      await fin(validateStep2.id, validateStep2.startedAt, {
         status: 'retry',
         detail: { stepCount: (modelOutput as unknown[]).length, passed: false, errorCount: stepErrors.length },
         error: (firstErr as Error).message,
       });
 
-      setProgress(genId, 'retrying', 'Retrying with validation feedback', 50);
+      await setProgress(genId, 'retrying', 'Retrying with validation feedback', 50);
 
       // ── Trace: retry call ─────────────────────────────────────────────────
-      const retryStep = mk('retry', 'Retrying with validation feedback');
+      const retryStep = await mk('retry', 'Retrying with validation feedback');
       const retryPrompt = buildRetryPrompt(userPrompt, stepErrors);
 
       let retryOutput: unknown = null;
       try {
         retryOutput = await callModel(retryPrompt, stepErrors);
-        fin(retryStep.id, retryStep.startedAt, {
+        await fin(retryStep.id, retryStep.startedAt, {
           status: 'ok',
           detail: { stepCount: Array.isArray(retryOutput) ? (retryOutput as unknown[]).length : 0 },
           output: JSON.stringify(retryOutput),
           prompt: { user: retryPrompt },
         });
       } catch (retryErr) {
-        fin(retryStep.id, retryStep.startedAt, {
+        await fin(retryStep.id, retryStep.startedAt, {
           status: 'failed',
           error: String((retryErr as Error).message ?? retryErr),
           prompt: { user: retryPrompt },
@@ -557,8 +558,8 @@ export async function runGeneration(
 
       // Record salvage warnings in a trace step if any
       if (genWarnings.length > 0) {
-        const salvageStep = mk('salvage', `Salvaged ${validatedSteps.length} of ${outputToSalvage.length} steps`);
-        fin(salvageStep.id, salvageStep.startedAt, {
+        const salvageStep = await mk('salvage', `Salvaged ${validatedSteps.length} of ${outputToSalvage.length} steps`);
+        await fin(salvageStep.id, salvageStep.startedAt, {
           status: 'ok',
           detail: { kept: validatedSteps.length, dropped: genWarnings.filter((w) => w.includes('dropped')).length, repaired: genWarnings.filter((w) => w.includes('repaired')).length },
         });
@@ -568,32 +569,32 @@ export async function runGeneration(
       if (validatedSteps.length === 0) {
         const NO_STEPS_MSG =
           'The model returned no usable steps. Try a more specific description, or use Generate test cases for scenario-level test cases.';
-        traceFail(NO_STEPS_MSG);
+        await traceFail(NO_STEPS_MSG);
         throw new Error(NO_STEPS_MSG);
       }
     }
 
-    setProgress(genId, 'parsing', 'Validating steps', 70, validatedSteps.length);
+    await setProgress(genId, 'parsing', 'Validating steps', 70, validatedSteps.length);
 
     // Check if cancelled before saving — do not create/update script
-    if (cancelledGenerations.has(genId)) {
+    // (the cancel route may have run in another process, so the database is checked as well)
+    if (cancelledGenerations.has(genId) || (await testingRepo().getGenerationById(genId))?.cancelled_at) {
       cancelledGenerations.delete(genId);
       return;
     }
 
     // ── Create or update script ────────────────────────────────────────────
-    setProgress(genId, 'saving', existingScriptId ? 'Updating test script' : 'Saving test script', 85, validatedSteps.length);
-    const saveStep = mk('save', existingScriptId ? 'Updating script' : 'Creating script');
+    await setProgress(genId, 'saving', existingScriptId ? 'Updating test script' : 'Saving test script', 85, validatedSteps.length);
+    const saveStep = await mk('save', existingScriptId ? 'Updating script' : 'Creating script');
     const ts = now();
     let scriptId: string;
 
     if (existingScriptId) {
-      run('UPDATE test_scripts SET steps = ?, updated_at = ? WHERE id = ?',
-        JSON.stringify(validatedSteps), ts, existingScriptId);
+      await testingRepo().updateTestScript(existingScriptId, { steps: JSON.stringify(validatedSteps), updated_at: ts });
       scriptId = existingScriptId;
     } else {
       scriptId = generateId();
-      insert('test_scripts', {
+      await testingRepo().createTestScript({
         id: scriptId,
         test_project_id: tp.id,
         test_group_id: targetGroupId,
@@ -606,23 +607,22 @@ export async function runGeneration(
       });
     }
 
-    fin(saveStep.id, saveStep.startedAt, {
+    await fin(saveStep.id, saveStep.startedAt, {
       status: 'ok',
       detail: { scriptId, stepCount: validatedSteps.length },
     });
 
     // ── Done step ─────────────────────────────────────────────────────────
-    const doneStep = mk('done', 'Generation complete');
+    const doneStep = await mk('done', 'Generation complete');
 
-    setProgress(genId, 'done', 'Generation complete', 100, validatedSteps.length);
+    await setProgress(genId, 'done', 'Generation complete', 100, validatedSteps.length);
     try {
-      run(
-        'UPDATE test_generations SET status = ?, result_script_ids = ?, finished_at = ?, warnings = ? WHERE id = ?',
-        'done', JSON.stringify([scriptId]), ts, JSON.stringify(genWarnings), genId,
-      );
+      await testingRepo().updateGeneration(genId, {
+        status: 'done', result_script_ids: JSON.stringify([scriptId]), finished_at: ts, warnings: JSON.stringify(genWarnings),
+      });
     } catch { /* DB closed */ }
 
-    fin(doneStep.id, doneStep.startedAt, {
+    await fin(doneStep.id, doneStep.startedAt, {
       status: 'ok',
       detail: { scriptId, warningsCount: genWarnings.length },
     });
@@ -632,10 +632,9 @@ export async function runGeneration(
       try { await deleteAttachmentsByIds(attachmentIds); } catch { /* best effort */ }
     }
   } catch (err) {
-    traceFail(String((err as Error).message ?? err));
+    await traceFail(String((err as Error).message ?? err));
     try {
-      run('UPDATE test_generations SET status = ?, error = ?, finished_at = ? WHERE id = ?',
-        'failed', String((err as Error).message ?? err), now(), genId);
+      await testingRepo().updateGeneration(genId, { status: 'failed', error: String((err as Error).message ?? err), finished_at: now() });
     } catch { /* DB closed */ }
     // Attachments are NOT deleted on failure — kept for retry
   }
@@ -643,7 +642,45 @@ export async function runGeneration(
 
 // ── Route registration ─────────────────────────────────────────────────────────
 
+/** First group of a test project (lowest sort order), or null when it has none. */
+async function firstGroupId(testProjectId: string): Promise<string | null> {
+  const groups = (await testingRepo().listGroupsByTestProject(testProjectId)).sort((a, b) => a.sort_order - b.sort_order);
+  return groups[0]?.id ?? null;
+}
+
+interface GenerationJob {
+  genId: string;
+  tp: TestProject;
+  description: string;
+  targetGroupId: string;
+  existingScriptId: string | null;
+  createdBy: string;
+  attachmentIds: string[];
+}
+
+/** Run a generation in the background (a separate Lambda invocation in the cloud). */
+async function startGenerationJob(job: GenerationJob): Promise<void> {
+  await runInBackground('test-generate', {
+    genId: job.genId,
+    testProjectId: job.tp.id,
+    description: job.description,
+    targetGroupId: job.targetGroupId,
+    existingScriptId: job.existingScriptId,
+    createdBy: job.createdBy,
+    attachmentIds: job.attachmentIds,
+  });
+}
+
 export function registerGenerateRoutes(): void {
+  registerBackgroundJob('test-generate', async (a) => {
+    const tp = (await testingRepo().getTestProjectById(String(a.testProjectId))) as unknown as TestProject | null;
+    if (!tp) return;
+    await runGeneration(
+      String(a.genId), tp, String(a.description), String(a.targetGroupId),
+      a.existingScriptId ? String(a.existingScriptId) : null, String(a.createdBy),
+      Array.isArray(a.attachmentIds) ? (a.attachmentIds as unknown[]).map(String) : [],
+    );
+  });
 
   // POST /api/projects/:pid/tests/:tpid/generate — start generation
   router.post('/api/projects/:pid/tests/:tpid/generate', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
@@ -664,23 +701,23 @@ export function registerGenerateRoutes(): void {
 
     // Validate group if provided
     if (groupId) {
-      const group = one<Row>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', groupId, tp.id);
+      const group = await testingRepo().getTestGroupByTestProjectAndId(tp.id, groupId);
       if (!group) { sendJson(res, 400, { error: 'Group not found in this test project' }); return; }
     } else {
       // Create a default group if none exists
-      const existing = one<Row>('SELECT id FROM test_groups WHERE test_project_id = ? LIMIT 1', tp.id);
-      if (!existing) {
+      const existing = await testingRepo().listGroupsByTestProject(tp.id);
+      if (existing.length === 0) {
         const gid = generateId();
         const ts = now();
-        insert('test_groups', { id: gid, test_project_id: tp.id, name: 'Default', sort_order: 0, created_at: ts, updated_at: ts });
+        await testingRepo().createTestGroup({ id: gid, test_project_id: tp.id, name: 'Default', sort_order: 0, created_at: ts, updated_at: ts });
       }
     }
 
-    const effectiveGroupId = groupId ?? (one<Row>('SELECT id FROM test_groups WHERE test_project_id = ? ORDER BY sort_order LIMIT 1', tp.id)?.id as string);
+    const effectiveGroupId = groupId ?? (await firstGroupId(tp.id)) as string;
 
     const genId = generateId();
     const ts = now();
-    insert('test_generations', {
+    await testingRepo().createGeneration({
       id: genId,
       test_project_id: tp.id,
       script_id: null,
@@ -695,13 +732,14 @@ export function registerGenerateRoutes(): void {
       created_by: req.user!.id,
       created_at: ts,
       finished_at: null,
+      progress: '{}',
+      started_at: null,
+      cancelled_at: null,
     });
 
     auditRaw(req.user!.id, 'test_generation.start', `test_generation:${genId}`, { description });
 
-    runGeneration(genId, tp, description, effectiveGroupId, null, req.user!.id, rawAttachmentIds).catch(() => {
-      // error saved to DB in runGeneration — ignore any trailing DB-closed errors
-    });
+    await startGenerationJob({ genId, tp, description, targetGroupId: effectiveGroupId, existingScriptId: null, createdBy: req.user!.id, attachmentIds: rawAttachmentIds });
 
     sendJson(res, 202, { generationId: genId });
   });
@@ -711,7 +749,7 @@ export function registerGenerateRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
+    const script = (await testingRepo().getTestScriptByTestProjectAndId(tp.id, req.params.sid)) as unknown as TestScript | null;
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -726,7 +764,7 @@ export function registerGenerateRoutes(): void {
 
     const genId = generateId();
     const ts = now();
-    insert('test_generations', {
+    await testingRepo().createGeneration({
       id: genId,
       test_project_id: tp.id,
       script_id: script.id,
@@ -741,9 +779,12 @@ export function registerGenerateRoutes(): void {
       created_by: req.user!.id,
       created_at: ts,
       finished_at: null,
+      progress: '{}',
+      started_at: null,
+      cancelled_at: null,
     });
 
-    runGeneration(genId, tp, instruction, script.test_group_id, script.id, req.user!.id, rawAttachmentIds).catch(() => {});
+    await startGenerationJob({ genId, tp, description: instruction, targetGroupId: script.test_group_id, existingScriptId: script.id, createdBy: req.user!.id, attachmentIds: rawAttachmentIds });
 
     sendJson(res, 202, { generationId: genId });
   });
@@ -758,18 +799,11 @@ export function registerGenerateRoutes(): void {
     const rawLimit = parseInt(req.query.get('limit') ?? '20', 10);
     const limit = Math.min(Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 20), 50);
 
-    let gens: TestGeneration[];
-    if (activeOnly) {
-      gens = all<TestGeneration>(
-        "SELECT * FROM test_generations WHERE test_project_id = ? AND status IN ('pending', 'running') ORDER BY created_at DESC",
-        tp.id,
-      );
-    } else {
-      gens = all<TestGeneration>(
-        'SELECT * FROM test_generations WHERE test_project_id = ? ORDER BY created_at DESC LIMIT ?',
-        tp.id, limit,
-      );
-    }
+    const allGens = ((await testingRepo().listGenerationsByTestProject(tp.id, 1000, 0)) as unknown as TestGeneration[])
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const gens: TestGeneration[] = activeOnly
+      ? allGens.filter((g) => g.status === 'pending' || g.status === 'running')
+      : allGens.slice(0, limit);
 
     const generations = gens.map((gen) => {
       let warnings: string[] = [];
@@ -813,10 +847,7 @@ export function registerGenerateRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const gen = one<TestGeneration>(
-      'SELECT * FROM test_generations WHERE id = ? AND test_project_id = ?',
-      req.params.genId, tp.id,
-    );
+    const gen = (await testingRepo().getGenerationByTestProjectAndId(tp.id, req.params.genId)) as unknown as TestGeneration | null;
     if (!gen) { sendJson(res, 404, { error: 'Generation not found' }); return; }
 
     // If done, include the created/updated scripts
@@ -824,15 +855,15 @@ export function registerGenerateRoutes(): void {
     if (gen.status === 'done') {
       let ids: string[] = [];
       try { ids = JSON.parse(String(gen.result_script_ids || '[]')) as string[]; } catch { ids = []; }
-      scripts = ids.map((sid) => {
-        const s = one<TestScript>('SELECT * FROM test_scripts WHERE id = ?', sid);
+      scripts = (await Promise.all(ids.map(async (sid) => {
+        const s = await testingRepo().getTestScriptById(sid);
         if (!s) return null;
         return {
           id: s.id,
           name: s.name,
           steps: (() => { try { return JSON.parse(String(s.steps || '[]')); } catch { return []; } })(),
         };
-      }).filter(Boolean);
+      }))).filter(Boolean);
     }
 
     // Parse warnings from DB
@@ -869,17 +900,17 @@ export function registerGenerateRoutes(): void {
     // Validate group
     let targetGroupId = groupId;
     if (targetGroupId) {
-      const group = one<Row>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', targetGroupId, tp.id);
+      const group = await testingRepo().getTestGroupByTestProjectAndId(tp.id, targetGroupId);
       if (!group) { sendJson(res, 400, { error: 'Group not found' }); return; }
     } else {
-      const existing = one<Row>('SELECT id FROM test_groups WHERE test_project_id = ? ORDER BY sort_order LIMIT 1', tp.id);
-      if (!existing) {
+      const existingId = await firstGroupId(tp.id);
+      if (!existingId) {
         const gid = generateId();
         const ts = now();
-        insert('test_groups', { id: gid, test_project_id: tp.id, name: 'Imported', sort_order: 0, created_at: ts, updated_at: ts });
+        await testingRepo().createTestGroup({ id: gid, test_project_id: tp.id, name: 'Imported', sort_order: 0, created_at: ts, updated_at: ts });
         targetGroupId = gid;
       } else {
-        targetGroupId = String(existing.id);
+        targetGroupId = existingId;
       }
     }
 
@@ -914,11 +945,12 @@ export function registerGenerateRoutes(): void {
 
       const genId = generateId();
       const ts = now();
-      insert('test_generations', {
+      await testingRepo().createGeneration({
         id: genId,
         test_project_id: tp.id,
         script_id: null,
         kind: 'import',
+        group_id: targetGroupId,
         description: `${name}: ${description}`,
         status: 'pending',
         error: null,
@@ -927,9 +959,12 @@ export function registerGenerateRoutes(): void {
         created_by: req.user!.id,
         created_at: ts,
         finished_at: null,
+        progress: '{}',
+        started_at: null,
+        cancelled_at: null,
       });
 
-      runGeneration(genId, tp, `${name}: ${description}`, targetGroupId!, null, req.user!.id).catch(() => {});
+      await startGenerationJob({ genId, tp, description: `${name}: ${description}`, targetGroupId: targetGroupId!, existingScriptId: null, createdBy: req.user!.id, attachmentIds: [] });
       genIds.push(genId);
     }
 
@@ -942,10 +977,7 @@ export function registerGenerateRoutes(): void {
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
-    const gen = one<TestGeneration>(
-      'SELECT * FROM test_generations WHERE id = ? AND test_project_id = ?',
-      req.params.gid, tp.id,
-    );
+    const gen = (await testingRepo().getGenerationByTestProjectAndId(tp.id, req.params.gid)) as unknown as TestGeneration | null;
     if (!gen) { sendJson(res, 404, { error: 'Generation not found' }); return; }
 
     const currentStatus = gen.cancelled_at ? 'cancelled' : gen.status;
@@ -974,7 +1006,7 @@ export function registerGenerateRoutes(): void {
     // Mark cancelled in DB and signal runGeneration to abort before saving
     const ts = now();
     try {
-      run('UPDATE test_generations SET cancelled_at = ?, finished_at = ? WHERE id = ?', ts, ts, gen.id);
+      await testingRepo().updateGeneration(gen.id, { cancelled_at: ts, finished_at: ts });
     } catch { /* DB closed */ }
     cancelledGenerations.add(gen.id);
 
@@ -996,13 +1028,10 @@ export function registerGenerateRoutes(): void {
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
 
-    const gen = one<{ id: string }>(
-      'SELECT id FROM test_generations WHERE id = ? AND test_project_id = ?',
-      req.params.gid, tp.id,
-    );
+    const gen = await testingRepo().getGenerationByTestProjectAndId(tp.id, req.params.gid);
     if (!gen) { sendJson(res, 404, { error: 'Generation not found' }); return; }
 
-    const steps = getGenerationTrace(gen.id);
+    const steps = await getGenerationTrace(gen.id);
     sendJson(res, 200, { steps });
   });
 
@@ -1012,10 +1041,7 @@ export function registerGenerateRoutes(): void {
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
-    const original = one<TestGeneration>(
-      'SELECT * FROM test_generations WHERE id = ? AND test_project_id = ?',
-      req.params.gid, tp.id,
-    );
+    const original = (await testingRepo().getGenerationByTestProjectAndId(tp.id, req.params.gid)) as unknown as TestGeneration | null;
     if (!original) { sendJson(res, 404, { error: 'Generation not found' }); return; }
 
     const currentStatus = original.cancelled_at ? 'cancelled' : String(original.status);
@@ -1026,8 +1052,7 @@ export function registerGenerateRoutes(): void {
 
     // For 'refine' kind, verify the script still exists
     if (original.kind === 'refine' && original.script_id) {
-      const script = one<{ id: string }>('SELECT id FROM test_scripts WHERE id = ? AND test_project_id = ?',
-        String(original.script_id), tp.id);
+      const script = await testingRepo().getTestScriptByTestProjectAndId(tp.id, String(original.script_id));
       if (!script) { sendJson(res, 404, { error: 'Original script no longer exists' }); return; }
     }
 
@@ -1040,17 +1065,12 @@ export function registerGenerateRoutes(): void {
       if (error) attachmentIds = [];
     }
 
-    const groupId = original.group_id
-      ? String(original.group_id)
-      : (() => {
-          const g = one<Row>('SELECT id FROM test_groups WHERE test_project_id = ? ORDER BY sort_order LIMIT 1', tp.id);
-          return g ? String(g.id) : null;
-        })();
+    const groupId = original.group_id ? String(original.group_id) : await firstGroupId(tp.id);
     if (!groupId) { sendJson(res, 400, { error: 'No group found for retry' }); return; }
 
     const genId = generateId();
     const ts = now();
-    insert('test_generations', {
+    await testingRepo().createGeneration({
       id: genId,
       test_project_id: tp.id,
       script_id: original.script_id ?? null,
@@ -1065,6 +1085,9 @@ export function registerGenerateRoutes(): void {
       created_by: req.user!.id,
       created_at: ts,
       finished_at: null,
+      progress: '{}',
+      started_at: null,
+      cancelled_at: null,
     });
 
     auditRaw(req.user!.id, 'test_generation.retry', `test_generation:${genId}`, {
@@ -1072,15 +1095,15 @@ export function registerGenerateRoutes(): void {
       kind: original.kind,
     });
 
-    runGeneration(
+    await startGenerationJob({
       genId,
       tp,
-      String(original.description ?? ''),
-      groupId,
-      original.kind === 'refine' ? (original.script_id ? String(original.script_id) : null) : null,
-      req.user!.id,
+      description: String(original.description ?? ''),
+      targetGroupId: groupId,
+      existingScriptId: original.kind === 'refine' ? (original.script_id ? String(original.script_id) : null) : null,
+      createdBy: req.user!.id,
       attachmentIds,
-    ).catch(() => {});
+    });
 
     sendJson(res, 202, { generationId: genId });
   });

@@ -1,6 +1,7 @@
 /**
  * Shared helpers for the testing module: auth guards, scope checks, DB types.
  */
+import { testingRepo } from './data.ts';
 import { one } from '../db.ts';
 import type { Row } from '../db.ts';
 import { sendJson } from '../http.ts';
@@ -170,11 +171,7 @@ export async function requireTestProject(
     return null;
   }
 
-  const tp = one<TestProject>(
-    'SELECT * FROM test_projects WHERE id = ? AND project_id = ?',
-    testProjectId,
-    projectId,
-  );
+  const tp = (await testingRepo().getTestProjectByProjectAndId(projectId, testProjectId)) as unknown as TestProject | null;
   if (!tp) {
     sendJson(res, 404, { error: 'Test project not found' });
     return null;

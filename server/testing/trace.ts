@@ -11,7 +11,7 @@
  * not secrets.
  */
 
-import { insert, run, all } from '../db.ts';
+import { testingRepo } from './data.ts';
 import type { Row } from '../db.ts';
 import { generateId, now } from '../util.ts';
 
@@ -52,6 +52,9 @@ export interface TraceStepRow extends Row {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+/** Where each running step lives, so finishStep can find it on DynamoDB (keyed by parent + seq). */
+const stepRefs = new Map<string, { case_set_id: string | null; generation_id: string | null; seq: number }>();
 
 function truncateField(s: string): { value: string; truncated: boolean } {
   if (s.length <= MAX_TRACE_FIELD_CHARS) return { value: s, truncated: false };
@@ -95,14 +98,20 @@ export interface StartStepResult {
  * Returns the generated id and the startedAt timestamp so finishStep can compute duration.
  * All errors are swallowed (the DB may be closed or the parent row deleted — trace is best-effort).
  */
-export function startStep(opts: StartStepOpts): StartStepResult {
+export async function startStep(opts: StartStepOpts): Promise<StartStepResult> {
   const id = generateId();
   const startedAt = now();
   try {
-    insert('trace_steps', {
-      id,
+    const ref = {
       case_set_id: opts.parentKind === 'case_set' ? opts.parentId : null,
       generation_id: opts.parentKind === 'generation' ? opts.parentId : null,
+      seq: opts.seq,
+    };
+    stepRefs.set(id, ref);
+    await testingRepo().createTraceStep({
+      id,
+      case_set_id: ref.case_set_id,
+      generation_id: ref.generation_id,
       seq: opts.seq,
       kind: opts.kind,
       label: opts.label,
@@ -139,16 +148,14 @@ export interface FinishStepOpts {
  * Update a trace step to its final status.
  * All errors are swallowed (trace is best-effort).
  */
-export function finishStep(id: string, startedAt: string, opts: FinishStepOpts): void {
+export async function finishStep(id: string, startedAt: string, opts: FinishStepOpts): Promise<void> {
   try {
     const finishedAt = now();
     const startMs = new Date(startedAt).getTime();
     const endMs = new Date(finishedAt).getTime();
     const durationMs = Number.isFinite(endMs - startMs) ? Math.round(endMs - startMs) : null;
 
-    const sets: string[] = ['status = ?', 'finished_at = ?', 'duration_ms = ?'];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vals: any[] = [opts.status, finishedAt, durationMs];
+    const patch: Record<string, unknown> = { status: opts.status, finished_at: finishedAt, duration_ms: durationMs };
 
     if (opts.output !== null && opts.output !== undefined) {
       let output = opts.output;
@@ -157,30 +164,15 @@ export function finishStep(id: string, startedAt: string, opts: FinishStepOpts):
         output = output.slice(0, MAX_TRACE_FIELD_CHARS);
         outputTruncated = 1;
       }
-      sets.push('output = ?');
-      vals.push(output);
-      sets.push('output_truncated = ?');
-      vals.push(outputTruncated);
+      patch.output = output;
+      patch.output_truncated = outputTruncated;
     }
+    if (opts.error) patch.error = String(opts.error).slice(0, 2000);
+    if (opts.detail) patch.detail = JSON.stringify(opts.detail);
+    if (opts.prompt != null) patch.prompt = buildPromptJson(opts.prompt);
 
-    if (opts.error) {
-      sets.push('error = ?');
-      vals.push(String(opts.error).slice(0, 2000));
-    }
-
-    if (opts.detail) {
-      sets.push('detail = ?');
-      vals.push(JSON.stringify(opts.detail));
-    }
-
-    if (opts.prompt != null) {
-      sets.push('prompt = ?');
-      vals.push(buildPromptJson(opts.prompt));
-    }
-
-    vals.push(id);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    run(`UPDATE trace_steps SET ${sets.join(', ')} WHERE id = ?`, ...(vals as any[]));
+    await testingRepo().updateTraceStep(id, patch as never, stepRefs.get(id));
+    stepRefs.delete(id);
   } catch {
     // DB closed — ignore
   }
@@ -217,19 +209,15 @@ export function formatTraceStep(row: TraceStepRow): Record<string, unknown> {
 }
 
 /** Fetch all trace steps for a case-set, ordered by seq. */
-export function getCaseSetTrace(csId: string): Record<string, unknown>[] {
-  const rows = all<TraceStepRow>(
-    'SELECT * FROM trace_steps WHERE case_set_id = ? ORDER BY seq',
-    csId,
-  );
+export async function getCaseSetTrace(csId: string): Promise<Record<string, unknown>[]> {
+  const rows = ((await testingRepo().listTraceByCaseSet(csId)) as unknown as TraceStepRow[])
+    .sort((a, b) => a.seq - b.seq);
   return rows.map(formatTraceStep);
 }
 
 /** Fetch all trace steps for a generation, ordered by seq. */
-export function getGenerationTrace(genId: string): Record<string, unknown>[] {
-  const rows = all<TraceStepRow>(
-    'SELECT * FROM trace_steps WHERE generation_id = ? ORDER BY seq',
-    genId,
-  );
+export async function getGenerationTrace(genId: string): Promise<Record<string, unknown>[]> {
+  const rows = ((await testingRepo().listTraceByGeneration(genId)) as unknown as TraceStepRow[])
+    .sort((a, b) => a.seq - b.seq);
   return rows.map(formatTraceStep);
 }

@@ -170,6 +170,10 @@ export interface TestGenerationRecord {
   progress: string;
   started_at: string | null;
   cancelled_at: string | null;
+  /** Group the generated script is saved into. */
+  group_id?: string | null;
+  /** JSON array of attachment ids, kept so a failed generation can be retried. */
+  attachment_ids?: string;
 }
 
 export interface TraceStepRecord {
@@ -256,10 +260,11 @@ export interface TestingRepository {
 
   // test_cases
   createCase(rec: TestCaseRecord): Promise<TestCaseRecord>;
-  getCaseById(id: string): Promise<TestCaseRecord | null>;
+  /** `caseSetId` is required on DynamoDB (cases are keyed by case set); SQLite ignores it. */
+  getCaseById(id: string, caseSetId?: string): Promise<TestCaseRecord | null>;
   listCasesByCaseSet(caseSetId: string): Promise<TestCaseRecord[]>;
-  updateCase(id: string, fields: Partial<TestCaseRecord>): Promise<void>;
-  deleteCase(id: string): Promise<void>;
+  updateCase(id: string, fields: Partial<TestCaseRecord>, caseSetId?: string): Promise<void>;
+  deleteCase(id: string, caseSetId?: string): Promise<void>;
   countCasesByCaseSet(caseSetId: string): Promise<number>;
   getMaxOrdByCaseSet(caseSetId: string): Promise<number>;
   getCategoryOrderByCaseSet(caseSetId: string): Promise<string[]>;
@@ -274,7 +279,12 @@ export interface TestingRepository {
 
   // trace_steps
   createTraceStep(rec: TraceStepRecord): Promise<TraceStepRecord>;
-  updateTraceStep(id: string, fields: Partial<TraceStepRecord>): Promise<void>;
+  /** `ref` (the step's parent and seq) is required on DynamoDB; SQLite ignores it. */
+  updateTraceStep(
+    id: string,
+    fields: Partial<TraceStepRecord>,
+    ref?: { case_set_id: string | null; generation_id: string | null; seq: number },
+  ): Promise<void>;
   listTraceByCaseSet(caseSetId: string): Promise<TraceStepRecord[]>;
   listTraceByGeneration(generationId: string): Promise<TraceStepRecord[]>;
   getMaxTraceSeqByCaseSet(caseSetId: string): Promise<number>;

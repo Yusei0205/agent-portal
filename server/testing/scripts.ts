@@ -15,6 +15,7 @@
  *   GET    /api/projects/:pid/tests/:tpid/scripts/:sid/history — run history with trend
  */
 
+import { testingRepo } from './data.ts';
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { all, one, run, insert } from '../db.ts';
@@ -71,10 +72,8 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const groups = all<TestGroup>(
-      'SELECT * FROM test_groups WHERE test_project_id = ? ORDER BY sort_order, name',
-      tp.id,
-    );
+    const groups = ((await testingRepo().listGroupsByTestProject(tp.id)) as unknown as TestGroup[])
+      .sort((a, b) => a.sort_order - b.sort_order || String(a.name).localeCompare(String(b.name)));
     sendJson(res, 200, { groups: groups.map(groupView) });
   });
 
@@ -86,17 +85,13 @@ export function registerScriptRoutes(): void {
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 200 }).trim();
-    const maxOrder = one<{ n: number }>(
-      'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM test_groups WHERE test_project_id = ?',
-      tp.id,
-    );
-    const sortOrder = typeof body.sortOrder === 'number' ? body.sortOrder : (maxOrder?.n ?? 0);
+    const sortOrder = typeof body.sortOrder === 'number' ? body.sortOrder : (await testingRepo().getMaxGroupSortOrder(tp.id)) + 1;
 
     const id = generateId();
     const ts = now();
-    insert('test_groups', { id, test_project_id: tp.id, name, sort_order: sortOrder, created_at: ts, updated_at: ts });
+    await testingRepo().createTestGroup({ id, test_project_id: tp.id, name, sort_order: sortOrder, created_at: ts, updated_at: ts });
 
-    const group = one<TestGroup>('SELECT * FROM test_groups WHERE id = ?', id)!;
+    const group = (await testingRepo().getTestGroupById(id)) as unknown as TestGroup;
     sendJson(res, 201, { group: groupView(group) });
   });
 
@@ -105,7 +100,7 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const group = one<TestGroup>('SELECT * FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
+    const group = (await testingRepo().getTestGroupByTestProjectAndId(tp.id, req.params.gid)) as unknown as TestGroup | null;
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -113,11 +108,9 @@ export function registerScriptRoutes(): void {
     if (typeof body.name === 'string') patch.name = body.name.trim().slice(0, 200);
     if (typeof body.sortOrder === 'number') patch.sort_order = body.sortOrder;
 
-    const keys = Object.keys(patch);
-    run(`UPDATE test_groups SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      ...keys.map((k) => patch[k] as string), group.id);
+    await testingRepo().updateTestGroup(group.id, patch as Partial<TestGroup>);
 
-    const updated = one<TestGroup>('SELECT * FROM test_groups WHERE id = ?', group.id)!;
+    const updated = (await testingRepo().getTestGroupById(group.id)) as unknown as TestGroup;
     sendJson(res, 200, { group: groupView(updated) });
   });
 
@@ -126,9 +119,11 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const group = one<TestGroup>('SELECT * FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
+    const group = (await testingRepo().getTestGroupByTestProjectAndId(tp.id, req.params.gid)) as unknown as TestGroup | null;
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
-    run('DELETE FROM test_groups WHERE id = ?', group.id);
+    // SQLite removes a group's scripts through a cascade; do it explicitly so DynamoDB behaves the same.
+    for (const sc of await testingRepo().listScriptsByGroup(group.id)) await testingRepo().deleteTestScript(sc.id);
+    await testingRepo().deleteTestGroup(group.id);
     sendJson(res, 200, { ok: true });
   });
 
@@ -139,10 +134,8 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const scripts = all<TestScript>(
-      'SELECT * FROM test_scripts WHERE test_project_id = ? ORDER BY test_group_id, sort_order',
-      tp.id,
-    );
+    const scripts = ((await testingRepo().listScriptsByTestProject(tp.id)) as unknown as TestScript[])
+      .sort((a, b) => String(a.test_group_id).localeCompare(String(b.test_group_id)) || a.sort_order - b.sort_order);
     sendJson(res, 200, { scripts: scripts.map(scriptView) });
   });
 
@@ -151,12 +144,11 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const group = one<TestGroup>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
+    const group = (await testingRepo().getTestGroupByTestProjectAndId(tp.id, req.params.gid)) as unknown as TestGroup | null;
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
-    const scripts = all<TestScript>(
-      'SELECT * FROM test_scripts WHERE test_group_id = ? AND test_project_id = ? ORDER BY sort_order',
-      group.id, tp.id,
-    );
+    const scripts = ((await testingRepo().listScriptsByGroup(group.id)) as unknown as TestScript[])
+      .filter((x) => x.test_project_id === tp.id)
+      .sort((a, b) => a.sort_order - b.sort_order);
     sendJson(res, 200, { scripts: scripts.map(scriptView) });
   });
 
@@ -165,7 +157,7 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const group = one<TestGroup>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
+    const group = (await testingRepo().getTestGroupByTestProjectAndId(tp.id, req.params.gid)) as unknown as TestGroup | null;
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -175,15 +167,13 @@ export function registerScriptRoutes(): void {
       try { steps = validateSteps(body.steps); }
       catch (err) { sendJson(res, 400, { error: (err as Error).message }); return; }
     }
-    const maxOrder = one<{ n: number }>(
-      'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM test_scripts WHERE test_group_id = ?',
-      group.id,
-    );
-    const sortOrder = typeof body.sortOrder === 'number' ? body.sortOrder : (maxOrder?.n ?? 0);
+    const groupScripts = await testingRepo().listScriptsByGroup(group.id);
+    const nextOrder = groupScripts.reduce((m, x) => Math.max(m, x.sort_order), -1) + 1;
+    const sortOrder = typeof body.sortOrder === 'number' ? body.sortOrder : nextOrder;
 
     const id = generateId();
     const ts = now();
-    insert('test_scripts', {
+    await testingRepo().createTestScript({
       id,
       test_project_id: tp.id,
       test_group_id: group.id,
@@ -196,7 +186,7 @@ export function registerScriptRoutes(): void {
     });
 
     auditRaw(req.user!.id, 'test_script.create', `test_script:${id}`, { name, groupId: group.id });
-    const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ?', id)!;
+    const script = (await testingRepo().getTestScriptById(id)) as unknown as TestScript;
     sendJson(res, 201, { script: scriptView(script) });
   });
 
@@ -205,7 +195,7 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
+    const script = (await testingRepo().getTestScriptByTestProjectAndId(tp.id, req.params.sid)) as unknown as TestScript | null;
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
     sendJson(res, 200, { script: scriptView(script) });
   });
@@ -215,7 +205,7 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
+    const script = (await testingRepo().getTestScriptByTestProjectAndId(tp.id, req.params.sid)) as unknown as TestScript | null;
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -229,17 +219,15 @@ export function registerScriptRoutes(): void {
       patch.steps = JSON.stringify(validated);
     }
     if (typeof body.testGroupId === 'string') {
-      const newGroup = one<Row>('SELECT id FROM test_groups WHERE id = ? AND test_project_id = ?', body.testGroupId, tp.id);
+      const newGroup = await testingRepo().getTestGroupByTestProjectAndId(tp.id, body.testGroupId);
       if (!newGroup) { sendJson(res, 400, { error: 'Group not found in this test project' }); return; }
       patch.test_group_id = body.testGroupId;
     }
 
-    const keys = Object.keys(patch);
-    run(`UPDATE test_scripts SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      ...keys.map((k) => patch[k] as string), script.id);
+    await testingRepo().updateTestScript(script.id, patch as Partial<TestScript>);
 
     auditRaw(req.user!.id, 'test_script.update', `test_script:${script.id}`, {});
-    const updated = one<TestScript>('SELECT * FROM test_scripts WHERE id = ?', script.id)!;
+    const updated = (await testingRepo().getTestScriptById(script.id)) as unknown as TestScript;
     sendJson(res, 200, { script: scriptView(updated) });
   });
 
@@ -248,9 +236,9 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
+    const script = (await testingRepo().getTestScriptByTestProjectAndId(tp.id, req.params.sid)) as unknown as TestScript | null;
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
-    run('DELETE FROM test_scripts WHERE id = ?', script.id);
+    await testingRepo().deleteTestScript(script.id);
     auditRaw(req.user!.id, 'test_script.delete', `test_script:${script.id}`, { name: script.name });
     sendJson(res, 200, { ok: true });
   });
@@ -260,17 +248,16 @@ export function registerScriptRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const script = one<TestScript>('SELECT id FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
+    const script = (await testingRepo().getTestScriptByTestProjectAndId(tp.id, req.params.sid)) as unknown as TestScript | null;
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
 
     const limit = Math.min(100, Math.max(1, Number(req.query.get('limit') || 20)));
-    const runs = all<Row>(
-      `SELECT id, status, created_at, started_at, finished_at, error
-       FROM test_runs
-       WHERE script_id = ? AND status IN ('passed','failed','error','cancelled')
-       ORDER BY created_at DESC LIMIT ?`,
-      script.id, limit,
-    );
+    const FINISHED = new Set(['passed', 'failed', 'error', 'cancelled']);
+    const runs = (await testingRepo().listRunsByTestProject(tp.id, 5000, 0))
+      .filter((r) => r.script_id === script.id && FINISHED.has(r.status))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, limit)
+      .map((r) => ({ id: r.id, status: r.status, created_at: r.created_at, started_at: r.started_at, finished_at: r.finished_at, error: r.error })) as Row[];
 
     // Trend: last 20 runs
     const trend = runs.slice(0, 20).map((r) => ({

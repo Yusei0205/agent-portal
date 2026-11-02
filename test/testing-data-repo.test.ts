@@ -243,6 +243,73 @@ function runContract(
       const steps = await repo.listTraceByCaseSet(csId);
       assert.ok(steps.some((s) => s.id === traceId));
     });
+
+    // ── cases and trace: update/delete with their parent context ──────────────
+
+    test('cases — update, reorder and delete by case set', async () => {
+      const csId = `tcs-cases-${sfx}`;
+      await repo.createCaseSet({
+        id: csId, test_project_id: testProjectId, name: 'Cases', description: '', status: 'done',
+        progress: '{}', error: null, warnings: '[]', created_by: userId, created_at: now(),
+        started_at: null, finished_at: null, cancelled: 0, outline_categories: null, attachment_ids: '[]',
+      });
+      const mk = (id: string, ord: number) => repo.createCase({
+        id, case_set_id: csId, ord, test_id: `T${ord}`, category: 'Auth', scenario: `s${ord}`,
+        precondition: '', steps: '', expected_result: '', status: 'Not Run', remarks: '',
+        request: null, response: null, created_at: now(), updated_at: now(),
+      });
+      await mk(`c1-${sfx}`, 1);
+      await mk(`c2-${sfx}`, 2);
+
+      assert.equal((await repo.getCaseById(`c1-${sfx}`, csId))?.scenario, 's1');
+      await repo.updateCase(`c1-${sfx}`, { scenario: 'changed', status: 'Pass' }, csId);
+      const after = await repo.getCaseById(`c1-${sfx}`, csId);
+      assert.equal(after?.scenario, 'changed');
+      assert.equal(after?.status, 'Pass');
+
+      // Reordering moves the case without duplicating it.
+      await repo.updateCase(`c1-${sfx}`, { ord: 5 }, csId);
+      const list = await repo.listCasesByCaseSet(csId);
+      assert.deepEqual(list.map((c) => c.id), [`c2-${sfx}`, `c1-${sfx}`]);
+
+      await repo.deleteCase(`c2-${sfx}`, csId);
+      assert.deepEqual((await repo.listCasesByCaseSet(csId)).map((c) => c.id), [`c1-${sfx}`]);
+    });
+
+    test('trace step — update through its parent and seq', async () => {
+      const csId = `tcs-trace2-${sfx}`;
+      await repo.createCaseSet({
+        id: csId, test_project_id: testProjectId, name: 'Trace 2', description: '', status: 'running',
+        progress: '{}', error: null, warnings: '[]', created_by: userId, created_at: now(),
+        started_at: now(), finished_at: null, cancelled: 0, outline_categories: null, attachment_ids: '[]',
+      });
+      const id = `trace2-${sfx}`;
+      await repo.createTraceStep({
+        id, case_set_id: csId, generation_id: null, seq: 3, kind: 'llm', label: 'Call',
+        status: 'running', started_at: now(), finished_at: null, duration_ms: null,
+        detail: '{}', prompt: null, output: null, output_truncated: 0, error: null,
+      });
+      await repo.updateTraceStep(id, { status: 'ok', duration_ms: 42, output: 'done' }, { case_set_id: csId, generation_id: null, seq: 3 });
+      const step = (await repo.listTraceByCaseSet(csId)).find((x) => x.id === id);
+      assert.equal(step?.status, 'ok');
+      assert.equal(step?.duration_ms, 42);
+      assert.equal(step?.output, 'done');
+    });
+
+    test("listScriptsByGroup — returns only that group's scripts", async () => {
+      const mkGroup = (id: string, order: number) => repo.createTestGroup({
+        id, test_project_id: testProjectId, name: id, sort_order: order, created_at: now(), updated_at: now(),
+      } as never);
+      await mkGroup(`g1-${sfx}`, 1);
+      await mkGroup(`g2-${sfx}`, 2);
+      const mkScript = (id: string, group: string, order: number) => repo.createTestScript({
+        id, test_project_id: testProjectId, test_group_id: group, name: id, sort_order: order,
+        steps: '[]', created_by: userId, created_at: now(), updated_at: now(),
+      });
+      await mkScript(`s1-${sfx}`, `g1-${sfx}`, 1);
+      await mkScript(`s2-${sfx}`, `g2-${sfx}`, 1);
+      assert.deepEqual((await repo.listScriptsByGroup(`g1-${sfx}`)).map((x) => x.id), [`s1-${sfx}`]);
+    });
   });
 }
 

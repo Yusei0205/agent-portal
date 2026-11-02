@@ -185,6 +185,8 @@ function toGeneration(row: Row): TestGenerationRecord {
     progress:          S(row.progress ?? '{}'),
     started_at:        row.started_at != null ? S(row.started_at) : null,
     cancelled_at:      row.cancelled_at != null ? S(row.cancelled_at) : null,
+    group_id:          row.group_id != null ? S(row.group_id) : null,
+    attachment_ids:    S(row.attachment_ids ?? '[]'),
   };
 }
 
@@ -552,6 +554,7 @@ export class SqliteTestingRepository implements TestingRepository {
       result_script_ids: rec.result_script_ids, warnings: rec.warnings,
       created_by: rec.created_by, created_at: rec.created_at, finished_at: rec.finished_at,
       progress: rec.progress, started_at: rec.started_at, cancelled_at: rec.cancelled_at,
+      group_id: rec.group_id ?? null, attachment_ids: rec.attachment_ids ?? '[]',
     });
     return toGeneration(one<Row>('SELECT * FROM test_generations WHERE id = ?', rec.id)!);
   }

@@ -12,6 +12,8 @@
  *   GET    /api/projects/:pid/tests/:tpid/vault/files/:fileId/download — download vault file
  */
 
+import { testingRepo } from './data.ts';
+import { persistFile, restoreFile, forgetFile } from '../durable-files.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from '../http.ts';
@@ -155,10 +157,9 @@ export function registerTestVaultRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const files = all<Row>(
-      'SELECT id, name, size_bytes, mime_type, created_at FROM test_vault_files WHERE test_project_id = ? ORDER BY name',
-      tp.id,
-    );
+    const files = (await testingRepo().listVaultFilesByTestProject(tp.id))
+      .map((f) => ({ id: f.id, name: f.name, size_bytes: f.size_bytes, mime_type: f.mime_type, created_at: f.created_at }))
+      .sort((a, b) => a.name.localeCompare(b.name));
     sendJson(res, 200, { files });
   });
 
@@ -180,10 +181,7 @@ export function registerTestVaultRoutes(): void {
     if (!name) { sendJson(res, 400, { error: 'name is required' }); return; }
 
     // Check for duplicate name
-    const existing = one<Row>(
-      'SELECT id FROM test_vault_files WHERE test_project_id = ? AND name = ?',
-      tp.id, name,
-    );
+    const existing = await testingRepo().getVaultFileByTestProjectAndName(tp.id, name);
     if (existing) { sendJson(res, 409, { error: `A vault file named "${name}" already exists` }); return; }
 
     const fileId = generateId();
@@ -194,8 +192,9 @@ export function registerTestVaultRoutes(): void {
     const absPath = path.join(absDir, `${fileId}-${safeName}`);
     const relPath = path.relative(config.dataDir, absPath);
     fs.writeFileSync(absPath, data);
+    await persistFile(absPath, mimeType);
 
-    insert('test_vault_files', {
+    await testingRepo().createVaultFile({
       id: fileId,
       test_project_id: tp.id,
       name,
@@ -206,7 +205,10 @@ export function registerTestVaultRoutes(): void {
       created_at: now(),
     });
 
-    sendJson(res, 201, { file: one<Row>('SELECT id, name, size_bytes, mime_type, created_at FROM test_vault_files WHERE id = ?', fileId) });
+    const createdFile = await testingRepo().getVaultFileById(fileId);
+    sendJson(res, 201, {
+      file: createdFile && { id: createdFile.id, name: createdFile.name, size_bytes: createdFile.size_bytes, mime_type: createdFile.mime_type, created_at: createdFile.created_at },
+    });
   });
 
   // GET /api/projects/:pid/tests/:tpid/vault/files/:fileId/download
@@ -214,10 +216,10 @@ export function registerTestVaultRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const file = one<Row>('SELECT * FROM test_vault_files WHERE id = ? AND test_project_id = ?', req.params.fileId, tp.id);
+    const file = (await testingRepo().getVaultFileByTestProjectAndId(tp.id, req.params.fileId)) as unknown as Row | null;
     if (!file) { sendJson(res, 404, { error: 'File not found' }); return; }
     const absPath = path.join(config.dataDir, String(file.path));
-    if (!fs.existsSync(absPath)) { sendJson(res, 404, { error: 'File not on disk' }); return; }
+    if (!(await restoreFile(absPath))) { sendJson(res, 404, { error: 'File not on disk' }); return; }
     const stat = fs.statSync(absPath);
     res.writeHead(200, {
       'Content-Type': String(file.mime_type || 'application/octet-stream'),
@@ -233,11 +235,12 @@ export function registerTestVaultRoutes(): void {
     if (!requireBrowserAuth(req, res)) return;
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const file = one<Row>('SELECT * FROM test_vault_files WHERE id = ? AND test_project_id = ?', req.params.fileId, tp.id);
+    const file = (await testingRepo().getVaultFileByTestProjectAndId(tp.id, req.params.fileId)) as unknown as Row | null;
     if (!file) { sendJson(res, 404, { error: 'File not found' }); return; }
     const absPath = path.join(config.dataDir, String(file.path));
     try { fs.rmSync(absPath, { force: true }); } catch { /* non-fatal */ }
-    run('DELETE FROM test_vault_files WHERE id = ?', String(file.id));
+    await forgetFile(absPath).catch(() => { /* best effort */ });
+    await testingRepo().deleteVaultFile(String(file.id));
     sendJson(res, 200, { ok: true });
   });
 
@@ -278,7 +281,7 @@ export function registerTestVaultRoutes(): void {
       if (!name) { errors.push({ row: rowNum, error: 'name is required' }); continue; }
       if (kind !== 'login' && kind !== 'secret') { errors.push({ row: rowNum, error: `kind must be login or secret (got "${kind}")` }); continue; }
 
-      const existing = one<Row>('SELECT id FROM test_vault_items WHERE test_project_id = ? AND name = ?', tp.id, name);
+      const existing = await testingRepo().getVaultItemByTestProjectAndName(tp.id, name);
       if (existing) { errors.push({ row: rowNum, error: `vault item "${name}" already exists` }); continue; }
 
       try {
@@ -289,7 +292,7 @@ export function registerTestVaultRoutes(): void {
         const value = valueIdx >= 0 ? (row[valueIdx] ?? '').trim() : '';
         const username = usernameIdx >= 0 ? (row[usernameIdx] ?? '').trim() : '';
 
-        insert('test_vault_items', {
+        await testingRepo().createVaultItem({
           id,
           test_project_id: tp.id,
           name,
@@ -317,10 +320,8 @@ export function registerTestVaultRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const items = all<TestVaultItem>(
-      'SELECT * FROM test_vault_items WHERE test_project_id = ? ORDER BY kind, name',
-      tp.id,
-    );
+    const items = ((await testingRepo().listVaultItemsByTestProject(tp.id)) as unknown as TestVaultItem[])
+      .sort((a, b) => String(a.kind).localeCompare(String(b.kind)) || String(a.name).localeCompare(String(b.name)));
     sendJson(res, 200, { items: items.map(vaultItemView) });
   });
 
@@ -338,7 +339,7 @@ export function registerTestVaultRoutes(): void {
       return;
     }
 
-    const existing = one<Row>('SELECT id FROM test_vault_items WHERE test_project_id = ? AND name = ?', tp.id, name);
+    const existing = await testingRepo().getVaultItemByTestProjectAndName(tp.id, name);
     if (existing) { sendJson(res, 409, { error: `A vault item named "${name}" already exists` }); return; }
 
     const id = generateId();
@@ -348,7 +349,7 @@ export function registerTestVaultRoutes(): void {
       const username = typeof body.username === 'string' ? body.username.trim() : '';
       const password = typeof body.password === 'string' ? body.password : '';
       const totpSecret = typeof body.totpSecret === 'string' ? body.totpSecret.trim() : '';
-      insert('test_vault_items', {
+      await testingRepo().createVaultItem({
         id,
         test_project_id: tp.id,
         name,
@@ -363,7 +364,7 @@ export function registerTestVaultRoutes(): void {
       });
     } else {
       const value = typeof body.value === 'string' ? body.value : '';
-      insert('test_vault_items', {
+      await testingRepo().createVaultItem({
         id,
         test_project_id: tp.id,
         name,
@@ -379,7 +380,7 @@ export function registerTestVaultRoutes(): void {
     }
 
     auditRaw(req.user!.id, 'test_vault.create', `test_project:${tp.id}`, { name, kind });
-    const item = one<TestVaultItem>('SELECT * FROM test_vault_items WHERE id = ?', id)!;
+    const item = (await testingRepo().getVaultItemById(id)) as unknown as TestVaultItem;
     sendJson(res, 201, { item: vaultItemView(item) });
   });
 
@@ -388,9 +389,9 @@ export function registerTestVaultRoutes(): void {
     if (!requireBrowserAuth(req, res)) return;
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const item = one<Row>('SELECT id FROM test_vault_items WHERE id = ? AND test_project_id = ?', req.params.itemId, tp.id);
-    if (!item) { sendJson(res, 404, { error: 'Vault item not found' }); return; }
-    run('DELETE FROM test_vault_items WHERE id = ?', req.params.itemId);
+    const item = await testingRepo().getVaultItemById(req.params.itemId);
+    if (!item || item.test_project_id !== tp.id) { sendJson(res, 404, { error: 'Vault item not found' }); return; }
+    await testingRepo().deleteVaultItem(req.params.itemId);
     auditRaw(req.user!.id, 'test_vault.delete', `test_project:${tp.id}`, { itemId: req.params.itemId });
     sendJson(res, 200, { ok: true });
   });
@@ -415,11 +416,7 @@ export async function resolveVaultRefs(
   let result = value;
   for (const match of matches) {
     const [full, name, field] = match;
-    const item = one<TestVaultItem>(
-      'SELECT * FROM test_vault_items WHERE test_project_id = ? AND name = ?',
-      testProjectId,
-      name,
-    );
+    const item = (await testingRepo().getVaultItemByTestProjectAndName(testProjectId, name)) as unknown as TestVaultItem | null;
     if (!item) throw new Error(`Vault item "${name}" not found`);
 
     let resolved: string;

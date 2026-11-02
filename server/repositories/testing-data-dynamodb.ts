@@ -283,6 +283,8 @@ function itemToGeneration(item: Record<string, AttributeValue>): TestGenerationR
     progress:          S(getString(item, 'progress')) || '{}',
     started_at:        getString(item, 'started_at'),
     cancelled_at:      getString(item, 'cancelled_at'),
+    group_id:          getString(item, 'group_id'),
+    attachment_ids:    S(getString(item, 'attachment_ids')) || '[]',
   };
 }
 
@@ -486,8 +488,9 @@ export class DynamoDbTestingRepository implements TestingRepository {
   }
 
   async listScriptsByGroup(groupId: string): Promise<TestScriptRecord[]> {
-    // Backlog: add GSI-ScriptsByGroup. For now, not available without scan.
-    return [];
+    const group = await this.getTestGroupById(groupId);
+    if (!group) return [];
+    return (await this.listScriptsByTestProject(group.test_project_id)).filter((s) => s.test_group_id === groupId);
   }
 
   async updateTestScript(id: string, fields: Partial<TestScriptRecord>): Promise<void> {
@@ -676,10 +679,10 @@ export class DynamoDbTestingRepository implements TestingRepository {
     return rec;
   }
 
-  async getCaseById(id: string): Promise<TestCaseRecord | null> {
-    // Without a secondary index on case id, we can't look up efficiently.
-    // Backlog: add GSI-CaseById to portal-testing.
-    return null;
+  async getCaseById(id: string, caseSetId?: string): Promise<TestCaseRecord | null> {
+    // Cases are keyed by case set + order, so the case set is needed to find one by id.
+    if (!caseSetId) return null;
+    return (await this.listCasesByCaseSet(caseSetId)).find((c) => c.id === id) ?? null;
   }
 
   async listCasesByCaseSet(caseSetId: string): Promise<TestCaseRecord[]> {
@@ -692,12 +695,28 @@ export class DynamoDbTestingRepository implements TestingRepository {
     return (resp.Items ?? []).map(itemToCase);
   }
 
-  async updateCase(id: string, fields: Partial<TestCaseRecord>): Promise<void> {
-    // Backlog: need caseSetId+ord to construct PK/SK for update. Store a lookup item in production.
+  private caseSk(c: { ord: number; id: string }): string {
+    return `ORD#${String(c.ord).padStart(8, '0')}#${c.id}`;
   }
 
-  async deleteCase(id: string): Promise<void> {
-    // Backlog: need caseSetId+ord to construct PK/SK for delete.
+  async updateCase(id: string, fields: Partial<TestCaseRecord>, caseSetId?: string): Promise<void> {
+    const existing = await this.getCaseById(id, caseSetId);
+    if (!existing) return;
+    const { id: _i, case_set_id: _c, ...rest } = fields as Record<string, unknown>;
+    if (rest.ord !== undefined && Number(rest.ord) !== existing.ord) {
+      // The sort key contains the order, so a reorder is a delete + put.
+      const merged = { ...existing, ...rest } as TestCaseRecord;
+      await this.deleteItem(`TC#${existing.case_set_id}`, this.caseSk(existing));
+      await this.createCase(merged);
+      return;
+    }
+    await genericUpdate(this.client, this.tableName, `TC#${existing.case_set_id}`, this.caseSk(existing), rest);
+  }
+
+  async deleteCase(id: string, caseSetId?: string): Promise<void> {
+    const existing = await this.getCaseById(id, caseSetId);
+    if (!existing) return;
+    await this.deleteItem(`TC#${existing.case_set_id}`, this.caseSk(existing));
   }
 
   async countCasesByCaseSet(caseSetId: string): Promise<number> {
@@ -741,6 +760,7 @@ export class DynamoDbTestingRepository implements TestingRepository {
       result_script_ids: rec.result_script_ids, warnings: rec.warnings,
       created_by: rec.created_by, created_at: rec.created_at, finished_at: rec.finished_at,
       progress: rec.progress, started_at: rec.started_at, cancelled_at: rec.cancelled_at,
+      group_id: rec.group_id ?? null, attachment_ids: rec.attachment_ids ?? '[]',
       testTestProjectId: rec.test_project_id, testListSK: listSK('TGN', rec.created_at, rec.id),
     });
     return rec;
@@ -779,10 +799,16 @@ export class DynamoDbTestingRepository implements TestingRepository {
     return rec;
   }
 
-  async updateTraceStep(id: string, _fields: Partial<TraceStepRecord>): Promise<void> {
-    // Backlog: need caseSetId/generationId+seq to construct PK/SK for trace updates.
-    // For DynamoDB, trace updates require the PK (case_set_id or generation_id) and SK (seq).
-    // This is tracked in the backlog.
+  async updateTraceStep(
+    _id: string,
+    fields: Partial<TraceStepRecord>,
+    ref?: { case_set_id: string | null; generation_id: string | null; seq: number },
+  ): Promise<void> {
+    // Trace steps are keyed by their parent and sequence number, so the caller passes both.
+    if (!ref) return;
+    const pk = ref.case_set_id ? `TRACE_CS#${ref.case_set_id}` : `TRACE_GN#${ref.generation_id}`;
+    const { id: _i, case_set_id: _c, generation_id: _g, seq: _s, ...rest } = fields as Record<string, unknown>;
+    await genericUpdate(this.client, this.tableName, pk, String(ref.seq).padStart(8, '0'), rest);
   }
 
   async listTraceByCaseSet(caseSetId: string): Promise<TraceStepRecord[]> {

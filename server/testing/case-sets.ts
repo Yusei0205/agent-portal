@@ -19,6 +19,8 @@
  *   GET    /case-sets/:csid/export.xlsx   — Excel workbook
  */
 
+import { testingRepo } from './data.ts';
+import { registerBackgroundJob, runInBackground } from '../background-jobs.ts';
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { all, one, run, insert } from '../db.ts';
@@ -99,9 +101,15 @@ function parseWarnings(raw: string | null | undefined): string[] {
   catch { return []; }
 }
 
-function getCaseCount(csId: string): number {
-  const row = one<{ c: number }>('SELECT COUNT(*) AS c FROM test_cases WHERE case_set_id = ?', csId);
-  return row?.c ?? 0;
+async function getCaseCount(csId: string): Promise<number> {
+  return testingRepo().countCasesByCaseSet(csId);
+}
+
+/** Mark a case set done, unless it was cancelled while it was generating. */
+async function markDoneUnlessCancelled(csId: string, warnings: string[]): Promise<void> {
+  const cur = await testingRepo().getCaseSetById(csId);
+  if (!cur || cur.cancelled) return;
+  await testingRepo().updateCaseSet(csId, { status: 'done', finished_at: now(), warnings: JSON.stringify(warnings) });
 }
 
 /** Normalise a category name for comparison: lowercase, collapsed whitespace. */
@@ -113,21 +121,21 @@ function normCat(s: string): string {
  * For a case set with a saved outline, return the list of categories that still
  * have zero cases. Returns null when no outline is saved (unknown / old set).
  */
-function getRemainingCategories(cs: TestCaseSet): string[] | null {
+async function getRemainingCategories(cs: TestCaseSet): Promise<string[] | null> {
   if (!cs.outline_categories) return null;
   try {
     const outline = JSON.parse(cs.outline_categories) as string[];
     if (!Array.isArray(outline)) return null;
-    const existing = getCategoryOrder(cs.id).map(normCat);
+    const existing = (await getCategoryOrder(cs.id)).map(normCat);
     return outline.filter((cat) => !existing.includes(normCat(cat)));
   } catch {
     return null;
   }
 }
 
-function formatCaseSet(cs: TestCaseSet): Record<string, unknown> {
+async function formatCaseSet(cs: TestCaseSet): Promise<Record<string, unknown>> {
   const warnings = parseWarnings(cs.warnings);
-  const remaining = getRemainingCategories(cs);
+  const remaining = await getRemainingCategories(cs);
   const resumable =
     cs.status === 'failed' ||
     cs.status === 'cancelled' ||
@@ -140,7 +148,7 @@ function formatCaseSet(cs: TestCaseSet): Record<string, unknown> {
     progress: parseProgress(cs.progress),
     error: cs.error ?? null,
     warnings,
-    caseCount: getCaseCount(cs.id),
+    caseCount: await getCaseCount(cs.id),
     createdAt: cs.created_at,
     startedAt: cs.started_at ?? null,
     finishedAt: cs.finished_at ?? null,
@@ -286,21 +294,20 @@ function parseResponseFromModel(raw: unknown): string | null {
 
 // ── Progress helpers ───────────────────────────────────────────────────────────
 
-function setProgress(csId: string, p: Partial<Progress>): void {
-  const existing = one<{ progress: string }>('SELECT progress FROM test_case_sets WHERE id = ?', csId);
-  const current = parseProgress(existing?.progress);
-  const updated: Progress = { ...current, ...p };
-  try { run('UPDATE test_case_sets SET progress = ? WHERE id = ?', JSON.stringify(updated), csId); }
-  catch { /* DB closed or row deleted — ignore */ }
+async function setProgress(csId: string, p: Partial<Progress>): Promise<void> {
+  try {
+    const existing = await testingRepo().getCaseSetById(csId);
+    const current = parseProgress(existing?.progress);
+    const updated: Progress = { ...current, ...p };
+    await testingRepo().updateCaseSet(csId, { progress: JSON.stringify(updated) });
+  } catch { /* DB closed or row deleted — ignore */ }
 }
 
 // ── Cancellation check ─────────────────────────────────────────────────────────
 
-function isCancelled(csId: string): boolean {
+async function isCancelled(csId: string): Promise<boolean> {
   try {
-    const row = one<{ cancelled: number; status: string }>(
-      'SELECT cancelled, status FROM test_case_sets WHERE id = ?', csId,
-    );
+    const row = await testingRepo().getCaseSetById(csId);
     if (!row) return true; // row deleted — stop
     return row.cancelled !== 0 || row.status === 'cancelled';
   } catch {
@@ -313,27 +320,20 @@ function isCancelled(csId: string): boolean {
 /**
  * Returns categories in order of first appearance within a case set.
  */
-function getCategoryOrder(csId: string): string[] {
-  const rows = all<{ category: string }>(
-    'SELECT category FROM test_cases WHERE case_set_id = ? GROUP BY category ORDER BY MIN(ord)',
-    csId,
-  );
-  return rows.map((r) => r.category);
+async function getCategoryOrder(csId: string): Promise<string[]> {
+  return testingRepo().getCategoryOrderByCaseSet(csId);
 }
 
 /**
  * Compute TC-<catIdx>.1.<caseNo> for a new case being added to the set.
  * catIdx is 1-based; if the category is new, it gets the next index.
  */
-function computeTestId(csId: string, category: string): string {
-  const cats = getCategoryOrder(csId);
+async function computeTestId(csId: string, category: string): Promise<string> {
+  const cats = await getCategoryOrder(csId);
   let catIdx = cats.indexOf(category) + 1;
   if (catIdx === 0) catIdx = cats.length + 1;
-  const count = one<{ c: number }>(
-    'SELECT COUNT(*) AS c FROM test_cases WHERE case_set_id = ? AND category = ?',
-    csId, category,
-  );
-  const caseNo = (count?.c ?? 0) + 1;
+  const count = await testingRepo().countCasesByCaseSetAndCategory(csId, category);
+  const caseNo = count + 1;
   return `TC-${catIdx}.1.${caseNo}`;
 }
 
@@ -342,8 +342,8 @@ function computeTestId(csId: string, category: string): string {
  * category's first-appearance order and their ord within each category.
  * Called once after generation to make IDs consistent.
  */
-function renumberCases(csId: string): void {
-  const cases = all<TestCase>('SELECT * FROM test_cases WHERE case_set_id = ? ORDER BY ord', csId);
+async function renumberCases(csId: string): Promise<void> {
+  const cases = ((await testingRepo().listCasesByCaseSet(csId)) as unknown as TestCase[]).sort((a, b) => a.ord - b.ord);
   const catOrder: string[] = [];
   for (const c of cases) {
     if (!catOrder.includes(c.category)) catOrder.push(c.category);
@@ -354,7 +354,7 @@ function renumberCases(csId: string): void {
     counters[c.category] = (counters[c.category] ?? 0) + 1;
     const newId = `TC-${catIdx}.1.${counters[c.category]}`;
     if (newId !== c.test_id) {
-      try { run('UPDATE test_cases SET test_id = ? WHERE id = ?', newId, c.id); }
+      try { await testingRepo().updateCase(c.id, { test_id: newId }, csId); }
       catch { /* ok */ }
     }
   }
@@ -432,12 +432,8 @@ export async function runCaseSetGeneration(
   resumeFrom?: { existingCaseCount: number; categoriesToGenerate: string[] },
 ): Promise<void> {
   // Local trace state — continue seq from the max existing seq when resuming
-  const existingMaxSeq = (() => {
-    try {
-      const r = one<{ m: number | null }>('SELECT MAX(seq) AS m FROM trace_steps WHERE case_set_id = ?', csId);
-      return r?.m ?? 0;
-    } catch { return 0; }
-  })();
+  let existingMaxSeq = 0;
+  try { existingMaxSeq = await testingRepo().getMaxTraceSeqByCaseSet(csId); } catch { existingMaxSeq = 0; }
   let seq = existingMaxSeq;
   let _failureStepAdded = false;
   const mk = (kind: string, label: string, detail?: Record<string, unknown>) =>
@@ -445,40 +441,36 @@ export async function runCaseSetGeneration(
   const fin = finishStep;
 
   // Convenience: add a terminal 'cancelled' step and return
-  const traceCancel = () => {
-    const s = mk('cancelled', 'Generation cancelled');
-    fin(s.id, s.startedAt, { status: 'ok' });
+  const traceCancel = async () => {
+    const s = await mk('cancelled', 'Generation cancelled');
+    await fin(s.id, s.startedAt, { status: 'ok' });
   };
   // Convenience: add a terminal 'failure' step
-  const traceFail = (error: string) => {
+  const traceFail = async (error: string) => {
     if (_failureStepAdded) return;
     _failureStepAdded = true;
-    const s = mk('failure', 'Generation failed');
-    fin(s.id, s.startedAt, { status: 'failed', error });
+    const s = await mk('failure', 'Generation failed');
+    await fin(s.id, s.startedAt, { status: 'failed', error });
   };
 
   try {
-    run(
-      'UPDATE test_case_sets SET status = ?, started_at = ?, cancelled = 0, error = NULL WHERE id = ?',
-      'running', now(), csId,
-    );
+    await testingRepo().updateCaseSet(csId, { status: 'running', started_at: now(), cancelled: 0, error: null });
   } catch { return; }
 
   try {
     // ── Phase: context ──────────────────────────────────────────────────────
-    setProgress(csId, { phase: 'context', message: 'Building context…', percent: 0 });
+    await setProgress(csId, { phase: 'context', message: 'Building context…', percent: 0 });
 
-    const ctxStep = mk('context', 'Building context');
+    const ctxStep = await mk('context', 'Building context');
 
     // Resolve attachment IDs — from parameter or (on resume) from the saved row
-    const resolvedAttachmentIds = attachmentIds.length > 0
-      ? attachmentIds
-      : (() => {
-          try {
-            const row = one<{ attachment_ids: string }>('SELECT attachment_ids FROM test_case_sets WHERE id = ?', csId);
-            return JSON.parse(row?.attachment_ids ?? '[]') as string[];
-          } catch { return []; }
-        })();
+    let resolvedAttachmentIds = attachmentIds;
+    if (resolvedAttachmentIds.length === 0) {
+      try {
+        const row = await testingRepo().getCaseSetById(csId);
+        resolvedAttachmentIds = JSON.parse(row?.attachment_ids ?? '[]') as string[];
+      } catch { resolvedAttachmentIds = []; }
+    }
 
     let textBlock = '';
     let images: Array<{ data: Buffer; mimeType: string; filename: string }> = [];
@@ -499,13 +491,13 @@ export async function runCaseSetGeneration(
 
     const systemPrompt = buildSystemPrompt(tp, attachmentNote) + textBlock;
 
-    fin(ctxStep.id, ctxStep.startedAt, {
+    await fin(ctxStep.id, ctxStep.startedAt, {
       status: 'ok',
       detail: { attachmentNames, textChars: textBlock.length, imageCount: images.length },
       prompt: { system: systemPrompt },
     });
 
-    if (isCancelled(csId)) { traceCancel(); return; }
+    if (await isCancelled(csId)) { await traceCancel(); return; }
 
     // ── Resolve categories (resume path vs. full generation path) ────────────
     let categories: string[];
@@ -513,36 +505,31 @@ export async function runCaseSetGeneration(
     if (resumeFrom) {
       // Resume: categories already resolved by caller; add a resume trace step
       categories = resumeFrom.categoriesToGenerate;
-      const resumeStep = mk('resume', 'Resuming generation', {
+      const resumeStep = await mk('resume', 'Resuming generation', {
         existingCaseCount: resumeFrom.existingCaseCount,
         categoriesToGenerate: categories,
       });
-      fin(resumeStep.id, resumeStep.startedAt, { status: 'ok' });
+      await fin(resumeStep.id, resumeStep.startedAt, { status: 'ok' });
 
       if (categories.length === 0) {
         // Nothing to do — all categories already have cases
-        const doneStep = mk('done', 'Generation complete (nothing remaining)');
-        setProgress(csId, { phase: 'done', message: 'Complete', percent: 100 });
+        const doneStep = await mk('done', 'Generation complete (nothing remaining)');
+        await setProgress(csId, { phase: 'done', message: 'Complete', percent: 100 });
         const warnings: string[] = [];
         try {
-          const existing = all<{ warnings: string }>(
-            'SELECT warnings FROM test_case_sets WHERE id = ?', csId,
-          );
-          try { const parsed = JSON.parse(existing[0]?.warnings ?? '[]') as string[]; warnings.push(...parsed); } catch { /**/ }
+          const existing = await testingRepo().getCaseSetById(csId);
+          try { const parsed = JSON.parse(existing?.warnings ?? '[]') as string[]; warnings.push(...parsed); } catch { /**/ }
         } catch { /**/ }
-        run(
-          `UPDATE test_case_sets SET status = 'done', finished_at = ?, warnings = ? WHERE id = ? AND cancelled = 0`,
-          now(), JSON.stringify(warnings), csId,
-        );
-        fin(doneStep.id, doneStep.startedAt, { status: 'ok', detail: { warningsCount: warnings.length } });
+        await markDoneUnlessCancelled(csId, warnings);
+        await fin(doneStep.id, doneStep.startedAt, { status: 'ok', detail: { warningsCount: warnings.length } });
         return;
       }
     } else {
       // Full generation: run the outline phase
-      setProgress(csId, { phase: 'outline', message: 'Generating outline…', percent: 5 });
+      await setProgress(csId, { phase: 'outline', message: 'Generating outline…', percent: 5 });
 
       const outlineUserPrompt = buildOutlinePrompt(description);
-      const outlineStep = mk('outline', 'Generating test outline');
+      const outlineStep = await mk('outline', 'Generating test outline');
 
       let outlineText: string;
       try {
@@ -552,7 +539,7 @@ export async function runCaseSetGeneration(
           { maxTokens: 2048, createdBy, images },
         );
       } catch (outlineErr) {
-        fin(outlineStep.id, outlineStep.startedAt, {
+        await fin(outlineStep.id, outlineStep.startedAt, {
           status: 'failed',
           error: String((outlineErr as Error).message ?? outlineErr),
           prompt: { user: outlineUserPrompt },
@@ -564,7 +551,7 @@ export async function runCaseSetGeneration(
       try {
         rawCategories = extractJsonArray(outlineText);
       } catch (e) {
-        fin(outlineStep.id, outlineStep.startedAt, {
+        await fin(outlineStep.id, outlineStep.startedAt, {
           status: 'failed',
           error: `Outline parse failed: ${(e as Error).message}`,
           output: outlineText,
@@ -574,7 +561,7 @@ export async function runCaseSetGeneration(
       }
 
       if (!Array.isArray(rawCategories) || rawCategories.length === 0) {
-        fin(outlineStep.id, outlineStep.startedAt, {
+        await fin(outlineStep.id, outlineStep.startedAt, {
           status: 'failed',
           error: 'Outline returned no categories.',
           output: outlineText,
@@ -592,7 +579,7 @@ export async function runCaseSetGeneration(
       }).filter(Boolean);
 
       if (parsed.length === 0) {
-        fin(outlineStep.id, outlineStep.startedAt, {
+        await fin(outlineStep.id, outlineStep.startedAt, {
           status: 'failed',
           error: 'Outline returned no usable categories.',
           output: outlineText,
@@ -605,20 +592,20 @@ export async function runCaseSetGeneration(
 
       // Persist the outline for future resumes
       try {
-        run('UPDATE test_case_sets SET outline_categories = ? WHERE id = ?', JSON.stringify(categories), csId);
+        await testingRepo().updateCaseSet(csId, { outline_categories: JSON.stringify(categories) });
       } catch { /* best effort */ }
 
-      fin(outlineStep.id, outlineStep.startedAt, {
+      await fin(outlineStep.id, outlineStep.startedAt, {
         status: 'ok',
         detail: { categoryNames: categories },
         output: outlineText,
         prompt: { user: outlineUserPrompt },
       });
 
-      if (isCancelled(csId)) { traceCancel(); return; }
+      if (await isCancelled(csId)) { await traceCancel(); return; }
     }
 
-    setProgress(csId, {
+    await setProgress(csId, {
       phase: 'cases',
       message: `Generating cases for ${categories.length} categories…`,
       percent: 10,
@@ -630,19 +617,16 @@ export async function runCaseSetGeneration(
     // ── Phase: cases ────────────────────────────────────────────────────────
     const warnings: string[] = [];
     // globalOrd tracks the TOTAL ord for newly inserted rows (offset by existing count for resume)
-    const existingOrdBase = (() => {
-      const r = one<{ m: number | null }>('SELECT MAX(ord) AS m FROM test_cases WHERE case_set_id = ?', csId);
-      return r?.m ?? 0;
-    })();
+    const existingOrdBase = await testingRepo().getMaxOrdByCaseSet(csId);
     let globalOrd = existingOrdBase;
     let categoriesDone = 0;
 
     for (let i = 0; i < categories.length; i++) {
-      if (isCancelled(csId)) { traceCancel(); return; }
+      if (await isCancelled(csId)) { await traceCancel(); return; }
 
       const catName = categories[i];
       // catIdx must account for categories already present; getCategoryOrder returns them in order
-      const existingCats = getCategoryOrder(csId);
+      const existingCats = await getCategoryOrder(csId);
       let catIdx = existingCats.map(normCat).indexOf(normCat(catName)) + 1;
       if (catIdx === 0) catIdx = existingCats.length + 1;
       const userMsg = buildCategoryPrompt(description, catName, textBlock);
@@ -652,18 +636,18 @@ export async function runCaseSetGeneration(
       let parseOk = false;
 
       for (let attempt = 0; attempt < 2; attempt++) {
-        if (isCancelled(csId)) { traceCancel(); return; }
+        if (await isCancelled(csId)) { await traceCancel(); return; }
 
         const catLabel = attempt === 0
           ? `Category: ${catName}`
           : `Category: ${catName} (retry)`;
-        const catStep = mk('category', catLabel, { categoryName: catName, attempt: attempt + 1 });
+        const catStep = await mk('category', catLabel, { categoryName: catName, attempt: attempt + 1 });
 
         try {
           rawCasesText = await callTextModel(systemPrompt, userMsg, { maxTokens: 8192, createdBy, images });
           rawCases = extractJsonArray(rawCasesText);
           parseOk = true;
-          fin(catStep.id, catStep.startedAt, {
+          await fin(catStep.id, catStep.startedAt, {
             status: 'ok',
             detail: { categoryName: catName, attempt: attempt + 1, casesProduced: (rawCases as unknown[]).length },
             output: rawCasesText,
@@ -673,7 +657,7 @@ export async function runCaseSetGeneration(
         } catch (parseErr) {
           rawCases = null;
           parseOk = false;
-          fin(catStep.id, catStep.startedAt, {
+          await fin(catStep.id, catStep.startedAt, {
             status: attempt < 1 ? 'retry' : 'failed',
             detail: { categoryName: catName, attempt: attempt + 1, parseError: String((parseErr as Error).message) },
             output: rawCasesText,
@@ -686,11 +670,11 @@ export async function runCaseSetGeneration(
         warnings.push(`Category "${catName}" failed to generate and was skipped.`);
         categoriesDone++;
         const pct = Math.round(10 + (categoriesDone / categories.length) * 85);
-        setProgress(csId, { categoriesDone, percent: pct });
+        await setProgress(csId, { categoriesDone, percent: pct });
         continue;
       }
 
-      if (isCancelled(csId)) { traceCancel(); return; }
+      if (await isCancelled(csId)) { await traceCancel(); return; }
 
       let caseNo = 0;
       for (const raw of rawCases as unknown[]) {
@@ -704,7 +688,7 @@ export async function runCaseSetGeneration(
         const testId = `TC-${catIdx}.1.${caseNo}`;
 
         try {
-          insert('test_cases', {
+          await testingRepo().createCase({
             id: generateId(),
             case_set_id: csId,
             ord: globalOrd,
@@ -728,7 +712,7 @@ export async function runCaseSetGeneration(
 
       categoriesDone++;
       const pct = Math.round(10 + (categoriesDone / categories.length) * 85);
-      setProgress(csId, {
+      await setProgress(csId, {
         phase: 'cases',
         message: `Generated ${categoriesDone} of ${categories.length} categories`,
         percent: pct,
@@ -738,38 +722,32 @@ export async function runCaseSetGeneration(
       });
     }
 
-    if (isCancelled(csId)) { traceCancel(); return; }
+    if (await isCancelled(csId)) { await traceCancel(); return; }
 
     const totalNewCases = globalOrd - existingOrdBase;
     if (totalNewCases === 0 && !resumeFrom) {
       const noMsg = 'No test cases were generated. Try a more specific description or check the model output.';
-      traceFail(noMsg);
-      run(
-        `UPDATE test_case_sets SET status = 'failed', error = ?, finished_at = ? WHERE id = ?`,
-        noMsg, now(), csId,
-      );
+      await traceFail(noMsg);
+      await testingRepo().updateCaseSet(csId, { status: 'failed', error: noMsg, finished_at: now() });
       return;
     }
 
     // ── Phase: saving ───────────────────────────────────────────────────────
-    const savingStep = mk('saving', 'Saving and renumbering cases');
-    setProgress(csId, { phase: 'saving', message: 'Saving…', percent: 98 });
-    renumberCases(csId);
-    fin(savingStep.id, savingStep.startedAt, {
+    const savingStep = await mk('saving', 'Saving and renumbering cases');
+    await setProgress(csId, { phase: 'saving', message: 'Saving…', percent: 98 });
+    await renumberCases(csId);
+    await fin(savingStep.id, savingStep.startedAt, {
       status: 'ok',
       detail: { caseCount: globalOrd, warningsCount: warnings.length },
     });
 
-    if (isCancelled(csId)) { traceCancel(); return; }
+    if (await isCancelled(csId)) { await traceCancel(); return; }
 
     // ── Phase: done ─────────────────────────────────────────────────────────
-    const doneStep = mk('done', 'Generation complete');
-    setProgress(csId, { phase: 'done', message: 'Complete', percent: 100 });
-    run(
-      `UPDATE test_case_sets SET status = 'done', finished_at = ?, warnings = ? WHERE id = ? AND cancelled = 0`,
-      now(), JSON.stringify(warnings), csId,
-    );
-    fin(doneStep.id, doneStep.startedAt, {
+    const doneStep = await mk('done', 'Generation complete');
+    await setProgress(csId, { phase: 'done', message: 'Complete', percent: 100 });
+    await markDoneUnlessCancelled(csId, warnings);
+    await fin(doneStep.id, doneStep.startedAt, {
       status: 'ok',
       detail: { caseCount: globalOrd, warningsCount: warnings.length },
     });
@@ -779,13 +757,10 @@ export async function runCaseSetGeneration(
       try { await deleteAttachmentsByIds(resolvedAttachmentIds); } catch { /* best effort */ }
     }
   } catch (err) {
-    if (isCancelled(csId)) return;
-    traceFail(String((err as Error).message ?? err));
+    if (await isCancelled(csId)) return;
+    await traceFail(String((err as Error).message ?? err));
     try {
-      run(
-        `UPDATE test_case_sets SET status = 'failed', error = ?, finished_at = ? WHERE id = ?`,
-        String((err as Error).message ?? err), now(), csId,
-      );
+      await testingRepo().updateCaseSet(csId, { status: 'failed', error: String((err as Error).message ?? err), finished_at: now() });
     } catch { /* DB closed */ }
     // Attachments are NOT deleted on failure — kept for resume
   }
@@ -825,21 +800,18 @@ async function runCaseSetGenerationWithExistingFilter(
     }).filter(Boolean);
 
     // Persist the outline
-    try { run('UPDATE test_case_sets SET outline_categories = ? WHERE id = ?', JSON.stringify(parsed), csId); } catch { /* ok */ }
+    try { await testingRepo().updateCaseSet(csId, { outline_categories: JSON.stringify(parsed) }); } catch { /* ok */ }
 
     // Filter to categories not already present
     categories = parsed.filter((cat) => !existingNorm.includes(normCat(cat)));
   } catch (err) {
     try {
-      run(
-        `UPDATE test_case_sets SET status = 'failed', error = ?, finished_at = ? WHERE id = ?`,
-        String((err as Error).message ?? err), now(), csId,
-      );
+      await testingRepo().updateCaseSet(csId, { status: 'failed', error: String((err as Error).message ?? err), finished_at: now() });
     } catch { /* DB closed */ }
     return;
   }
 
-  const existingCaseCount = getCaseCount(csId);
+  const existingCaseCount = await getCaseCount(csId);
   await runCaseSetGeneration(csId, tp, description, createdBy, [], {
     existingCaseCount,
     categoriesToGenerate: categories,
@@ -848,16 +820,13 @@ async function runCaseSetGenerationWithExistingFilter(
 
 // ── Route helpers ──────────────────────────────────────────────────────────────
 
-function requireCaseSet(
+async function requireCaseSet(
   req: PortalRequest,
   res: PortalResponse,
   csId: string,
   tp: TestProject,
-): TestCaseSet | null {
-  const cs = one<TestCaseSet>(
-    'SELECT * FROM test_case_sets WHERE id = ? AND test_project_id = ?',
-    csId, tp.id,
-  );
+): Promise<TestCaseSet | null> {
+  const cs = (await testingRepo().getCaseSetByTestProjectAndId(tp.id, csId)) as unknown as TestCaseSet | null;
   if (!cs) { sendJson(res, 404, { error: 'Case set not found' }); return null; }
   return cs;
 }
@@ -865,6 +834,23 @@ function requireCaseSet(
 // ── Route registration ─────────────────────────────────────────────────────────
 
 export function registerCaseSetRoutes(): void {
+  registerBackgroundJob('case-set-generate', async (a) => {
+    const tp = (await testingRepo().getTestProjectById(String(a.testProjectId))) as unknown as TestProject | null;
+    if (!tp) return;
+    await runCaseSetGeneration(
+      String(a.csId), tp, String(a.description), String(a.createdBy),
+      Array.isArray(a.attachmentIds) ? (a.attachmentIds as unknown[]).map(String) : [],
+      a.resumeFrom ? (a.resumeFrom as { existingCaseCount: number; categoriesToGenerate: string[] }) : undefined,
+    );
+  });
+  registerBackgroundJob('case-set-generate-filtered', async (a) => {
+    const tp = (await testingRepo().getTestProjectById(String(a.testProjectId))) as unknown as TestProject | null;
+    if (!tp) return;
+    await runCaseSetGenerationWithExistingFilter(
+      String(a.csId), tp, String(a.description), String(a.createdBy),
+      Array.isArray(a.existingCatNames) ? (a.existingCatNames as unknown[]).map(String) : [],
+    );
+  });
 
   // POST /case-sets — create + start generation
   router.post('/api/projects/:pid/tests/:tpid/case-sets', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
@@ -889,7 +875,7 @@ export function registerCaseSetRoutes(): void {
     const ts = now();
     const initProgress: Progress = { phase: 'queued', message: 'Waiting to start', percent: 0, categoriesTotal: 0, categoriesDone: 0, casesSoFar: 0 };
 
-    insert('test_case_sets', {
+    await testingRepo().createCaseSet({
       id: csId,
       test_project_id: tp.id,
       name,
@@ -903,16 +889,17 @@ export function registerCaseSetRoutes(): void {
       started_at: null,
       finished_at: null,
       cancelled: 0,
+      outline_categories: null,
       attachment_ids: JSON.stringify(rawAttachmentIds),
     });
 
     auditRaw(req.user!.id, 'test_case_set.create', `test_case_set:${csId}`, { name });
 
-    const cs = one<TestCaseSet>('SELECT * FROM test_case_sets WHERE id = ?', csId)!;
+    const cs = (await testingRepo().getCaseSetById(csId)) as unknown as TestCaseSet;
 
-    runCaseSetGeneration(csId, tp, description, req.user!.id, rawAttachmentIds).catch(() => {});
+    await runInBackground('case-set-generate', { csId, testProjectId: tp.id, description, createdBy: req.user!.id, attachmentIds: rawAttachmentIds });
 
-    sendJson(res, 202, { caseSet: formatCaseSet(cs) });
+    sendJson(res, 202, { caseSet: await formatCaseSet(cs) });
   });
 
   // GET /case-sets — list all, newest first
@@ -921,11 +908,9 @@ export function registerCaseSetRoutes(): void {
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
 
-    const rows = all<TestCaseSet>(
-      'SELECT * FROM test_case_sets WHERE test_project_id = ? ORDER BY created_at DESC',
-      tp.id,
-    );
-    sendJson(res, 200, { caseSets: rows.map((cs) => formatCaseSet(cs)) });
+    const rows = ((await testingRepo().listCaseSetsByTestProject(tp.id, 100000, 0)).items as unknown as TestCaseSet[])
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    sendJson(res, 200, { caseSets: await Promise.all(rows.map((cs) => formatCaseSet(cs))) });
   });
 
   // GET /case-sets/:csid — get with cases
@@ -933,14 +918,11 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
-    const cases = all<TestCase>(
-      'SELECT * FROM test_cases WHERE case_set_id = ? ORDER BY ord',
-      cs.id,
-    );
-    sendJson(res, 200, { caseSet: formatCaseSet(cs), cases: cases.map(formatCase) });
+    const cases = ((await testingRepo().listCasesByCaseSet(cs.id)) as unknown as TestCase[]).sort((a, b) => a.ord - b.ord);
+    sendJson(res, 200, { caseSet: await formatCaseSet(cs), cases: cases.map(formatCase) });
   });
 
   // PATCH /case-sets/:csid — update name
@@ -948,15 +930,15 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const name = str(body.name, 'name', { max: 120 }).trim();
 
-    run('UPDATE test_case_sets SET name = ? WHERE id = ?', name, cs.id);
-    const updated = one<TestCaseSet>('SELECT * FROM test_case_sets WHERE id = ?', cs.id)!;
-    sendJson(res, 200, { caseSet: formatCaseSet(updated) });
+    await testingRepo().updateCaseSet(cs.id, { name });
+    const updated = (await testingRepo().getCaseSetById(cs.id)) as unknown as TestCaseSet;
+    sendJson(res, 200, { caseSet: await formatCaseSet(updated) });
   });
 
   // DELETE /case-sets/:csid — delete + cancel
@@ -964,17 +946,19 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
     // Signal cancellation before deleting (so running generation detects it before FK errors)
-    try { run('UPDATE test_case_sets SET cancelled = 1 WHERE id = ?', cs.id); } catch { /* ok */ }
+    try { await testingRepo().updateCaseSet(cs.id, { cancelled: 1 }); } catch { /* ok */ }
     // Clean up any stored attachments
     try {
       const attIds = JSON.parse(cs.attachment_ids || '[]') as string[];
       if (attIds.length > 0) await deleteAttachmentsByIds(attIds);
     } catch { /* best effort */ }
-    run('DELETE FROM test_case_sets WHERE id = ?', cs.id);
+    // SQLite removes a set's cases through a cascade; do it explicitly so DynamoDB behaves the same.
+    for (const c of await testingRepo().listCasesByCaseSet(cs.id)) await testingRepo().deleteCase(c.id, cs.id);
+    await testingRepo().deleteCaseSet(cs.id);
     sendJson(res, 200, { ok: true });
   });
 
@@ -983,18 +967,15 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
     if (cs.status === 'pending' || cs.status === 'running') {
-      run(
-        `UPDATE test_case_sets SET cancelled = 1, status = 'cancelled', finished_at = ? WHERE id = ?`,
-        now(), cs.id,
-      );
+      await testingRepo().updateCaseSet(cs.id, { cancelled: 1, status: 'cancelled', finished_at: now() });
     }
 
-    const updated = one<TestCaseSet>('SELECT * FROM test_case_sets WHERE id = ?', cs.id)!;
-    sendJson(res, 200, { caseSet: formatCaseSet(updated) });
+    const updated = (await testingRepo().getCaseSetById(cs.id)) as unknown as TestCaseSet;
+    sendJson(res, 200, { caseSet: await formatCaseSet(updated) });
   });
 
   // POST /case-sets/:csid/resume — resume a failed/cancelled set, or re-generate skipped categories
@@ -1002,7 +983,7 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
     // 409 when already running/pending
@@ -1022,8 +1003,8 @@ export function registerCaseSetRoutes(): void {
       return;
     }
 
-    const existingCaseCount = getCaseCount(cs.id);
-    const existingCatNames = getCategoryOrder(cs.id);
+    const existingCaseCount = await getCaseCount(cs.id);
+    const existingCatNames = await getCategoryOrder(cs.id);
 
     let categoriesToGenerate: string[];
 
@@ -1051,22 +1032,19 @@ export function registerCaseSetRoutes(): void {
       ? { existingCaseCount, categoriesToGenerate }
       : null;
 
-    // Reset cancelled flag so isCancelled() works correctly
-    run(
-      'UPDATE test_case_sets SET cancelled = 0, status = ?, error = NULL WHERE id = ?',
-      'pending', cs.id,
-    );
+    // Reset cancelled flag so await isCancelled() works correctly
+    await testingRepo().updateCaseSet(cs.id, { cancelled: 0, status: 'pending', error: null });
 
-    const updated = one<TestCaseSet>('SELECT * FROM test_case_sets WHERE id = ?', cs.id)!;
+    const updated = (await testingRepo().getCaseSetById(cs.id)) as unknown as TestCaseSet;
 
     if (resumeFrom) {
-      runCaseSetGeneration(cs.id, tp, cs.description, req.user!.id, [], resumeFrom).catch(() => {});
+      await runInBackground('case-set-generate', { csId: cs.id, testProjectId: tp.id, description: cs.description, createdBy: req.user!.id, attachmentIds: [], resumeFrom });
     } else {
       // No saved outline: run full generation but skip categories whose names already exist
-      runCaseSetGenerationWithExistingFilter(cs.id, tp, cs.description, req.user!.id, existingCatNames).catch(() => {});
+      await runInBackground('case-set-generate-filtered', { csId: cs.id, testProjectId: tp.id, description: cs.description, createdBy: req.user!.id, existingCatNames });
     }
 
-    sendJson(res, 202, { caseSet: formatCaseSet(updated) });
+    sendJson(res, 202, { caseSet: await formatCaseSet(updated) });
   });
 
   // GET /case-sets/:csid/trace — generation trace steps
@@ -1074,10 +1052,10 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
-    const steps = getCaseSetTrace(cs.id);
+    const steps = await getCaseSetTrace(cs.id);
     sendJson(res, 200, { steps });
   });
 
@@ -1086,7 +1064,7 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -1105,17 +1083,14 @@ export function registerCaseSetRoutes(): void {
     const requestJson = 'request' in body ? validateRequestField(body.request) : null;
     const responseJson = 'response' in body ? validateResponseField(body.response) : null;
 
-    const nextOrd = (() => {
-      const r = one<{ m: number | null }>('SELECT MAX(ord) AS m FROM test_cases WHERE case_set_id = ?', cs.id);
-      return (r?.m ?? 0) + 1;
-    })();
+    const nextOrd = (await testingRepo().getMaxOrdByCaseSet(cs.id)) + 1;
 
     const effectiveCategory = category || 'Uncategorised';
     const cid = generateId();
-    const testId = computeTestId(cs.id, effectiveCategory);
+    const testId = await computeTestId(cs.id, effectiveCategory);
     const ts = now();
 
-    insert('test_cases', {
+    await testingRepo().createCase({
       id: cid,
       case_set_id: cs.id,
       ord: nextOrd,
@@ -1133,7 +1108,7 @@ export function registerCaseSetRoutes(): void {
       updated_at: ts,
     });
 
-    const newCase = one<TestCase>('SELECT * FROM test_cases WHERE id = ?', cid)!;
+    const newCase = (await testingRepo().getCaseById(cid, cs.id)) as unknown as TestCase;
     sendJson(res, 201, { case: formatCase(newCase) });
   });
 
@@ -1142,13 +1117,10 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
-    const existingCase = one<TestCase>(
-      'SELECT * FROM test_cases WHERE id = ? AND case_set_id = ?',
-      req.params.cid, cs.id,
-    );
+    const existingCase = (await testingRepo().getCaseById(req.params.cid, cs.id)) as unknown as TestCase | null;
     if (!existingCase) { sendJson(res, 404, { error: 'Case not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -1169,12 +1141,9 @@ export function registerCaseSetRoutes(): void {
     if ('request' in body) updates.request = validateRequestField(body.request);
     if ('response' in body) updates.response = validateResponseField(body.response);
 
-    const setClauses = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
-    const vals = [...Object.values(updates), existingCase.id];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    run(`UPDATE test_cases SET ${setClauses} WHERE id = ?`, ...(vals as any[]));
+    await testingRepo().updateCase(existingCase.id, updates as Partial<TestCase>, cs.id);
 
-    const updated = one<TestCase>('SELECT * FROM test_cases WHERE id = ?', existingCase.id)!;
+    const updated = (await testingRepo().getCaseById(existingCase.id, cs.id)) as unknown as TestCase;
     sendJson(res, 200, { case: formatCase(updated) });
   });
 
@@ -1183,16 +1152,13 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
-    const existingCase = one<TestCase>(
-      'SELECT id FROM test_cases WHERE id = ? AND case_set_id = ?',
-      req.params.cid, cs.id,
-    );
+    const existingCase = (await testingRepo().getCaseById(req.params.cid, cs.id)) as unknown as TestCase | null;
     if (!existingCase) { sendJson(res, 404, { error: 'Case not found' }); return; }
 
-    run('DELETE FROM test_cases WHERE id = ?', existingCase.id);
+    await testingRepo().deleteCase(existingCase.id, cs.id);
     sendJson(res, 200, { ok: true });
   });
 
@@ -1201,10 +1167,10 @@ export function registerCaseSetRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'viewer');
     if (!tp) return;
-    const cs = requireCaseSet(req, res, req.params.csid, tp);
+    const cs = await requireCaseSet(req, res, req.params.csid, tp);
     if (!cs) return;
 
-    const cases = all<TestCase>('SELECT * FROM test_cases WHERE case_set_id = ? ORDER BY ord', cs.id);
+    const cases = ((await testingRepo().listCasesByCaseSet(cs.id)) as unknown as TestCase[]).sort((a, b) => a.ord - b.ord);
 
     const ExcelJS = await import('exceljs');
     const wb = new ExcelJS.default.Workbook();

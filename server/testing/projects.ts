@@ -10,6 +10,7 @@
  *   DELETE /api/projects/:pid/tests/:tpid                — delete test project (editor+, write scope)
  */
 
+import { testingRepo, deleteTestProjectDeep } from './data.ts';
 import { router, sendJson, requireAuth } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { all, one, run, insert } from '../db.ts';
@@ -99,10 +100,8 @@ export function registerTestProjectRoutes(): void {
   router.get('/api/projects/:pid/tests', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     if (!await requireProjectMember(req, res, req.params.pid)) return;
-    const projects = all<TestProject>(
-      'SELECT * FROM test_projects WHERE project_id = ? ORDER BY created_at DESC',
-      req.params.pid,
-    );
+    const projects = ((await testingRepo().listTestProjectsByProject(req.params.pid)) as unknown as TestProject[])
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
     sendJson(res, 200, { testProjects: projects.map(tpView) });
   });
 
@@ -131,7 +130,7 @@ export function registerTestProjectRoutes(): void {
     const id = generateId();
     const ts = now();
 
-    insert('test_projects', {
+    await testingRepo().createTestProject({
       id,
       project_id: req.params.pid,
       name,
@@ -150,7 +149,7 @@ export function registerTestProjectRoutes(): void {
 
     auditRaw(req.user!.id, 'test_project.create', `test_project:${id}`, { name, projectId: req.params.pid });
 
-    const tp = one<TestProject>('SELECT * FROM test_projects WHERE id = ?', id)!;
+    const tp = (await testingRepo().getTestProjectById(id)) as unknown as TestProject;
     sendJson(res, 201, { testProject: tpView(tp) });
   });
 
@@ -194,14 +193,10 @@ export function registerTestProjectRoutes(): void {
 
     const keys = Object.keys(patch);
     if (keys.length === 1) { sendJson(res, 400, { error: 'Nothing to update' }); return; }
-    run(
-      `UPDATE test_projects SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      ...keys.map((k) => patch[k] as string),
-      tp.id,
-    );
+    await testingRepo().updateTestProject(tp.id, patch as Partial<TestProject>);
 
     auditRaw(req.user!.id, 'test_project.update', `test_project:${tp.id}`, { name: patch.name });
-    const updated = one<TestProject>('SELECT * FROM test_projects WHERE id = ?', tp.id)!;
+    const updated = (await testingRepo().getTestProjectById(tp.id)) as unknown as TestProject;
     sendJson(res, 200, { testProject: tpView(updated) });
   });
 
@@ -211,7 +206,7 @@ export function registerTestProjectRoutes(): void {
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
 
-    run('DELETE FROM test_projects WHERE id = ?', tp.id);
+    await deleteTestProjectDeep(tp.id);
     auditRaw(req.user!.id, 'test_project.delete', `test_project:${tp.id}`, { name: tp.name });
     sendJson(res, 200, { ok: true });
   });

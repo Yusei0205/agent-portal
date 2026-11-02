@@ -10,6 +10,9 @@
  *   GET  /api/projects/:pid/tests/:tpid/runs/:rid/steps/:stepIdx/screenshot — serve screenshot
  */
 
+import { testingRepo } from './data.ts';
+import { registerBackgroundJob, runInBackground } from '../background-jobs.ts';
+import { restoreFile } from '../durable-files.ts';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -375,13 +378,10 @@ async function executeStep(
         const fileRef = step.file.match(/^\{\{file\.([^}]+)\}\}$/);
         if (!fileRef) throw new Error(`Invalid file ref: ${step.file}`);
         const fileName = fileRef[1];
-        const fileRow = one<Row>(
-          'SELECT path FROM test_vault_files WHERE test_project_id = ? AND name = ?',
-          tp.id, fileName,
-        );
+        const fileRow = await testingRepo().getVaultFileByTestProjectAndName(tp.id, fileName);
         if (!fileRow) throw new Error(`Vault file "${fileName}" not found`);
         const absFilePath = path.join(config.dataDir, String(fileRow.path));
-        if (!fs.existsSync(absFilePath)) throw new Error(`Vault file "${fileName}" not on disk`);
+        if (!(await restoreFile(absFilePath))) throw new Error(`Vault file "${fileName}" not on disk`);
         const loc = buildLocator(page, step.locator);
         await loc.setInputFiles(absFilePath);
         break;
@@ -488,7 +488,7 @@ async function executeStep(
 // ── Run executor ──────────────────────────────────────────────────────────────
 
 async function executeRun(runId: string, scripts: TestScript[], tp: TestProject): Promise<void> {
-  run('UPDATE test_runs SET status = ?, started_at = ? WHERE id = ?', 'running', now(), runId);
+  await testingRepo().updateTestRun(runId, { status: 'running', started_at: now() });
 
   const artifactDir = path.join(config.dataDir, 'test-runs', runId);
   const executablePath = findBrowser() ?? undefined;
@@ -499,15 +499,21 @@ async function executeRun(runId: string, scripts: TestScript[], tp: TestProject)
   try {
     // mkdir inside the try so the finally always decrements — no early-return leaks
     await _mkdirFn(artifactDir, { recursive: true });
-    run('UPDATE test_runs SET artifact_dir = ? WHERE id = ?', artifactDir, runId);
+    await testingRepo().updateTestRun(runId, { artifact_dir: artifactDir });
 
     // SSRF guard setting — metadata/link-local always blocked; private networks allowed by default
     const allowPrivateNetworks = getSetting(getDb(), 'test.allowPrivateNetworks') !== 'false';
 
     const pw = await loadPlaywright();
     if (!pw) {
-      run('UPDATE test_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?',
-        'error', 'playwright or playwright-core is not installed', now(), runId);
+      const onLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+      await testingRepo().updateTestRun(runId, {
+        status: 'error',
+        error: onLambda
+          ? 'Browser test runs are not available on the cloud portal yet (they need a browser runtime).'
+          : 'playwright or playwright-core is not installed',
+        finished_at: now(),
+      });
       return; // finally runs → counter correctly decremented; no double-decrement possible
     }
 
@@ -526,7 +532,7 @@ async function executeRun(runId: string, scripts: TestScript[], tp: TestProject)
 
     for (const script of scripts) {
       if (cancelledRuns.has(runId)) {
-        run('UPDATE test_runs SET status = ?, finished_at = ? WHERE id = ?', 'cancelled', now(), runId);
+        await testingRepo().updateTestRun(runId, { status: 'cancelled', finished_at: now() });
         break;
       }
 
@@ -569,7 +575,7 @@ async function executeRun(runId: string, scripts: TestScript[], tp: TestProject)
           ? path.relative(config.dataDir, result.screenshotPath)
           : null;
 
-        insert('test_run_steps', {
+        await testingRepo().createRunStep({
           id: stepId,
           run_id: runId,
           script_id: script.id,
@@ -592,19 +598,17 @@ async function executeRun(runId: string, scripts: TestScript[], tp: TestProject)
     }
 
     if (cancelledRuns.has(runId)) {
-      run('UPDATE test_runs SET status = ?, finished_at = ? WHERE id = ?', 'cancelled', now(), runId);
+      await testingRepo().updateTestRun(runId, { status: 'cancelled', finished_at: now() });
     } else {
-      run('UPDATE test_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?',
-        runPassed ? 'passed' : 'failed',
-        runError ?? null,
-        now(),
-        runId,
-      );
+      await testingRepo().updateTestRun(runId, {
+        status: runPassed ? 'passed' : 'failed',
+        error: runError ?? null,
+        finished_at: now(),
+      });
     }
   } catch (err) {
     const errMsg = String((err as Error).message ?? err);
-    run('UPDATE test_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?',
-      'error', errMsg, now(), runId);
+    await testingRepo().updateTestRun(runId, { status: 'error', error: errMsg, finished_at: now() }).catch(() => { /* best effort */ });
   } finally {
     cancelledRuns.delete(runId);
     runningCount = Math.max(0, runningCount - 1);
@@ -616,13 +620,29 @@ async function executeRun(runId: string, scripts: TestScript[], tp: TestProject)
 // ── Route registration ─────────────────────────────────────────────────────────
 
 export function registerRunRoutes(): void {
+  registerBackgroundJob('test-run', async (a) => {
+    const runId = String(a.runId);
+    try {
+      const tp = (await testingRepo().getTestProjectById(String(a.testProjectId))) as unknown as TestProject | null;
+      if (!tp) throw new Error('Test project not found');
+      const scripts: TestScript[] = [];
+      for (const id of (a.scriptIds as string[]) ?? []) {
+        const sc = (await testingRepo().getTestScriptById(id)) as unknown as TestScript | null;
+        if (sc) scripts.push(sc);
+      }
+      await executeRun(runId, scripts, tp);
+    } catch (e) {
+      await testingRepo().updateTestRun(runId, { status: 'error', error: String((e as Error).message ?? e), finished_at: now() })
+        .catch(() => { /* DB may be closed in tests — best effort */ });
+    }
+  });
 
   // POST /api/projects/:pid/tests/:tpid/scripts/:sid/run — run one script
   router.post('/api/projects/:pid/tests/:tpid/scripts/:sid/run', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const script = one<TestScript>('SELECT * FROM test_scripts WHERE id = ? AND test_project_id = ?', req.params.sid, tp.id);
+    const script = (await testingRepo().getTestScriptByTestProjectAndId(tp.id, req.params.sid)) as unknown as TestScript | null;
     if (!script) { sendJson(res, 404, { error: 'Script not found' }); return; }
 
     const maxConcurrent = Number(getSetting(getDb(), 'test.run_concurrency') ?? '2') || 2;
@@ -633,7 +653,7 @@ export function registerRunRoutes(): void {
 
     const runId = generateId();
     const ts = now();
-    insert('test_runs', {
+    await testingRepo().createTestRun({
       id: runId,
       test_project_id: tp.id,
       script_id: script.id,
@@ -648,13 +668,8 @@ export function registerRunRoutes(): void {
     });
 
     auditRaw(req.user!.id, 'test_run.start', `test_run:${runId}`, { scriptId: script.id });
-    // Start execution asynchronously
-    executeRun(runId, [script], tp).catch((e: unknown) => {
-      try {
-        run('UPDATE test_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?',
-          'error', String((e as Error).message ?? e), now(), runId);
-      } catch { /* DB may be closed in tests — best effort */ }
-    });
+    // Start execution in the background (a separate Lambda invocation in the cloud).
+    await runInBackground('test-run', { runId, testProjectId: tp.id, scriptIds: [script.id] });
 
     sendJson(res, 202, { runId });
   });
@@ -664,13 +679,11 @@ export function registerRunRoutes(): void {
     if (!hasScope(req, 'tests')) { sendJson(res, 403, { error: 'tests scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const group = one<TestGroup>('SELECT * FROM test_groups WHERE id = ? AND test_project_id = ?', req.params.gid, tp.id);
+    const group = (await testingRepo().getTestGroupByTestProjectAndId(tp.id, req.params.gid)) as unknown as TestGroup | null;
     if (!group) { sendJson(res, 404, { error: 'Group not found' }); return; }
 
-    const scripts = all<TestScript>(
-      'SELECT * FROM test_scripts WHERE test_group_id = ? ORDER BY sort_order',
-      group.id,
-    );
+    const scripts = ((await testingRepo().listScriptsByGroup(group.id)) as unknown as TestScript[])
+      .sort((a, b) => a.sort_order - b.sort_order);
 
     const maxConcurrent = Number(getSetting(getDb(), 'test.run_concurrency') ?? '2') || 2;
     if (runningCount >= maxConcurrent) {
@@ -680,7 +693,7 @@ export function registerRunRoutes(): void {
 
     const runId = generateId();
     const ts = now();
-    insert('test_runs', {
+    await testingRepo().createTestRun({
       id: runId,
       test_project_id: tp.id,
       script_id: null,
@@ -695,12 +708,7 @@ export function registerRunRoutes(): void {
     });
 
     auditRaw(req.user!.id, 'test_run.start_group', `test_run:${runId}`, { groupId: group.id });
-    executeRun(runId, scripts, tp).catch((e: unknown) => {
-      try {
-        run('UPDATE test_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?',
-          'error', String((e as Error).message ?? e), now(), runId);
-      } catch { /* DB may be closed in tests — best effort */ }
-    });
+    await runInBackground('test-run', { runId, testProjectId: tp.id, scriptIds: scripts.map((x) => x.id) });
 
     sendJson(res, 202, { runId });
   });
@@ -712,11 +720,11 @@ export function registerRunRoutes(): void {
     if (!tp) return;
     const limit = Math.min(200, Math.max(1, Number(req.query.get('limit') || 50)));
     const offset = Math.max(0, Number(req.query.get('offset') || 0));
-    const runs = all<Row>(
-      `SELECT id, script_id, group_id, status, error, created_at, started_at, finished_at, created_by
-       FROM test_runs WHERE test_project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-      tp.id, limit, offset,
-    );
+    const runs = (await testingRepo().listRunsByTestProject(tp.id, limit, offset))
+      .map((r) => ({
+        id: r.id, script_id: r.script_id, group_id: r.group_id, status: r.status, error: r.error,
+        created_at: r.created_at, started_at: r.started_at, finished_at: r.finished_at, created_by: r.created_by,
+      })) as Row[];
     sendJson(res, 200, { runs });
   });
 
@@ -725,13 +733,14 @@ export function registerRunRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const testRun = one<TestRun>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', req.params.rid, tp.id);
+    const testRun = (await testingRepo().getTestRunByTestProjectAndId(tp.id, req.params.rid)) as unknown as TestRun | null;
     if (!testRun) { sendJson(res, 404, { error: 'Run not found' }); return; }
-    const steps = all<Row>(
-      `SELECT id, script_id, step_index, status, duration_ms, error, screenshot_path, created_at
-       FROM test_run_steps WHERE run_id = ? ORDER BY step_index`,
-      testRun.id,
-    );
+    const steps = (await testingRepo().listStepsByRun(testRun.id))
+      .sort((a, b) => a.step_index - b.step_index)
+      .map((x) => ({
+        id: x.id, script_id: x.script_id, step_index: x.step_index, status: x.status, duration_ms: x.duration_ms,
+        error: x.error, screenshot_path: x.screenshot_path, created_at: x.created_at,
+      })) as Row[];
     sendJson(res, 200, { run: testRun, steps });
   });
 
@@ -740,16 +749,15 @@ export function registerRunRoutes(): void {
     if (!hasScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid, 'editor');
     if (!tp) return;
-    const testRun = one<TestRun>('SELECT * FROM test_runs WHERE id = ? AND test_project_id = ?', req.params.rid, tp.id);
+    const testRun = (await testingRepo().getTestRunByTestProjectAndId(tp.id, req.params.rid)) as unknown as TestRun | null;
     if (!testRun) { sendJson(res, 404, { error: 'Run not found' }); return; }
 
     if (testRun.status === 'running' || testRun.status === 'queued') {
       cancelledRuns.add(testRun.id);
-      run('UPDATE test_runs SET status = ?, finished_at = ? WHERE id = ? AND status IN (?,?)',
-        'cancelled', now(), testRun.id, 'queued', 'running');
+      await testingRepo().updateTestRun(testRun.id, { status: 'cancelled', finished_at: now() });
     }
 
-    const updated = one<TestRun>('SELECT * FROM test_runs WHERE id = ?', testRun.id)!;
+    const updated = (await testingRepo().getTestRunById(testRun.id)) as unknown as TestRun;
     sendJson(res, 200, { run: updated });
   });
 
@@ -758,18 +766,15 @@ export function registerRunRoutes(): void {
     if (!hasScope(req, 'read')) { sendJson(res, 403, { error: 'read scope required' }); return; }
     const tp = await requireTestProject(req, res, req.params.pid, req.params.tpid);
     if (!tp) return;
-    const testRun = one<TestRun>('SELECT id, test_project_id FROM test_runs WHERE id = ? AND test_project_id = ?', req.params.rid, tp.id);
+    const testRun = (await testingRepo().getTestRunByTestProjectAndId(tp.id, req.params.rid)) as unknown as TestRun | null;
     if (!testRun) { sendJson(res, 404, { error: 'Run not found' }); return; }
 
     const stepIdx = parseInt(req.params.stepIdx, 10);
-    const stepRow = one<Row>(
-      'SELECT screenshot_path FROM test_run_steps WHERE run_id = ? AND step_index = ?',
-      testRun.id, stepIdx,
-    );
+    const stepRow = (await testingRepo().listStepsByRun(testRun.id)).find((x) => x.step_index === stepIdx);
     if (!stepRow?.screenshot_path) { sendJson(res, 404, { error: 'Screenshot not found' }); return; }
 
     const absPath = path.join(config.dataDir, String(stepRow.screenshot_path));
-    if (!fs.existsSync(absPath)) { sendJson(res, 404, { error: 'Screenshot file not found on disk' }); return; }
+    if (!(await restoreFile(absPath))) { sendJson(res, 404, { error: 'Screenshot file not found on disk' }); return; }
 
     const stat = fs.statSync(absPath);
     res.writeHead(200, {
