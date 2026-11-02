@@ -238,6 +238,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.storageBucket
           ? { STORAGE_BACKEND: 's3', STORAGE_S3_BUCKET: props.storageBucket, STORAGE_S3_PREFIX: 'data', STORAGE_S3_REGION: this.region }
           : {}),
+        // A run lives inside one Lambda invocation (15 min max): end agent runs a little before that.
+        PORTAL_RUN_TIMEOUT_MS: String(14 * 60_000),
         // Lambda Web Adapter forwards non-HTTP events (EventBridge Scheduler) to this path.
         AWS_LWA_PASS_THROUGH_PATH: '/internal/events',
         PORTAL_GOOGLE_SECRET_ARN: googleSecret.secretArn,

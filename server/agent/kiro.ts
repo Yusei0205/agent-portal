@@ -945,6 +945,12 @@ async function runKiroViaAgentCoreAdapter(
   if (run.kind === 'review') {
     prompt = `${run.goal}\n\n${REVIEW_INSTRUCTIONS}`;
   }
+  // Every AgentCore session starts fresh, so earlier turns are passed along as a recap.
+  const recap = await buildConversationRecap(run.workflowId, run.runId);
+  if (recap) {
+    prompt = recap + prompt;
+    emit('status', { text: 'Included a recap of earlier turns' });
+  }
 
   const token: KiroTokenPayload = {
     accessToken,

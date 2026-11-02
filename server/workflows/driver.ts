@@ -3,6 +3,7 @@
  * and spawns the agent runner in the background.
  */
 
+import { registerBackgroundJob, runInBackground } from '../background-jobs.ts';
 import { setBeforeCloseHook } from '../db.ts';
 import { generateId, now, badRequest } from '../util.ts';
 import { emit } from '../events.ts';
@@ -110,23 +111,35 @@ export async function startRun(workflowId: string): Promise<string> {
     emit(workflow.project_id, { type: 'run.updated', workflowId, runId, status: 'pending' });
   }
 
-  // Spawn the run in the background (fire-and-forget)
-  executeRun(runId, workflowId).catch((e: unknown) => {
+  // Run it in the background. On Lambda this is a separate invocation, so the run keeps going after this
+  // request's reply is sent (otherwise the instance freezes and the run only moves when something wakes it).
+  await runInBackground('execute-run', { runId, workflowId });
+
+  return runId;
+}
+
+/** Runs one agent turn and marks the run failed if it throws. */
+async function runTurn(runId: string, workflowId: string): Promise<void> {
+  try {
+    await executeRun(runId, workflowId);
+  } catch (e: unknown) {
     console.error(`[driver] Unhandled error in run ${runId}:`, e);
+    const repo = getSessionsRepository();
+    const workflow = await repo.getWorkflowById(workflowId).catch(() => null);
     // Best-effort: mark the run failed via finalizeRun so rollups are updated.
     const errTs = now();
     const errHint: RunFinalizeStats = {
       dateUTC: errTs.slice(0, 10),
-      projectId: workflow.project_id ?? null,
-      agentName: (workflow.lead_agent ?? '').trim() || 'default',
+      projectId: workflow?.project_id ?? null,
+      agentName: (workflow?.lead_agent ?? '').trim() || 'default',
     };
-    repo.finalizeRun(runId, 'running', { status: 'failed', finished_at: errTs }, errHint).catch(() => {});
-    repo.updateWorkflowConditional(workflowId, 'running', { status: 'failed', updated_at: errTs }).catch(() => {});
-    if (workflow.project_id) {
+    await repo.finalizeRun(runId, 'running', { status: 'failed', finished_at: errTs }, errHint).catch(() => {});
+    await repo.updateWorkflowConditional(workflowId, 'running', { status: 'failed', updated_at: errTs }).catch(() => {});
+    if (workflow?.project_id) {
       emit(workflow.project_id, { type: 'run.updated', workflowId, runId, status: 'failed' });
       emit(workflow.project_id, { type: 'workflow.updated', workflowId, status: 'failed' });
     }
-  });
-
-  return runId;
+  }
 }
+
+registerBackgroundJob('execute-run', async (a) => { await runTurn(String(a.runId), String(a.workflowId)); });

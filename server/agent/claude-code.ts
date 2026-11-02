@@ -174,6 +174,12 @@ async function runClaudeViaAgentCoreAdapter(
   if (run.kind === 'review') prompt = `${run.goal}
 
 ${REVIEW_SYSTEM_APPEND}`;
+  // Every AgentCore session starts fresh, so earlier turns are passed along as a recap.
+  const recap = await buildConversationRecap(run.workflowId, run.runId);
+  if (recap) {
+    prompt = recap + prompt;
+    emit('status', { text: 'Included a recap of earlier turns' });
+  }
 
   const res = await runClaudeViaAgentCore(ctx, {
     runtimeArn,
