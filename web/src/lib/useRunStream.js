@@ -83,9 +83,12 @@ export function useRunStream(runId) {
 
     const alive = { v: true };
     let unsubRealtime = null;
+    let pollTimer = null;
+    let done = false;
 
     const addEvent = (ev) => {
       if (!alive.v || !ev) return;
+      if (ev.type === 'run-complete' || ev.type === 'run-failed') done = true;
       const key = ev.id ?? `${ev.type}-${ev.created_at}`;
       if (ev.id && seen.current.has(key)) return;
       if (ev.id) seen.current.add(key);
@@ -112,11 +115,31 @@ export function useRunStream(runId) {
       } catch { /* live events still arrive */ }
       historyLoaded = true;
       for (const ev of queued) addEvent(ev);
+
+      // Safety net: the live channel can miss events (a dropped connection, a late subscribe). Until the run
+      // reports it has ended, re-read the stored history every few seconds; events already shown are skipped.
+      const started = Date.now();
+      const poll = async () => {
+        if (!alive.v || done || Date.now() - started > 20 * 60_000) return;
+        try {
+          const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/events/history`, { credentials: 'include' });
+          if (res.ok) {
+            const body = await res.json();
+            for (const ev of body.events ?? []) {
+              addEvent(ev);
+              if (ev.type === 'run-complete' || ev.type === 'run-failed') done = true;
+            }
+          }
+        } catch { /* try again */ }
+        if (alive.v && !done) pollTimer = setTimeout(poll, 2500);
+      };
+      pollTimer = setTimeout(poll, 2500);
     });
 
     return () => {
       alive.v = false;
       clearTimeout(retryTimer.current);
+      if (pollTimer) clearTimeout(pollTimer);
       esRef.current?.close();
       esRef.current = null;
       if (unsubRealtime) unsubRealtime();
