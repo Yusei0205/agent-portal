@@ -513,19 +513,30 @@ async function _doCodeCommitListRepos(
     await import('@aws-sdk/client-codecommit');
   const client = new CodeCommitClient({ region: creds.region, credentials: resolved ?? undefined });
 
-  const listResult = await client.send(
-    new ListRepositoriesCommand({
-      order: 'descending',
-      sortBy: 'lastModifiedDate',
-      nextToken: nextToken || undefined,
-    }),
-  );
-  const names = (listResult.repositories ?? []).map((r) => r.repositoryName ?? '').filter(Boolean);
+  // List every repository, not just the first page: CodeCommit returns them in pages, so a search or a
+  // "load more" that only looked at one page would miss repositories on the others.
+  const MAX_REPOS = 1500;
+  let names: string[] = [];
+  let token: string | undefined = nextToken || undefined;
+  do {
+    const page = await client.send(
+      new ListRepositoriesCommand({ order: 'ascending', sortBy: 'repositoryName', nextToken: token }),
+    );
+    names.push(...(page.repositories ?? []).map((r) => r.repositoryName ?? '').filter(Boolean));
+    token = page.nextToken ?? undefined;
+  } while (token && names.length < MAX_REPOS);
 
-  if (names.length === 0) return { repos: [], nextPage: listResult.nextToken ?? null };
+  // Filter by name first so a search only has to fetch details for the matches.
+  if (q) {
+    const lq = q.toLowerCase();
+    names = names.filter((n) => n.toLowerCase().includes(lq));
+  }
+  if (names.length === 0) return { repos: [], nextPage: null };
 
-  // BatchGetRepositories is capped at 25 names per call — chunk and merge.
+  // BatchGetRepositories is capped at 25 names per call — chunk, and run a few chunks at a time.
   const BATCH_LIMIT = 25;
+  const chunks: string[][] = [];
+  for (let i = 0; i < names.length; i += BATCH_LIMIT) chunks.push(names.slice(i, i + BATCH_LIMIT));
   const rawRepos: Array<{
     repositoryName?: string;
     cloneUrlHttp?: string;
@@ -533,11 +544,15 @@ async function _doCodeCommitListRepos(
     repositoryDescription?: string;
     lastModifiedDate?: Date;
   }> = [];
-  for (let i = 0; i < names.length; i += BATCH_LIMIT) {
-    const chunk = names.slice(i, i + BATCH_LIMIT);
-    const batchResult = await client.send(new BatchGetRepositoriesCommand({ repositoryNames: chunk }));
-    rawRepos.push(...(batchResult.repositories ?? []));
-  }
+  let nextChunk = 0;
+  const worker = async (): Promise<void> => {
+    while (nextChunk < chunks.length) {
+      const chunk = chunks[nextChunk++];
+      const batchResult = await client.send(new BatchGetRepositoriesCommand({ repositoryNames: chunk }));
+      rawRepos.push(...(batchResult.repositories ?? []));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker));
 
   let repos: DiscoveredRepo[] = rawRepos.map((r) => ({
     name: r.repositoryName ?? '',
@@ -549,12 +564,9 @@ async function _doCodeCommitListRepos(
     updatedAt: r.lastModifiedDate ? new Date(r.lastModifiedDate).toISOString() : '',
   }));
 
-  if (q) {
-    const lq = q.toLowerCase();
-    repos = repos.filter((r) => r.name.toLowerCase().includes(lq));
-  }
+  repos.sort((a, b) => a.name.localeCompare(b.name));
 
-  return { repos, nextPage: listResult.nextToken ?? null };
+  return { repos, nextPage: token ?? null };
 }
 
 /** Resolve short-lived AWS credentials for CodeCommit operations. */

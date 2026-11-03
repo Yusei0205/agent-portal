@@ -882,7 +882,7 @@ export function SessionLive({
   const pairedEarlierEvents   = pairToolEvents(
     earlierEvents.filter((e) => !(runId && e.run_id && e.run_id === runId)),
   );
-  const displayEarlierEvents = mergeConsecutiveAssistantText(pairedEarlierEvents);
+  const displayEarlierEventsAll = mergeConsecutiveAssistantText(pairedEarlierEvents);
 
   const goalText = typeof workflow?.goal === 'string' ? workflow.goal.trim() : '';
   // Show the goal bubble only once we know there is no earlier history (i.e.
@@ -921,7 +921,7 @@ export function SessionLive({
       pendingTextsMap[m.text] = (pendingTextsMap[m.text] || 0) + 1;
     }
   }
-  const dedupedDisplayEvents = displayEvents.filter((e) => {
+  const dedupedAll = displayEvents.filter((e) => {
     if (e.type !== 'human') return true;
     const text = e.payload?.text || e.payload?.body || e.payload?.message || '';
     if (pendingTextsMap[text] > 0) {
@@ -930,6 +930,14 @@ export function SessionLive({
     }
     return true;
   });
+
+  // Only the latest failure matters: an older "run failed" (for example "Kiro sign-in expired") is no longer
+  // true once a later turn has run, so it is not shown again in the history.
+  const isTerminal = (e) => e.type === 'run-complete' || e.type === 'run-failed';
+  const lastTerminal = [...displayEarlierEventsAll, ...dedupedAll].filter(isTerminal).pop() ?? null;
+  const dropStaleFailure = (e) => !(e.type === 'run-failed' && lastTerminal && e !== lastTerminal);
+  const displayEarlierEvents = displayEarlierEventsAll.filter(dropStaleFailure);
+  const dedupedDisplayEvents = dedupedAll.filter(dropStaleFailure);
 
   // ── New-run handling: when runId changes, persist current events ─────────
 
