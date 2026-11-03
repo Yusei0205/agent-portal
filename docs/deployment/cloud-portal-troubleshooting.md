@@ -230,3 +230,29 @@ The Integrations page has two parts. **Connected services** is an overview of si
 - A page opened before the deploy kept the old web bundle (the tab still showed the old Browser panel with "Not running"). Reload the page.
 - While control is taken, the agent's page reads came back empty and it then carried on; it is not a hard stop of the run.
 - The older picture-after-each-action feed (`browser-screenshot` events) is still emitted and stored; it is only shown when no live stream is available.
+
+## Runner images and the portal image: tools are baked in, not fetched (2026-11-04)
+
+- **Runner images** (Kiro and Claude) contain `uv`/`uvx`, Python 3 and (Claude) curl, with `UV_PYTHON_PREFERENCE=system`, so a session never downloads an interpreter or tool at start. If `uv` fails with a download error, the image running is older than tag `br-202611056`/`br-202611058`: warm AgentCore machines keep the old image for about 5 minutes after a deploy.
+- **Portal image** (`Dockerfile.lambda`) contains headless Chromium and fonts (`DOC_BROWSER=/usr/bin/chromium`) and the Icon diagrams pack (`ICON_DIAGRAMS_DIR=/opt/icon-diagrams`, installed by `scripts/install-drawio-pack.ts` at build time, checked against the pinned hashes). The Tests page showed "Browser not available" before this because Lambda had no browser. The Azure icon images are best effort and the build installed 0 of them; the rest of the pack is complete.
+- A restore of a large workspace snapshot (935 MB took 16-19 s) is dominated by git history and committed dependency layers, not by the network. Options if it hurts: zstd instead of gzip, sparse checkout of the repository, a longer idle window.
+
+## Tests: choosing the AI credential and model (2026-11-04)
+
+- Generate with AI has a Credential list (Claude and Kiro credentials of the signed-in person) and a Model list. With no credential of their own the portal's provider is used; if that is unset (demo) and the person has no credential, generation says so.
+- A Kiro credential sends the prompt through the Kiro runner. Kiro is an agent and may answer in prose, so the prompt ends with an instruction to give only the output, and generation retries once when the reply has no JSON array. The error now shows what the model said: `Model output did not contain a JSON array. The model said: "..."`.
+- The model is passed to kiro-cli with ACP `session/set_model`; if the model cannot be set the run goes on with Kiro's default and a status line says "Could not use model ...". Sessions use the same path. A Tests-page generation has no run feed, so to check the model, start a session with a specific model and look for the status line `Model: <id>`.
+
+## DynamoDB run events: read enough of them
+
+`listWorkflowRunEventsByType` reads only the first `limit` events of a run (oldest first) and then filters by type. For rare types such as `browser-session` or `check-result` use a large limit (500), or they are missed in long runs. This was why Live View vanished in later runs.
+
+## Loop sessions and loop triggers (port branch)
+
+**Loop session.** A session created with `loop: { stopRules, checks }` goes from run to run by itself. After each run `afterRun` (server/workflows/loop.ts) records the iteration and either starts the next run or stops with a reason: failures in a row, the agent reporting blocked or done, no progress over several iterations, the iteration limit, the budget or the time limit. State is the `loop_state` JSON on the session. Checks (`{ step, cmd }`) run inside the runner after each iteration, in a credential-free environment, are guarded like agent commands, and their result goes into the next prompt (`check-result` event). A check the guard refuses makes the create call return 400.
+
+**Triggers** (`server/loop-triggers.ts`, loop specs page).
+- `cron` (5 fields, UTC) and `interval` (every N minutes, at least 5) specs are started by the `loop-triggers` job: an EventBridge Scheduler schedule `agent-portal-loop-triggers`, `rate(1 minute)`, calling `/internal/events`; locally a timer. A tick that is a minute late still fires once.
+- `webhook` specs: `POST /api/hooks/loop-specs/<specId>` with header `x-portal-signature: sha256=<HMAC-SHA256 of the raw body, key = the spec's secret>` (`x-hub-signature-256` is accepted too). The secret is shown once on create (or from `POST .../loop-specs/<id>/webhook-secret`) and is never returned again. Wrong signature and unknown spec both return 401. Body values become `{{a.b}}` in the goal template.
+- A triggered session runs as the person who last saved the trigger (`runAs`) and only while they are still project editor or owner; "trust all tools" is always off, so a tool needing approval waits in the inbox; it does not start while the spec's previous session is still running (409) and starts at most `maxPerHour` (default 3) times an hour (429). "Run now" by a person skips the last two.
+- `github` and `jira` trigger types are accepted but do not start sessions yet; use a webhook.
