@@ -13,6 +13,8 @@ import assert from 'node:assert/strict';
 import { createTestServer, cleanup } from './fixtures.ts';
 import {
   setBedrockClientFactory,
+  setKiroRunnerOverride,
+  pickTextEngine,
   callTextModel,
   type BedrockClientLike,
   type BedrockConverseInput,
@@ -189,6 +191,45 @@ describe('Bedrock provider — callTextModel', () => {
     assert.equal(seen[1].key, 'sk-ant-chosen-key');
     assert.equal(seen[1].model, 'claude-chosen-model');
     void defaultCred;
+  });
+
+  it('a person with only a Kiro credential is served by the Kiro runner, and an explicit Claude choice still wins', async () => {
+    setSetting(getDb(), 'provider.mode', 'demo');
+    const userId = generateId();
+    const ts = now();
+    insert('users', { id: userId, email: `kiro-only-${Date.now()}@test.com`, name: 'Kiro only', password_hash: 'x', is_admin: 0, disabled: 0, created_at: ts });
+    const cred = (engine: string, name: string): string => {
+      const id = generateId();
+      insert('engine_credentials', {
+        id, user_id: userId, engine, name, mode: engine === 'kiro' ? 'identity_center' : 'api_key', secret_enc: encrypt('x', config.secretKey),
+        extra_config: '{}', is_default: 0, last4: 'abcd', created_at: ts, updated_at: ts, updated_by: userId,
+      });
+      return id;
+    };
+    const kiroCred = cred('kiro', 'my kiro');
+    const calls: { prompt: string; credentialId: string | null }[] = [];
+    setKiroRunnerOverride(async (prompt, _u, credentialId) => { calls.push({ prompt, credentialId }); return 'kiro says hi'; });
+    try {
+      assert.equal(await pickTextEngine(userId, null), 'kiro');
+      assert.equal(await pickTextEngine(userId, kiroCred), 'kiro');
+      assert.equal(await pickTextEngine(null, null), null);
+      const text = await callTextModel('Be brief.', 'Say hi.', { createdBy: userId });
+      assert.equal(text, 'kiro says hi');
+      assert.match(calls[0].prompt, /Be brief\.[\s\S]*Say hi\.[\s\S]*requested output only/);
+      assert.equal(await callTextModel('s', 'u', { createdBy: userId, credentialId: kiroCred }), 'kiro says hi');
+      assert.equal(calls[1].credentialId, kiroCred);
+      // Once the person has a Claude credential too, theirs is the default engine (unless they choose the Kiro one).
+      const claudeCred = cred('claude-code', 'my claude');
+      assert.equal(await pickTextEngine(userId, null), 'claude-code');
+      assert.equal(await pickTextEngine(userId, kiroCred), 'kiro');
+      assert.equal(await pickTextEngine(userId, claudeCred), 'claude-code');
+      // Someone else's credential id is not usable.
+      assert.equal(await pickTextEngine(generateId(), kiroCred), null);
+    } finally {
+      setKiroRunnerOverride(null);
+      dbRun('DELETE FROM engine_credentials WHERE user_id = ?', userId);
+      dbRun('DELETE FROM users WHERE id = ?', userId);
+    }
   });
 
   it('user api_key credential takes precedence over portal bedrock', async () => {

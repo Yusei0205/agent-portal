@@ -40,6 +40,8 @@ export interface KiroRunPayload {
   mcpServers?: unknown[];
   /** Check steps to run after the agent finishes (checked again in run.ts by shared/runner-checks.ts). */
   checks?: unknown[];
+  /** The model kiro-cli should use (chosen with session/set_model); kiro's own default when absent. */
+  model?: string;
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
   snapshot?: unknown;
 }
@@ -160,6 +162,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       runId: (obj.runId as string).trim(),
       prompt: obj.prompt as string,
       ...(obj.browser === true ? { browser: true } : {}),
+      ...(typeof obj.model === 'string' && /^[A-Za-z0-9._:/@+-]{1,120}$/.test(obj.model) ? { model: obj.model } : {}),
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
       ...(Array.isArray(obj.checks) && obj.checks.length <= 8 ? { checks: obj.checks as unknown[] } : {}),

@@ -903,6 +903,35 @@ Use severities: critical, high, medium, low, info.
 Set confidence 0.0–1.0. Output [] when the diff is clean.
 `.trim();
 
+/**
+ * The Identity Center token a Kiro runner needs, from the sentinel env vars that resolveCredentialEnv('kiro', ...) sets.
+ */
+export function kiroTokenFromEnv(childEnv: NodeJS.ProcessEnv): KiroTokenPayload {
+  const accessToken = String(childEnv[IDC_TOKEN_KEY] ?? '');
+  const idcRegion = String(childEnv[IDC_REGION_KEY] ?? 'us-east-1');
+  const idcExpiry = String(childEnv[IDC_EXPIRY_KEY] ?? new Date(Date.now() + 28_800_000).toISOString());
+  const idcStartUrl = String(childEnv[IDC_START_URL_KEY] ?? '');
+  const idcRefreshToken = childEnv[IDC_REFRESH_TOKEN_KEY] ? String(childEnv[IDC_REFRESH_TOKEN_KEY]) : undefined;
+  const idcClientId = childEnv[IDC_CLIENT_ID_KEY] ? String(childEnv[IDC_CLIENT_ID_KEY]) : undefined;
+  const idcClientSecret = childEnv[IDC_CLIENT_SECRET_KEY] ? String(childEnv[IDC_CLIENT_SECRET_KEY]) : undefined;
+  const idcClientSecretExpiresAt = childEnv[IDC_CLIENT_SECRET_EXPIRES_AT_KEY]
+    ? Number(childEnv[IDC_CLIENT_SECRET_EXPIRES_AT_KEY]) : undefined;
+  const idcProfileArn = childEnv[IDC_PROFILE_ARN_KEY] ? String(childEnv[IDC_PROFILE_ARN_KEY]) : undefined;
+  const idcProfileName = childEnv[IDC_PROFILE_NAME_KEY] ? String(childEnv[IDC_PROFILE_NAME_KEY]) : undefined;
+  return {
+    accessToken,
+    expiresAt: idcExpiry,
+    region: idcRegion,
+    startUrl: idcStartUrl,
+    ...(idcRefreshToken ? { refreshToken: idcRefreshToken } : {}),
+    ...(idcClientId ? { clientId: idcClientId } : {}),
+    ...(idcClientSecret ? { clientSecret: idcClientSecret } : {}),
+    ...(idcClientSecretExpiresAt ? { clientSecretExpiresAt: idcClientSecretExpiresAt } : {}),
+    ...(idcProfileArn ? { profileArn: idcProfileArn } : {}),
+    ...(idcProfileName ? { profileName: idcProfileName } : {}),
+  };
+}
+
 // ── AgentCore adapter ─────────────────────────────────────────────────────────
 
 /**
@@ -916,19 +945,6 @@ async function runKiroViaAgentCoreAdapter(
   childEnv: NodeJS.ProcessEnv,
 ): Promise<string> {
   const { run, emit } = ctx;
-
-  // Extract IDC token from the sentinel env vars built by resolveCredentialEnv()
-  const accessToken = String(childEnv[IDC_TOKEN_KEY] ?? '');
-  const idcRegion = String(childEnv[IDC_REGION_KEY] ?? 'us-east-1');
-  const idcExpiry = String(childEnv[IDC_EXPIRY_KEY] ?? new Date(Date.now() + 28_800_000).toISOString());
-  const idcStartUrl = String(childEnv[IDC_START_URL_KEY] ?? '');
-  const idcRefreshToken = childEnv[IDC_REFRESH_TOKEN_KEY] ? String(childEnv[IDC_REFRESH_TOKEN_KEY]) : undefined;
-  const idcClientId = childEnv[IDC_CLIENT_ID_KEY] ? String(childEnv[IDC_CLIENT_ID_KEY]) : undefined;
-  const idcClientSecret = childEnv[IDC_CLIENT_SECRET_KEY] ? String(childEnv[IDC_CLIENT_SECRET_KEY]) : undefined;
-  const idcClientSecretExpiresAt = childEnv[IDC_CLIENT_SECRET_EXPIRES_AT_KEY]
-    ? Number(childEnv[IDC_CLIENT_SECRET_EXPIRES_AT_KEY]) : undefined;
-  const idcProfileArn = childEnv[IDC_PROFILE_ARN_KEY] ? String(childEnv[IDC_PROFILE_ARN_KEY]) : undefined;
-  const idcProfileName = childEnv[IDC_PROFILE_NAME_KEY] ? String(childEnv[IDC_PROFILE_NAME_KEY]) : undefined;
 
   // Capture the current stored ciphertext for the conditional token write-back.
   // If another run saves a newer token before this run finishes, we skip the update.
@@ -952,18 +968,7 @@ async function runKiroViaAgentCoreAdapter(
     emit('status', { text: 'Included a recap of earlier turns' });
   }
 
-  const token: KiroTokenPayload = {
-    accessToken,
-    expiresAt: idcExpiry,
-    region: idcRegion,
-    startUrl: idcStartUrl,
-    ...(idcRefreshToken ? { refreshToken: idcRefreshToken } : {}),
-    ...(idcClientId ? { clientId: idcClientId } : {}),
-    ...(idcClientSecret ? { clientSecret: idcClientSecret } : {}),
-    ...(idcClientSecretExpiresAt ? { clientSecretExpiresAt: idcClientSecretExpiresAt } : {}),
-    ...(idcProfileArn ? { profileArn: idcProfileArn } : {}),
-    ...(idcProfileName ? { profileName: idcProfileName } : {}),
-  };
+  const token = kiroTokenFromEnv(childEnv);
 
   const { textParts, credits: kiroCredits } = await runKiroViaAgentCore(ctx, {
     runtimeArn,
@@ -976,6 +981,7 @@ async function runKiroViaAgentCoreAdapter(
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
     checks: run.runnerChecks,
+    model: run.model || null,
   });
 
   if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');

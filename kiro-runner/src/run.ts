@@ -437,6 +437,16 @@ export async function runKiroRun(
       const sessionId = sessionResult?.sessionId ?? '';
       if (!sessionId) throw new Error('kiro-cli ACP did not return a sessionId');
 
+      // The model the person chose. A model that cannot be set is reported and the run goes on with kiro's own default.
+      if (payload.model) {
+        try {
+          await acp.sendRequest('session/set_model', { sessionId, modelId: payload.model });
+          emit({ type: 'status', text: `Model: ${payload.model}` });
+        } catch (e) {
+          emit({ type: 'status', text: `Could not use model ${payload.model} (${String((e as Error)?.message ?? e).slice(0, 120)}); using kiro's default.` });
+        }
+      }
+
       // Send prompt
       await acp.sendRequest('session/prompt', {
         sessionId,

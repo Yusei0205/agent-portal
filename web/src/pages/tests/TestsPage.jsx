@@ -29,6 +29,8 @@ import { AiChoicePicker } from '../../components/AiChoicePicker.jsx';
 
 function safeJson(s, fallback) {
   if (!s) return fallback;
+  // The cloud API returns lists already parsed; the local one returns JSON text.
+  if (typeof s === 'object') return s;
   try { return JSON.parse(String(s)); } catch { return fallback; }
 }
 
