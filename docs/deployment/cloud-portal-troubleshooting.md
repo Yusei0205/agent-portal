@@ -152,3 +152,17 @@ How it works: with `PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN` set (deploy context `cl
 - The first-admin setup page is public until the first admin exists. Create the admin right after the first deploy, before sharing the URL.
 - New users added by invite get **viewer** access on the invited project.
 - Google sign-in and an email allow-list are not built yet (plan step 3).
+
+## Session chat: duplicate message, endless "Thinking…", history missing after refresh
+
+Three separate causes, all in the web app:
+
+1. **Saved history never appeared after opening a session.** The first transcript fetch in `SessionLive.jsx` set `loadedInitialTranscript` and listed the same value as an effect dependency, so React re-ran the effect and cancelled the fetch that was still in flight. Fix: the effect depends only on the session and project.
+2. **A sent message showed twice, and "Thinking…" never cleared.** The temporary bubble was only removed when the saved copy arrived through the live run stream, but user messages are saved as session events and only appear in the transcript. Fix: while a sent message is unconfirmed, the page re-reads the transcript every 2 s and matches the saved copy by text and send time.
+3. **The agent's reply did not show until a refresh.** The live channel (AppSync Events) can miss events. `useRunStream` now also re-reads the stored run history every 2.5 s until the run reports it has ended.
+
+Also note: a deploy replaces the Lambda; a run that is in flight at that moment is cut off. Avoid deploying while testing a run.
+
+## Tool packs: pack says "installed" but is gone after refresh (Lambda)
+
+On Lambda the pack folder is `/tmp/data/tools/...`, which disappears when the instance is replaced. The Icon diagrams install now copies the whole folder to S3 (`data/tools/icon-diagrams/`), and the status page and diagram rendering restore it on demand (in parallel; ~3,700 files). `uv` and Kiro CLI installs still cannot work on Lambda (`curl` is not in the image) and report "finished" even when the download failed.
