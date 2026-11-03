@@ -7,6 +7,7 @@ import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { AwsRegionSelect } from '../components/AwsRegionSelect.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 const AUTH_METHODS = [
   { value: 'keys',          label: 'Access keys' },
@@ -203,6 +204,7 @@ function AwsAccountModal({ projectId, account, onClose, onSave }) {
 
 export function AwsAccounts({ projectId, currentProject }) {
   const [accounts, setAccounts]       = useState([]);
+  const { sorted: sortedAccounts, sortProps } = useSort(accounts, { name: (acct) => acct.name, auth: (acct) => acct.auth_method, region: (acct) => acct.region, added: (acct) => acct.created_at });
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
   const [modal, setModal]             = useState(null); // null | 'new' | { account }
@@ -353,15 +355,15 @@ export function AwsAccounts({ projectId, currentProject }) {
                         onChange={bulk.toggleAll}
                       />
                     </th>
-                    <th>Name</th>
-                    <th>Auth method</th>
-                    <th>Region</th>
-                    <th>Added</th>
+                    <th {...sortProps('name')}>Name</th>
+                    <th {...sortProps('auth')}>Auth method</th>
+                    <th {...sortProps('region')}>Region</th>
+                    <th {...sortProps('added')}>Added</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {accounts.map((acct) => (
+                  {sortedAccounts.map((acct) => (
                     <tr key={acct.id}>
                       <td>
                         <input

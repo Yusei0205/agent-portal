@@ -1919,3 +1919,19 @@ input[type="datetime-local"]:focus {
   .cred-mode-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 
+
+/* ── Sortable table headings (useSort) ────────────────── */
+th.th-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.th-sortable:hover { color: var(--ink); }
+th.th-sortable::after {
+  content: '↕';
+  margin-left: 6px;
+  font-size: 0.7rem;
+  opacity: 0;
+}
+th.th-sortable:hover::after,
+th.th-sortable:focus-visible::after { opacity: 0.45; }
+th.th-sorted { color: var(--ink); }
+th.th-sorted::after { opacity: 0.9; }
+th.th-sorted[data-dir='asc']::after  { content: '↑'; }
+th.th-sorted[data-dir='desc']::after { content: '↓'; }

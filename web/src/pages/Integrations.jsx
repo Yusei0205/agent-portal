@@ -6,6 +6,7 @@ import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 const INTEGRATION_TYPES = [
   { value: 'http',       label: 'HTTP' },
@@ -212,6 +213,7 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
 
 export function Integrations({ projectId }) {
   const [integrations, setIntegrations] = useState([]);
+  const { sorted: sortedIntegrations, sortProps } = useSort(integrations, { name: (intg) => intg.name, type: (intg) => intg.type, enabled: (intg) => intg.enabled, added: (intg) => intg.created_at });
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [modal, setModal]               = useState(null); // null | 'new' | { integration }
@@ -357,15 +359,15 @@ export function Integrations({ projectId }) {
                     onChange={bulk.toggleAll}
                   />
                 </th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Enabled</th>
-                <th>Added</th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('type')}>Type</th>
+                <th {...sortProps('enabled')}>Enabled</th>
+                <th {...sortProps('added')}>Added</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {integrations.map((intg) => (
+              {sortedIntegrations.map((intg) => (
                 <tr key={intg.id}>
                   <td>
                     <input

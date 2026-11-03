@@ -6,6 +6,7 @@ import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Scope definitions ─────────────────────────────────────────────────────────
 
@@ -456,6 +457,7 @@ function RestSection() {
 
 export function ApiAccess() {
   const [tokens, setTokens]       = useState([]);
+  const { sorted: sortedTokens, sortProps } = useSort(tokens, { name: (tok) => tok.name, project: (tok) => tok.project_id, created: (tok) => tok.created_at, used: (tok) => tok.last_used_at, expires: (tok) => tok.expires_at });
   const [projects, setProjects]   = useState([]);
   const [mcpInfo, setMcpInfo]     = useState(null);
   const [loading, setLoading]     = useState(true);
@@ -580,17 +582,17 @@ export function ApiAccess() {
                     onChange={bulk.toggleAll}
                   />
                 </th>
-                <th>Name</th>
+                <th {...sortProps('name')}>Name</th>
                 <th>Scopes</th>
-                <th>Project</th>
-                <th>Created</th>
-                <th>Last used</th>
-                <th>Expires</th>
+                <th {...sortProps('project')}>Project</th>
+                <th {...sortProps('created')}>Created</th>
+                <th {...sortProps('used')}>Last used</th>
+                <th {...sortProps('expires')}>Expires</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {tokens.map((tok) => (
+              {sortedTokens.map((tok) => (
                 <tr key={tok.id} style={{ opacity: tok.active ? 1 : 0.5 }}>
                   <td>
                     {tok.active ? (

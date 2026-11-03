@@ -10,6 +10,7 @@ import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1043,6 +1044,7 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
 
 export function Connections({ user }) {
   const [connections,  setConnections]  = useState([]);
+  const { sorted: sortedConnections, sortProps } = useSort(connections, { name: (conn) => conn.name, provider: (conn) => conn.provider, scope: (conn) => conn.scope, created: (conn) => conn.created_at });
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState(null);
   const [modal,        setModal]        = useState(null); // null | 'new' | { connection }
@@ -1196,16 +1198,16 @@ export function Connections({ user }) {
                     onChange={bulk.toggleAll}
                   />
                 </th>
-                <th>Name</th>
-                <th>Provider</th>
-                <th>Scope</th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('provider')}>Provider</th>
+                <th {...sortProps('scope')}>Scope</th>
                 <th>Account</th>
-                <th>Created</th>
+                <th {...sortProps('created')}>Created</th>
                 <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
-              {connections.map((conn) => {
+              {sortedConnections.map((conn) => {
                 const result  = testResults[conn.id];
                 const account = result?.account;
                 return (

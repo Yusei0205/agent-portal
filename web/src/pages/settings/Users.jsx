@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useId, useRef } from 'react';
 import { api } from '../../lib/api.js';
+import { useSort } from '../../lib/useSort.jsx';
 
 /** The server sees the internal host behind CloudFront, so rebuild the link on the address the admin is using. */
 function portalInviteLink(url) {
@@ -21,6 +22,10 @@ function portalInviteLink(url) {
 
 export default function UsersPage() {
   const [users, setUsers] = useState([]);
+  const { sorted: sortedUsers, sortProps } = useSort(users, {
+    name: (u) => u.name, email: (u) => u.email, role: (u) => (u.is_admin ? 'Admin' : 'Member'),
+    status: (u) => (u.disabled ? 'Disabled' : 'Active'), active: (u) => u.last_active_at,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -83,16 +88,16 @@ export default function UsersPage() {
       <table className="data-table" aria-label="Users">
         <thead>
           <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Email</th>
-            <th scope="col">Role</th>
-            <th scope="col">Status</th>
-            <th scope="col">Last active</th>
+            <th {...sortProps('name')}>Name</th>
+            <th {...sortProps('email')}>Email</th>
+            <th {...sortProps('role')}>Role</th>
+            <th {...sortProps('status')}>Status</th>
+            <th {...sortProps('active')}>Last active</th>
             <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {users.map((user) => (
+          {sortedUsers.map((user) => (
             <UserRow
               key={user.id}
               user={user}

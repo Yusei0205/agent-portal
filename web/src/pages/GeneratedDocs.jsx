@@ -7,6 +7,7 @@ import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -260,6 +261,7 @@ function RefreshDocDialog({ projectId, doc, onClose, onRefreshed }) {
  */
 export function GeneratedDocs({ projectId }) {
   const [docs, setDocs] = useState([]);
+  const { sorted: sortedDocs, sortProps } = useSort(docs, { name: (d) => d.name, type: (d) => d.doc_type, status: (d) => d.status, updated: (d) => d.updated_at ?? d.created_at });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showNew, setShowNew] = useState(false);
@@ -387,15 +389,15 @@ export function GeneratedDocs({ projectId }) {
                     aria-label="Select all"
                   />
                 </th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Last updated</th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('type')}>Type</th>
+                <th {...sortProps('status')}>Status</th>
+                <th {...sortProps('updated')}>Last updated</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {docs.map((d) => (
+              {sortedDocs.map((d) => (
                 <tr key={d.id} className={selected.has(d.id) ? 'is-selected' : ''}>
                   <td className="sel-col">
                     <input

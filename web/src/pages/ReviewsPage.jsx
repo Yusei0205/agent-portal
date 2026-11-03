@@ -25,6 +25,7 @@ import Review from './Review.jsx';
 import ReviewDetail from './ReviewDetail.jsx';
 import BranchScans from './BranchScans.jsx';
 import BranchScanDetail from './BranchScanDetail.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 const TABS = [
   { id: 'code',          label: 'Code reviews' },
@@ -82,6 +83,10 @@ function ProjectDashboard({ projectId }) {
   const filteredReviews = data?.recentReviews?.filter((r) =>
     showAll ? true : r.project_id === projectId,
   ) ?? [];
+  const { sorted: sortedReviews, sortProps } = useSort(filteredReviews, {
+    branch: (r) => `${r.base_ref}>${r.head_ref}`, status: (r) => r.status,
+    cost: (r) => Number(r.estimatedUsd ?? 0), when: (r) => r.created_at,
+  });
 
   const STATUS_CLASS = {
     pending: 'badge badge-warn',
@@ -187,15 +192,15 @@ function ProjectDashboard({ projectId }) {
                 <table className="data-table" aria-label="Recent code reviews">
                   <thead>
                     <tr>
-                      <th>Branch / PR</th>
-                      <th>Status</th>
-                      <th style={{ textAlign: 'right' }}>Est. cost</th>
-                      <th style={{ textAlign: 'right' }}>When</th>
+                      <th {...sortProps('branch')}>Branch / PR</th>
+                      <th {...sortProps('status')}>Status</th>
+                      <th {...sortProps('cost')} style={{ textAlign: 'right' }}>Est. cost</th>
+                      <th {...sortProps('when')} style={{ textAlign: 'right' }}>When</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredReviews.map((r) => (
+                    {sortedReviews.map((r) => (
                       <tr key={r.id}>
                         <td>
                           <code style={{ fontSize: '0.82rem' }}>

@@ -7,6 +7,7 @@ import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,7 @@ function StatusBadge({ status }) {
 
 function DocumentsTab({ projectId }) {
   const [docs, setDocs] = useState([]);
+  const { sorted: sortedDocs, sortProps } = useSort(docs, { name: (doc) => doc.name, type: (doc) => doc.mime_type, size: (doc) => doc.size_bytes, status: (doc) => doc.status, uploaded: (doc) => doc.created_at });
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
@@ -154,16 +156,16 @@ function DocumentsTab({ projectId }) {
                     onChange={bulk.toggleAll}
                   />
                 </th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Size</th>
-                <th>Status</th>
-                <th>Uploaded</th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('type')}>Type</th>
+                <th {...sortProps('size')}>Size</th>
+                <th {...sortProps('status')}>Status</th>
+                <th {...sortProps('uploaded')}>Uploaded</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {docs.map((doc) => (
+              {sortedDocs.map((doc) => (
                 <tr key={doc.id}>
                   <td>
                     <input

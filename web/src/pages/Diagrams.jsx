@@ -9,6 +9,7 @@ import { DiagramStyle } from '../components/DiagramStyle.jsx';
 import { MermaidViewer } from '../components/MermaidViewer.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -455,6 +456,7 @@ function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onD
 
 export function Diagrams({ projectId }) {
   const [diagrams, setDiagrams] = useState([]);
+  const { sorted: sortedDiagrams, sortProps } = useSort(diagrams, { name: (d) => d.name, style: (d) => d.style_label ?? d.style, status: (d) => d.status, updated: (d) => d.updated_at });
   const [repos, setRepos] = useState([]);
   const [styles, setStyles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -559,15 +561,15 @@ export function Diagrams({ projectId }) {
                 <th className="sel-col" style={{ width: 32 }}>
                   <span className="sr-only">Select</span>
                 </th>
-                <th>Name</th>
-                <th>Style</th>
-                <th>Status</th>
-                <th>Last updated</th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('style')}>Style</th>
+                <th {...sortProps('status')}>Status</th>
+                <th {...sortProps('updated')}>Last updated</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {diagrams.map((d) => (
+              {sortedDiagrams.map((d) => (
                 <DiagramRow
                   key={d.id}
                   diagram={d}

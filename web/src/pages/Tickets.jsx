@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
+import { useSort } from '../lib/useSort.jsx';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { TicketPreview } from '../components/TicketPreview.jsx';
@@ -736,6 +737,14 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
   const [assigneeMe, setAssigneeMe]   = useState(true);
   const [statuses, setStatuses]       = useState([]);
   const [issues, setIssues]           = useState(null);
+  const { sorted: sortedIssues, sortProps } = useSort(issues, {
+    key: (i) => i.key,
+    summary: (i) => i.summary,
+    status: (i) => i.status,
+    priority: (i) => i.priority,
+    assignee: (i) => i.assignee,
+    updated: (i) => i.updated,
+  });
   const [nextPage, setNextPage]       = useState(null);
   const [loading, setLoading]         = useState(false);
   const [loadErr, setLoadErr]         = useState(null);
@@ -959,16 +968,16 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
             <table className="data-table" aria-label="Jira tickets">
               <thead>
                 <tr>
-                  <th scope="col">Key</th>
-                  <th scope="col">Summary</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Priority</th>
-                  <th scope="col">Assignee</th>
-                  <th scope="col">Updated</th>
+                  <th {...sortProps('key')}>Key</th>
+                  <th {...sortProps('summary')}>Summary</th>
+                  <th {...sortProps('status')}>Status</th>
+                  <th {...sortProps('priority')}>Priority</th>
+                  <th {...sortProps('assignee')}>Assignee</th>
+                  <th {...sortProps('updated')}>Updated</th>
                 </tr>
               </thead>
               <tbody>
-                {issues.map((issue) => (
+                {sortedIssues.map((issue) => (
                   <tr
                     key={issue.key}
                     className={`ticket-row${selected?.key === issue.key ? ' is-selected' : ''}`}

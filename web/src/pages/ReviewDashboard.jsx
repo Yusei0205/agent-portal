@@ -11,6 +11,7 @@ import { api } from '../lib/api.js';
 import { href, navigate } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { formatRelative } from '../lib/util.js';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -126,6 +127,10 @@ export default function ReviewDashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const { sorted: sortedRecent, sortProps } = useSort(data?.recentReviews, {
+    branch: (r) => `${r.base_ref}>${r.head_ref}`, status: (r) => r.status, verdict: (r) => r.verdict,
+    cost: (r) => Number(r.estimatedUsd ?? 0), when: (r) => r.created_at,
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -232,16 +237,16 @@ export default function ReviewDashboard() {
                 <table className="data-table" aria-label="Recent code reviews">
                   <thead>
                     <tr>
-                      <th>Branch / PR</th>
-                      <th>Status</th>
-                      <th>Verdict</th>
-                      <th style={{ textAlign: 'right' }}>Est. cost</th>
-                      <th style={{ textAlign: 'right' }}>When</th>
+                      <th {...sortProps('branch')}>Branch / PR</th>
+                      <th {...sortProps('status')}>Status</th>
+                      <th {...sortProps('verdict')}>Verdict</th>
+                      <th {...sortProps('cost')} style={{ textAlign: 'right' }}>Est. cost</th>
+                      <th {...sortProps('when')} style={{ textAlign: 'right' }}>When</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.recentReviews.map((r) => (
+                    {sortedRecent.map((r) => (
                       <RecentReviewRow key={r.id} review={r} />
                     ))}
                   </tbody>

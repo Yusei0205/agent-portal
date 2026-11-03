@@ -7,6 +7,7 @@ import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -336,6 +337,7 @@ function RefreshPresDialog({ projectId, presentation, onClose, onRefreshed }) {
  */
 export function Presentations({ projectId }) {
   const [presentations, setPresentations] = useState([]);
+  const { sorted: sortedPresentations, sortProps } = useSort(presentations, { name: (p) => p.name, source: (p) => p.source_kind, slides: (p) => p.slide_count, status: (p) => p.status, updated: (p) => p.updated_at });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showNew, setShowNew] = useState(false);
@@ -464,16 +466,16 @@ export function Presentations({ projectId }) {
                     aria-label="Select all"
                   />
                 </th>
-                <th>Name</th>
-                <th>Source</th>
-                <th>Slides</th>
-                <th>Status</th>
-                <th>Last updated</th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('source')}>Source</th>
+                <th {...sortProps('slides')}>Slides</th>
+                <th {...sortProps('status')}>Status</th>
+                <th {...sortProps('updated')}>Last updated</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {presentations.map((p) => (
+              {sortedPresentations.map((p) => (
                 <tr key={p.id} className={selected.has(p.id) ? 'is-selected' : ''}>
                   <td className="sel-col">
                     <input

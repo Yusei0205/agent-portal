@@ -4,6 +4,7 @@ import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
@@ -250,6 +251,7 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
 
 export function Workspaces({ projectId }) {
   const [workspaces, setWorkspaces] = useState([]);
+  const { sorted: sortedWorkspaces, sortProps } = useSort(workspaces, { name: (ws) => ws.name, repos: (ws) => (ws.repo_ids ?? []).length, created: (ws) => ws.created_at });
   const [repos, setRepos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -360,14 +362,14 @@ export function Workspaces({ projectId }) {
         <table className="data-table" aria-label="Workspaces">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Repositories</th>
-              <th>Created</th>
+              <th {...sortProps('name')}>Name</th>
+              <th {...sortProps('repos')}>Repositories</th>
+              <th {...sortProps('created')}>Created</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {workspaces.map((ws) => (
+            {sortedWorkspaces.map((ws) => (
               <tr key={ws.id}>
                 <td>
                   <div>{ws.name}</div>

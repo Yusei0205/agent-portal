@@ -10,6 +10,7 @@ import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { buildFolderList } from '../lib/vaultFolders.js';
+import { useSort } from '../lib/useSort.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ function readFolderFromHash() {
 
 function FlatScopeTab({ projectId, scope, label }) {
   const [files, setFiles] = useState([]);
+  const { sorted: sortedFiles, sortProps } = useSort(files, { name: (f) => f.name, size: (f) => f.size_bytes, type: (f) => f.mime_type, by: (f) => f.uploaded_by, date: (f) => f.created_at });
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
@@ -195,16 +197,16 @@ function FlatScopeTab({ projectId, scope, label }) {
                     onChange={bulk.toggleAll}
                   />
                 </th>
-                <th>Name</th>
-                <th>Size</th>
-                <th>Type</th>
-                <th>Uploaded by</th>
-                <th>Date</th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('size')}>Size</th>
+                <th {...sortProps('type')}>Type</th>
+                <th {...sortProps('by')}>Uploaded by</th>
+                <th {...sortProps('date')}>Date</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {files.map((f) => (
+              {sortedFiles.map((f) => (
                 <tr key={f.id}>
                   <td>
                     <input
