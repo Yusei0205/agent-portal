@@ -63,7 +63,7 @@ const SKIP_NAMES = new Set([
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type IdeScope = 'work' | 'uploads' | 'vault';
+export type IdeScope = 'work' | 'uploads' | 'vault' | 'vault:team';
 
 interface WorkingCopyRoots {
   workDir: string;
@@ -419,20 +419,25 @@ export function registerSessionFileRoutes(): void {
         roots: [
           { name: 'Working Copy', scope: 'work', path: '' },
           { name: 'Uploads', scope: 'uploads', path: '' },
-          { name: 'Vault', scope: 'vault', path: '', readOnly: true },
         ],
       });
       return;
     }
 
-    if (scope === 'vault') {
-      // Vault listing — delegate to vault query
+    if (scope === 'vault' || scope === 'vault:team') {
+      // "vault" = the user's own files; "vault:team" = the project's shared files plus the portal-wide ones
       const projectId = roots.projectId;
       const userId = req.user!.id;
-      const files = await getVaultFilesRepository().listByProject(projectId, userId, null);
+      const vaultRepo = getVaultFilesRepository();
+      const files = scope === 'vault'
+        ? await vaultRepo.listByProject(projectId, userId, 'personal')
+        : [
+            ...(await vaultRepo.listByProject(projectId, userId, 'project')),
+            ...(await vaultRepo.listByProject(projectId, userId, 'portal')),
+          ];
       files.sort((a, b) => a.name.localeCompare(b.name));
       sendJson(res, 200, {
-        scope: 'vault',
+        scope,
         path: '',
         readOnly: true,
         entries: files.map((f) => ({
@@ -451,9 +456,10 @@ export function registerSessionFileRoutes(): void {
 
     const scopeRoot = scope === 'uploads' ? roots.uploadsDir : roots.workDir;
 
-    // Ensure uploads dir exists
-    if (scope === 'uploads') {
-      await fsp.mkdir(roots.uploadsDir, { recursive: true });
+    // The top level of the working copy and of uploads can legitimately be empty (a Kiro or Claude run on
+    // AgentCore keeps its files elsewhere), so create it instead of reporting "Directory not found".
+    if (!relPath) {
+      await fsp.mkdir(scopeRoot, { recursive: true });
     }
 
     const absDir = relPath ? resolveScopePath(roots, scope, relPath) : scopeRoot;
