@@ -444,6 +444,18 @@ export function registerWorkflowRoutes(): void {
       : null;
     const model: string = requestModel ?? (wsEngineMatches ? wsDefaultModel : null) ?? projectDefaultModel ?? '';
 
+    // A loop session's rules and checks are validated before anything is created (a check may not be allowed).
+    let loopState: string | null = null;
+    if (body.loop) {
+      const loopBody = (typeof body.loop === 'object' ? body.loop : {}) as Record<string, unknown>;
+      try {
+        loopState = newLoopState(loopBody.stopRules, { progressFile: loopBody.progressFile !== false, checks: loopBody.checks });
+      } catch (e) {
+        sendJson(res, 400, { error: (e as Error).message });
+        return;
+      }
+    }
+
     const id = generateId();
     const ts = now();
 
@@ -472,9 +484,7 @@ export function registerWorkflowRoutes(): void {
     });
 
     // A loop session goes from run to run by itself until a stop rule says to stop (see workflows/loop.ts).
-    if (body.loop) {
-      const loopBody = (typeof body.loop === 'object' ? body.loop : {}) as Record<string, unknown>;
-      const loopState = newLoopState(loopBody.stopRules, { progressFile: loopBody.progressFile !== false });
+    if (loopState) {
       await repo.updateWorkflow(id, { loop_state: loopState, updated_at: ts });
       wfRecord.loop_state = loopState;
     }
