@@ -407,14 +407,16 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
   const canControl = wsState === 'connected' && controlEnabled;
 
   // Build a synthetic tab list if the server hasn't sent any
-  const tabList = tabs.length > 0
+  // In the cloud there is nothing to show once the browser has closed, so no stale page title is kept.
+  const tabList = cloudMode ? (live ? [{ id: '__live__', title: tryHostname(currentUrl) || 'Cloud browser', url: currentUrl, active: true }] : [])
+    : tabs.length > 0
     ? tabs
     : currentUrl
       ? [{ id: '__default__', title: pageTitle || tryHostname(currentUrl), url: currentUrl, active: true }]
       : [];
 
-  const showFallback = !hasFrame && !live && (liveData?.screenshotBase64 || fallbackScreenshot);
-  const showEmpty    = !hasFrame && !live && !liveData?.screenshotBase64 && !fallbackScreenshot;
+  const showFallback = !cloudMode && !hasFrame && !live && (liveData?.screenshotBase64 || fallbackScreenshot);
+  const showEmpty    = !hasFrame && !live && (cloudMode || (!liveData?.screenshotBase64 && !fallbackScreenshot));
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -608,7 +610,7 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
         {showEmpty && (
           <div className="idb-empty" aria-live="polite">
             <Icon name="browser" size={32} />
-            <p>The agent&rsquo;s browser will appear here when it opens a page</p>
+            <p>{cloudMode ? 'The browser is not running. It appears here while the agent is using it.' : 'The agent’s browser will appear here when it opens a page'}</p>
             {wsState === 'disconnected' && (
               <p style={{ fontSize: '0.77rem', opacity: 0.6, marginTop: 4 }}>
                 Reconnecting…
