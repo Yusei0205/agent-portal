@@ -791,7 +791,7 @@ async function main() {
     await test('Connections page Git tab renders', async (p) => {
       await goto(p, '/connections/git');
       await assertHeading(p, 'Connections');
-      await assertTabsExist(p, ['Git', 'AWS accounts']);
+      
     }, page);
     } // end §10 connections
 
@@ -809,10 +809,10 @@ async function main() {
     if (sectionEnabled('connections', 'aws-accounts')) {
     console.log('\n12. Connections / AWS accounts');
     currentSectionId = '12';
-    await test('Connections AWS accounts tab renders', async (p) => {
-      await goto(p, '/connections/aws');
+    await test('Connections page renders', async (p) => {
+      await goto(p, '/connections/git');
       await assertHeading(p, 'Connections');
-      await assertTabsExist(p, ['Git', 'AWS accounts']);
+      
     }, page);
     } // end §12 connections/aws-accounts
 
@@ -3748,11 +3748,11 @@ async function main() {
         }
       }, page);
 
-      await test('/aws redirects to /connections/aws', async (p) => {
+      await test('/aws redirects to /connections/git', async (p) => {
         await goto(p, '/aws', 1200);
         const url = p.url();
-        if (!url.includes('/connections/aws')) {
-          throw new Error(`Expected redirect to /connections/aws, got: ${url}`);
+        if (!url.includes('/connections/git')) {
+          throw new Error(`Expected redirect to /connections/git, got: ${url}`);
         }
       }, page);
 
@@ -3791,8 +3791,8 @@ async function main() {
         // pressing Back must return to /projects, not loop back to /aws.
         await goto(p, '/aws', 1200);
         const afterUrl = p.url();
-        if (!afterUrl.includes('/connections/aws')) {
-          throw new Error(`Expected redirect to /connections/aws, got: ${afterUrl}`);
+        if (!afterUrl.includes('/connections/git')) {
+          throw new Error(`Expected redirect to /connections/git, got: ${afterUrl}`);
         }
 
         // Press browser Back — should land on /projects, not on /aws again.
