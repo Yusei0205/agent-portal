@@ -1,0 +1,103 @@
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../lib/api.js';
+
+/**
+ * Which credential and model an AI feature (for example test generation) should use, like the New session dialog.
+ *
+ * Lists the person's own Claude Code credentials and the models they can use, and reports { credentialId, model }
+ * through onChange. With no credential of their own the portal's provider is used, and the picker says so.
+ * "Portal default" for the model leaves it to the portal setting.
+ */
+export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) {
+  const [creds, setCreds] = useState(null);       // null while loading
+  const [credentialId, setCredentialId] = useState('');
+  const [model, setModel] = useState('');
+  const [models, setModels] = useState([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelError, setModelError] = useState(null);
+
+  // The person's Claude Code credentials; their default one is selected first.
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/api/credentials/summary')
+      .catch(() => ({ summary: [] }))
+      .then((cs) => {
+        if (cancelled) return;
+        const entry = (cs.summary || []).find((e) => e.engine === 'claude-code');
+        const list = entry?.credentials || [];
+        setCreds(list);
+        const def = list.find((c) => c.isDefault) || list[0];
+        if (def) setCredentialId(def.id);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const loadModels = useCallback(async () => {
+    if (creds === null) return;
+    setModelsLoading(true);
+    setModelError(null);
+    try {
+      const qs = credentialId ? `?credentialId=${encodeURIComponent(credentialId)}` : '';
+      const data = await api.get(`/api/engines/claude-code/models${qs}`);
+      setModels(data.models || []);
+      if (data.error) setModelError(data.error);
+    } catch (e) {
+      setModels([]);
+      setModelError(e.message || 'Could not load the models');
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [creds, credentialId]);
+
+  useEffect(() => { loadModels(); }, [loadModels]);
+
+  useEffect(() => {
+    onChange?.({ credentialId: credentialId || undefined, model: model || undefined });
+  }, [credentialId, model]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (creds === null) return null;
+
+  return (
+    <>
+      <div className="field">
+        <label htmlFor={`${idPrefix}-cred`}>Credential</label>
+        {creds.length === 0 ? (
+          <p className="field-hint" id={`${idPrefix}-cred`}>
+            You have no credential of your own, so the portal&rsquo;s AI provider is used. Add one under{' '}
+            <a href="#/credentials">Credentials</a> to choose here.
+          </p>
+        ) : (
+          <select
+            id={`${idPrefix}-cred`}
+            value={credentialId}
+            onChange={(e) => { setCredentialId(e.target.value); setModel(''); }}
+            disabled={disabled}
+          >
+            {creds.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}{c.isDefault ? ' (default)' : ''}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="field">
+        <label htmlFor={`${idPrefix}-model`}>Model</label>
+        {modelsLoading ? (
+          <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading models…" />
+        ) : (
+          <select
+            id={`${idPrefix}-model`}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={disabled}
+          >
+            <option value="">Portal default</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.label || m.id}</option>
+            ))}
+          </select>
+        )}
+        {modelError && <p className="field-hint" style={{ color: 'var(--danger)' }}>{modelError}</p>}
+      </div>
+    </>
+  );
+}
