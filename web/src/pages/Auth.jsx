@@ -44,15 +44,15 @@ function GoogleMark() {
   );
 }
 
-/** The sessions strip on the sign-in page: a few example sessions and a typed command. */
-const DEMO_SESSIONS = [
-  { engine: 'Kiro', repo: 'payments-api', task: 'add the refund cancel endpoint', state: 'running' },
-  { engine: 'Claude', repo: 'web-checkout', task: 'fix the flaky e2e total', state: 'done' },
-  { engine: 'Kiro', repo: 'ledger-service', task: 'rotate the signing secrets', state: 'queued' },
+/** What the portal does, shown as three short steps under the sign-in card. */
+const LOGIN_STEPS = [
+  { n: '1', title: 'Describe the work', text: 'Pick repositories and tell an agent what to do.' },
+  { n: '2', title: 'Watch it run', text: 'Follow every command and edit live, step in when needed.' },
+  { n: '3', title: 'Review and merge', text: 'Push the branch and open the pull request from the browser.' },
 ];
 
 /**
- * Sign-in page: product pitch on the left, sign-in card on the right.
+ * Sign-in page: one centred card on a soft gradient, with the three steps beneath it.
  * Google is the main route when it is set up; email and password stay available below it.
  * @param {{ onDone: () => void }} props
  */
@@ -89,64 +89,33 @@ export function Login({ onDone, googleEnabled = false }) {
   };
 
   return (
-    <div className="login-split">
-      <section className="login-hero" aria-label={`About ${productName}`}>
-        <div className="login-brand">
-          <img src={logoDataUrl} alt="" width={36} height={36} />
+    <main className="login-page">
+      <div className="login-aurora" aria-hidden="true" />
+
+      <div className="login-center">
+        <div className="login-mark">
+          <img src={logoDataUrl} alt="" width={44} height={44} />
           <span>{productName}</span>
         </div>
+        <h1 className="login-title">
+          Your coding agents,<br />
+          <span className="login-accent">working in the cloud.</span>
+        </h1>
 
-        <div className="login-pitch">
-          <p className="login-eyebrow">Kiro and Claude Code, in the cloud</p>
-          <h1 className="login-headline">
-            Hand the work to agents.
-            <br />
-            <span className="login-accent">Watch</span> it ship.
-          </h1>
-          <p className="login-lede">
-            Start a session over your repositories, follow every tool call as it runs, then push the
-            branch and open the pull request without leaving the browser.
-          </p>
-        </div>
-
-        <div className="login-term" aria-hidden="true">
-          <div className="login-term-bar">
-            <span /><span /><span />
-            <em>sessions</em>
-          </div>
-          <ul>
-            {DEMO_SESSIONS.map((r) => (
-              <li key={r.repo}>
-                <i className={`login-dot is-${r.state}`} />
-                <b className={r.engine === 'Kiro' ? 'is-kiro' : 'is-claude'}>{r.engine}</b>
-                <span className="login-repo">{r.repo}</span>
-                <span className="login-task">{r.task}</span>
-                <span className="login-state">{r.state}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="login-prompt">
-            <span>&gt;</span> <span className="login-typed">open a pull request for payments-api</span>
-            <span className="login-caret" />
-          </div>
-        </div>
-      </section>
-
-      <section className="login-side">
         <div className="login-card">
-          <h2>Sign in</h2>
+          <h2>Welcome back</h2>
           <p className="login-card-intro">
             {googleEnabled
-              ? `${productName} runs coding agents with a shell in the cloud and can push to your repositories, so it admits only approved Google accounts.`
-              : `${productName} runs coding agents with a shell in the cloud and can push to your repositories, so it admits only approved accounts.`}
+              ? 'Sign in with an approved Google account to start.'
+              : 'Sign in with your email and password to start.'}
           </p>
 
           {error && <div className="error-note" role="alert">{error}</div>}
 
           {googleEnabled && (
             <a className="login-google" href="/api/auth/google/start">
-              <span className="login-google-g"><GoogleMark /></span>
-              <span>Sign in with Google</span>
+              <GoogleMark />
+              <span>Continue with Google</span>
             </a>
           )}
 
@@ -158,7 +127,7 @@ export function Login({ onDone, googleEnabled = false }) {
 
           {showPassword && (
             <form onSubmit={submit} className="login-form" noValidate>
-              {googleEnabled && <div className="login-or"><span>or with email</span></div>}
+              {googleEnabled && <div className="login-or"><span>or</span></div>}
               <div className="field">
                 <label htmlFor="login-email">Email</label>
                 <input
@@ -189,18 +158,25 @@ export function Login({ onDone, googleEnabled = false }) {
             </form>
           )}
 
-          <div className="login-note">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
-            </svg>
-            <span>
-              Your session is kept in a secure cookie that page scripts cannot read. Nothing is saved
-              to this browser&apos;s storage.
-            </span>
-          </div>
+          <p className="login-note">
+            Agents here run commands and can push to your repositories, so access is limited to
+            approved accounts.
+          </p>
         </div>
-      </section>
-    </div>
+
+        <ol className="login-steps">
+          {LOGIN_STEPS.map((st) => (
+            <li key={st.n}>
+              <span className="login-step-n">{st.n}</span>
+              <div>
+                <strong>{st.title}</strong>
+                <span>{st.text}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </main>
   );
 }
 
