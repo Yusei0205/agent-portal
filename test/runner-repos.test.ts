@@ -15,6 +15,24 @@ describe('parseRunnerRepos', () => {
     }]);
     assert.equal(r.ok, true);
   });
+  it('accepts the exact settings the portal builds (empty credential.helper first, then the auth header)', () => {
+    const r = parseRunnerRepos([{
+      name: 'x', url: 'https://git-codecommit.ap-southeast-1.amazonaws.com/v1/repos/x',
+      env: {
+        GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '2',
+        GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '',
+        GIT_CONFIG_KEY_1: 'http.https://git-codecommit.ap-southeast-1.amazonaws.com/.extraHeader', GIT_CONFIG_VALUE_1: 'Authorization: Basic abc',
+      },
+    }]);
+    assert.equal(r.ok, true);
+  });
+  it('does not allow credential.helper to run a program', () => {
+    const r = parseRunnerRepos([{
+      name: 'x', url: 'https://example.com/x',
+      env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '!sh -c evil' },
+    }]);
+    assert.equal(r.ok, false);
+  });
   it('rejects anything that could run a command or escape the folder', () => {
     const base = { name: 'a', url: 'https://example.com/a.git' };
     for (const bad of [

@@ -78,9 +78,16 @@ export function parseRunnerRepos(
       for (const [k, v] of entries) {
         if (!ENV_KEY_RE.test(k)) return { ok: false, error: `repo.env may only hold git settings (got "${k}")` };
         if (typeof v !== 'string' || v.length > RUNNER_REPO_LIMITS.envValueChars) return { ok: false, error: `repo.env "${k}" must be a string` };
-        // The only config keys allowed are http.* ones (the auth header), never anything that runs a command.
-        if (/^GIT_CONFIG_KEY_/.test(k) && !/^http\./i.test(v)) return { ok: false, error: 'repo.env may only set http.* git options' };
         env[k] = v;
+      }
+      // The only git options allowed are the http.* ones (the auth header) and an empty credential.helper (it
+      // switches off any saved helper). Nothing that could run a command gets through.
+      for (const [k, v] of Object.entries(env)) {
+        const m = /^GIT_CONFIG_KEY_(\d{1,2})$/.exec(k);
+        if (!m) continue;
+        const isHttp = /^http\./i.test(v);
+        const isEmptyHelper = v === 'credential.helper' && env[`GIT_CONFIG_VALUE_${m[1]}`] === '';
+        if (!isHttp && !isEmptyHelper) return { ok: false, error: 'repo.env may only set http.* git options' };
       }
     }
     repos.push({ name, url, ...(branch ? { branch } : {}), ...(env ? { env } : {}) });
