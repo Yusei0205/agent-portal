@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -270,21 +271,18 @@ export function Inbox() {
   return (
     <div className="page" style={{ maxWidth: 760 }}>
       {/* Page header */}
-      <div className="page-head">
-        <h1>Inbox {total > 0 && <span className="muted" style={{ fontWeight: 400, fontSize: '0.9em' }}>({total})</span>}</h1>
-        <div className="page-actions">
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={load}
-            title="Refresh inbox"
-            aria-label="Refresh inbox"
-          >
-            <Icon name="refresh" size={15} />
-            Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader title={total > 0 ? `Inbox (${total})` : 'Inbox'} description="Approvals and notifications that are waiting for you.">
+        <button
+          type="button"
+          className="btn"
+          onClick={load}
+          title="Refresh inbox"
+          aria-label="Refresh inbox"
+        >
+          <Icon name="refresh" size={15} />
+          Refresh
+        </button>
+      </PageHeader>
 
       {loading && !items && (
         <div style={{ padding: '32px 0', textAlign: 'center' }}>

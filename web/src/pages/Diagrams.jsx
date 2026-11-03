@@ -10,6 +10,7 @@ import { MermaidViewer } from '../components/MermaidViewer.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -535,13 +536,12 @@ export function Diagrams({ projectId }) {
 
   return (
     <div className="page">
-      <div className="page-header row gap-sm">
-        <h2>Architecture diagrams</h2>
+      <SectionHead description="Architecture diagrams drawn by an agent from your repositories.">
         <button type="button" className="btn btn-primary" onClick={() => setShowNew(true)}>
-          <Icon name="plus" size={15} />
+          <Icon name="plus" size={14} />
           New diagram
         </button>
-      </div>
+      </SectionHead>
 
       {loading && <div className="spinner" aria-label="Loading…" />}
       {error && <div className="error-note" role="alert">{error}</div>}

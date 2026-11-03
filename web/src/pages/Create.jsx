@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Diagrams } from './Diagrams.jsx';
 import { GeneratedDocs } from './GeneratedDocs.jsx';
 import { Presentations } from './Presentations.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 const TABS = [
   { id: 'diagrams',  label: 'Diagrams' },
@@ -18,7 +19,8 @@ export function Create({ projectId }) {
   const [activeTab, setActiveTab] = useState('diagrams');
 
   return (
-    <div className="create-hub">
+    <div className="page create-hub">
+      <PageHeader title="Create" description="Generate architecture diagrams, Word documents and slide decks from your repositories and knowledge." />
       <div className="tab-bar" role="tablist" aria-label="Create">
         {TABS.map((tab) => (
           <button

@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
@@ -326,20 +327,16 @@ export function Workspaces({ projectId }) {
     <div className="page">
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />
-      <div className="page-head">
-        <h1>Workspaces</h1>
-        <div className="page-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setModal('new')}
-          >
-            <Icon name="plus" size={14} />
-            New workspace
-          </button>
-        </div>
-      </div>
-      <p className="muted">Group repositories into named workspaces for agent runs.</p>
+      <PageHeader title="Workspaces" description="Group repositories into named workspaces for agent runs.">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setModal('new')}
+        >
+          <Icon name="plus" size={14} />
+          New workspace
+        </button>
+      </PageHeader>
 
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="error-note" role="alert">{error}</p>}

@@ -9,6 +9,7 @@ import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import UsersPage from './settings/Users.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Audit log tab ─────────────────────────────────────────────────────────────
 
@@ -513,7 +514,7 @@ export function AdminPanel({ user }) {
   if (!user?.is_admin) {
     return (
       <div className="page">
-        <h1>Users</h1>
+        <PageHeader title="Users" />
         <p className="error-note">Admin access required.</p>
       </div>
     );
@@ -521,7 +522,7 @@ export function AdminPanel({ user }) {
 
   return (
     <div className="page">
-      <h1>Users</h1>
+      <PageHeader title="Users" description="Who can sign in, their roles, and portal-wide administration." />
 
       <div className="tab-bar" role="tablist" aria-label="Admin sections">
         {ADMIN_TABS.map((t) => (

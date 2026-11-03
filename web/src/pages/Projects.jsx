@@ -4,6 +4,7 @@ import { navigate } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -217,8 +218,7 @@ export function Projects({ user, onProjectsChange }) {
       )}
 
       {/* ── Page header ─────────────────────────────────── */}
-      <div className="page-header">
-        <h1>Projects</h1>
+      <PageHeader title="Projects" description="Each project has its own repositories, sessions, knowledge and members.">
         {/* Primary action shown only when there are projects */}
         {hasList && (
           <button
@@ -226,10 +226,11 @@ export function Projects({ user, onProjectsChange }) {
             className="btn btn-primary"
             onClick={() => setShowModal(true)}
           >
-            + New project
+            <Icon name="plus" size={14} />
+            New project
           </button>
         )}
-      </div>
+      </PageHeader>
 
       {loading && (
         <div className="spinner-wrap" aria-label="Loading projects">

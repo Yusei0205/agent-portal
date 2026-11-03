@@ -5,6 +5,7 @@ import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 /**
  * Integrations — everything an agent can use in a session, in one place.
@@ -365,20 +366,16 @@ export function Integrations({ projectId }) {
     <div className="page">
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />
-      <div className="page-head">
-        <h1>Integrations</h1>
-        <div className="page-actions">
-          {projectId && (
-            <button type="button" className="btn btn-primary" onClick={() => setModal('new')}>
-              <Icon name="plus" size={14} /> New MCP server
-            </button>
-          )}
-        </div>
-      </div>
-      <p className="muted">
-        Services the agent can use in a session: Jira and Confluence, your Git hosts, model sign-ins, and any MCP server.
-        Secrets are write-only and are only handed to a session when it starts.
-      </p>
+      <PageHeader
+        title="Integrations"
+        description="Services the agent can use in a session: Jira and Confluence, your Git hosts, model sign-ins, and any MCP server. Secrets are write-only and are only handed to a session when it starts."
+      >
+        {projectId && (
+          <button type="button" className="btn btn-primary" onClick={() => setModal('new')}>
+            <Icon name="plus" size={14} /> New MCP server
+          </button>
+        )}
+      </PageHeader>
 
       <ConnectedServices projectId={projectId} />
 

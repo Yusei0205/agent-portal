@@ -13,6 +13,7 @@ import { Icon } from '../components/Icon.jsx';
 import { TicketPreview } from '../components/TicketPreview.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1300,12 +1301,7 @@ export function Tickets({ projectId, route, onNewSession }) {
   if (!jira?.connected) {
     return (
       <div className="page">
-        <div className="page-header" style={{ marginBottom: 20 }}>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Icon name="ticket" size={24} aria-hidden="true" />
-            Tickets
-          </h1>
-        </div>
+        <PageHeader title="Tickets" description="Jira tickets for this project; start an agent session from one." />
 
         {jira?.canManage === false ? (
           <div className="card" style={{ maxWidth: 480 }}>
@@ -1335,11 +1331,7 @@ export function Tickets({ projectId, route, onNewSession }) {
   if (jira.sites && jira.sites.length > 1 && !jira.site) {
     return (
       <div className="page">
-        <div className="page-header" style={{ marginBottom: 20 }}>
-          <h1>
-            <Icon name="ticket" size={24} aria-hidden="true" /> Tickets
-          </h1>
-        </div>
+        <PageHeader title="Tickets" description="Jira tickets for this project; start an agent session from one." />
         <SiteSelector
           sites={jira.sites}
           currentSiteId={null}
@@ -1355,12 +1347,7 @@ export function Tickets({ projectId, route, onNewSession }) {
     <div className="page">
       <ToastShelf toasts={toasts} onRemove={removeToast} />
 
-      <div className="page-header" style={{ marginBottom: 20 }}>
-        <h1 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Icon name="ticket" size={24} aria-hidden="true" />
-          Tickets
-        </h1>
-      </div>
+      <PageHeader title="Tickets" description="Jira tickets for this project; start an agent session from one." />
 
       <div className="stack-lg">
         <ConnectedHeader

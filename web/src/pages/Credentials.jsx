@@ -18,6 +18,7 @@ import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { AwsRegionSelect } from '../components/AwsRegionSelect.jsx';
 import { DeviceCodeBox } from '../components/DeviceCodeBox.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -776,16 +777,15 @@ export function Credentials({ user }) {
 
   return (
     <div className="page">
-      <h1>Credentials</h1>
-      <p className="muted" style={{ marginBottom: 24 }}>
-        Your own sign-ins for Kiro and Claude Code. Your sessions use these first; without one
-        they fall back to the{' '}
-        {isAdmin
-          ? <a href="#/settings">portal AI provider</a>
-          : 'portal AI provider'
-        }.{' '}
-        Secrets are write-only and never appear in logs or transcripts.
-      </p>
+      <PageHeader
+        title="Credentials"
+        description={<>
+          Your own sign-ins for Kiro and Claude Code. Your sessions use these first; without one
+          they fall back to the{' '}
+          {isAdmin ? <a href="#/settings">portal AI provider</a> : 'portal AI provider'}.{' '}
+          Secrets are write-only and never appear in logs or transcripts.
+        </>}
+      />
 
       <EngineSection
         engine="kiro"

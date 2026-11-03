@@ -563,6 +563,21 @@
   justify-content: space-between;
   flex-wrap: wrap;
 }
+/* Standard page header (components/PageHeader.jsx): title + description left, actions right. */
+.page-head-text { display: grid; gap: 4px; min-width: 0; }
+.page-head-text h1 { margin: 0; }
+.page-head-text p.muted { margin: 0; font-size: 0.88rem; }
+.page-head > .page-actions { align-self: flex-start; }
+/* Header for a tab inside a page: description left, that tab's actions right. */
+.section-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.section-head p.muted { margin: 0; font-size: 0.88rem; max-width: 80ch; }
+
 .page-actions {
   display: flex;
   gap: 8px;

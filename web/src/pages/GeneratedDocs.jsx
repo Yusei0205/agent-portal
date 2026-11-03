@@ -8,6 +8,7 @@ import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -357,19 +358,16 @@ export function GeneratedDocs({ projectId }) {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <div>
-          <h2>Documents</h2>
-          <p className="muted">AI-generated Word documents from your repositories and knowledge.</p>
-        </div>
+      <SectionHead description="AI-generated Word documents from your repositories and knowledge.">
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => setShowNew(true)}
         >
-          + New document
+          <Icon name="plus" size={14} />
+          New document
         </button>
-      </div>
+      </SectionHead>
 
       {docs.length === 0 ? (
         <div className="empty-state">

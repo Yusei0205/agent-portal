@@ -8,6 +8,7 @@ import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -434,19 +435,16 @@ export function Presentations({ projectId }) {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <div>
-          <h2>Presentations</h2>
-          <p className="muted">AI-generated PowerPoint decks from your project content.</p>
-        </div>
+      <SectionHead description="AI-generated PowerPoint decks from your project content.">
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => setShowNew(true)}
         >
-          + New presentation
+          <Icon name="plus" size={14} />
+          New presentation
         </button>
-      </div>
+      </SectionHead>
 
       {presentations.length === 0 ? (
         <div className="empty-state">

@@ -17,6 +17,7 @@ import { Icon } from '../components/Icon.jsx';
 import { ConfigStatus } from './config/ConfigStatus.jsx';
 import { ConfigFileTree } from './config/ConfigFileTree.jsx';
 import { ConfigEditor } from './config/ConfigEditor.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 const TABS = [
   {
@@ -274,19 +275,13 @@ export function Configuration({ user }) {
   return (
     <div className="page">
       {/* Page header: title + subtitle on left, zip buttons on right */}
-      <div className="config-page-header">
-        <div className="config-page-title">
-          <h1>Configuration</h1>
-          <p className="muted">
-            Your own .kiro, .claude and .aws folders, as the engines and their tools see them in
-            every session you start. Changes apply to sessions started or resumed afterwards.
-          </p>
-        </div>
-        <div className="config-page-header-actions">
-          <ImportZipButton folder={tab} onImported={handleImported} />
-          <ExportZipButton folder={tab} />
-        </div>
-      </div>
+      <PageHeader
+        title="Configuration"
+        description="Your own .kiro, .claude and .aws folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
+      >
+        <ImportZipButton folder={tab} onImported={handleImported} />
+        <ExportZipButton folder={tab} />
+      </PageHeader>
 
       {/* Tab row with inline description */}
       <div className="config-tabs-row">

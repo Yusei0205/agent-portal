@@ -11,6 +11,7 @@ import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { buildFolderList } from '../lib/vaultFolders.js';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -849,10 +850,7 @@ export function Vault({ projectId, user }) {
 
   return (
     <div className="page">
-      <h1>Vault</h1>
-      <p className="muted">
-        Files uploaded here are available to every agent run in this project.
-      </p>
+      <PageHeader title="Vault" description="Files uploaded here are available to every agent run in this project." />
 
       <div className="tab-bar" role="tablist" aria-label="Vault scopes">
         {SCOPES.map((s) => (

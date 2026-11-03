@@ -11,6 +11,7 @@ import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1059,10 +1060,10 @@ export function Connections({ user }) {
   };
 
   return (
-    <>
+    <div className="page">
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />
-      <div className="page-actions" style={{ marginBottom: '0.5rem' }}>
+      <PageHeader title="Connections" description="Saved Git credentials shared across all projects.">
         <button
           type="button"
           className="btn btn-primary"
@@ -1071,11 +1072,7 @@ export function Connections({ user }) {
           <Icon name="plus" size={14} />
           New connection
         </button>
-      </div>
-
-      <p className="muted" style={{ fontSize: '0.84rem' }}>
-        Saved Git credentials shared across all projects.
-      </p>
+      </PageHeader>
 
       {loading && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)', fontSize: '0.84rem' }}>
@@ -1269,7 +1266,7 @@ export function Connections({ user }) {
           ssoSettings={ssoSettings}
         />
       )}
-    </>
+    </div>
   );
 }
 

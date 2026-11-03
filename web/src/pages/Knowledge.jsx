@@ -8,6 +8,7 @@ import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -430,7 +431,7 @@ export function Knowledge({ projectId }) {
 
   return (
     <div className="page">
-      <h1>Knowledge</h1>
+      <PageHeader title="Knowledge" description="Documents, decisions and learning material that agents in this project can draw on." />
 
       <div className="tab-bar" role="tablist" aria-label="Knowledge sections">
         {TABS.map((t) => (

@@ -1300,6 +1300,8 @@ input[type="datetime-local"]:focus {
   display: grid;
   align-content: start;
 }
+/* The tabs inside Create each render a .page; the hub already supplies the padding. */
+.create-hub .page { padding: 0; }
 
 /* ── Section header — flex row with title + action ─────────────────────────── */
 .section-header {

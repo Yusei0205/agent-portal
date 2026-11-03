@@ -7,6 +7,7 @@ import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Scope definitions ─────────────────────────────────────────────────────────
 
@@ -548,16 +549,12 @@ export function ApiAccess() {
     <div className="page">
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />
-      <div className="page-head">
-        <h1>API access</h1>
-        <div className="page-actions">
-          <button type="button" className="btn btn-primary" onClick={() => setShowNew(true)}>
-            <Icon name="plus" size={14} />
-            New token
-          </button>
-        </div>
-      </div>
-      <p className="muted">Personal API tokens for automating portal access. Tokens act as you.</p>
+      <PageHeader title="API access" description="Personal API tokens for automating portal access. Tokens act as you.">
+        <button type="button" className="btn btn-primary" onClick={() => setShowNew(true)}>
+          <Icon name="plus" size={14} />
+          New token
+        </button>
+      </PageHeader>
 
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="error-note" role="alert">{error}</p>}

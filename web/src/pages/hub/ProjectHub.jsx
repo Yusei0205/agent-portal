@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
+import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -1264,14 +1265,10 @@ export function ProjectHub({ projectId, user, initialTab }) {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <div>
-          <h1>{project?.name} — Setup</h1>
-          {project?.description && (
-            <p className="muted small">{project.description}</p>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Setup"
+        description={project?.description ? `${project.name} — ${project.description}` : (project?.name || '')}
+      />
 
       {/* Tab navigation */}
       <nav className="tab-nav" role="tablist" aria-label="Setup sections">

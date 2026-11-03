@@ -6,6 +6,7 @@ import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -497,18 +498,16 @@ export default function LoopSpecs({ projectId, user }) {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Loop Specs</h1>
-        <div className="page-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowModal(true)}
-          >
-            + Add spec
-          </button>
-        </div>
-      </div>
+      <PageHeader title="Loop specs" description="Reusable loop sessions: the goal, the checks that decide when it is done, and what starts it (by hand, on a schedule, or from a webhook).">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setShowModal(true)}
+        >
+          <Icon name="plus" size={14} />
+          Add spec
+        </button>
+      </PageHeader>
 
       {error && (
         <p className="error-note" role="alert">{error}</p>

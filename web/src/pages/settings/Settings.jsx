@@ -15,6 +15,7 @@ import { api } from '../../lib/api.js';
 import Providers from './Providers.jsx';
 import Secrets from './Secrets.jsx';
 import AppearanceTab from './Appearance.jsx';
+import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
 
 const TABS = [
   { id: 'provider',    label: 'Portal AI provider' },
@@ -55,7 +56,7 @@ export default function Settings({ user }) {
 
   return (
     <div className="page">
-      <h1>Settings</h1>
+      <PageHeader title="Settings" description="Portal-wide settings: AI provider, appearance and storage." />
 
       {/* Read-only banner for non-admins */}
       {!isAdmin && (

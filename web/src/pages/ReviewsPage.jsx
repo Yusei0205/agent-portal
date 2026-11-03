@@ -26,6 +26,7 @@ import ReviewDetail from './ReviewDetail.jsx';
 import BranchScans from './BranchScans.jsx';
 import BranchScanDetail from './BranchScanDetail.jsx';
 import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 const TABS = [
   { id: 'code',          label: 'Code reviews' },
@@ -264,9 +265,7 @@ export function ReviewsPage({ projectId, route, user }) {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Reviews</h1>
-      </div>
+      <PageHeader title="Reviews" description="Code reviews, branch scans and review metrics for this project." />
 
       {/* Tab bar — hidden when a detail is open */}
       {!detailId && (

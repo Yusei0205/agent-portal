@@ -24,6 +24,7 @@ import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { AiChoicePicker } from '../../components/AiChoicePicker.jsx';
+import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -2564,12 +2565,11 @@ function TestProjectList({ projectId, onSelect }) {
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ flex: 1 }}>Tests</h1>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>
+      <PageHeader title="Tests" description="AI-assisted end-to-end and API tests, grouped into test projects.">
+        <button type="button" className="btn btn-primary" onClick={() => setShowNew(true)}>
           <Icon name="plus" size={14} /> New test project
         </button>
-      </div>
+      </PageHeader>
 
       <BrowserBanner available={capability?.available} reason={capability?.reason} />
 
