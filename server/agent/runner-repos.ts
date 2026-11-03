@@ -11,6 +11,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -95,14 +96,14 @@ export function parseRunnerRepos(
   return { ok: true, repos };
 }
 
-function runGit(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number; err: string }> {
+function runGit(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number; err: string; signal?: string }> {
   return new Promise((resolve) => {
     const proc = spawn('git', args, { cwd, env, stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     proc.stderr.on('data', (d: Buffer) => { if (err.length < 4000) err += d.toString('utf8'); });
     const timer = setTimeout(() => { proc.kill('SIGKILL'); err += '\ntimed out'; }, timeoutMs);
     proc.on('error', (e) => { clearTimeout(timer); resolve({ code: 1, err: String(e.message) }); });
-    proc.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? 1, err }); });
+    proc.on('close', (code, signal) => { clearTimeout(timer); resolve({ code: code ?? 1, err, ...(signal ? { signal } : {}) }); });
   });
 }
 
@@ -216,6 +217,9 @@ export async function cloneRunnerRepos(
     const dest = path.join(reposDir, repo.name);
     const realDest = path.join(realReposDir, repo.name);
     const trust = persist ? trustArgs(realDest) : [];
+    try {
+      if (fs.lstatSync(dest).isSymbolicLink() && !fs.existsSync(dest)) fs.rmSync(dest, { force: true });
+    } catch { /* nothing there */ }
     if (fs.existsSync(path.join(dest, '.git'))) {
       await refreshExisting(repo, dest, trust, emit);
       done.push(repo.name);
@@ -226,16 +230,43 @@ export async function cloneRunnerRepos(
     emit({ type: 'status', text: `Cloning ${repo.name}${repo.branch ? ` @ ${repo.branch}` : ''}…` });
     const args = ['clone', '--quiet', '--depth', '1', '--single-branch', '--no-tags',
       ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, dest];
-    const res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs);
+    let res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs);
+    if (res.code !== 0 && persist) {
+      // The session's persistent folder is small (1 GB) and a mounted file system; if the clone did not fit or did
+      // not work there, clone onto the machine's own disk instead and link it in. It then lasts as long as the
+      // machine does, and the next message clones again.
+      try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* ok */ }
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-repo-'));
+      const localDest = path.join(localRoot, repo.name);
+      emit({ type: 'status', text: `${repo.name} did not fit in the session's storage; cloning to temporary disk instead…` });
+      const retry = await runGit(
+        ['clone', '--quiet', '--depth', '1', '--single-branch', '--no-tags', ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, localDest],
+        localRoot, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs,
+      );
+      if (retry.code === 0) {
+        try { fs.symlinkSync(localDest, dest, 'dir'); res = retry; } catch { /* keep the original failure */ }
+      } else {
+        try { fs.rmSync(localRoot, { recursive: true, force: true }); } catch { /* ok */ }
+        res = { ...retry, err: `${res.err}\n${retry.err}` };
+      }
+    }
     if (res.code === 0) {
       done.push(repo.name);
-      if (persist) trusted.push(realDest);
+      // Only a clone that really is on the persistent folder needs trusting (a temporary one is owned by the runner).
+      if (persist && fs.existsSync(dest) && fs.lstatSync(dest).isDirectory()) trusted.push(realDest);
     } else {
-      // git writes progress with carriage returns; keep a real error line (fatal / error / remote) if there is one.
+      // git writes progress with carriage returns; keep real error lines (fatal / error / warning) if there are any.
       const lines = res.err.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
-      const last = [...lines].reverse().find((l) => /^(fatal|error|remote):/i.test(l)) ?? lines[lines.length - 1] ?? 'git clone failed';
-      // Never echo anything that could hold a credential: only the last line of git's own message.
-      emit({ type: 'status', text: `Could not clone ${repo.name}: ${last.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 200)}` });
+      const errors = lines.filter((l) => /^(fatal|error|warning):/i.test(l)).slice(-3);
+      const tail = errors.length ? errors.join(' | ') : (lines[lines.length - 1] ?? '');
+      let free = '';
+      try {
+        const st = fs.statfsSync(persist ?? reposDir);
+        free = `, free disk ${Math.round(Number(st.bavail) * Number(st.bsize) / 1048576)} MB`;
+      } catch { /* ok */ }
+      const why = `git exited ${res.signal ? `on signal ${res.signal}` : `with code ${res.code}`}${free}, free memory ${Math.round(os.freemem() / 1048576)} MB`;
+      // Never echo anything that could hold a credential.
+      emit({ type: 'status', text: `Could not clone ${repo.name} (${why}): ${tail.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 260)}` });
       try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* ok */ }
     }
   }
