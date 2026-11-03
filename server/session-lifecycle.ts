@@ -263,7 +263,7 @@ export function registerSessionLifecycleRoutes(): void {
       if (!wf) return;
       const repo = getSessionsRepository();
       const active = await repo.getActiveRun(String(wf.id));
-      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 5) : [];
+      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 500) : [];
       // The browser is closed when the run ends, so only a session announced during the current run can be watched.
       const since = String(active?.started_at ?? active?.created_at ?? '');
       const latest = [...events].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= since);
@@ -297,7 +297,7 @@ export function registerSessionLifecycleRoutes(): void {
       const takeOver = Boolean((req.body as Record<string, unknown> | undefined)?.enabled);
       const repo = getSessionsRepository();
       const active = await repo.getActiveRun(String(wf.id));
-      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 5) : [];
+      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 500) : [];
       const since = String(active?.started_at ?? active?.created_at ?? '');
       const latest = [...events].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= since);
       let info: { browserId?: string; sessionId?: string } = {};
