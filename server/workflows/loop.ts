@@ -12,6 +12,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 import { emit } from '../events.ts';
 import { now } from '../util.ts';
+import { validateCheckSteps, formatCheckResult, type CheckStep, type CheckResult } from '../agent/runner-checks.ts';
 import {
   parseStatus, nextStep, composeIterationPrompt, addProgress, recentProgressText,
   type LoopDecision, type ProgressEntry, type StopRules,
@@ -32,6 +33,10 @@ export interface LoopSessionState {
   spentUsd?: number;
   /** Set to false in the spec to leave the progress record out of the next prompts. */
   progressFile?: boolean;
+  /** Commands run after each iteration (tests, lint, build); validated when the loop is created. */
+  checks?: CheckStep[];
+  /** The result of the last run of the checks, for the next prompt. */
+  lastCheck?: { ok: boolean; output: string } | null;
 }
 
 /** The state of a loop session, or null for an ordinary session. */
@@ -51,6 +56,8 @@ export function readLoopState(w: Pick<WorkflowRecord, 'loop_state'>): LoopSessio
       budgetUsd: j.budgetUsd ?? null,
       spentUsd: Number(j.spentUsd ?? 0) || 0,
       progressFile: j.progressFile !== false,
+      checks: Array.isArray(j.checks) ? (j.checks as CheckStep[]) : [],
+      lastCheck: j.lastCheck && typeof j.lastCheck === 'object' ? j.lastCheck : null,
     };
   } catch {
     return null;
@@ -76,10 +83,13 @@ export function readStopRules(raw: unknown): StopRules {
 }
 
 /** The JSON stored on a new loop session. */
-export function newLoopState(rules: unknown, opts: { progressFile?: boolean } = {}): string {
+export function newLoopState(rules: unknown, opts: { progressFile?: boolean; checks?: unknown } = {}): string {
   const state: LoopSessionState = {
     enabled: true, rules: readStopRules(rules), failures: 0, summaries: [], progress: [], startedAt: now(),
     progressFile: opts.progressFile !== false,
+    // Throws (a message fit to show) when a check is not allowed.
+    checks: validateCheckSteps(opts.checks),
+    lastCheck: null,
   };
   return JSON.stringify(state);
 }
@@ -95,6 +105,7 @@ export function loopPrompt(w: WorkflowRecord, state: LoopSessionState, instructi
     goal: w.goal,
     progress: progress || state.summaries[state.summaries.length - 1] || '',
     instructions,
+    check: state.lastCheck ?? null,
     iteration: (w.iteration_count ?? 0) + 1,
     maxIterations: w.max_iterations ?? 0,
     repos: repoNames.map((name) => ({ name })),
@@ -107,8 +118,24 @@ export interface IterationOutcome {
   result: string;
   /** The run ended in an error rather than normally. */
   failed: boolean;
-  /** Whether the checks passed, when there were any. */
+  /** The run that just ended, so its check result can be found. */
+  runId?: string;
+  /** Whether the checks passed, when there were any (read from the run's check-result event when not given). */
   checkPassed?: boolean | null;
+}
+
+/** The check result a run reported, or null when it ran none. */
+export async function readCheckResult(workflowId: string, runId: string | undefined): Promise<CheckResult | null> {
+  if (!runId) return null;
+  const events = await getSessionsRepository().listWorkflowRunEventsByType(workflowId, ['check-result'], 50);
+  const e = events.filter((x) => String(x.run_id) === runId).sort((a, b) => b.id - a.id)[0];
+  if (!e) return null;
+  try {
+    const j = JSON.parse(e.payload ?? '{}') as Partial<CheckResult>;
+    return { ok: Boolean(j.ok), ranAt: String(j.ranAt ?? ''), steps: Array.isArray(j.steps) ? j.steps : [] };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -123,6 +150,9 @@ export async function afterRun(workflowId: string, outcome: IterationOutcome): P
   const state = readLoopState(w);
   if (!state) return null;
 
+  const check = outcome.failed || outcome.checkPassed !== undefined ? null : await readCheckResult(workflowId, outcome.runId);
+  const checkPassed = outcome.checkPassed !== undefined ? outcome.checkPassed : check ? check.ok : null;
+  if (check) state.lastCheck = { ok: check.ok, output: formatCheckResult(check) };
   const status = outcome.failed ? null : parseStatus(outcome.result);
   const summary = (status?.summary || outcome.result.replace(/WORKFLOW_STATUS\s*\{[^\n]*\}/g, '').trim().slice(0, 600) || (outcome.failed ? 'The run failed.' : 'No summary.')).slice(0, 2000);
   // A failed run is not counted in iteration_count, but it is an attempt: number it as the next one.
@@ -139,7 +169,7 @@ export async function afterRun(workflowId: string, outcome: IterationOutcome): P
     summaries: state.summaries,
     status,
     runFailed: outcome.failed,
-    checkPassed: outcome.checkPassed ?? null,
+    checkPassed,
     minutesElapsed: (Date.now() - Date.parse(state.startedAt)) / 60_000,
   }, state.rules);
 

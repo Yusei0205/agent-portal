@@ -71,6 +71,7 @@ export type AgentCoreSSEEvent =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string }
   | { type: 'tool'; name: string }
+  | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
   | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
   | { type: 'browser-navigate'; url: string }
   | { type: 'browser-screenshot'; screenshotBase64: string; url?: string }
@@ -478,6 +479,8 @@ export interface AgentCoreRunOpts {
   repos?: import('./runner-repos.ts').RunnerRepo[];
   /** The project's remote MCP integrations (runner starts a proxy for each). */
   mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** A loop session's check steps, run by the runner after kiro finishes. */
+  checks?: import('./runner-checks.ts').CheckStep[];
 }
 
 /**
@@ -522,6 +525,7 @@ export async function runKiroViaAgentCore(
       ...(opts.browser ? { browser: true } : {}),
       ...(opts.repos?.length ? { repos: opts.repos } : {}),
       ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
+      ...(opts.checks?.length ? { checks: opts.checks } : {}),
       ...(snapshot ? { snapshot } : {}),
     };
 
@@ -557,6 +561,12 @@ export async function runKiroViaAgentCore(
           if (textParts.length && textParts[textParts.length - 1] !== '') textParts.push('');
           emit('tool-start', { toolCallId: '', toolName, toolInput: '{}', status: 'in_progress' });
           emit('tool-end', { toolCallId: '', toolName, status: 'completed', output: '' });
+          break;
+        }
+
+        case 'check-result': {
+          const chk = ev as { type: 'check-result'; ok?: boolean; ranAt?: string; steps?: unknown[] };
+          emit('check-result', { ok: Boolean(chk.ok), ranAt: String(chk.ranAt ?? ''), steps: Array.isArray(chk.steps) ? chk.steps : [] });
           break;
         }
 

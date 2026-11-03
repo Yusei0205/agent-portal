@@ -31,6 +31,7 @@ COPY server/agent/runner-files.ts ./shared/runner-files.ts
 COPY server/agent/runner-repos.ts ./shared/runner-repos.ts
 COPY server/agent/runner-snapshot.ts ./shared/runner-snapshot.ts
 COPY server/agent/runner-mcp.ts ./shared/runner-mcp.ts
+COPY server/agent/runner-checks.ts ./shared/runner-checks.ts
 
 # Compile + bundle → dist/index.mjs
 # @anthropic-ai/claude-agent-sdk stays external (installed in runtime stage)

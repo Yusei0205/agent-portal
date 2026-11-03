@@ -42,6 +42,7 @@ import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
 import { emitRunnerFiles } from '../shared/runner-files.js';
+import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
@@ -550,6 +551,15 @@ export async function runInvocation(
       metrics,
     }) + '\n',
   );
+
+  // Loop sessions: run the check steps where the code is and report the result for the next iteration.
+  if (payload.checks?.length) {
+    try {
+      emit({ type: 'check-result', ...(await runCheckSteps(payload.checks as never, workDir)) });
+    } catch (e) {
+      emit({ type: 'check-result', ok: false, ranAt: new Date().toISOString(), steps: [{ step: 'checks', ok: false, output: String((e as Error)?.message ?? e).slice(0, 500), durationMs: 0, required: true }] });
+    }
+  }
 
   // Send back the files the agent wrote (documents, images, spreadsheets...), within size limits.
   try { emitRunnerFiles(workDir, emit, filesSinceMs); } catch { /* best effort */ }

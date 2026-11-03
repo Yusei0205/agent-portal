@@ -38,6 +38,8 @@ export interface KiroRunPayload {
   repos?: unknown[];
   /** Remote MCP integrations (checked in run.ts by shared/runner-mcp.ts). */
   mcpServers?: unknown[];
+  /** Check steps to run after the agent finishes (checked again in run.ts by shared/runner-checks.ts). */
+  checks?: unknown[];
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
   snapshot?: unknown;
 }
@@ -160,6 +162,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       ...(obj.browser === true ? { browser: true } : {}),
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
+      ...(Array.isArray(obj.checks) && obj.checks.length <= 8 ? { checks: obj.checks as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       token: {
         accessToken: tok.accessToken as string,

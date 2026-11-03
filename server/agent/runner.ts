@@ -473,6 +473,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         agentRun.projectId,
         (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
       );
+      if (loopState?.checks?.length) agentRun.runnerChecks = loopState.checks;
       agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null)
         .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
       if (specs.length > 0) {
@@ -582,7 +583,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
     // A loop session decides here whether to go on: the next run is started, or the session stops with the reason.
     if (runFinished && loopState) {
-      try { await loopAfterRun(workflowId, { result, failed: false }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+      try { await loopAfterRun(workflowId, { result, failed: false, runId }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
     }
   } catch (e: unknown) {
     const aborted = (e as { name?: string })?.name === 'AbortError' || ctrl.signal.aborted;
