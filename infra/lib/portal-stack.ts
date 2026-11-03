@@ -228,6 +228,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
       }),
       memorySize: 1024,
       timeout: cdk.Duration.minutes(15),
+      // Repository clones and agent files live on /tmp: the default 512 MB is too small for a large repository.
+      ephemeralStorageSize: cdk.Size.mebibytes(4096),
       environment: {
         ...tableEnv,
         USE_DYNAMODB: 'true',

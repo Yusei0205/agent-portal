@@ -12,8 +12,10 @@
  *   PUT    /api/projects/:id/repos/:repoId/default-branch  — update default branch
  */
 
+import { registerBackgroundJob, runInBackground } from './background-jobs.ts';
 import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
 import fs from 'node:fs';
+import os from 'node:os';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -382,6 +384,31 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
 
   const cloneDir = repoCloneDir(slug, repo.name);
   const cloneEnv = await getCloneEnv(repo);
+
+  // In the cloud the agents clone the repository themselves inside their own microVM, and Lambda's disk is
+  // temporary and small, so "adding" a repository only checks that the portal can reach it and finds its
+  // default branch. Nothing is stored on this machine.
+  if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.PORTAL_REPO_SYNC_MODE === 'check') {
+    try {
+      const out = await spawnGit(['ls-remote', '--symref', repo.url, 'HEAD'], os.tmpdir(), cloneEnv);
+      const m = out.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m);
+      await getGitReposRepository().updateStatus(repoId, 'ready', {
+        lastSyncedAt: now(),
+        defaultBranch: m ? m[1] : repo.default_branch,
+        lastError: null,
+      });
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : String(e);
+      await getGitReposRepository().updateStatus(repoId, 'error', {
+        lastError: `Could not reach the repository: ${raw}`.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 500),
+      });
+    } finally {
+      repoProgress.delete(repoId);
+      syncInFlight.delete(repoId);
+    }
+    return;
+  }
+
   const onChunk = (chunk: Buffer) => tracker.feedChunk(chunk);
 
   try {
@@ -443,6 +470,9 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
   }
 }
 
+// On Lambda a clone started after the reply would be frozen or recycled mid-way, so it runs as its own invocation.
+registerBackgroundJob('repo-sync', async (a) => { await performSync(String(a.repoId), String(a.projectId)); });
+
 // ── Route registration ────────────────────────────────────────────────────────
 
 export function registerRepoRoutes(): void {
@@ -482,9 +512,7 @@ export function registerRepoRoutes(): void {
     });
 
     // Start background clone immediately
-    performSync(id, req.params.id).catch((e: unknown) => {
-      console.error(`[repos] initial sync error for ${id}:`, e);
-    });
+    await runInBackground('repo-sync', { repoId: id, projectId: req.params.id });
 
     sendJson(res, 201, { repo: withProgress(repo) });
   });
@@ -546,9 +574,7 @@ export function registerRepoRoutes(): void {
 
     await getGitReposRepository().updateStatus(repo.id, nextStatus, { lastError: null });
 
-    performSync(repo.id, req.params.id).catch((e: unknown) => {
-      console.error(`[repos] sync error for ${repo.id}:`, e);
-    });
+    await runInBackground('repo-sync', { repoId: repo.id, projectId: req.params.id });
 
     sendJson(res, 202, { ok: true, status: nextStatus });
   });
@@ -656,9 +682,7 @@ export function registerRepoRoutes(): void {
         });
         existingUrls.add(url.toLowerCase());
         added.push(withProgress(repo) as unknown as Record<string, unknown>);
-        performSync(id, req.params.id).catch((e: unknown) => {
-          console.error(`[repos] bulk sync error for ${id}:`, e);
-        });
+        await runInBackground('repo-sync', { repoId: id, projectId: req.params.id });
       } catch (e: unknown) {
         errors.push({ url, error: e instanceof Error ? e.message : String(e) });
       }
