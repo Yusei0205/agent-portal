@@ -20,6 +20,6 @@ export async function runPrepareRepos(payload: KiroPreparePayload, emit: EmitFn)
     emit({ type: 'result', runId: payload.runId, success: true, persisted: false, repos: [] });
     return;
   }
-  const names = await cloneRunnerRepos(parsed.repos, persist, (ev) => emit(ev));
+  const names = await cloneRunnerRepos(parsed.repos, persist, (ev) => emit(ev), { persistRoot: persist });
   emit({ type: 'result', runId: payload.runId, success: names.length === parsed.repos.length, persisted: true, repos: names });
 }

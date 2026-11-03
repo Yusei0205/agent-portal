@@ -128,22 +128,50 @@ function gitEnv(repo: RunnerRepo): NodeJS.ProcessEnv {
 }
 
 /**
+ * The persistent folder is a mounted file system whose files report a different owner than the runner's user, and
+ * git then refuses to work in a repository there ("dubious ownership"). Two narrow fixes, both naming only the exact
+ * repository folders the runner created (never a wildcard):
+ *  - the runner's own git calls pass `-c safe.directory=<folder>`;
+ *  - the agent runs git with its own HOME, so a `.gitconfig` in that HOME lists the same folders.
+ * Repository names are validated, so the paths cannot point anywhere else.
+ */
+function trustArgs(abs: string): string[] {
+  return ['-c', `safe.directory=${abs}`];
+}
+
+export function trustFoldersForAgent(homeDir: string, folders: string[]): void {
+  if (folders.length === 0) return;
+  const file = path.join(homeDir, '.gitconfig');
+  let current = '';
+  try { current = fs.readFileSync(file, 'utf8'); } catch { /* new file */ }
+  const missing = folders.filter((f) => !current.includes(`directory = ${f}\n`));
+  if (missing.length === 0) return;
+  const block = `${current && !current.endsWith('\n') ? '\n' : ''}[safe]\n${missing.map((f) => `\tdirectory = ${f}\n`).join('')}`;
+  fs.writeFileSync(file, current + block, 'utf8');
+}
+
+/**
  * A repository that is already on disk (kept from an earlier message of the same session) is brought up to date,
  * unless the agent changed it: edits and commits made in the session are never thrown away.
  */
-async function refreshExisting(repo: RunnerRepo, dest: string, emit: (e: { type: 'status'; text: string }) => void): Promise<void> {
+async function refreshExisting(
+  repo: RunnerRepo,
+  dest: string,
+  trust: string[],
+  emit: (e: { type: 'status'; text: string }) => void,
+): Promise<void> {
   const env = gitEnv(repo);
   const branch = repo.branch ?? '';
-  const out = await gitOut(['status', '--porcelain'], dest, env);
-  const ahead = branch ? await gitOut(['rev-list', '--count', `origin/${branch}..HEAD`], dest, env) : '0';
+  const out = await gitOut([...trust, 'status', '--porcelain'], dest, env);
+  const ahead = branch ? await gitOut([...trust, 'rev-list', '--count', `origin/${branch}..HEAD`], dest, env) : '0';
   if (out.trim() !== '' || (ahead.trim() !== '' && ahead.trim() !== '0')) {
     emit({ type: 'status', text: `${repo.name} already has your session's changes; left as it is.` });
     return;
   }
-  const fetchArgs = ['fetch', '--depth', '1', 'origin', ...(branch ? [branch] : [])];
+  const fetchArgs = [...trust, 'fetch', '--depth', '1', 'origin', ...(branch ? [branch] : [])];
   const f = await runGit(fetchArgs, dest, env, 120_000);
   if (f.code !== 0) { emit({ type: 'status', text: `${repo.name}: kept the earlier copy (could not fetch updates).` }); return; }
-  await runGit(['reset', '--hard', 'FETCH_HEAD'], dest, env, 60_000);
+  await runGit([...trust, 'reset', '--hard', 'FETCH_HEAD'], dest, env, 60_000);
   emit({ type: 'status', text: `${repo.name} is up to date.` });
 }
 
@@ -161,29 +189,37 @@ function gitOut(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<st
 /**
  * Puts each repository under `<workDir>/repos/<name>` (shallow clone). With `persistRoot`, the real folder is
  * `<persistRoot>/repos` and `<workDir>/repos` is a link to it, so the copy survives until the session is released.
+ * `homeDir` is the agent's HOME: it gets a `.gitconfig` that trusts those repository folders.
  * A repository that cannot be cloned is reported and skipped (the run continues). Returns the names available.
  */
 export async function cloneRunnerRepos(
   repos: RunnerRepo[],
   workDir: string,
   emit: (event: { type: 'status'; text: string }) => void,
-  opts: { persistRoot?: string | null } = {},
+  opts: { persistRoot?: string | null; homeDir?: string | null } = {},
 ): Promise<string[]> {
   const done: string[] = [];
   const reposDir = path.join(workDir, 'repos');
   const persist = opts.persistRoot ? usablePersistRoot(opts.persistRoot) : null;
+  let realReposDir = reposDir;
   if (persist) {
-    const real = path.join(persist, 'repos');
-    fs.mkdirSync(real, { recursive: true });
+    realReposDir = path.join(persist, 'repos');
+    fs.mkdirSync(realReposDir, { recursive: true });
     if (!fs.existsSync(reposDir)) {
-      try { fs.symlinkSync(real, reposDir, 'dir'); } catch { /* fall back to a plain folder below */ }
+      try { fs.symlinkSync(realReposDir, reposDir, 'dir'); } catch { /* fall back to a plain folder below */ }
     }
+    // If the link could not be made, the repositories stay in the temporary work folder instead.
+    try { if (fs.realpathSync(reposDir) !== fs.realpathSync(realReposDir)) realReposDir = reposDir; } catch { realReposDir = reposDir; }
   }
+  const trusted: string[] = [];
   for (const repo of repos) {
     const dest = path.join(reposDir, repo.name);
+    const realDest = path.join(realReposDir, repo.name);
+    const trust = persist ? trustArgs(realDest) : [];
     if (fs.existsSync(path.join(dest, '.git'))) {
-      await refreshExisting(repo, dest, emit);
+      await refreshExisting(repo, dest, trust, emit);
       done.push(repo.name);
+      if (persist) trusted.push(realDest);
       continue;
     }
     fs.mkdirSync(reposDir, { recursive: true });
@@ -193,12 +229,16 @@ export async function cloneRunnerRepos(
     const res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs);
     if (res.code === 0) {
       done.push(repo.name);
+      if (persist) trusted.push(realDest);
     } else {
       const last = res.err.split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? 'git clone failed';
       // Never echo anything that could hold a credential: only the last line of git's own message.
       emit({ type: 'status', text: `Could not clone ${repo.name}: ${last.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 200)}` });
       try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* ok */ }
     }
+  }
+  if (opts.homeDir && trusted.length > 0) {
+    try { trustFoldersForAgent(opts.homeDir, trusted); } catch { /* the agent can still read the files */ }
   }
   if (done.length > 0) emit({ type: 'status', text: `Repositories available at: ${done.map((n) => `repos/${n}/`).join(', ')}` });
   return done;

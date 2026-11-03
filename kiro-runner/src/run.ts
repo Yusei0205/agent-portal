@@ -284,7 +284,7 @@ export async function runKiroRun(
     // The session's repositories, under repos/ in the agent's work folder
     if (payload.repos?.length) {
       const parsed = parseRunnerRepos(payload.repos);
-      if (parsed.ok) await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT });
+      if (parsed.ok) await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: kiroHome });
       else emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
     }
 

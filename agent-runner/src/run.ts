@@ -186,7 +186,7 @@ export async function runInvocation(
   if (payload.repos?.length) {
     const parsed = parseRunnerRepos(payload.repos);
     if (parsed.ok) {
-      await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT });
+      await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: workDir });
     } else {
       emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
     }
