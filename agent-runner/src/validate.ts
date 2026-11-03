@@ -41,6 +41,8 @@ export interface InvocationPayload {
   maxTurns?: number;
   /** Maximum spend in USD (default 0.50). */
   maxBudgetUsd?: number;
+  /** Thinking effort (low | medium | high | xhigh | max); the model's own default when absent. */
+  effort?: string;
   /** Wall-clock timeout in minutes (default 10). */
   maxMinutes?: number;
   repo?: RepoConfig;
@@ -78,7 +80,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser',
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser',
 ]);
 const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
@@ -150,6 +152,11 @@ export function validatePayload(raw: unknown): ValidationResult {
     if (typeof obj.maxBudgetUsd !== 'number' || obj.maxBudgetUsd <= 0 || obj.maxBudgetUsd > 100) {
       return err('"maxBudgetUsd" must be a positive number ≤ 100');
     }
+  }
+
+  // effort — optional, one of the known levels
+  if (obj.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(String(obj.effort))) {
+    return err('"effort" must be low, medium, high, xhigh or max');
   }
 
   // maxMinutes — optional positive number
@@ -248,6 +255,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       model: typeof obj.model === 'string' ? obj.model.trim() : undefined,
       maxTurns: typeof obj.maxTurns === 'number' ? obj.maxTurns : undefined,
       maxBudgetUsd: typeof obj.maxBudgetUsd === 'number' ? obj.maxBudgetUsd : undefined,
+      ...(typeof obj.effort === 'string' ? { effort: obj.effort } : {}),
       maxMinutes: typeof obj.maxMinutes === 'number' ? obj.maxMinutes : undefined,
       repo,
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),

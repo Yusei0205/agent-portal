@@ -83,6 +83,8 @@ const WRITE_TOOLS = new Set([
 /** Tools that only read: allowed even when the session does not trust all tools. */
 const READ_ONLY_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebSearch', 'WebFetch', 'TodoWrite',
+  // The agent's own task list: nothing leaves the run, so it needs no approval.
+  'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate',
   'read', 'glob', 'grep', 'ls',
   // AgentCore Browser tools that only look (opening a page is like WebFetch). click/type need "Trust all tools".
   `mcp__${BROWSER_SERVER_NAME}__goto`, `mcp__${BROWSER_SERVER_NAME}__snapshot`,
@@ -370,6 +372,7 @@ export async function runInvocation(
         settingSources: [],
         // SDK spend cap (FR-GUARD-10 compatible)
         maxBudgetUsd,
+        ...(payload.effort ? { effort: payload.effort } : {}),
         // Let the SDK enforce the turn limit natively so it can emit a proper
         // result message (with total_cost_usd and stop_reason:"max_turns").
         // Our manual counter below remains for the turns metric.

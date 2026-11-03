@@ -30,6 +30,8 @@ export interface ClaudeAgentCoreOpts {
   auth: { kind: 'api_key' | 'oauth_token'; secret: string };
   trustTools: boolean;
   maxBudgetUsd?: number | null;
+  /** Thinking effort from Settings (empty = the model's default). */
+  effort?: string | null;
   maxTurns?: number | null;
   /** Give the agent the AgentCore Browser tools (mcp__browser__*). */
   browser?: boolean;
@@ -99,6 +101,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(snapshot ? { snapshot } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
+    ...(opts.effort ? { effort: opts.effort } : {}),
     ...(opts.maxTurns && opts.maxTurns > 0 ? { maxTurns: Math.min(opts.maxTurns, 200) } : {}),
   };
 
