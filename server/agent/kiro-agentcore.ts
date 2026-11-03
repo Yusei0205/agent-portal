@@ -84,7 +84,7 @@ export type AgentCoreSSEEvent =
     };
 
 export type AgentCoreLoginResultEvent =
-  | { type: 'result'; success: boolean; tokenPayload?: { access_token: string; expires_at: string; refresh_token?: string; region?: string; start_url?: string }; tokenSizeBytes: number; durationMs: number; coldStartMs: number; exitCode: number }
+  | { type: 'result'; success: boolean; tokenPayload?: { access_token: string; expires_at: string; refresh_token?: string; region?: string; start_url?: string; client_id?: string; client_secret?: string; client_secret_expires_at?: number }; tokenSizeBytes: number; durationMs: number; coldStartMs: number; exitCode: number }
   | { type: 'error'; message: string }
   | { type: 'verification'; verificationUri: string; userCode: string }
   | { type: 'status'; text: string };
@@ -622,6 +622,9 @@ export interface AgentCoreLoginResult {
     refresh_token?: string;
     region?: string;
     start_url?: string;
+    client_id?: string;
+    client_secret?: string;
+    client_secret_expires_at?: number;
   };
   error?: string;
 }

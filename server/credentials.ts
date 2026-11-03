@@ -1116,8 +1116,10 @@ export function registerCredentialRoutes(): void {
       const tokenEnc = encrypt(accessToken, config.secretKey);
       const expiresAtStr = String(tp.expires_at ?? '');
       const tokenExpiry = expiresAtStr || new Date(Date.now() + 28_800_000).toISOString();
-      const clientSecretExpiresAt = Number(extra.pendingClientSecretExpiresAt ?? 0);
-      const clientId = String(extra.pendingClientId ?? extra.clientId ?? '');
+      // The runner returns the sign-in client kiro-cli registered; with it the token can be renewed
+      // without asking the user to sign in again.
+      const clientSecretExpiresAt = Number(tp.client_secret_expires_at ?? extra.pendingClientSecretExpiresAt ?? 0);
+      const clientId = String(tp.client_id ?? extra.pendingClientId ?? extra.clientId ?? '');
 
       const newExtra: Record<string, unknown> = {
         startUrl: String(extra.startUrl ?? tp.start_url ?? ''),
@@ -1126,7 +1128,9 @@ export function registerCredentialRoutes(): void {
         signedInAt: now(),
         ...(clientId ? { clientId } : {}),
         ...(clientSecretExpiresAt ? { clientSecretExpiresAt } : {}),
-        ...(extra.clientSecretEnc ? { clientSecretEnc: String(extra.clientSecretEnc) } : {}),
+        ...(tp.client_secret
+          ? { clientSecretEnc: encrypt(tp.client_secret, config.secretKey) }
+          : extra.clientSecretEnc ? { clientSecretEnc: String(extra.clientSecretEnc) } : {}),
       };
       if (tp.refresh_token) {
         newExtra.refreshTokenEnc = encrypt(tp.refresh_token, config.secretKey);

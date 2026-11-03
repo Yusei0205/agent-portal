@@ -28,6 +28,9 @@ export interface AgentcoreLoginEntry {
     refresh_token?: string;
     region?: string;
     start_url?: string;
+    client_id?: string;
+    client_secret?: string;
+    client_secret_expires_at?: number;
   };
   errorMessage: string | null;
   /** ISO timestamp; used to set DynamoDB TTL. */

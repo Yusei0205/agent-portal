@@ -26,6 +26,7 @@ export type EmitFn = (event: Record<string, unknown>) => void;
 
 const KIRO_TEST_DB_ENV = 'KIRO_TEST_DB_PATH';
 const AUTH_KV_TOKEN_KEY = 'kirocli:odic:token';
+const AUTH_KV_DEVICE_REG_KEY = 'kirocli:odic:device-registration';
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,25 @@ interface TokenPayload {
   refresh_token?: string;
   region?: string;
   start_url?: string;
+  /** The sign-in client kiro-cli registered. Needed to renew the token later without a new sign-in. */
+  client_id?: string;
+  client_secret?: string;
+  client_secret_expires_at?: number;
+}
+
+function readRegistration(db: DatabaseSync): Partial<TokenPayload> {
+  try {
+    const row = db.prepare('SELECT value FROM auth_kv WHERE key = ?')
+      .get(AUTH_KV_DEVICE_REG_KEY) as { value: string } | undefined;
+    if (!row?.value) return {};
+    const reg = JSON.parse(row.value) as Record<string, unknown>;
+    if (!reg.client_id || !reg.client_secret) return {};
+    return {
+      client_id: String(reg.client_id),
+      client_secret: String(reg.client_secret),
+      ...(reg.client_secret_expires_at ? { client_secret_expires_at: Number(reg.client_secret_expires_at) } : {}),
+    };
+  } catch { return {}; }
 }
 
 function readTokenFromDb(dbPath: string): TokenPayload | null {
@@ -56,12 +76,14 @@ function readTokenFromDb(dbPath: string): TokenPayload | null {
     const parsed = JSON.parse(row.value) as Record<string, unknown>;
     const accessToken = String(parsed.access_token ?? '');
     if (!accessToken) return null;
+    const reg = readRegistration(db);
     return {
       access_token: accessToken,
       expires_at: String(parsed.expires_at ?? ''),
       ...(parsed.refresh_token ? { refresh_token: String(parsed.refresh_token) } : {}),
       ...(parsed.region ? { region: String(parsed.region) } : {}),
       ...(parsed.start_url ? { start_url: String(parsed.start_url) } : {}),
+      ...reg,
     };
   } catch {
     return null;

@@ -27,7 +27,7 @@ import { Construct } from 'constructs';
 /** ECR repo name — must exist and have the image pushed before `cdk deploy`. */
 const ECR_REPO_NAME = 'agent-portal/kiro-runner';
 /** Image tag to use in the AgentCore Runtime. */
-const IMAGE_TAG = 'br-202611031';
+const IMAGE_TAG = 'br-202611034';
 
 export class AgentPortalSpikeBStack extends cdk.Stack {
   public readonly runtimeArn: string;
