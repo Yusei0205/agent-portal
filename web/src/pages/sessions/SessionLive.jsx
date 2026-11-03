@@ -1072,7 +1072,7 @@ export function SessionLive({
   // ── Transcript loading ────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!workflowId || !projectId || loadedInitialTranscript) return;
+    if (!workflowId || !projectId) return;
     setLoadedInitialTranscript(true);
 
     // Server max is 200 raw events per page, but consecutive streamed
@@ -1129,7 +1129,7 @@ export function SessionLive({
     return () => { cancelled = true; };
   // runId is intentionally NOT in deps: this effect runs once per session mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflowId, projectId, loadedInitialTranscript]);
+  }, [workflowId, projectId]);
 
   const loadEarlier = async () => {
     if (!nextCursor || loadingEarlier) return;
