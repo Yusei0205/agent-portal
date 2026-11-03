@@ -215,7 +215,7 @@ describe('Bedrock provider — callTextModel', () => {
       assert.equal(await pickTextEngine(null, null), null);
       const text = await callTextModel('Be brief.', 'Say hi.', { createdBy: userId });
       assert.equal(text, 'kiro says hi');
-      assert.match(calls[0].prompt, /Be brief\.[\s\S]*Say hi\.[\s\S]*answer only/);
+      assert.match(calls[0].prompt, /Be brief\.[\s\S]*Say hi\.[\s\S]*requested output only/);
       assert.equal(await callTextModel('s', 'u', { createdBy: userId, credentialId: kiroCred }), 'kiro says hi');
       assert.equal(calls[1].credentialId, kiroCred);
       // Once the person has a Claude credential too, theirs is the default engine (unless they choose the Kiro one).

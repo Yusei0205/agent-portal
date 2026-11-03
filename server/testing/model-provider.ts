@@ -125,7 +125,7 @@ export async function pickTextEngine(userId: string | null, credentialId: string
   return null;
 }
 
-let _kiroRunnerOverride: ((prompt: string, userId: string, credentialId: string | null) => Promise<string>) | null = null;
+let _kiroRunnerOverride: ((prompt: string, userId: string, credentialId: string | null, model?: string | null) => Promise<string>) | null = null;
 /** Replace the Kiro runner call in tests. Pass null to restore. */
 export function setKiroRunnerOverride(fn: typeof _kiroRunnerOverride): void {
   _kiroRunnerOverride = fn;
@@ -139,8 +139,9 @@ async function callKiroViaRunner(
   prompt: string,
   userId: string,
   credentialId: string | null,
+  model: string | null = null,
 ): Promise<string> {
-  if (_kiroRunnerOverride) return _kiroRunnerOverride(prompt, userId, credentialId);
+  if (_kiroRunnerOverride) return _kiroRunnerOverride(prompt, userId, credentialId, model);
   const runtimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
   if (!runtimeArn) throw new Error('The Kiro runner is not set up for this portal, so a Kiro credential cannot be used here.');
   const { resolveCredentialEnv } = await import('../credentials.ts');
@@ -175,6 +176,7 @@ async function callKiroViaRunner(
     token,
     credentialId: row.id,
     expectedCiphertext: row.secret_enc ?? null,
+    model,
   });
   return textParts.join('');
 }
@@ -213,9 +215,10 @@ export async function callTextModel(
 
 ${userMessage}${imageNote}
 
-Reply with the answer only, as asked above. Do not use tools and do not add commentary.`,
+Reply with the requested output only: no explanation, no markdown fences, no questions and no tools. If something is unclear, make a reasonable assumption and still produce the output.`,
         createdBy,
         credentialId,
+        modelOverride,
       );
     }
   }

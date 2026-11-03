@@ -442,12 +442,29 @@ export async function runGeneration(
         });
       }
 
-      const text = await callTextModel(
+      const ask = (msg: string): Promise<string> => callTextModel(
         systemPrompt + textBlock,
-        userMsg,
+        msg,
         { maxTokens: 4096, createdBy, images, credentialId: ai.credentialId ?? null, model: ai.model ?? null },
       );
-      return extractJsonArray(text);
+      const text = await ask(userMsg);
+      try {
+        return extractJsonArray(text);
+      } catch (firstErr) {
+        if (!/JSON array/.test(String((firstErr as Error).message))) throw firstErr;
+        // An agent-style model sometimes answers in prose (a question, a plan). Ask once more for only the array.
+        const again = await ask(
+          `${userMsg}
+
+Your previous reply was not a JSON array of steps. Reply again with ONLY the JSON array, starting with [ and ending with ], and nothing else. If the request is vague, assume a simple scenario for the application and write the steps.`,
+        );
+        try {
+          return extractJsonArray(again);
+        } catch {
+          const said = (again || text).replace(/\s+/g, ' ').trim().slice(0, 300);
+          throw new Error(`Model output did not contain a JSON array. The model said: "${said}${said.length >= 300 ? '…' : ''}"`);
+        }
+      }
     };
 
     await setProgress(genId, 'calling', existingScriptId ? 'Refining existing script' : 'Calling the AI model', 30);

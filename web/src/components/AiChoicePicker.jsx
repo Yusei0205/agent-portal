@@ -40,12 +40,12 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
   const isKiro = chosen?.engine === 'kiro';
 
   const loadModels = useCallback(async () => {
-    if (creds === null || isKiro) { setModels([]); return; }
+    if (creds === null || !chosen) { setModels([]); return; }
     setModelsLoading(true);
     setModelError(null);
     try {
       const qs = credentialId ? `?credentialId=${encodeURIComponent(credentialId)}` : '';
-      const data = await api.get(`/api/engines/claude-code/models${qs}`);
+      const data = await api.get(`/api/engines/${isKiro ? 'kiro' : 'claude-code'}/models${qs}`);
       setModels(data.models || []);
       if (data.error) setModelError(data.error);
     } catch (e) {
@@ -54,13 +54,13 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
     } finally {
       setModelsLoading(false);
     }
-  }, [creds, credentialId, isKiro]);
+  }, [creds, credentialId, isKiro, chosen]);
 
   useEffect(() => { loadModels(); }, [loadModels]);
 
   useEffect(() => {
-    onChange?.({ credentialId: credentialId || undefined, model: isKiro ? undefined : (model || undefined) });
-  }, [credentialId, model, isKiro]); // eslint-disable-line react-hooks/exhaustive-deps
+    onChange?.({ credentialId: credentialId || undefined, model: model || undefined });
+  }, [credentialId, model]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (creds === null) return null;
 
@@ -88,9 +88,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
       </div>
       <div className="field">
         <label htmlFor={`${idPrefix}-model`}>Model</label>
-        {isKiro ? (
-          <p className="field-hint" id={`${idPrefix}-model`}>Kiro chooses the model itself.</p>
-        ) : modelsLoading ? (
+        {modelsLoading ? (
           <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading models…" />
         ) : (
           <select
@@ -99,7 +97,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
             onChange={(e) => setModel(e.target.value)}
             disabled={disabled}
           >
-            <option value="">Portal default</option>
+            <option value="">{isKiro ? 'Kiro default' : 'Portal default'}</option>
             {models.map((m) => (
               <option key={m.id} value={m.id}>{m.label || m.id}</option>
             ))}

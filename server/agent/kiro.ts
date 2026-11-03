@@ -980,6 +980,7 @@ async function runKiroViaAgentCoreAdapter(
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
+    model: run.model || null,
   });
 
   if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');

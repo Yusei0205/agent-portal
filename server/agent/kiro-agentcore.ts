@@ -478,6 +478,8 @@ export interface AgentCoreRunOpts {
   repos?: import('./runner-repos.ts').RunnerRepo[];
   /** The project's remote MCP integrations (runner starts a proxy for each). */
   mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** The model to use (a Kiro model id); kiro's own default when absent. */
+  model?: string | null;
 }
 
 /**
@@ -522,6 +524,7 @@ export async function runKiroViaAgentCore(
       ...(opts.browser ? { browser: true } : {}),
       ...(opts.repos?.length ? { repos: opts.repos } : {}),
       ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
+      ...(opts.model ? { model: opts.model } : {}),
       ...(snapshot ? { snapshot } : {}),
     };
 
