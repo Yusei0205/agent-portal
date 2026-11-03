@@ -272,6 +272,13 @@ export async function runInvocation(
 
   // ── AgentCore Browser (optional, started on first use, always stopped in finally) ──
   const browser = payload.browser ? new AgentCoreBrowser(emit, region) : null;
+  if (browser) {
+    // Live Browser view in the portal (a small picture after each action; never shown to the model).
+    browser.onFrame = (f) => {
+      emit({ type: 'browser-navigate', url: f.url });
+      emit({ type: 'browser-screenshot', screenshotBase64: f.jpegBase64, url: f.url });
+    };
+  }
 
   // ── Remote MCP integrations: one local stdio proxy each (holds the secret headers, hides write tools unless allowed)
   const integrations = parseMcpServers(payload.mcpServers);

@@ -8,6 +8,8 @@
  * Protocol: MCP over stdio, newline-delimited JSON-RPC 2.0. Nothing but protocol messages may go to stdout.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline';
 import { z } from 'zod';
 import { AgentCoreBrowser, browserToolSpecs } from '../shared/browser-tools.js';
@@ -15,6 +17,20 @@ import { AgentCoreBrowser, browserToolSpecs } from '../shared/browser-tools.js';
 const region = process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'ap-southeast-1';
 const browser = new AgentCoreBrowser(() => { /* status events are not forwarded from here */ }, region);
 const tools = browserToolSpecs(browser);
+
+// Live view: the runner (parent of kiro-cli) watches this folder and forwards each frame to the portal.
+const liveDir = process.env.BROWSER_LIVE_DIR;
+if (liveDir) {
+  let seq = 0;
+  browser.onFrame = (f) => {
+    try {
+      fs.mkdirSync(liveDir, { recursive: true });
+      const name = `${Date.now()}-${String(seq++).padStart(4, '0')}`;
+      fs.writeFileSync(path.join(liveDir, `${name}.tmp`), JSON.stringify(f));
+      fs.renameSync(path.join(liveDir, `${name}.tmp`), path.join(liveDir, `${name}.json`));
+    } catch { /* the live view is optional */ }
+  };
+}
 
 function send(msg: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n');

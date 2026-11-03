@@ -71,6 +71,8 @@ export type AgentCoreSSEEvent =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string }
   | { type: 'tool'; name: string }
+  | { type: 'browser-navigate'; url: string }
+  | { type: 'browser-screenshot'; screenshotBase64: string; url?: string }
   | { type: 'status'; text: string }
   | { type: 'error'; message: string }
   | { type: 'models'; stdout: string }
@@ -554,6 +556,18 @@ export async function runKiroViaAgentCore(
           if (textParts.length && textParts[textParts.length - 1] !== '') textParts.push('');
           emit('tool-start', { toolCallId: '', toolName, toolInput: '{}', status: 'in_progress' });
           emit('tool-end', { toolCallId: '', toolName, status: 'completed', output: '' });
+          break;
+        }
+
+        case 'browser-navigate': {
+          const navEv = ev as { type: 'browser-navigate'; url: string };
+          if (navEv.url) emit('browser-navigate', { url: navEv.url });
+          break;
+        }
+
+        case 'browser-screenshot': {
+          const shotEv = ev as { type: 'browser-screenshot'; screenshotBase64: string; url?: string };
+          if (shotEv.screenshotBase64) emit('browser-screenshot', { screenshotBase64: shotEv.screenshotBase64, ...(shotEv.url ? { url: shotEv.url } : {}) });
           break;
         }
 

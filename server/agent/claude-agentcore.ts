@@ -124,6 +124,12 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
         case 'tool-result':
           emit('tool-end', { toolCallId: '', toolName: String(ev.name ?? 'Tool'), status: 'completed', output: String(ev.output ?? '') });
           break;
+        case 'browser-navigate':
+          if (ev.url) emit('browser-navigate', { url: String(ev.url) });
+          break;
+        case 'browser-screenshot':
+          if (ev.screenshotBase64) emit('browser-screenshot', { screenshotBase64: String(ev.screenshotBase64), ...(ev.url ? { url: String(ev.url) } : {}) });
+          break;
         case 'tool-blocked':
           emit('tool-blocked', { toolName: String(ev.toolName ?? ''), toolInput: String(ev.toolInput ?? ''), reason: String(ev.reason ?? '') });
           break;

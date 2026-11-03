@@ -277,6 +277,38 @@ describe('AgentCore — tool event → tool-start + tool-end', () => {
   });
 });
 
+describe('AgentCore — browser events → the Browser tab', () => {
+  let cfg: Config;
+
+  before(() => {
+    createTestDb();
+    cfg = makeConfig();
+    setConfig(cfg);
+  });
+
+  after(async () => {
+    _setAgentCoreInvokerOverride(null);
+    await cleanup();
+  });
+
+  it('turns browser events from the runner into browser-navigate and browser-screenshot', async () => {
+    _setAgentCoreInvokerOverride(async function* () {
+      yield { type: 'browser-navigate', url: 'https://example.com/' } as AgentCoreSSEEvent;
+      yield { type: 'browser-screenshot', screenshotBase64: 'AAAA', url: 'https://example.com/' } as AgentCoreSSEEvent;
+      yield { type: 'result', runId: 'r1', exitCode: 0, durationMs: 100, coldStartMs: 50, tokenRefreshed: false } as AgentCoreSSEEvent;
+    });
+
+    const td = makeTestData(cfg);
+    const { ctx, events } = await makeCtx(td.runId, td.workflowId, td.projectId, td.workDir, cfg);
+    await runKiroViaAgentCore(ctx, { runtimeArn: FAKE_ARN, runId: td.runId, prompt: 'x', token: SAMPLE_TOKEN, credentialId: null, expectedCiphertext: null });
+
+    assert.equal(pick(events, 'browser-navigate')[0].payload.url, 'https://example.com/');
+    const shot = pick(events, 'browser-screenshot')[0];
+    assert.equal(shot.payload.screenshotBase64, 'AAAA');
+    assert.equal(shot.payload.url, 'https://example.com/');
+  });
+});
+
 describe('AgentCore — status event forwarding', () => {
   let cfg: Config;
 

@@ -205,6 +205,7 @@ The Integrations page has two parts. **Connected services** is an overview of si
 - **Cause:** the AgentCore Browser tools are opt-in per deployment. Without `-c agentcoreBrowser=true` the portal Lambda has no `PORTAL_AGENTCORE_BROWSER=1`, the runner is never told to start the browser, and the agent answers that it cannot browse. Every `cdk deploy AgentPortalCloud` must repeat this context value, or the setting is dropped again.
 - **Check:** `aws lambda get-function-configuration --function-name agent-portal --query Environment.Variables.PORTAL_AGENTCORE_BROWSER` should print `1`. The runtime roles already allow the browser calls.
 - **Cost:** a browser session only bills while open; it starts on the agent's first browser tool call.
+- **Browser tab stays empty although the agent browses:** the tab shows what the runner sends as `browser-navigate` / `browser-screenshot` events. After `goto`, `click` and `type` the browser tools take a small JPEG (at most 250 000 base64 characters, never shown to the model) and hand it to the live view: in the Claude runner straight to the event stream, in the Kiro runner through a folder (`BROWSER_LIVE_DIR`) that the runner empties every 0.5 s, because the browser MCP is a child of kiro-cli. The tab is not interactive for cloud runs (view only) and shows the latest picture, so it is small in the narrow side panel; widen the panel or use the pop-out button.
 
 ## Message appears in the chat but no run starts
 

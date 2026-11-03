@@ -371,6 +371,27 @@ export async function runKiroRun(
       return { outcome: { outcome: 'selected', optionId: allowOpt?.optionId ?? (p?.options ?? [])[0]?.optionId ?? 'allow_once' } };
     });
 
+    // Live Browser view: browser-mcp (a child of kiro-cli) drops a small picture in this folder after each action;
+    // it is forwarded to the portal as browser events and never reaches the model.
+    const liveDir = payload.browser ? await fsp.mkdtemp(path.join(os.tmpdir(), 'browser-live-')) : null;
+    let draining = false;
+    const drainFrames = async (): Promise<void> => {
+      if (!liveDir || draining) return;
+      draining = true;
+      try {
+        const names = (await fsp.readdir(liveDir)).filter((n) => n.endsWith('.json')).sort();
+        let last: { url?: string; jpegBase64?: string } | null = null;
+        for (const n of names) {
+          const file = path.join(liveDir, n);
+          try { last = JSON.parse(await fsp.readFile(file, 'utf8')) as { url?: string; jpegBase64?: string }; } catch { /* half written */ }
+          await fsp.rm(file, { force: true });
+        }
+        if (last?.url) emit({ type: 'browser-navigate', url: last.url });
+        if (last?.jpegBase64) emit({ type: 'browser-screenshot', screenshotBase64: last.jpegBase64, ...(last.url ? { url: last.url } : {}) });
+      } catch { /* the live view is optional */ } finally { draining = false; }
+    };
+    const frameTimer = liveDir ? setInterval(() => { void drainFrames(); }, 500) : null;
+
     let acpError: Error | undefined;
     try {
       // ACP handshake
@@ -389,10 +410,10 @@ export async function runKiroRun(
             name: 'browser',
             command: 'node',
             args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'browser-mcp.mjs')],
-            env: ['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+            env: [...(liveDir ? [{ name: 'BROWSER_LIVE_DIR', value: liveDir }] : []), ...['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
               'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
               .filter((k) => process.env[k])
-              .map((k) => ({ name: k, value: process.env[k] as string })),
+              .map((k) => ({ name: k, value: process.env[k] as string }))],
           }]
         : [];
       // Remote MCP integrations: each one runs behind a local stdio proxy that keeps its headers out of kiro-cli's
@@ -421,6 +442,9 @@ export async function runKiroRun(
     } finally {
       clearTimeout(timeoutTimer);
       acp.close();
+      if (frameTimer) clearInterval(frameTimer);
+      await drainFrames();
+      if (liveDir) await fsp.rm(liveDir, { recursive: true, force: true }).catch(() => undefined);
     }
 
     const exitCode = await new Promise<number | null>((resolve) => {

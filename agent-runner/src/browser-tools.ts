@@ -23,6 +23,10 @@ export const BROWSER_SERVER_NAME = 'browser';
 const DEFAULT_BROWSER_ID = 'aws.browser.v1';
 const MAX_TEXT_CHARS = 20_000;
 const ACTION_TIMEOUT_MS = 15_000;
+/** Largest live-view picture (base64 characters) sent to the portal; it is stored with the session's events. */
+const MAX_FRAME_BASE64 = 250_000;
+
+export interface BrowserFrame { url: string; jpegBase64: string }
 
 type EmitFn = (event: Record<string, unknown>) => void;
 type ToolResult = { content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>; isError?: boolean };
@@ -54,6 +58,8 @@ export class AgentCoreBrowser {
   private browser: Browser | null = null;
   private page: Page | null = null;
   private starting: Promise<Page> | null = null;
+  /** Receives a small picture of the page after each action, for the portal's live Browser view (never shown to the model). */
+  onFrame: ((f: BrowserFrame) => void) | null = null;
 
   constructor(private emit: EmitFn, region: string, private browserId = DEFAULT_BROWSER_ID) {
     this.region = region;
@@ -107,6 +113,19 @@ export class AgentCoreBrowser {
     return this.starting;
   }
 
+  /** Sends the live view a picture of the current page. Best effort: a failure here never fails a tool call. */
+  async publishFrame(): Promise<void> {
+    const page = this.page;
+    if (!this.onFrame || !page || page.isClosed()) return;
+    try {
+      for (const quality of [55, 30]) {
+        const jpg = await page.screenshot({ type: 'jpeg', quality, timeout: 5_000 });
+        const b64 = jpg.toString('base64');
+        if (b64.length <= MAX_FRAME_BASE64) { this.onFrame({ url: page.url(), jpegBase64: b64 }); return; }
+      }
+    } catch { /* the live view is optional */ }
+  }
+
   /** Always call when the run ends: a forgotten session keeps billing until its timeout. */
   async close(): Promise<void> {
     const browser = this.browser;
@@ -151,6 +170,7 @@ export function browserToolSpecs(browser: AgentCoreBrowser): BrowserToolSpec[] {
       handler: ({ url }: { url: string }) => guarded(async () => {
         const page = await browser.getPage();
         await page.goto(assertWebUrl(url), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        await browser.publishFrame();
         return text(`Opened ${page.url()}
 Title: ${await page.title()}`);
       }),
@@ -196,6 +216,7 @@ ${await page.locator('body').ariaSnapshot()}`);
         const page = await browser.getPage();
         await (selector ? page.locator(selector) : page.getByText(label!, { exact: false })).first().click();
         await page.waitForLoadState('domcontentloaded').catch(() => {});
+        await browser.publishFrame();
         return text(`Clicked. Now at ${page.url()}`);
       }),
     },
@@ -215,6 +236,7 @@ ${await page.locator('body').ariaSnapshot()}`);
           await el.press('Enter');
           await page.waitForLoadState('domcontentloaded').catch(() => {});
         }
+        await browser.publishFrame();
         return text(`Typed into ${selector}${submit ? ' and submitted' : ''}. Now at ${page.url()}`);
       }),
     },
