@@ -766,14 +766,8 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
 
   // ── Run complete ──────────────────────────────────────────────────────────
   if (type === 'run-complete') {
-    const duration = payload.duration_ms ? `${(payload.duration_ms / 1000).toFixed(1)}s` : null;
-    const cost     = payload.cost_usd != null ? formatCost(payload.cost_usd) : null;
-    return (
-      <div className="live-event live-run-complete" role="status" aria-label="Run complete">
-        <Icon name="check" size={16} />
-        Done{duration ? ` in ${duration}` : ''}{cost ? ` · ${cost}` : ''}
-      </div>
-    );
+    // No per-turn "Done" row: the cost summary above the message box already carries the total.
+    return null;
   }
 
   // ── Run failed ────────────────────────────────────────────────────────────
