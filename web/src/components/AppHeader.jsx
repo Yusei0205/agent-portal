@@ -13,7 +13,6 @@ const PAGE_NAMES = {
   reviews:      'Reviews',
   knowledge:    'Knowledge',
   vault:        'Vault',
-  insights:     'Insights',
   create:       'Create',
   integrations: 'Integrations',
   setup:        'Setup',

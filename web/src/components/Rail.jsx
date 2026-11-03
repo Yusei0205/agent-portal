@@ -48,7 +48,6 @@ const NAV_SECTIONS = [
       { tab: 'workspaces', label: 'Workspaces', icon: 'projects'  },
       { tab: 'knowledge',  label: 'Knowledge',  icon: 'knowledge' },
       { tab: 'create',     label: 'Create',     icon: 'sparkles'  },
-      { tab: 'insights',   label: 'Insights',   icon: 'chart'     },
       { tab: 'tickets',    label: 'Tickets',    icon: 'ticket'    },
     ],
   },

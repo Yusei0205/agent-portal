@@ -19,7 +19,6 @@ import { Inbox } from './pages/Inbox.jsx';
 import { Create } from './pages/Create.jsx';
 import { Knowledge } from './pages/Knowledge.jsx';
 import { Vault } from './pages/Vault.jsx';
-import { Insights } from './pages/Insights.jsx';
 import { AdminPanel } from './pages/AdminPanel.jsx';
 import ReviewDetail from './pages/ReviewDetail.jsx';
 import LoopSpecs from './pages/LoopSpecs.jsx';
@@ -46,7 +45,6 @@ registerShortcuts([
   { id: 'goto_reviews',       keys: 'g r',          label: 'Go to Reviews',         group: 'Navigate' },
   { id: 'goto_knowledge',     keys: 'g k',          label: 'Go to Knowledge',       group: 'Navigate' },
   { id: 'goto_vault_proj',    keys: 'g v',          label: 'Go to Vault',           group: 'Navigate' },
-  { id: 'goto_insights',      keys: 'g l',          label: 'Go to Insights',        group: 'Navigate' },
   { id: 'goto_create',        keys: 'g c',          label: 'Go to Create',          group: 'Navigate' },
   { id: 'goto_integrations_p',keys: 'g i',          label: 'Go to Integrations',    group: 'Navigate' },
   { id: 'goto_tests',         keys: 'g h',          label: 'Go to Tests',           group: 'Navigate' },
@@ -286,7 +284,6 @@ function Shell({ user, onSignOut }) {
           case 'r': if (pid) navigate(`/p/${pid}/reviews/code`);                  break;
           case 'k': if (pid) navigate(`/p/${pid}/knowledge`);                     break;
           case 'v': navigate(pid ? `/p/${pid}/vault`         : '/projects');      break;
-          case 'l': if (pid) navigate(`/p/${pid}/insights`);                      break;
           case 'c': if (pid) navigate(`/p/${pid}/create`);                        break;
           case 'i': navigate(pid ? `/p/${pid}/integrations` : '/integrations');  break;
           case 'h': if (pid) navigate(`/p/${pid}/tests`);                         break;
@@ -344,6 +341,15 @@ function Shell({ user, onSignOut }) {
   useEffect(() => {
     const { tab, projectId, rest } = route;
 
+    // Insights was merged into the Dashboard (cost panel). Keep old links working;
+    // /p/:pid/insights opens the Dashboard with that project preselected.
+    if (tab === 'insights') {
+      try {
+        if (projectId) sessionStorage.setItem('dash-project', projectId);
+      } catch { /* private mode */ }
+      navigateReplace('/dashboard');
+      return;
+    }
     // /aws (removed page) → /connections/git
     if (!projectId && tab === 'aws') {
       navigateReplace('/connections/git');
@@ -419,7 +425,6 @@ function Shell({ user, onSignOut }) {
   const isCreateRoute     = route.projectId && route.tab === 'create';
   const isKnowledgeRoute  = route.projectId && route.tab === 'knowledge';
   const isVaultRoute      = route.projectId && route.tab === 'vault';
-  const isInsightsRoute   = route.tab === 'insights';
   const isUsersRoute      = !route.projectId && route.tab === 'users';
   const isLoopSpecsRoute  = route.projectId && route.tab === 'loop-specs';
   const isWorkspacesRoute = route.projectId && route.tab === 'workspaces';
@@ -528,8 +533,6 @@ function Shell({ user, onSignOut }) {
             <Knowledge projectId={route.projectId} />
           ) : isVaultRoute ? (
             <Vault projectId={route.projectId} user={user} />
-          ) : isInsightsRoute ? (
-            <Insights projectId={route.projectId || null} user={user} />
           ) : isUsersRoute ? (
             <AdminPanel user={user} />
           ) : isLoopSpecsRoute ? (

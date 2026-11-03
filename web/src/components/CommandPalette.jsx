@@ -18,7 +18,6 @@ function buildNavItems(route, user) {
       { id: 'goto_reviews',         label: 'Reviews',         description: 'Code reviews, branch scans & dashboard', keys: 'g r', href: href(pid, 'reviews', 'code') },
       { id: 'goto_knowledge',       label: 'Knowledge',       description: 'Documents, decisions and learning', keys: 'g k', href: href(pid, 'knowledge')              },
       { id: 'goto_vault_proj',      label: 'Vault',           description: 'Project secrets and files',         keys: 'g v', href: href(pid, 'vault')                  },
-      { id: 'goto_insights',        label: 'Insights',        description: 'Usage analytics and costs',         keys: 'g l', href: href(pid, 'insights')               },
       { id: 'goto_create',          label: 'Create',          description: 'Generate diagrams, docs and decks', keys: 'g c', href: href(pid, 'create')                 },
       { id: 'goto_integrations_p',  label: 'Integrations',    description: 'MCP tools and connections',         keys: 'g i', href: href(pid, 'integrations')           },
       { id: 'goto_tests',           label: 'Tests',           description: 'AI-assisted end-to-end and API tests', keys: 'g h', href: href(pid, 'tests')             },

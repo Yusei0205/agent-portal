@@ -18,6 +18,7 @@ import { api } from '../lib/api.js';
 import { subscribeGlobal } from '../lib/events.js';
 import { href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
+import { CostPanel } from '../components/CostPanel.jsx';
 import { formatRelative, formatCost } from '../lib/util.js';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
@@ -929,7 +930,14 @@ export function Dashboard({ user, projects }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [period, setPeriod] = useState('today');
-  const [projectFilter, setProjectFilter] = useState('');
+  // An old /p/:id/insights link redirects here and leaves the project to preselect.
+  const [projectFilter, setProjectFilter] = useState(() => {
+    try {
+      const p = sessionStorage.getItem('dash-project') || '';
+      sessionStorage.removeItem('dash-project');
+      return p;
+    } catch { return ''; }
+  });
   const { animated, toggleAnimated } = useAnimations();
   const debounceRef = useRef(null);
   // fix 6: ref for toggling db-paused when tab is hidden
@@ -1167,6 +1175,9 @@ export function Dashboard({ user, projects }) {
           </>
         )}
       </div>
+
+      {/* ── Cost (was the Insights page) ── */}
+      <CostPanel period={period} projectId={projectFilter} user={user} refreshKey={data?.generatedAt} />
 
       {/* ── Main grid: Network | Active Session ── */}
       <div className="db-main-grid">

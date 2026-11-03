@@ -378,7 +378,7 @@
         "server/repositories/stats.ts",
         "server/repositories/stats-sqlite.ts",
         "server/repositories/stats-dynamodb.ts",
-        "web/src/pages/Insights.jsx"
+        "web/src/components/CostPanel.jsx"
       ],
       "tests": [
         "test/insights.test.ts"

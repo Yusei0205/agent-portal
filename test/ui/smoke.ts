@@ -629,9 +629,9 @@ async function main() {
     if (sectionEnabled('insights')) {
     console.log('\n7. Insights');
     currentSectionId = '7';
-    await test('Insights page renders', async (p) => {
+    await test('Old Insights link opens the Dashboard with the Cost panel', async (p) => {
       await goto(p, `/p/${projectId}/insights`);
-      await assertHeading(p, 'Insights');
+      await p.waitForSelector('[aria-label="Cost"]', { timeout: 8000 });
     }, page);
     } // end §7 insights
 
