@@ -42,6 +42,7 @@ import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
 import { emitRunnerFiles } from '../shared/runner-files.js';
+import { parseRunnerRepos, cloneRunnerRepos } from '../shared/runner-repos.js';
 import {
   type InvocationPayload,
   DEFAULT_MODEL,
@@ -178,6 +179,16 @@ export async function runInvocation(
     } catch (e: unknown) {
       const msg = (e as Error)?.message ?? String(e);
       throw new Error(`git clone failed: ${msg.slice(0, 300)}`);
+    }
+  }
+
+  // ── The session's repositories (cloned under repos/) ───────────────────────
+  if (payload.repos?.length) {
+    const parsed = parseRunnerRepos(payload.repos);
+    if (parsed.ok) {
+      await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev));
+    } else {
+      emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
     }
   }
 

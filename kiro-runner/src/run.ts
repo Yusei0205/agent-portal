@@ -15,6 +15,7 @@
  */
 
 import { emitRunnerFiles } from '../shared/runner-files.js';
+import { parseRunnerRepos, cloneRunnerRepos } from '../shared/runner-repos.js';
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -279,6 +280,13 @@ export async function runKiroRun(
 
     workDir = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-work-${runId}-`));
     kiroHome = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-home-${runId}-`));
+
+    // The session's repositories, under repos/ in the agent's work folder
+    if (payload.repos?.length) {
+      const parsed = parseRunnerRepos(payload.repos);
+      if (parsed.ok) await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev));
+      else emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
+    }
 
     // Place the DB at the default location for kiro-cli-chat.
     // kiro-cli-chat (the ACP backend) reads from $HOME/.local/share/kiro-cli/data.sqlite3

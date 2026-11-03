@@ -478,9 +478,15 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
           style={{ transition: 'transform .15s', transform: open ? 'rotate(90deg)' : 'none', flexShrink: 0 }}
         />
         <h3 style={{ margin: 0 }}>Jira projects</h3>
-        <span className="muted small">
-          {selected.size > 0 ? `${selected.size} selected` : 'all projects allowed'}
-        </span>
+        {selected.size === 0 && <span className="muted small">all projects allowed</span>}
+        {selected.size > 0 && (
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            {[...selected].slice(0, 12).map((k) => (
+              <span key={k} className="badge badge-neutral" style={{ fontSize: '0.72rem' }}>{k}</span>
+            ))}
+            {selected.size > 12 && <span className="muted small">+{selected.size - 12} more</span>}
+          </span>
+        )}
       </button>
       {open && (
       <div id="jira-projects-body" className="stack">

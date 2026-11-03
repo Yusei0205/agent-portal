@@ -942,9 +942,10 @@ export function registerWorkflowRoutes(): void {
     const hasGoal        = body.goal !== undefined;
     const hasTrustTools  = body.trustTools !== undefined;
     const hasMaxIter     = body.maxIterations !== undefined;
+    const hasRepoIds     = body.repoIds !== undefined;
 
-    if (!hasTitle && !hasGoal && !hasTrustTools && !hasMaxIter) {
-      sendJson(res, 400, { error: 'Provide at least one of: title, goal, trustTools, maxIterations' });
+    if (!hasTitle && !hasGoal && !hasTrustTools && !hasMaxIter && !hasRepoIds) {
+      sendJson(res, 400, { error: 'Provide at least one of: title, goal, trustTools, maxIterations, repoIds' });
       return;
     }
 
@@ -963,6 +964,16 @@ export function registerWorkflowRoutes(): void {
     }
     if (hasMaxIter) {
       patch.max_iterations = int(body.maxIterations, 'maxIterations', 10, 1, 100);
+    }
+    if (hasRepoIds) {
+      // The repositories the agent gets as context. Only this portal project's own repositories are accepted.
+      if (!Array.isArray(body.repoIds) || body.repoIds.length > 10) throw badRequest('repoIds must be a list of at most 10 repository ids');
+      const wanted = [...new Set(body.repoIds.map(String))];
+      const projectRepos = await getGitReposRepository().listByProject(req.params.id);
+      const valid = new Set(projectRepos.map((r) => String(r.id)));
+      const bad = wanted.filter((rid) => !valid.has(rid));
+      if (bad.length) throw badRequest('Some repositories do not belong to this project');
+      patch.repo_ids = JSON.stringify(wanted);
     }
 
     const ts = now();

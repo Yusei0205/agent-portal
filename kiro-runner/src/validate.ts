@@ -34,6 +34,8 @@ export interface KiroRunPayload {
   token: KiroTokenInput;
   /** true = give kiro-cli the AgentCore Browser tools as an MCP server. */
   browser?: boolean;
+  /** The session's repositories to clone under repos/ (checked in run.ts by shared/runner-repos.ts). */
+  repos?: unknown[];
 }
 
 export interface KiroLoginPayload {
@@ -140,6 +142,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       runId: (obj.runId as string).trim(),
       prompt: obj.prompt as string,
       ...(obj.browser === true ? { browser: true } : {}),
+      ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       token: {
         accessToken: tok.accessToken as string,
         expiresAt: tok.expiresAt as string,

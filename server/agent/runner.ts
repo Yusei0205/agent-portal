@@ -15,6 +15,7 @@
  */
 
 import { getReviewsRepository } from '../repositories/reviews.ts';
+import { buildRunnerRepos } from './runner-repo-specs.ts';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -454,12 +455,30 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     // under workDir/repos/<repo.name>/ so the agent can edit, commit, and branch
     // without touching the shared reference clone.  Repos that are still cloning
     // or have errors emit a visible status event; the run continues without them.
-    const availableRepoNames = await populateRepoWorkDirs(
-      agentRun.repoIds,
-      agentRun.projectId,
-      workDir,
-      (type, payload) => emitRunEvent(runId, agentRun.projectId, workflowId, type, payload),
-    );
+    // Cloud runs (Kiro / Claude on AgentCore) execute in a separate runner that has no copy of the portal's
+    // clones, so the runner clones the repositories itself, with short-lived access built here.
+    const runsOnAgentCore =
+      (agentRun.engine === 'kiro' && Boolean(process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN))
+      || (agentRun.engine === 'claude-code' && Boolean(process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN));
+    let availableRepoNames: string[] = [];
+    if (runsOnAgentCore) {
+      const specs = await buildRunnerRepos(
+        agentRun.repoIds,
+        agentRun.projectId,
+        (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
+      );
+      if (specs.length > 0) {
+        agentRun.runnerRepos = specs;
+        availableRepoNames = specs.map((s) => s.name);
+      }
+    } else {
+      availableRepoNames = await populateRepoWorkDirs(
+        agentRun.repoIds,
+        agentRun.projectId,
+        workDir,
+        (type, payload) => emitRunEvent(runId, agentRun.projectId, workflowId, type, payload),
+      );
+    }
 
     // Prepend a repo-location hint so the agent knows where to find the code.
     // This complements any Jira-ticket context already in agentRun.goal.

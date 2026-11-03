@@ -468,6 +468,8 @@ export interface AgentCoreRunOpts {
   expectedCiphertext: string | null;
   /** Give kiro-cli the AgentCore Browser tools (MCP server in the runner). */
   browser?: boolean;
+  /** The session's repositories for the runner to clone under repos/. */
+  repos?: import('./runner-repos.ts').RunnerRepo[];
 }
 
 /**
@@ -507,6 +509,7 @@ export async function runKiroViaAgentCore(
       prompt: opts.prompt,
       token: opts.token,
       ...(opts.browser ? { browser: true } : {}),
+      ...(opts.repos?.length ? { repos: opts.repos } : {}),
     };
 
     const fileReceiver = ctx.run?.workDir ? createFileReceiver(ctx.run.workDir, (abs) => persistFile(abs)) : null;

@@ -28,6 +28,7 @@ COPY kiro-runner/src/ ./src/
 COPY kiro-runner/tsconfig.json ./
 COPY kiro-runner/build.mjs ./
 COPY server/agent/runner-files.ts ./shared/runner-files.ts
+COPY server/agent/runner-repos.ts ./shared/runner-repos.ts
 COPY agent-runner/src/browser-tools.ts ./shared/browser-tools.ts
 
 # Compile + bundle → dist/index.mjs (no external runtime deps; node:* built-ins only)
@@ -44,6 +45,7 @@ RUN apt-get update && \
       unzip \
       ca-certificates \
       bash \
+      git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install kiro-cli — the installer puts binaries in /root/.local/bin by default.

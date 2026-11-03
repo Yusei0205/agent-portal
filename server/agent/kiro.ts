@@ -973,6 +973,7 @@ async function runKiroViaAgentCoreAdapter(
     credentialId: run.credentialId,
     expectedCiphertext,
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
+    repos: run.runnerRepos,
   });
 
   if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');

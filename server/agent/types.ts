@@ -19,6 +19,8 @@ export interface AgentRun {
   /** Absolute path: DATA_DIR/projects/<slug>/work/<runId>/ */
   workDir: string;
   repoIds: string[];
+  /** Set when the run goes to an AgentCore runner: the repositories it must clone (see runner-repos.ts). */
+  runnerRepos?: import('./runner-repos.ts').RunnerRepo[];
   leadAgent: string | null;
   permissions: RunPermissions;
   /** Optional per-user credential to use for this run (F4). */

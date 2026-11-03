@@ -44,6 +44,8 @@ export interface InvocationPayload {
   /** Wall-clock timeout in minutes (default 10). */
   maxMinutes?: number;
   repo?: RepoConfig;
+  /** The session's repositories to clone under repos/ (checked in run.ts by shared/runner-repos.ts). */
+  repos?: unknown[];
   portal?: PortalConfig;
   /** Anthropic credential; without it the run uses Bedrock through the execution role. */
   auth?: AuthConfig;
@@ -70,7 +72,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal', 'auth', 'trustTools', 'browser',
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'repos', 'portal', 'auth', 'trustTools', 'browser',
 ]);
 const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
@@ -197,6 +199,9 @@ export function validatePayload(raw: unknown): ValidationResult {
     return err('"trustTools" must be a boolean');
   }
 
+  if (obj.repos !== undefined && !Array.isArray(obj.repos)) {
+    return err('"repos" must be an array');
+  }
   if (obj.browser !== undefined && typeof obj.browser !== 'boolean') {
     return err('"browser" must be a boolean');
   }
@@ -233,6 +238,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       maxBudgetUsd: typeof obj.maxBudgetUsd === 'number' ? obj.maxBudgetUsd : undefined,
       maxMinutes: typeof obj.maxMinutes === 'number' ? obj.maxMinutes : undefined,
       repo,
+      ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       portal,
       auth,
       trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,

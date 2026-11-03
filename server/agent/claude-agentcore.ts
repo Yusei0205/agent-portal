@@ -30,6 +30,8 @@ export interface ClaudeAgentCoreOpts {
   maxTurns?: number | null;
   /** Give the agent the AgentCore Browser tools (mcp__browser__*). */
   browser?: boolean;
+  /** The session's repositories for the runner to clone under repos/. */
+  repos?: import('./runner-repos.ts').RunnerRepo[];
 }
 
 export interface ClaudeAgentCoreResult {
@@ -84,6 +86,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     auth: opts.auth,
     trustTools: opts.trustTools,
     ...(opts.browser ? { browser: true } : {}),
+    ...(opts.repos?.length ? { repos: opts.repos } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
     ...(opts.maxTurns && opts.maxTurns > 0 ? { maxTurns: Math.min(opts.maxTurns, 200) } : {}),

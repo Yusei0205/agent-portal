@@ -191,6 +191,7 @@ ${REVIEW_SYSTEM_APPEND}`;
     maxBudgetUsd,
     // The browser bills while a session is open, so it is opt-in per deployment (see infra context agentcoreBrowser).
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
+    repos: run.runnerRepos,
   });
 
   let costUsd = res.costUsd;

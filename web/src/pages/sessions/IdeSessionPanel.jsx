@@ -156,6 +156,106 @@ function ActivityPanel({ workflowId, projectId }) {
 
 // ── Context tab ───────────────────────────────────────────────────────────────
 
+/**
+ * The repositories attached to this session. The agent gets a shallow copy of each under repos/<name>/ at the
+ * start of its next message. Repositories are added to the portal project first (Repositories page).
+ */
+function RepositoriesSection({ workflow, projectId }) {
+  const [repos, setRepos]   = useState(null);          // every repository of the project
+  const [attached, setAttached] = useState(Array.isArray(workflow?.repo_ids) ? workflow.repo_ids : []);
+  const [busy, setBusy]     = useState(false);
+  const [error, setError]   = useState(null);
+  const [pick, setPick]     = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get(`/api/projects/${projectId}/repos`)
+      .then((d) => { if (!cancelled) setRepos(d.repos ?? d ?? []); })
+      .catch(() => { if (!cancelled) setRepos([]); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const save = async (ids) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.patch(`/api/projects/${projectId}/workflows/${workflow.id}`, { repoIds: ids });
+      const next = r?.workflow?.repo_ids;
+      setAttached(Array.isArray(next) ? next : ids);
+      setPick('');
+    } catch (e) {
+      setError(e.message || 'Could not update the repositories');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const byId = new Map((repos ?? []).map((r) => [r.id, r]));
+  const available = (repos ?? []).filter((r) => !attached.includes(r.id));
+
+  return (
+    <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>
+      <div style={{ fontSize: '0.72rem', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-3)', marginBottom: 6 }}>
+        Repositories
+      </div>
+      {attached.length === 0 && (
+        <p className="muted" style={{ fontSize: '0.76rem', margin: '0 0 6px' }}>
+          None attached. Add one to give the agent its code.
+        </p>
+      )}
+      {attached.map((id) => (
+        <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', padding: '2px 0' }}>
+          <Icon name="branch" size={13} />
+          <span style={{ flex: 1, wordBreak: 'break-word' }}>{byId.get(id)?.name ?? id}</span>
+          <button
+            type="button"
+            className="btn-icon"
+            aria-label={`Remove ${byId.get(id)?.name ?? 'repository'}`}
+            disabled={busy}
+            onClick={() => save(attached.filter((x) => x !== id))}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+      ))}
+      {repos !== null && available.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          <select
+            className="input"
+            aria-label="Repository to add"
+            value={pick}
+            onChange={(e) => setPick(e.target.value)}
+            style={{ flex: 1, minWidth: 0, fontSize: '0.8rem' }}
+          >
+            <option value="">Add a repository…</option>
+            {available.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            disabled={busy || !pick}
+            onClick={() => save([...attached, pick])}
+          >
+            Add
+          </button>
+        </div>
+      )}
+      {repos !== null && repos.length === 0 && (
+        <p className="muted" style={{ fontSize: '0.74rem', margin: '6px 0 0' }}>
+          This project has no repositories yet. Add them from the Repositories page first.
+        </p>
+      )}
+      {attached.length > 0 && (
+        <p className="muted" style={{ fontSize: '0.72rem', margin: '6px 0 0' }}>
+          The agent gets a copy under <code>repos/&lt;name&gt;/</code> from its next message.
+        </p>
+      )}
+      {error && <div className="error-note" role="alert" style={{ marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
+
 function ContextPanel({ workflowId }) {
   const [items, setItems] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -514,7 +614,10 @@ export function IdeSessionPanel({ workflow, workflowId, projectId }) {
         style={{ flex: 1, overflow: 'hidden', display: tab === 'context' ? 'flex' : 'none', flexDirection: 'column' }}
       >
         {tab === 'context' && (
-          <ContextPanel workflowId={workflowId} />
+          <>
+            <RepositoriesSection workflow={workflow} projectId={projectId} />
+            <ContextPanel workflowId={workflowId} />
+          </>
         )}
       </div>
       <div
