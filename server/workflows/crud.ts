@@ -40,6 +40,7 @@ import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { parseSessionIntegrations, encodeSessionIntegrations, integrationIsPersonal } from '../agent/runner-integrations.ts';
 import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
+import { newLoopState } from './loop.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 
 // ── Constant ───────────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ function workflowView(w: Row | WorkflowRecord) {
     stop_reason: (w.stop_reason as string | undefined) ?? '',
     engine: w.engine,
     trust_tools: Boolean((w as Row).trust_tools),
+    loop: Boolean(String((w as Row).loop_state ?? '').trim()),
     lead_agent: w.lead_agent ?? null,
     workspace_id: w.workspace_id ?? null,
     output_files_enabled: Boolean((w as Row).output_files_enabled),
@@ -468,6 +470,14 @@ export function registerWorkflowRoutes(): void {
       created_at: ts,
       updated_at: ts,
     });
+
+    // A loop session goes from run to run by itself until a stop rule says to stop (see workflows/loop.ts).
+    if (body.loop) {
+      const loopBody = (typeof body.loop === 'object' ? body.loop : {}) as Record<string, unknown>;
+      const loopState = newLoopState(loopBody.stopRules, { progressFile: loopBody.progressFile !== false });
+      await repo.updateWorkflow(id, { loop_state: loopState, updated_at: ts });
+      wfRecord.loop_state = loopState;
+    }
 
     // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });
