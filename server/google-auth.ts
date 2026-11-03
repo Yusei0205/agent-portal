@@ -98,7 +98,7 @@ function decodeJwtPayload(jwt: string): GoogleClaims | null {
 
 let cachedCreds: { clientId: string; clientSecret: string } | null | undefined;
 
-async function loadCredentials(): Promise<{ clientId: string; clientSecret: string } | null> {
+export async function loadGoogleCredentials(): Promise<{ clientId: string; clientSecret: string } | null> {
   if (cachedCreds !== undefined && cachedCreds !== null) return cachedCreds;
   let clientId = process.env.GOOGLE_CLIENT_ID?.trim() ?? '';
   let clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() ?? '';
@@ -120,10 +120,10 @@ async function loadCredentials(): Promise<{ clientId: string; clientSecret: stri
 }
 
 export async function googleSignInEnabled(): Promise<boolean> {
-  return Boolean(process.env.PORTAL_PUBLIC_URL && (await loadCredentials()));
+  return Boolean(process.env.PORTAL_PUBLIC_URL && (await loadGoogleCredentials()));
 }
 
-function redirectUri(): string {
+export function googleRedirectUri(): string {
   return `${(process.env.PORTAL_PUBLIC_URL ?? '').replace(/\/+$/, '')}/api/auth/google/callback`;
 }
 
@@ -143,7 +143,7 @@ function fail(res: PortalResponse, secure: boolean, message: string): void {
 
 export function registerGoogleAuthRoutes(startSession: StartSession): void {
   router.get('/api/auth/google/start', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    const creds = await loadCredentials();
+    const creds = await loadGoogleCredentials();
     if (!creds || !process.env.PORTAL_PUBLIC_URL) {
       fail(res, req.secure, 'Google sign-in is not set up on this portal.');
       return;
@@ -151,13 +151,20 @@ export function registerGoogleAuthRoutes(startSession: StartSession): void {
     const state = randomBytes(24).toString('base64url');
     const nonce = randomBytes(24).toString('base64url');
     setCookie(res, STATE_COOKIE, `${state}.${nonce}`, { maxAge: STATE_TTL_SECONDS, secure: req.secure });
-    redirect(res, buildAuthUrl({ clientId: creds.clientId, redirectUri: redirectUri(), state, nonce }));
+    redirect(res, buildAuthUrl({ clientId: creds.clientId, redirectUri: googleRedirectUri(), state, nonce }));
   });
 
   router.get('/api/auth/google/callback', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const secure = req.secure;
-    const creds = await loadCredentials();
+    const creds = await loadGoogleCredentials();
     if (!creds) { fail(res, secure, 'Google sign-in is not set up on this portal.'); return; }
+
+    // "Connect Google Workspace" (Drive, Docs, Sheets, Slides) comes back through the same redirect address.
+    if ((req.query.get('state') ?? '').startsWith('ws.')) {
+      const { handleWorkspaceCallback } = await import('./google-workspace.ts');
+      await handleWorkspaceCallback(req, res, creds);
+      return;
+    }
 
     const googleError = req.query.get('error');
     if (googleError) { fail(res, secure, googleError === 'access_denied' ? 'Google sign-in was cancelled.' : 'Google sign-in failed.'); return; }
@@ -180,7 +187,7 @@ export function registerGoogleAuthRoutes(startSession: StartSession): void {
           code,
           client_id: creds.clientId,
           client_secret: creds.clientSecret,
-          redirect_uri: redirectUri(),
+          redirect_uri: googleRedirectUri(),
           grant_type: 'authorization_code',
         }).toString(),
       });

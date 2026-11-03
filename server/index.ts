@@ -37,6 +37,7 @@ import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLoopSpecRoutes } from './loop-specs.ts';
 import { registerInsightsRoutes } from './insights.ts';
+import { registerGoogleWorkspaceRoutes } from './google-workspace.ts';
 import { registerDashboardRoutes } from './dashboard.ts';
 import { registerApiTokenRoutes } from './api-tokens.ts';
 import { registerStorageTestRoutes } from './storage-test.ts';
@@ -245,6 +246,7 @@ export async function startServer(
   registerReviewRoutes();
   registerLoopSpecRoutes();
   registerInsightsRoutes();
+  registerGoogleWorkspaceRoutes();
   registerDashboardRoutes();
   registerApiTokenRoutes();
   registerStorageTestRoutes();

@@ -1967,3 +1967,14 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 .integration-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .integration-form legend { padding: 0; font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; }
 .integration-form .row > input[type="text"] { flex: 0 1 180px; }
+
+/* Option under a connected service (Integrations → Google Workspace) */
+.integration-service-sub {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 4px 14px 10px 54px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.integration-service-sub input { width: auto; min-height: auto; margin-top: 3px; }

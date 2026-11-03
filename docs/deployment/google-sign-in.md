@@ -42,3 +42,24 @@ The login page shows **Continue with Google** once the portal has a Google OAuth
 | "is not allowed to use this portal" | Email not an existing user and not on `googleAllowed`. Invite the user or extend the allow-list. |
 | "Sign-in session expired" | The 10-minute state cookie expired or cookies are blocked. Try again. |
 | "Your Google email address is not verified" | Use a Google account with a verified email. |
+
+## Google Workspace for agents (Drive, Docs, Sheets, Slides)
+
+Integrations → Connected services → **Google Workspace** lets each person connect their own Google account. Sessions that person starts then get a `google` tool set: `search_drive`, `get_file_info`, `read_doc`, `list_sheet_tabs`, `read_sheet`, `read_slides` (always), and `create_doc`, `append_to_doc`, `update_sheet_cells`, `append_sheet_rows` (only when the person ticks **Let agents edit my files**).
+
+One-time setup in Google Cloud (same project as the sign-in client):
+
+1. **Enable the APIs**: Google Drive API, Google Docs API, Google Sheets API, Google Slides API.
+2. **OAuth consent screen → Data access**: add the scopes `.../auth/drive`, `.../auth/documents`, `.../auth/spreadsheets`, `.../auth/presentations`. If the app is in Testing, add each person under Test users; refresh tokens of a Testing app expire after 7 days, so publish it (Internal for a Workspace domain) for lasting use.
+3. No new redirect URI: the connection returns to `<publicUrl>/api/auth/google/callback`, and the portal tells it apart from a sign-in by the `ws.` prefix of the state.
+
+How it stays safe: the refresh token is stored encrypted (`google-workspace:<user id>`) and never leaves the portal. The session only holds a signed token that names the person and expires after 8 hours; the portal calls Google as that person. Disconnecting revokes the token at Google. Code: `server/google-workspace.ts`, tests: `test/google-workspace.test.ts`.
+
+| Symptom | Cause |
+|---|---|
+| "Connect Google" greyed out, "Not set up" | The Google client secret or `publicUrl` is missing (same as the sign-in button). |
+| Google says "access blocked" / app not verified | Consent screen is in Testing and the person is not a test user. |
+| "Google did not return a long-lived sign-in" | The person approved before; remove the portal under their Google account's third-party access and connect again. |
+| "Not every permission was ticked" | The person unticked a permission on Google's screen; connect again and allow all four. |
+| Tool says "Google no longer accepts the saved connection" | Token revoked or expired (Testing app after 7 days). Disconnect and connect again. |
+| Edit tools missing in a session | "Let agents edit my files" is off; sessions started after turning it on get them. |

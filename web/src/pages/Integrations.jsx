@@ -48,6 +48,72 @@ function ServiceRow({ icon, title, detail, status, tone, to, action }) {
   );
 }
 
+function GoogleWorkspaceRow() {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(() => {
+    const h = window.location.hash;
+    if (!h.includes('?')) return null;
+    const q = new URLSearchParams(h.slice(h.indexOf('?') + 1));
+    return q.get('google') ? { ok: q.get('google') === 'connected', text: q.get('msg') || '' } : null;
+  });
+  const load = useCallback(() => {
+    api.get('/api/google/status').then(setSt).catch(() => setSt({ available: false }));
+  }, []);
+  useEffect(() => {
+    load();
+    // Drop the result from the address once it has been shown, so a refresh does not repeat it.
+    if (msg && window.location.hash.includes('?')) history.replaceState(null, '', window.location.hash.split('?')[0]);
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setWrites = async (allowWrites) => {
+    setBusy(true);
+    try { await api.put('/api/google/settings', { allowWrites }); load(); } finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    setBusy(true);
+    try { await api.delete('/api/google/connection'); setMsg({ ok: true, text: 'Google disconnected.' }); load(); } finally { setBusy(false); }
+  };
+
+  const status = st === null ? 'Checking…' : !st.available ? 'Not set up' : st.connected ? 'Connected' : 'Not connected';
+  const tone = st?.connected ? 'badge-ok' : st && !st.available ? 'badge-neutral' : 'badge-warn';
+  const detail = st?.connected
+    ? `Drive, Docs, Sheets and Slides${st.email ? ` · ${st.email}` : ''}`
+    : st && !st.available
+      ? 'Ask an admin to set up the Google client first (docs/deployment/google-sign-in.md).'
+      : 'Let agents search Drive and read Docs, Sheets and Slides as you.';
+
+  return (
+    <>
+      <div className="integration-service">
+        <span className="integration-service-icon" aria-hidden="true"><Icon name="knowledge" size={16} /></span>
+        <div className="integration-service-body">
+          <strong>Google Workspace</strong>
+          <span className="muted small">{detail}</span>
+        </div>
+        <span className={`badge ${tone}`}>{status}</span>
+        {st?.connected ? (
+          <button type="button" className="btn btn-sm" onClick={disconnect} disabled={busy}>Disconnect</button>
+        ) : (
+          <a className={`btn btn-sm${st?.available ? ' btn-primary' : ''}`} href={st?.available ? '/api/google/connect' : undefined} aria-disabled={!st?.available}>
+            Connect Google
+          </a>
+        )}
+      </div>
+      {st?.connected && (
+        <label className="integration-service-sub">
+          <input type="checkbox" checked={st.allowWrites} disabled={busy} onChange={(e) => setWrites(e.target.checked)} />
+          <span>
+            Let agents edit my files
+            <span className="muted small"> — create Docs, add text, and change Sheet cells. Off by default; agents can always read.</span>
+          </span>
+        </label>
+      )}
+      {msg && <p className={msg.ok ? 'success-note' : 'error-note'} role="status">{msg.text}</p>}
+    </>
+  );
+}
+
 function ConnectedServices({ projectId }) {
   const { jira, git } = useServiceStatus(projectId);
 
@@ -93,6 +159,7 @@ function ConnectedServices({ projectId }) {
           to="#/credentials"
           action="Manage"
         />
+        <GoogleWorkspaceRow />
       </div>
     </section>
   );

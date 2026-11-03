@@ -11,6 +11,7 @@ import { decrypt } from '../secrets.ts';
 import { config } from '../config.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { parseMcpServers, type McpServerSpec } from './runner-mcp.ts';
+import { workspaceMcpSpec } from '../google-workspace.ts';
 
 /** What is stored (encrypted) for a remote MCP integration. */
 export interface HttpIntegrationConfig {
@@ -82,6 +83,12 @@ export async function buildRunnerMcpServers(
     if (!cfg) continue;
     if (cfg.personal && it.created_by !== userId) continue;
     specs.push({ name: serverName(it.name, taken), url: cfg.url, headers: cfg.headers ?? {}, allowWrites: cfg.allowWrites === true });
+  }
+  // The person's own Google Drive, Docs, Sheets and Slides, when they have connected Google. The runner only gets a
+  // short-lived token for this portal, never a Google credential.
+  if (!selected) {
+    const g = await workspaceMcpSpec(userId, process.env.PORTAL_PUBLIC_URL).catch(() => null);
+    if (g && !taken.has(g.name)) specs.push(g);
   }
   return parseMcpServers(specs);
 }
