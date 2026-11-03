@@ -370,6 +370,7 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
   const [total, setTotal]             = useState(0);
   const [truncated, setTruncated]     = useState(false);
   const [loadErr, setLoadErr]         = useState(null);
+  const [open, setOpen]               = useState(false); // collapsed by default: it is a long list
   const [selected, setSelected]       = useState(
     new Set(mapping?.projectKeys ?? []),
   );
@@ -461,7 +462,28 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
 
   return (
     <div className="card stack">
-      <h3>Jira projects</h3>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls="jira-projects-body"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+          background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', font: 'inherit',
+        }}
+      >
+        <Icon
+          name="chevronRight"
+          size={14}
+          style={{ transition: 'transform .15s', transform: open ? 'rotate(90deg)' : 'none', flexShrink: 0 }}
+        />
+        <h3 style={{ margin: 0 }}>Jira projects</h3>
+        <span className="muted small">
+          {selected.size > 0 ? `${selected.size} selected` : 'all projects allowed'}
+        </span>
+      </button>
+      {open && (
+      <div id="jira-projects-body" className="stack">
       <p className="muted small">
         Select which Jira projects are available for ticket browsing in this
         portal project. Leaving all unchecked means every project is allowed.
@@ -693,6 +715,8 @@ function JiraProjectSettings({ projectId, mapping, onSaved }) {
         )}
         Save settings
       </button>
+      </div>
+      )}
     </div>
   );
 }
