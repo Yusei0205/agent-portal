@@ -95,13 +95,17 @@ async function prepare(workflowId: string): Promise<void> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new Error('timed out')), 5 * 60_000);
   let last = '';
+  const problems: string[] = [];
   let persisted = false;
   let names: string[] = [];
   let failed: string | null = null;
   try {
     for await (const raw of invokeAgentCore(rt.arn, agentCoreSessionId(workflowId, rt.kind), payload, ac.signal)) {
       const ev = raw as unknown as Record<string, unknown>;
-      if (ev.type === 'status' && typeof ev.text === 'string' && !ev.text.startsWith('Work dir:')) last = ev.text;
+      if (ev.type === 'status' && typeof ev.text === 'string' && !ev.text.startsWith('Work dir:')) {
+        last = ev.text;
+        if (ev.text.startsWith('Could not')) problems.push(ev.text);
+      }
       if (ev.type === 'error') failed = String(ev.message ?? 'The runner reported an error');
       if (ev.type === 'result') {
         if (ev.success === false) failed = String(ev.error ?? 'Some repositories could not be prepared');
@@ -115,7 +119,7 @@ async function prepare(workflowId: string): Promise<void> {
     clearTimeout(timer);
   }
 
-  const message = (failed ?? last ?? 'Repositories are ready.').replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 300);
+  const message = (problems.length ? problems.join(' ') : (failed ?? last ?? 'Repositories are ready.')).replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 300);
   await save(workflowId, {
     state: failed ? 'failed' : 'done',
     at: now(),
