@@ -87,6 +87,10 @@ async function makeBedrockClient(
 export interface CallTextModelOptions {
   maxTokens?: number;
   createdBy?: string | null;
+  /** The person's own credential to use (must be theirs); their default one when absent. */
+  credentialId?: string | null;
+  /** The model to use instead of the portal's default (a Bedrock model id or an Anthropic model id, to match the credential). */
+  model?: string | null;
   /**
    * Optional image attachments for multi-modal generation.
    * Each entry is a raw image buffer, its MIME type, and a filename (for diagnostics).
@@ -107,7 +111,7 @@ export async function callTextModel(
   opts: CallTextModelOptions = {},
 ): Promise<string> {
   if (_callTextModelOverride) return _callTextModelOverride(systemPrompt, userMessage, opts);
-  const { maxTokens = 4096, createdBy = null, images = [] } = opts;
+  const { maxTokens = 4096, createdBy = null, images = [], credentialId = null, model: modelOverride = null } = opts;
 
   const { getSettings } = await import('../settings.ts');
   const { resolveCredentialEnv } = await import('../credentials.ts');
@@ -117,7 +121,9 @@ export async function callTextModel(
 
   const settings = getSettings();
 
-  if (settings.provider.mode === 'demo') {
+  // The portal's own provider may be unset (demo) while the person has a credential of their own: that is enough.
+  const personalEnv = settings.provider.mode === 'demo' ? await resolveCredentialEnv('claude-code', createdBy, credentialId) : null;
+  if (settings.provider.mode === 'demo' && !personalEnv?.CLAUDE_CODE_USE_BEDROCK && !personalEnv?.ANTHROPIC_API_KEY) {
     throw new Error(
       'No AI provider configured. Set up an Anthropic API key, Bedrock, LiteLLM, or Kiro CLI ' +
       'in Settings to use this feature.',
@@ -187,7 +193,7 @@ export async function callTextModel(
   }
 
   // ── 2. Resolve credential env (user cred first, then portal fallback) ─────
-  const env = await resolveCredentialEnv('claude-code', createdBy, null);
+  const env = personalEnv ?? await resolveCredentialEnv('claude-code', createdBy, credentialId);
 
   // ── 3. Kiro CLI mode ─────────────────────────────────────────────────────
   // Use kiro-cli when provider mode is kiro AND the user has no personal
@@ -205,9 +211,7 @@ export async function callTextModel(
     );
   }
 
-  const modelId = settings.defaultModel
-    ? settings.defaultModel
-    : null;
+  const modelId = modelOverride || (settings.defaultModel ? settings.defaultModel : null);
 
   if (!modelId) {
     throw new Error(

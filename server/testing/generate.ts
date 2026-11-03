@@ -367,6 +367,7 @@ export async function runGeneration(
   existingScriptId: string | null,
   createdBy: string,
   attachmentIds: string[] = [],
+  ai: AiChoice = {},
 ): Promise<void> {
   // ── Local trace helpers ─────────────────────────────────────────────────
   let seq = 0;
@@ -444,7 +445,7 @@ export async function runGeneration(
       const text = await callTextModel(
         systemPrompt + textBlock,
         userMsg,
-        { maxTokens: 4096, createdBy, images },
+        { maxTokens: 4096, createdBy, images, credentialId: ai.credentialId ?? null, model: ai.model ?? null },
       );
       return extractJsonArray(text);
     };
@@ -648,7 +649,19 @@ async function firstGroupId(testProjectId: string): Promise<string | null> {
   return groups[0]?.id ?? null;
 }
 
+/** Which credential and model the person chose for this generation (both optional: their default credential and the portal model). */
+export interface AiChoice { credentialId?: string | null; model?: string | null }
+
+function readAiChoice(body: Record<string, unknown>): AiChoice {
+  const clean = (v: unknown): string | null => {
+    const s = typeof v === 'string' ? v.trim() : '';
+    return s && s.length <= 200 && /^[A-Za-z0-9._:/@+-]+$/.test(s) ? s : null;
+  };
+  return { credentialId: clean(body.credentialId), model: clean(body.model) };
+}
+
 interface GenerationJob {
+  ai?: AiChoice;
   genId: string;
   tp: TestProject;
   description: string;
@@ -668,6 +681,8 @@ async function startGenerationJob(job: GenerationJob): Promise<void> {
     existingScriptId: job.existingScriptId,
     createdBy: job.createdBy,
     attachmentIds: job.attachmentIds,
+    ...(job.ai?.credentialId ? { aiCredentialId: job.ai.credentialId } : {}),
+    ...(job.ai?.model ? { aiModel: job.ai.model } : {}),
   });
 }
 
@@ -679,6 +694,7 @@ export function registerGenerateRoutes(): void {
       String(a.genId), tp, String(a.description), String(a.targetGroupId),
       a.existingScriptId ? String(a.existingScriptId) : null, String(a.createdBy),
       Array.isArray(a.attachmentIds) ? (a.attachmentIds as unknown[]).map(String) : [],
+      { credentialId: a.aiCredentialId ? String(a.aiCredentialId) : null, model: a.aiModel ? String(a.aiModel) : null },
     );
   });
 
@@ -739,7 +755,7 @@ export function registerGenerateRoutes(): void {
 
     auditRaw(req.user!.id, 'test_generation.start', `test_generation:${genId}`, { description });
 
-    await startGenerationJob({ genId, tp, description, targetGroupId: effectiveGroupId, existingScriptId: null, createdBy: req.user!.id, attachmentIds: rawAttachmentIds });
+    await startGenerationJob({ genId, tp, description, targetGroupId: effectiveGroupId, existingScriptId: null, createdBy: req.user!.id, attachmentIds: rawAttachmentIds, ai: readAiChoice(body) });
 
     sendJson(res, 202, { generationId: genId });
   });
@@ -784,7 +800,7 @@ export function registerGenerateRoutes(): void {
       cancelled_at: null,
     });
 
-    await startGenerationJob({ genId, tp, description: instruction, targetGroupId: script.test_group_id, existingScriptId: script.id, createdBy: req.user!.id, attachmentIds: rawAttachmentIds });
+    await startGenerationJob({ genId, tp, description: instruction, targetGroupId: script.test_group_id, existingScriptId: script.id, createdBy: req.user!.id, attachmentIds: rawAttachmentIds, ai: readAiChoice(body) });
 
     sendJson(res, 202, { generationId: genId });
   });

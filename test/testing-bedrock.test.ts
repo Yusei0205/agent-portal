@@ -145,6 +145,52 @@ describe('Bedrock provider — callTextModel', () => {
     assert.ok(creds?.accessKeyId === 'AKIA_PORTAL_KEY', `expected accessKeyId 'AKIA_PORTAL_KEY', got '${creds?.accessKeyId}'`);
   });
 
+  it('uses the chosen credential and model even when the portal provider is not set (demo)', async () => {
+    const db = getDb();
+    setSetting(db, 'provider.mode', 'demo');
+    const userId = generateId();
+    const ts = now();
+    insert('users', { id: userId, email: `choice-${Date.now()}@test.com`, name: 'Choice', password_hash: 'x', is_admin: 0, disabled: 0, created_at: ts });
+    const mk = (name: string, isDefault: number): string => {
+      const id = generateId();
+      insert('engine_credentials', {
+        id, user_id: userId, engine: 'claude-code', name, mode: 'api_key', secret_enc: encrypt(`sk-ant-${name}`, config.secretKey),
+        extra_config: '{}', is_default: isDefault, last4: name.slice(-4), created_at: ts, updated_at: ts, updated_by: userId,
+      });
+      return id;
+    };
+    const defaultCred = mk('default-key', 1);
+    const chosenCred = mk('chosen-key', 0);
+
+    const seen: { key: string; model: string }[] = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).includes('anthropic.com')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        seen.push({ key: headers['x-api-key'] ?? '', model: body.model ?? '' });
+        return new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return origFetch(url, init);
+    };
+    try {
+      // The person's default credential is enough: no "No AI provider configured" although the portal has none.
+      setSetting(db, 'model.sonnet', 'claude-sonnet-portal');
+      assert.equal(await callTextModel('s', 'u', { createdBy: userId }), 'ok');
+      // A chosen credential and model win over the default ones.
+      assert.equal(await callTextModel('s', 'u', { createdBy: userId, credentialId: chosenCred, model: 'claude-chosen-model' }), 'ok');
+    } finally {
+      globalThis.fetch = origFetch;
+      dbRun('DELETE FROM engine_credentials WHERE user_id = ?', userId);
+      dbRun('DELETE FROM users WHERE id = ?', userId);
+    }
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0].key, 'sk-ant-default-key');
+    assert.equal(seen[1].key, 'sk-ant-chosen-key');
+    assert.equal(seen[1].model, 'claude-chosen-model');
+    void defaultCred;
+  });
+
   it('user api_key credential takes precedence over portal bedrock', async () => {
     const db = getDb();
 

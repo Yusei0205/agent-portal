@@ -23,6 +23,7 @@ import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
+import { AiChoicePicker } from '../../components/AiChoicePicker.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -518,6 +519,7 @@ function GenerateDialog({ testProjectId, projectId, groupId, onClose, onGenerate
   const [error, setError]                 = useState(null);
   const [attachmentIds, setAttachmentIds] = useState([]);
   const [uploadsBusy, setUploadsBusy]     = useState(false);
+  const [aiChoice, setAiChoice]           = useState({});
   const descRef = useRef(null);
   const trapRef = useFocusTrap();
 
@@ -544,6 +546,8 @@ function GenerateDialog({ testProjectId, projectId, groupId, onClose, onGenerate
           description:   description.trim(),
           groupId:       groupId || undefined,
           attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+          credentialId:  aiChoice.credentialId,
+          model:         aiChoice.model,
         },
       );
       onGenerated(data.generationId, description.trim());
@@ -617,6 +621,8 @@ function GenerateDialog({ testProjectId, projectId, groupId, onClose, onGenerate
               disabled={busy}
             />
           </div>
+
+          <AiChoicePicker onChange={setAiChoice} disabled={busy} idPrefix="gen" />
 
           {error && <div className="error-note" role="alert">{error}</div>}
         </div>
