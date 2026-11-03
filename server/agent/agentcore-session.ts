@@ -1,9 +1,9 @@
 /**
  * One AgentCore session per portal session.
  *
- * AgentCore keeps a session's persistent folder (see infra: filesystemConfigurations) only for invocations that use
- * the same runtime session id, so every message of a portal session, and the "prepare repositories" step, use the
- * id derived here. Ids must be at least 33 characters.
+ * Every message of a portal session, and the "prepare repositories" step, use the id derived here, so they reach the
+ * same machine while it is warm (its workspace folder is still there) and the same saved workspace afterwards
+ * (runner-snapshot.ts). Ids must be at least 33 characters.
  */
 
 import { createHash } from 'node:crypto';

@@ -36,6 +36,8 @@ export interface KiroRunPayload {
   browser?: boolean;
   /** The session's repositories to clone under repos/ (checked in run.ts by shared/runner-repos.ts). */
   repos?: unknown[];
+  /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
+  snapshot?: unknown;
 }
 
 export interface KiroLoginPayload {
@@ -62,6 +64,7 @@ export interface KiroPreparePayload {
   runId: string;
   /** The session's repositories to clone into the persistent folder (checked in prepare.ts). */
   repos: unknown[];
+  snapshot?: unknown;
 }
 
 export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload | KiroLoginStatusPayload | KiroPreparePayload;
@@ -101,7 +104,7 @@ export function validatePayload(raw: unknown): ValidationResult {
   }
   if (mode === 'prepare-repos') {
     if (!Array.isArray(obj.repos)) return err('"repos" must be an array');
-    return { ok: true, payload: { mode: 'prepare-repos', runId: (obj.runId as string).trim(), repos: obj.repos as unknown[] } };
+    return { ok: true, payload: { mode: 'prepare-repos', runId: (obj.runId as string).trim(), repos: obj.repos as unknown[], ...(obj.snapshot ? { snapshot: obj.snapshot } : {}) } };
   }
   if (mode === 'kiro-run') {
     return validateKiroRun(obj);
@@ -154,6 +157,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       prompt: obj.prompt as string,
       ...(obj.browser === true ? { browser: true } : {}),
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
+      ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       token: {
         accessToken: tok.accessToken as string,
         expiresAt: tok.expiresAt as string,

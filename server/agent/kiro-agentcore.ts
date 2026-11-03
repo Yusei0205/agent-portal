@@ -43,6 +43,7 @@ import { createFileReceiver } from './runner-files.ts';
 import { persistFile } from '../durable-files.ts';
 import { encrypt, decrypt } from '../secrets.ts';
 import { getCredentialsRepository } from '../repositories/credentials.ts';
+import { snapshotAccess } from './runner-snapshot-access.ts';
 import { agentCoreSessionId } from './agentcore-session.ts';
 import { waitForRepoPrep } from './repo-prep.ts';
 import { getAgentcoreLoginRepository, clearAgentcoreLoginRepository } from '../repositories/agentcore-login.ts';
@@ -507,6 +508,7 @@ export async function runKiroViaAgentCore(
   }, timeoutMs);
 
   try {
+    const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
     const payload: Record<string, unknown> = {
       mode: 'kiro-run',
       runId: opts.runId,
@@ -514,6 +516,7 @@ export async function runKiroViaAgentCore(
       token: opts.token,
       ...(opts.browser ? { browser: true } : {}),
       ...(opts.repos?.length ? { repos: opts.repos } : {}),
+      ...(snapshot ? { snapshot } : {}),
     };
 
     const fileReceiver = ctx.run?.workDir ? createFileReceiver(ctx.run.workDir, (abs) => persistFile(abs)) : null;

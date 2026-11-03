@@ -18,6 +18,7 @@ import { HttpError } from '../util.ts';
 import type { RunContext } from './types.ts';
 import { createFileReceiver } from './runner-files.ts';
 import { persistFile } from '../durable-files.ts';
+import { snapshotAccess } from './runner-snapshot-access.ts';
 import { agentCoreSessionId } from './agentcore-session.ts';
 import { waitForRepoPrep } from './repo-prep.ts';
 
@@ -83,6 +84,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; ac.abort(new Error('AgentCore run timed out')); }, timeoutMs);
 
+  const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
   const payload: Record<string, unknown> = {
     runId: opts.runId,
     prompt: opts.prompt,
@@ -91,6 +93,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     trustTools: opts.trustTools,
     ...(opts.browser ? { browser: true } : {}),
     ...(opts.repos?.length ? { repos: opts.repos } : {}),
+    ...(snapshot ? { snapshot } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
     ...(opts.maxTurns && opts.maxTurns > 0 ? { maxTurns: Math.min(opts.maxTurns, 200) } : {}),

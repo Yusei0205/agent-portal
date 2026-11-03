@@ -14,6 +14,7 @@ import { getSetting, setSetting } from '../settings.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { registerBackgroundJob, runInBackground } from '../background-jobs.ts';
 import { invokeAgentCore } from './kiro-agentcore.ts';
+import { snapshotAccess } from './runner-snapshot-access.ts';
 import { agentCoreSessionId } from './agentcore-session.ts';
 import { buildRunnerRepos } from './runner-repo-specs.ts';
 import { now } from '../util.ts';
@@ -88,9 +89,10 @@ async function prepare(workflowId: string): Promise<void> {
   }
 
   const runId = `prep-${randomUUID()}`;
+  const snapshot = await snapshotAccess(workflowId);
   const payload: Record<string, unknown> = rt.kind === 'kiro'
-    ? { mode: 'prepare-repos', runId, repos }
-    : { runId, prepareOnly: true, repos };
+    ? { mode: 'prepare-repos', runId, repos, ...(snapshot ? { snapshot } : {}) }
+    : { runId, prepareOnly: true, repos, ...(snapshot ? { snapshot } : {}) };
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new Error('timed out')), 5 * 60_000);

@@ -107,13 +107,18 @@ function runGit(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: 
   });
 }
 
-/** Where AgentCore mounts the session's persistent storage in the runner (see infra: filesystemConfigurations). */
-export const PERSIST_ROOT = '/mnt/workspace';
+/**
+ * The runner's workspace folder: on the machine's own disk, so it is fast and behaves like any normal folder (no
+ * mount quirks). It lasts as long as the machine does; runner-snapshot.ts saves it to S3 and restores it on the
+ * next machine of the same session.
+ */
+export const PERSIST_ROOT = process.env.RUNNER_WORKSPACE_DIR || path.join(os.tmpdir(), 'agent-workspace');
 const MIN_FREE_BYTES = 150 * 1024 * 1024;
 
-/** The persistent folder, when it is mounted, writable and has room; otherwise null (repositories stay temporary). */
+/** The workspace folder, when it is writable and has room; otherwise null (repositories stay in the temporary work folder). */
 export function usablePersistRoot(root = PERSIST_ROOT): string | null {
   try {
+    fs.mkdirSync(root, { recursive: true });
     if (!fs.statSync(root).isDirectory()) return null;
     fs.accessSync(root, fs.constants.W_OK);
     const st = fs.statfsSync(root);

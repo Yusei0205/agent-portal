@@ -180,6 +180,19 @@ export class S3StorageBackend implements StorageBackend {
     });
   }
 
+  /**
+   * A presigned URL for uploading (`put`) or downloading (`get`) one object, for a caller that holds no AWS credentials
+   * (the AgentCore runners). Checksums are only added when S3 requires them: the newer default would put a checksum
+   * header into the signed URL that the uploader cannot reproduce.
+   */
+  async presign(logicalPath: string, method: 'get' | 'put', expiresInSeconds: number): Promise<string> {
+    const [s3Mod, presignMod] = await Promise.all([s3Sdk(), presignerSdk()]);
+    const Client = s3Mod.S3Client as unknown as new (opts: object) => S3ClientLike;
+    const client = new Client({ region: this.region, requestChecksumCalculation: 'WHEN_REQUIRED' });
+    const Cmd = method === 'put' ? s3Mod.PutObjectCommand : s3Mod.GetObjectCommand;
+    return presignMod.getSignedUrl(client, new Cmd({ Bucket: this.bucket, Key: this.key(logicalPath) }), { expiresIn: expiresInSeconds });
+  }
+
   async ping(): Promise<void> {
     const mod = await s3Sdk();
     const client = await this.client();

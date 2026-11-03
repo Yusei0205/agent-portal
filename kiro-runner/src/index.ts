@@ -20,6 +20,8 @@ import { runKiroRun } from './run.js';
 import { runKiroLogin } from './login.js';
 import { runKiroListModels } from './list-models.js';
 import { runPrepareRepos } from './prepare.js';
+import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground } from '../shared/runner-snapshot.js';
+import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
@@ -52,7 +54,7 @@ const server = http.createServer(async (req, res) => {
   const url = req.url ?? '/';
 
   if (method === 'GET' && url === '/ping') {
-    const status = runActive ? 'HealthyBusy' : 'Healthy';
+    const status = runActive || snapshotBusy() ? 'HealthyBusy' : 'Healthy';
     const body: Record<string, unknown> = { status };
     if (lastStatusChange > 0) {
       body.time_of_last_update = lastStatusChange;
@@ -101,6 +103,9 @@ const server = http.createServer(async (req, res) => {
 `);
       return;
     }
+
+    // A save of the workspace may still be running from the previous message: cancel it (this message saves again).
+    await cancelSnapshot();
 
     if (runActive) {
       res.writeHead(409, {
@@ -154,6 +159,11 @@ const server = http.createServer(async (req, res) => {
     } finally {
       setRunActive(false);
       if (!res.writableEnded) res.end();
+      // Save the workspace once the reply is out; the machine stays "busy" until that is done.
+      const p = validation.payload;
+      if (p.mode === 'kiro-run' || p.mode === 'prepare-repos') {
+        saveWorkspaceInBackground(parseSnapshot(p.snapshot), usablePersistRoot(PERSIST_ROOT), () => { lastStatusChange = Math.floor(Date.now() / 1000); });
+      }
     }
     return;
   }

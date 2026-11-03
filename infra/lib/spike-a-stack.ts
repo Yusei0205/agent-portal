@@ -26,7 +26,7 @@ import { Construct } from 'constructs';
 /** ECR repo name — must exist and have the image pushed before `cdk deploy`. */
 const ECR_REPO_NAME = 'agent-portal/agent-runner';
 /** Image tag to use in the AgentCore Runtime. */
-const IMAGE_TAG = 'br-202611039';
+const IMAGE_TAG = 'br-202611043';
 
 export class AgentPortalSpikeAStack extends cdk.Stack {
   public readonly runtimeArn: string;
@@ -172,10 +172,6 @@ export class AgentPortalSpikeAStack extends cdk.Stack {
         idleRuntimeSessionTimeout: 300,   // 5 minutes idle → microVM released
         maxLifetime: 1800,                 // 30 minutes absolute max
       },
-      // Persistent per-session folder (preview): repositories and files survive after the microVM is released, as long as
-      // later calls use the same runtime session id (see server/agent/agentcore-session.ts). 1 GB, kept 14 days idle,
-      // reset when a new runtime version is deployed. The runners fall back to temporary disk if it is not mounted.
-      filesystemConfigurations: [{ sessionStorage: { mountPath: '/mnt/workspace' } }],
       environmentVariables: {
         AWS_DEFAULT_REGION: this.region,
         AWS_REGION: this.region,

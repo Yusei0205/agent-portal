@@ -15,7 +15,8 @@
  */
 
 import { emitRunnerFiles } from '../shared/runner-files.js';
-import { parseRunnerRepos, cloneRunnerRepos, PERSIST_ROOT } from '../shared/runner-repos.js';
+import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
+import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -284,6 +285,7 @@ export async function runKiroRun(
     // The session's repositories, under repos/ in the agent's work folder
     if (payload.repos?.length) {
       const parsed = parseRunnerRepos(payload.repos);
+      if (parsed.ok) await restoreWorkspace(parseSnapshot(payload.snapshot), usablePersistRoot(PERSIST_ROOT), (ev) => emit(ev));
       if (parsed.ok) await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: kiroHome });
       else emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
     }

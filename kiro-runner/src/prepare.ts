@@ -4,6 +4,7 @@
  */
 
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
+import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import type { KiroPreparePayload } from './validate.js';
 
 export type EmitFn = (event: Record<string, unknown>) => void;
@@ -16,10 +17,11 @@ export async function runPrepareRepos(payload: KiroPreparePayload, emit: EmitFn)
   }
   const persist = usablePersistRoot(PERSIST_ROOT);
   if (!persist) {
-    emit({ type: 'status', text: 'Persistent storage is not available; repositories will be cloned when a message is sent.' });
+    emit({ type: 'status', text: 'The workspace folder is not available; repositories will be cloned when a message is sent.' });
     emit({ type: 'result', runId: payload.runId, success: true, persisted: false, repos: [] });
     return;
   }
+  await restoreWorkspace(parseSnapshot(payload.snapshot), persist, (ev) => emit(ev));
   const names = await cloneRunnerRepos(parsed.repos, persist, (ev) => emit(ev), { persistRoot: persist });
   emit({ type: 'result', runId: payload.runId, success: names.length === parsed.repos.length, persisted: true, repos: names });
 }

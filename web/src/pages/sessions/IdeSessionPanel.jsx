@@ -266,9 +266,7 @@ function RepositoriesSection({ workflow, projectId }) {
       {attached.length > 0 && (
         <p className="muted" style={{ fontSize: '0.72rem', margin: '6px 0 0' }}>
           {prep?.state === 'running' && 'Getting the repositories ready…'}
-          {prep?.state === 'done' && (prep.persisted
-            ? `Ready: ${(prep.repos ?? []).join(', ') || 'repositories'} kept in this session's storage under repos/.`
-            : 'Checked. The agent clones them when you send a message (session storage is not available).')}
+          {prep?.state === 'done' && `Ready: ${(prep.repos ?? []).join(', ') || 'repositories'} under repos/. The workspace is saved after each message and comes back when the session is resumed.`}
           {prep?.state === 'failed' && <span style={{ color: 'var(--danger, #c0392b)' }}>Could not prepare: {prep.message}</span>}
           {!prep && <>The agent gets a copy under <code>repos/&lt;name&gt;/</code> from its next message.</>}
         </p>

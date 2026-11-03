@@ -42,7 +42,8 @@ import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
 import { emitRunnerFiles } from '../shared/runner-files.js';
-import { parseRunnerRepos, cloneRunnerRepos, PERSIST_ROOT } from '../shared/runner-repos.js';
+import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
+import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import {
   type InvocationPayload,
   DEFAULT_MODEL,
@@ -186,6 +187,7 @@ export async function runInvocation(
   if (payload.repos?.length) {
     const parsed = parseRunnerRepos(payload.repos);
     if (parsed.ok) {
+      await restoreWorkspace(parseSnapshot(payload.snapshot), usablePersistRoot(PERSIST_ROOT), (ev) => emit(ev));
       await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: workDir });
     } else {
       emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });

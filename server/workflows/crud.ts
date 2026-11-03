@@ -37,6 +37,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import { getProjectRepository } from '../repositories/projects.ts';
 import { getWorkspacesRepository } from '../repositories/workspaces.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
+import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 
 // ── Constant ───────────────────────────────────────────────────────────────────
@@ -511,6 +512,8 @@ export function registerWorkflowRoutes(): void {
 
     // deleteWorkflow owns the child-count decrement internally (both backends).
     await repo.deleteWorkflow(w.id);
+    // The saved workspace (repositories) of the session goes with it.
+    deleteSnapshot(w.id).catch(() => {/* non-fatal: the bucket expires it anyway */});
 
     emit(String(project.id), { type: 'workflow.deleted', workflowId: w.id });
     sendJson(res, 200, { ok: true });
