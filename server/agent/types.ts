@@ -21,6 +21,8 @@ export interface AgentRun {
   repoIds: string[];
   /** Set when the run goes to an AgentCore runner: the repositories it must clone (see runner-repos.ts). */
   runnerRepos?: import('./runner-repos.ts').RunnerRepo[];
+  /** Set when the run goes to an AgentCore runner: the project's enabled MCP integrations (see runner-integrations.ts). */
+  runnerMcpServers?: import('./runner-mcp.ts').McpServerSpec[];
   leadAgent: string | null;
   permissions: RunPermissions;
   /** Optional per-user credential to use for this run (F4). */

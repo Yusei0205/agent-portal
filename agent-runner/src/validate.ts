@@ -46,6 +46,8 @@ export interface InvocationPayload {
   repo?: RepoConfig;
   /** The session's repositories to clone under repos/ (checked in run.ts by shared/runner-repos.ts). */
   repos?: unknown[];
+  /** Remote MCP integrations (checked in run.ts by shared/runner-mcp.ts). */
+  mcpServers?: unknown[];
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
   snapshot?: unknown;
   /** true = only put the repositories in place (no prompt, no agent run). */
@@ -76,7 +78,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'repos', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser',
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser',
 ]);
 const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
@@ -249,6 +251,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       maxMinutes: typeof obj.maxMinutes === 'number' ? obj.maxMinutes : undefined,
       repo,
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
+      ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(obj.prepareOnly === true ? { prepareOnly: true } : {}),
       portal,

@@ -17,6 +17,7 @@
 import { emitRunnerFiles } from '../shared/runner-files.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
+import { parseMcpServers } from '../shared/runner-mcp.js';
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -366,7 +367,8 @@ export async function runKiroRun(
     acp.onServerRequest(async (_method, params, _id) => {
       const p = params as { options?: Array<{ optionId: string; kind: string }> };
       const allowOpt = (p?.options ?? []).find(o => o.kind === 'allow_once' || o.kind === 'allow_always');
-      return { optionId: allowOpt?.optionId ?? (p?.options ?? [])[0]?.optionId ?? 'allow_once' };
+      // ACP wants the choice wrapped as an outcome; a bare optionId is rejected ("missing field outcome").
+      return { outcome: { outcome: 'selected', optionId: allowOpt?.optionId ?? (p?.options ?? [])[0]?.optionId ?? 'allow_once' } };
     });
 
     let acpError: Error | undefined;
@@ -393,9 +395,18 @@ export async function runKiroRun(
               .map((k) => ({ name: k, value: process.env[k] as string })),
           }]
         : [];
+      // Remote MCP integrations: each one runs behind a local stdio proxy that keeps its headers out of kiro-cli's
+      // config and hides write tools unless the integration allows them.
+      const proxyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs');
+      const integrationMcp = parseMcpServers(payload.mcpServers).map((s) => ({
+        name: s.name,
+        command: 'node',
+        args: [proxyPath],
+        env: [{ name: 'MCP_PROXY_SPEC', value: JSON.stringify(s) }],
+      }));
       const sessionResult = await acp.sendRequest('session/new', {
         cwd: workDir,
-        mcpServers: browserMcp,
+        mcpServers: [...browserMcp, ...integrationMcp],
       }) as { sessionId?: string };
       const sessionId = sessionResult?.sessionId ?? '';
       if (!sessionId) throw new Error('kiro-cli ACP did not return a sessionId');

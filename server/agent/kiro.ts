@@ -974,6 +974,7 @@ async function runKiroViaAgentCoreAdapter(
     expectedCiphertext,
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
     repos: run.runnerRepos,
+    mcpServers: run.runnerMcpServers,
   });
 
   if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');

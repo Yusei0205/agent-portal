@@ -473,6 +473,8 @@ export interface AgentCoreRunOpts {
   browser?: boolean;
   /** The session's repositories for the runner to clone under repos/. */
   repos?: import('./runner-repos.ts').RunnerRepo[];
+  /** The project's remote MCP integrations (runner starts a proxy for each). */
+  mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
 }
 
 /**
@@ -516,6 +518,7 @@ export async function runKiroViaAgentCore(
       token: opts.token,
       ...(opts.browser ? { browser: true } : {}),
       ...(opts.repos?.length ? { repos: opts.repos } : {}),
+      ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
       ...(snapshot ? { snapshot } : {}),
     };
 

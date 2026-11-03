@@ -192,6 +192,7 @@ ${REVIEW_SYSTEM_APPEND}`;
     // The browser bills while a session is open, so it is opt-in per deployment (see infra context agentcoreBrowser).
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
     repos: run.runnerRepos,
+    mcpServers: run.runnerMcpServers,
   });
 
   let costUsd = res.costUsd;

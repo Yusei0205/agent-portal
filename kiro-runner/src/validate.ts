@@ -36,6 +36,8 @@ export interface KiroRunPayload {
   browser?: boolean;
   /** The session's repositories to clone under repos/ (checked in run.ts by shared/runner-repos.ts). */
   repos?: unknown[];
+  /** Remote MCP integrations (checked in run.ts by shared/runner-mcp.ts). */
+  mcpServers?: unknown[];
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
   snapshot?: unknown;
 }
@@ -157,6 +159,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       prompt: obj.prompt as string,
       ...(obj.browser === true ? { browser: true } : {}),
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
+      ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       token: {
         accessToken: tok.accessToken as string,

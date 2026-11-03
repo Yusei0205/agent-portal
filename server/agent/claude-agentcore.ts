@@ -35,6 +35,8 @@ export interface ClaudeAgentCoreOpts {
   browser?: boolean;
   /** The session's repositories for the runner to clone under repos/. */
   repos?: import('./runner-repos.ts').RunnerRepo[];
+  /** The project's remote MCP integrations (runner starts a proxy for each). */
+  mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
 }
 
 export interface ClaudeAgentCoreResult {
@@ -93,6 +95,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     trustTools: opts.trustTools,
     ...(opts.browser ? { browser: true } : {}),
     ...(opts.repos?.length ? { repos: opts.repos } : {}),
+    ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
     ...(snapshot ? { snapshot } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),

@@ -1935,3 +1935,33 @@ th.th-sorted { color: var(--ink); }
 th.th-sorted::after { opacity: 0.9; }
 th.th-sorted[data-dir='asc']::after  { content: '↑'; }
 th.th-sorted[data-dir='desc']::after { content: '↓'; }
+
+/* ── Integrations page ───────────────────────────────────────────────────────── */
+.integration-group { margin-top: 28px; display: grid; gap: 12px; }
+.integration-group > h2 { font-size: 1rem; margin: 0; }
+.integration-services { display: grid; gap: 8px; }
+.integration-service {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 12px 14px;
+}
+.integration-service-icon { display: inline-flex; color: var(--ink-2); }
+.integration-service-body { display: grid; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.integration-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.integration-stats .stat-tile { padding: 12px 14px; display: grid; gap: 2px; }
+.integration-stats .stat-tile strong { font-size: 1.4rem; }
+.integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.integration-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 14px 16px; display: grid; gap: 10px; align-content: start;
+}
+.integration-card-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.integration-card-head h3 { margin: 0; font-size: 0.95rem; }
+.integration-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 0; }
+.integration-facts div { min-width: 0; }
+.integration-facts dt { font-size: 0.72rem; color: var(--ink-3, var(--ink-2)); text-transform: uppercase; letter-spacing: 0.04em; }
+.integration-facts dd { margin: 0; overflow-wrap: anywhere; font-size: 0.85rem; }
+.integration-card-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.integration-card-actions .btn-icon { margin-left: auto; }
+.integration-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.integration-form legend { padding: 0; font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; }
+.integration-form .row > input[type="text"] { flex: 0 1 180px; }

@@ -44,6 +44,8 @@ import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from '.
 import { emitRunnerFiles } from '../shared/runner-files.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
+import { parseMcpServers } from '../shared/runner-mcp.js';
+import { fileURLToPath } from 'node:url';
 import {
   type InvocationPayload,
   DEFAULT_MODEL,
@@ -271,6 +273,16 @@ export async function runInvocation(
   // ── AgentCore Browser (optional, started on first use, always stopped in finally) ──
   const browser = payload.browser ? new AgentCoreBrowser(emit, region) : null;
 
+  // ── Remote MCP integrations: one local stdio proxy each (holds the secret headers, hides write tools unless allowed)
+  const integrations = parseMcpServers(payload.mcpServers);
+  const proxyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs');
+  const integrationServers = Object.fromEntries(integrations.map((s) => [s.name, {
+    type: 'stdio',
+    command: 'node',
+    args: [proxyPath],
+    env: { PATH: process.env.PATH ?? '', MCP_PROXY_SPEC: JSON.stringify(s) },
+  }]));
+
   // ── Counters ─────────────────────────────────────────────────────────────────
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -318,7 +330,9 @@ export async function runInvocation(
     }
 
     // A one-shot invocation cannot ask the user for approval, so without "trust all tools" only reads run.
-    if (payload.trustTools === false && !READ_ONLY_TOOLS.has(toolName)) {
+    // An integration's proxy has already hidden the tools it may not offer, so what is left may run.
+    const isIntegrationTool = integrations.some((s) => toolName.startsWith(`mcp__${s.name}__`));
+    if (payload.trustTools === false && !READ_ONLY_TOOLS.has(toolName) && !isIntegrationTool) {
       const reason = `"${toolName}" needs approval. Turn on "Trust all tools" for this session to let the agent change files or run commands.`;
       emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason });
       return { behavior: 'deny', message: reason };
@@ -352,7 +366,7 @@ export async function runInvocation(
         // result message (with total_cost_usd and stop_reason:"max_turns").
         // Our manual counter below remains for the turns metric.
         maxTurns,
-        ...(browser ? { mcpServers: { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser) } } : {}),
+        ...(browser || integrations.length ? { mcpServers: { ...(browser ? { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser) } : {}), ...integrationServers } } : {}),
       },
     }) as AsyncIterable<Record<string, unknown>>;
 

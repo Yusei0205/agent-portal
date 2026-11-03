@@ -31,4 +31,16 @@ await esbuild.build({
   logLevel: 'info',
 });
 
-console.log('agent-runner build complete → dist/index.mjs');
+// Stdio MCP proxy in front of one remote MCP integration (holds its secret headers, hides write tools).
+await esbuild.build({
+  entryPoints: [path.join(root, 'src', 'mcp-proxy.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node22',
+  outfile: path.join(distDir, 'mcp-proxy.mjs'),
+  sourcemap: false,
+  logLevel: 'info',
+});
+
+console.log('agent-runner build complete → dist/index.mjs, dist/mcp-proxy.mjs');

@@ -46,6 +46,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import type { RunFinalizeStats } from '../repositories/sessions.ts';
 import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
+import { buildRunnerMcpServers } from './runner-integrations.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
 
@@ -467,6 +468,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         agentRun.projectId,
         (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
       );
+      agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId)
+        .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
       if (specs.length > 0) {
         agentRun.runnerRepos = specs;
         availableRepoNames = specs.map((s) => s.name);
