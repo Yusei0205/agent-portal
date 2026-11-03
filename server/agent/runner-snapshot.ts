@@ -126,7 +126,7 @@ async function changedSinceSave(root: string, signal: AbortSignal): Promise<bool
   const r = await run('find', [
     'repos', '-newer', STAMP,
     '(',
-    '-type', 'f', '-not', '-path', '*/.git/FETCH_HEAD', '-not', '-path', '*/.git/index', '-not', '-path', '*/.git/shallow', '-not', '-path', '*/.git/logs/*',
+    '-type', 'f', '-not', '-path', '*/.git/FETCH_HEAD', '-not', '-path', '*/.git/index', '-not', '-path', '*/.git/shallow', '-not', '-path', '*/.git/ORIG_HEAD', '-not', '-path', '*/.git/logs/*',
     '-o',
     '-type', 'd', '-not', '-path', '*/.git', '-not', '-path', '*/.git/*',
     ')',
