@@ -384,7 +384,7 @@ const SUBSCRIPTION_MODELS: EngineModelEntry[] = [
  * Resolve and return models for the given engine + credential context.
  * `userId` is the authenticated user's ID; `requestedCredentialId` may be null.
  */
-async function getEngineModels(
+export async function getEngineModels(
   engine: 'kiro' | 'claude-code',
   userId: string,
   requestedCredentialId: string | null,

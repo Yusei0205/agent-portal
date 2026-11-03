@@ -974,7 +974,7 @@ interface AgentEntry {
   description?: string;
 }
 
-async function listAgentsForEngine(userId: string, engine: string): Promise<AgentEntry[]> {
+export async function listAgentsForEngine(userId: string, engine: string): Promise<AgentEntry[]> {
   const agents: AgentEntry[] = [];
 
   if (engine === 'kiro') {

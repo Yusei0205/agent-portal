@@ -589,6 +589,14 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
   if (type === 'slash-command' || type === 'workflow.command') {
     return <SlashCommandEvent event={event} />;
   }
+  // A command the portal answered itself, saved as "<command>\n---\n<answer>"
+  if (type === 'command-result') {
+    const raw = typeof payload.text === 'string' ? payload.text : (payload.body || '');
+    const cut = raw.indexOf('\n---\n');
+    const command = cut >= 0 ? raw.slice(0, cut) : (payload.command || '');
+    const result  = cut >= 0 ? raw.slice(cut + 5) : raw;
+    return <SlashCommandEvent event={{ payload: { command, result, user: 'You' } }} />;
+  }
 
   // ── Assistant text ────────────────────────────────────────────────────────
   if (type === 'assistant-text') {
@@ -823,6 +831,7 @@ export function SessionLive({
   projectId,
   workflow,
   pendingMessages = [],
+  refreshKey = 0,
   onRemovePending,
   onRetryPending,
   onBrowserEvent,
@@ -1062,6 +1071,23 @@ export function SessionLive({
     timer = setTimeout(tick, 400);
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [waitingKey, workflowId, projectId]);
+
+  // A /command was just answered by the portal: pull in its saved answer.
+  useEffect(() => {
+    if (!refreshKey || !workflowId || !projectId) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.get(`/api/projects/${projectId}/workflows/${workflowId}/transcript?limit=20`);
+        if (cancelled) return;
+        const saved = (data.events ?? [])
+          .map(normaliseTranscriptEvent)
+          .filter((e) => e.src === 'w' && (e.type === 'command-result' || e.type === 'human'));
+        setEarlierEvents((prev) => mergeEventLists(prev, saved.reverse()));
+      } catch { /* non-critical */ }
+    })();
+    return () => { cancelled = true; };
+  }, [refreshKey, workflowId, projectId]);
 
   // ── Transcript loading ────────────────────────────────────────────────────
 

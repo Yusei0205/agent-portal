@@ -201,8 +201,11 @@ function ComposerBar({
   onOptimisticSend,
   onSendSuccess,
   onSendError,
+  onCommandDone,
 }) {
   const [message, setMessage] = useState('');
+  const [commands, setCommands] = useState(null);
+  const [menuIdx, setMenuIdx]   = useState(0);
   const [busy, setBusy]       = useState(false);
   // Resume state — shown when workflow.resumable and not running
   const [resuming, setResuming]       = useState(false);
@@ -224,7 +227,26 @@ function ComposerBar({
       ? 'Ask Claude to change something… (Enter to send, Shift+Enter for new line)'
       : 'Send a message… (Enter to send, Shift+Enter for new line)';
 
-  const showSlashHint = message.startsWith('/');
+  // Command menu: opens while a "/command" is being typed (no space yet).
+  const typedCommand = message.startsWith('/') && !/\s/.test(message) ? message.slice(1).toLowerCase() : null;
+  const menuItems = typedCommand === null || !commands
+    ? []
+    : commands.filter((c) => c.name.startsWith(typedCommand));
+  const showMenu = menuItems.length > 0;
+  const showSlashHint = message.startsWith('/') && !showMenu;
+
+  useEffect(() => {
+    if (typedCommand === null || commands) return;
+    api.get('/api/slash-commands').then((d) => setCommands(d.commands ?? [])).catch(() => setCommands([]));
+  }, [typedCommand, commands]);
+
+  useEffect(() => { setMenuIdx(0); }, [typedCommand]);
+
+  const pickCommand = (c) => {
+    // Commands that take an argument keep the cursor ready for it; the rest are sent straight away.
+    setMessage(`/${c.name} `);
+    textareaRef.current?.focus();
+  };
 
   // Auto-resize textarea height when in auto-grow mode
   useEffect(() => {
@@ -335,9 +357,10 @@ function ComposerBar({
     const text = message.trim();
     if (!text || busy) return;
     const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const isSlash = text.startsWith('/');
 
-    // Optimistic: show bubble immediately + clear composer
-    if (onOptimisticSend) onOptimisticSend(clientId, text);
+    // Optimistic: show bubble immediately + clear composer (commands show their answer instead)
+    if (!isSlash && onOptimisticSend) onOptimisticSend(clientId, text);
     setMessage('');
     // Reset textarea to one line after send
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -349,6 +372,12 @@ function ComposerBar({
         `/api/projects/${projectId}/workflows/${workflow.id}/message`,
         { message: text },
       );
+      if (res?.handled) {
+        // The portal answered a command itself: show the answer, nothing runs.
+        if (onCommandDone) onCommandDone();
+        return;
+      }
+      if (isSlash && onOptimisticSend) onOptimisticSend(clientId, text);
       // Only call /start if not already running and not resumed by /message
       if (!isRunning && !res?.resumed) {
         await api.post(
@@ -367,6 +396,17 @@ function ComposerBar({
   const handleKeyDown = (e) => {
     // Skip during IME composition (Chinese, Japanese, Korean, etc.)
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if (showMenu) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIdx((i) => (i + 1) % menuItems.length); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setMenuIdx((i) => (i - 1 + menuItems.length) % menuItems.length); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); setMessage(''); return; }
+      const picked = menuItems[Math.min(menuIdx, menuItems.length - 1)];
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && picked.name !== typedCommand)) {
+        e.preventDefault();
+        pickCommand(picked);
+        return;
+      }
+    }
     // Ctrl/Cmd+Enter → send (preserves old habit)
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -448,6 +488,21 @@ function ComposerBar({
           </button>
         </div>
       )}
+      {showMenu && (
+        <ul className="ide-slash-menu" role="listbox" aria-label="Commands"
+          style={{ listStyle: 'none', margin: 0, padding: '4px 0', borderTop: '1px solid var(--line)', maxHeight: 220, overflowY: 'auto' }}>
+          {menuItems.map((c, i) => (
+            <li key={c.name} role="option" aria-selected={i === menuIdx}
+              onMouseDown={(e) => { e.preventDefault(); pickCommand(c); }}
+              onMouseEnter={() => setMenuIdx(i)}
+              style={{ display: 'flex', gap: 12, padding: '4px 12px', cursor: 'pointer', fontSize: '0.8rem',
+                background: i === menuIdx ? 'var(--bg-3, rgba(127,127,127,.15))' : 'transparent' }}>
+              <code style={{ minWidth: 150 }}>{c.usage}</code>
+              <span style={{ color: 'var(--ink-3)' }}>{c.description}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {showSlashHint && (
         <div
           className="ide-slash-hint"
@@ -521,6 +576,8 @@ export function IdeWorkspace({ id, project }) {
 
   // Optimistic send — messages sent but not yet confirmed by the stream
   const [pendingMessages, setPendingMessages] = useState([]);
+  // Bumped when a /command was answered, so the chat re-reads the saved conversation
+  const [commandTick, setCommandTick] = useState(0);
 
   // Browser panel live state (updated from stream events)
   const [browserLiveData, setBrowserLiveData] = useState(null);
@@ -1015,6 +1072,7 @@ export function IdeWorkspace({ id, project }) {
                 projectId={project.id}
                 workflow={workflow}
                 pendingMessages={pendingMessages}
+                refreshKey={commandTick}
                 onRemovePending={handleRemovePending}
                 onRetryPending={handleRetryPending}
                 onBrowserEvent={handleBrowserEvent}
@@ -1089,6 +1147,7 @@ export function IdeWorkspace({ id, project }) {
         onOptimisticSend={handleOptimisticSend}
         onSendSuccess={handleSendSuccess}
         onSendError={handleSendError}
+        onCommandDone={() => { load(); setCommandTick((k) => k + 1); }}
       />
 
       {/* Output file preview modal (opened from Outputs panel) */}

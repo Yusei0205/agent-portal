@@ -25,6 +25,7 @@ import { emit } from '../events.ts';
 import { shutdownSessionBrowser } from '../agent/browser-manager.ts';
 import { cancelRun } from './controls.ts';
 import { startRun } from './driver.ts';
+import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
 import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
@@ -833,6 +834,27 @@ export function registerWorkflowRoutes(): void {
     const kind = isCommand ? 'command' : 'human';
     const ts = now();
 
+    // Commands the portal answers itself (/model, /agent, /cost, ...). The command and its answer are saved as
+    // one event and nothing is sent to the engine.
+    if (isCommand && w.engine !== 'demo' && message.toLowerCase().trim() !== '/clear') {
+      const answer = await runPortalCommand(w, message, req.user!.id);
+      if (answer !== null) {
+        await repo.appendWorkflowEvent({
+          workflow_id: w.id,
+          kind: 'command-result',
+          body: `${message}\n---\n${answer}`,
+          data: JSON.stringify({ command: message, by: req.user!.id }),
+          created_at: ts,
+        });
+        if (w.project_id) {
+          emit(w.project_id, { type: 'workflow.command-result', workflowId: w.id, command: message, result: answer });
+          emit(w.project_id, { type: 'workflow.updated', workflowId: w.id });
+        }
+        sendJson(res, 200, { ok: true, kind: 'command', resumed: false, handled: true });
+        return;
+      }
+    }
+
     await repo.appendWorkflowEvent({
       workflow_id: w.id,
       kind,
@@ -898,6 +920,11 @@ export function registerWorkflowRoutes(): void {
     }
 
     sendJson(res, 200, { ok: true, kind, resumed });
+  });
+
+  // GET /api/slash-commands — the commands the chat box offers
+  router.get('/api/slash-commands', async (_req: PortalRequest, res: PortalResponse): Promise<void> => {
+    sendJson(res, 200, { commands: PORTAL_COMMANDS });
   });
 
   // PATCH /api/projects/:id/workflows/:wid — update session settings
