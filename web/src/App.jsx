@@ -344,9 +344,9 @@ function Shell({ user, onSignOut }) {
   useEffect(() => {
     const { tab, projectId, rest } = route;
 
-    // /aws → /connections/aws
+    // /aws (removed page) → /connections/git
     if (!projectId && tab === 'aws') {
-      navigateReplace('/connections/aws');
+      navigateReplace('/connections/git');
       return;
     }
     // /connections (bare, no sub-tab) → /connections/git

@@ -45,7 +45,6 @@ import { registerAuditRoutes } from './audit.ts';
 import { registerLearnRoutes } from './learn.ts';
 import { registerControlPlaneRoutes } from './control-plane.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
-import { registerAwsAccountRoutes } from './aws-accounts.ts';
 import { registerSessionFileRoutes } from './session-files.ts';
 import { registerTerminalRoutes, handleTerminalUpgrade, shutdownAllTerminals } from './terminal.ts';
 import { registerSessionLifecycleRoutes, startIdleStopTimer, stopIdleStopTimer } from './session-lifecycle.ts';
@@ -253,7 +252,6 @@ export async function startServer(
   registerLearnRoutes();
   registerControlPlaneRoutes();
   registerIntegrationRoutes();
-  registerAwsAccountRoutes();
   registerSessionFileRoutes();
   registerTerminalRoutes();
   registerSessionLifecycleRoutes();

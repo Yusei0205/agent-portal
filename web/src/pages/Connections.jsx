@@ -57,7 +57,6 @@ const PROVIDER_LABEL = {
 
 const CC_CRED_SOURCES = [
   { value: 'keys',        label: 'Access key ID + secret' },
-  { value: 'aws-account', label: 'Portal AWS account' },
   { value: 'portal-sso',  label: 'Portal AWS SSO identity' },
 ];
 
@@ -271,15 +270,12 @@ function GitHubForm({
 function CodeCommitForm({
   region, onRegionChange,
   credSource, onCredSourceChange,
-  awsAccountId, onAwsAccountIdChange,
   accessKeyId, onAccessKeyIdChange,
   secretAccessKey, onSecretAccessKeyChange,
   sessionToken, onSessionTokenChange,
   hasSessionToken,           // true when an encrypted token is already stored (edit mode)
   onNamePrefill,             // callback(profileName) — fills the connection Name if blank
   isEditing,
-  awsAccountGroups,    // null = not loaded, [] = loaded empty, [...] = loaded
-  awsAccountsLoading,
   ssoSettings,         // provider.sso from GET /api/settings
 }) {
   // ── Paste-area local state ─────────────────────────────────────────────────
@@ -356,56 +352,6 @@ function CodeCommitForm({
         </div>
       )}
 
-      {credSource === 'aws-account' && (
-        <div className="field">
-          <label htmlFor="cc-aws-account-id">
-            Portal AWS account{' '}
-            {isEditing && <span className="muted" style={{ fontWeight: 400 }}>(optional — leave blank to keep existing)</span>}
-          </label>
-          {awsAccountsLoading ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.84rem', color: 'var(--ink-3)' }}>
-              <div className="spinner" style={{ width: 14, height: 14 }} aria-label="Loading AWS accounts…" />
-              Loading AWS accounts…
-            </div>
-          ) : awsAccountGroups === null || (awsAccountGroups && awsAccountGroups.length === 0) ? (
-            <>
-              <select id="cc-aws-account-id" disabled style={{ color: 'var(--ink-3)' }}>
-                <option>No AWS accounts found</option>
-              </select>
-              <p className="field-hint" id="cc-aws-hint">
-                Add an AWS account under{' '}
-                <a href="#/connections/aws" style={{ color: 'var(--link, var(--accent))' }}>
-                  Connections → AWS accounts
-                </a>{' '}
-                first.
-              </p>
-            </>
-          ) : (
-            <>
-              <select
-                id="cc-aws-account-id"
-                value={awsAccountId}
-                onChange={(e) => onAwsAccountIdChange(e.target.value)}
-                aria-describedby="cc-aws-hint"
-              >
-                <option value="">— select an account —</option>
-                {(awsAccountGroups || []).map((g) => (
-                  <optgroup key={g.project.id} label={g.project.name}>
-                    {g.accounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}{a.region ? ` · ${a.region}` : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <p className="field-hint" id="cc-aws-hint">
-                AWS account credentials will be used to authenticate with CodeCommit.
-              </p>
-            </>
-          )}
-        </div>
-      )}
 
       {credSource === 'keys' && (
         <>
@@ -667,14 +613,10 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
   // ── CodeCommit fields ─────────────────────────────────────────────────────
   const [ccRegion,          setCcRegion]          = useState('us-east-1');
   const [ccCredSource,      setCcCredSource]      = useState('keys');
-  const [ccAwsAccountId,    setCcAwsAccountId]    = useState('');
   const [ccAccessKeyId,     setCcAccessKeyId]     = useState('');
   const [ccSecretAccessKey, setCcSecretAccessKey] = useState('');
   const [ccSessionToken,    setCcSessionToken]    = useState('');
 
-  // ── AWS accounts for CodeCommit aws-account dropdown ──────────────────────
-  const [awsAccountGroups,   setAwsAccountGroups]   = useState(null); // null=not loaded
-  const [awsAccountsLoading, setAwsAccountsLoading] = useState(false);
 
   // ── Bitbucket fields ──────────────────────────────────────────────────────
   const [bbEmail,     setBbEmail]     = useState('');
@@ -734,28 +676,6 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flowPhase, flowId]);
 
-  // ── Load AWS accounts for CodeCommit aws-account dropdown ─────────────────
-  useEffect(() => {
-    if (provider !== 'codecommit' || ccCredSource !== 'aws-account') return;
-    if (awsAccountGroups !== null) return; // already loaded
-    let cancelled = false;
-    setAwsAccountsLoading(true);
-    api.get('/api/projects')
-      .then(async (r) => {
-        const projects = r.projects || [];
-        const groups = await Promise.all(
-          projects.map(async (p) => {
-            const ar = await api.get(`/api/projects/${p.id}/aws-accounts`).catch(() => ({ accounts: [] }));
-            return { project: p, accounts: ar.accounts || [] };
-          }),
-        );
-        if (!cancelled) setAwsAccountGroups(groups.filter((g) => g.accounts.length > 0));
-      })
-      .catch(() => { if (!cancelled) setAwsAccountGroups([]); })
-      .finally(() => { if (!cancelled) setAwsAccountsLoading(false); });
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider, ccCredSource, awsAccountGroups]);
 
   const startDeviceFlow = async () => {
     if (!name.trim()) { setError('Please enter a connection name before signing in.'); return; }
@@ -829,7 +749,6 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
           secretAccessKey: ccSecretAccessKey,
           sessionToken:    ccSessionToken.trim(),
         } : {}),
-        ...(ccCredSource === 'aws-account' ? { awsAccountId: ccAwsAccountId.trim() } : {}),
       };
     } else if (provider === 'bitbucket') {
       if (!isEditing && (!bbEmail.trim() || !bbApiToken.trim())) {
@@ -967,8 +886,6 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
                   onRegionChange={setCcRegion}
                   credSource={ccCredSource}
                   onCredSourceChange={setCcCredSource}
-                  awsAccountId={ccAwsAccountId}
-                  onAwsAccountIdChange={setCcAwsAccountId}
                   accessKeyId={ccAccessKeyId}
                   onAccessKeyIdChange={setCcAccessKeyId}
                   secretAccessKey={ccSecretAccessKey}
@@ -978,8 +895,6 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
                   hasSessionToken={Boolean(connection?.hasSessionToken)}
                   onNamePrefill={(profileName) => { if (!name.trim()) setName(profileName); }}
                   isEditing={isEditing}
-                  awsAccountGroups={awsAccountGroups}
-                  awsAccountsLoading={awsAccountsLoading}
                   ssoSettings={ssoSettings}
                 />
               )}

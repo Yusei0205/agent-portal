@@ -59,8 +59,7 @@ function AwsWarning() {
       <Icon name="warning" size={15} style={{ flexShrink: 0 }} />
       <span>
         Keys stored here are plaintext in zip exports — handle with care. For engine
-        sign-ins, <a href="#/credentials" style={{ color: 'inherit', textDecoration: 'underline' }}>Credentials</a> or{' '}
-        <a href="#/connections/aws" style={{ color: 'inherit', textDecoration: 'underline' }}>Connections › AWS accounts</a>{' '}
+        sign-ins, <a href="#/credentials" style={{ color: 'inherit', textDecoration: 'underline' }}>Credentials</a>{' '}
         is the safer place.
       </span>
     </div>
