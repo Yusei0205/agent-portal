@@ -20,11 +20,9 @@ import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
 const TABS = [
   { id: 'provider',    label: 'Portal AI provider' },
   { id: 'tools',       label: 'Tools' },
-  { id: 'permissions', label: 'Permissions' },
   { id: 'budget',      label: 'Budget' },
   { id: 'codereview',  label: 'Code review' },
   { id: 'sessions',    label: 'Sessions' },
-  { id: 'delegation',  label: 'Delegated sessions' },
   { id: 'github',      label: 'GitHub' },
   { id: 'appearance',  label: 'Appearance' },
 ];
@@ -129,7 +127,6 @@ export default function Settings({ user }) {
           </>
         )}
         {tab === 'tools' && <Secrets />}
-        {tab === 'permissions' && <PermissionsTab />}
         {tab === 'budget' && (
           <BudgetTab
             settings={settings}
@@ -139,10 +136,10 @@ export default function Settings({ user }) {
         )}
         {tab === 'codereview' && <CodeReviewTab user={user} />}
         {tab === 'sessions' && (
-          <SessionsTab isAdmin={isAdmin} />
-        )}
-        {tab === 'delegation' && (
-          <DelegationTab isAdmin={isAdmin} />
+          <div style={{ display: 'grid', gap: 36 }}>
+            <SessionsTab isAdmin={isAdmin} />
+            <DelegationTab isAdmin={isAdmin} />
+          </div>
         )}
         {tab === 'appearance' && (
           <AppearanceTab isAdmin={isAdmin} />
@@ -156,20 +153,6 @@ export default function Settings({ user }) {
         )}
       </div>
     </div>
-  );
-}
-
-// ── Permissions tab placeholder ───────────────────────────────────────────────
-
-function PermissionsTab() {
-  return (
-    <section aria-label="Permissions">
-      <h2>Portal-wide permissions</h2>
-      <p className="muted">
-        Configure which shell commands agents may run, ask for, or are always blocked.
-        These rules apply to all projects unless a project overrides them.
-      </p>
-    </section>
   );
 }
 
