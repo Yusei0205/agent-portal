@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { usesDynamoDb } from './repositories/backend.ts';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { HttpError, generateId, now } from './util.ts';
@@ -349,6 +350,28 @@ export async function getToolPacks(): Promise<ToolPack[]> {
     },
   ];
 
+  // In the cloud, agents run in the AgentCore runner images, not where the portal runs, so installing here would change
+  // nothing for them. What the runners have is fixed when the image is built.
+  if (usesDynamoDb()) {
+    for (const p of packs) {
+      if (p.id === 'uv' || p.id === 'kiro') {
+        p.status = 'available';
+        p.installable = false;
+        p.detail = 'Included in the runner image';
+      } else if (p.id === 'drawio' && process.env.ICON_DIAGRAMS_DIR) {
+        // The portal image carries the pack (installed when the image is built), so there is nothing to install here.
+        p.installable = false;
+        p.detail = p.status === 'available' ? 'Included in the portal image' : 'Expected in the portal image but not found';
+      } else if (p.id === 'browser') {
+        const on = process.env.PORTAL_AGENTCORE_BROWSER === '1';
+        p.name = 'Cloud browser (AgentCore)';
+        p.status = on ? 'available' : 'not-available';
+        p.installable = false;
+        p.detail = on ? 'Agents can open pages; watch and take over in the Browser tab' : 'Turn on when deploying: cdk deploy -c agentcoreBrowser=true';
+      }
+    }
+  }
+
   _cache = { packs, at: Date.now() };
   return packs;
 }
@@ -402,6 +425,26 @@ async function runInstall(job: InstallJob): Promise<void> {
     }
     job.subscribers.clear();
   }
+}
+
+/**
+ * Install the Icon diagrams pack into packDir() (set ICON_DIAGRAMS_DIR first). Used when the cloud portal image is
+ * built (scripts/install-drawio-pack.ts), so the pack ships inside the image and is never fetched from S3 at run time.
+ * Returns the install log; throws when the install fails.
+ */
+export async function installDrawioPackForBuild(log: (line: string) => void = () => {}): Promise<void> {
+  const job: InstallJob = {
+    id: generateId(),
+    packId: 'drawio',
+    status: 'pending',
+    log: [],
+    startedAt: now(),
+    finishedAt: null,
+    error: null,
+    subscribers: new Set([log]),
+  };
+  await runInstall(job);
+  if (job.status !== 'done') throw new Error(job.error ?? 'The Icon diagrams pack did not install');
 }
 
 /**

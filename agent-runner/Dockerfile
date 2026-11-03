@@ -40,10 +40,15 @@ RUN node build.mjs
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM node:22-slim AS runtime
 
-# Install git (for shallow clones in repo-based runs)
+# git (clones in repo-based runs), curl and python3 (tools the agent commonly needs)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git ca-certificates && \
+    apt-get install -y --no-install-recommends git ca-certificates curl python3 && \
     rm -rf /var/lib/apt/lists/*
+
+# uv / uvx (Python tools and uvx-based MCP servers) are part of the image, so nothing is downloaded when a run starts.
+# Python itself comes from the image too (UV_PYTHON_PREFERENCE=system), so uv does not fetch an interpreter.
+COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /uvx /usr/local/bin/
+ENV UV_PYTHON_PREFERENCE=system
 
 WORKDIR /app
 
