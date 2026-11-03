@@ -23,17 +23,24 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
       .catch(() => ({ summary: [] }))
       .then((cs) => {
         if (cancelled) return;
-        const entry = (cs.summary || []).find((e) => e.engine === 'claude-code');
-        const list = entry?.credentials || [];
+        // Claude Code credentials first (they also give a choice of model), then Kiro ones.
+        const list = [];
+        for (const engine of ['claude-code', 'kiro']) {
+          const entry = (cs.summary || []).find((e) => e.engine === engine);
+          for (const c of entry?.credentials || []) list.push({ ...c, engine });
+        }
         setCreds(list);
-        const def = list.find((c) => c.isDefault) || list[0];
+        const def = list.find((c) => c.engine === 'claude-code' && c.isDefault) || list[0];
         if (def) setCredentialId(def.id);
       });
     return () => { cancelled = true; };
   }, []);
 
+  const chosen = (creds || []).find((c) => c.id === credentialId) || null;
+  const isKiro = chosen?.engine === 'kiro';
+
   const loadModels = useCallback(async () => {
-    if (creds === null) return;
+    if (creds === null || isKiro) { setModels([]); return; }
     setModelsLoading(true);
     setModelError(null);
     try {
@@ -47,13 +54,13 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
     } finally {
       setModelsLoading(false);
     }
-  }, [creds, credentialId]);
+  }, [creds, credentialId, isKiro]);
 
   useEffect(() => { loadModels(); }, [loadModels]);
 
   useEffect(() => {
-    onChange?.({ credentialId: credentialId || undefined, model: model || undefined });
-  }, [credentialId, model]); // eslint-disable-line react-hooks/exhaustive-deps
+    onChange?.({ credentialId: credentialId || undefined, model: isKiro ? undefined : (model || undefined) });
+  }, [credentialId, model, isKiro]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (creds === null) return null;
 
@@ -74,14 +81,16 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
             disabled={disabled}
           >
             {creds.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}{c.isDefault ? ' (default)' : ''}</option>
+              <option key={c.id} value={c.id}>{c.name} ({c.engine === 'kiro' ? 'Kiro' : 'Claude'}){c.isDefault ? ' (default)' : ''}</option>
             ))}
           </select>
         )}
       </div>
       <div className="field">
         <label htmlFor={`${idPrefix}-model`}>Model</label>
-        {modelsLoading ? (
+        {isKiro ? (
+          <p className="field-hint" id={`${idPrefix}-model`}>Kiro chooses the model itself.</p>
+        ) : modelsLoading ? (
           <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading models…" />
         ) : (
           <select

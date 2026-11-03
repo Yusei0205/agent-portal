@@ -6,6 +6,8 @@
  *   2. Resolved credential env (user bedrock_role cred or portal Bedrock settings):
  *        CLAUDE_CODE_USE_BEDROCK=1  → Bedrock Converse API.
  *        ANTHROPIC_API_KEY          → Anthropic Messages API.
+ *   2b. A personal Kiro credential — the prompt goes to the Kiro runner (AgentCore), so the cloud portal needs no
+ *      kiro-cli of its own.
  *   3. Kiro CLI — if provider.mode === 'kiro' and no personal claude-code credential
  *      overrides it (runs kiro-cli chat --no-interactive --trust-tools=).
  *   4. Demo / nothing configured    → throws a clear error.
@@ -98,6 +100,85 @@ export interface CallTextModelOptions {
   images?: Array<{ data: Buffer; mimeType: string; filename: string }>;
 }
 
+// ── Which engine's credential a call uses ────────────────────────────────────
+
+export type TextEngine = 'claude-code' | 'kiro';
+
+/**
+ * The engine a text call should use for this person: the engine of the credential they chose, otherwise their default
+ * Claude Code credential, otherwise any Kiro credential of theirs. null when they have neither (the portal's own
+ * provider settings then apply).
+ */
+export async function pickTextEngine(userId: string | null, credentialId: string | null): Promise<TextEngine | null> {
+  if (!userId) return null;
+  const { getCredentialsRepository } = await import('../repositories/credentials.ts');
+  const repo = getCredentialsRepository();
+  if (credentialId) {
+    const row = await repo.getByIdAndUser(credentialId, userId);
+    if (row && (row.engine === 'claude-code' || row.engine === 'kiro')) return row.engine;
+    return null;
+  }
+  if (await repo.getDefaultByUserAndEngine(userId, 'claude-code')) return 'claude-code';
+  const mine = await repo.listByUser(userId);
+  if (mine.some((c) => c.engine === 'claude-code')) return 'claude-code';
+  if (mine.some((c) => c.engine === 'kiro')) return 'kiro';
+  return null;
+}
+
+let _kiroRunnerOverride: ((prompt: string, userId: string, credentialId: string | null) => Promise<string>) | null = null;
+/** Replace the Kiro runner call in tests. Pass null to restore. */
+export function setKiroRunnerOverride(fn: typeof _kiroRunnerOverride): void {
+  _kiroRunnerOverride = fn;
+}
+
+/**
+ * Send a prompt to the Kiro runner (AgentCore) with the person's Kiro credential and return the reply text. Each call is
+ * its own short session. Kiro picks its model itself.
+ */
+async function callKiroViaRunner(
+  prompt: string,
+  userId: string,
+  credentialId: string | null,
+): Promise<string> {
+  if (_kiroRunnerOverride) return _kiroRunnerOverride(prompt, userId, credentialId);
+  const runtimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+  if (!runtimeArn) throw new Error('The Kiro runner is not set up for this portal, so a Kiro credential cannot be used here.');
+  const { resolveCredentialEnv } = await import('../credentials.ts');
+  const { getCredentialsRepository } = await import('../repositories/credentials.ts');
+  const { kiroTokenFromEnv } = await import('../agent/kiro.ts');
+  const { runKiroViaAgentCore } = await import('../agent/kiro-agentcore.ts');
+  const { randomUUID } = await import('node:crypto');
+
+  const repo = getCredentialsRepository();
+  const row = credentialId
+    ? await repo.getByIdAndUser(credentialId, userId)
+    : (await repo.listByUser(userId)).find((c) => c.engine === 'kiro') ?? null;
+  if (!row || row.engine !== 'kiro') throw new Error('That Kiro credential was not found. Choose one of your own credentials.');
+
+  const env = await resolveCredentialEnv('kiro', userId, row.id);
+  const token = kiroTokenFromEnv(env);
+  if (!token.accessToken) throw new Error('The Kiro credential has no valid token. Sign in again under Credentials.');
+
+  // A minimal run context: nothing to approve, nothing shown live. The reply comes back as text parts.
+  const ctx = {
+    run: { runId: randomUUID(), workflowId: '' },
+    emit: () => {},
+    awaitInput: async () => ({ decision: 'deny' as const, remember: false, message: '' }),
+    allowed: new Set<string>(),
+    signal: undefined,
+  } as unknown as Parameters<typeof runKiroViaAgentCore>[0];
+
+  const { textParts } = await runKiroViaAgentCore(ctx, {
+    runtimeArn,
+    runId: randomUUID(),
+    prompt,
+    token,
+    credentialId: row.id,
+    expectedCiphertext: row.secret_enc ?? null,
+  });
+  return textParts.join('');
+}
+
 /**
  * Call the portal's configured AI provider and return the response text.
  *
@@ -120,6 +201,24 @@ export async function callTextModel(
   const { config: _config } = await import('../config.ts');
 
   const settings = getSettings();
+
+  // A person who works with Kiro has a Kiro credential and no Claude one: the prompt goes to the Kiro runner.
+  if (process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN || _kiroRunnerOverride) {
+    if ((await pickTextEngine(createdBy, credentialId)) === 'kiro' && createdBy) {
+      const imageNote = images.length > 0 ? `
+
+[Note: ${images.length} image attachment(s) were provided but cannot be forwarded to Kiro. Base your answer on the text only.]` : '';
+      return callKiroViaRunner(
+        `${systemPrompt}
+
+${userMessage}${imageNote}
+
+Reply with the answer only, as asked above. Do not use tools and do not add commentary.`,
+        createdBy,
+        credentialId,
+      );
+    }
+  }
 
   // The portal's own provider may be unset (demo) while the person has a credential of their own: that is enough.
   const personalEnv = settings.provider.mode === 'demo' ? await resolveCredentialEnv('claude-code', createdBy, credentialId) : null;
