@@ -73,16 +73,26 @@ export async function restoreTree(absDir: string): Promise<void> {
   if (last && Date.now() - last < TREE_FRESH_MS && fs.existsSync(absDir)) return;
   restoredTrees.set(key, Date.now());
   const storage = getStorage();
-  for (const k of await storage.list(`${key}/`)) {
+  const keys = await storage.list(`${key}/`);
+  await forEachLimit(keys, 32, async (k) => {
     const abs = path.join(config.dataDir, ...k.split('/'));
-    if (fs.existsSync(abs)) continue;
+    if (fs.existsSync(abs)) return;
     try {
       await fs.promises.mkdir(path.dirname(abs), { recursive: true });
       await fs.promises.writeFile(abs, await storage.read(k));
     } catch (e) {
       console.error('[durable-files] restore failed for', k, e instanceof Error ? e.message : e);
     }
-  }
+  });
+}
+
+/** Run `fn` over `items` with at most `limit` running at once (folders can hold thousands of files). */
+async function forEachLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
 /** Remove every mirrored file under `absDir` (after the folder was deleted or moved). */
@@ -98,12 +108,15 @@ export async function forgetTree(absDir: string): Promise<void> {
 /** Mirror every file under a local folder (used after a folder is moved). */
 export async function persistTree(absDir: string): Promise<void> {
   if (!enabled()) return;
+  const files: string[] = [];
   const walk = async (dir: string): Promise<void> => {
     for (const e of await fs.promises.readdir(dir, { withFileTypes: true })) {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) await walk(full);
-      else await persistFile(full);
+      else files.push(full);
     }
   };
-  if (fs.existsSync(absDir)) await walk(absDir);
+  if (!fs.existsSync(absDir)) return;
+  await walk(absDir);
+  await forEachLimit(files, 32, (f) => persistFile(f));
 }
