@@ -201,6 +201,10 @@ export function registerInboxRoutes(): void {
     const response = body.response ?? null;
 
     // ── Approval-specific checks
+    if (item.type === 'approval' && response === 'approve' && req.authViaToken) {
+      sendJson(res, 403, { error: 'API tokens cannot approve tool calls. Approve it from a signed-in browser, or decline it.' });
+      return;
+    }
     if (item.type === 'approval') {
       const clientHash = typeof body.inputHash === 'string' ? body.inputHash : null;
       const pl = safeJson(item.payload, {}) as Record<string, unknown>;

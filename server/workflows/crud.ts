@@ -697,6 +697,12 @@ export function registerWorkflowRoutes(): void {
       return;
     }
 
+    // Allowing a tool call is a person looking at it. A token may answer questions and decline tool calls, not allow them.
+    if (response === 'approve' && req.authViaToken) {
+      sendJson(res, 403, { error: 'API tokens cannot approve tool calls. Approve it from a signed-in browser, or decline it.' });
+      return;
+    }
+
     if (response === 'approve') {
       let storedHash = inputRow.input_hash ?? null;
       if (!storedHash) {
@@ -971,6 +977,18 @@ export function registerWorkflowRoutes(): void {
       patch.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
     }
     if (hasTrustTools) {
+      // A session runs with its creator's identity, budget and vault, so only the creator can take the human check away
+      // from it, and never an API token. Anyone with edit access may turn it off.
+      if (body.trustTools && Number((w as unknown as Row).trust_tools ?? 0) !== 1) {
+        if (req.authViaToken) {
+          sendJson(res, 403, { error: 'API tokens cannot turn on "trust all tools". Do this from a signed-in browser.' });
+          return;
+        }
+        if (w.created_by && String(w.created_by) !== req.user!.id) {
+          sendJson(res, 403, { error: 'Only the person who started this session can turn on "trust all tools": the session runs as them.' });
+          return;
+        }
+      }
       patch.trust_tools = body.trustTools ? 1 : 0;
     }
     if (hasMaxIter) {
