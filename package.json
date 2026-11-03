@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --import tsx --test --test-timeout=300000 test/*.test.ts",
     "test:file": "node --disable-warning=ExperimentalWarning --import tsx --test --test-timeout=300000",
+    "test:engine": "node --disable-warning=ExperimentalWarning --import tsx --test --test-timeout=600000 test/engine/*.test.ts",
     "test:affected": "node scripts/test-affected.mjs",
     "test:map:check": "node scripts/test-map-check.mjs",
     "test:checklist": "node scripts/test-checklist.mjs",

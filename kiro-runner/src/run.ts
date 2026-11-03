@@ -12,6 +12,12 @@
  * Safety invariants:
  *   - Token fields (accessToken, refreshToken, clientSecret) never appear in logs.
  *   - Temp DB and temp dirs are deleted at the end regardless of outcome.
+ *   - Every tool call kiro-cli asks about passes the portal's guard (shared/agent/guard.ts):
+ *     tool settings, MCP lists, Kiro config and git hooks/config are never changed.
+ *   - Untrusted runs ask a person through the portal (shared/agent/agentcore-approvals.ts),
+ *     the same rule as the portal's local Kiro engine. Without a way to ask, they decline.
+ *   - Secret-looking variables are removed from kiro-cli's environment (shared/agent/env-scrub.ts).
+ *   - A cancel from the portal (or the portal hanging up) stops kiro-cli.
  */
 
 import { spawn } from 'node:child_process';
@@ -20,6 +26,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import type { KiroRunPayload } from './validate.js';
+import { guardToolCall } from '../shared/agent/guard.ts';
+import { scrubEnvForShell } from '../shared/agent/env-scrub.ts';
+import { inputFingerprint } from '../shared/agent/tool-policy.ts';
+import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
 
 export type EmitFn = (event: Record<string, unknown>) => void;
 
@@ -255,12 +265,29 @@ function extractText(content: unknown): string {
   }).join('');
 }
 
+// ── Permission requests ───────────────────────────────────────────────────────
+
+/** kiro-cli sends rawInput as an object or as JSON text. */
+function parseRawInput(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === 'string') {
+    try {
+      const v = JSON.parse(raw);
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch { /* not JSON */ }
+    return { command: raw };
+  }
+  return {};
+}
+
 // ── Run entry point ───────────────────────────────────────────────────────────
 
 export async function runKiroRun(
   payload: KiroRunPayload,
   emit: EmitFn,
   processStartMs: number,
+  broker?: ApprovalBroker,
+  stop?: AbortSignal,
 ): Promise<void> {
   const coldStartMs = Date.now() - processStartMs;
   const invokeStart = Date.now();
@@ -292,8 +319,9 @@ export async function runKiroRun(
 
     // Build child env — set HOME to isolated temp dir; DO NOT set KIRO_TEST_DB_PATH
     // (kiro-cli-chat ignores it; we use the real default path instead)
+    // Secret-looking variables (*_KEY, *_TOKEN, *_SECRET, model and portal keys) never reach kiro-cli.
     const childEnv: Record<string, string> = Object.fromEntries(
-      Object.entries(process.env as Record<string, string | undefined>)
+      Object.entries(scrubEnvForShell(process.env as Record<string, string | undefined>) as Record<string, string | undefined>)
         .filter(([k, v]) => v !== undefined
           && k !== 'KIRO_CLI_SKIP_SETUP'
           && k !== 'KIRO_CLI_NO_MODIFY_PATH'
@@ -321,12 +349,23 @@ export async function runKiroRun(
     let timedOut = false;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      emit({ type: 'status', text: 'kiro-cli ACP wall-clock timeout (5 min). Terminating.' });
+      emit({ type: 'status', text: 'kiro-cli time limit (29 minutes) reached. Stopping.' });
       try { child.kill('SIGTERM'); } catch { /* ok */ }
       setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ok */ } }, 3_000).unref();
     }, TIMEOUT_MS);
 
     const acp = createAcpClient(child);
+
+    // A cancel from the portal stops kiro-cli.
+    let cancelled = false;
+    const onStop = (): void => {
+      cancelled = true;
+      emit({ type: 'status', text: 'Run cancelled. Stopping kiro-cli.' });
+      try { child.kill('SIGTERM'); } catch { /* ok */ }
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ok */ } }, 3_000).unref();
+    };
+    if (stop?.aborted) onStop();
+    else stop?.addEventListener('abort', onStop, { once: true });
 
     acp.onNotification((method, params) => {
       if (method !== 'session/update') return;
@@ -350,11 +389,42 @@ export async function runKiroRun(
       }
     });
 
-    // Auto-allow all tool calls (trusted run in spike)
-    acp.onServerRequest(async (_method, params, _id) => {
-      const p = params as { options?: Array<{ optionId: string; kind: string }> };
-      const allowOpt = (p?.options ?? []).find(o => o.kind === 'allow_once' || o.kind === 'allow_always');
-      return { optionId: allowOpt?.optionId ?? (p?.options ?? [])[0]?.optionId ?? 'allow_once' };
+    // Tool permissions: guard first, then trust, then a person (through the portal).
+    const trusted = payload.policy?.trusted ?? true;
+    const runAbort = new AbortController();
+    stop?.addEventListener('abort', () => runAbort.abort(), { once: true });
+    acp.onServerRequest(async (method, params, _id) => {
+      if (method !== 'session/request_permission') throw new Error(`Unhandled server request: ${method}`);
+      const p = params as {
+        toolCall?: { title?: string; name?: string; rawInput?: unknown };
+        options?: Array<{ optionId: string; kind: string }>;
+      };
+      const options = p?.options ?? [];
+      const allowId = (options.find(o => o.kind === 'allow_once' || o.kind === 'allow_always') ?? options[0])?.optionId ?? 'allow_once';
+      const rejectId = (options.find(o => o.kind === 'reject_once' || o.kind === 'reject_always') ?? options[options.length - 1])?.optionId ?? 'reject_once';
+      const toolName = p?.toolCall?.title ?? p?.toolCall?.name ?? 'Tool';
+      const input = parseRawInput(p?.toolCall?.rawInput);
+      const inputStr = JSON.stringify(input);
+
+      const guardReason = guardToolCall(toolName, input, workDir ?? '');
+      if (guardReason) {
+        emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: guardReason });
+        return { optionId: rejectId };
+      }
+      if (trusted) return { optionId: allowId };
+
+      if (!payload.approvals || !broker) {
+        emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: `"${toolName}" needs a person's approval, and this run has no way to ask one.` });
+        return { optionId: rejectId };
+      }
+      const inputHash = inputFingerprint(toolName, input);
+      const expiryMs = Math.round(payload.approvals.expiryMinutes * 60_000) + 60_000;
+      const req = broker.open(runId, inputHash, expiryMs, runAbort.signal);
+      emit({ type: 'approval-request', requestId: req.requestId, toolName, input, inputHash, expiresAt: req.expiresAt });
+      const outcome = await req.outcome;
+      if (outcome.decision === 'allow') return { optionId: allowId };
+      emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: outcome.message || 'The user declined this action.' });
+      return { optionId: rejectId };
     });
 
     let acpError: Error | undefined;
@@ -384,6 +454,9 @@ export async function runKiroRun(
       acpError = e as Error;
     } finally {
       clearTimeout(timeoutTimer);
+      stop?.removeEventListener('abort', onStop);
+      runAbort.abort();
+      broker?.closeRun(runId);
       acp.close();
     }
 
@@ -409,7 +482,7 @@ export async function runKiroRun(
 
     process.stdout.write(JSON.stringify({
       event: 'run_complete', runId, exitCode, durationMs, coldStartMs,
-      tokenRefreshed, timedOut, acpError: acpError?.message?.slice(0, 200),
+      tokenRefreshed, timedOut, cancelled, acpError: acpError?.message?.slice(0, 200),
       prompt_preview: prompt.slice(0, 200) + (prompt.length > 200 ? '…' : ''),
     }) + '\n');
 

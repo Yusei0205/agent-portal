@@ -4,6 +4,8 @@ import * as cdk from 'aws-cdk-lib';
 import { AgentPortalSpikeAStack } from '../lib/spike-a-stack';
 import { AgentPortalSpikeBStack } from '../lib/spike-b-stack';
 import { AgentPortalSpikeCStack } from '../lib/spike-c-stack';
+import { AgentPortalHarnessBuildStack, AgentPortalHarnessStack } from '../lib/harness-stack';
+import * as path from 'path';
 
 const app = new cdk.App();
 
@@ -33,3 +35,21 @@ new AgentPortalSpikeCStack(app, 'AgentPortalSpikeC', {
   description: 'Spike C: AppSync Events live-update channel proof for agent-portal (project=agent-portal, purpose=spike-c)',
   stackName: 'AgentPortalSpikeC',
 });
+
+// Harness runners (infra/scripts/deploy-harness.mjs passes -c harness=1 and the image tag).
+// Only built on request, so the spike stacks deploy without the staged runner sources.
+if (app.node.tryGetContext('harness')) {
+  const env = { account: '366019841051', region: 'ap-southeast-1' };
+  new AgentPortalHarnessBuildStack(app, 'AgentPortalHarnessBuild', {
+    env,
+    stackName: 'AgentPortalHarnessBuild',
+    description: 'Agent Portal: ECR and arm64 CodeBuild for the harness runner images (project=agent-portal, purpose=harness)',
+    sourceDir: path.join(__dirname, '..', '.harness-src'),
+  });
+  new AgentPortalHarnessStack(app, 'AgentPortalHarness', {
+    env,
+    stackName: 'AgentPortalHarness',
+    description: 'Agent Portal: Claude and Kiro AgentCore runtimes with approvals, rules, guard and limits (project=agent-portal, purpose=harness)',
+    imageTag: String(app.node.tryGetContext('harnessImageTag') ?? 'unset'),
+  });
+}

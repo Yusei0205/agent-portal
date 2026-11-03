@@ -22,6 +22,30 @@ export interface PortalConfig {
   runToken: string;
 }
 
+/** One permission rule, as the portal stores it (only the fields the decision needs). */
+export interface PolicyRulePayload {
+  id: string;
+  pattern: string | null;
+  category: string | null;
+  action: 'allow' | 'block' | 'ask';
+  scope: 'always' | 'untrusted';
+  reason: string | null;
+}
+
+/** The run's permission policy: the same rules and trust level the portal's local engine applies. */
+export interface PolicyPayload {
+  trusted: boolean;
+  rules: PolicyRulePayload[];
+}
+
+/** How a tool call that needs a person is handled. Absent: it is declined (nobody to ask). */
+export interface ApprovalsPayload {
+  /** The portal relays approval-request events and answers with a mode "answer" invocation. */
+  via: 'portal';
+  /** Minutes before an unanswered request is declined (the portal's own expiry plus a margin). */
+  expiryMinutes: number;
+}
+
 export interface InvocationPayload {
   /** Unique run ID provided by the caller. */
   runId: string;
@@ -36,6 +60,9 @@ export interface InvocationPayload {
   maxMinutes?: number;
   repo?: RepoConfig;
   portal?: PortalConfig;
+  /** Permission rules and trust. Absent: no rules (everything the guard allows runs), untrusted. */
+  policy?: PolicyPayload;
+  approvals?: ApprovalsPayload;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -49,8 +76,12 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal',
+  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'portal', 'policy', 'approvals',
 ]);
+const MAX_RULES = 1_000;
+const MAX_RULE_PATTERN = 2_000;
+/** Branch names git accepts and that cannot be read as an option. */
+const SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]{0,254}$/;
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
 const KNOWN_PORTAL_FIELDS = new Set(['url', 'runToken']);
 
@@ -80,6 +111,10 @@ export function validatePayload(raw: unknown): ValidationResult {
   }
 
   // runId — required string
+  if (obj.mode !== undefined && obj.mode !== 'run') {
+    return err('"mode" must be "run" for a run (answers use mode "answer")');
+  }
+
   if (typeof obj.runId !== 'string' || !obj.runId.trim()) {
     return err('"runId" must be a non-empty string');
   }
@@ -140,11 +175,17 @@ export function validatePayload(raw: unknown): ValidationResult {
     if (!trimmedUrl.startsWith('https://')) {
       return err('"repo.url" must be a public HTTPS URL');
     }
+    if (/[\s\x00-\x1f]/.test(trimmedUrl)) {
+      return err('"repo.url" must not contain spaces or control characters');
+    }
     if (trimmedUrl.length > MAX_REPO_URL_LENGTH) {
       return err(`"repo.url" exceeds maximum length of ${MAX_REPO_URL_LENGTH}`);
     }
     if (r.branch !== undefined && (typeof r.branch !== 'string' || !r.branch.trim())) {
       return err('"repo.branch" must be a non-empty string when provided');
+    }
+    if (typeof r.branch === 'string' && (!SAFE_BRANCH.test(r.branch.trim()) || r.branch.includes('..'))) {
+      return err('"repo.branch" must be a plain branch name (letters, digits, . _ / -)');
     }
     repo = {
       url: trimmedUrl,
@@ -171,6 +212,27 @@ export function validatePayload(raw: unknown): ValidationResult {
     portal = { url: p.url.trim(), runToken: p.runToken };
   }
 
+  let policy: PolicyPayload | undefined;
+  if (obj.policy !== undefined) {
+    const r = validatePolicy(obj.policy);
+    if (typeof r === 'string') return err(r);
+    policy = r;
+  }
+
+  let approvals: ApprovalsPayload | undefined;
+  if (obj.approvals !== undefined) {
+    const a = obj.approvals as Record<string, unknown>;
+    if (typeof a !== 'object' || a === null || Array.isArray(a)) return err('"approvals" must be an object');
+    for (const key of Object.keys(a)) {
+      if (key !== 'via' && key !== 'expiryMinutes') return err(`Unknown field in "approvals": "${key}"`);
+    }
+    if (a.via !== 'portal') return err('"approvals.via" must be "portal"');
+    if (typeof a.expiryMinutes !== 'number' || !(a.expiryMinutes > 0) || a.expiryMinutes > 1440) {
+      return err('"approvals.expiryMinutes" must be a positive number ≤ 1440');
+    }
+    approvals = { via: 'portal', expiryMinutes: a.expiryMinutes };
+  }
+
   return {
     ok: true,
     payload: {
@@ -182,8 +244,43 @@ export function validatePayload(raw: unknown): ValidationResult {
       maxMinutes: typeof obj.maxMinutes === 'number' ? obj.maxMinutes : undefined,
       repo,
       portal,
+      policy,
+      approvals,
     },
   };
+}
+
+function validatePolicy(raw: unknown): PolicyPayload | string {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return '"policy" must be an object';
+  const p = raw as Record<string, unknown>;
+  for (const key of Object.keys(p)) {
+    if (key !== 'trusted' && key !== 'rules') return `Unknown field in "policy": "${key}"`;
+  }
+  if (typeof p.trusted !== 'boolean') return '"policy.trusted" must be a boolean';
+  if (!Array.isArray(p.rules)) return '"policy.rules" must be an array';
+  if (p.rules.length > MAX_RULES) return `"policy.rules" has more than ${MAX_RULES} rules`;
+  const rules: PolicyRulePayload[] = [];
+  for (const [i, r] of p.rules.entries()) {
+    if (typeof r !== 'object' || r === null || Array.isArray(r)) return `"policy.rules[${i}]" must be an object`;
+    const x = r as Record<string, unknown>;
+    if (typeof x.id !== 'string' || !x.id) return `"policy.rules[${i}].id" must be a non-empty string`;
+    if (x.pattern !== null && x.pattern !== undefined && (typeof x.pattern !== 'string' || x.pattern.length > MAX_RULE_PATTERN)) {
+      return `"policy.rules[${i}].pattern" must be a string of at most ${MAX_RULE_PATTERN} characters or null`;
+    }
+    if (x.category !== null && x.category !== undefined && typeof x.category !== 'string') return `"policy.rules[${i}].category" must be a string or null`;
+    if (x.action !== 'allow' && x.action !== 'block' && x.action !== 'ask') return `"policy.rules[${i}].action" must be allow, block or ask`;
+    if (x.scope !== 'always' && x.scope !== 'untrusted') return `"policy.rules[${i}].scope" must be always or untrusted`;
+    if (x.reason !== null && x.reason !== undefined && typeof x.reason !== 'string') return `"policy.rules[${i}].reason" must be a string or null`;
+    rules.push({
+      id: x.id,
+      pattern: (x.pattern as string | null | undefined) ?? null,
+      category: (x.category as string | null | undefined) ?? null,
+      action: x.action,
+      scope: x.scope,
+      reason: (x.reason as string | null | undefined) ?? null,
+    });
+  }
+  return { trusted: p.trusted, rules };
 }
 
 function err(message: string): ValidationErr {

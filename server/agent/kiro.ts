@@ -27,7 +27,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { run as dbRun, insert, one, getDb, all } from '../db.ts';
+import { run as dbRun, insert, getDb, all } from '../db.ts';
 import type { Row } from '../db.ts';
 import { now, generateId, HttpError } from '../util.ts';
 import { getAgentEnv, getSettings, getSetting } from '../settings.ts';
@@ -934,11 +934,11 @@ async function runKiroViaAgentCoreAdapter(
   let expectedCiphertext: string | null = null;
   if (run.credentialId) {
     try {
-      const credRow = one<{ secret_enc: string | null }>(
-        'SELECT secret_enc FROM engine_credentials WHERE id = ?',
-        run.credentialId,
-      );
-      expectedCiphertext = credRow?.secret_enc ?? null;
+      // Through the repository, so DynamoDB mode finds the credential too (a SQLite read
+      // returned nothing there, and refreshed tokens were never saved).
+      const { getCredentialsRepository } = await import('../repositories/credentials.ts');
+      const cred = await getCredentialsRepository().getById(run.credentialId);
+      expectedCiphertext = cred?.secret_enc ?? null;
     } catch { /* non-fatal */ }
   }
 

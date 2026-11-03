@@ -14,7 +14,6 @@
  * ALL decisions route through evaluateCommand() from guardrails.ts.
  */
 
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -99,59 +98,9 @@ function fireHook(workflowId: string, runId: string, event: 'start' | 'done' | '
 }
 
 // ── Fingerprinting (FR-GUARD-8) ───────────────────────────────────────────────
-
-/** The fields of a tool call that decide what it does. These are shown whole in the approval, never cut. */
-const DECIDING_FIELDS = new Set(['command', 'url', 'file_path', 'notebook_path', 'path', 'pattern', 'branch']);
-
-/** A shell command longer than this is refused instead of shown to a person: nobody can review it meaningfully. */
-export const MAX_REVIEWABLE_COMMAND = 20_000;
-
-/** JSON with sorted keys so the same tool call always produces the same text. */
-function canonicalJson(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  if (v && typeof v === 'object') {
-    return `{${Object.keys(v as object)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
-
-/** SHA-256 fingerprint of one exact tool call. An approval must send it back. */
-export function inputFingerprint(toolName: string, input: unknown): string {
-  return createHash('sha256').update(canonicalJson({ tool: toolName, input })).digest('hex');
-}
-
-/** What an approval shows: deciding fields whole, other long strings cut at 4,000 characters. */
-function approvalView(input: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(input)) {
-    out[k] = DECIDING_FIELDS.has(k) && typeof v === 'string' ? v : (typeof v === 'string' && v.length > 4000 ? v.slice(0, 4000) + `… (${v.length - 4000} more)` : v);
-  }
-  return out;
-}
-
-/**
- * What "allow for the rest of this run" covers: one exact shell command, one web host for WebFetch,
- * or one other tool name. This prevents a single approval from covering any later variant.
- */
-export function rememberKey(toolName: string, input: Record<string, unknown>): { key: string; scope: 'command' | 'host' | 'tool'; label: string } {
-  if (toolName === 'Bash' || toolName === 'bash' || toolName === 'execute_bash' || toolName === 'execute_command') {
-    const command = String(input.command ?? input.cmd ?? '');
-    return { key: `Bash\u0000${command}`, scope: 'command', label: command };
-  }
-  if (toolName === 'WebFetch' || toolName === 'web_fetch') {
-    let host = '';
-    try {
-      host = new URL(String(input.url ?? '')).host.toLowerCase();
-    } catch { /* not a URL — treat as exact */ }
-    return host
-      ? { key: `WebFetch\u0000${host}`, scope: 'host', label: host }
-      : { key: `WebFetch\u0000${String(input.url ?? '')}`, scope: 'command', label: String(input.url ?? '') };
-  }
-  return { key: toolName, scope: 'tool', label: toolName };
-}
+// The helpers live in tool-policy.ts so the AgentCore runners use the same code.
+import { inputFingerprint, rememberKey, approvalView } from './tool-policy.ts';
+export { inputFingerprint, rememberKey, MAX_REVIEWABLE_COMMAND } from './tool-policy.ts';
 
 // ── Pending approval map ──────────────────────────────────────────────────────
 // Moved to approvals.ts to break the runner→inbox→runner circular import.

@@ -32,6 +32,14 @@ export interface KiroRunPayload {
   runId: string;
   prompt: string;
   token: KiroTokenInput;
+  /**
+   * Trust level of the run, as in the portal's local Kiro engine: trusted runs allow what
+   * kiro-cli asks about; untrusted runs ask a person. Absent: trusted (the spike behaviour,
+   * for direct invocations); the portal always sends it.
+   */
+  policy?: { trusted: boolean };
+  /** How to ask a person: the portal relays approval-request events and answers them. */
+  approvals?: { via: 'portal'; expiryMinutes: number };
 }
 
 export interface KiroLoginPayload {
@@ -110,6 +118,24 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
     return err(`"token.startUrl" exceeds maximum length of ${MAX_URL}`);
   }
 
+  let policy: KiroRunPayload['policy'];
+  if (obj.policy !== undefined) {
+    const pol = obj.policy as Record<string, unknown>;
+    if (typeof pol !== 'object' || pol === null || Array.isArray(pol) || typeof pol.trusted !== 'boolean') {
+      return err('"policy" must be an object with a boolean "trusted"');
+    }
+    policy = { trusted: pol.trusted };
+  }
+  let approvals: KiroRunPayload['approvals'];
+  if (obj.approvals !== undefined) {
+    const a = obj.approvals as Record<string, unknown>;
+    if (typeof a !== 'object' || a === null || Array.isArray(a) || a.via !== 'portal'
+      || typeof a.expiryMinutes !== 'number' || !(a.expiryMinutes > 0) || a.expiryMinutes > 1440) {
+      return err('"approvals" must be { via: "portal", expiryMinutes: number ≤ 1440 }');
+    }
+    approvals = { via: 'portal', expiryMinutes: a.expiryMinutes };
+  }
+
   return {
     ok: true,
     payload: {
@@ -128,6 +154,8 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
         profileArn: typeof tok.profileArn === 'string' && tok.profileArn ? tok.profileArn : undefined,
         profileName: typeof tok.profileName === 'string' && tok.profileName ? tok.profileName : undefined,
       },
+      policy,
+      approvals,
     },
   };
 }

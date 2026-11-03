@@ -65,6 +65,7 @@ function toWorkflow(row: Row): WorkflowRecord {
     jira_url: String(row.jira_url ?? ''),
     kind: row.kind != null ? String(row.kind) : null,
     run_timeout_minutes: row.run_timeout_minutes != null ? Number(row.run_timeout_minutes) : null,
+    budget_usd: row.budget_usd != null ? Number(row.budget_usd) : null,
     // enrichment
     parent_title: row.parent_title !== undefined ? (row.parent_title != null ? String(row.parent_title) : null) : undefined,
     child_count: row.child_count !== undefined ? Number(row.child_count) : undefined,
@@ -285,7 +286,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
-      'kind', 'run_timeout_minutes',
+      'kind', 'run_timeout_minutes', 'budget_usd',
     ];
     const clean: Record<string, unknown> = {};
     for (const k of allowed) {
@@ -309,7 +310,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
-      'kind', 'run_timeout_minutes',
+      'kind', 'run_timeout_minutes', 'budget_usd',
     ];
     const clean: Record<string, unknown> = {};
     for (const k of allowed) {
