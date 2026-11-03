@@ -199,3 +199,13 @@ The Integrations page has two parts. **Connected services** is an overview of si
 - **"Needs attention" after saving:** the message says why (HTTP status, "did not answer in time", "SSRF blocked"). A runner image older than this feature ignores `mcpServers` silently, so after deploying wait for warm machines to go idle before testing.
 - **Kiro says an MCP tool failed with a permission error ("missing field outcome"):** kiro-cli asks `session/request_permission` before it runs an MCP tool and wants the answer as `{ outcome: { outcome: 'selected', optionId } }`. The runner used to answer with a bare `optionId`, which built-in tools never needed. Fixed in kiro-runner `run.ts`; a machine on an older image still shows it until it is released.
 - **A session ignores new messages:** check `iteration_count` against `max_iterations` (PATCH `maxIterations` raises it); a session that hit its limit shows `stop_reason: max_iterations` and starts no run.
+
+## Session says it has no browser (cloud)
+
+- **Cause:** the AgentCore Browser tools are opt-in per deployment. Without `-c agentcoreBrowser=true` the portal Lambda has no `PORTAL_AGENTCORE_BROWSER=1`, the runner is never told to start the browser, and the agent answers that it cannot browse. Every `cdk deploy AgentPortalCloud` must repeat this context value, or the setting is dropped again.
+- **Check:** `aws lambda get-function-configuration --function-name agent-portal --query Environment.Variables.PORTAL_AGENTCORE_BROWSER` should print `1`. The runtime roles already allow the browser calls.
+- **Cost:** a browser session only bills while open; it starts on the agent's first browser tool call.
+
+## Message appears in the chat but no run starts
+
+- **Cause (fixed):** the composer only called `/start` when its copy of the session status said "not running". Right after a run ended that copy could still say "running", so the message was saved and never answered; `/start` errors (for example the iteration limit) were also swallowed. Now it always calls `/start` (the server ignores it when a run is going) and shows the reason when the start fails.

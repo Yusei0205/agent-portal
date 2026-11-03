@@ -365,6 +365,7 @@ function ComposerBar({
     // Reset textarea to one line after send
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setBusy(true);
+    setResumeError(null);
 
     if (idleStopped && onDismissIdle) onDismissIdle();
     try {
@@ -378,11 +379,14 @@ function ComposerBar({
         return;
       }
       if (isSlash && onOptimisticSend) onOptimisticSend(clientId, text);
-      // Only call /start if not already running and not resumed by /message
-      if (!isRunning && !res?.resumed) {
+      // Always ask the server to start: it does nothing when a run is already going. The page's own idea of
+      // "running" can be out of date right after a run ends, and skipping the start left the message unanswered.
+      if (!res?.resumed) {
         await api.post(
           `/api/projects/${projectId}/workflows/${workflow.id}/start`,
-        ).catch(() => {});
+        ).catch((e) => {
+          if (e?.status !== 409 && !isRunning) setResumeError(`Your message was saved, but the run did not start: ${e?.message || 'unknown error'}`);
+        });
       }
       if (onSendSuccess) onSendSuccess(clientId);
       if (onSent) onSent();
@@ -465,6 +469,9 @@ function ComposerBar({
             <Icon name="x" size={13} />
           </button>
         </div>
+      )}
+      {resumeError && !(workflow?.resumable && !isRunning) && (
+        <div className="error-note" role="alert" style={{ margin: '4px 8px' }}>{resumeError}</div>
       )}
       {workflow?.resumable && !isRunning && (
         <div className="ide-idle-banner" role="status">
@@ -712,7 +719,6 @@ export function IdeWorkspace({ id, project }) {
     if (!msg) return;
     const wf = data?.workflow;
     if (!wf) return;
-    const isRunning = wf.status === 'running' || wf.status === 'pending';
 
     setPendingMessages((prev) =>
       prev.map((m) =>
@@ -724,7 +730,7 @@ export function IdeWorkspace({ id, project }) {
         `/api/projects/${project.id}/workflows/${wf.id}/message`,
         { message: msg.text },
       );
-      if (!isRunning && !res?.resumed) {
+      if (!res?.resumed) {
         await api.post(`/api/projects/${project.id}/workflows/${wf.id}/start`).catch(() => {});
       }
       setPendingMessages((prev) =>
