@@ -40,11 +40,23 @@ const web = await esbuild.build({
   sourcemap: 'linked',
   target: ['es2022', 'chrome110', 'safari16', 'firefox115'],
   define: { 'process.env.NODE_ENV': '"production"' },
+  // The AgentCore Live View component imports the NICE DCV client by bare name (see web/vendor/agentcore-live-view).
+  alias: {
+    dcv: path.join(root, 'web/vendor/agentcore-live-view/nice-dcv-web-client-sdk/dcvjs-esm/dcv.js'),
+    'dcv-ui': path.join(root, 'web/vendor/agentcore-live-view/nice-dcv-web-client-sdk/dcv-ui/dcv-ui.js'),
+  },
   loader: { '.svg': 'file', '.woff2': 'file', '.woff': 'file' },
   metafile: true,
   logLevel: 'warning',
   legalComments: 'none',
 });
+
+// The DCV client loads its decoder workers from <baseUrl>/dcv/*.js at run time (baseUrl = /nice-dcv-web-client-sdk/dcvjs-esm).
+fs.cpSync(
+  path.join(root, 'web/vendor/agentcore-live-view/nice-dcv-web-client-sdk/dcvjs-esm'),
+  path.join(webOut, 'nice-dcv-web-client-sdk/dcvjs-esm'),
+  { recursive: true },
+);
 
 // ── Inject asset hashes into index.html ─────────────────────────────────────
 

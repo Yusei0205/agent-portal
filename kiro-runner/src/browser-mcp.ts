@@ -22,14 +22,16 @@ const tools = browserToolSpecs(browser);
 const liveDir = process.env.BROWSER_LIVE_DIR;
 if (liveDir) {
   let seq = 0;
-  browser.onFrame = (f) => {
+  const drop = (payload: unknown): void => {
     try {
       fs.mkdirSync(liveDir, { recursive: true });
       const name = `${Date.now()}-${String(seq++).padStart(4, '0')}`;
-      fs.writeFileSync(path.join(liveDir, `${name}.tmp`), JSON.stringify(f));
+      fs.writeFileSync(path.join(liveDir, `${name}.tmp`), JSON.stringify(payload));
       fs.renameSync(path.join(liveDir, `${name}.tmp`), path.join(liveDir, `${name}.json`));
     } catch { /* the live view is optional */ }
   };
+  browser.onFrame = (f) => drop(f);
+  browser.onSession = (s) => drop({ session: s });
 }
 
 function send(msg: Record<string, unknown>): void {

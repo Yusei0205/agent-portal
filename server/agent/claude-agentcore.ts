@@ -124,6 +124,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
         case 'tool-result':
           emit('tool-end', { toolCallId: '', toolName: String(ev.name ?? 'Tool'), status: 'completed', output: String(ev.output ?? '') });
           break;
+        case 'browser-session':
+          if (ev.sessionId) emit('browser-session', { browserId: String(ev.browserId ?? 'aws.browser.v1'), sessionId: String(ev.sessionId), width: Number(ev.width) || 1280, height: Number(ev.height) || 800 });
+          break;
         case 'browser-navigate':
           if (ev.url) emit('browser-navigate', { url: String(ev.url) });
           break;

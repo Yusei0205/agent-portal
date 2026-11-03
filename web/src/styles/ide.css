@@ -1345,3 +1345,7 @@
   border-top: 1px solid var(--line-2);
   background: var(--raised);
 }
+
+/* AgentCore Live View (cloud browser) */
+.idb-live-wrap { position: absolute; inset: 0; background: #202020; }
+.idb-live-shield { position: absolute; inset: 0; z-index: 5; cursor: not-allowed; }

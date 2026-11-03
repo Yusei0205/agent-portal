@@ -47,7 +47,7 @@ export function issueRealtimeToken(user: { id: string; is_admin: boolean }, proj
 // ── Publishing ────────────────────────────────────────────────────────────────
 
 // Minimal SHA-256 for @smithy/signature-v4 on top of node:crypto.
-function Sha256(this: { _h: ReturnType<typeof createHash> | ReturnType<typeof createHmac> }, secret?: Uint8Array | string): void {
+export function Sha256(this: { _h: ReturnType<typeof createHash> | ReturnType<typeof createHmac> }, secret?: Uint8Array | string): void {
   this._h = secret != null ? createHmac('sha256', Buffer.from(secret as string)) : createHash('sha256');
 }
 Sha256.prototype.update = function (this: { _h: { update(d: Buffer): void } }, data: Uint8Array | string): void {

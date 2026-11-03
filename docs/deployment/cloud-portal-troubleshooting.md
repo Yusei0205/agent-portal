@@ -210,3 +210,23 @@ The Integrations page has two parts. **Connected services** is an overview of si
 ## Message appears in the chat but no run starts
 
 - **Cause (fixed):** the composer only called `/start` when its copy of the session status said "not running". Right after a run ended that copy could still say "running", so the message was saved and never answered; `/start` errors (for example the iteration limit) were also swallowed. Now it always calls `/start` (the server ignores it when a run is going) and shows the reason when the start fails.
+
+## Browser tab: live video of the agent's cloud browser (AgentCore Live View)
+
+**What it is.** In the cloud portal the Browser tab streams the agent's AgentCore browser as real video (AWS DCV) and, with **Remote** switched on, lets you use the mouse and keyboard in it. The stream goes from AWS straight to your browser; the portal only signs a 5-minute address.
+
+**What it needs**
+- `-c agentcoreBrowser=true` on every `cdk deploy AgentPortalCloud` (otherwise the agent has no browser at all).
+- Both runner images from this change or later (they announce the browser session id with a `browser-session` event).
+- The Lambda role policy `bedrock-agentcore:ConnectBrowserLiveViewStream`, `UpdateBrowserStream`, `GetBrowserSession` (in `infra/lib/portal-stack.ts`).
+- The viewer is vendored in `web/vendor/agentcore-live-view/` (from `bedrock-agentcore` 0.4.6, Apache-2.0; it bundles the NICE DCV web client with its own licence). The DCV worker files are copied to `dist/web/nice-dcv-web-client-sdk/` by `scripts/build.mjs`.
+
+**How it behaves**
+- `GET /api/workflows/:id/browser/live-view` returns `{ available, url, sessionId, width, height }`. It is only available while a run is active and the agent has opened a browser; the browser closes when the run ends, so the tab goes back to "Not running".
+- **Remote on** calls `POST /api/workflows/:id/browser/live-view/control` (project editor), which uses AgentCore `UpdateBrowserStream` to pause the agent's control. **Remote off** hands control back. The switch resets to off for each new browser session.
+- Viewport is fixed at 1280x800; the component must be given the same size or the picture is cropped.
+
+**Seen when testing (2026-11-03)**
+- A page opened before the deploy kept the old web bundle (the tab still showed the old Browser panel with "Not running"). Reload the page.
+- While control is taken, the agent's page reads came back empty and it then carried on; it is not a hard stop of the run.
+- The older picture-after-each-action feed (`browser-screenshot` events) is still emitted and stored; it is only shown when no live stream is available.

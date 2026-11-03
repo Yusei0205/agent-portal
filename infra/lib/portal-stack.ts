@@ -259,6 +259,11 @@ export class AgentPortalCloudStack extends cdk.Stack {
       actions: ['appsync:EventPublish'],
       resources: [`arn:aws:appsync:${this.region}:${this.account}:apis/${eventsApi.attrApiId}/channelNamespace/*`],
     }));
+    // Live View of the agent's cloud browser: the portal signs the stream address, the page connects to AWS.
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:ConnectBrowserLiveViewStream', 'bedrock-agentcore:UpdateBrowserStream', 'bedrock-agentcore:GetBrowserSession'],
+      resources: ['*'],
+    }));
     if (props.kiroRuntimeArn) {
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],

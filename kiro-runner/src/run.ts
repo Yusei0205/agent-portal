@@ -383,7 +383,11 @@ export async function runKiroRun(
         let last: { url?: string; jpegBase64?: string } | null = null;
         for (const n of names) {
           const file = path.join(liveDir, n);
-          try { last = JSON.parse(await fsp.readFile(file, 'utf8')) as { url?: string; jpegBase64?: string }; } catch { /* half written */ }
+          try {
+            const item = JSON.parse(await fsp.readFile(file, 'utf8')) as { url?: string; jpegBase64?: string; session?: Record<string, unknown> };
+            if (item.session) emit({ type: 'browser-session', ...item.session });
+            else last = item;
+          } catch { /* half written */ }
           await fsp.rm(file, { force: true });
         }
         if (last?.url) emit({ type: 'browser-navigate', url: last.url });

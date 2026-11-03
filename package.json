@@ -72,12 +72,16 @@
     "ws": "8.18.0"
   },
   "devDependencies": {
+    "@cloudscape-design/components": "^3.0.1408",
+    "@cloudscape-design/design-tokens": "^3.0.117",
+    "@cloudscape-design/global-styles": "^1.0.71",
     "@types/node": "^26.0.0",
     "@types/ws": "8.5.14",
     "esbuild": "^0.28.0",
     "jsdom": "^25.0.0",
     "pdf-lib": "^1.17.1",
     "playwright": "^1.56.0",
+    "prop-types": "^15.8.1",
     "tsx": "^4.23.0",
     "typescript": "^6.0.0"
   },

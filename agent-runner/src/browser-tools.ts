@@ -28,6 +28,10 @@ const MAX_FRAME_BASE64 = 250_000;
 
 export interface BrowserFrame { url: string; jpegBase64: string }
 
+/** The AgentCore browser session in use: the portal signs a Live View URL for it. */
+export interface BrowserSessionInfo { browserId: string; sessionId: string; width: number; height: number }
+const VIEWPORT = { width: 1280, height: 800 };
+
 type EmitFn = (event: Record<string, unknown>) => void;
 type ToolResult = { content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>; isError?: boolean };
 
@@ -60,6 +64,8 @@ export class AgentCoreBrowser {
   private starting: Promise<Page> | null = null;
   /** Receives a small picture of the page after each action, for the portal's live Browser view (never shown to the model). */
   onFrame: ((f: BrowserFrame) => void) | null = null;
+  /** Called once the browser session exists (so a person can watch and take over through AgentCore Live View). */
+  onSession: ((s: BrowserSessionInfo) => void) | null = null;
 
   constructor(private emit: EmitFn, region: string, private browserId = DEFAULT_BROWSER_ID) {
     this.region = region;
@@ -92,12 +98,13 @@ export class AgentCoreBrowser {
       browserIdentifier: this.browserId,
       name: 'agent-portal-run',
       sessionTimeoutSeconds: 900,
-      viewPort: { width: 1280, height: 800 },
+      viewPort: VIEWPORT,
     }));
     this.sessionId = res.sessionId ?? null;
     const wsUrl = res.streams?.automationStream?.streamEndpoint;
     if (!this.sessionId || !wsUrl) throw new Error('AgentCore did not return a browser automation endpoint');
     this.emit({ type: 'status', text: 'Browser session started' });
+    try { this.onSession?.({ browserId: this.browserId, sessionId: this.sessionId, ...VIEWPORT }); } catch { /* optional */ }
 
     this.browser = await chromium.connectOverCDP(wsUrl, { headers: await this.signedHeaders(wsUrl) });
     const ctx = this.browser.contexts()[0] ?? await this.browser.newContext();

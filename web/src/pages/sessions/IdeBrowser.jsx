@@ -12,9 +12,15 @@
  *   onPopIn     () => void   — called when user collapses back to sidebar
  *   isPopped    boolean      — true when rendered in the main-area overlay
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { realtimeAvailable } from '../../lib/realtime.js';
 import { Icon } from '../../components/Icon.jsx';
+
+// AgentCore Live View (AWS DCV video stream of the agent's cloud browser). Loaded only when a cloud browser is open.
+const BrowserLiveView = lazy(() =>
+  import('../../../vendor/agentcore-live-view/BrowserLiveView.js').then((m) => ({ default: m.BrowserLiveView })));
+const LIVE_POLL_MS = 5000;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000]; // exponential backoff ms
@@ -85,6 +91,10 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
   // ── Connection state ───────────────────────────────────────────────────────
   const [wsState, setWsState]         = useState('idle');    // idle|connecting|connected|disconnected
   const [wsError, setWsError]         = useState(null);
+
+  // ── Cloud mode: the portal cannot hold a WebSocket, so the agent's browser is shown through AgentCore Live View ──
+  const [cloudMode, setCloudMode]     = useState(null);      // null = not known yet
+  const [live, setLive]               = useState(null);      // { url, sessionId, width, height } while a cloud browser is open
 
   // ── Browser state (from WS 'state' messages) ────────────────────────────
   const [running, setRunning]           = useState(false);
@@ -180,6 +190,7 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
 
   useEffect(() => {
     closedRef.current = false;
+    if (cloudMode !== false) return undefined; // cloud: Live View below; unknown yet: wait
 
     function connect() {
       if (closedRef.current) return;
@@ -249,7 +260,36 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
       const ws = wsRef.current;
       if (ws) { ws.close(); wsRef.current = null; }
     };
-  }, [workflowId, drawFrame]);
+  }, [workflowId, drawFrame, cloudMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    realtimeAvailable().then((v) => { if (!cancelled) setCloudMode(Boolean(v)); }).catch(() => { if (!cancelled) setCloudMode(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // While a cloud browser is open, ask the portal for a signed Live View address (and notice when it closes).
+  useEffect(() => {
+    if (cloudMode !== true) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const r = await api.get(`/api/workflows/${workflowId}/browser/live-view`);
+        if (cancelled) return;
+        if (r?.available && r.url) {
+          // A new address is signed on every call, so keep the first one for as long as it is the same browser session.
+          // A new browser session starts with the agent in control, so the switch starts off again.
+          setLive((cur) => { if (!cur || cur.sessionId !== r.sessionId) setControlEnabled(false); return cur && cur.sessionId === r.sessionId ? cur : { url: r.url, sessionId: r.sessionId, width: r.width, height: r.height }; });
+        } else {
+          setLive(null);
+        }
+      } catch { /* try again on the next tick */ }
+      if (!cancelled) timer = setTimeout(tick, LIVE_POLL_MS);
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [cloudMode, workflowId]);
 
   // ── Remote-control toggle ────────────────────────────────────────────────
   const handleControlToggle = useCallback(async () => {
@@ -258,13 +298,14 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
     const next = !controlEnabled;
     setControlEnabled(next); // optimistic
     try {
-      await api.post(`/api/workflows/${workflowId}/browser/control`, { enabled: next });
+      // cloud: pauses the agent's control of the browser (AgentCore) so the person can drive it through Live View
+      await api.post(cloudMode ? `/api/workflows/${workflowId}/browser/live-view/control` : `/api/workflows/${workflowId}/browser/control`, { enabled: next });
     } catch {
       setControlEnabled((v) => !v); // revert on failure
     } finally {
       controlBusyRef.current = false;
     }
-  }, [controlEnabled, workflowId]);
+  }, [controlEnabled, workflowId, cloudMode]);
 
   // ── Coordinate mapping (CSS-pixel viewport → frame pixels) ────────────────
   const mapCoords = useCallback((e) => {
@@ -370,8 +411,8 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
       ? [{ id: '__default__', title: pageTitle || tryHostname(currentUrl), url: currentUrl, active: true }]
       : [];
 
-  const showFallback = !hasFrame && (liveData?.screenshotBase64 || fallbackScreenshot);
-  const showEmpty    = !hasFrame && !liveData?.screenshotBase64 && !fallbackScreenshot;
+  const showFallback = !hasFrame && !live && (liveData?.screenshotBase64 || fallbackScreenshot);
+  const showEmpty    = !hasFrame && !live && !liveData?.screenshotBase64 && !fallbackScreenshot;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -398,6 +439,7 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
 
       {/* ── Toolbar ────────────────────────────────────────────────────────── */}
       <div className="idb-toolbar" role="toolbar" aria-label="Browser controls">
+        {!cloudMode && (<>
         <button
           type="button"
           className="btn-icon"
@@ -462,9 +504,10 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
             }}
           />
         </form>
+        </>)}
 
         {/* Status dot */}
-        <StatusDot wsState={wsState} running={running} />
+        <StatusDot wsState={cloudMode ? (live ? 'connected' : 'disconnected') : wsState} running={cloudMode ? Boolean(live) : running} />
 
         {/* Remote control toggle */}
         <div className="idb-remote-wrap">
@@ -505,7 +548,7 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
       {controlEnabled && (
         <div className="idb-control-banner" role="status" aria-live="polite">
           <Icon name="warning" size={13} />
-          You are controlling the browser — the agent may also act
+          {cloudMode ? 'You are controlling the browser — the agent is paused' : 'You are controlling the browser — the agent may also act'}
         </div>
       )}
 
@@ -539,6 +582,16 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
           onBlur={() => setViewportFocused(false)}
           onContextMenu={(e) => { if (controlEnabled) e.preventDefault(); }}
         />
+
+        {/* AgentCore Live View: real video of the agent's cloud browser; the shield keeps it view-only until Remote is on */}
+        {cloudMode && live && (
+          <div className="idb-live-wrap">
+            <Suspense fallback={null}>
+              <BrowserLiveView key={live.sessionId} signedUrl={live.url} remoteWidth={live.width} remoteHeight={live.height} />
+            </Suspense>
+            {!controlEnabled && <div className="idb-live-shield" title="View only. Switch Remote on to take control." />}
+          </div>
+        )}
 
         {/* Fallback screenshot — shown before first live frame arrives */}
         {showFallback && (

@@ -26,6 +26,7 @@ import { getSessionBrowserState, shutdownSessionBrowser } from './agent/browser-
 import { getSetting } from './settings.ts';
 import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
+import { presignLiveViewUrl, setAutomationStream } from './browser-live-view.ts';
 
 // ── Idle stop ─────────────────────────────────────────────────────────────────
 
@@ -252,6 +253,66 @@ export function registerSessionLifecycleRoutes(): void {
   //
   // GET /api/workflows/:wid/browser
   //
+  // GET /api/workflows/:wid/browser/live-view
+  // A short-lived signed URL for AgentCore Live View of the browser the agent is using right now (the page streams
+  // it straight from AWS and can take over with mouse and keyboard). { available: false } when no browser is open.
+  router.get(
+    '/api/workflows/:wid/browser/live-view',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const wf = await requireWorkflowReadAccess(req, res, req.params.wid);
+      if (!wf) return;
+      const repo = getSessionsRepository();
+      const active = await repo.getActiveRun(String(wf.id));
+      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 5) : [];
+      // The browser is closed when the run ends, so only a session announced during the current run can be watched.
+      const since = String(active?.started_at ?? active?.created_at ?? '');
+      const latest = [...events].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= since);
+      if (!latest) { sendJson(res, 200, { available: false }); return; }
+      let info: { browserId?: string; sessionId?: string; width?: number; height?: number } = {};
+      try { info = JSON.parse(latest.payload ?? '{}'); } catch { /* none */ }
+      if (!info.sessionId) { sendJson(res, 200, { available: false }); return; }
+      try {
+        const url = await presignLiveViewUrl(info.browserId || 'aws.browser.v1', info.sessionId, 300);
+        sendJson(res, 200, { available: true, url, sessionId: info.sessionId, width: info.width || 1280, height: info.height || 800, expiresIn: 300 });
+      } catch (e: unknown) {
+        console.error('[browser] live-view signing failed:', e);
+        sendJson(res, 200, { available: false, error: 'Could not sign the live view address' });
+      }
+    },
+  );
+
+  // POST /api/workflows/:wid/browser/live-view/control  { enabled: boolean }
+  // Take over (enabled=true: the agent's browser commands are paused) or hand control back to the agent.
+  router.post(
+    '/api/workflows/:wid/browser/live-view/control',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const wf = await requireWorkflowReadAccess(req, res, req.params.wid);
+      if (!wf) return;
+      if (req.authViaToken) { sendJson(res, 403, { error: 'This endpoint requires browser authentication, not an API token' }); return; }
+      if (!req.user?.is_admin) {
+        const member = wf.project_id ? await getMembership(String(wf.project_id), req.user!.id) : null;
+        const ok = wf.project_id ? ['editor', 'owner'].includes(String(member?.access ?? '')) : String(wf.created_by ?? '') === req.user!.id;
+        if (!ok) { sendJson(res, 403, { error: 'Project editor access required' }); return; }
+      }
+      const takeOver = Boolean((req.body as Record<string, unknown> | undefined)?.enabled);
+      const repo = getSessionsRepository();
+      const active = await repo.getActiveRun(String(wf.id));
+      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 5) : [];
+      const since = String(active?.started_at ?? active?.created_at ?? '');
+      const latest = [...events].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= since);
+      let info: { browserId?: string; sessionId?: string } = {};
+      try { info = JSON.parse(latest?.payload ?? '{}'); } catch { /* none */ }
+      if (!info.sessionId) { sendJson(res, 409, { error: 'No cloud browser is open for this session' }); return; }
+      try {
+        await setAutomationStream(info.browserId || 'aws.browser.v1', info.sessionId, !takeOver);
+        sendJson(res, 200, { ok: true, enabled: takeOver });
+      } catch (e: unknown) {
+        console.error('[browser] stream update failed:', e);
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Could not change browser control' });
+      }
+    },
+  );
+
   // Returns what the agent's browser tool last opened: most recent URL and
   // screenshot (base64 PNG) found in run events.  Returns empty when none.
   //

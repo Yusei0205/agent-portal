@@ -71,6 +71,7 @@ export type AgentCoreSSEEvent =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string }
   | { type: 'tool'; name: string }
+  | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
   | { type: 'browser-navigate'; url: string }
   | { type: 'browser-screenshot'; screenshotBase64: string; url?: string }
   | { type: 'status'; text: string }
@@ -556,6 +557,12 @@ export async function runKiroViaAgentCore(
           if (textParts.length && textParts[textParts.length - 1] !== '') textParts.push('');
           emit('tool-start', { toolCallId: '', toolName, toolInput: '{}', status: 'in_progress' });
           emit('tool-end', { toolCallId: '', toolName, status: 'completed', output: '' });
+          break;
+        }
+
+        case 'browser-session': {
+          const sesEv = ev as { type: 'browser-session'; browserId?: string; sessionId?: string; width?: number; height?: number };
+          if (sesEv.sessionId) emit('browser-session', { browserId: sesEv.browserId || 'aws.browser.v1', sessionId: sesEv.sessionId, width: Number(sesEv.width) || 1280, height: Number(sesEv.height) || 800 });
           break;
         }
 

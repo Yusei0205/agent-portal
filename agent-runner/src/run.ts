@@ -273,6 +273,7 @@ export async function runInvocation(
   // ── AgentCore Browser (optional, started on first use, always stopped in finally) ──
   const browser = payload.browser ? new AgentCoreBrowser(emit, region) : null;
   if (browser) {
+    browser.onSession = (s) => emit({ type: 'browser-session', ...s });
     // Live Browser view in the portal (a small picture after each action; never shown to the model).
     browser.onFrame = (f) => {
       emit({ type: 'browser-navigate', url: f.url });
