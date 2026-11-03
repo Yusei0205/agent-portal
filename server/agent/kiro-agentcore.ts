@@ -43,6 +43,8 @@ import { createFileReceiver } from './runner-files.ts';
 import { persistFile } from '../durable-files.ts';
 import { encrypt, decrypt } from '../secrets.ts';
 import { getCredentialsRepository } from '../repositories/credentials.ts';
+import { agentCoreSessionId } from './agentcore-session.ts';
+import { waitForRepoPrep } from './repo-prep.ts';
 import { getAgentcoreLoginRepository, clearAgentcoreLoginRepository } from '../repositories/agentcore-login.ts';
 import { usesDynamoDb } from '../repositories/backend.ts';
 import { now, HttpError, generateId } from '../util.ts';
@@ -486,7 +488,9 @@ export async function runKiroViaAgentCore(
   const { emit, signal } = ctx;
   const textParts: string[] = [];
   const credits = 0;
-  const sessionId = randomUUID();
+  // One AgentCore session per portal session, so the session's persistent folder (repositories) is found again.
+  const sessionId = ctx.run?.workflowId ? agentCoreSessionId(ctx.run.workflowId, 'kiro') : randomUUID();
+  if (ctx.run?.workflowId && opts.repos?.length) await waitForRepoPrep(ctx.run.workflowId);
 
   emit('status', { state: 'thinking' });
   emit('status', { text: 'Running via AgentCore…' });

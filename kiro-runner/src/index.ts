@@ -19,6 +19,7 @@ import { validatePayload } from './validate.js';
 import { runKiroRun } from './run.js';
 import { runKiroLogin } from './login.js';
 import { runKiroListModels } from './list-models.js';
+import { runPrepareRepos } from './prepare.js';
 
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
@@ -130,6 +131,8 @@ const server = http.createServer(async (req, res) => {
         await runKiroRun(payload, emit, processStartMs);
       } else if (payload.mode === 'kiro-list-models') {
         await runKiroListModels(payload, emit);
+      } else if (payload.mode === 'prepare-repos') {
+        await runPrepareRepos(payload, emit);
       } else if (payload.mode === 'kiro-login') {
         loginOutcomes.set(payload.runId, { state: 'pending', at: Date.now() });
         const recording = (event: Record<string, unknown>): void => {

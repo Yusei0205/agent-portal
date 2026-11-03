@@ -166,6 +166,24 @@ function RepositoriesSection({ workflow, projectId }) {
   const [busy, setBusy]     = useState(false);
   const [error, setError]   = useState(null);
   const [pick, setPick]     = useState('');
+  const [prep, setPrep]     = useState(null);          // how far getting the repositories ready has got
+
+  // Follow the preparation (the portal clones the repositories into the session's storage in the background).
+  useEffect(() => {
+    if (attached.length === 0) { setPrep(null); return undefined; }
+    let cancelled = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const d = await api.get(`/api/projects/${projectId}/workflows/${workflow.id}/repo-prep`);
+        if (cancelled) return;
+        setPrep(d.prep ?? null);
+        if (d.prep?.state === 'running') timer = setTimeout(tick, 3000);
+      } catch { /* the status line is optional */ }
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [attached.join(','), projectId, workflow?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,7 +265,12 @@ function RepositoriesSection({ workflow, projectId }) {
       )}
       {attached.length > 0 && (
         <p className="muted" style={{ fontSize: '0.72rem', margin: '6px 0 0' }}>
-          The agent gets a copy under <code>repos/&lt;name&gt;/</code> from its next message.
+          {prep?.state === 'running' && 'Getting the repositories ready…'}
+          {prep?.state === 'done' && (prep.persisted
+            ? `Ready: ${(prep.repos ?? []).join(', ') || 'repositories'} kept in this session's storage under repos/.`
+            : 'Checked. The agent clones them when you send a message (session storage is not available).')}
+          {prep?.state === 'failed' && <span style={{ color: 'var(--danger, #c0392b)' }}>Could not prepare: {prep.message}</span>}
+          {!prep && <>The agent gets a copy under <code>repos/&lt;name&gt;/</code> from its next message.</>}
         </p>
       )}
       {error && <div className="error-note" role="alert" style={{ marginTop: 6 }}>{error}</div>}

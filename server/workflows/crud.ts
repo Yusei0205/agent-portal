@@ -26,6 +26,7 @@ import { shutdownSessionBrowser } from '../agent/browser-manager.ts';
 import { cancelRun } from './controls.ts';
 import { startRun } from './driver.ts';
 import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
+import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
 import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
@@ -465,6 +466,8 @@ export function registerWorkflowRoutes(): void {
 
     // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });
+    // Cloud engines: get the attached repositories ready before the first message.
+    if (repoIds.length > 0) await requestRepoPrep(id).catch((e) => console.error('[repo-prep] request failed:', e));
 
     const enriched = await enrichWorkflowRow(wfRecord);
     sendJson(res, 201, { workflow: workflowView(enriched) });
@@ -999,9 +1002,20 @@ export function registerWorkflowRoutes(): void {
       emit(w.project_id, { type: 'workflow.updated', workflowId: w.id });
     }
 
+    if (hasRepoIds) await requestRepoPrep(w.id).catch((e) => console.error('[repo-prep] request failed:', e));
+
     const updated = await repo.getWorkflowById(w.id);
     const enriched = updated ? await enrichWorkflowRow(updated) : w;
     sendJson(res, 200, { workflow: workflowView(enriched) });
+  });
+
+  // GET /api/projects/:id/workflows/:wid/repo-prep — how far getting the session's repositories ready has got
+  router.get('/api/projects/:id/workflows/:wid/repo-prep', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const w = await getSessionsRepository().getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    sendJson(res, 200, { prep: getRepoPrep(w.id) });
   });
 
   // GET /api/projects/:id/workflows/:wid/transcript  — newest-first, cursor-based paging

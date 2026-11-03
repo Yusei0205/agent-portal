@@ -57,7 +57,14 @@ export interface KiroLoginStatusPayload {
   runId: string;
 }
 
-export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload | KiroLoginStatusPayload;
+export interface KiroPreparePayload {
+  mode: 'prepare-repos';
+  runId: string;
+  /** The session's repositories to clone into the persistent folder (checked in prepare.ts). */
+  repos: unknown[];
+}
+
+export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload | KiroLoginStatusPayload | KiroPreparePayload;
 
 export type ValidationResult =
   | { ok: true; payload: KiroPayload }
@@ -78,8 +85,8 @@ export function validatePayload(raw: unknown): ValidationResult {
   const obj = raw as Record<string, unknown>;
 
   const mode = obj.mode;
-  if (mode !== 'kiro-run' && mode !== 'kiro-login' && mode !== 'kiro-list-models' && mode !== 'kiro-login-status') {
-    return err('"mode" must be "kiro-run", "kiro-login", "kiro-list-models" or "kiro-login-status"');
+  if (mode !== 'kiro-run' && mode !== 'kiro-login' && mode !== 'kiro-list-models' && mode !== 'kiro-login-status' && mode !== 'prepare-repos') {
+    return err('"mode" must be "kiro-run", "kiro-login", "kiro-list-models", "kiro-login-status" or "prepare-repos"');
   }
 
   if (typeof obj.runId !== 'string' || !obj.runId.trim()) {
@@ -91,6 +98,10 @@ export function validatePayload(raw: unknown): ValidationResult {
 
   if (mode === 'kiro-login-status') {
     return { ok: true, payload: { mode: 'kiro-login-status', runId: (obj.runId as string).trim() } };
+  }
+  if (mode === 'prepare-repos') {
+    if (!Array.isArray(obj.repos)) return err('"repos" must be an array');
+    return { ok: true, payload: { mode: 'prepare-repos', runId: (obj.runId as string).trim(), repos: obj.repos as unknown[] } };
   }
   if (mode === 'kiro-run') {
     return validateKiroRun(obj);

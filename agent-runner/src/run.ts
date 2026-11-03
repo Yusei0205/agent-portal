@@ -42,7 +42,7 @@ import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
 import { emitRunnerFiles } from '../shared/runner-files.js';
-import { parseRunnerRepos, cloneRunnerRepos } from '../shared/runner-repos.js';
+import { parseRunnerRepos, cloneRunnerRepos, PERSIST_ROOT } from '../shared/runner-repos.js';
 import {
   type InvocationPayload,
   DEFAULT_MODEL,
@@ -186,10 +186,14 @@ export async function runInvocation(
   if (payload.repos?.length) {
     const parsed = parseRunnerRepos(payload.repos);
     if (parsed.ok) {
-      await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev));
+      await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT });
     } else {
       emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
     }
+  }
+  if (payload.prepareOnly) {
+    emit({ type: 'result', runId: payload.runId, stop_reason: 'prepared', metrics: {} });
+    return;
   }
 
   // Files changed from here on are what the agent produced (the clone above is not sent back).

@@ -46,6 +46,8 @@ export interface InvocationPayload {
   repo?: RepoConfig;
   /** The session's repositories to clone under repos/ (checked in run.ts by shared/runner-repos.ts). */
   repos?: unknown[];
+  /** true = only put the repositories in place (no prompt, no agent run). */
+  prepareOnly?: boolean;
   portal?: PortalConfig;
   /** Anthropic credential; without it the run uses Bedrock through the execution role. */
   auth?: AuthConfig;
@@ -72,7 +74,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'repos', 'portal', 'auth', 'trustTools', 'browser',
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'maxMinutes', 'repo', 'repos', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser',
 ]);
 const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
@@ -112,6 +114,12 @@ export function validatePayload(raw: unknown): ValidationResult {
   }
 
   // prompt — required string
+  if (obj.prepareOnly !== undefined && typeof obj.prepareOnly !== 'boolean') {
+    return err('"prepareOnly" must be a boolean');
+  }
+  if (obj.prepareOnly === true && obj.prompt === undefined) {
+    obj.prompt = 'prepare';
+  }
   if (typeof obj.prompt !== 'string' || !obj.prompt.trim()) {
     return err('"prompt" must be a non-empty string');
   }
@@ -239,6 +247,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       maxMinutes: typeof obj.maxMinutes === 'number' ? obj.maxMinutes : undefined,
       repo,
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
+      ...(obj.prepareOnly === true ? { prepareOnly: true } : {}),
       portal,
       auth,
       trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,

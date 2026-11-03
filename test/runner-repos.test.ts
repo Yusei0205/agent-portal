@@ -80,6 +80,67 @@ describe('cloneRunnerRepos', () => {
   });
 });
 
+describe('cloneRunnerRepos with persistent storage', () => {
+  it('keeps a repository between runs, updates it, and never discards the changes the agent made', async () => {
+    // The runner is Linux; creating folder links needs extra rights on Windows, so skip there when it is not allowed.
+    const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-link-'));
+    try {
+      fs.mkdirSync(path.join(probe, 'a'));
+      fs.symlinkSync(path.join(probe, 'a'), path.join(probe, 'b'), 'dir');
+    } catch {
+      fs.rmSync(probe, { recursive: true, force: true });
+      return;
+    }
+    fs.rmSync(probe, { recursive: true, force: true });
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-persist-'));
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=t', ...args], { cwd, stdio: 'pipe' }).toString();
+    const src = path.join(tmp, 'src');
+    fs.mkdirSync(src);
+    git(src, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(src, 'a.txt'), '1');
+    git(src, 'add', '.');
+    git(src, 'commit', '-q', '-m', 'one');
+    const persist = path.join(tmp, 'persist');
+    fs.mkdirSync(persist);
+    const repo = { name: 'proj', url: 'file://' + src.split(path.sep).join('/'), branch: 'main' };
+
+    // Run 1: a fresh microVM clones into the persistent folder.
+    const work1 = path.join(tmp, 'work1');
+    fs.mkdirSync(work1);
+    const m1: string[] = [];
+    await cloneRunnerRepos([repo], work1, (e) => m1.push(e.text), { persistRoot: persist });
+    assert.ok(m1.some((m) => m.startsWith('Cloning proj')));
+    assert.ok(fs.existsSync(path.join(persist, 'repos', 'proj', 'a.txt')));
+
+    // The source moves on; run 2 (a new work folder, same persistent folder) brings it up to date without cloning.
+    fs.writeFileSync(path.join(src, 'b.txt'), '2');
+    git(src, 'add', '.');
+    git(src, 'commit', '-q', '-m', 'two');
+    const work2 = path.join(tmp, 'work2');
+    fs.mkdirSync(work2);
+    const m2: string[] = [];
+    await cloneRunnerRepos([repo], work2, (e) => m2.push(e.text), { persistRoot: persist });
+    assert.ok(!m2.some((m) => m.startsWith('Cloning')), m2.join(' | '));
+    assert.ok(m2.some((m) => m.includes('up to date')), m2.join(' | '));
+    assert.ok(fs.existsSync(path.join(persist, 'repos', 'proj', 'b.txt')));
+
+    // The agent edits a file: the next run leaves the repository alone.
+    fs.writeFileSync(path.join(persist, 'repos', 'proj', 'a.txt'), 'edited');
+    fs.writeFileSync(path.join(src, 'c.txt'), '3');
+    git(src, 'add', '.');
+    git(src, 'commit', '-q', '-m', 'three');
+    const work3 = path.join(tmp, 'work3');
+    fs.mkdirSync(work3);
+    const m3: string[] = [];
+    await cloneRunnerRepos([repo], work3, (e) => m3.push(e.text), { persistRoot: persist });
+    assert.ok(m3.some((m) => m.includes("already has your session's changes")), m3.join(' | '));
+    assert.equal(fs.readFileSync(path.join(persist, 'repos', 'proj', 'a.txt'), 'utf8'), 'edited');
+    assert.ok(!fs.existsSync(path.join(persist, 'repos', 'proj', 'c.txt')));
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
 function pathToFileUrl(p: string): string {
   return p;
 }

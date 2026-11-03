@@ -106,30 +106,91 @@ function runGit(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: 
   });
 }
 
+/** Where AgentCore mounts the session's persistent storage in the runner (see infra: filesystemConfigurations). */
+export const PERSIST_ROOT = '/mnt/workspace';
+const MIN_FREE_BYTES = 150 * 1024 * 1024;
+
+/** The persistent folder, when it is mounted, writable and has room; otherwise null (repositories stay temporary). */
+export function usablePersistRoot(root = PERSIST_ROOT): string | null {
+  try {
+    if (!fs.statSync(root).isDirectory()) return null;
+    fs.accessSync(root, fs.constants.W_OK);
+    const st = fs.statfsSync(root);
+    if (Number(st.bavail) * Number(st.bsize) < MIN_FREE_BYTES) return null;
+    return root;
+  } catch {
+    return null;
+  }
+}
+
+function gitEnv(repo: RunnerRepo): NodeJS.ProcessEnv {
+  return { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(repo.env ?? {}) };
+}
+
 /**
- * Shallow-clones each repository into `<workDir>/repos/<name>`. A repository that cannot be cloned is reported
- * and skipped (the run continues). Returns the names that are now available.
+ * A repository that is already on disk (kept from an earlier message of the same session) is brought up to date,
+ * unless the agent changed it: edits and commits made in the session are never thrown away.
+ */
+async function refreshExisting(repo: RunnerRepo, dest: string, emit: (e: { type: 'status'; text: string }) => void): Promise<void> {
+  const env = gitEnv(repo);
+  const branch = repo.branch ?? '';
+  const out = await gitOut(['status', '--porcelain'], dest, env);
+  const ahead = branch ? await gitOut(['rev-list', '--count', `origin/${branch}..HEAD`], dest, env) : '0';
+  if (out.trim() !== '' || (ahead.trim() !== '' && ahead.trim() !== '0')) {
+    emit({ type: 'status', text: `${repo.name} already has your session's changes; left as it is.` });
+    return;
+  }
+  const fetchArgs = ['fetch', '--depth', '1', 'origin', ...(branch ? [branch] : [])];
+  const f = await runGit(fetchArgs, dest, env, 120_000);
+  if (f.code !== 0) { emit({ type: 'status', text: `${repo.name}: kept the earlier copy (could not fetch updates).` }); return; }
+  await runGit(['reset', '--hard', 'FETCH_HEAD'], dest, env, 60_000);
+  emit({ type: 'status', text: `${repo.name} is up to date.` });
+}
+
+function gitOut(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((resolve) => {
+    const proc = spawn('git', args, { cwd, env, stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    proc.stdout.on('data', (d: Buffer) => { if (out.length < 4000) out += d.toString('utf8'); });
+    const timer = setTimeout(() => proc.kill('SIGKILL'), 30_000);
+    proc.on('error', () => { clearTimeout(timer); resolve(''); });
+    proc.on('close', () => { clearTimeout(timer); resolve(out); });
+  });
+}
+
+/**
+ * Puts each repository under `<workDir>/repos/<name>` (shallow clone). With `persistRoot`, the real folder is
+ * `<persistRoot>/repos` and `<workDir>/repos` is a link to it, so the copy survives until the session is released.
+ * A repository that cannot be cloned is reported and skipped (the run continues). Returns the names available.
  */
 export async function cloneRunnerRepos(
   repos: RunnerRepo[],
   workDir: string,
   emit: (event: { type: 'status'; text: string }) => void,
+  opts: { persistRoot?: string | null } = {},
 ): Promise<string[]> {
   const done: string[] = [];
   const reposDir = path.join(workDir, 'repos');
+  const persist = opts.persistRoot ? usablePersistRoot(opts.persistRoot) : null;
+  if (persist) {
+    const real = path.join(persist, 'repos');
+    fs.mkdirSync(real, { recursive: true });
+    if (!fs.existsSync(reposDir)) {
+      try { fs.symlinkSync(real, reposDir, 'dir'); } catch { /* fall back to a plain folder below */ }
+    }
+  }
   for (const repo of repos) {
     const dest = path.join(reposDir, repo.name);
-    if (fs.existsSync(path.join(dest, '.git'))) { done.push(repo.name); continue; }
+    if (fs.existsSync(path.join(dest, '.git'))) {
+      await refreshExisting(repo, dest, emit);
+      done.push(repo.name);
+      continue;
+    }
     fs.mkdirSync(reposDir, { recursive: true });
     emit({ type: 'status', text: `Cloning ${repo.name}${repo.branch ? ` @ ${repo.branch}` : ''}…` });
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: '0',
-      ...(repo.env ?? {}),
-    };
     const args = ['clone', '--depth', '1', '--single-branch', '--no-tags',
       ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, dest];
-    const res = await runGit(args, reposDir, env, RUNNER_REPO_LIMITS.cloneMs);
+    const res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs);
     if (res.code === 0) {
       done.push(repo.name);
     } else {

@@ -18,6 +18,8 @@ import { HttpError } from '../util.ts';
 import type { RunContext } from './types.ts';
 import { createFileReceiver } from './runner-files.ts';
 import { persistFile } from '../durable-files.ts';
+import { agentCoreSessionId } from './agentcore-session.ts';
+import { waitForRepoPrep } from './repo-prep.ts';
 
 export interface ClaudeAgentCoreOpts {
   runtimeArn: string;
@@ -63,7 +65,9 @@ function mergeSignals(signals: AbortSignal[]): AbortSignal {
 
 export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCoreOpts): Promise<ClaudeAgentCoreResult> {
   const { emit, signal } = ctx;
-  const sessionId = randomUUID();
+  // One AgentCore session per portal session, so the session's persistent folder (repositories) is found again.
+  const sessionId = ctx.run?.workflowId ? agentCoreSessionId(ctx.run.workflowId, 'claude-code') : randomUUID();
+  if (ctx.run?.workflowId && opts.repos?.length) await waitForRepoPrep(ctx.run.workflowId);
   const parts: string[] = [];
   const out: ClaudeAgentCoreResult = {
     text: '', costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, stopReason: 'end_turn',
