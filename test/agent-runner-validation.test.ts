@@ -305,3 +305,12 @@ describe('validatePayload — trustTools', () => {
     assert.equal(validatePayload({ ...minPayload(), trustTools: 'yes' }).ok, false);
   });
 });
+
+describe('validatePayload — effort', () => {
+  test('accepts the known levels and keeps them', () => {
+    assert.equal(ok({ ...minPayload(), effort: 'high' }).effort, 'high');
+    assert.equal(ok({ ...minPayload(), effort: 'xhigh' }).effort, 'xhigh');
+    assert.equal(ok(minPayload()).effort, undefined);
+  });
+  test('rejects an unknown level', () => fail({ ...minPayload(), effort: 'extreme' }, '"effort"'));
+});

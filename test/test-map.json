@@ -678,6 +678,7 @@
       "description": "Loop specifications for multi-agent orchestration",
       "sources": [
         "server/loop-specs.ts",
+        "server/loop-triggers.ts",
         "server/repositories/loop-specs.ts",
         "server/repositories/loop-specs-sqlite.ts",
         "server/repositories/loop-specs-dynamodb.ts",
@@ -685,7 +686,8 @@
       ],
       "tests": [
         "test/loop-specs.test.ts",
-        "test/loop-specs-repo.test.ts"
+        "test/loop-specs-repo.test.ts",
+        "test/loop-triggers.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Loop Specs yet."

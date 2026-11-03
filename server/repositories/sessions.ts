@@ -69,6 +69,8 @@ export interface WorkflowRecord {
   jira_url: string;
   kind: string | null;
   run_timeout_minutes: number | null;
+  /** State of an iterating (loop) session as JSON, '' for an ordinary session. See workflows/loop.ts. */
+  loop_state?: string;
   // enrichment fields (populated by listWorkflowsByProject / enrichWorkflowRow)
   parent_title?: string | null;
   child_count?: number;

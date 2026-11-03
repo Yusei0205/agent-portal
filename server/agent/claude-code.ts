@@ -189,10 +189,12 @@ ${REVIEW_SYSTEM_APPEND}`;
     auth,
     trustTools: Boolean(run.trusted),
     maxBudgetUsd,
+    effort: getSettings().agents.effort || null,
     // The browser bills while a session is open, so it is opt-in per deployment (see infra context agentcoreBrowser).
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
+    checks: run.runnerChecks,
   });
 
   let costUsd = res.costUsd;
@@ -570,6 +572,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         ...(resumeId ? { resume: resumeId } : {}),
         // Per-run spend cap (FR-GUARD-10): subagents inherit this cap.
         ...(maxBudgetUsd != null && maxBudgetUsd > 0 ? { maxBudgetUsd } : {}),
+        ...(getSettings().agents.effort ? { effort: getSettings().agents.effort } : {}),
         // In-process delegation MCP server (F7)
         ...(delegationMcpServers ? { mcpServers: delegationMcpServers as unknown as Record<string, object> } : {}),
       },

@@ -40,6 +40,7 @@ import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { parseSessionIntegrations, encodeSessionIntegrations, integrationIsPersonal } from '../agent/runner-integrations.ts';
 import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
+import { newLoopState } from './loop.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 
 // ── Constant ───────────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ function workflowView(w: Row | WorkflowRecord) {
     stop_reason: (w.stop_reason as string | undefined) ?? '',
     engine: w.engine,
     trust_tools: Boolean((w as Row).trust_tools),
+    loop: Boolean(String((w as Row).loop_state ?? '').trim()),
     lead_agent: w.lead_agent ?? null,
     workspace_id: w.workspace_id ?? null,
     output_files_enabled: Boolean((w as Row).output_files_enabled),
@@ -442,6 +444,18 @@ export function registerWorkflowRoutes(): void {
       : null;
     const model: string = requestModel ?? (wsEngineMatches ? wsDefaultModel : null) ?? projectDefaultModel ?? '';
 
+    // A loop session's rules and checks are validated before anything is created (a check may not be allowed).
+    let loopState: string | null = null;
+    if (body.loop) {
+      const loopBody = (typeof body.loop === 'object' ? body.loop : {}) as Record<string, unknown>;
+      try {
+        loopState = newLoopState(loopBody.stopRules, { progressFile: loopBody.progressFile !== false, checks: loopBody.checks });
+      } catch (e) {
+        sendJson(res, 400, { error: (e as Error).message });
+        return;
+      }
+    }
+
     const id = generateId();
     const ts = now();
 
@@ -468,6 +482,12 @@ export function registerWorkflowRoutes(): void {
       created_at: ts,
       updated_at: ts,
     });
+
+    // A loop session goes from run to run by itself until a stop rule says to stop (see workflows/loop.ts).
+    if (loopState) {
+      await repo.updateWorkflow(id, { loop_state: loopState, updated_at: ts });
+      wfRecord.loop_state = loopState;
+    }
 
     // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });
@@ -694,6 +714,12 @@ export function registerWorkflowRoutes(): void {
 
     if (inputRow.status === 'expired') {
       sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
+      return;
+    }
+
+    // Allowing a tool call is a person looking at it. A token may answer questions and decline tool calls, not allow them.
+    if (response === 'approve' && req.authViaToken) {
+      sendJson(res, 403, { error: 'API tokens cannot approve tool calls. Approve it from a signed-in browser, or decline it.' });
       return;
     }
 
@@ -971,6 +997,18 @@ export function registerWorkflowRoutes(): void {
       patch.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
     }
     if (hasTrustTools) {
+      // A session runs with its creator's identity, budget and vault, so only the creator can take the human check away
+      // from it, and never an API token. Anyone with edit access may turn it off.
+      if (body.trustTools && Number((w as unknown as Row).trust_tools ?? 0) !== 1) {
+        if (req.authViaToken) {
+          sendJson(res, 403, { error: 'API tokens cannot turn on "trust all tools". Do this from a signed-in browser.' });
+          return;
+        }
+        if (w.created_by && String(w.created_by) !== req.user!.id) {
+          sendJson(res, 403, { error: 'Only the person who started this session can turn on "trust all tools": the session runs as them.' });
+          return;
+        }
+      }
       patch.trust_tools = body.trustTools ? 1 : 0;
     }
     if (hasMaxIter) {

@@ -337,6 +337,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
     const jobs: Array<{ name: string; job: string; every: string }> = [
       { name: 'idle-stop', job: 'idle-stop', every: 'rate(1 minute)' },
       { name: 'attachment-cleanup', job: 'attachment-cleanup', every: 'rate(6 hours)' },
+      // Starts loop specs whose cron or interval trigger is due (server/loop-triggers.ts).
+      { name: 'loop-triggers', job: 'loop-triggers', every: 'rate(1 minute)' },
     ];
     for (const j of jobs) {
       new scheduler.CfnSchedule(this, `Job-${j.name}`, {

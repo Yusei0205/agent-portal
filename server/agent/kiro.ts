@@ -980,6 +980,7 @@ async function runKiroViaAgentCoreAdapter(
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
+    checks: run.runnerChecks,
     model: run.model || null,
   });
 

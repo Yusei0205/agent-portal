@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,15 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
     triggerType: 'manual',
     goalTemplate: '',
     maxIterations: 10,
+    cron: '0 9 * * 1-5',
+    everyMinutes: 60,
+    maxPerHour: 3,
+    engine: 'claude-code',
+    maxFailures: 3,
+    wallClockMinutes: '',
+    checks: '',
   });
+  const [ai, setAi] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const dialogRef = useFocusTrap();
@@ -70,14 +79,29 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
     setLoading(true);
     setError(null);
     try {
+      // One command per line; "name: command" names a step, otherwise the command itself is the name.
+      const checks = form.checks.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+        const m = /^([\w .-]{1,40}):\s+(.+)$/.exec(l);
+        return m ? { step: m[1].trim(), cmd: m[2] } : { step: l.slice(0, 40), cmd: l };
+      });
+      const triggerConfig = { engine: form.engine, maxPerHour: Number(form.maxPerHour) || 3 };
+      if (form.triggerType === 'cron') triggerConfig.cron = form.cron;
+      if (form.triggerType === 'interval') triggerConfig.everyMinutes = Number(form.everyMinutes);
+      if (ai.credentialId) triggerConfig.credentialId = ai.credentialId;
+      if (ai.model) triggerConfig.model = ai.model;
+      const stopConfig = { maxConsecutiveFailures: Number(form.maxFailures) || 3 };
+      if (Number(form.wallClockMinutes) > 0) stopConfig.wallClockMinutes = Number(form.wallClockMinutes);
+      if (checks.length) stopConfig.checks = checks;
       const r = await api.post(`/api/projects/${projectId}/loop-specs`, {
         name: form.name,
         description: form.description,
         triggerType: form.triggerType,
         goalTemplate: form.goalTemplate,
         maxIterations: Number(form.maxIterations),
+        triggerConfig,
+        stopConfig,
       });
-      onCreated(r.spec);
+      onCreated(r.spec, r.webhookSecret);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -160,6 +184,28 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
               </select>
             </div>
 
+            {form.triggerType === 'cron' && (
+              <div className="field">
+                <label htmlFor="ls-cron">Cron (minute hour day month weekday, UTC)</label>
+                <input id="ls-cron" type="text" value={form.cron} style={{ fontFamily: 'var(--mono)' }}
+                  onChange={(e) => setForm((f) => ({ ...f, cron: e.target.value }))} />
+                <p className="field-hint">For example <code>0 9 * * 1-5</code> is 09:00 UTC on weekdays. Not more often than every few minutes.</p>
+              </div>
+            )}
+            {form.triggerType === 'interval' && (
+              <div className="field">
+                <label htmlFor="ls-every">Every (minutes, at least 5)</label>
+                <input id="ls-every" type="number" min={5} value={form.everyMinutes} style={{ width: 120 }}
+                  onChange={(e) => setForm((f) => ({ ...f, everyMinutes: e.target.value }))} />
+              </div>
+            )}
+            {form.triggerType === 'webhook' && (
+              <p className="field-hint">A secret and the address to call are shown once, after you create the spec.</p>
+            )}
+            {['github', 'jira'].includes(form.triggerType) && (
+              <p className="field-hint">This kind does not start sessions yet. Use a webhook to start one from {form.triggerType === 'jira' ? 'Jira' : 'GitHub'}.</p>
+            )}
+
             <div className="field">
               <label htmlFor="ls-goal">Goal template</label>
               <textarea
@@ -169,6 +215,44 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
                 placeholder="What should the agent do? Use {{variable}} for placeholders."
                 style={{ minHeight: 80, fontFamily: 'var(--mono)', fontSize: 13 }}
               />
+            </div>
+
+            <div className="field">
+              <label htmlFor="ls-engine">Agent</label>
+              <select id="ls-engine" value={form.engine} onChange={(e) => setForm((f) => ({ ...f, engine: e.target.value }))}>
+                <option value="claude-code">Claude Code</option>
+                <option value="kiro">Kiro</option>
+                <option value="demo">Demo (no AI)</option>
+              </select>
+            </div>
+            {form.engine !== 'demo' && <AiChoicePicker onChange={setAi} idPrefix="ls-ai" />}
+
+            <div className="field">
+              <label htmlFor="ls-checks">Checks after each iteration (optional)</label>
+              <textarea id="ls-checks" value={form.checks} placeholder={'tests: npm test\nlint: npm run lint'}
+                onChange={(e) => setForm((f) => ({ ...f, checks: e.target.value }))}
+                style={{ minHeight: 60, fontFamily: 'var(--mono)', fontSize: 13 }} />
+              <p className="field-hint">One command per line, run by the agent runner after each iteration. Commands the agent could not run are refused.</p>
+            </div>
+
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <div className="field">
+                <label htmlFor="ls-fail">Stop after failures in a row</label>
+                <input id="ls-fail" type="number" min={1} max={10} value={form.maxFailures} style={{ width: 100 }}
+                  onChange={(e) => setForm((f) => ({ ...f, maxFailures: e.target.value }))} />
+              </div>
+              <div className="field">
+                <label htmlFor="ls-wall">Stop after (minutes)</label>
+                <input id="ls-wall" type="number" min={0} value={form.wallClockMinutes} placeholder="no limit" style={{ width: 120 }}
+                  onChange={(e) => setForm((f) => ({ ...f, wallClockMinutes: e.target.value }))} />
+              </div>
+              {form.triggerType !== 'manual' && (
+                <div className="field">
+                  <label htmlFor="ls-perhour">Most starts per hour</label>
+                  <input id="ls-perhour" type="number" min={1} max={60} value={form.maxPerHour} style={{ width: 100 }}
+                    onChange={(e) => setForm((f) => ({ ...f, maxPerHour: e.target.value }))} />
+                </div>
+              )}
             </div>
 
             <div className="field">
@@ -183,6 +267,10 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
                 style={{ width: 100 }}
               />
             </div>
+
+            {form.triggerType !== 'manual' && (
+              <p className="field-hint">Sessions started by a trigger run as you, as long as you can edit this project. They never trust all tools: a tool that needs approval waits in the inbox.</p>
+            )}
 
             {error && (
               <p className="error-note" role="alert">{error}</p>
@@ -207,6 +295,27 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
 }
 
 // ── Loop run history ──────────────────────────────────────────────────────────
+
+function WebhookSecretPanel({ projectId, secretInfo, onClose }) {
+  const url = `${window.location.origin}/api/hooks/loop-specs/${secretInfo.specId}`;
+  return (
+    <div className="dialog-overlay" role="presentation">
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="hook-title">
+        <div className="dialog-head"><h2 className="dialog-title" id="hook-title">Webhook for {secretInfo.name}</h2></div>
+        <div className="dialog-body stack">
+          <p>Copy the secret now. It is not shown again (you can make a new one from the spec).</p>
+          <div className="field"><label>Address (POST)</label><input readOnly value={url} onFocus={(e) => e.target.select()} /></div>
+          <div className="field"><label>Secret</label><input readOnly value={secretInfo.secret} onFocus={(e) => e.target.select()} style={{ fontFamily: 'var(--mono)' }} /></div>
+          <p className="field-hint">
+            Send the JSON body with the header <code>x-portal-signature: sha256=&lt;HMAC-SHA256 of the body, keyed with the secret&gt;</code>.
+            Values in the body can be used in the goal template, for example <code>{'{{issue.key}}'}</code>.
+          </p>
+        </div>
+        <div className="dialog-foot"><button type="button" className="btn btn-primary" onClick={onClose}>I have copied it</button></div>
+      </div>
+    </div>
+  );
+}
 
 function RunHistory({ projectId, specId }) {
   const [runs, setRuns] = useState([]);
@@ -337,6 +446,7 @@ export default function LoopSpecs({ projectId, user }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const [secretInfo, setSecretInfo] = useState(null);
   const [runMsg, setRunMsg] = useState(null);
   const [runMsgKind, setRunMsgKind] = useState('ok');
   const { confirmState, requestConfirm } = useConfirm();
@@ -474,12 +584,14 @@ export default function LoopSpecs({ projectId, user }) {
         <AddSpecModal
           projectId={projectId}
           onClose={() => setShowModal(false)}
-          onCreated={(spec) => {
+          onCreated={(spec, secret) => {
             setShowModal(false);
             setSpecs((prev) => [...prev, spec]);
+            if (secret) setSecretInfo({ specId: spec.id, name: spec.name, secret });
           }}
         />
       )}
+      {secretInfo && <WebhookSecretPanel projectId={projectId} secretInfo={secretInfo} onClose={() => setSecretInfo(null)} />}
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>

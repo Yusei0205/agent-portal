@@ -25,6 +25,8 @@ export interface AgentRun {
   runnerRepos?: import('./runner-repos.ts').RunnerRepo[];
   /** Set when the run goes to an AgentCore runner: the project's enabled MCP integrations (see runner-integrations.ts). */
   runnerMcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** Set for a loop session's runs on an AgentCore runner: the check steps the runner runs after the agent finishes. */
+  runnerChecks?: import('./runner-checks.ts').CheckStep[];
   leadAgent: string | null;
   permissions: RunPermissions;
   /** Optional per-user credential to use for this run (F4). */

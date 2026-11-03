@@ -24,6 +24,7 @@ import { getLoopSpecsRepository } from './repositories/loop-specs.ts';
 import type { LoopSpecRecord } from './repositories/loop-specs.ts';
 
 import { getMemberRow, getProjectRow } from './project-access.ts';
+import { fireLoopSpec, newWebhookSecret, readWebhookBody, triggerProblem, webhookSignatureOk, webhookVars } from './loop-triggers.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface LoopSpec {
@@ -94,9 +95,12 @@ async function requireProjectEditor(req: PortalRequest, res: PortalResponse, pro
 }
 
 function serializeSpec(s: LoopSpec | LoopSpecRecord) {
+  // The webhook secret is shown once, when it is made; it is never sent again.
+  const { webhookSecret, ...triggerConfig } = parseJson<Record<string, unknown>>(s.trigger_config, {});
   return {
     ...s,
-    trigger_config: parseJson(s.trigger_config, {}),
+    webhook_configured: Boolean(webhookSecret),
+    trigger_config: triggerConfig,
     stop_config: parseJson(s.stop_config, {}),
   };
 }
@@ -136,9 +140,17 @@ export function registerLoopSpecRoutes(): void {
     const rules = body.rules != null ? String(body.rules).slice(0, 4000) : null;
     const maxIterations = Math.min(50, Math.max(1, Number(body.maxIterations ?? 10)));
 
-    const triggerConfig = body.triggerConfig && typeof body.triggerConfig === 'object'
-      ? JSON.stringify(body.triggerConfig)
-      : '{}';
+    const triggerObj: Record<string, unknown> = body.triggerConfig && typeof body.triggerConfig === 'object'
+      ? { ...(body.triggerConfig as Record<string, unknown>) }
+      : {};
+    const problem = triggerProblem(triggerType, triggerObj);
+    if (problem) { sendJson(res, 400, { error: problem }); return; }
+    // Sessions started by a trigger run as the person who set it up (and only while they can still edit the project).
+    triggerObj.runAs = req.user!.id;
+    delete triggerObj.webhookSecret;
+    let webhookSecret: string | undefined;
+    if (triggerType === 'webhook') { webhookSecret = newWebhookSecret(); triggerObj.webhookSecret = webhookSecret; }
+    const triggerConfig = JSON.stringify(triggerObj);
     const stopConfig = body.stopConfig && typeof body.stopConfig === 'object'
       ? JSON.stringify(body.stopConfig)
       : '{}';
@@ -151,7 +163,7 @@ export function registerLoopSpecRoutes(): void {
       trigger_config: triggerConfig, goal_template: goalTemplate, rules, stop_config: stopConfig,
       max_iterations: maxIterations, enabled: 1, is_builtin: 0, created_at: ts,
     });
-    sendJson(res, 201, { spec: serializeSpec(spec) });
+    sendJson(res, 201, { spec: serializeSpec(spec), ...(webhookSecret ? { webhookSecret } : {}) });
   });
 
   // GET /api/projects/:id/loop-specs/:sid
@@ -175,11 +187,27 @@ export function registerLoopSpecRoutes(): void {
 
     if (body.name !== undefined) patch.name = str(body.name, 'name', { max: 120 }).trim();
     if (body.description !== undefined) patch.description = String(body.description).slice(0, 500);
-    if (body.triggerType !== undefined && TRIGGER_TYPES.includes(body.triggerType as typeof TRIGGER_TYPES[number])) {
-      patch.trigger_type = String(body.triggerType);
+    const current = await getLoopSpecsRepository().getSpecById(req.params.sid);
+    if (!current || current.is_builtin || current.project_id !== req.params.id) {
+      sendJson(res, 404, { error: 'Loop spec not found or cannot be modified' }); return;
     }
-    if (body.triggerConfig !== undefined && typeof body.triggerConfig === 'object') {
-      patch.trigger_config = JSON.stringify(body.triggerConfig);
+    let newSecret: string | undefined;
+    if (body.triggerType !== undefined || body.triggerConfig !== undefined) {
+      const type = body.triggerType !== undefined && TRIGGER_TYPES.includes(body.triggerType as typeof TRIGGER_TYPES[number])
+        ? String(body.triggerType) : current.trigger_type;
+      const old = parseJson<Record<string, unknown>>(current.trigger_config, {});
+      const cfg: Record<string, unknown> = body.triggerConfig && typeof body.triggerConfig === 'object'
+        ? { ...(body.triggerConfig as Record<string, unknown>) } : { ...old };
+      const problem = triggerProblem(type, cfg);
+      if (problem) { sendJson(res, 400, { error: problem }); return; }
+      cfg.runAs = req.user!.id;
+      delete cfg.webhookSecret;
+      if (type === 'webhook') {
+        if (typeof old.webhookSecret === 'string' && old.webhookSecret) cfg.webhookSecret = old.webhookSecret;
+        else { newSecret = newWebhookSecret(); cfg.webhookSecret = newSecret; }
+      }
+      patch.trigger_type = type;
+      patch.trigger_config = JSON.stringify(cfg);
     }
     if (body.goalTemplate !== undefined) patch.goal_template = String(body.goalTemplate).slice(0, 6000);
     if (body.rules !== undefined) patch.rules = String(body.rules).slice(0, 4000);
@@ -199,7 +227,45 @@ export function registerLoopSpecRoutes(): void {
     const updated = await getLoopSpecsRepository().updateSpec(req.params.sid, req.params.id, patch as Partial<LoopSpecRecord>);
     if (!updated) { sendJson(res, 404, { error: 'Loop spec not found or cannot be modified' }); return; }
 
-    sendJson(res, 200, { spec: serializeSpec(updated) });
+    sendJson(res, 200, { spec: serializeSpec(updated), ...(newSecret ? { webhookSecret: newSecret } : {}) });
+  });
+
+  // POST /api/projects/:id/loop-specs/:sid/webhook-secret — make a new webhook secret (shown once)
+  router.post('/api/projects/:id/loop-specs/:sid/webhook-secret', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectEditor(req, res, req.params.id)) return;
+    const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
+    if (!spec || spec.is_builtin || spec.project_id !== req.params.id) { sendJson(res, 404, { error: 'Loop spec not found' }); return; }
+    if (spec.trigger_type !== 'webhook') { sendJson(res, 400, { error: 'This spec does not use a webhook trigger' }); return; }
+    const cfg = parseJson<Record<string, unknown>>(spec.trigger_config, {});
+    const secret = newWebhookSecret();
+    cfg.webhookSecret = secret;
+    cfg.runAs = req.user!.id;
+    await getLoopSpecsRepository().updateSpec(spec.id, req.params.id, { trigger_config: JSON.stringify(cfg) } as Partial<LoopSpecRecord>);
+    sendJson(res, 200, { webhookSecret: secret });
+  });
+
+  // POST /api/hooks/loop-specs/:sid — a signed webhook starts the spec (no sign-in: the signature is the proof)
+  // A raw route: callers such as GitHub or Jira cannot send the browser header, so the signature replaces it, and
+  // the body is read here (it has to be the exact bytes that were signed).
+  router.rawPost('/api/hooks/loop-specs/:sid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    try {
+      const body = await readWebhookBody(req);
+      req.rawBody = body.raw;
+      req.body = body.json;
+    } catch {
+      sendJson(res, 413, { error: 'Request body too large' }); return;
+    }
+    const spec = await getLoopSpecsRepository().getSpecById(req.params.sid);
+    const cfg = spec ? parseJson<Record<string, unknown>>(spec.trigger_config, {}) : {};
+    const secret = typeof cfg.webhookSecret === 'string' ? cfg.webhookSecret : '';
+    const sig = String(req.headers['x-portal-signature'] ?? req.headers['x-hub-signature-256'] ?? '');
+    // The same answer for "no such spec" and "wrong signature", so the ids cannot be probed.
+    if (!spec || spec.trigger_type !== 'webhook' || !webhookSignatureOk(req.rawBody, sig, secret)) {
+      sendJson(res, 401, { error: 'Invalid signature' }); return;
+    }
+    const result = await fireLoopSpec(spec, { source: 'webhook', vars: webhookVars(req.body) });
+    if (!result.ok) { sendJson(res, result.status, { error: result.reason }); return; }
+    sendJson(res, 202, { ok: true, workflow_id: result.workflowId, run_id: result.runId });
   });
 
   // DELETE /api/projects/:id/loop-specs/:sid
@@ -226,36 +292,14 @@ export function registerLoopSpecRoutes(): void {
     }
     if (!spec.enabled) { sendJson(res, 400, { error: 'This loop spec is disabled' }); return; }
 
-    const body = req.body as Record<string, unknown>;
-    const vars = body.vars && typeof body.vars === 'object' ? body.vars as Record<string, string> : {};
-
-    let goal = spec.goal_template;
-    for (const [k, v] of Object.entries(vars)) {
-      goal = goal.replace(new RegExp(`\\{\\{${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}\\}`, 'g'), String(v));
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const vars: Record<string, string> = {};
+    if (body.vars && typeof body.vars === 'object') {
+      for (const [k, v] of Object.entries(body.vars as Record<string, unknown>)) vars[k] = String(v).slice(0, 500);
     }
-
-    const runId = generateId();
-    const ts = now();
-
-    let workflowId: string | null = null;
-    try {
-      const wid = generateId();
-      await getSessionsRepository().createWorkflow({
-        id: wid, project_id: req.params.id, goal: goal.slice(0, 2000), status: 'pending',
-        engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
-        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0,
-        max_iterations: spec.max_iterations, credential_id: null, model: '',
-        created_by: req.user!.id, created_at: ts, updated_at: ts,
-      });
-      workflowId = wid;
-      emit(req.params.id, { type: 'workflow.created', workflowId: wid });
-    } catch { /* if workflow insert fails, continue */ }
-
-    const loopRun = await getLoopSpecsRepository().createRun({
-      id: runId, spec_id: spec.id, status: 'running', iteration: 0,
-      last_workflow_id: workflowId, started_at: ts, finished_at: null,
-    });
-    sendJson(res, 201, { run: loopRun, workflow_id: workflowId, goal });
+    const result = await fireLoopSpec(spec, { source: 'manual', vars, userId: req.user!.id, projectId: req.params.id });
+    if (!result.ok) { sendJson(res, result.status, { error: result.reason }); return; }
+    sendJson(res, 201, { run: result.run, workflow_id: result.workflowId, goal: result.goal });
   });
 
   // GET /api/projects/:id/loop-specs/:sid/runs — list loop run history

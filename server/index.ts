@@ -56,6 +56,7 @@ import { registerTestingRoutes } from './testing/index.ts';
 import { registerThemeRoutes } from './themes.ts';
 import { registerPortalEventsRoutes } from './portal-events.ts';
 import { registerAiAttachmentRoutes, cleanupOrphanedAttachments } from './ai-attachments.ts';
+import { runDueTriggers } from './loop-triggers.ts';
 import { registerBedrockSsoRoutes } from './bedrock-sso.ts';
 import { registerKiroSettingsRoutes } from './kiro-settings.ts';
 import { registerEngineModelRoutes } from './models.ts';
@@ -342,6 +343,12 @@ export async function startServer(
 
   // 9. Idle-session stop timer (checks every minute)
   if (!onLambda) startIdleStopTimer();
+
+  // 9b. Loop specs with a cron or interval trigger (on Lambda: the `loop-triggers` schedule)
+  const loopTriggerTimer = setInterval(() => {
+    if (!onLambda && isDbOpen()) void runDueTriggers().catch((e) => console.error('[loop-trigger] tick failed:', e));
+  }, 60_000);
+  loopTriggerTimer.unref();
 
   // 10. Graceful shutdown
   server.on('close', () => {

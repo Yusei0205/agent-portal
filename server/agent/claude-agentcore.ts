@@ -30,6 +30,8 @@ export interface ClaudeAgentCoreOpts {
   auth: { kind: 'api_key' | 'oauth_token'; secret: string };
   trustTools: boolean;
   maxBudgetUsd?: number | null;
+  /** Thinking effort from Settings (empty = the model's default). */
+  effort?: string | null;
   maxTurns?: number | null;
   /** Give the agent the AgentCore Browser tools (mcp__browser__*). */
   browser?: boolean;
@@ -37,6 +39,8 @@ export interface ClaudeAgentCoreOpts {
   repos?: import('./runner-repos.ts').RunnerRepo[];
   /** The project's remote MCP integrations (runner starts a proxy for each). */
   mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** A loop session's check steps, run by the runner after the agent finishes. */
+  checks?: import('./runner-checks.ts').CheckStep[];
 }
 
 export interface ClaudeAgentCoreResult {
@@ -96,9 +100,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.browser ? { browser: true } : {}),
     ...(opts.repos?.length ? { repos: opts.repos } : {}),
     ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
+    ...(opts.checks?.length ? { checks: opts.checks } : {}),
     ...(snapshot ? { snapshot } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
+    ...(opts.effort ? { effort: opts.effort } : {}),
     ...(opts.maxTurns && opts.maxTurns > 0 ? { maxTurns: Math.min(opts.maxTurns, 200) } : {}),
   };
 
@@ -123,6 +129,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
           break;
         case 'tool-result':
           emit('tool-end', { toolCallId: '', toolName: String(ev.name ?? 'Tool'), status: 'completed', output: String(ev.output ?? '') });
+          break;
+        case 'check-result':
+          emit('check-result', { ok: Boolean(ev.ok), ranAt: String(ev.ranAt ?? ''), steps: Array.isArray(ev.steps) ? ev.steps : [] });
           break;
         case 'browser-session':
           if (ev.sessionId) emit('browser-session', { browserId: String(ev.browserId ?? 'aws.browser.v1'), sessionId: String(ev.sessionId), width: Number(ev.width) || 1280, height: Number(ev.height) || 800 });

@@ -42,6 +42,7 @@ import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
 import { emitRunnerFiles } from '../shared/runner-files.js';
+import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
@@ -83,6 +84,8 @@ const WRITE_TOOLS = new Set([
 /** Tools that only read: allowed even when the session does not trust all tools. */
 const READ_ONLY_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebSearch', 'WebFetch', 'TodoWrite',
+  // The agent's own task list: nothing leaves the run, so it needs no approval.
+  'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate',
   'read', 'glob', 'grep', 'ls',
   // AgentCore Browser tools that only look (opening a page is like WebFetch). click/type need "Trust all tools".
   `mcp__${BROWSER_SERVER_NAME}__goto`, `mcp__${BROWSER_SERVER_NAME}__snapshot`,
@@ -370,6 +373,7 @@ export async function runInvocation(
         settingSources: [],
         // SDK spend cap (FR-GUARD-10 compatible)
         maxBudgetUsd,
+        ...(payload.effort ? { effort: payload.effort } : {}),
         // Let the SDK enforce the turn limit natively so it can emit a proper
         // result message (with total_cost_usd and stop_reason:"max_turns").
         // Our manual counter below remains for the turns metric.
@@ -547,6 +551,15 @@ export async function runInvocation(
       metrics,
     }) + '\n',
   );
+
+  // Loop sessions: run the check steps where the code is and report the result for the next iteration.
+  if (payload.checks?.length) {
+    try {
+      emit({ type: 'check-result', ...(await runCheckSteps(payload.checks as never, workDir)) });
+    } catch (e) {
+      emit({ type: 'check-result', ok: false, ranAt: new Date().toISOString(), steps: [{ step: 'checks', ok: false, output: String((e as Error)?.message ?? e).slice(0, 500), durationMs: 0, required: true }] });
+    }
+  }
 
   // Send back the files the agent wrote (documents, images, spreadsheets...), within size limits.
   try { emitRunnerFiles(workDir, emit, filesSinceMs); } catch { /* best effort */ }

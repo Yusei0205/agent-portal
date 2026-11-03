@@ -47,6 +47,7 @@ import type { RunFinalizeStats } from '../repositories/sessions.ts';
 import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
 import { buildRunnerMcpServers, parseSessionIntegrations } from './runner-integrations.ts';
+import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
 
@@ -321,6 +322,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   } else {
     prompt = workflow.goal;
   }
+  // A loop session gets the full iteration prompt: goal, recent progress, new instructions and how to report back.
+  const loopState = readLoopState(workflow);
+  if (loopState) prompt = loopPrompt(workflow, loopState, pendingEvents.map((m) => m.body));
 
   // ── Jira ticket context ───────────────────────────────────────────────────
   // When the workflow has a jira_key, fetch the latest ticket (including any
@@ -469,6 +473,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         agentRun.projectId,
         (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
       );
+      if (loopState?.checks?.length) agentRun.runnerChecks = loopState.checks;
       agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null)
         .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
       if (specs.length > 0) {
@@ -575,6 +580,11 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       emit(agentRun.projectId, { type: 'run.updated', workflowId, runId, status: 'done' });
       emit(agentRun.projectId, { type: 'workflow.updated', workflowId, status: 'done' });
     }
+
+    // A loop session decides here whether to go on: the next run is started, or the session stops with the reason.
+    if (runFinished && loopState) {
+      try { await loopAfterRun(workflowId, { result, failed: false, runId }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+    }
   } catch (e: unknown) {
     const aborted = (e as { name?: string })?.name === 'AbortError' || ctrl.signal.aborted;
     const msg = aborted ? 'Cancelled' : String((e as { message?: string })?.message ?? e);
@@ -638,6 +648,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
     if (!aborted) {
       console.error(`[runner] Run ${runId} failed:`, e);
+      if (loopState) {
+        try { await loopAfterRun(workflowId, { result: msg, failed: true }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+      }
     }
   } finally {
     // Clean up pending approvals
