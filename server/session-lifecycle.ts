@@ -302,7 +302,11 @@ export function registerSessionLifecycleRoutes(): void {
       const latest = [...events].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= since);
       let info: { browserId?: string; sessionId?: string } = {};
       try { info = JSON.parse(latest?.payload ?? '{}'); } catch { /* none */ }
-      if (!info.sessionId) { sendJson(res, 409, { error: 'No cloud browser is open for this session' }); return; }
+      if (!info.sessionId) {
+        // Nothing to hand back when the browser is already closed; only taking over needs one.
+        if (!takeOver) { sendJson(res, 200, { ok: true, enabled: false }); return; }
+        sendJson(res, 409, { error: 'No cloud browser is open for this session' }); return;
+      }
       try {
         await setAutomationStream(info.browserId || 'aws.browser.v1', info.sessionId, !takeOver);
         sendJson(res, 200, { ok: true, enabled: takeOver });

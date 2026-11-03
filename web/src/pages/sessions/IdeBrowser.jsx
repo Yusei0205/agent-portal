@@ -283,6 +283,7 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
           setLive((cur) => { if (!cur || cur.sessionId !== r.sessionId) setControlEnabled(false); return cur && cur.sessionId === r.sessionId ? cur : { url: r.url, sessionId: r.sessionId, width: r.width, height: r.height }; });
         } else {
           setLive(null);
+          if (cloudMode) setControlEnabled(false); // the browser is gone, so there is nothing left to control
         }
       } catch { /* try again on the next tick */ }
       if (!cancelled) timer = setTimeout(tick, LIVE_POLL_MS);
@@ -301,7 +302,8 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
       // cloud: pauses the agent's control of the browser (AgentCore) so the person can drive it through Live View
       await api.post(cloudMode ? `/api/workflows/${workflowId}/browser/live-view/control` : `/api/workflows/${workflowId}/browser/control`, { enabled: next });
     } catch {
-      setControlEnabled((v) => !v); // revert on failure
+      // Switching off always sticks (the browser may be gone already); a failed take-over reverts to off.
+      setControlEnabled(false);
     } finally {
       controlBusyRef.current = false;
     }
