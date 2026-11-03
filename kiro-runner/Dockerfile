@@ -48,6 +48,7 @@ RUN apt-get update && \
       ca-certificates \
       bash \
       git \
+      python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install kiro-cli — the installer puts binaries in /root/.local/bin by default.
@@ -62,6 +63,11 @@ RUN curl -LsSf https://cli.kiro.dev/install > /tmp/kiro-install.sh && \
     find /root/.local/bin -maxdepth 1 -name 'kiro-cli*' -exec cp {} /usr/local/bin/ \; && \
     chmod 755 /usr/local/bin/kiro-cli* && \
     kiro-cli --version
+
+# uv / uvx (Python tools and uvx-based MCP servers) are part of the image, so nothing is downloaded when a run starts.
+# Python itself comes from the image too (UV_PYTHON_PREFERENCE=system), so uv does not fetch an interpreter.
+COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /uvx /usr/local/bin/
+ENV UV_PYTHON_PREFERENCE=system
 
 WORKDIR /app
 

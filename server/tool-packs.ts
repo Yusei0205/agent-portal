@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { usesDynamoDb } from './repositories/backend.ts';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { HttpError, generateId, now } from './util.ts';
@@ -348,6 +349,24 @@ export async function getToolPacks(): Promise<ToolPack[]> {
       detail: 'Set the HEADROOM_PROXY_URL environment variable to your proxy URL',
     },
   ];
+
+  // In the cloud, agents run in the AgentCore runner images, not where the portal runs, so installing here would change
+  // nothing for them. What the runners have is fixed when the image is built.
+  if (usesDynamoDb()) {
+    for (const p of packs) {
+      if (p.id === 'uv' || p.id === 'kiro') {
+        p.status = 'available';
+        p.installable = false;
+        p.detail = 'Included in the runner image';
+      } else if (p.id === 'browser') {
+        const on = process.env.PORTAL_AGENTCORE_BROWSER === '1';
+        p.name = 'Cloud browser (AgentCore)';
+        p.status = on ? 'available' : 'not-available';
+        p.installable = false;
+        p.detail = on ? 'Agents can open pages; watch and take over in the Browser tab' : 'Turn on when deploying: cdk deploy -c agentcoreBrowser=true';
+      }
+    }
+  }
 
   _cache = { packs, at: Date.now() };
   return packs;
