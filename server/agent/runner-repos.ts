@@ -224,14 +224,16 @@ export async function cloneRunnerRepos(
     }
     fs.mkdirSync(reposDir, { recursive: true });
     emit({ type: 'status', text: `Cloning ${repo.name}${repo.branch ? ` @ ${repo.branch}` : ''}…` });
-    const args = ['clone', '--depth', '1', '--single-branch', '--no-tags',
+    const args = ['clone', '--quiet', '--depth', '1', '--single-branch', '--no-tags',
       ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, dest];
     const res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs);
     if (res.code === 0) {
       done.push(repo.name);
       if (persist) trusted.push(realDest);
     } else {
-      const last = res.err.split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? 'git clone failed';
+      // git writes progress with carriage returns; keep a real error line (fatal / error / remote) if there is one.
+      const lines = res.err.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+      const last = [...lines].reverse().find((l) => /^(fatal|error|remote):/i.test(l)) ?? lines[lines.length - 1] ?? 'git clone failed';
       // Never echo anything that could hold a credential: only the last line of git's own message.
       emit({ type: 'status', text: `Could not clone ${repo.name}: ${last.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 200)}` });
       try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* ok */ }
