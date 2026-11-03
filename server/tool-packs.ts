@@ -358,6 +358,10 @@ export async function getToolPacks(): Promise<ToolPack[]> {
         p.status = 'available';
         p.installable = false;
         p.detail = 'Included in the runner image';
+      } else if (p.id === 'drawio' && process.env.ICON_DIAGRAMS_DIR) {
+        // The portal image carries the pack (installed when the image is built), so there is nothing to install here.
+        p.installable = false;
+        p.detail = p.status === 'available' ? 'Included in the portal image' : 'Expected in the portal image but not found';
       } else if (p.id === 'browser') {
         const on = process.env.PORTAL_AGENTCORE_BROWSER === '1';
         p.name = 'Cloud browser (AgentCore)';
@@ -421,6 +425,26 @@ async function runInstall(job: InstallJob): Promise<void> {
     }
     job.subscribers.clear();
   }
+}
+
+/**
+ * Install the Icon diagrams pack into packDir() (set ICON_DIAGRAMS_DIR first). Used when the cloud portal image is
+ * built (scripts/install-drawio-pack.ts), so the pack ships inside the image and is never fetched from S3 at run time.
+ * Returns the install log; throws when the install fails.
+ */
+export async function installDrawioPackForBuild(log: (line: string) => void = () => {}): Promise<void> {
+  const job: InstallJob = {
+    id: generateId(),
+    packId: 'drawio',
+    status: 'pending',
+    log: [],
+    startedAt: now(),
+    finishedAt: null,
+    error: null,
+    subscribers: new Set([log]),
+  };
+  await runInstall(job);
+  if (job.status !== 'done') throw new Error(job.error ?? 'The Icon diagrams pack did not install');
 }
 
 /**
