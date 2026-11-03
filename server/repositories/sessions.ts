@@ -50,6 +50,8 @@ export interface WorkflowRecord {
   workspace_id: string | null;
   output_files_enabled: number;
   repo_ids: string;
+  /** Which MCP integrations this session gets: '[]' = the project's enabled ones, '{"ids":[...]}' = only those. */
+  integrations?: string;
   iteration_count: number;
   max_iterations: number;
   last_turn_at: string | null;

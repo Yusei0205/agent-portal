@@ -24,6 +24,10 @@ export interface HttpIntegrationConfig {
   lastTest?: { ok: boolean; message: string; at: string; tools: number };
 }
 
+export function integrationIsPersonal(i: { config_enc: string | null }): boolean {
+  return readHttpConfig(i.config_enc)?.personal === true;
+}
+
 export function readHttpConfig(configEnc: string | null): HttpIntegrationConfig | null {
   if (!configEnc) return null;
   try {
@@ -44,13 +48,36 @@ export function serverName(name: string, taken: Set<string>): string {
   return out;
 }
 
-export async function buildRunnerMcpServers(projectId: string | null, userId: string | null): Promise<McpServerSpec[]> {
+/**
+ * What a session stored for its integrations: null = the project's enabled ones (the default),
+ * a list = only those (an empty list = none).
+ */
+export function parseSessionIntegrations(raw: unknown): string[] | null {
+  if (typeof raw !== 'string' || raw.trim() === '' || raw.trim() === '[]') return null;
+  try {
+    const v = JSON.parse(raw) as { ids?: unknown };
+    if (v && Array.isArray(v.ids)) return v.ids.map(String).slice(0, 20);
+  } catch { /* fall through */ }
+  return null;
+}
+
+export function encodeSessionIntegrations(ids: string[] | null): string {
+  return ids === null ? '[]' : JSON.stringify({ ids });
+}
+
+export async function buildRunnerMcpServers(
+  projectId: string | null,
+  userId: string | null,
+  /** The session's own selection (null = the project's enabled ones). */
+  selected: string[] | null = null,
+): Promise<McpServerSpec[]> {
   if (!projectId) return [];
   const items = await getIntegrationsRepository().listByProject(projectId);
   const taken = new Set<string>(['browser']);
   const specs: unknown[] = [];
   for (const it of items) {
     if (it.enabled !== 1 || it.type !== 'http') continue;
+    if (selected && !selected.includes(it.id)) continue;
     const cfg = readHttpConfig(it.config_enc);
     if (!cfg) continue;
     if (cfg.personal && it.created_by !== userId) continue;

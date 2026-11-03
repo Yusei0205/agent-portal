@@ -48,6 +48,7 @@ function toWorkflow(row: Row): WorkflowRecord {
     workspace_id: row.workspace_id != null ? String(row.workspace_id) : null,
     output_files_enabled: Number(row.output_files_enabled ?? 0),
     repo_ids: String(row.repo_ids ?? '[]'),
+    integrations: String(row.integrations ?? '[]'),
     iteration_count: Number(row.iteration_count ?? 0),
     max_iterations: Number(row.max_iterations ?? 10),
     last_turn_at: row.last_turn_at != null ? String(row.last_turn_at) : null,
@@ -282,7 +283,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
   ): Promise<boolean> {
     const allowed: (keyof WorkflowRecord)[] = [
       'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
-      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids',
+      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
@@ -306,7 +307,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
   async updateWorkflow(id: string, patch: Partial<WorkflowRecord>): Promise<void> {
     const allowed: (keyof WorkflowRecord)[] = [
       'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
-      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids',
+      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',

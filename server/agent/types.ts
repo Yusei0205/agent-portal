@@ -19,6 +19,8 @@ export interface AgentRun {
   /** Absolute path: DATA_DIR/projects/<slug>/work/<runId>/ */
   workDir: string;
   repoIds: string[];
+  /** The session's own choice of MCP integrations; null = the project's enabled ones. */
+  integrationIds?: string[] | null;
   /** Set when the run goes to an AgentCore runner: the repositories it must clone (see runner-repos.ts). */
   runnerRepos?: import('./runner-repos.ts').RunnerRepo[];
   /** Set when the run goes to an AgentCore runner: the project's enabled MCP integrations (see runner-integrations.ts). */

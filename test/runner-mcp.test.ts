@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseMcpServers, isReadOnlyTool, McpHttpClient } from '../server/agent/runner-mcp.ts';
-import { serverName } from '../server/agent/runner-integrations.ts';
+import { serverName, parseSessionIntegrations, encodeSessionIntegrations } from '../server/agent/runner-integrations.ts';
 
 const TOOLS = [
   { name: 'search_docs', description: 'Find pages' },
@@ -175,5 +175,19 @@ describe('stdio proxy', () => {
       const r = await ask(false, [{ method: 'tools/call', params: { name: 'search_docs' } }]);
       assert.equal(r.length, 1);
     } finally { url = live; }
+  });
+});
+
+describe('the integrations a session chose for itself', () => {
+  it('uses the project default unless the session chose', () => {
+    assert.equal(parseSessionIntegrations('[]'), null);
+    assert.equal(parseSessionIntegrations(''), null);
+    assert.equal(parseSessionIntegrations(undefined), null);
+    assert.equal(parseSessionIntegrations('not json'), null);
+    assert.deepEqual(parseSessionIntegrations(encodeSessionIntegrations(['a', 'b'])), ['a', 'b']);
+  });
+  it('keeps "none chosen" apart from "project default"', () => {
+    assert.deepEqual(parseSessionIntegrations(encodeSessionIntegrations([])), []);
+    assert.equal(encodeSessionIntegrations(null), '[]');
   });
 });

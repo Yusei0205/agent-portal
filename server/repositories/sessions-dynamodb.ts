@@ -116,6 +116,7 @@ function itemToWorkflow(item: Record<string, AttributeValue>): WorkflowRecord {
     workspace_id: getString(item, 'workspace_id'),
     output_files_enabled: getNumber(item, 'output_files_enabled'),
     repo_ids: getString(item, 'repo_ids') ?? '[]',
+    integrations: getString(item, 'integrations') ?? '[]',
     iteration_count: getNumber(item, 'iteration_count'),
     max_iterations: getNumber(item, 'max_iterations') || 10,
     last_turn_at: getString(item, 'last_turn_at'),
@@ -634,7 +635,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   ): Promise<boolean> {
     const allowed: (keyof WorkflowRecord)[] = [
       'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
-      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids',
+      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
@@ -691,7 +692,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   async updateWorkflow(id: string, patch: Partial<WorkflowRecord>): Promise<void> {
     const allowed: (keyof WorkflowRecord)[] = [
       'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
-      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids',
+      'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',

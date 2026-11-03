@@ -46,7 +46,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import type { RunFinalizeStats } from '../repositories/sessions.ts';
 import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
-import { buildRunnerMcpServers } from './runner-integrations.ts';
+import { buildRunnerMcpServers, parseSessionIntegrations } from './runner-integrations.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
 
@@ -422,6 +422,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       dataDir: config.dataDir,
       workDir,
       repoIds: parseJsonArray(String(workflow.repo_ids ?? '[]')),
+      integrationIds: parseSessionIntegrations(workflow.integrations),
       leadAgent: workflow.lead_agent ? String(workflow.lead_agent) : null,
       permissions,
       credentialId: workflow.credential_id ? String(workflow.credential_id) : null,
@@ -468,7 +469,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         agentRun.projectId,
         (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
       );
-      agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId)
+      agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null)
         .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
       if (specs.length > 0) {
         agentRun.runnerRepos = specs;

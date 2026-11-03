@@ -37,6 +37,8 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import { getProjectRepository } from '../repositories/projects.ts';
 import { getWorkspacesRepository } from '../repositories/workspaces.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
+import { getIntegrationsRepository } from '../repositories/integrations.ts';
+import { parseSessionIntegrations, encodeSessionIntegrations, integrationIsPersonal } from '../agent/runner-integrations.ts';
 import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 
@@ -68,6 +70,8 @@ function workflowView(w: Row | WorkflowRecord) {
     workspace_id: w.workspace_id ?? null,
     output_files_enabled: Boolean((w as Row).output_files_enabled),
     repo_ids: safeJson((w as Row).repo_ids as string, []),
+    // null = the project's enabled integrations; a list = only those
+    integration_ids: parseSessionIntegrations((w as Row).integrations),
     iteration_count: (w as WorkflowRecord).iteration_count ?? 0,
     max_iterations: (w as WorkflowRecord).max_iterations ?? 10,
     last_turn_at: w.last_turn_at ?? null,
@@ -949,9 +953,10 @@ export function registerWorkflowRoutes(): void {
     const hasTrustTools  = body.trustTools !== undefined;
     const hasMaxIter     = body.maxIterations !== undefined;
     const hasRepoIds     = body.repoIds !== undefined;
+    const hasIntegrationIds = body.integrationIds !== undefined;
 
-    if (!hasTitle && !hasGoal && !hasTrustTools && !hasMaxIter && !hasRepoIds) {
-      sendJson(res, 400, { error: 'Provide at least one of: title, goal, trustTools, maxIterations, repoIds' });
+    if (!hasTitle && !hasGoal && !hasTrustTools && !hasMaxIter && !hasRepoIds && !hasIntegrationIds) {
+      sendJson(res, 400, { error: 'Provide at least one of: title, goal, trustTools, maxIterations, repoIds, integrationIds' });
       return;
     }
 
@@ -980,6 +985,19 @@ export function registerWorkflowRoutes(): void {
       const bad = wanted.filter((rid) => !valid.has(rid));
       if (bad.length) throw badRequest('Some repositories do not belong to this project');
       patch.repo_ids = JSON.stringify(wanted);
+    }
+    if (hasIntegrationIds) {
+      // The MCP integrations this session gets. null = whatever the project has enabled; a list = only those.
+      if (body.integrationIds === null) {
+        patch.integrations = encodeSessionIntegrations(null);
+      } else {
+        if (!Array.isArray(body.integrationIds) || body.integrationIds.length > 20) throw badRequest('integrationIds must be null or a list of at most 20 integration ids');
+        const wanted = [...new Set(body.integrationIds.map(String))];
+        const mine = (await getIntegrationsRepository().listByProject(req.params.id)).filter((i) => i.type === 'http');
+        const usable = new Set(mine.filter((i) => !integrationIsPersonal(i) || i.created_by === req.user!.id).map((i) => i.id));
+        if (wanted.some((id) => !usable.has(id))) throw badRequest('Some integrations do not belong to this project');
+        patch.integrations = encodeSessionIntegrations(wanted);
+      }
     }
 
     const ts = now();

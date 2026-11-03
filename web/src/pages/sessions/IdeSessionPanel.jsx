@@ -277,6 +277,100 @@ function RepositoriesSection({ workflow, projectId }) {
 }
 
 
+/**
+ * The MCP integrations this session gets. By default a session gets every integration the project has switched on
+ * (Integrations page); "Choose" limits it to the ticked ones, and nothing ticked means no MCP tools at all.
+ * The agent picks the change up from its next message.
+ */
+function IntegrationsSection({ workflow, projectId }) {
+  const [items, setItems]   = useState(null);                       // the project's remote MCP integrations
+  const [chosen, setChosen] = useState(Array.isArray(workflow?.integration_ids) ? workflow.integration_ids : null);
+  const [busy, setBusy]     = useState(false);
+  const [error, setError]   = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get(`/api/projects/${projectId}/integrations`)
+      .then((d) => { if (!cancelled) setItems((d.integrations ?? []).filter((i) => i.type === 'http')); })
+      .catch(() => { if (!cancelled) setItems([]); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const save = async (ids) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.patch(`/api/projects/${projectId}/workflows/${workflow.id}`, { integrationIds: ids });
+      const next = r?.workflow?.integration_ids;
+      setChosen(Array.isArray(next) ? next : null);
+    } catch (e) {
+      setError(e.message || 'Could not update the integrations');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (items === null) return null;
+  if (items.length === 0) {
+    return (
+      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>
+        <div style={{ fontSize: '0.72rem', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-3)', marginBottom: 6 }}>
+          Integrations
+        </div>
+        <p className="muted" style={{ fontSize: '0.76rem', margin: 0 }}>
+          No MCP servers in this project yet. Add one on the Integrations page.
+        </p>
+      </div>
+    );
+  }
+
+  const custom = chosen !== null;
+  const defaultCount = items.filter((i) => i.enabled).length;
+  const on = (i) => (custom ? chosen.includes(i.id) : i.enabled);
+
+  return (
+    <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>
+      <div style={{ fontSize: '0.72rem', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-3)', marginBottom: 6 }}>
+        Integrations
+      </div>
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.8rem', padding: '2px 0' }}>
+        <input type="radio" name={`int-mode-${workflow.id}`} checked={!custom} disabled={busy} onChange={() => save(null)} />
+        <span>Project default <span className="muted">({defaultCount} on)</span></span>
+      </label>
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.8rem', padding: '2px 0' }}>
+        <input
+          type="radio"
+          name={`int-mode-${workflow.id}`}
+          checked={custom}
+          disabled={busy}
+          onChange={() => save(items.filter((i) => i.enabled).map((i) => i.id))}
+        />
+        <span>Choose for this session</span>
+      </label>
+      <div style={{ marginTop: 4 }}>
+        {items.map((i) => (
+          <label key={i.id} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.8rem', padding: '2px 0 2px 18px', opacity: !custom && !i.enabled ? 0.55 : 1 }}>
+            <input
+              type="checkbox"
+              checked={on(i)}
+              disabled={busy || !custom}
+              onChange={(e) => save(e.target.checked ? [...chosen, i.id] : chosen.filter((x) => x !== i.id))}
+            />
+            <span style={{ flex: 1, wordBreak: 'break-word' }}>{i.name}</span>
+            <span className="muted" style={{ fontSize: '0.7rem' }}>
+              {!i.enabled && !custom ? 'off' : i.lastTest && !i.lastTest.ok ? 'needs attention' : i.allowWrites ? 'writes' : 'read-only'}
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="muted" style={{ fontSize: '0.72rem', margin: '6px 0 0' }}>
+        The agent gets these tools from its next message.
+      </p>
+      {error && <div className="error-note" role="alert" style={{ marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
 function ContextPanel({ workflowId }) {
   const [items, setItems] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -637,6 +731,7 @@ export function IdeSessionPanel({ workflow, workflowId, projectId }) {
         {tab === 'context' && (
           <>
             <RepositoriesSection workflow={workflow} projectId={projectId} />
+            <IntegrationsSection workflow={workflow} projectId={projectId} />
             <ContextPanel workflowId={workflowId} />
           </>
         )}
