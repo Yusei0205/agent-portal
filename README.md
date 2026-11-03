@@ -9,7 +9,7 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
 - **Projects** hold documents, repositories, agents, skills, sessions and members. **Setup** is one
   page per project: a readiness checklist plus tabs for connection and provider, repositories,
   agents and skills, team and members, Jira, configuration files and budget.
-  The project menu is Sessions, Workspaces, Code review, Knowledge, Create, Vault, Insights, Setup
+  The project menu is Sessions, Workspaces, Code review, Knowledge, Create, Vault, Setup
   and the Portal group, plus Tickets once the project has Jira connected.
 - **Create** is one page with tabs for Diagrams, Documents (generated Word and Markdown), Decks
   (PowerPoint) and this project's Templates. The portal-wide default templates stay in Settings.
@@ -51,7 +51,7 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   that folder; project owners can turn the copies off on the Create page.
 - **Integrations and connections**: Git connections (GitHub, Bitbucket, CodeCommit, other Git
   servers), AWS accounts (keys, profiles, SSO), MCP integrations, Jira, and API tokens.
-- **Insights**: cost, tokens, latency, failures and agent activity, for one project or all of
+- **Dashboard cost panel** (this was the separate Insights page): cost, tokens, latency, failures and agent activity, for one project or all of
   them, plus loop metrics and spend per user.
 - **Knowledge**: upload FSD, TSD, specs and notes (Word, PDF, Excel, PowerPoint, Markdown, HTML).
   They are converted to Markdown, indexed, searchable and answerable with cited sources. When the
