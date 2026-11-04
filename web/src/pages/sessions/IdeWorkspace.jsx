@@ -220,6 +220,30 @@ function ComposerBar({
 
   const isRunning = workflow?.status === 'running' || workflow?.status === 'pending';
 
+  // The repositories are cloned into the session's storage in the background: say so, and hold the message box until
+  // that is done (a message sent meanwhile would only wait for it). A preparation stuck for over 6 minutes is ignored.
+  const repoKey = Array.isArray(workflow?.repo_ids) ? workflow.repo_ids.join(',') : '';
+  const [cloning, setCloning] = useState(false);
+  useEffect(() => {
+    if (!workflow?.id || !repoKey) { setCloning(false); return undefined; }
+    let cancelled = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const d = await api.get(`/api/projects/${projectId}/workflows/${workflow.id}/repo-prep`);
+        if (cancelled) return;
+        const p = d.prep;
+        const live = p?.state === 'running' && Date.now() - new Date(p.at).getTime() < 6 * 60_000;
+        setCloning(Boolean(live));
+        if (live) timer = setTimeout(tick, 3000);
+      } catch {
+        if (!cancelled) setCloning(false);
+      }
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [workflow?.id, repoKey, projectId]);
+
   const enginePlaceholder =
     workflow?.engine === 'kiro'
       ? 'Ask Kiro to change something…'
@@ -525,6 +549,12 @@ function ComposerBar({
           Commands starting with / are passed to the engine. /clear starts the next turn fresh.
         </div>
       )}
+      {cloning && (
+        <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', fontSize: '0.8rem', color: 'var(--ink-2)' }}>
+          <span className="spinner" style={{ width: 12, height: 12 }} />
+          Cloning the repositories into this session… you can send a message when it finishes.
+        </div>
+      )}
       <div className="ws-composer-row">
         <button
           type="button"
@@ -540,11 +570,11 @@ function ComposerBar({
           ref={textareaRef}
           rows={1}
           className="ws-composer-input"
-          placeholder={enginePlaceholder}
+          placeholder={cloning ? 'Cloning the repositories…' : enginePlaceholder}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={!workflow}
+          disabled={!workflow || cloning}
           aria-label="Message"
         />
         <div className="ws-composer-actions">
@@ -552,7 +582,7 @@ function ComposerBar({
             type="button"
             className="btn btn-sm btn-primary"
             onClick={send}
-            disabled={busy || !message.trim() || !workflow}
+            disabled={busy || !message.trim() || !workflow || cloning}
             aria-label="Send (Enter)"
             title="Send (Enter)"
           >
