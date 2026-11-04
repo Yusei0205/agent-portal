@@ -237,6 +237,18 @@ export function makeGitProgressReader(onUpdate: (u: { phase: string; percent: nu
   };
 }
 
+/** How many files the repository's current checkout holds (tracked files), for the "N files" shown when it is ready. */
+function countTrackedFiles(cwd: string, trust: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  return new Promise((resolve) => {
+    const proc = spawn('git', [...trust, 'ls-files', '-z'], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'] });
+    let n = 0;
+    proc.stdout.on('data', (d: Buffer) => { for (const b of d) if (b === 0) n++; });
+    const timer = setTimeout(() => proc.kill('SIGKILL'), 30_000);
+    proc.on('error', () => { clearTimeout(timer); resolve(0); });
+    proc.on('close', () => { clearTimeout(timer); resolve(n); });
+  });
+}
+
 /**
  * Puts each repository under `<workDir>/repos/<name>` (full clone: all branches and tags, the full history). With `persistRoot`, the real folder is
  * `<persistRoot>/repos` and `<workDir>/repos` is a link to it, so the copy survives until the session is released.
@@ -247,7 +259,7 @@ export async function cloneRunnerRepos(
   repos: RunnerRepo[],
   workDir: string,
   emit: (event: { type: 'status'; text: string }) => void,
-  opts: { persistRoot?: string | null; homeDir?: string | null; onProgress?: (u: { name: string; phase: string; percent: number; detail: string }) => void } = {},
+  opts: { persistRoot?: string | null; homeDir?: string | null; onProgress?: (u: { name: string; phase: string; percent: number; detail: string; done?: boolean }) => void } = {},
 ): Promise<string[]> {
   const done: string[] = [];
   const reposDir = path.join(workDir, 'repos');
@@ -274,6 +286,7 @@ export async function cloneRunnerRepos(
     if (fs.existsSync(path.join(dest, '.git'))) {
       await refreshExisting(repo, dest, trust, emit);
       ready.add(repo.name);
+      if (opts.onProgress) opts.onProgress({ name: repo.name, phase: 'Ready', percent: 100, detail: `${(await countTrackedFiles(dest, trust, gitEnv(repo))).toLocaleString('en-US')} files`, done: true });
       if (persist) trusted.push(realDest);
       return;
     }
@@ -305,6 +318,7 @@ export async function cloneRunnerRepos(
     }
     if (res.code === 0) {
       ready.add(repo.name);
+      if (opts.onProgress) opts.onProgress({ name: repo.name, phase: 'Ready', percent: 100, detail: `${(await countTrackedFiles(dest, trust, gitEnv(repo))).toLocaleString('en-US')} files`, done: true });
       // Only a clone that really is on the persistent folder needs trusting (a temporary one is owned by the runner).
       if (persist && fs.existsSync(dest) && fs.lstatSync(dest).isDirectory()) trusted.push(realDest);
     } else {

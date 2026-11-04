@@ -2127,3 +2127,12 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
 .clone-bar[data-state="failed"]>i{width:100%;background:var(--danger,#c0392b)}
 @keyframes clone-slide{0%{margin-left:-40%}100%{margin-left:100%}}
 @media (prefers-reduced-motion:reduce){.clone-bar[data-state="working"][data-known="no"]>i{animation:none;width:60%}}
+
+.clone-panel-title{font-weight:600;color:var(--ink-1,inherit)}
+.clone-panel-pct{font-size:1.15rem;font-weight:700;color:var(--accent,#d9962b);font-variant-numeric:tabular-nums}
+.clone-panel.is-done .clone-panel-title{color:var(--ok,#3fa66b)}
+.clone-panel.is-failed .clone-panel-title{color:var(--danger,#c0392b)}
+.clone-row-pct{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums}
+.clone-bar{height:8px;max-width:none}
+.clone-bar-total{height:6px;margin-bottom:2px}
+.clone-panel-head{align-items:center}

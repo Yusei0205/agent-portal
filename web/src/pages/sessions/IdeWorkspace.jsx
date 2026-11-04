@@ -250,6 +250,24 @@ function ComposerBar({
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [workflow?.id, repoKey, projectId]);
 
+  // Progress panel: while cloning, and the outcome afterwards (a result stays for a little, or until dismissed).
+  const [dismissed, setDismissed] = useState(false);
+  const items = prep?.items ?? [];
+  const total = items.length || repoKey.split(',').filter(Boolean).length;
+  const doneCount = items.filter((i) => i.state === 'done').length;
+  const failedCount = items.filter((i) => i.state === 'failed').length;
+  const overallPct = items.length
+    ? Math.round(items.reduce((a, i) => a + (i.state === 'done' ? 100 : (typeof i.percent === 'number' ? i.percent : 0)), 0) / items.length)
+    : 0;
+  const recentlyFinished = prep && prep.state !== 'running' && Date.now() - new Date(prep.at).getTime() < 3 * 60_000;
+  const showPanel = !dismissed && (cloning || (recentlyFinished && (prep.state === 'done' || prep.state === 'failed') && items.length > 0));
+  useEffect(() => { setDismissed(false); }, [workflow?.id, cloning]);
+  useEffect(() => {
+    if (!prep || prep.state !== 'done' || cloning) return undefined;
+    const t = setTimeout(() => setDismissed(true), 25_000);
+    return () => clearTimeout(t);
+  }, [prep?.state, prep?.at, cloning]);
+
   const enginePlaceholder =
     workflow?.engine === 'kiro'
       ? 'Ask Kiro to change something…'
@@ -555,29 +573,35 @@ function ComposerBar({
           Commands starting with / are passed to the engine. /clear starts the next turn fresh.
         </div>
       )}
-      {(cloning || prep?.state === 'failed') && (
-        <div className="clone-panel" role="status" aria-live="polite">
+      {showPanel && (
+        <div className={`clone-panel${prep?.state === 'done' ? ' is-done' : ''}${prep?.state === 'failed' ? ' is-failed' : ''}`} role="status" aria-live="polite">
           <div className="clone-panel-head">
-            <span>
-              {cloning
-                ? `Checking out ${(prep?.items?.length || repoKey.split(',').length)} ${((prep?.items?.length || repoKey.split(',').length) === 1) ? 'repository' : 'repositories'} · ${(prep?.items ?? []).filter((i) => i.state === 'done').length} of ${prep?.items?.length || repoKey.split(',').length} done`
-                : 'Some repositories could not be checked out'}
+            <span className="clone-panel-title">
+              {cloning && `Checking out ${total} ${total === 1 ? 'repository' : 'repositories'} · ${doneCount} of ${total} done`}
+              {!cloning && prep?.state === 'done' && `✓ ${total === 1 ? 'Repository' : 'Repositories'} ready · ${doneCount} of ${total}`}
+              {!cloning && prep?.state === 'failed' && `✗ ${failedCount || 'Some'} of ${total} could not be checked out`}
             </span>
-            {!cloning && <span className="muted">{prep?.message}</span>}
+            {cloning && <span className="clone-panel-pct">{overallPct}%</span>}
+            {!cloning && <button type="button" className="btn-icon" aria-label="Dismiss" title="Dismiss" onClick={() => setDismissed(true)} style={{ width: 22, height: 22 }}>×</button>}
           </div>
-          {(prep?.items ?? []).map((i, n, all) => (
+          {cloning && <div className="clone-bar clone-bar-total" data-state="working" data-known="yes"><i style={{ width: `${Math.max(2, overallPct)}%` }} /></div>}
+          {items.map((i, n) => (
             <div key={i.name} className="clone-row">
               <div className="clone-row-line">
                 <strong>{i.name}/</strong>
-                <span className="muted">{i.text}{i.detail ? ` · ${i.detail}` : ''}{all.length > 1 ? ` · repo ${n + 1} of ${all.length}` : ''}</span>
-                {i.state === 'working' && typeof i.percent === 'number' && <span className="muted" style={{ marginLeft: 'auto' }}>{i.percent}%</span>}
+                <span className="muted">
+                  {i.text}{i.detail ? ` · ${i.detail}` : ''}{items.length > 1 ? ` · repo ${n + 1} of ${items.length}` : ''}
+                </span>
+                {(i.state === 'working' && typeof i.percent === 'number') && <span className="clone-row-pct">{i.percent}%</span>}
+                {i.state === 'done' && <span className="clone-row-pct">100%</span>}
               </div>
               <div className="clone-bar" data-state={i.state} data-known={typeof i.percent === 'number' ? 'yes' : 'no'}>
                 <i style={i.state === 'working' && typeof i.percent === 'number' ? { width: `${Math.max(2, i.percent)}%` } : undefined} />
               </div>
             </div>
           ))}
-          {cloning && <div className="muted" style={{ fontSize: '0.74rem', paddingTop: 2 }}>You can type once the repositories are ready.</div>}
+          {!cloning && prep?.state === 'failed' && prep?.message && <div className="muted" style={{ fontSize: '0.76rem' }}>{prep.message}</div>}
+          {cloning && <div className="muted" style={{ fontSize: '0.74rem', paddingTop: 2 }}>You can type once the repositories are ready. Git only reports the file total near the end (checking out files); before that the count is of objects.</div>}
         </div>
       )}
       <div className="ws-composer-row">

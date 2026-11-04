@@ -160,9 +160,9 @@ async function prepare(workflowId: string): Promise<void> {
       if (ev.type === 'progress' && typeof ev.name === 'string') {
         const it = items.find((i) => i.name === ev.name);
         if (it && it.state !== 'done') {
-          it.state = 'working';
-          it.text = String(ev.phase ?? 'Cloning');
-          it.percent = Number(ev.percent ?? 0);
+          it.state = ev.done === true ? 'done' : 'working';
+          it.text = ev.done === true ? 'Ready' : String(ev.phase ?? 'Cloning');
+          it.percent = ev.done === true ? 100 : Number(ev.percent ?? 0);
           it.detail = String(ev.detail ?? '');
           await save(workflowId, { state: 'running', at: now(), message: 'Preparing repositories…', items });
         }
