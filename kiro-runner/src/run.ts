@@ -404,8 +404,44 @@ export async function runKiroRun(
         else made.emit({ type: 'error', message: `kiro-cli spawn error: ${e.message}` });
       });
 
+      // How full the model's context window is. Kiro reports it as a percentage in its own notifications
+      // (`contextUsagePercentage`), or as used/size in the standard `usage_update`. Each notification method is
+      // logged once by name so a change in what Kiro sends can be seen in the logs.
+      const seenMethods = new Set<string>();
+      let lastPercent = -1;
+      const reportContext = (percent: unknown): void => {
+        const n = Number(percent);
+        if (!Number.isFinite(n) || n < 0) return;
+        const rounded = Math.min(100, Math.round(n));
+        if (rounded === lastPercent) return;
+        lastPercent = rounded;
+        made.emit({ type: 'context', percent: rounded });
+      };
+      const findPercent = (v: unknown, depth = 0): unknown => {
+        if (!v || typeof v !== 'object' || depth > 3) return undefined;
+        const o = v as Record<string, unknown>;
+        if (o.contextUsagePercentage !== undefined) return o.contextUsagePercentage;
+        for (const x of Object.values(o)) {
+          const r = findPercent(x, depth + 1);
+          if (r !== undefined) return r;
+        }
+        return undefined;
+      };
       acp.onNotification((method, params) => {
-        if (method !== 'session/update') return;
+        if (!seenMethods.has(method)) {
+          seenMethods.add(method);
+          process.stdout.write(JSON.stringify({ event: 'acp_notification', method }) + '\n');
+        }
+        if (method !== 'session/update') {
+          reportContext(findPercent(params));
+          return;
+        }
+        {
+          const u = (params as { update?: { sessionUpdate?: string; used?: unknown; size?: unknown } })?.update;
+          if (u?.sessionUpdate === 'usage_update' && Number(u.size) > 0 && Number.isFinite(Number(u.used))) {
+            reportContext((Number(u.used) / Number(u.size)) * 100);
+          }
+        }
         const p = params as { update?: SessionUpdatePayload };
         const update = p?.update;
         if (!update) return;

@@ -238,10 +238,20 @@ export function registerSessionLifecycleRoutes(): void {
         outputTokens: isKiro ? null : totals.total_output,
       };
 
+      // How full the model's context window was at the last report of the session's runs.
+      let contextPercent: number | null = null;
+      try {
+        const ctxEvents = await repo.listWorkflowRunEventsByType(wid, ['context-usage'], 50);
+        const last = [...ctxEvents].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)))[0];
+        const pct = last ? Number((JSON.parse(String(last.payload ?? '{}')) as { percent?: unknown }).percent) : NaN;
+        if (Number.isFinite(pct)) contextPercent = pct;
+      } catch { /* the bar is optional */ }
+
       sendJson(res, 200, {
         agent: w.lead_agent ?? null,
         engine,
         model: latestRun?.model ?? null,
+        contextPercent,
         toolApprovalMode: w.trust_tools ? 'trust-all' : 'ask',
         thisTurn,
         thisSession,

@@ -57,6 +57,17 @@ export function IdeStatusBar({ projectId, workflowId }) {
       {bar?.model && (
         <span className="ide-status-chip ide-status-model" title="Model"><span className="ide-status-key">model</span> {bar.model}</span>
       )}
+      {typeof bar?.contextPercent === 'number' && (
+        <span className="ide-status-chip ide-status-ctx" title={`${bar.contextPercent}% of the model's context window is in use`}>
+          <span className="ide-status-key">ctx</span> {bar.contextPercent}%
+          <span className="ide-status-meter" aria-hidden="true">
+            <span
+              className={`ide-status-meter-fill${bar.contextPercent >= 85 ? ' is-high' : bar.contextPercent >= 65 ? ' is-mid' : ''}`}
+              style={{ width: `${Math.max(2, Math.min(100, bar.contextPercent))}%` }}
+            />
+          </span>
+        </span>
+      )}
       {bar?.agent && (
         <span className="ide-status-chip" title="Agent"><span className="ide-status-key">agent</span> {bar.agent}</span>
       )}

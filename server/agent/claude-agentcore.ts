@@ -126,6 +126,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
           }
           break;
         }
+        case 'context': {
+          const percent = Number(ev.percent);
+          if (Number.isFinite(percent)) emit('context-usage', { percent });
+          break;
+        }
         case 'thought': {
           const text = String(ev.text ?? '');
           if (text) emit('agent-thought', { text });

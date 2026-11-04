@@ -440,6 +440,13 @@ export async function runInvocation(
         totalCacheWriteTokens += cacheWriteTok;
         totalCacheReadTokens += cacheReadTok;
 
+        // What the model read for this message is what fills its context window (200k tokens; an estimate for
+        // models with a larger window).
+        if (!msg.parent_tool_use_id) {
+          const used = inputTok + cacheWriteTok + cacheReadTok;
+          if (used > 0) emit({ type: 'context', percent: Math.min(100, Math.round((used / 200_000) * 100)) });
+        }
+
         const content = message.content;
         if (!Array.isArray(content)) continue;
 

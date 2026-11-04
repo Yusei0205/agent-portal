@@ -70,6 +70,7 @@ export interface KiroTokenPayload {
 export type AgentCoreSSEEvent =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string }
+  | { type: 'context'; percent: number }
   | { type: 'tool'; name: string }
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
   | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
@@ -549,6 +550,12 @@ export async function runKiroViaAgentCore(
             if (textParts.length) textParts[textParts.length - 1] += textEv.text;
             else textParts.push(textEv.text);
           }
+          break;
+        }
+
+        case 'context': {
+          const percent = Number((ev as { type: 'context'; percent: number }).percent);
+          if (Number.isFinite(percent)) emit('context-usage', { percent });
           break;
         }
 
