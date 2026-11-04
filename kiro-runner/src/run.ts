@@ -395,7 +395,7 @@ export async function runKiroRun(
 
   // Only what identifies the setup: credentials and tokens inside these change from message to message.
   const pick = (list: unknown[] | undefined, keys: string[]) => (list ?? []).map((x) => keys.map((k) => String((x as Record<string, unknown>)?.[k] ?? '')));
-  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser), aws: payload.awsEnv?.AWS_ACCESS_KEY_ID ?? '' });
+  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser), aws: payload.awsEnv?.AWS_ACCESS_KEY_ID ?? '', model: payload.model ?? '' });
   // A cloud browser session lasts 15 minutes, so a browser session's kiro-cli is restarted after 12.
   const browserExpired = Boolean(payload.browser) && warm !== null && Date.now() - warm.startedAt > 12 * 60_000;
   if (warm && (browserExpired || warm.exited || warm.fingerprint !== fingerprint)) await disposeKiro(warm);
@@ -469,7 +469,9 @@ export async function runKiroRun(
         Object.assign(childEnv, payload.awsEnv);
       }
 
-      const child = spawn('kiro-cli', ['acp'], {
+      // kiro-cli 3 refuses session/set_model ("no persistence classification"), so the model is given at start. A
+      // different model later starts a new kiro-cli (the model is part of the fingerprint above).
+      const child = spawn('kiro-cli', payload.model ? ['acp', '--model', payload.model] : ['acp'], {
         cwd: workDir,
         env: childEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -477,7 +479,7 @@ export async function runKiroRun(
       const acp = createAcpClient(child);
       const made: WarmKiro = {
         child, acp, acpSessionId: '', workDir, kiroHome, authTmpDir, defaultDbPath, fingerprint,
-        expiresAtBefore: token.expiresAt, exited: false, exitCode: null, liveDir, startedAt: Date.now(), browserSession: null, emit, perm: null, stderr: { tail: '' },
+        model: payload.model, expiresAtBefore: token.expiresAt, exited: false, exitCode: null, liveDir, startedAt: Date.now(), browserSession: null, emit, perm: null, stderr: { tail: '' },
       };
       w = made;
 

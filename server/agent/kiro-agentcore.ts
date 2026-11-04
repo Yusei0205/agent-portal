@@ -410,7 +410,22 @@ export async function* invokeAgentCore(
   signal?: AbortSignal,
 ): AsyncGenerator<AgentCoreSSEEvent | AgentCoreLoginResultEvent> {
   const invoker = _invokerOverride ?? invokeAgentCoreReal;
-  yield* invoker(runtimeArn, sessionId, payload, signal);
+  // The runner answers 409 while the session's machine is still busy (a repository preparation or a workspace save from
+  // the previous message). That is momentary: wait and ask again, as long as nothing has been delivered yet.
+  for (let attempt = 0; ; attempt++) {
+    let delivered = false;
+    try {
+      for await (const ev of invoker(runtimeArn, sessionId, payload, signal)) {
+        delivered = true;
+        yield ev;
+      }
+      return;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (delivered || attempt >= 8 || signal?.aborted || !/\(409\)|HTTP 409/.test(msg)) throw e;
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+  }
 }
 
 /**
