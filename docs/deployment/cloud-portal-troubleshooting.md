@@ -321,3 +321,9 @@ The Integrations page has two parts. **Connected services** is an overview of si
 
 - **Resume:** a run that ended without results (failed, stopped, or finished without `results.csv`) shows "Resume (n)" in Run history, n being the cases of that run that still have no result. It opens the run dialog without the case choices and starts a new run for those cases only (`resumeOf` in the start request; at most 30 cases, press Resume again for the rest).
 - **Tests table:** Remarks is now a wrapping text box that grows to show the whole remark (it was a one-line input); the status counts above the table (Pass, Fail, Blocked, Unset) are filters you click, together with the category chips.
+
+
+### Forgot password (admin-issued reset link)
+- **Flow:** there is no email sending in the portal, so the reset is done through an admin, like an invitation. Settings › Users › "Reset password" (not shown for deactivated users) calls `POST /api/governance/users/:id/reset-link` and shows a link `#/reset-password?token=…` to copy and send. The person opens it (signed in or not), chooses a new password (at least 10 characters, typed twice) and `POST /api/auth/reset-password` sets it. The sign-in page has "Forgot password?", which says to ask an admin.
+- **Token:** random, only its SHA-256 is stored, as the setting `auth.reset.<hash>` = `{userId, expiresAt, createdBy}`. Valid 60 minutes, one use (the setting is blanked before the password changes). The public endpoint allows 10 tries per IP per 15 minutes. Audit entries: `auth.reset_link_issued`, `auth.password_reset`.
+- **Limits:** other devices already signed in stay signed in (sessions are not revoked), and the old password works until the link is used. Someone who signs in only with Google has no portal password to reset. Email delivery (Amazon SES) was offered and not chosen: it needs a verified sender and, in the SES sandbox, verified recipients.

@@ -9,7 +9,7 @@ import { ShortcutsSheet } from './components/ShortcutsSheet.jsx';
 import { getTemplate, getActiveTemplateId, fetchAndApplyTheme } from './lib/theme.js';
 import { subscribeGlobal } from './lib/events.js';
 import { Rail, DEFAULT_RAIL_W, MIN_RAIL_W, MAX_RAIL_W } from './components/Rail.jsx';
-import { Login, AcceptInvite } from './pages/Auth.jsx';
+import { Login, AcceptInvite, ResetPassword } from './pages/Auth.jsx';
 import SetupWizard from './pages/setup/SetupWizard.jsx';
 import { SessionsShell } from './pages/sessions/SessionsShell.jsx';
 import Settings from './pages/settings/Settings.jsx';
@@ -620,6 +620,11 @@ export function App() {
 
   if (auth.needsSetup) {
     return <SetupWizard onDone={load} />;
+  }
+
+  // A reset link works whether or not someone is signed in on this browser.
+  if (window.location.hash.startsWith('#/reset-password')) {
+    return <ResetPassword onDone={() => { window.location.hash = '#/'; load(); }} />;
   }
 
   if (!auth.user) {

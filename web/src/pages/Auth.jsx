@@ -73,6 +73,7 @@ export function Login({ onDone, googleEnabled = false }) {
   const [error, setError] = useState(/** @type {string|null} */ (hashError));
   // With Google on, the password form is folded away until asked for.
   const [showPassword, setShowPassword] = useState(!googleEnabled);
+  const [forgot, setForgot] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -154,6 +155,15 @@ export function Login({ onDone, googleEnabled = false }) {
               <button type="submit" className="btn btn-primary" disabled={busy}>
                 {busy ? 'Signing in…' : 'Sign in'}
               </button>
+              <button type="button" className="login-alt" onClick={() => setForgot((v) => !v)} aria-expanded={forgot}>
+                Forgot password?
+              </button>
+              {forgot && (
+                <p className="muted small" role="status">
+                  Ask your portal admin for a reset link: they open Settings › Users, press “Reset password” next to your name and send you the link.
+                  It works once and expires after an hour. If you only ever signed in with Google, use “Continue with Google”.
+                </p>
+              )}
               <p className="muted small">Ask your admin to create an account or send you an invite link.</p>
             </form>
           )}
@@ -237,6 +247,71 @@ export function AcceptInvite({ onDone }) {
         {error && <div className="error-note" role="alert">{error}</div>}
         <button type="submit" className="btn btn-primary" disabled={busy}>
           {busy ? 'Creating account…' : 'Create account'}
+        </button>
+      </form>
+    </AuthFrame>
+  );
+}
+
+/**
+ * Reset-password form: opened from the one-time link an admin issues (#/reset-password?token=...).
+ * @param {{ onDone: () => void }} props
+ */
+export function ResetPassword({ onDone }) {
+  const hash = window.location.hash;
+  const token = new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '').get('token') || '';
+  const [password, setPassword] = useState('');
+  const [again, setAgain] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(/** @type {string|null} */ (null));
+  const [email, setEmail] = useState(/** @type {string|null} */ (null));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (password.length < 10) { setError('Password must be at least 10 characters'); return; }
+    if (password !== again) { setError('The two passwords do not match'); return; }
+    setBusy(true);
+    try {
+      const r = await api.post('/api/auth/reset-password', { token, password });
+      setEmail(r.email || '');
+    } catch (err) {
+      setError(err.message || 'Could not reset the password');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <AuthFrame title="Reset password">
+        <div className="error-note" role="alert">This link is missing its token. Ask your admin for a new one.</div>
+      </AuthFrame>
+    );
+  }
+
+  if (email !== null) {
+    return (
+      <AuthFrame title="Password changed" intro={email ? `You can now sign in as ${email} with the new password.` : 'You can now sign in with the new password.'}>
+        <button type="button" className="btn btn-primary" onClick={onDone}>Go to sign in</button>
+      </AuthFrame>
+    );
+  }
+
+  return (
+    <AuthFrame title="Choose a new password" intro="This link works once and expires an hour after your admin made it.">
+      <form onSubmit={submit} className="stack" noValidate>
+        <div className="field">
+          <label htmlFor="reset-password">New password (at least 10 characters)</label>
+          <input id="reset-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus autoComplete="new-password" />
+        </div>
+        <div className="field">
+          <label htmlFor="reset-again">Repeat the new password</label>
+          <input id="reset-again" type="password" value={again} onChange={(e) => setAgain(e.target.value)} required autoComplete="new-password" />
+        </div>
+        {error && <div className="error-note" role="alert">{error}</div>}
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? 'Saving…' : 'Set new password'}
         </button>
       </form>
     </AuthFrame>

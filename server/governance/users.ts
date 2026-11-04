@@ -18,6 +18,7 @@ import { generateId, now, str, badRequest } from '../util.ts';
 import { appendAudit } from '../audit.ts';
 import { hashPassword } from '../auth.ts';
 import { getAuthRepository } from '../repositories/auth.ts';
+import { getSetting, setSetting } from '../settings.ts';
 import { getProjectRepository } from '../repositories/projects.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -25,6 +26,9 @@ import { getProjectRepository } from '../repositories/projects.ts';
 function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
 }
+
+const RESET_MINUTES = 60;
+const resetAttempts = new Map<string, { count: number; until: number }>();
 
 function requireAdmin(req: PortalRequest, res: PortalResponse): boolean {
   if (!req.user?.is_admin) {
@@ -108,6 +112,60 @@ export function registerUserRoutes(): void {
       },
     });
   }));
+
+  // POST /api/governance/users/:id/reset-link — an admin issues a one-time link to set a new password (shared by hand, like an invitation)
+  router.post('/api/governance/users/:id/reset-link', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
+    if (!requireAdmin(req, res)) return;
+    const user = await getAuthRepository().getUserById(req.params.id);
+    if (!user) { sendJson(res, 404, { error: 'User not found' }); return; }
+    if (user.disabled) { sendJson(res, 400, { error: 'This user is deactivated. Reactivate them first.' }); return; }
+
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + RESET_MINUTES * 60_000).toISOString();
+    await setSetting(getDb(), `auth.reset.${sha256(token)}`, JSON.stringify({ userId: user.id, expiresAt, createdBy: req.user!.id }));
+    appendAudit(getDb(), req.user!.id, 'auth.reset_link_issued', `user:${user.id}`, { email: user.email }, req.ip);
+
+    sendJson(res, 201, {
+      reset: {
+        email: user.email,
+        name: user.name,
+        expiresAt,
+        resetUrl: `${publicBaseUrl(req)}/#/reset-password?token=${encodeURIComponent(token)}`,
+      },
+    });
+  }));
+
+  // POST /api/auth/reset-password — set a new password with a link an admin issued (public; the link is the proof)
+  router.post('/api/auth/reset-password', async (req: PortalRequest, res: PortalResponse) => {
+    const body = req.body as Record<string, unknown>;
+    const token = typeof body.token === 'string' ? body.token.trim() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+
+    const rate = resetAttempts.get(req.ip) ?? { count: 0, until: 0 };
+    if (rate.until > Date.now() && rate.count >= 10) { sendJson(res, 429, { error: 'Too many attempts. Wait 15 minutes and try again.' }); return; }
+    resetAttempts.set(req.ip, { count: (rate.until > Date.now() ? rate.count : 0) + 1, until: Date.now() + 15 * 60_000 });
+
+    if (!token) throw badRequest('This link is missing its token. Ask your admin for a new one.');
+    if (password.length < 10) throw badRequest('Password must be at least 10 characters');
+
+    const key = `auth.reset.${sha256(token)}`;
+    let rec: { userId?: string; expiresAt?: string } | null = null;
+    try { const raw = getSetting(getDb(), key); rec = raw ? JSON.parse(raw) : null; } catch { rec = null; }
+    if (!rec?.userId) { sendJson(res, 400, { error: 'This link is not valid or has already been used. Ask your admin for a new one.' }); return; }
+    if (!rec.expiresAt || rec.expiresAt < now()) {
+      await setSetting(getDb(), key, '');
+      sendJson(res, 400, { error: 'This link has expired. Ask your admin for a new one.' });
+      return;
+    }
+    const user = await getAuthRepository().getUserById(rec.userId);
+    if (!user || user.disabled) { sendJson(res, 400, { error: 'This account cannot sign in. Ask your admin.' }); return; }
+
+    // One use only: remove the link before changing the password.
+    await setSetting(getDb(), key, '');
+    await getAuthRepository().updateUserFields(user.id, { password_hash: hashPassword(password) });
+    appendAudit(getDb(), user.id, 'auth.password_reset', `user:${user.id}`, {}, req.ip);
+    sendJson(res, 200, { ok: true, email: user.email });
+  });
 
   // POST /api/governance/invitations — create invitation
   router.post('/api/governance/invitations', requireAuth(async (req: PortalRequest, res: PortalResponse) => {

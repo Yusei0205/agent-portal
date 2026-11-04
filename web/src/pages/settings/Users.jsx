@@ -30,6 +30,17 @@ export default function UsersPage() {
   const [error, setError] = useState(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [actionError, setActionError] = useState(null);
+  const [resetFor, setResetFor] = useState(null); // { user, reset }
+
+  const resetPassword = async (user) => {
+    setActionError(null);
+    try {
+      const data = await api.post(`/api/governance/users/${user.id}/reset-link`, {});
+      setResetFor({ user, reset: data.reset });
+    } catch (e) {
+      setActionError(e.message);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -103,10 +114,34 @@ export default function UsersPage() {
               user={user}
               onToggleDisabled={() => toggleDisabled(user)}
               onToggleAdmin={() => toggleAdmin(user)}
+              onResetPassword={() => resetPassword(user)}
             />
           ))}
         </tbody>
       </table>
+
+      {resetFor && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reset-title" onKeyDown={(e) => { if (e.key === 'Escape') setResetFor(null); }}>
+          <div className="modal">
+            <div className="modal-header">
+              <h2 id="reset-title">Reset password</h2>
+              <button type="button" className="btn-icon" onClick={() => setResetFor(null)} aria-label="Close">✕</button>
+            </div>
+            <div className="modal-body stack">
+              <p>Send this link to <strong>{resetFor.reset.name}</strong> ({resetFor.reset.email}). They open it and choose a new password.</p>
+              <div className="field">
+                <label>Reset link</label>
+                <div className="input-with-action">
+                  <input type="text" readOnly value={portalInviteLink(resetFor.reset.resetUrl)} onFocus={(e) => e.target.select()} />
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigator.clipboard.writeText(portalInviteLink(resetFor.reset.resetUrl)).catch(() => {})}>Copy</button>
+                </div>
+              </div>
+              <p className="muted small">The link works once and expires in an hour. Their current password keeps working until they use it, and devices already signed in stay signed in.</p>
+              <button type="button" className="btn btn-primary" onClick={() => setResetFor(null)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {inviteOpen && (
         <InviteModal
@@ -120,7 +155,7 @@ export default function UsersPage() {
 
 // ── User row ──────────────────────────────────────────────────────────────────
 
-function UserRow({ user, onToggleDisabled, onToggleAdmin }) {
+function UserRow({ user, onToggleDisabled, onToggleAdmin, onResetPassword }) {
   const lastActive = user.last_active_at
     ? new Date(user.last_active_at).toLocaleDateString()
     : 'Never';
@@ -154,6 +189,16 @@ function UserRow({ user, onToggleDisabled, onToggleAdmin }) {
           >
             {user.disabled ? 'Reactivate' : 'Deactivate'}
           </button>
+          {!user.disabled && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={onResetPassword}
+              aria-label={`Reset password for ${user.name}`}
+            >
+              Reset password
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-ghost btn-sm"
