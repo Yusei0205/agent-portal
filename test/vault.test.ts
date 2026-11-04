@@ -57,7 +57,7 @@ async function uploadVaultFile(
       'X-Requested-With': 'agent-portal',
       Cookie: cookie,
     },
-    body,
+    body: body as unknown as RequestInit['body'],
   });
   const data = await res.json();
   assert.equal(res.status, 200, `Vault upload failed: ${JSON.stringify(data)}`);

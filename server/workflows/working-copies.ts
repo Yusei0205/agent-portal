@@ -24,6 +24,8 @@ import { spawn } from 'node:child_process';
  * a large repo but bounded so a hung subprocess does not stall the runner.
  */
 function spawnGit(args: string[], cwd: string, timeoutMs = 300_000): Promise<string> {
+  // The git subcommand (skipping -c key=value options), for error messages.
+  const sub = args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-c') ?? 'command';
   return new Promise((resolve, reject) => {
     const proc = spawn('git', args, {
       cwd,
@@ -39,7 +41,7 @@ function spawnGit(args: string[], cwd: string, timeoutMs = 300_000): Promise<str
     proc.stderr.on('data', (d: Buffer) => err.push(d));
     const timer = setTimeout(() => {
       proc.kill();
-      reject(new Error(`git ${args[0]} timed out after ${timeoutMs}ms`));
+      reject(new Error(`git ${sub} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
       (timer as { unref(): void }).unref();
@@ -49,7 +51,7 @@ function spawnGit(args: string[], cwd: string, timeoutMs = 300_000): Promise<str
       if (code === 0) {
         resolve(Buffer.concat(out).toString('utf8').trim());
       } else {
-        reject(new Error(Buffer.concat(err).toString('utf8').trim() || `git exited with ${code}`));
+        reject(new Error(`git ${sub} failed: ${Buffer.concat(err).toString('utf8').trim() || `exited with ${code}`}`));
       }
     });
     proc.on('error', (e) => {

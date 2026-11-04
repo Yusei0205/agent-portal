@@ -93,13 +93,13 @@ export class SqliteScansRepository implements ScansRepository {
         'SELECT * FROM p10_scans WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
         projectId, opts.status, opts.limit, opts.offset,
       );
-      countRow = one<{ n: number }>('SELECT COUNT(*) AS n FROM p10_scans WHERE project_id = ? AND status = ?', projectId, opts.status);
+      countRow = one<{ n: number }>('SELECT COUNT(*) AS n FROM p10_scans WHERE project_id = ? AND status = ?', projectId, opts.status) ?? null;
     } else {
       rows = all<Row>(
         'SELECT * FROM p10_scans WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
         projectId, opts.limit, opts.offset,
       );
-      countRow = one<{ n: number }>('SELECT COUNT(*) AS n FROM p10_scans WHERE project_id = ?', projectId);
+      countRow = one<{ n: number }>('SELECT COUNT(*) AS n FROM p10_scans WHERE project_id = ?', projectId) ?? null;
     }
     return { items: rows.map(toScan), total: Number(countRow?.n ?? 0) };
   }

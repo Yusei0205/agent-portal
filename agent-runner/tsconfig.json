@@ -11,9 +11,7 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["node"],
-    "lib": ["ES2022"],
-    "baseUrl": ".",
-    "paths": {}
+    "lib": ["ES2022"]
   },
   "include": ["src/**/*.ts", "shared/**/*.ts"]
 }

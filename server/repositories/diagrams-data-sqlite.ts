@@ -3,6 +3,7 @@
  */
 
 import { one, all, run as dbRun, insert, update } from '../db.ts';
+import type { DbParam } from '../db.ts';
 import type { Row } from '../db.ts';
 import type {
   DiagramRepository,
@@ -126,7 +127,7 @@ export class SqliteDiagramRepository implements DiagramRepository {
     for (const key of k) {
       if (fields[key] !== undefined) dbFields[key as string] = fields[key];
     }
-    update('diagrams', id, dbFields);
+    update('diagrams', id, dbFields as Record<string, DbParam>);
   }
 
   async delete(id: string): Promise<void> {

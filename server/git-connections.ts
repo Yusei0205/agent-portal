@@ -629,7 +629,7 @@ function testGitRemote(url: string, env: Record<string, string>): Promise<void> 
       env: { ...process.env, ...env },
     });
     proc.unref();
-    proc.stderr.unref();
+    (proc.stderr as unknown as { unref(): void }).unref();
     const err: Buffer[] = [];
     proc.stderr.on('data', (d: Buffer) => err.push(d));
     proc.on('close', (code) => {

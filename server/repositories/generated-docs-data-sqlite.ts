@@ -3,6 +3,7 @@
  */
 
 import { one, all, run as dbRun, insert, update } from '../db.ts';
+import type { DbParam } from '../db.ts';
 import type { Row } from '../db.ts';
 import type {
   GeneratedDocRepository,
@@ -102,7 +103,7 @@ export class SqliteGeneratedDocRepository implements GeneratedDocRepository {
     if (fields.error !== undefined)             dbFields.error = fields.error;
     if (fields.attachment_ids !== undefined)    dbFields.attachment_ids = fields.attachment_ids;
     if (fields.workflow_id !== undefined)       dbFields.workflow_id = fields.workflow_id;
-    update('generated_docs', id, dbFields);
+    update('generated_docs', id, dbFields as Record<string, DbParam>);
   }
 
   async delete(id: string): Promise<void> {

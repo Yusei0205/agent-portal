@@ -5,7 +5,7 @@
  * No portal dependencies — pure validation logic only.
  */
 
-import { test, describe } from 'node:test';
+import { test, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validatePayload,
@@ -24,7 +24,7 @@ function minPayload(): Record<string, unknown> {
 function ok(raw: unknown) {
   const r = validatePayload(raw);
   assert.ok(r.ok, `Expected ok but got error: ${r.ok ? '' : r.error}`);
-  if (!r.ok) throw new Error(r.error);
+  if (!r.ok) throw new Error('validation failed');
   return r.payload;
 }
 
@@ -159,7 +159,7 @@ describe('validatePayload — prompt', () => {
 // ── model ─────────────────────────────────────────────────────────────────────
 
 describe('validatePayload — model', () => {
-  test('omitted model is accepted', () => ok(minPayload()));
+  test('omitted model is accepted', () => void ok(minPayload()));
   test('empty model string is rejected', () => fail({ ...minPayload(), model: '' }, '"model"'));
   test('whitespace-only model is rejected', () => fail({ ...minPayload(), model: '  ' }, '"model"'));
   test('non-string model is rejected', () => fail({ ...minPayload(), model: 123 }, '"model"'));
@@ -172,8 +172,8 @@ describe('validatePayload — maxTurns', () => {
     const p = ok({ ...minPayload(), maxTurns: 5 });
     assert.equal(p.maxTurns, 5);
   });
-  test('maxTurns = 1 accepted', () => ok({ ...minPayload(), maxTurns: 1 }));
-  test('maxTurns = 200 accepted', () => ok({ ...minPayload(), maxTurns: 200 }));
+  test('maxTurns = 1 accepted', () => void ok({ ...minPayload(), maxTurns: 1 }));
+  test('maxTurns = 200 accepted', () => void ok({ ...minPayload(), maxTurns: 200 }));
   test('maxTurns = 0 rejected', () => fail({ ...minPayload(), maxTurns: 0 }, '"maxTurns"'));
   test('maxTurns = 201 rejected', () => fail({ ...minPayload(), maxTurns: 201 }, '"maxTurns"'));
   test('fractional maxTurns rejected', () => fail({ ...minPayload(), maxTurns: 1.5 }, '"maxTurns"'));
@@ -187,7 +187,7 @@ describe('validatePayload — maxBudgetUsd', () => {
     const p = ok({ ...minPayload(), maxBudgetUsd: 0.25 });
     assert.equal(p.maxBudgetUsd, 0.25);
   });
-  test('maxBudgetUsd = 100 accepted', () => ok({ ...minPayload(), maxBudgetUsd: 100 }));
+  test('maxBudgetUsd = 100 accepted', () => void ok({ ...minPayload(), maxBudgetUsd: 100 }));
   test('maxBudgetUsd = 0 rejected', () => fail({ ...minPayload(), maxBudgetUsd: 0 }, '"maxBudgetUsd"'));
   test('maxBudgetUsd > 100 rejected', () => fail({ ...minPayload(), maxBudgetUsd: 100.01 }, '"maxBudgetUsd"'));
   test('negative maxBudgetUsd rejected', () => fail({ ...minPayload(), maxBudgetUsd: -1 }, '"maxBudgetUsd"'));
@@ -201,7 +201,7 @@ describe('validatePayload — maxMinutes', () => {
     const p = ok({ ...minPayload(), maxMinutes: 15 });
     assert.equal(p.maxMinutes, 15);
   });
-  test('maxMinutes = 480 accepted', () => ok({ ...minPayload(), maxMinutes: 480 }));
+  test('maxMinutes = 480 accepted', () => void ok({ ...minPayload(), maxMinutes: 480 }));
   test('maxMinutes = 0 rejected', () => fail({ ...minPayload(), maxMinutes: 0 }, '"maxMinutes"'));
   test('maxMinutes > 480 rejected', () => fail({ ...minPayload(), maxMinutes: 481 }, '"maxMinutes"'));
 });

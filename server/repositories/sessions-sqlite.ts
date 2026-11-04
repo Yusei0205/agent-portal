@@ -8,6 +8,7 @@
  */
 
 import { one, all, run as dbRun, insert, getDb, tx } from '../db.ts';
+import type { DbParam } from '../db.ts';
 import type { Row } from '../db.ts';
 import { HttpError } from '../util.ts';
 import type {
@@ -67,6 +68,7 @@ function toWorkflow(row: Row): WorkflowRecord {
     kind: row.kind != null ? String(row.kind) : null,
     run_timeout_minutes: row.run_timeout_minutes != null ? Number(row.run_timeout_minutes) : null,
     loop_state: String(row.loop_state ?? ''),
+    budget_usd: row.budget_usd != null ? Number(row.budget_usd) : null,
     // enrichment
     parent_title: row.parent_title !== undefined ? (row.parent_title != null ? String(row.parent_title) : null) : undefined,
     child_count: row.child_count !== undefined ? Number(row.child_count) : undefined,
@@ -141,14 +143,14 @@ function toWorkflowEvent(row: Row): WorkflowEventRecord {
 
 function buildPatchSet(patch: Record<string, unknown>): {
   setSql: string;
-  values: unknown[];
+  values: DbParam[];
 } {
   const parts: string[] = [];
-  const values: unknown[] = [];
+  const values: DbParam[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (v !== undefined) {
       parts.push(`${k} = ?`);
-      values.push(v);
+      values.push(v as DbParam);
     }
   }
   return { setSql: parts.join(', '), values };
@@ -288,7 +290,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
-      'kind', 'run_timeout_minutes', 'loop_state',
+      'kind', 'run_timeout_minutes', 'loop_state', 'budget_usd',
     ];
     const clean: Record<string, unknown> = {};
     for (const k of allowed) {
@@ -312,7 +314,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
-      'kind', 'run_timeout_minutes', 'loop_state',
+      'kind', 'run_timeout_minutes', 'loop_state', 'budget_usd',
     ];
     const clean: Record<string, unknown> = {};
     for (const k of allowed) {

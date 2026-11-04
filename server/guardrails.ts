@@ -11,6 +11,7 @@
 
 import { getPermissionsRepository } from './repositories/permissions.ts';
 import type { PermissionRule, ProjectToolRule } from './repositories/permissions.ts';
+import { evaluateRules } from './agent/tool-policy.ts';
 
 // Re-export types for callers that import from guardrails.ts
 export type { PermissionRuleGroup, PermissionRule, ProjectToolRule } from './repositories/permissions.ts';
@@ -76,27 +77,6 @@ export function evaluateCommand(
   perms: RunPermissions,
   trusted: boolean,
 ): PermissionDecision {
-  for (const rule of perms.rules) {
-    if (rule.scope === 'untrusted' && trusted) continue;
-
-    let matched = false;
-
-    if (rule.pattern) {
-      try {
-        matched = new RegExp(rule.pattern, 'i').test(cmd.command);
-      } catch {
-        continue;
-      }
-    }
-
-    if (!matched && rule.category) {
-      matched = rule.category === cmd.category;
-    }
-
-    if (matched) {
-      return { action: rule.action, reason: rule.reason ?? '', ruleId: rule.id };
-    }
-  }
-
-  return { action: 'allow', reason: '', ruleId: null };
+  // One implementation, shared with the AgentCore runners (server/agent/tool-policy.ts).
+  return evaluateRules(cmd, perms.rules, trusted);
 }

@@ -1,5 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+// @ts-ignore -- a plain JS module shared with the web app
 import { statusSortKey, prioritySortKey } from '../web/src/lib/ticketSort.js';
 
 const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });

@@ -7,7 +7,10 @@
 #     -f agent-runner/Dockerfile -t agent-runner:local .
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
-FROM node:22-slim AS builder
+# Base image; CodeBuild passes AWS's public ECR mirror (public.ecr.aws/docker/library/node:22-slim).
+ARG NODE_IMAGE=node:22-slim
+
+FROM ${NODE_IMAGE} AS builder
 
 WORKDIR /build
 
@@ -24,9 +27,10 @@ COPY agent-runner/build.mjs ./
 
 # Copy portal's pure modules into shared/ — same source as the portal (not a copy of content,
 # a copy at build time so the compiled bundle includes the live versions).
-# These are imported as ../shared/guard.ts and ../shared/env-scrub.ts in run.ts.
-COPY server/agent/guard.ts ./shared/guard.ts
-COPY server/agent/env-scrub.ts ./shared/env-scrub.ts
+# run.ts imports them from ../shared/agent/*.ts and ../shared/real-path.ts (same layout as server/), and its own
+# modules from ../shared/runner-*.ts.
+COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/tool-policy.ts server/agent/pricing.ts server/agent/agentcore-approvals.ts ./shared/agent/
+COPY server/real-path.ts ./shared/real-path.ts
 COPY server/agent/runner-files.ts ./shared/runner-files.ts
 COPY server/agent/runner-repos.ts ./shared/runner-repos.ts
 COPY server/agent/runner-snapshot.ts ./shared/runner-snapshot.ts
@@ -39,7 +43,7 @@ RUN node build.mjs
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM node:22-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 
 # git (clones in repo-based runs), curl and python3 (tools the agent commonly needs)
 RUN apt-get update && \

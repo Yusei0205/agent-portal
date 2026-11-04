@@ -71,6 +71,8 @@ export interface WorkflowRecord {
   run_timeout_minutes: number | null;
   /** State of an iterating (loop) session as JSON, '' for an ordinary session. See workflows/loop.ts. */
   loop_state?: string;
+  /** Per-workflow spend cap per run (FR-GUARD-10); null uses Settings › Limits. */
+  budget_usd?: number | null;
   // enrichment fields (populated by listWorkflowsByProject / enrichWorkflowRow)
   parent_title?: string | null;
   child_count?: number;

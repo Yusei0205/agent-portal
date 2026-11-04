@@ -28,7 +28,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { run as dbRun, insert, one, getDb, all } from '../db.ts';
+import { run as dbRun, insert, getDb, all } from '../db.ts';
 import type { Row } from '../db.ts';
 import { now, generateId, HttpError } from '../util.ts';
 import { getAgentEnv, getSettings, getSetting } from '../settings.ts';
@@ -797,6 +797,9 @@ async function runKiroLegacy(
     ctx.signal.addEventListener('abort', onAbort, { once: true });
   }
 
+  // kiro-cli may exit before reading the prompt (cancelled, or failed at start):
+  // the resulting EPIPE arrives as an 'error' event, which must not fail the run.
+  child.stdin.on('error', () => { /* the exit code and stderr say what happened */ });
   try {
     child.stdin.write(prompt + '\n');
     child.stdin.end();

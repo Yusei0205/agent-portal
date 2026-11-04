@@ -27,3 +27,5 @@ infra/node_modules/
 infra/cdk.out/
 # Spike C generated config (deployment-specific, not for commit)
 infra/scripts/spike-c-config.json
+# staged runner sources for the harness image build (infra/scripts/deploy-harness.mjs)
+infra/.harness-src/

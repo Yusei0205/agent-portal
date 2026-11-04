@@ -301,6 +301,7 @@ describe('runKiro — materialised home dir env vars (Windows guard)', () => {
       credentialId: null,
       credentialOwnerId: null,
       model: null,
+      engineSessionId: null,
     };
 
     const abort = new AbortController();
@@ -441,6 +442,7 @@ describe('runKiro — KIRO_TEST_DB_PATH injected for identity_center credential'
       credentialId: credId,
       credentialOwnerId: ownerId,
       model: null,
+      engineSessionId: null,
     };
 
     const abort = new AbortController();
@@ -635,7 +637,7 @@ describe('runKiro — IDC materialisation failure → run throws user-actionable
       runId: t.runId, workflowId: t.workflowId, projectId: t.projectId,
       goal: 'test', kind: null, engine: 'kiro', trusted: false,
       dataDir: t.cfg.dataDir, workDir: t.workDir, repoIds: [],
-      leadAgent: null, permissions, credentialId: credId, credentialOwnerId: ownerId, model: null,
+      leadAgent: null, permissions, credentialId: credId, credentialOwnerId: ownerId, model: null, engineSessionId: null,
     };
     const abort = new AbortController();
     const ctx: RunContext = {
@@ -719,7 +721,7 @@ describe('runKiro — IDC hook ignored → run refused with API-key suggestion',
       runId: t.runId, workflowId: t.workflowId, projectId: t.projectId,
       goal: 'test', kind: null, engine: 'kiro', trusted: false,
       dataDir: t.cfg.dataDir, workDir: t.workDir, repoIds: [],
-      leadAgent: null, permissions, credentialId: credId, credentialOwnerId: ownerId, model: null,
+      leadAgent: null, permissions, credentialId: credId, credentialOwnerId: ownerId, model: null, engineSessionId: null,
     };
     const abort = new AbortController();
     const ctx: RunContext = {
@@ -914,7 +916,7 @@ describe('runKiro — IDC token write-back when kiro-cli refreshes access_token'
       runId: t.runId, workflowId: t.workflowId, projectId: t.projectId,
       goal: 'test writeback', kind: null, engine: 'kiro', trusted: false,
       dataDir: t.cfg.dataDir, workDir: t.workDir, repoIds: [],
-      leadAgent: null, permissions, credentialId: credId, credentialOwnerId: ownerId, model: null,
+      leadAgent: null, permissions, credentialId: credId, credentialOwnerId: ownerId, model: null, engineSessionId: null,
     };
     const abort = new AbortController();
     const ctx: RunContext = {

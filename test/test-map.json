@@ -568,6 +568,8 @@
         "server/kiro-settings.ts",
         "server/mcp-server.ts",
         "server/agent/kiro-agentcore.ts",
+        "server/agent/agentcore-bridge.ts",
+        "server/agent/claude-agentcore.ts",
         "server/repositories/agentcore-login.ts",
         "server/repositories/agentcore-login-sqlite.ts",
         "server/repositories/agentcore-login-dynamodb.ts"
@@ -579,6 +581,7 @@
         "test/kiro-settings.test.ts",
         "test/kiro-win-env.test.ts",
         "test/kiro-agentcore.test.ts",
+        "test/agentcore-portal.test.ts",
         "test/agentcore-login-repo.test.ts"
       ],
       "smokeIds": [],
@@ -913,15 +916,20 @@
       "smokeIds": ["tickets"]
     },
     "agent-runner": {
-      "description": "AgentCore Runtime container — payload validation (backend-only; no smoke section)",
+      "description": "AgentCore Runtime container for Claude runs: payload validation, shared tool policy and approvals (backend-only; no smoke section)",
       "sources": [
-        "agent-runner/src/validate.ts"
+        "agent-runner/src/validate.ts",
+        "agent-runner/src/run.ts",
+        "agent-runner/src/index.ts",
+        "server/agent/tool-policy.ts",
+        "server/agent/agentcore-approvals.ts"
       ],
       "tests": [
-        "test/agent-runner-validation.test.ts"
+        "test/agent-runner-validation.test.ts",
+        "test/agentcore-harness.test.ts"
       ],
       "smokeIds": [],
-      "note": "Spike A container. run.ts and index.ts are not unit-tested here; the full container is smoke-tested via the local docker run in docs/plans/2026-11-01-spike-a-agentcore-results.md."
+      "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."
     },
     "kiro-runner": {
       "description": "Kiro CLI AgentCore Runtime container — payload validation (backend-only; no smoke section)",

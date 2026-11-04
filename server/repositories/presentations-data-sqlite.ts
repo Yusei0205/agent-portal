@@ -3,6 +3,7 @@
  */
 
 import { one, all, run as dbRun, insert, update } from '../db.ts';
+import type { DbParam } from '../db.ts';
 import type { Row } from '../db.ts';
 import type {
   PresentationRepository,
@@ -104,7 +105,7 @@ export class SqlitePresentationRepository implements PresentationRepository {
     if (fields.error !== undefined)         dbFields.error = fields.error;
     if (fields.updated_at !== undefined)    dbFields.updated_at = fields.updated_at;
     if (fields.attachment_ids !== undefined) dbFields.attachment_ids = fields.attachment_ids;
-    update('presentations', id, dbFields);
+    update('presentations', id, dbFields as Record<string, DbParam>);
   }
 
   async delete(id: string): Promise<void> {

@@ -13,6 +13,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+// @ts-expect-error — jsdom ships without type declarations
 import { JSDOM } from 'jsdom';
 import createDOMPurify from 'dompurify';
 
@@ -26,7 +27,7 @@ import { mergeConsecutiveAssistantText, collectThoughtParagraphs } from '../web/
 // the identical configuration here so any future drift will be caught by CI.
 const { window: jsdomWindow } = new JSDOM('');
 // DOMPurify exports a factory in Node.js context
-const DOMPurify = (createDOMPurify as unknown as (win: Window) => typeof import('dompurify'))(
+const DOMPurify = (createDOMPurify as unknown as (win: Window) => typeof createDOMPurify)(
   jsdomWindow as unknown as Window,
 );
 

@@ -19,7 +19,6 @@ import assert from 'node:assert/strict';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { emitRunEvent } from '../server/agent/runner.ts';
 import { insert, getDb } from '../server/db.ts';
-// @ts-expect-error — plain JS helper, no types needed here
 import { coalesceStreamedRows } from '../server/workflows/crud.ts';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

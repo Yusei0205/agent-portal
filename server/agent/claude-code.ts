@@ -6,7 +6,7 @@
  *   'bedrock'   — AWS credentials from portal settings (ambient/profile/keys/bedrock-key)
  *
  * Guardrails:
- *   - Every tool call routed through evaluateCommand() (allow/ask/block).
+ *   - Every tool call routed through decideToolCall() (tool-policy.ts: folder, guard, rules, approvals).
  *   - 'ask' suspends until the user approves or denies via ctx.awaitInput.
  *   - 'block' denies immediately without asking.
  *   - Writes outside workDir are always blocked.
@@ -20,12 +20,10 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { now, generateId, HttpError } from '../util.ts';
-import { evaluateCommand } from '../guardrails.ts';
 import { getSettings, getAgentEnv } from '../settings.ts';
 import { resolveCredentialEnv } from '../credentials.ts';
-import { guardToolCall } from './guard.ts';
+import { decideToolCall } from './tool-policy.ts';
 import { shouldScrubSdkEnv } from './env-scrub.ts';
-import { isReallyInsideDir } from '../real-path.ts';
 import {
   rewritePlaywrightMcpHeadless,
   rewritePlaywrightMcpCdp,
@@ -75,44 +73,11 @@ function loadSdk(): Promise<SdkModule> {
   return _sdkPromise;
 }
 
-// ── Tool helpers ──────────────────────────────────────────────────────────────
+// ── Result helpers ────────────────────────────────────────────────────────────
 
-const WRITE_TOOLS = new Set([
-  'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
-  'write', 'edit', 'str_replace_editor',
-]);
-
-const BASH_TOOLS = new Set([
-  'Bash', 'bash', 'execute_bash', 'execute_command', 'computer',
-]);
-
-const READ_TOOLS = new Set([
-  'Read', 'read', 'Glob', 'glob', 'Grep', 'grep',
-  'LS', 'ls', 'view', 'cat',
-  'WebSearch', 'WebFetch', 'web_search', 'web_fetch',
-]);
-
-function toolCategory(name: string): string | null {
-  if (WRITE_TOOLS.has(name)) return 'write';
-  if (BASH_TOOLS.has(name)) return 'bash';
-  if (READ_TOOLS.has(name)) return 'read';
-  return null;
-}
-
-/** Build the command string fed to evaluateCommand for non-bash tools. */
-function toolCommandStr(name: string, input: Record<string, unknown>): string {
-  if (BASH_TOOLS.has(name)) {
-    return String(input.command ?? input.cmd ?? name);
-  }
-  if (WRITE_TOOLS.has(name)) {
-    const fp = String(input.file_path ?? input.path ?? input.new_path ?? '');
-    return fp ? `${name} ${fp}` : name;
-  }
-  if (READ_TOOLS.has(name)) {
-    const fp = String(input.file_path ?? input.path ?? input.query ?? '');
-    return fp ? `${name} ${fp}` : name;
-  }
-  return name;
+/** True when the engine ended the run at maxBudgetUsd (result subtype "error_max_budget_usd"). */
+export function isBudgetStop(msg: Record<string, unknown>): boolean {
+  return msg.subtype === 'error_max_budget_usd' || msg.stop_reason === 'error_max_budget_usd';
 }
 
 // ── Model resolution ──────────────────────────────────────────────────────────
@@ -242,16 +207,24 @@ ${REVIEW_SYSTEM_APPEND}`;
 export async function runClaudeCode(ctx: RunContext): Promise<string> {
   const { run, emit, awaitInput } = ctx;
 
+  // ── Cloud: run on an AgentCore microVM (agent-runner/) instead of a local SDK process ─────
+  const claudeRuntimeArn = process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
+  if (claudeRuntimeArn) {
+    // The person's own Anthropic key or Claude subscription goes with the request; without one the run uses
+    // Bedrock with the runtime's role, under the harness (approvals, rules, guard, limits).
+    let cloudAuth: ReturnType<typeof anthropicAuthFromEnv> = null;
+    try {
+      const cloudEnv = await resolveCredentialEnv('claude-code', run.credentialOwnerId, run.credentialId);
+      cloudAuth = anthropicAuthFromEnv(cloudEnv as Record<string, string | undefined>);
+    } catch { /* no usable credential: Bedrock below */ }
+    if (cloudAuth) return runClaudeViaAgentCoreAdapter(ctx, claudeRuntimeArn, cloudAuth);
+    const { runClaudeViaAgentCore: runClaudeOnBedrock } = await import('./claude-agentcore-bedrock.ts');
+    return runClaudeOnBedrock(ctx, claudeRuntimeArn);
+  }
+
   // ── Pre-flight: credentials check ─────────────────────────────────────────
   // Resolve env from per-user credential, default credential, or portal provider.
   const agentEnv = await resolveCredentialEnv('claude-code', run.credentialOwnerId, run.credentialId);
-
-  // ── Cloud: run on an AgentCore runtime instead of a local SDK process ─────
-  const claudeRuntimeArn = process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
-  const cloudAuth = claudeRuntimeArn ? anthropicAuthFromEnv(agentEnv as Record<string, string | undefined>) : null;
-  if (claudeRuntimeArn && cloudAuth) {
-    return runClaudeViaAgentCoreAdapter(ctx, claudeRuntimeArn, cloudAuth);
-  }
 
   // ── Materialised home dir (F5) ─────────────────────────────────────────────
   // await materialiseForRun() is called before the engine by runner.ts.
@@ -344,9 +317,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   // ── Run budget limit (FR-GUARD-10) ─────────────────────────────────────────
   const repo = getSessionsRepository();
   const wfForBudget = await repo.getWorkflowById(run.workflowId);
-  const wfBudget = (wfForBudget as Record<string, unknown>)?.['budget_usd'] != null
-    ? Number((wfForBudget as Record<string, unknown>)['budget_usd'])
-    : null;
+  const wfBudget = wfForBudget?.budget_usd != null ? Number(wfForBudget.budget_usd) : null;
   const globalBudget = getSettings().agents.maxBudgetUsdPerRun;
   const maxBudgetUsd = wfBudget ?? globalBudget;
 
@@ -381,61 +352,22 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       return { behavior: 'deny', message: 'Run cancelled.' };
     }
 
-    // Write guard: file writes must stay inside workDir; symlinks are followed
-    if (WRITE_TOOLS.has(toolName)) {
-      const relPath = String(input.file_path ?? input.path ?? input.new_path ?? '');
-      if (relPath) {
-        const absPath = path.resolve(run.workDir, relPath);
-        if (!isReallyInsideDir(run.workDir, absPath)) {
-          const reason = `Write to "${relPath}" is outside the run working directory.`;
-          emit('tool-blocked', { toolName, toolInput: inputStr, reason });
-          return { behavior: 'deny', message: reason };
-        }
-      }
-    }
+    // One decision for every engine and for the AgentCore runners: working folder, guard, rules, approvals.
+    const decision = decideToolCall({
+      toolName,
+      input,
+      workDir: run.workDir,
+      rules: run.permissions.rules,
+      trusted: run.trusted,
+      allowed: ctx.allowed,
+    });
 
-    // Guard: tool settings, MCP lists, git hooks/config, and Kiro config are protected
-    const guardReason = guardToolCall(toolName, input, run.workDir);
-    if (guardReason) {
-      emit('tool-blocked', { toolName, toolInput: inputStr, reason: guardReason });
-      return { behavior: 'deny', message: guardReason };
-    }
-
-    // Guardrail evaluation
-    const cmdStr = toolCommandStr(toolName, input);
-    const decision = evaluateCommand(
-      { command: cmdStr, category: toolCategory(toolName) },
-      run.permissions,
-      run.trusted,
-    );
-
-    if (decision.action === 'block') {
-      const reason = decision.reason || `Tool "${toolName}" is blocked by portal guardrails.`;
-      emit('tool-blocked', { toolName, toolInput: inputStr, reason });
-      return { behavior: 'deny', message: reason };
+    if (decision.action === 'deny') {
+      emit('tool-blocked', { toolName, toolInput: inputStr, reason: decision.reason });
+      return { behavior: 'deny', message: decision.reason };
     }
 
     if (decision.action === 'ask') {
-      // Import rememberKey lazily to avoid circular dependency in tests
-      const { rememberKey, MAX_REVIEWABLE_COMMAND } = await import('./runner.ts');
-      const rk = rememberKey(toolName, input);
-
-      // Check if already allowed for this run
-      if (ctx.allowed.has(rk.key)) {
-        emit('tool-start', { toolName, toolInput: inputStr });
-        return { behavior: 'allow' };
-      }
-
-      // Refuse commands that are too long for a person to review.
-      if (BASH_TOOLS.has(toolName)) {
-        const command = String(input.command ?? input.cmd ?? '');
-        if (command.length > MAX_REVIEWABLE_COMMAND) {
-          const reason = `This command is ${command.length} characters long, too long for a person to review. Write a script file first, or split it into smaller steps.`;
-          emit('tool-blocked', { toolName, toolInput: inputStr, reason });
-          return { behavior: 'deny', message: reason };
-        }
-      }
-
       // Suspend until the user responds
       let resp: { decision: 'allow' | 'deny'; remember: boolean; message: string; expired?: boolean };
       try {
@@ -450,7 +382,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         return { behavior: 'deny', message: msg };
       }
       if (resp.remember) {
-        ctx.allowed.add(rk.key);
+        ctx.allowed.add(decision.rememberKey);
       }
     }
 
@@ -580,6 +512,8 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       },
     });
 
+    let sawResult = false;
+    try {
     for await (const msg of q as AsyncIterable<Record<string, unknown>>) {
       // Abort check
       if (abortController.signal.aborted) break;
@@ -665,14 +599,15 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         }
 
       } else if (msgType === 'result') {
+        sawResult = true;
         // SDK-reported total cost (authoritative over our estimate)
         const sdkCost = (msg as Record<string, unknown>).total_cost_usd;
         if (typeof sdkCost === 'number' && sdkCost > 0) {
           totalCostUsd = sdkCost;
         }
-        // Detect budget stop: stop_reason == 'error_max_budget_usd' means the SDK hit the cap.
-        const stopReason = String((msg as Record<string, unknown>).stop_reason ?? '');
-        if (stopReason === 'error_max_budget_usd') {
+        // Detect budget stop. The engine reports it as the result's subtype
+        // (stop_reason is the model's own reason, e.g. "tool_use").
+        if (isBudgetStop(msg as Record<string, unknown>)) {
           const capLabel = maxBudgetUsd != null ? ` ($${maxBudgetUsd})` : '';
           await repo.updateRun(run.runId, { stop_reason: `spend cap reached${capLabel}` });
           emit('status', { text: `Spend cap reached${capLabel}. Run stopped cleanly.` });
@@ -687,6 +622,12 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
           });
         }
       }
+    }
+    } catch (e: unknown) {
+      // After a result it has already reported (e.g. the spend cap), the engine also throws
+      // "Claude Code returned an error result". The run ended; the result says how.
+      if (sawResult && !abortController.signal.aborted) return;
+      throw e;
     }
   };
 

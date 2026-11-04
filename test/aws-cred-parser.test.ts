@@ -10,6 +10,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+// @ts-expect-error — plain JS module without type declarations
 import { parseAwsCredentials, _extractKeyValue, _stripQuotes } from '../web/src/lib/awsCredParser.js';
 
 // ── Fixture values ─────────────────────────────────────────────────────────────
@@ -282,12 +283,10 @@ describe('parseAwsCredentials — edge cases', () => {
   });
 
   it('returns null for null input', () => {
-    // @ts-expect-error — testing JS runtime coercion behaviour
     assert.equal(parseAwsCredentials(null), null);
   });
 
   it('returns null for undefined input', () => {
-    // @ts-expect-error
     assert.equal(parseAwsCredentials(undefined), null);
   });
 

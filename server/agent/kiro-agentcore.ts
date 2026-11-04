@@ -51,6 +51,8 @@ import { usesDynamoDb } from '../repositories/backend.ts';
 import { now, HttpError, generateId } from '../util.ts';
 import { config } from '../config.ts';
 import type { RunContext } from './types.ts';
+import { getSettings } from '../settings.ts';
+import { ApprovalRelay, isApprovalRequest, type ControlSender } from './agentcore-bridge.ts';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -81,6 +83,8 @@ export type AgentCoreSSEEvent =
   | { type: 'models'; stdout: string }
   | { type: 'login-status'; state: 'pending' | 'complete' | 'failed' | 'unknown'; tokenPayload?: AgentCoreLoginResult['tokenPayload']; error?: string }
   | { type: 'verification'; verificationUri: string; userCode: string }
+  | { type: 'approval-request'; requestId: string; toolName: string; input: Record<string, unknown>; inputHash: string; expiresAt?: string }
+  | { type: 'tool-blocked'; toolName: string; toolInput?: string; reason: string }
   | {
       type: 'result';
       runId: string;
@@ -284,8 +288,9 @@ async function* invokeAgentCoreReal(
   signal?: AbortSignal,
 ): AsyncGenerator<AgentCoreSSEEvent | AgentCoreLoginResultEvent> {
   const { region } = parseRuntimeArn(runtimeArn);
-  const profile = process.env.PORTAL_KIRO_AGENTCORE_AWS_PROFILE;
-  const overrideRegion = process.env.PORTAL_KIRO_AGENTCORE_REGION;
+  // PORTAL_AGENTCORE_* apply to every runtime; the older PORTAL_KIRO_AGENTCORE_* names still work.
+  const profile = process.env.PORTAL_AGENTCORE_AWS_PROFILE || process.env.PORTAL_KIRO_AGENTCORE_AWS_PROFILE;
+  const overrideRegion = process.env.PORTAL_AGENTCORE_REGION || process.env.PORTAL_KIRO_AGENTCORE_REGION;
   const effectiveRegion = overrideRegion || region;
 
   const credentials = await resolveAwsCredentials(profile);
@@ -406,6 +411,32 @@ export async function* invokeAgentCore(
 ): AsyncGenerator<AgentCoreSSEEvent | AgentCoreLoginResultEvent> {
   const invoker = _invokerOverride ?? invokeAgentCoreReal;
   yield* invoker(runtimeArn, sessionId, payload, signal);
+}
+
+/**
+ * A sender for control invocations (approval answers, cancel) on a run's session.
+ * AgentCore routes them to the run's microVM while the run's own invocation is still streaming.
+ */
+export function agentCoreControlSender(runtimeArn: string, sessionId: string): ControlSender {
+  return async (payload) => {
+    const replies: Array<Record<string, unknown>> = [];
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    try {
+      for await (const ev of invokeAgentCore(runtimeArn, sessionId, payload, ac.signal)) {
+        replies.push(ev as unknown as Record<string, unknown>);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    return replies;
+  };
+}
+
+/** The approval settings sent to a runner: the portal's expiry (the runner adds a margin). */
+export function runnerApprovals(): { via: 'portal'; expiryMinutes: number } {
+  const minutes = Number(getSettings().agents.approvalExpiryMinutes) || 60;
+  return { via: 'portal', expiryMinutes: Math.min(Math.max(minutes, 0.1), 1440) };
 }
 
 // ── Token write-back ───────────────────────────────────────────────────────────
@@ -537,10 +568,23 @@ export async function runKiroViaAgentCore(
       ...(opts.checks?.length ? { checks: opts.checks } : {}),
       ...(opts.model ? { model: opts.model } : {}),
       ...(snapshot ? { snapshot } : {}),
+      // Same rule as the local Kiro engine: trusted runs allow what kiro-cli asks about,
+      // untrusted runs ask a person (relayed below).
+      policy: { trusted: ctx.run.trusted },
+      approvals: runnerApprovals(),
     };
 
     const fileReceiver = ctx.run?.workDir ? createFileReceiver(ctx.run.workDir, (abs) => persistFile(abs)) : null;
 
+    const send = agentCoreControlSender(opts.runtimeArn, sessionId);
+    // Kiro's local engine checks the guard and trust only (no permission rules), so the relay re-checks the guard.
+    const relay = new ApprovalRelay(ctx, send, []);
+    const onCancel = (): void => {
+      void send({ mode: 'cancel', runId: opts.runId }).catch(() => { /* the stream is closing anyway */ });
+    };
+    signal?.addEventListener('abort', onCancel, { once: true });
+
+    try {
     for await (const ev of invokeAgentCore(opts.runtimeArn, sessionId, payload, merged)) {
       if (signal?.aborted) break;
       if ((ev as { type: string }).type === 'file') {
@@ -549,6 +593,18 @@ export async function runKiroViaAgentCore(
       }
 
       switch (ev.type) {
+        case 'approval-request': {
+          const raw = ev as unknown as Record<string, unknown>;
+          if (isApprovalRequest(raw)) relay.handle(raw);
+          break;
+        }
+
+        case 'tool-blocked': {
+          const b = ev as { toolName?: string; toolInput?: string; reason?: string };
+          emit('tool-blocked', { toolName: b.toolName ?? 'Tool', toolInput: b.toolInput ?? '', reason: b.reason ?? '' });
+          break;
+        }
+
         case 'text': {
           const textEv = ev as { type: 'text'; text: string };
           if (textEv.text) {
@@ -638,6 +694,9 @@ export async function runKiroViaAgentCore(
         default:
           break;
       }
+    }
+    } finally {
+      signal?.removeEventListener('abort', onCancel);
     }
   } finally {
     clearTimeout(timeoutTimer);

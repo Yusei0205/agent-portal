@@ -25,6 +25,7 @@ import { runInvocation } from './run.js';
 import { validatePayload } from './validate.js';
 import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground } from '../shared/runner-snapshot.js';
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
+import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
 
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
@@ -32,6 +33,10 @@ const processStartMs = Date.now();
 // Track current run state for /ping.
 // Only one run at a time in the spike (AgentCore creates one microVM per session).
 let runActive = false;
+/** The run in progress: its id and the way to stop it. */
+let activeRun: { runId: string; stop: AbortController } | null = null;
+/** Approval requests of the run in progress, settled by "answer" invocations. */
+const broker = new ApprovalBroker();
 let lastStatusChange = Math.floor(Date.now() / 1000); // Unix seconds
 
 function setRunActive(active: boolean): void {
@@ -97,6 +102,32 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+
+    // ── Control invocations: an approval answer or a cancel for the run in progress ──
+    // They arrive on the same session (AgentCore routes them to this microVM) while the
+    // run's own invocation is still streaming, so they skip the busy check.
+    const body = parsed as Record<string, unknown> | null;
+    if (body && typeof body === 'object' && !Array.isArray(body) && (body.mode === 'answer' || body.mode === 'cancel')) {
+      let reply: Record<string, unknown>;
+      if (body.mode === 'answer') {
+        const answer = parseApprovalAnswer(body);
+        if (typeof answer === 'string') {
+          reply = { type: 'answer-rejected', status: 400, error: answer };
+        } else {
+          const r = broker.answer(answer);
+          reply = r.ok ? { type: 'answer-ack', requestId: answer.requestId } : { type: 'answer-rejected', status: r.status, error: r.error };
+        }
+      } else if (activeRun && typeof body.runId === 'string' && body.runId === activeRun.runId) {
+        activeRun.stop.abort();
+        reply = { type: 'cancel-ack', runId: body.runId };
+      } else {
+        reply = { type: 'cancel-ack', runId: body.runId ?? null, note: 'no such run in progress' };
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      res.end(`data: ${JSON.stringify(reply)}\n\n`);
+      return;
+    }
+
     // Validate payload
     const validation = validatePayload(parsed);
     if (!validation.ok) {
@@ -134,14 +165,19 @@ const server = http.createServer(async (req, res) => {
     };
 
     setRunActive(true);
+    const stop = new AbortController();
+    activeRun = { runId: validation.payload.runId, stop };
+    // The caller hung up before the run finished: stop the run rather than carry on unseen.
+    res.on('close', () => { if (!res.writableFinished) stop.abort(); });
     try {
-      await runInvocation(validation.payload, sessionId, emit, processStartMs);
+      await runInvocation(validation.payload, sessionId, emit, processStartMs, broker, stop.signal);
     } catch (e: unknown) {
       const msg = (e as Error)?.message ?? String(e);
       emit({ type: 'error', message: msg.slice(0, 500) });
       // Log error (no sensitive data, just the error message)
       process.stderr.write(JSON.stringify({ event: 'run_error', error: msg.slice(0, 500) }) + '\n');
     } finally {
+      activeRun = null;
       setRunActive(false);
       if (!res.writableEnded) res.end();
       // Save the workspace once the reply is out; the machine stays "busy" until that is done.

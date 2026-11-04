@@ -128,6 +128,7 @@ async function makeRunContext(
     credentialId: null,
     credentialOwnerId: null,
     model: null,
+    engineSessionId: null,
     ...overrides,
   };
 
@@ -409,6 +410,7 @@ describe('Claude Code engine — credentials and cancellation', () => {
         credentialId: null,
         credentialOwnerId: null,
         model: null,
+        engineSessionId: null,
       },
       emit: () => {},
       awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),
@@ -591,6 +593,7 @@ describe('Kiro engine — failure modes (no fallback)', () => {
         credentialId: null,
         credentialOwnerId: null,
         model: null,
+        engineSessionId: null,
       },
       emit: () => {},
       awaitInput: async () => ({ decision: 'allow' as const, remember: false, message: '' }),

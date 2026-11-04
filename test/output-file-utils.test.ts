@@ -161,7 +161,7 @@ describe('groupOutputsByRunId', () => {
   it('preserves file identity in grouped arrays', () => {
     const map = groupOutputsByRunId(files);
     const run1Files = map.get('run-1') ?? [];
-    assert.deepEqual(run1Files.map((f) => f.id), ['a', 'b']);
+    assert.deepEqual(run1Files.map((f: { id: string }) => f.id), ['a', 'b']);
   });
 
   it('returns empty map for empty array', () => {
