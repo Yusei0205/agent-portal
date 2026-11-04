@@ -390,7 +390,10 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     if (!workspaceId) return null;
     const ws = workspaces.find((w) => w.id === workspaceId);
     if (!ws) return null;
-    const ids = ws.repo_ids || [];
+    const all = ws.repo_ids || [];
+    // Repositories that no longer exist in the project cannot be cloned: leave them out and say so.
+    const ids = all.filter((id) => repos.some((r) => r.id === id));
+    if (all.length > 0 && ids.length === 0) return 'The repositories of this workspace no longer exist. Edit the workspace (Workspaces page) to pick the current ones.';
     if (ids.length === 0) return 'No repositories in this workspace.';
     const names = ids
       .map((id) => repos.find((r) => r.id === id)?.name ?? id)

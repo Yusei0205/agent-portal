@@ -573,6 +573,18 @@ export function registerRepoRoutes(): void {
     const deleted = await getGitReposRepository().delete(req.params.repoId, req.params.id);
     if (!deleted) { sendJson(res, 404, { error: 'Repository not found' }); return; }
 
+    // A workspace must not keep pointing at a repository that is gone (new sessions of it would start with nothing).
+    try {
+      const { getWorkspacesRepository } = await import('./repositories/workspaces.ts');
+      const wsRepo = getWorkspacesRepository();
+      for (const ws of await wsRepo.listByProject(req.params.id)) {
+        const ids = parseJson<string[]>(ws.repo_ids, []);
+        if (ids.includes(req.params.repoId)) {
+          await wsRepo.update(ws.id, req.params.id, { repo_ids: JSON.stringify(ids.filter((x) => x !== req.params.repoId)) });
+        }
+      }
+    } catch (e) { console.error('[repos] could not update workspaces after delete:', e); }
+
     sendJson(res, 200, { ok: true });
   });
 
