@@ -55,6 +55,11 @@ RUN apt-get update && \
 COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_PREFERENCE=system
 
+# The draw.io MCP server (lookups for icon diagrams) and its shape index, pinned, so a run needs no network for them.
+# Same versions as the portal's Icon diagrams pack (server/drawio-pack.ts). Run as an integration named "drawio".
+ENV DRAWIO_MCP_HOME=/opt/drawio-mcp
+RUN npm install --prefix /opt/drawio-mcp --ignore-scripts --no-audit --no-fund --save-exact @drawio/mcp@1.10.0 &&     node -e "const c=require('crypto'),f=require('fs');fetch('https://raw.githubusercontent.com/jgraph/drawio-mcp/c9cc979ea66d440a0735ef3a4289962af11ee2de/shape-search/search-index.json').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()}).then(b=>{const h=c.createHash('sha256').update(Buffer.from(b)).digest('hex');if(h!=='d32fe548100b0c73fbbbc66609e294a2dd766b1e52406774ba68f6a8449c5186')throw new Error('shape index checksum '+h);f.writeFileSync('/opt/drawio-mcp/shape-index.json',Buffer.from(b))}).catch(e=>{console.error(e.message);process.exit(1)})" &&     chmod -R a+rX /opt/drawio-mcp
+
 WORKDIR /app
 
 # Copy only production dependency manifests

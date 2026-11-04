@@ -314,12 +314,13 @@ export async function runInvocation(
   // ── Remote MCP integrations: one local stdio proxy each (holds the secret headers, hides write tools unless allowed)
   const integrations = parseMcpServers(payload.mcpServers);
   const proxyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs');
-  const integrationServers = Object.fromEntries(integrations.map((s) => [s.name, {
-    type: 'stdio',
-    command: 'node',
-    args: [proxyPath],
-    env: { PATH: process.env.PATH ?? '', MCP_PROXY_SPEC: JSON.stringify(s) },
-  }]));
+  // The draw.io server is bundled in the image: an integration named "drawio" runs from there (no network).
+  const drawioHome = process.env.DRAWIO_MCP_HOME || '/opt/drawio-mcp';
+  const drawioPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'drawio-mcp.mjs');
+  const localDrawio = fs.existsSync(drawioPath) && fs.existsSync(path.join(drawioHome, 'shape-index.json'));
+  const integrationServers = Object.fromEntries(integrations.map((s) => [s.name, localDrawio && s.name === 'drawio'
+    ? { type: 'stdio', command: 'node', args: [drawioPath], env: { PATH: process.env.PATH ?? '', DRAWIO_MCP_HOME: drawioHome } }
+    : { type: 'stdio', command: 'node', args: [proxyPath], env: { PATH: process.env.PATH ?? '', MCP_PROXY_SPEC: JSON.stringify(s) } }]));
 
   // ── Counters ─────────────────────────────────────────────────────────────────
   let totalInputTokens = 0;

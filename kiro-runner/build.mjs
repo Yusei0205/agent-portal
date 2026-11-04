@@ -81,4 +81,16 @@ await esbuild.build({
   logLevel: 'info',
 });
 
+// The draw.io MCP server (lookups only), run from the copy installed in the image.
+await esbuild.build({
+  entryPoints: [path.join(root, 'src', 'drawio-mcp.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node22',
+  outfile: path.join(distDir, 'drawio-mcp.mjs'),
+  sourcemap: false,
+  logLevel: 'info',
+});
+
 console.log('kiro-runner build complete → dist/index.mjs, dist/browser-mcp.mjs, dist/mcp-proxy.mjs');

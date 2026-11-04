@@ -682,12 +682,12 @@ export async function runKiroRun(
         // Remote MCP integrations: each one runs behind a local stdio proxy that keeps its headers out of kiro-cli's
         // config and hides write tools unless the integration allows them.
         const proxyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs');
-        const integrationMcp = parseMcpServers(payload.mcpServers).map((s) => ({
-          name: s.name,
-          command: 'node',
-          args: [proxyPath],
-          env: [{ name: 'MCP_PROXY_SPEC', value: JSON.stringify(s) }],
-        }));
+        // The draw.io server is bundled in the image: an integration named "drawio" runs from there (no network).
+        const drawioPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'drawio-mcp.mjs');
+        const localDrawio = fs.existsSync(drawioPath) && fs.existsSync(path.join(process.env.DRAWIO_MCP_HOME || '/opt/drawio-mcp', 'shape-index.json'));
+        const integrationMcp = parseMcpServers(payload.mcpServers).map((s) => (localDrawio && s.name === 'drawio'
+          ? { name: s.name, command: 'node', args: [drawioPath], env: [{ name: 'DRAWIO_MCP_HOME', value: process.env.DRAWIO_MCP_HOME || '/opt/drawio-mcp' }] }
+          : { name: s.name, command: 'node', args: [proxyPath], env: [{ name: 'MCP_PROXY_SPEC', value: JSON.stringify(s) }] }));
         const sessionResult = await acp.sendRequest('session/new', {
           cwd: run.workDir,
           mcpServers: [...browserMcp, ...integrationMcp],
