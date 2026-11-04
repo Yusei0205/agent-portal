@@ -79,7 +79,6 @@ export class ApprovalBroker {
         () => settle({ decision: 'deny', remember: false, expired: true, message: `Nobody answered within ${minutes} minutes, so this call was not run.` }),
         expiryMs,
       );
-      timer.unref?.();
       if (signal?.aborted) onAbort();
       else signal?.addEventListener('abort', onAbort, { once: true });
     });

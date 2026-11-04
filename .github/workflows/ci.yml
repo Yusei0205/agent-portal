@@ -49,6 +49,9 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Install the headless browser (browser-live tests)
+        run: npx playwright install --with-deps --only-shell chromium
+
       - name: Backend tests (affected modules)
         # --all so shared-core changes (db.ts, settings.ts, runner.ts …) run everything.
         # --backend-only skips the UI smoke suite that needs a live browser.
