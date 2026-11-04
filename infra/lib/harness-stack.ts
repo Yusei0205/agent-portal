@@ -134,6 +134,19 @@ export class AgentPortalHarnessStack extends cdk.Stack {
         resources: [`arn:aws:ecr:${this.region}:${this.account}:repository/${repoName}`],
       }));
       role.addToPolicy(new iam.PolicyStatement({ sid: 'EcrAuth', actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }));
+      // AgentCore Browser: the runner's browser tools start a managed browser session and drive it over the automation
+      // stream (SigV4 with this role). Without this, Tests case runs report "not authorized to start a browser session".
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'AgentCoreBrowser',
+        actions: [
+          'bedrock-agentcore:StartBrowserSession',
+          'bedrock-agentcore:GetBrowserSession',
+          'bedrock-agentcore:StopBrowserSession',
+          'bedrock-agentcore:ConnectBrowserAutomationStream',
+          'bedrock-agentcore:ConnectBrowserLiveViewStream',
+        ],
+        resources: ['*'],
+      }));
       if (bedrock) {
         const models = [
           'anthropic.claude-haiku-4-5-20251001-v1:0',
