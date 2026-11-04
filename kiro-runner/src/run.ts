@@ -163,7 +163,7 @@ function readTokenFromDb(dbPath: string): TokenPayload | null {
 
 // ── ACP JSON-RPC client ───────────────────────────────────────────────────────
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void };
+type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; method: string };
 
 interface AcpClient {
   sendRequest(method: string, params?: unknown): Promise<unknown>;
@@ -205,8 +205,10 @@ function createAcpClient(child: ReturnType<typeof spawn>): AcpClient {
       if (p) {
         pending.delete(id);
         if (msg.error) {
-          const e = msg.error as { code: number; message: string; data?: string };
-          p.reject(new Error(`ACP error ${e.code}: ${e.message}${e.data ? ` (${e.data})` : ''}`));
+          const e = msg.error as { code: number; message: string; data?: unknown };
+          // The reason is often an object (which parameter was wrong); show it as text.
+          const detail = e.data === undefined ? '' : ` (${typeof e.data === 'string' ? e.data : JSON.stringify(e.data)})`;
+          p.reject(new Error(`ACP error ${e.code}: ${e.message}${detail} [${p.method}]`));
         } else {
           p.resolve(msg.result);
         }
@@ -237,7 +239,7 @@ function createAcpClient(child: ReturnType<typeof spawn>): AcpClient {
     sendRequest(method, params) {
       const id = nextId++;
       return new Promise<unknown>((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        pending.set(id, { resolve, reject, method });
         writeLine({ jsonrpc: '2.0', id, method, params });
       });
     },
@@ -529,6 +531,8 @@ export async function runKiroRun(
         const input = parseRawInput(p?.toolCall?.rawInput);
         const inputStr = JSON.stringify(input);
         const perm = made.perm;
+        const trace = (what: string, extra?: unknown): void => { process.stdout.write(JSON.stringify({ event: 'acp_permission', what, tool: toolName, trusted: perm?.trusted, options: options.map((o) => `${o.kind}:${o.optionId}`), extra }) + '\n'); };
+        trace('request');
 
         const guardReason = guardToolCall(toolName, input, perm?.workDir ?? workDir ?? '');
         if (guardReason) {
@@ -546,6 +550,7 @@ export async function runKiroRun(
         const req = perm.broker.open(perm.runId, inputHash, expiryMs, perm.abort);
         made.emit({ type: 'approval-request', requestId: req.requestId, toolName, input, inputHash, expiresAt: req.expiresAt });
         const outcome = await req.outcome;
+        trace('answered', outcome.decision);
         if (outcome.decision === 'allow') return chosen(allowId);
         made.emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: outcome.message || 'The user declined this action.' });
         return chosen(rejectId);
@@ -611,11 +616,18 @@ export async function runKiroRun(
     try {
       if (!continuing) {
         // ACP handshake
-        await acp.sendRequest('initialize', {
-          protocolVersion: '0.1',
+        // kiro-cli 3.x wants the protocol version as a number; 2.x took the text "0.1". Try the number first.
+        const initParams = (protocolVersion: number | string) => ({
+          protocolVersion,
           capabilities: {},
           clientInfo: { name: 'kiro-runner', version: '1.0' },
         });
+        try {
+          await acp.sendRequest('initialize', initParams(1));
+        } catch (e) {
+          if (!/-32602/.test(String((e as Error)?.message))) throw e;
+          await acp.sendRequest('initialize', initParams('0.1'));
+        }
         acp.sendNotification('notifications/initialized');
 
         // New session

@@ -737,6 +737,21 @@ async function awaitApproval(
     const pending: PendingApproval = { resolve, reject };
     runApprovals.set(inputId, pending);
 
+    // The answer arrives as a web request, which on a cloud deployment is handled by a different server instance than
+    // the one running this session, so the in-memory resolve may never reach here. The answer is also saved in the
+    // database: look for it there as well.
+    const poll = setInterval(() => {
+      if (runApprovals.get(inputId) !== pending) { clearInterval(poll); return; }
+      repo.getInputByRunAndId(runId, inputId).then((row) => {
+        if (!row || row.status !== 'answered' || runApprovals.get(inputId) !== pending) return;
+        clearInterval(poll);
+        let response: unknown = '';
+        try { response = JSON.parse(String(row.response ?? '""')); } catch { /* treated as a decline */ }
+        resolveApproval(runId, inputId, response === 'approve' ? 'allow' : 'deny', { remember: Boolean(row.allow_all), message: '' });
+      }).catch(() => { /* try again on the next tick */ });
+    }, 2000);
+    poll.unref?.();
+
     // Expiry timer: when nobody answers in time, deny the call and record the expiry.
     if (minutes > 0) {
       pending.timer = setTimeout(() => {
