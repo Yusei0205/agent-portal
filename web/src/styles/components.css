@@ -2081,3 +2081,6 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 .arun-live { display: inline-flex; gap: 6px; align-items: center; color: var(--accent); }
 .arun-scope { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 
+/* The open list of a select is drawn by the browser: on glass themes the field is see-through and its text light, so the list needs its own solid colours. */
+select option,
+select optgroup { background-color: var(--canvas); color: var(--ink); }
