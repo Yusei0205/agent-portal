@@ -22,6 +22,6 @@ export async function runPrepareRepos(payload: KiroPreparePayload, emit: EmitFn)
     return;
   }
   await restoreWorkspace(parseSnapshot(payload.snapshot), persist, (ev) => emit(ev));
-  const names = await cloneRunnerRepos(parsed.repos, persist, (ev) => emit(ev), { persistRoot: persist });
+  const names = await cloneRunnerRepos(parsed.repos, persist, (ev) => emit(ev), { persistRoot: persist, onProgress: (u) => emit({ type: 'progress', ...u }) });
   emit({ type: 'result', runId: payload.runId, success: names.length === parsed.repos.length, persisted: true, repos: names });
 }

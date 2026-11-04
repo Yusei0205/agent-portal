@@ -197,7 +197,7 @@ export async function runInvocation(
     const parsed = parseRunnerRepos(payload.repos);
     if (parsed.ok) {
       await restoreWorkspace(parseSnapshot(payload.snapshot), usablePersistRoot(PERSIST_ROOT), (ev) => emit(ev));
-      await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: workDir });
+      await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: workDir, ...(payload.prepareOnly === true ? { onProgress: (u: { name: string; phase: string; percent: number; detail: string }) => emit({ type: 'progress', ...u }) } : {}) });
     } else {
       emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
     }

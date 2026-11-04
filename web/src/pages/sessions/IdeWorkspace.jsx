@@ -229,12 +229,16 @@ function ComposerBar({
     if (!workflow?.id || !repoKey) { setCloning(false); setPrep(null); return undefined; }
     let cancelled = false;
     let timer = null;
+    let wasRunning = false;
     const tick = async () => {
       try {
         const d = await api.get(`/api/projects/${projectId}/workflows/${workflow.id}/repo-prep`);
         if (cancelled) return;
         const p = d.prep;
-        const live = p?.state === 'running' && Date.now() - new Date(p.at).getTime() < 6 * 60_000;
+        // A server instance that has not seen the status yet answers with nothing: keep waiting, do not unlock.
+        if (!p && wasRunning) { timer = setTimeout(tick, 3000); return; }
+        const live = p?.state === 'running' && Date.now() - new Date(p.at).getTime() < 17 * 60_000;
+        wasRunning = Boolean(live);
         setCloning(Boolean(live));
         setPrep(p ?? null);
         if (live) timer = setTimeout(tick, 3000);
@@ -565,9 +569,12 @@ function ComposerBar({
             <div key={i.name} className="clone-row">
               <div className="clone-row-line">
                 <strong>{i.name}/</strong>
-                <span className="muted">{i.text}{all.length > 1 ? ` · repo ${n + 1} of ${all.length}` : ''}</span>
+                <span className="muted">{i.text}{i.detail ? ` · ${i.detail}` : ''}{all.length > 1 ? ` · repo ${n + 1} of ${all.length}` : ''}</span>
+                {i.state === 'working' && typeof i.percent === 'number' && <span className="muted" style={{ marginLeft: 'auto' }}>{i.percent}%</span>}
               </div>
-              <div className="clone-bar" data-state={i.state}><i /></div>
+              <div className="clone-bar" data-state={i.state} data-known={typeof i.percent === 'number' ? 'yes' : 'no'}>
+                <i style={i.state === 'working' && typeof i.percent === 'number' ? { width: `${Math.max(2, i.percent)}%` } : undefined} />
+              </div>
             </div>
           ))}
           {cloning && <div className="muted" style={{ fontSize: '0.74rem', paddingTop: 2 }}>You can type once the repositories are ready.</div>}

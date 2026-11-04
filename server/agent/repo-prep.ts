@@ -35,6 +35,10 @@ export interface RepoPrepItem {
   name: string;
   state: 'waiting' | 'working' | 'done' | 'failed';
   text: string;
+  /** Overall 0-100 while git reports it (otherwise the panel shows a moving bar). */
+  percent?: number;
+  /** For example "1,234 / 3,333 objects · 12.3 MiB · 2.1 MiB/s" or "123 / 400 files". */
+  detail?: string;
 }
 
 /** Update the repository rows from one status line of the runner. Returns true when a row changed. */
@@ -43,6 +47,7 @@ export function applyPrepStatus(items: RepoPrepItem[], text: string): boolean {
     const it = items.find((i) => i.name === name);
     if (!it || (it.state === state && it.text === t)) return false;
     it.state = state; it.text = t;
+    if (state === 'done') { it.percent = 100; delete it.detail; }
     return true;
   };
   let m = /^Cloning (.+?)(?: @ .+)?…$/.exec(text);
@@ -109,7 +114,7 @@ export async function waitForRepoPrep(workflowId: string, maxMs = 90_000): Promi
     const st = getRepoPrep(workflowId);
     if (!st || st.state !== 'running') return;
     // A preparation that has been "running" for far longer than it can take is stale (its Lambda was lost).
-    if (Date.now() - new Date(st.at).getTime() > 6 * 60_000) return;
+    if (Date.now() - new Date(st.at).getTime() > 17 * 60_000) return;
     await new Promise((r) => setTimeout(r, 2_000));
   }
 }
@@ -138,7 +143,7 @@ async function prepare(workflowId: string): Promise<void> {
     : { runId, prepareOnly: true, repos, ...(snapshot ? { snapshot } : {}) };
 
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(new Error('timed out')), 5 * 60_000);
+  const timer = setTimeout(() => ac.abort(new Error('timed out')), 15 * 60_000);
   let last = '';
   const problems: string[] = [];
   let persisted = false;
@@ -151,6 +156,16 @@ async function prepare(workflowId: string): Promise<void> {
         last = ev.text;
         if (ev.text.startsWith('Could not')) problems.push(ev.text);
         if (applyPrepStatus(items, ev.text)) await save(workflowId, { state: 'running', at: now(), message: 'Preparing repositories…', items });
+      }
+      if (ev.type === 'progress' && typeof ev.name === 'string') {
+        const it = items.find((i) => i.name === ev.name);
+        if (it && it.state !== 'done') {
+          it.state = 'working';
+          it.text = String(ev.phase ?? 'Cloning');
+          it.percent = Number(ev.percent ?? 0);
+          it.detail = String(ev.detail ?? '');
+          await save(workflowId, { state: 'running', at: now(), message: 'Preparing repositories…', items });
+        }
       }
       if (ev.type === 'error') failed = String(ev.message ?? 'The runner reported an error');
       if (ev.type === 'result') {

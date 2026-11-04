@@ -96,11 +96,16 @@ export function parseRunnerRepos(
   return { ok: true, repos };
 }
 
-function runGit(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number; err: string; signal?: string }> {
+function runGit(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number, onStderr?: (chunk: string) => void): Promise<{ code: number; err: string; signal?: string }> {
   return new Promise((resolve) => {
     const proc = spawn('git', args, { cwd, env, stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
-    proc.stderr.on('data', (d: Buffer) => { if (err.length < 4000) err += d.toString('utf8'); });
+    proc.stderr.on('data', (d: Buffer) => {
+      const t = d.toString('utf8');
+      onStderr?.(t);
+      // Progress lines are overwritten in place by git (carriage returns); keep only the tail so a long clone cannot fill the buffer.
+      err = (err + t).slice(-4000);
+    });
     const timer = setTimeout(() => { proc.kill('SIGKILL'); err += '\ntimed out'; }, timeoutMs);
     proc.on('error', (e) => { clearTimeout(timer); resolve({ code: 1, err: String(e.message) }); });
     proc.on('close', (code, signal) => { clearTimeout(timer); resolve({ code: code ?? 1, err, ...(signal ? { signal } : {}) }); });
@@ -192,6 +197,46 @@ function gitOut(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<st
   });
 }
 
+const PROGRESS_RE = /^(?:remote:\s+)?(Counting objects|Enumerating objects|Compressing objects|Receiving objects|Resolving deltas|Updating files):\s+(\d+)%\s*(?:\(([\d,]+)\/([\d,]+)\))?(.*)$/;
+const PHASE: Record<string, [string, number, number, string]> = {
+  'Enumerating objects': ['Counting objects', 0, 3, 'objects'],
+  'Counting objects': ['Counting objects', 0, 3, 'objects'],
+  'Compressing objects': ['Compressing objects', 3, 5, 'objects'],
+  'Receiving objects': ['Receiving objects', 5, 75, 'objects'],
+  'Resolving deltas': ['Resolving deltas', 75, 95, 'deltas'],
+  'Updating files': ['Checking out files', 95, 100, 'files'],
+};
+
+/** Turns git's stderr progress (written with 
+) into { phase, percent (overall, never going back), detail } updates, at most one a second. */
+export function makeGitProgressReader(onUpdate: (u: { phase: string; percent: number; detail: string }) => void): (chunk: string) => void {
+  let partial = '';
+  let last = 0;
+  let overall = 0;
+  return (chunk: string) => {
+    const parts = (partial + chunk).split(/[\r\n]/);
+    partial = parts.pop() ?? '';
+    for (const line of parts) {
+      const m = PROGRESS_RE.exec(line.trim());
+      if (!m) continue;
+      const ph = PHASE[m[1]];
+      if (!ph) continue;
+      const pct = Number(m[2]);
+      overall = Math.max(overall, Math.round(ph[1] + (pct / 100) * (ph[2] - ph[1])));
+      const now = Date.now();
+      if (now - last < 1000 && pct < 100) continue;
+      last = now;
+      let detail = '';
+      if (m[3] && m[4]) detail = `${Number(m[3].replace(/,/g, '')).toLocaleString('en-US')} / ${Number(m[4].replace(/,/g, '')).toLocaleString('en-US')} ${ph[3]}`;
+      const size = /[\d.]+\s*[KMGT]?iB(?!\/s)/.exec(m[5] ?? '')?.[0];
+      const speed = /[\d.]+\s*[KMGT]?iB\/s/.exec(m[5] ?? '')?.[0];
+      if (size) detail += ` · ${size}`;
+      if (speed) detail += ` · ${speed}`;
+      onUpdate({ phase: ph[0], percent: overall, detail });
+    }
+  };
+}
+
 /**
  * Puts each repository under `<workDir>/repos/<name>` (full clone: all branches and tags, the full history). With `persistRoot`, the real folder is
  * `<persistRoot>/repos` and `<workDir>/repos` is a link to it, so the copy survives until the session is released.
@@ -202,7 +247,7 @@ export async function cloneRunnerRepos(
   repos: RunnerRepo[],
   workDir: string,
   emit: (event: { type: 'status'; text: string }) => void,
-  opts: { persistRoot?: string | null; homeDir?: string | null } = {},
+  opts: { persistRoot?: string | null; homeDir?: string | null; onProgress?: (u: { name: string; phase: string; percent: number; detail: string }) => void } = {},
 ): Promise<string[]> {
   const done: string[] = [];
   const reposDir = path.join(workDir, 'repos');
@@ -218,7 +263,8 @@ export async function cloneRunnerRepos(
     try { if (fs.realpathSync(reposDir) !== fs.realpathSync(realReposDir)) realReposDir = reposDir; } catch { realReposDir = reposDir; }
   }
   const trusted: string[] = [];
-  for (const repo of repos) {
+  const ready = new Set<string>();
+  const processRepo = async (repo: RunnerRepo): Promise<void> => {
     const dest = path.join(reposDir, repo.name);
     const realDest = path.join(realReposDir, repo.name);
     const trust = persist ? trustArgs(realDest) : [];
@@ -227,15 +273,17 @@ export async function cloneRunnerRepos(
     } catch { /* nothing there */ }
     if (fs.existsSync(path.join(dest, '.git'))) {
       await refreshExisting(repo, dest, trust, emit);
-      done.push(repo.name);
+      ready.add(repo.name);
       if (persist) trusted.push(realDest);
-      continue;
+      return;
     }
     fs.mkdirSync(reposDir, { recursive: true });
     emit({ type: 'status', text: `Cloning ${repo.name}${repo.branch ? ` @ ${repo.branch}` : ''}…` });
-    const args = ['clone', '--quiet',
+    const args = ['clone', opts.onProgress ? '--progress' : '--quiet',
       ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, dest];
-    let res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs);
+    const onProgress = opts.onProgress;
+    const reader = onProgress ? makeGitProgressReader((u) => onProgress({ name: repo.name, ...u })) : undefined;
+    let res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs, reader);
     if (res.code !== 0 && persist) {
       // The session's persistent folder is small (1 GB) and a mounted file system; if the clone did not fit or did
       // not work there, clone onto the machine's own disk instead and link it in. It then lasts as long as the
@@ -256,7 +304,7 @@ export async function cloneRunnerRepos(
       }
     }
     if (res.code === 0) {
-      done.push(repo.name);
+      ready.add(repo.name);
       // Only a clone that really is on the persistent folder needs trusting (a temporary one is owned by the runner).
       if (persist && fs.existsSync(dest) && fs.lstatSync(dest).isDirectory()) trusted.push(realDest);
     } else {
@@ -274,7 +322,14 @@ export async function cloneRunnerRepos(
       emit({ type: 'status', text: `Could not clone ${repo.name} (${why}): ${tail.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 260)}` });
       try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* ok */ }
     }
-  }
+  };
+  // Repositories are cloned side by side (a few at a time): the wait is the network, not the machine.
+  const PARALLEL = 3;
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(PARALLEL, repos.length) }, async () => {
+    while (next < repos.length) await processRepo(repos[next++]);
+  }));
+  for (const r of repos) if (ready.has(r.name)) done.push(r.name);
   if (opts.homeDir && trusted.length > 0) {
     try { trustFoldersForAgent(opts.homeDir, trusted); } catch { /* the agent can still read the files */ }
   }
