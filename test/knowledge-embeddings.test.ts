@@ -10,7 +10,7 @@ import { setEmbedOverride, indexDocument, searchEmbeddings, countIndexed, forget
 const CONCEPTS = [['leave', 'vacation', 'holiday', 'time off', 'pto'], ['expense', 'claim', 'receipt', 'reimburse'], ['password', 'login', 'sign in']];
 const fake = async (texts: string[]): Promise<number[][]> => texts.map((t) => {
   const low = t.toLowerCase();
-  const v = CONCEPTS.map((words) => (words.some((w) => low.includes(w)) ? 1 : 0));
+  const v: number[] = CONCEPTS.map((words) => (words.some((w) => low.includes(w)) ? 1 : 0));
   v.push(0.01); // never an all-zero vector
   return v;
 });

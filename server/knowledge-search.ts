@@ -29,7 +29,7 @@ import { getMemberRow, getProjectRow } from './project-access.ts';
 import { getKnowledgeRepository } from './repositories/knowledge.ts';
 import { splitPassages, rankPassages, type Passage } from './knowledge-answer.ts';
 import { embedTexts, indexDocument, forgetEmbeddings, searchEmbeddings, countIndexed, EMBED_MODEL } from './knowledge-embeddings.ts';
-import { kbFromEnv, kbRetrieve, kbStartSync, kbSyncState, writeKbCopy, removeKbCopy, listKbCopies, type KbRef } from './knowledge-kb.ts';
+import { sharedKb, kbCreatable, createSharedKb, deleteSharedKb, kbRetrieve, kbStartSync, kbSyncState, writeKbCopy, removeKbCopy, listKbCopies, type KbRef } from './knowledge-kb.ts';
 
 export type SearchBackend = 'keyword' | 'embeddings' | 'kb';
 export interface SearchConfig { backend: SearchBackend; kb?: KbRef }
@@ -53,7 +53,7 @@ async function saveSearchConfig(projectId: string, cfg: SearchConfig): Promise<v
   await setSetting(getDb(), settingKey(projectId), JSON.stringify(cfg));
 }
 
-const kbOf = (cfg: SearchConfig): KbRef | null => cfg.kb ?? kbFromEnv();
+const kbOf = (cfg: SearchConfig): KbRef | null => cfg.kb ?? sharedKb();
 
 // ── Reading documents ─────────────────────────────────────────────────────────
 
@@ -124,7 +124,7 @@ export async function retrieve(project: ProjectRef, question: string, limit: num
     const kb = kbOf(cfg);
     try {
       if (!kb) throw new Error('no Knowledge Base is set up');
-      const hits = await kbRetrieve(kb, project.slug, question, limit);
+      const hits = await kbRetrieve(kb, project, question, limit);
       if (hits.length) {
         const names = new Map((await readyDocs(project.id)).map((d) => [d.docId, d.name]));
         return { passages: hits.map((h) => ({ docId: h.docId, docName: names.get(h.docId) ?? h.docId, heading: '', text: h.text })), via: 'kb' };
@@ -149,7 +149,7 @@ export async function onDocumentReady(project: ProjectRef, docId: string, name: 
   }
   const kb = kbOf(cfg);
   if (kb) {
-    await writeKbCopy(project.slug, docId, markdown).catch((e) => console.warn('[knowledge] KB copy failed:', msg(e)));
+    await writeKbCopy(project, docId, markdown).catch((e) => console.warn('[knowledge] KB copy failed:', msg(e)));
     if (cfg.backend === 'kb') await kbStartSync(kb).catch((e) => console.warn('[knowledge] KB sync failed:', msg(e)));
   }
 }
@@ -201,17 +201,17 @@ export function registerKnowledgeSearchRoutes(): void {
     const kb = kbOf(cfg);
     let kbInfo: Record<string, unknown> = { configured: false };
     if (kb) {
-      const copies = await listKbCopies(project.slug).catch(() => new Set<string>());
+      const { copied, labelled } = await listKbCopies(project.slug).catch(() => ({ copied: new Set<string>(), labelled: new Set<string>() }));
       let sync: unknown = null;
       let syncError: string | null = null;
       try { sync = await kbSyncState(kb); } catch (e) { syncError = msg(e); }
       kbInfo = {
         configured: true,
-        source: cfg.kb ? 'custom' : 'deployment',
+        source: cfg.kb ? 'custom' : 'shared',
         knowledgeBaseId: kb.knowledgeBaseId,
         dataSourceId: kb.dataSourceId,
         region: kb.region,
-        copied: docs.filter((d) => copies.has(d.docId)).length,
+        copied: docs.filter((d) => copied.has(d.docId) && labelled.has(d.docId)).length,
         sync,
         syncError,
       };
@@ -220,8 +220,8 @@ export function registerKnowledgeSearchRoutes(): void {
       backend: cfg.backend,
       total: docs.length,
       embeddings: { model: EMBED_MODEL, indexed: await countIndexed(project.slug, docs.map((d) => d.docId)) },
-      kb: kbInfo,
-      deploymentHasKb: Boolean(kbFromEnv()),
+      kb: { ...kbInfo, creatable: kbCreatable() && !kb },
+      canAdminister: Boolean(req.user!.is_admin),
     });
   });
 
@@ -265,9 +265,10 @@ export function registerKnowledgeSearchRoutes(): void {
       const have = await listKbCopies(project.slug);
       let copied = 0;
       for (const d of await readyDocs(project.id)) {
-        if (have.has(d.docId)) continue;
+        // A copy without its project label is rewritten, so the project filter can see it.
+        if (have.copied.has(d.docId) && have.labelled.has(d.docId)) continue;
         const md = await readMarkdown(project.slug, d.docId);
-        if (md) { await writeKbCopy(project.slug, d.docId, md); copied++; }
+        if (md) { await writeKbCopy(project, d.docId, md); copied++; }
       }
       const jobId = await kbStartSync(kb);
       sendJson(res, 202, { jobId, copied });
@@ -287,13 +288,38 @@ export function registerKnowledgeSearchRoutes(): void {
       } else if (which === 'kb') {
         const kb = kbOf(getSearchConfig(project.id));
         if (!kb) { sendJson(res, 200, { ok: false, message: 'No Knowledge Base is set up.' }); return; }
-        const hits = await kbRetrieve(kb, project.slug, 'connection test', 1);
+        const hits = await kbRetrieve(kb, project, 'connection test', 1);
         sendJson(res, 200, { ok: true, message: `The Knowledge Base answered (${hits.length} matching passage${hits.length === 1 ? '' : 's'} for the test question).` });
       } else {
         sendJson(res, 200, { ok: true, message: 'Keyword search needs no setup.' });
       }
     } catch (e) {
       sendJson(res, 200, { ok: false, message: msg(e) });
+    }
+  });
+
+  // The shared Knowledge Base: one for the whole portal, created and removed by an admin.
+  router.post('/api/knowledge-base', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+    if (!req.user.is_admin) { sendJson(res, 403, { error: 'Only an admin can create the shared Knowledge Base.' }); return; }
+    try {
+      const kb = await createSharedKb();
+      try { appendAudit(null, req.user.id, 'knowledge.kb-create', kb.knowledgeBaseId, null, null); } catch { /* audit must not break a request */ }
+      sendJson(res, 201, { knowledgeBaseId: kb.knowledgeBaseId, dataSourceId: kb.dataSourceId });
+    } catch (e) {
+      sendJson(res, 502, { error: msg(e) });
+    }
+  });
+
+  router.delete('/api/knowledge-base', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+    if (!req.user.is_admin) { sendJson(res, 403, { error: 'Only an admin can remove the shared Knowledge Base.' }); return; }
+    try {
+      await deleteSharedKb();
+      try { appendAudit(null, req.user.id, 'knowledge.kb-delete', null, null, null); } catch { /* audit must not break a request */ }
+      sendJson(res, 200, { ok: true });
+    } catch (e) {
+      sendJson(res, 502, { error: msg(e) });
     }
   });
 }

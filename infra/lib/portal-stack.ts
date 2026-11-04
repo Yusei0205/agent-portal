@@ -109,8 +109,6 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   publicUrl?: string;
   /** Emails / @domains allowed to sign in with Google without an invite, comma separated. */
   googleAllowed?: string;
-  /** Create a Bedrock Knowledge Base (S3 Vectors) for Knowledge search (-c knowledgeBase=true). Needs storageBucket. */
-  knowledgeBase?: boolean;
 }
 
 export class AgentPortalCloudStack extends cdk.Stack {
@@ -223,11 +221,13 @@ export class AgentPortalCloudStack extends cdk.Stack {
       secretStringValue: cdk.SecretValue.unsafePlainText('{"clientId":"","clientSecret":""}'),
     });
 
-    // ── Knowledge Base (optional): S3 Vectors store + Bedrock Knowledge Base over kb/ in the storage bucket ──
+    // ── Knowledge Base prerequisites: an S3 Vectors store and the service role a Knowledge Base runs as ──
+    // They cost nothing while unused. The Knowledge Base itself and its data source are created from the portal
+    // (Knowledge > Search setup), once, and shared by every project, so a deploy never has to be told about it.
     const embedModelArn = `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-multilingual-v3`;
     let kbEnv: Record<string, string> = {};
-    let kbArn: string | undefined;
-    if (props.knowledgeBase && props.storageBucket) {
+    let kbRoleArn: string | undefined;
+    if (props.storageBucket) {
       const vectorBucket = new s3vectors.CfnVectorBucket(this, 'KnowledgeVectors', {
         vectorBucketName: `agent-portal-kb-${this.account}-${this.region}`,
       });
@@ -256,36 +256,13 @@ export class AgentPortalCloudStack extends cdk.Stack {
         actions: ['s3vectors:GetIndex', 's3vectors:QueryVectors', 's3vectors:PutVectors', 's3vectors:GetVectors', 's3vectors:DeleteVectors', 's3vectors:ListVectors'],
         resources: [vectorIndex.attrIndexArn],
       }));
-      const kb = new bedrock.CfnKnowledgeBase(this, 'Knowledge', {
-        name: 'agent-portal-knowledge',
-        roleArn: kbRole.roleArn,
-        knowledgeBaseConfiguration: {
-          type: 'VECTOR',
-          vectorKnowledgeBaseConfiguration: { embeddingModelArn: embedModelArn },
-        },
-        storageConfiguration: {
-          type: 'S3_VECTORS',
-          s3VectorsConfiguration: { indexArn: vectorIndex.attrIndexArn },
-        },
-      });
-      kb.node.addDependency(kbRole);
-      kb.node.addDependency(vectorIndex);
-      const kbSource = new bedrock.CfnDataSource(this, 'KnowledgeSource', {
-        knowledgeBaseId: kb.attrKnowledgeBaseId,
-        name: 'project-documents',
-        dataSourceConfiguration: {
-          type: 'S3',
-          s3Configuration: { bucketArn: `arn:aws:s3:::${props.storageBucket}`, inclusionPrefixes: ['data/kb/'] },
-        },
-        vectorIngestionConfiguration: {
-          chunkingConfiguration: {
-            chunkingStrategy: 'FIXED_SIZE',
-            fixedSizeChunkingConfiguration: { maxTokens: 300, overlapPercentage: 20 },
-          },
-        },
-      });
-      kbEnv = { PORTAL_KB_ID: kb.attrKnowledgeBaseId, PORTAL_KB_DATA_SOURCE_ID: kbSource.attrDataSourceId, PORTAL_KB_REGION: this.region };
-      kbArn = kb.attrKnowledgeBaseArn;
+      kbRoleArn = kbRole.roleArn;
+      kbEnv = {
+        PORTAL_KB_ROLE_ARN: kbRole.roleArn,
+        PORTAL_KB_INDEX_ARN: vectorIndex.attrIndexArn,
+        PORTAL_KB_EMBED_MODEL_ARN: embedModelArn,
+        PORTAL_KB_BUCKET_ARN: `arn:aws:s3:::${props.storageBucket}`,
+      };
     }
 
     const fn = new lambda.DockerImageFunction(this, 'Portal', {
@@ -336,10 +313,21 @@ export class AgentPortalCloudStack extends cdk.Stack {
     }));
     // Meaning-based Knowledge search embeds passages and questions with this model.
     fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: [embedModelArn] }));
-    if (kbArn) {
+    if (kbRoleArn) {
+      // The portal creates, syncs, queries and removes the shared Knowledge Base. It may hand Bedrock only the one role above.
+      const kbArns = [`arn:aws:bedrock:${this.region}:${this.account}:knowledge-base/*`];
       fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['bedrock:Retrieve', 'bedrock:StartIngestionJob', 'bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
-        resources: [kbArn],
+        actions: [
+          'bedrock:CreateKnowledgeBase', 'bedrock:DeleteKnowledgeBase', 'bedrock:GetKnowledgeBase',
+          'bedrock:CreateDataSource', 'bedrock:DeleteDataSource', 'bedrock:GetDataSource',
+          'bedrock:Retrieve', 'bedrock:StartIngestionJob', 'bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs',
+        ],
+        resources: kbArns,
+      }));
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['iam:PassRole'],
+        resources: [kbRoleArn],
+        conditions: { StringEquals: { 'iam:PassedToService': 'bedrock.amazonaws.com' } },
       }));
     }
     if (props.kiroRuntimeArn) {

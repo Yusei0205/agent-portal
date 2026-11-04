@@ -11,7 +11,7 @@ import { api } from '../lib/api.js';
 const OPTIONS = [
   { id: 'keyword', title: 'Keywords', blurb: 'Matches the exact words of your question. Nothing to set up.' },
   { id: 'embeddings', title: 'Meaning (portal index)', blurb: 'Finds passages that mean the same even when the words differ ("time off" finds "annual leave"), and keeps exact-word matches too. Stays in your AWS account; costs a fraction of a cent per document.' },
-  { id: 'kb', title: 'AWS Knowledge Base', blurb: 'An Amazon Bedrock Knowledge Base with S3 Vectors, managed by AWS. Good for large document sets; documents are copied to it and synced.' },
+  { id: 'kb', title: 'AWS Knowledge Base', blurb: 'One Amazon Bedrock Knowledge Base (S3 Vectors) shared by every project; each project only ever searches its own documents. Good for large document sets.' },
 ];
 
 function Result({ r }) {
@@ -67,6 +67,9 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
     const r = await api.post(`${base}/test`, { backend });
     setTest((t) => ({ ...t, [backend]: r }));
   });
+  const createKb = () => run('create', async () => { await api.post('/api/knowledge-base', {}); await load(); });
+  const removeKb = () => run('remove', async () => { await api.delete('/api/knowledge-base'); setConfirmRemove(false); await load(); });
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const save = () => run('save', async () => {
     const body = { backend: choice };
     if (choice === 'kb' && !info.kb.configured) body.kb = kbForm;
@@ -78,7 +81,7 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
   const total = info?.total ?? 0;
   const kb = info?.kb;
   const needsIndex = choice === 'embeddings' && info && total > 0 && info.embeddings.indexed === 0;
-  const needsKb = choice === 'kb' && info && !kb.configured && !(kbForm.knowledgeBaseId && kbForm.dataSourceId);
+  const needsKb = choice === 'kb' && info && !kb.configured && !(!kb.creatable && kbForm.knowledgeBaseId && kbForm.dataSourceId);
   const sync = kb?.sync;
 
   return (
@@ -128,7 +131,7 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
                   <>
                     <p className="small">
                       Knowledge Base <code>{kb.knowledgeBaseId}</code> · data source <code>{kb.dataSourceId}</code> · {kb.region}
-                      <span className="muted"> ({kb.source === 'deployment' ? 'created with the portal' : 'entered by hand'})</span>
+                      <span className="muted"> ({kb.source === 'shared' ? 'shared by all projects' : 'entered by hand'})</span>
                     </p>
                     <p className="small"><strong>{kb.copied}</strong> of {total} document{total === 1 ? '' : 's'} copied to the data source
                       {sync ? <> · last sync <strong>{sync.status.toLowerCase().replace('_', ' ')}</strong>{sync.documents ? `, ${sync.documents.indexed} indexed, ${sync.documents.failed} failed` : ''}</> : ' · not synced yet'}
@@ -144,12 +147,36 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
                     </div>
                     <Result r={test.kb} />
                     <p className="field-hint">The Knowledge Base reads documents only when it syncs. Uploads start a sync automatically once this is chosen; a sync takes a minute or two.</p>
+                    {kb.source === 'shared' && info.canAdminister && (
+                      <p className="field-hint">
+                        {confirmRemove ? (
+                          <>Remove the shared Knowledge Base for <strong>all projects</strong>? Their documents are kept; projects using it fall back to keywords.{' '}
+                            <button type="button" className="link-btn" onClick={removeKb} disabled={busy !== null}>{busy === 'remove' ? 'Removing…' : 'Yes, remove it'}</button>{' · '}
+                            <button type="button" className="link-btn" onClick={() => setConfirmRemove(false)}>Keep it</button></>
+                        ) : (
+                          <button type="button" className="link-btn" onClick={() => setConfirmRemove(true)}>Remove the shared Knowledge Base…</button>
+                        )}
+                      </p>
+                    )}
+                  </>
+                ) : kb.creatable ? (
+                  <>
+                    <p className="small">
+                      There is no Knowledge Base yet. One is created for the whole portal and shared by every project: each project's documents carry
+                      their project's label, and a search only asks for its own. Creating it takes about a minute and costs nothing until documents are synced.
+                    </p>
+                    <div className="kss-actions">
+                      <button type="button" className="btn btn-sm btn-primary" onClick={createKb} disabled={busy !== null || !info.canAdminister}>
+                        {busy === 'create' ? 'Creating… (about a minute)' : 'Create the shared Knowledge Base'}
+                      </button>
+                    </div>
+                    {!info.canAdminister && <p className="field-hint">Only an admin can create it. Ask one to open this popup and press the button.</p>}
                   </>
                 ) : (
                   <>
                     <p className="small">
-                      This portal was not deployed with a Knowledge Base. Deploy with the Knowledge Base option (it creates one with S3 Vectors),
-                      or enter the ids of one you already have.
+                      This portal's stack does not have the Knowledge Base prerequisites (vector index and role); deploy the latest stack to get a
+                      one-click setup, or enter the ids of a Knowledge Base you already have.
                     </p>
                     <div className="kss-fields">
                       <div className="field">

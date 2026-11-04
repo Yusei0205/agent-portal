@@ -34,3 +34,11 @@ describe('knowledge passages', () => {
     assert.deepEqual(citedNumbers('Claims are due in 30 days [2]. See also [1][2] and [9].', 2), [2, 1]);
   });
 });
+
+import { kbMetadata, projectFilter } from '../server/knowledge-kb.ts';
+describe('Knowledge Base project label', () => {
+  test('each copy is labelled with its project, and the search asks for that label only', () => {
+    assert.deepEqual(JSON.parse(kbMetadata('p-1')), { metadataAttributes: { projectId: 'p-1' } });
+    assert.deepEqual(projectFilter('p-1'), { equals: { key: 'projectId', value: 'p-1' } });
+  });
+});
