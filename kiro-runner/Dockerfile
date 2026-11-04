@@ -13,7 +13,10 @@
 #   and works identically.
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
-FROM node:22-slim AS builder
+# Base image; CodeBuild passes AWS's public ECR mirror (public.ecr.aws/docker/library/node:22-slim).
+ARG NODE_IMAGE=node:22-slim
+
+FROM ${NODE_IMAGE} AS builder
 
 WORKDIR /build
 
@@ -27,13 +30,16 @@ RUN npm install
 COPY kiro-runner/src/ ./src/
 COPY kiro-runner/tsconfig.json ./
 COPY kiro-runner/build.mjs ./
+# Portal modules the runner shares with the portal (guard, approvals, env scrub), same layout as server/.
+COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/agentcore-approvals.ts server/agent/tool-policy.ts ./shared/agent/
+COPY server/real-path.ts ./shared/real-path.ts
 
 # Compile + bundle → dist/index.mjs (no external runtime deps; node:* built-ins only)
 RUN node build.mjs
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM node:22-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 
 # System packages needed to install kiro-cli
 RUN apt-get update && \

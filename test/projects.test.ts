@@ -414,7 +414,7 @@ describe('POST /api/projects — slug race retry', () => {
       createProjectWithOwner: async () => { throw new SlugAlreadyTakenError(); },
     };
 
-    setProjectRepository(alwaysFailRepo as Parameters<typeof setProjectRepository>[0]);
+    setProjectRepository(alwaysFailRepo as unknown as Parameters<typeof setProjectRepository>[0]);
     try {
       const r = await fetchJson(baseUrl, '/api/projects', {
         method: 'POST',

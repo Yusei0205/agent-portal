@@ -130,6 +130,7 @@ describe('collectOutputFiles — non-repo file detection', () => {
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
 
     const cutoff = new Date().toISOString();
+    await new Promise((r) => setTimeout(r, 30)); // file clock can lag Date.now() on Linux
     writeFile(workDir, 'output.md', '# Result\nHello world!');
     writeFile(workDir, 'diagram.png', 'PNG_DATA');
 
@@ -187,6 +188,7 @@ describe('collectOutputFiles — extension filter', () => {
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
     const cutoff = new Date().toISOString();
+    await new Promise((r) => setTimeout(r, 30)); // file clock can lag Date.now() on Linux
 
     const allowed = ['a.png', 'b.jpg', 'c.gif', 'd.svg', 'e.md', 'f.csv', 'g.html', 'h.drawio', 'i.pptx', 'j.xlsx', 'k.docx'];
     for (const name of allowed) writeFile(workDir, `ext-allowed/${name}`, 'x');
@@ -208,6 +210,7 @@ describe('collectOutputFiles — extension filter', () => {
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
     const cutoff = new Date().toISOString();
+    await new Promise((r) => setTimeout(r, 30)); // file clock can lag Date.now() on Linux
 
     // Documents and images only; config files the agent edits must not reach the Vault
     const denied = ['script.ts', 'helper.js', 'run.py', 'setup.sh', 'config.json', 'values.yaml', 'notes.txt'];
@@ -251,6 +254,7 @@ describe('collectOutputFiles — excluded directories', () => {
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
     const cutoff = new Date().toISOString();
+    await new Promise((r) => setTimeout(r, 30)); // file clock can lag Date.now() on Linux
 
     const excluded = [
       'home/.aws/credentials.md',

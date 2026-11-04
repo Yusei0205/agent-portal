@@ -1,14 +1,18 @@
 /**
  * Agent run — one Claude Code invocation against Bedrock.
  *
- * Guard wiring
- * ─────────────
- * guardToolCall    : imported from shared/guard.ts, which is COPY'd from
- *                    server/agent/guard.ts at Docker build time. Same source,
- *                    not a copy. Blocks protected config writes.
- * scrubEnvForShell : imported from shared/env-scrub.ts, COPY'd from
- *                    server/agent/env-scrub.ts. Removes *_KEY/*_TOKEN/*_SECRET
+ * Shared portal code (copied into shared/ at build time, same source as the portal)
+ * ──────────────────────────────────────────────────────────────────────────────
+ * decideToolCall   : shared/agent/tool-policy.ts. The same decision the portal's local
+ *                    engine makes: working folder (links followed), guard (tool settings,
+ *                    MCP lists, git hooks/config), the run's permission rules, remembered
+ *                    approvals, commands too long to review.
+ * ApprovalBroker   : shared/agent/agentcore-approvals.ts. A call that needs a person is
+ *                    streamed as an `approval-request`; the portal answers with a second
+ *                    invocation (mode "answer") bound to the call's SHA-256 fingerprint.
+ * scrubEnvForShell : shared/agent/env-scrub.ts. Removes *_KEY/*_TOKEN/*_SECRET
  *                    vars from the env passed to the SDK subprocess.
+ * estimateCost     : shared/agent/pricing.ts, for runs that end without the SDK's total.
  *
  * Environment scrubbing note
  * ───────────────────────────
@@ -35,11 +39,12 @@
  */
 
 import path from 'node:path';
-import os from 'node:os';
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
-import { guardToolCall } from '../shared/guard.js';
-import { scrubEnvForShell } from '../shared/env-scrub.js';
+import { execFileSync } from 'node:child_process';
+import { scrubEnvForShell } from '../shared/agent/env-scrub.ts';
+import { decideToolCall } from '../shared/agent/tool-policy.ts';
+import { estimateCost } from '../shared/agent/pricing.ts';
+import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
 import {
   type InvocationPayload,
   DEFAULT_MODEL,
@@ -66,18 +71,11 @@ interface RunMetrics {
   workDirDiskMb: number;
 }
 
-// ── Write-tool names (mirrors guard.ts) ──────────────────────────────────────
-
-const WRITE_TOOLS = new Set([
-  'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
-  'write', 'edit', 'str_replace_editor',
-]);
-
 // ── Disk usage helper ─────────────────────────────────────────────────────────
 
 function dirSizeMb(dirPath: string): number {
   try {
-    const out = execSync(`du -sm "${dirPath}" 2>/dev/null || echo "0"`, { encoding: 'utf8' });
+    const out = execFileSync('du', ['-sm', dirPath], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     const mb = parseInt(out.split('\t')[0] ?? '0', 10);
     return isNaN(mb) ? 0 : mb;
   } catch {
@@ -85,19 +83,12 @@ function dirSizeMb(dirPath: string): number {
   }
 }
 
-// ── Work dir boundary check ───────────────────────────────────────────────────
-
-/**
- * Returns true if absPath is inside (or equal to) baseDir.
- * Resolves relative paths against baseDir. Does not follow symlinks —
- * guardToolCall handles protected-config patterns separately.
- */
-function isInsideWorkDir(baseDir: string, absOrRelPath: string): boolean {
-  const abs = path.isAbsolute(absOrRelPath)
-    ? path.normalize(absOrRelPath)
-    : path.normalize(path.resolve(baseDir, absOrRelPath));
-  const base = path.normalize(baseDir);
-  return abs === base || abs.startsWith(base + '/');
+/** How a run ended, for the portal: end_turn | max_turns | budget | time_limit | cancelled | error. */
+function stopReasonOf(subtype: string, fallback: string): string {
+  if (subtype === 'error_max_budget_usd') return 'budget';
+  if (subtype === 'error_max_turns') return 'max_turns';
+  if (subtype === 'error_during_execution') return 'error';
+  return fallback;
 }
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
@@ -122,12 +113,16 @@ async function loadSdk(): Promise<SdkModule> {
  *                  the work dir for session affinity across multi-turn runs).
  * @param emit      SSE emit callback — called for each event JSON object.
  * @param processStartMs  Date.now() at process start (for cold-start metric).
+ * @param broker    Open approval requests; the server settles them from "answer" invocations.
+ * @param stop      Aborts when the caller cancels the run or disconnects.
  */
 export async function runInvocation(
   payload: InvocationPayload,
   sessionId: string | undefined,
   emit: EmitFn,
   processStartMs: number,
+  broker?: ApprovalBroker,
+  stop?: AbortSignal,
 ): Promise<void> {
   const coldStartMs = Date.now() - processStartMs;
   const invokeStart = Date.now();
@@ -145,9 +140,11 @@ export async function runInvocation(
   // with sessionStorage.mountPath = /agent-workspace to persist the work dir across
   // stop/resume cycles. /tmp is ephemeral; /agent-workspace would survive a session
   // resume. For the spike, /tmp is fine.
-  const sessionKey = sessionId ?? `run-${payload.runId}`;
-  const workDir = path.join('/tmp', 'agent-sessions', sessionKey, 'work');
-  fs.mkdirSync(workDir, { recursive: true });
+  const sessionKey = (sessionId ?? `run-${payload.runId}`).replace(/[^A-Za-z0-9._-]/g, '_');
+  const workRoot = process.env.AGENT_RUNNER_WORK_ROOT || path.join('/tmp', 'agent-sessions');
+  fs.mkdirSync(path.join(workRoot, sessionKey, 'work'), { recursive: true });
+  // The real path, so the inside-the-folder check compares like with like.
+  const workDir = fs.realpathSync.native(path.join(workRoot, sessionKey, 'work'));
 
   emit({ type: 'status', text: `Work dir: ${workDir}` });
 
@@ -157,7 +154,8 @@ export async function runInvocation(
     const branchArgs = payload.repo.branch ? ['--branch', payload.repo.branch] : [];
     emit({ type: 'status', text: `Cloning ${cloneUrl}${payload.repo.branch ? ` @ ${payload.repo.branch}` : ''}` });
     try {
-      execSync(['git', 'clone', '--depth=1', ...branchArgs, cloneUrl, '.'].join(' '), {
+      // No shell: the URL and branch are arguments, never command text. No hooks run.
+      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--depth=1', ...branchArgs, '--', cloneUrl, '.'], {
         cwd: workDir,
         stdio: 'pipe',
         timeout: 60_000,
@@ -180,12 +178,19 @@ export async function runInvocation(
   // which is NOT in the scrub denylist, so the credential chain works unmodified.
   // In local testing: we re-add explicit AWS credential vars so Claude Code can reach Bedrock.
   const scrubbed = scrubEnvForShell(process.env as Record<string, string | undefined>);
+  // Local testing only: AGENT_RUNNER_ANTHROPIC_BASE_URL sends model calls to an
+  // Anthropic-compatible stand-in (test/mock-anthropic-api.ts) instead of Bedrock.
+  const devAnthropicUrl = process.env.AGENT_RUNNER_ANTHROPIC_BASE_URL;
   const sdkEnv: Record<string, string> = {
     ...scrubbed,
-    CLAUDE_CODE_USE_BEDROCK: '1',
+    ...(devAnthropicUrl
+      ? { ANTHROPIC_BASE_URL: devAnthropicUrl, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? 'local-test-key' }
+      : { CLAUDE_CODE_USE_BEDROCK: '1' }),
     AWS_DEFAULT_REGION: region,
     AWS_REGION: region,
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    // One MCP tool call may take at most 10 minutes (Claude Code has no limit of its own).
+    MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '600000',
     // Isolate Claude's home dir to the work dir (no user-level settings loaded)
     HOME: workDir,
     USERPROFILE: workDir, // Windows compatibility (not needed in the container)
@@ -223,10 +228,18 @@ export async function runInvocation(
 
   // ── Abort controller (wall-clock limit) ─────────────────────────────────────
   const abortController = new AbortController();
+  let endedBy: 'time_limit' | 'cancelled' | null = null;
   const wallClockTimer = setTimeout(() => {
+    endedBy = 'time_limit';
     abortController.abort();
-    emit({ type: 'status', text: `Wall-clock limit of ${maxMinutes} minutes reached. Run aborted.` });
+    emit({ type: 'status', text: `Time limit of ${maxMinutes} minutes reached. Run stopped.` });
   }, maxMinutes * 60_000);
+  const onStop = (): void => {
+    if (!endedBy) endedBy = 'cancelled';
+    abortController.abort();
+  };
+  if (stop?.aborted) onStop();
+  else stop?.addEventListener('abort', onStop, { once: true });
 
   // ── Counters ─────────────────────────────────────────────────────────────────
   let totalInputTokens = 0;
@@ -236,47 +249,62 @@ export async function runInvocation(
   let totalCostUsd = 0;
   let turns = 0;
   let stopReason = 'end_turn';
+  let resultSubtype = '';
+  let gotResult = false;
+  let sdkSessionId: string | null = null;
 
   // Pending tool-use tracking (for tool-end correlation)
   const pendingToolUses = new Map<string, { name: string; inputStr: string }>();
 
   // ── canUseTool ───────────────────────────────────────────────────────────────
-  // Called by the SDK before each tool execution.
-  // No interactive approvals in the spike — any 'ask' is auto-denied.
-  const canUseTool = (
+  // The same decision as the portal's local engine (shared/agent/tool-policy.ts).
+  // A call that needs a person goes to the portal as an approval-request and waits.
+  const rules = payload.policy?.rules ?? [];
+  const trusted = payload.policy?.trusted ?? false;
+  const allowed = new Set<string>();
+  const canUseTool = async (
     toolName: string,
     input: Record<string, unknown>,
-  ): { behavior: 'allow' } | { behavior: 'deny'; message: string } => {
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> => {
     const inputStr = JSON.stringify(input);
+    const deny = (message: string) => {
+      emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: message });
+      return { behavior: 'deny' as const, message };
+    };
 
-    // Abort check
-    if (abortController.signal.aborted) {
-      return { behavior: 'deny', message: 'Run aborted (wall-clock limit).' };
+    if (abortController.signal.aborted || opts?.signal?.aborted) {
+      return { behavior: 'deny', message: 'The run has stopped.' };
     }
 
-    // Work dir boundary — write tools must stay inside workDir
-    if (WRITE_TOOLS.has(toolName)) {
-      const relPath = String(
-        input.file_path ?? input.path ?? input.new_path ?? input.notebook_path ?? '',
-      );
-      if (relPath && !isInsideWorkDir(workDir, relPath)) {
-        const reason = `Write to "${relPath}" is outside the run working directory. Blocked.`;
-        emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason });
-        return { behavior: 'deny', message: reason };
+    const decision = decideToolCall({ toolName, input, workDir, rules, trusted, allowed });
+    if (decision.action === 'deny') return deny(decision.reason);
+
+    if (decision.action === 'ask') {
+      if (!payload.approvals || !broker) {
+        return deny(`"${toolName}" needs a person's approval, and this run has no way to ask one.`);
       }
+      // Wait a little longer than the portal does, so the portal's expiry decides and is recorded there.
+      const expiryMs = Math.round(payload.approvals.expiryMinutes * 60_000) + 60_000;
+      const req = broker.open(payload.runId, decision.inputHash, expiryMs, abortController.signal);
+      emit({
+        type: 'approval-request',
+        requestId: req.requestId,
+        toolName,
+        input,
+        inputHash: decision.inputHash,
+        scope: decision.scope,
+        label: decision.label,
+        reason: decision.reason,
+        expiresAt: req.expiresAt,
+      });
+      const outcome = await req.outcome;
+      if (outcome.decision === 'deny') return deny(outcome.message || 'The user declined this action.');
+      if (outcome.remember) allowed.add(decision.rememberKey);
     }
 
-    // Guard: protected config files and git hooks/config
-    // (imported from server/agent/guard.ts — same source as portal)
-    const guardReason = guardToolCall(toolName, input, workDir);
-    if (guardReason) {
-      emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: guardReason });
-      return { behavior: 'deny', message: guardReason };
-    }
-
-    // No interactive approvals in this spike — allow everything else
     emit({ type: 'tool-start', toolName, toolInput: inputStr });
-    return { behavior: 'allow' };
+    return { behavior: 'allow', updatedInput: input };
   };
 
   // ── Run SDK ──────────────────────────────────────────────────────────────────
@@ -403,41 +431,43 @@ export async function runInvocation(
         if (typeof sdkCost === 'number' && sdkCost > 0) {
           totalCostUsd = sdkCost;
         }
+        gotResult = true;
+        // The engine reports how the run ended in subtype (stop_reason is the model's own reason).
+        resultSubtype = String((msg as Record<string, unknown>).subtype ?? '');
         const sdkStopReason = String((msg as Record<string, unknown>).stop_reason ?? '');
-        if (sdkStopReason) stopReason = sdkStopReason;
+        stopReason = stopReasonOf(resultSubtype, sdkStopReason || stopReason);
+        const sid = (msg as Record<string, unknown>).session_id;
+        if (typeof sid === 'string' && sid) sdkSessionId = sid;
       }
     }
   } catch (e: unknown) {
     const isAbort = (e as { name?: string })?.name === 'AbortError' || abortController.signal.aborted;
-    if (!isAbort) throw e;
-    stopReason = 'aborted';
+    // After a result it has already reported (e.g. the spend cap), the engine also throws
+    // "Claude Code returned an error result". The run ended; the result says how.
+    if (!isAbort && !gotResult) throw e;
   } finally {
     clearTimeout(wallClockTimer);
+    stop?.removeEventListener('abort', onStop);
+    broker?.closeRun(payload.runId);
   }
+  if (endedBy) stopReason = endedBy;
 
   // Flush any pending tool-ends
   for (const [, pending] of pendingToolUses) {
     emit({ type: 'tool-result', name: pending.name, output: '(completed)' });
   }
 
-  // Cost fallback for wall-clock aborts (SDK never emits a result message in that path).
-  // The SDK sets total_cost_usd in its result message for normal and max_turns stops;
-  // for a wall-clock abort we estimate from accumulated tokens using Haiku 4.5 pricing.
-  // Source: https://aws.amazon.com/bedrock/pricing/ (verify before billing)
+  // Cost fallback: a stopped or cancelled run ends without the SDK's total.
+  // Estimate from the tokens seen, priced for the run's own model.
+  let costEstimated = false;
   if (totalCostUsd === 0 && (totalInputTokens + totalOutputTokens + totalCacheWriteTokens + totalCacheReadTokens) > 0) {
-    const tokensUsed = totalInputTokens + totalOutputTokens + totalCacheWriteTokens + totalCacheReadTokens;
-    if (tokensUsed > 0) {
-      // Haiku 4.5 on Bedrock — approximate; SDK's own calculation is used when available.
-      const inputPrice = 0.80 / 1e6;
-      const outputPrice = 4.00 / 1e6;
-      const cacheWritePrice = 0.50 / 1e6;  // estimated — verify on pricing page
-      const cacheReadPrice = 0.08 / 1e6;
-      totalCostUsd =
-        totalInputTokens * inputPrice +
-        totalOutputTokens * outputPrice +
-        totalCacheWriteTokens * cacheWritePrice +
-        totalCacheReadTokens * cacheReadPrice;
-    }
+    totalCostUsd = estimateCost(model, {
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      cache_read_input_tokens: totalCacheReadTokens,
+      cache_creation_input_tokens: totalCacheWriteTokens,
+    });
+    costEstimated = true;
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────────────
@@ -479,6 +509,11 @@ export async function runInvocation(
     type: 'result',
     runId: payload.runId,
     stop_reason: stopReason,
+    subtype: resultSubtype || null,
+    costUsd: totalCostUsd,
+    costEstimated,
+    sessionId: sdkSessionId,
+    model,
     metrics,
   });
 }

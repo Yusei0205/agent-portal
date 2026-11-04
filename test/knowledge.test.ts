@@ -75,7 +75,7 @@ async function uploadTextFile(
       'X-Requested-With': 'agent-portal',
       Cookie: cookie,
     },
-    body,
+    body: body as unknown as RequestInit['body'],
   });
   const data = await res.json();
   assert.equal(res.status, 200, `Upload failed: ${JSON.stringify(data)}`);

@@ -190,9 +190,8 @@ describe('Budget stop — SDK error_max_budget_usd is recorded as stop_reason', 
     const runDetail = await fetchJson(baseUrl, `/api/runs/${runId}`, { cookie });
     const run = (runDetail.body as Record<string, unknown>).run as Record<string, unknown>;
     assert.ok(run, 'Expected run object');
-    // stop_reason should be set when SDK returns error_max_budget_usd
-    // (it may be null if the fake SDK didn't trigger the exact code path; verify the field exists)
-    assert.ok('stop_reason' in run, 'p6_runs.stop_reason field should be exposed');
+    // The engine reports a budget stop in the result's subtype; the portal records it.
+    assert.match(String(run.stop_reason ?? ''), /spend cap reached/, 'the budget stop is recorded');
   });
 });
 

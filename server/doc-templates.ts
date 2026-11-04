@@ -214,7 +214,7 @@ export function registerDocTemplateRoutes(): void {
       return;
     }
 
-    dbRun('DELETE FROM doc_templates WHERE id = ?', t.id);
+    dbRun('DELETE FROM doc_templates WHERE id = ?', String(t.id));
     try {
       fs.rmSync(templatePath(t), { force: true });
     } catch { /* best effort */ }
@@ -316,7 +316,7 @@ export function registerDocTemplateRoutes(): void {
       return;
     }
 
-    dbRun('DELETE FROM doc_templates WHERE id = ?', t.id);
+    dbRun('DELETE FROM doc_templates WHERE id = ?', String(t.id));
     try {
       fs.rmSync(templatePath(t), { force: true });
     } catch { /* best effort */ }

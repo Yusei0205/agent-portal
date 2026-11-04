@@ -133,6 +133,7 @@ function runContract(
 
       const wfId = `wf-h23-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projectId, goal: 'test', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: agent, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -199,6 +200,7 @@ function runContract(
         agentName: 'default',
       };
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'test', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -232,6 +234,7 @@ function runContract(
       // Create a run for project A
       const wfA = `wf-scope-a-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfA, project_id: projA, goal: 'a', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -280,6 +283,7 @@ function runContract(
       const wf2 = `wf-g7b-${sfx}`;
       for (const [wfId, agent] of [[wf1, agent1], [wf2, agent2]] as [string, string][]) {
         await sessions.createWorkflow({
+          created_by: null,
           id: wfId, project_id: projId, goal: 'g7', status: 'running',
           engine: 'demo', trust_tools: 0, lead_agent: agent, workspace_id: null,
           output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -361,6 +365,7 @@ function runContract(
 
       const wfR = `wf-race-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfR, project_id: projId, goal: 'race', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -402,6 +407,7 @@ function runContract(
       const projId = `proj-h1adm-${sfx}`;
       const wfId = `wf-h1adm-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'h1adm', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -431,6 +437,7 @@ function runContract(
       const projId = `proj-h2adm-${sfx}`;
       const wfId = `wf-h2adm-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'h2adm', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -457,6 +464,7 @@ function runContract(
       const projId = `proj-h3adm-${sfx}`;
       const wfId = `wf-h3adm-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'h3adm', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -482,6 +490,7 @@ function runContract(
       const projId = `proj-g4adm-${sfx}`;
       const wfId = `wf-g4adm-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'g4adm', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -506,6 +515,7 @@ function runContract(
       const projId = `proj-g56adm-${sfx}`;
       const wfId = `wf-g56adm-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'g56adm', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -533,6 +543,7 @@ function runContract(
       const agent = `agent-g7adm-${sfx}`;
       const wfId = `wf-g7adm-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'g7adm', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: agent, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -564,6 +575,7 @@ function runContract(
       const agent = `agent-g1adm-${sfx}`;
       const wfId = `wf-g1adm-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: wfId, project_id: projId, goal: 'g1adm', status: 'running',
         engine: 'demo', trust_tools: 0, lead_agent: agent, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
@@ -593,12 +605,14 @@ function runContract(
       const parentWfId = `wf-g8p-${sfx}`;
       const childWfId = `wf-g8c-${sfx}`;
       await sessions.createWorkflow({
+        created_by: null,
         id: parentWfId, project_id: projId, goal: 'parent', status: 'done',
         engine: 'demo', trust_tools: 0, lead_agent: parentAgent, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
         credential_id: null, model: 'claude', created_at: ts, updated_at: ts,
       });
       await sessions.createWorkflow({
+        created_by: null,
         id: childWfId, project_id: projId, goal: 'child', status: 'done',
         engine: 'demo', trust_tools: 0, lead_agent: childAgent, workspace_id: null,
         output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,

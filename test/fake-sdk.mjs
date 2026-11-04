@@ -231,7 +231,8 @@ export async function* query({ prompt, options }) {
     yield {
       type: 'result',
       subtype: 'error_max_budget_usd',
-      stop_reason: 'error_max_budget_usd',
+      // Like the real engine: the budget stop is in subtype; stop_reason is the model's own.
+      stop_reason: null,
       total_cost_usd: 5.01,
       num_turns: 1,
       is_error: true,

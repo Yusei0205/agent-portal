@@ -233,7 +233,7 @@ function runContract(label: string, makeRepo: () => Promise<SessionsRepository>)
       const before = await repo.countRunningChildWorkflows(parentId);
       assert.ok(before >= 1, `Expected at least 1 running child before release, got ${before}`);
 
-      await repo.releaseChildDelegationSlot(parentId, userId);
+      await repo.releaseChildDelegationSlot(input.id, parentId, userId);
 
       const after = await repo.countRunningChildWorkflows(parentId);
       // DynamoDB: counter decrements; SQLite: still 1 (count is live, not from counter)

@@ -121,6 +121,7 @@ async function makeCtx(
     credentialId: null,
     credentialOwnerId: null,
     model: null,
+    engineSessionId: null,
     ...overrides,
   };
 

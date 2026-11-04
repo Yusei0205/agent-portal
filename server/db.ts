@@ -2284,6 +2284,8 @@ export function setBeforeCloseHook(fn: () => void): void {
 // ── Query helpers ─────────────────────────────────────────────────────────────
 
 type P = SQLInputValue | boolean | undefined;
+/** A value the query helpers accept (booleans become 0/1, undefined becomes NULL). */
+export type DbParam = P;
 
 function norm(params: P[]): SQLInputValue[] {
   return params.map((p) =>

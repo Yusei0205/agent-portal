@@ -1253,7 +1253,7 @@ export function registerCaseSetRoutes(): void {
         expectedResult: c.expected_result,
         status: c.status,
         remarks: c.remarks,
-        request: reqObj ? formatAsCurl(reqObj as Parameters<typeof formatAsCurl>[0]) : '',
+        request: reqObj ? formatAsCurl(reqObj as unknown as Parameters<typeof formatAsCurl>[0]) : '',
         response: resObj ? formatResponseText(resObj as Parameters<typeof formatResponseText>[0]) : '',
       });
       row.eachCell({ includeEmpty: true }, (cell) => {

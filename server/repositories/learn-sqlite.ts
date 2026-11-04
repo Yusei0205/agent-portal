@@ -3,6 +3,7 @@
  */
 
 import { one, all, run as dbRun, insert, update } from '../db.ts';
+import type { DbParam } from '../db.ts';
 import type { Row } from '../db.ts';
 import type {
   LearnRepository,
@@ -125,7 +126,7 @@ export class SqliteLearnRepository implements LearnRepository {
   async updateDoc(id: string, fields: Partial<LearnDocRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v;
-    update('learn_docs', id, f);
+    update('learn_docs', id, f as Record<string, DbParam>);
   }
 
   async deleteDoc(id: string): Promise<void> {
@@ -165,7 +166,7 @@ export class SqliteLearnRepository implements LearnRepository {
   async updateQuiz(id: string, fields: Partial<QuizRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v;
-    update('quizzes', id, f);
+    update('quizzes', id, f as Record<string, DbParam>);
   }
 
   async deleteQuiz(id: string): Promise<void> {
@@ -227,7 +228,7 @@ export class SqliteLearnRepository implements LearnRepository {
   async updatePath(id: string, fields: Partial<PathRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v;
-    update('paths', id, f);
+    update('paths', id, f as Record<string, DbParam>);
   }
 
   async deletePath(id: string): Promise<void> {
