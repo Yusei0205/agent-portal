@@ -87,7 +87,30 @@ function ToggleSwitch({ checked, onChange, label }) {
  *   isPopped?:  boolean,
  * }} props
  */
-export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }) {
+export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn, isPopped }) {
+  // Starting the browser: the agent opens it when it needs a page, so "turning it on" means asking the agent to open one.
+  const [openUrl, setOpenUrl]   = useState('');
+  const [opening, setOpening]   = useState(false);
+  const [openError, setOpenError] = useState(null);
+  const askToOpen = async (e) => {
+    e.preventDefault();
+    let url = openUrl.trim();
+    if (!url || !projectId) return;
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+    try { new URL(url); } catch { setOpenError('That does not look like a web address.'); return; }
+    setOpening(true);
+    setOpenError(null);
+    try {
+      const base = `/api/projects/${projectId}/workflows/${workflowId}`;
+      const res = await api.post(`${base}/message`, { message: `Open ${url} in the browser and tell me what you see.` });
+      if (!res?.resumed) await api.post(`${base}/start`).catch((err) => { if (err?.status !== 409) throw err; });
+      setOpenUrl('');
+    } catch (err) {
+      setOpenError(err?.message || 'Could not ask the agent to open the page.');
+    } finally {
+      setOpening(false);
+    }
+  };
   // ── Connection state ───────────────────────────────────────────────────────
   const [wsState, setWsState]         = useState('idle');    // idle|connecting|connected|disconnected
   const [wsError, setWsError]         = useState(null);
@@ -415,8 +438,25 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
       ? [{ id: '__default__', title: pageTitle || tryHostname(currentUrl), url: currentUrl, active: true }]
       : [];
 
-  const showFallback = !cloudMode && !hasFrame && !live && (liveData?.screenshotBase64 || fallbackScreenshot);
-  const showEmpty    = !hasFrame && !live && (cloudMode || (!liveData?.screenshotBase64 && !fallbackScreenshot));
+  // The cloud browser closes when the run ends, so a finished session shows the last page the agent saw.
+  const lastShot     = liveData?.screenshotBase64 || fallbackScreenshot;
+  const showFallback = !hasFrame && !live && Boolean(lastShot);
+  const showEmpty    = !hasFrame && !live && !lastShot;
+  const openForm = cloudMode && !live && projectId ? (
+    <form onSubmit={askToOpen} style={{ display: 'flex', gap: 6, marginTop: 10, width: '100%', maxWidth: 360 }}>
+      <input
+        type="text"
+        value={openUrl}
+        onChange={(e) => setOpenUrl(e.target.value)}
+        placeholder="Address to open, e.g. example.com"
+        aria-label="Address to open in the browser"
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      <button type="submit" className="btn btn-primary btn-sm" disabled={opening || !openUrl.trim()}>
+        {opening ? 'Asking…' : 'Open'}
+      </button>
+    </form>
+  ) : null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -597,20 +637,32 @@ export function IdeBrowser({ workflowId, liveData, onPopOut, onPopIn, isPopped }
           </div>
         )}
 
-        {/* Fallback screenshot — shown before first live frame arrives */}
+        {/* Last screenshot: before the first live frame arrives, or after the run ended and the cloud browser closed */}
         {showFallback && (
-          <img
-            className="idb-fallback"
-            src={`data:image/png;base64,${liveData?.screenshotBase64 || fallbackScreenshot}`}
-            alt="Last known browser screenshot"
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, width: '100%', height: '100%', overflow: 'auto', padding: 8 }}>
+            <img
+              className="idb-fallback"
+              src={`data:image/png;base64,${lastShot}`}
+              alt="Last known browser screenshot"
+              style={{ maxHeight: 'none', flex: 'none' }}
+            />
+            {cloudMode && (
+              <div className="idb-empty" style={{ padding: '4px 8px' }} aria-live="polite">
+                <p style={{ fontSize: '0.8rem' }}>The browser closed when the run ended. This is the last page the agent saw.</p>
+                {openForm}
+                {openError && <p className="error-note" role="alert" style={{ marginTop: 6 }}>{openError}</p>}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Empty state — no browser activity yet */}
         {showEmpty && (
           <div className="idb-empty" aria-live="polite">
             <Icon name="browser" size={32} />
-            <p>{cloudMode ? 'The browser is not running. It appears here while the agent is using it.' : 'The agent’s browser will appear here when it opens a page'}</p>
+            <p>{cloudMode ? 'The browser is not running. It starts when the agent opens a page, and appears here while it is in use.' : 'The agent’s browser will appear here when it opens a page'}</p>
+            {openForm}
+            {openError && <p className="error-note" role="alert" style={{ marginTop: 6 }}>{openError}</p>}
             {wsState === 'disconnected' && (
               <p style={{ fontSize: '0.77rem', opacity: 0.6, marginTop: 4 }}>
                 Reconnecting…

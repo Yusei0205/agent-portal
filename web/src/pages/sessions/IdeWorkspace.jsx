@@ -969,6 +969,7 @@ export function IdeWorkspace({ id, project }) {
             {sidebarPanel === 'browser' && !browserPopped && (
               <IdeBrowser
                 workflowId={id}
+                projectId={project.id}
                 liveData={browserLiveData}
                 onPopOut={() => setBrowserPopped(true)}
               />
@@ -1131,6 +1132,7 @@ export function IdeWorkspace({ id, project }) {
             <div className="idb-main-overlay" aria-label="Browser (expanded)">
               <IdeBrowser
                 workflowId={id}
+                projectId={project.id}
                 liveData={browserLiveData}
                 onPopIn={() => setBrowserPopped(false)}
                 isPopped
