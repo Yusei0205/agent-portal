@@ -540,7 +540,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                       >
                         Not set up yet —{' '}
                         <a
-                          href="#/credentials"
+                          href="#/connect/models"
                           onClick={() => onClose()}
                           style={{ color: 'var(--accent)' }}
                         >

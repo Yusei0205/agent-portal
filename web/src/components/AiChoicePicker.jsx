@@ -71,7 +71,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
         {creds.length === 0 ? (
           <p className="field-hint" id={`${idPrefix}-cred`}>
             You have no credential of your own, so the portal&rsquo;s AI provider is used. Add one under{' '}
-            <a href="#/credentials">Credentials</a> to choose here.
+            <a href="#/connect/models">Connect › Models &amp; AWS</a> to choose here.
           </p>
         ) : (
           <select

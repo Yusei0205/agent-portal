@@ -115,7 +115,7 @@ function GoogleWorkspaceRow() {
 }
 
 function ConnectedServices({ projectId }) {
-  const { jira, git } = useServiceStatus(projectId);
+  const { jira } = useServiceStatus(projectId);
 
   const jiraRow = !projectId
     ? { status: 'Open a project', tone: 'badge-neutral', detail: 'Jira is connected per project, under Tickets.' }
@@ -125,12 +125,10 @@ function ConnectedServices({ projectId }) {
         ? { status: 'Connected', tone: 'badge-ok', detail: `${jira.site?.name || jira.site?.url || 'Jira'}${jira.account?.email ? ` · ${jira.account.email}` : ''}` }
         : { status: 'Not connected', tone: 'badge-warn', detail: 'Sign in with Atlassian or add an API token.' };
 
-  const gitCount = git ? git.length : null;
-
   return (
     <section className="integration-group" aria-labelledby="int-services">
       <h2 id="int-services">Connected services</h2>
-      <p className="muted small">Sign-ins the portal already holds. They are managed on their own pages; this is the overview.</p>
+      <p className="muted small">Services agents can use. Code hosts and model sign-ins are in the other tabs of Connect.</p>
       <div className="integration-services">
         <ServiceRow
           icon="ticket"
@@ -139,24 +137,6 @@ function ConnectedServices({ projectId }) {
           status={jiraRow.status}
           tone={jiraRow.tone}
           to={projectId ? href(projectId, 'tickets') : '#/projects'}
-          action="Manage"
-        />
-        <ServiceRow
-          icon="branch"
-          title="Git hosts"
-          detail="GitHub, Bitbucket, CodeCommit and other Git servers; used to clone repositories into sessions."
-          status={gitCount === null ? 'Checking…' : gitCount === 0 ? 'None added' : `${gitCount} connected`}
-          tone={gitCount ? 'badge-ok' : 'badge-neutral'}
-          to="#/connections/git"
-          action="Manage"
-        />
-        <ServiceRow
-          icon="key"
-          title="AWS & model sign-ins"
-          detail="Claude, Kiro and Amazon Bedrock sign-ins that run the agents."
-          status="Credentials"
-          tone="badge-neutral"
-          to="#/credentials"
           action="Manage"
         />
         <GoogleWorkspaceRow />

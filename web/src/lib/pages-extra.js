@@ -9,14 +9,14 @@
 export const EXTRA_NAV_ITEMS = [
   {
     id: 'goto_credentials',
-    label: 'Credentials',
-    description: 'Manage your engine sign-ins (Kiro, Claude Code)',
+    label: 'Models & AWS',
+    description: 'Your Kiro, Claude and Bedrock sign-ins',
     keys: 'g y',
-    href: '#/credentials',
+    href: '#/connect/models',
   },
   {
     id: 'goto_config',
-    label: 'Configuration',
+    label: 'Agent setup',
     description: 'Edit ~/.kiro, ~/.claude and ~/.aws per-user config',
     keys: 'g x',
     href: '#/config',

@@ -54,7 +54,7 @@ export default function Settings({ user }) {
 
   return (
     <div className="page">
-      <PageHeader title="Settings" description="Portal-wide settings: AI provider, appearance and storage." />
+      <PageHeader title="Settings" description="Portal-wide policy: AI provider, tools, budget, review rules, session limits and appearance." />
 
       {/* Read-only banner for non-admins */}
       {!isAdmin && (
@@ -117,7 +117,7 @@ export default function Settings({ user }) {
             <p className="muted" style={{ fontSize: '0.84rem', marginBottom: 16 }}>
               This is the portal's own AI account, used by code reviews, branch scans, Knowledge
               Ask and test generation. It is also the fallback for sessions when a user has no
-              sign-in under <a href="#/credentials">Credentials</a>.
+              sign-in under <a href="#/connect/models">Connect › Models &amp; AWS</a>.
             </p>
             <Providers
               settings={settings}

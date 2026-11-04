@@ -10,7 +10,22 @@
  * a description on the left and that tab's actions on the right.
  */
 
+import { createContext, useContext } from 'react';
+
+/** True inside a hub tab (Connect): the tab already names the page, so the h1 is left out. */
+export const HubContext = createContext(false);
+
 export function PageHeader({ title, description, children }) {
+  const inHub = useContext(HubContext);
+  if (inHub) {
+    if (!description && !children) return null;
+    return (
+      <div className="section-head">
+        <p className="muted">{description}</p>
+        {children && <div className="page-actions">{children}</div>}
+      </div>
+    );
+  }
   return (
     <div className="page-head">
       <div className="page-head-text">

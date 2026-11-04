@@ -1978,3 +1978,7 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
   cursor: pointer;
 }
 .integration-service-sub input { width: auto; min-height: auto; margin-top: 3px; }
+
+/* Connect hub: the tab's own page sits flush under the tab bar */
+.connect-hub .page { padding: 0; max-width: none; }
+.connect-panel { padding-top: 18px; }

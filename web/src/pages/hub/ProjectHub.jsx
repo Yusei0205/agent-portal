@@ -347,7 +347,7 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
               <div className="card">
                 <p className="muted" style={{ fontSize: '0.84rem' }}>
                   No Git connections configured.{' '}
-                  <a href="#/connections/git">Add a connection</a> first, then come back here.
+                  <a href="#/connect/code-hosts">Add a connection</a> first, then come back here.
                 </p>
               </div>
             ) : (
@@ -435,7 +435,7 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
                               No repositories found in {region}.
                               <div className="muted" style={{ marginTop: 4, fontSize: '0.82em' }}>
                                 The connection's region can be changed under{' '}
-                                <a href="#/connections/git">Connections</a>.
+                                <a href="#/connect/code-hosts">Connect › Code hosts</a>.
                               </div>
                             </>
                           )

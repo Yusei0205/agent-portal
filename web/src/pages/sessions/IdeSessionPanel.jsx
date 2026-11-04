@@ -318,7 +318,7 @@ function IntegrationsSection({ workflow, projectId }) {
           Integrations
         </div>
         <p className="muted" style={{ fontSize: '0.76rem', margin: 0 }}>
-          No MCP servers in this project yet. Add one on the Integrations page.
+          No MCP servers in this project yet. Add one under Connect › Tools & services.
         </p>
       </div>
     );

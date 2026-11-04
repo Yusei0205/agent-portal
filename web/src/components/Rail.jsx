@@ -40,54 +40,56 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    // Where the day's work happens.
     id: 'work',
     label: 'Work',
     projectScoped: true,
     items: [
       { tab: 'sessions',   label: 'Sessions',   icon: 'terminal'  },
       { tab: 'workspaces', label: 'Workspaces', icon: 'projects'  },
-      { tab: 'knowledge',  label: 'Knowledge',  icon: 'knowledge' },
-      { tab: 'create',     label: 'Create',     icon: 'sparkles'  },
+      // opens the Repositories tab of project setup
+      { tab: 'setup',      label: 'Repositories', icon: 'git-branch', subTab: 'repositories' },
+      // defaults to /p/:pid/reviews/code; also highlights for the legacy 'review' and 'branchscans' tabs
+      { tab: 'reviews',    label: 'Reviews',    icon: 'git-pull-request', subTab: 'code', activeFor: ['review', 'branchscans'] },
+      { tab: 'tests',      label: 'Tests',      icon: 'flask'     },
       { tab: 'tickets',    label: 'Tickets',    icon: 'ticket'    },
     ],
   },
   {
+    // What agents read and produce.
+    id: 'knowledge',
+    label: 'Knowledge',
+    projectScoped: true,
+    items: [
+      { tab: 'knowledge', label: 'Knowledge', icon: 'knowledge' },
+      { tab: 'create',    label: 'Create',    icon: 'sparkles'  },
+      { tab: 'vault',     label: 'Vault',     icon: 'archive'   },
+    ],
+  },
+  {
+    // What the portal signs in to: code hosts, model providers and AWS, tools. One page with tabs.
     id: 'connect',
     label: 'Connect',
     items: [
-      // portal-scoped — defaults to /connections/git
-      { tab: 'connections',  label: 'Connections',  icon: 'branch', subTab: 'git' },
-      // dual-scope — /p/:pid/integrations or /integrations
-      { tab: 'integrations', label: 'Integrations', icon: 'plug',   dualScope: true },
-      // project-scoped — opens Repositories tab of project setup
-      { tab: 'setup', label: 'Repositories', icon: 'git-branch', projectScoped: true, subTab: 'repositories' },
-      // project-scoped within this portal-level section
-      { tab: 'vault',        label: 'Vault',        icon: 'archive', projectScoped: true },
+      { tab: 'connect', label: 'Connections', icon: 'plug', subTab: 'code-hosts', activeFor: ['connect'] },
     ],
   },
   {
-    id: 'quality',
-    label: 'Quality',
+    // How the agent behaves: your own .kiro, .claude and .aws folders.
+    id: 'agents',
+    label: 'Agents',
     items: [
-      // project-scoped — defaults to /p/:pid/reviews/code
-      // also highlights for legacy 'review' and 'branchscans' tabs (redirects)
-      {
-        tab: 'reviews', label: 'Reviews', icon: 'git-pull-request',
-        projectScoped: true, subTab: 'code',
-        activeFor: ['review', 'branchscans'],
-      },
-      { tab: 'tests', label: 'Tests', icon: 'flask', projectScoped: true },
+      { tab: 'config', label: 'Agent setup', icon: 'file-cog' },
     ],
   },
   {
-    id: 'account',
-    label: 'Account',
+    // Portal-wide policy and access.
+    id: 'portal-admin',
+    label: 'Portal',
     items: [
-      { tab: 'credentials', label: 'Credentials',   icon: 'key'          },
-      { tab: 'config',      label: 'Configuration', icon: 'file-cog'     },
-      { tab: 'users',       label: 'Users',         icon: 'shield-user', adminOnly: true },
-      { tab: 'api',         label: 'API access',    icon: 'code-2'       },
-      { tab: 'settings',    label: 'Settings',      icon: 'settings'     },
+      { tab: 'settings', label: 'Settings',   icon: 'settings' },
+      { tab: 'users',    label: 'Users',      icon: 'shield-user', adminOnly: true },
+      { tab: 'api',      label: 'API access', icon: 'code-2' },
     ],
   },
 ];

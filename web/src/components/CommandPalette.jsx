@@ -19,7 +19,7 @@ function buildNavItems(route, user) {
       { id: 'goto_knowledge',       label: 'Knowledge',       description: 'Documents, decisions and learning', keys: 'g k', href: href(pid, 'knowledge')              },
       { id: 'goto_vault_proj',      label: 'Vault',           description: 'Project secrets and files',         keys: 'g v', href: href(pid, 'vault')                  },
       { id: 'goto_create',          label: 'Create',          description: 'Generate diagrams, docs and decks', keys: 'g c', href: href(pid, 'create')                 },
-      { id: 'goto_integrations_p',  label: 'Integrations',    description: 'MCP tools and connections',         keys: 'g i', href: href(pid, 'integrations')           },
+      { id: 'goto_integrations_p',  label: 'Tools & services', description: 'MCP tools, Jira and Google',       keys: 'g i', href: '#/connect/tools'                   },
       { id: 'goto_tests',           label: 'Tests',           description: 'AI-assisted end-to-end and API tests', keys: 'g h', href: href(pid, 'tests')             },
     );
   }
@@ -28,8 +28,8 @@ function buildNavItems(route, user) {
   items.push(
     { id: 'goto_projects',    label: 'Projects',       description: 'All your projects',                    keys: 'g p', href: '#/projects'          },
     { id: 'goto_inbox',       label: 'Inbox',          description: 'Pending PR-review notifications',      keys: 'g b', href: '#/inbox'             },
-    { id: 'goto_connections', label: 'Connections',    description: 'Git connections and AWS accounts',     keys: 'g n', href: '#/connections/git'   },
-    { id: 'goto_integrations',label: 'Integrations',   description: 'Portal-wide MCP integrations',        keys: 'g j', href: '#/integrations'      },
+    { id: 'goto_connections', label: 'Code hosts',     description: 'Git hosts used to clone repositories', keys: 'g n', href: '#/connect/code-hosts' },
+    { id: 'goto_integrations',label: 'Tools & services', description: 'Portal-wide MCP tools and services', keys: 'g j', href: '#/connect/tools'     },
     { id: 'goto_api',         label: 'API access',     description: 'Personal access tokens and MCP URL',  keys: 'g e', href: '#/api'               },
   );
 
@@ -43,8 +43,8 @@ function buildNavItems(route, user) {
 
   // Always-available extra pages
   items.push(
-    { id: 'goto_credentials', label: 'Credentials',   description: 'Manage your engine sign-ins',              keys: 'g y', href: '#/credentials' },
-    { id: 'goto_config',      label: 'Configuration', description: 'Edit ~/.kiro, ~/.claude and ~/.aws config', keys: 'g x', href: '#/config'      },
+    { id: 'goto_credentials', label: 'Models & AWS',  description: 'Your Kiro, Claude and Bedrock sign-ins',   keys: 'g y', href: '#/connect/models' },
+    { id: 'goto_config',      label: 'Agent setup',   description: 'Edit ~/.kiro, ~/.claude and ~/.aws config', keys: 'g x', href: '#/config'      },
   );
 
   return items;

@@ -24,10 +24,8 @@ import ReviewDetail from './pages/ReviewDetail.jsx';
 import LoopSpecs from './pages/LoopSpecs.jsx';
 import { Workspaces } from './pages/Workspaces.jsx';
 import { ApiAccess } from './pages/ApiAccess.jsx';
-import { Integrations } from './pages/Integrations.jsx';
-import { Credentials } from './pages/Credentials.jsx';
+import { ConnectHub } from './pages/ConnectHub.jsx';
 import { Configuration } from './pages/Configuration.jsx';
-import { ConnectionsPage } from './pages/ConnectionsPage.jsx';
 import { ReviewsPage } from './pages/ReviewsPage.jsx';
 import { TestsPage } from './pages/tests/TestsPage.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
@@ -46,18 +44,18 @@ registerShortcuts([
   { id: 'goto_knowledge',     keys: 'g k',          label: 'Go to Knowledge',       group: 'Navigate' },
   { id: 'goto_vault_proj',    keys: 'g v',          label: 'Go to Vault',           group: 'Navigate' },
   { id: 'goto_create',        keys: 'g c',          label: 'Go to Create',          group: 'Navigate' },
-  { id: 'goto_integrations_p',keys: 'g i',          label: 'Go to Integrations',    group: 'Navigate' },
+  { id: 'goto_integrations_p',keys: 'g i',          label: 'Go to Tools & services', group: 'Navigate' },
   { id: 'goto_tests',         keys: 'g h',          label: 'Go to Tests',           group: 'Navigate' },
   // Navigate — portal (always available)
   { id: 'goto_projects',      keys: 'g p',          label: 'Go to Projects',        group: 'Navigate' },
   { id: 'goto_inbox',         keys: 'g b',          label: 'Go to Inbox',           group: 'Navigate' },
-  { id: 'goto_connections',   keys: 'g n',          label: 'Go to Connections',     group: 'Navigate' },
-  { id: 'goto_integrations',  keys: 'g j',          label: 'Go to Integrations',    group: 'Navigate' },
+  { id: 'goto_connections',   keys: 'g n',          label: 'Go to Code hosts',      group: 'Navigate' },
+  { id: 'goto_integrations',  keys: 'g j',          label: 'Go to Tools & services', group: 'Navigate' },
   { id: 'goto_api',           keys: 'g e',          label: 'Go to API access',      group: 'Navigate' },
   { id: 'goto_users',         keys: 'g m',          label: 'Go to Users',           group: 'Navigate' },
   { id: 'goto_settings',      keys: 'g t',          label: 'Go to Settings',        group: 'Navigate' },
-  { id: 'goto_credentials',   keys: 'g y',          label: 'Go to Credentials',     group: 'Navigate' },
-  { id: 'goto_config',        keys: 'g x',          label: 'Go to Configuration',   group: 'Navigate' },
+  { id: 'goto_credentials',   keys: 'g y',          label: 'Go to Models & AWS',     group: 'Navigate' },
+  { id: 'goto_config',        keys: 'g x',          label: 'Go to Agent setup',       group: 'Navigate' },
   { id: 'goto_dashboard',     keys: 'g d',          label: 'Go to Dashboard',        group: 'Navigate' },
 ]);
 
@@ -285,16 +283,16 @@ function Shell({ user, onSignOut }) {
           case 'k': if (pid) navigate(`/p/${pid}/knowledge`);                     break;
           case 'v': navigate(pid ? `/p/${pid}/vault`         : '/projects');      break;
           case 'c': if (pid) navigate(`/p/${pid}/create`);                        break;
-          case 'i': navigate(pid ? `/p/${pid}/integrations` : '/integrations');  break;
+          case 'i': navigate('/connect/tools');                                   break;
           case 'h': if (pid) navigate(`/p/${pid}/tests`);                         break;
           case 'p': navigate('/projects');                                         break;
           case 'b': navigate('/inbox');                                            break;
-          case 'n': navigate('/connections/git');                                  break;
-          case 'j': navigate('/integrations');                                     break;
+          case 'n': navigate('/connect/code-hosts');                              break;
+          case 'j': navigate('/connect/tools');                                   break;
           case 'e': navigate('/api');                                              break;
           case 'm': if (u?.is_admin) navigate('/users');                          break;
           case 't': navigate('/settings');                                         break;
-          case 'y': navigate('/credentials');                                      break;
+          case 'y': navigate('/connect/models');                                  break;
           case 'x': navigate('/config');                                           break;
           case 'd': navigate('/dashboard');                                        break;
           default:  break;
@@ -350,14 +348,24 @@ function Shell({ user, onSignOut }) {
       navigateReplace('/dashboard');
       return;
     }
-    // /aws (removed page) → /connections/git
-    if (!projectId && tab === 'aws') {
-      navigateReplace('/connections/git');
+    // Connections, Credentials and Integrations are tabs of the Connect page now; the old addresses still work.
+    if (!projectId && (tab === 'aws' || tab === 'connections')) {
+      navigateReplace('/connect/code-hosts');
       return;
     }
-    // /connections (bare, no sub-tab) → /connections/git
-    if (!projectId && tab === 'connections' && (!rest || rest.length === 0)) {
-      navigateReplace('/connections/git');
+    if (!projectId && tab === 'credentials') {
+      navigateReplace('/connect/models');
+      return;
+    }
+    if (tab === 'integrations') {
+      try {
+        if (projectId) localStorage.setItem('rail-last-project', projectId);
+      } catch { /* private mode */ }
+      navigateReplace('/connect/tools');
+      return;
+    }
+    if (!projectId && tab === 'connect' && (!rest || rest.length === 0)) {
+      navigateReplace('/connect/code-hosts');
       return;
     }
     // /reviews (old portal-level dashboard, no project) → last project's reviews or projects
@@ -429,9 +437,7 @@ function Shell({ user, onSignOut }) {
   const isLoopSpecsRoute  = route.projectId && route.tab === 'loop-specs';
   const isWorkspacesRoute = route.projectId && route.tab === 'workspaces';
   const isApiRoute        = !route.projectId && route.tab === 'api';
-  const isConnectionsRoute = !route.projectId && route.tab === 'connections' && route.rest?.length > 0;
-  const isIntegrationsRoute = route.tab === 'integrations';
-  const isCredentialsRoute = !route.projectId && route.tab === 'credentials';
+  const isConnectRoute     = !route.projectId && route.tab === 'connect';
   const isConfigRoute      = !route.projectId && route.tab === 'config';
   const isTestsRoute       = route.projectId && route.tab === 'tests';
   const isReviewsRoute     = route.projectId && route.tab === 'reviews';
@@ -541,12 +547,8 @@ function Shell({ user, onSignOut }) {
             <Workspaces projectId={route.projectId} />
           ) : isApiRoute ? (
             <ApiAccess />
-          ) : isConnectionsRoute ? (
-            <ConnectionsPage subTab={route.rest?.[0] || 'git'} user={user} projectId={navProjectId} projects={projects} />
-          ) : isIntegrationsRoute ? (
-            <Integrations projectId={route.projectId} />
-          ) : isCredentialsRoute ? (
-            <Credentials user={user} />
+          ) : isConnectRoute ? (
+            <ConnectHub tab={route.rest?.[0]} user={user} projectId={navProjectId} />
           ) : isConfigRoute ? (
             <Configuration user={user} />
           ) : isTestsRoute ? (

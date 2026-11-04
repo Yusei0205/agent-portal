@@ -60,7 +60,7 @@ function AwsWarning() {
       <Icon name="warning" size={15} style={{ flexShrink: 0 }} />
       <span>
         Keys stored here are plaintext in zip exports — handle with care. For engine
-        sign-ins, <a href="#/credentials" style={{ color: 'inherit', textDecoration: 'underline' }}>Credentials</a>{' '}
+        sign-ins, <a href="#/connect/models" style={{ color: 'inherit', textDecoration: 'underline' }}>Connect › Models &amp; AWS</a>{' '}
         is the safer place.
       </span>
     </div>
@@ -276,8 +276,8 @@ export function Configuration({ user }) {
     <div className="page">
       {/* Page header: title + subtitle on left, zip buttons on right */}
       <PageHeader
-        title="Configuration"
-        description="Your own .kiro, .claude and .aws folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
+        title="Agent setup"
+        description="How your agents behave: your own .kiro, .claude and .aws folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
       >
         <ImportZipButton folder={tab} onImported={handleImported} />
         <ExportZipButton folder={tab} />
