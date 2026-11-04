@@ -59,6 +59,7 @@ const PROVIDER_LABEL = {
 const CC_CRED_SOURCES = [
   { value: 'keys',        label: 'Access key ID + secret' },
   { value: 'portal-sso',  label: 'Portal AWS SSO identity' },
+  { value: 'aws-account', label: 'Project AWS account (the AWS tab of Workspaces)' },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -278,7 +279,18 @@ function CodeCommitForm({
   onNamePrefill,             // callback(profileName) — fills the connection Name if blank
   isEditing,
   ssoSettings,         // provider.sso from GET /api/settings
+  projectId,
+  awsAccountId, onAwsAccountIdChange,
 }) {
+  // The project's AWS accounts, for the "Project AWS account" source.
+  const [awsAccounts, setAwsAccounts] = useState(null);
+  useEffect(() => {
+    if (credSource !== 'aws-account' || !projectId) return undefined;
+    let off = false;
+    api.get(`/api/projects/${projectId}/aws-accounts`).then((r) => { if (!off) setAwsAccounts(r.accounts || []); }).catch(() => { if (!off) setAwsAccounts([]); });
+    return () => { off = true; };
+  }, [credSource, projectId]);
+
   // ── Paste-area local state ─────────────────────────────────────────────────
   const [pasteText,     setPasteText]     = useState('');
   const [pasteFeedback, setPasteFeedback] = useState(null); // null | { type: 'ok'|'error', msg }
@@ -331,7 +343,7 @@ function CodeCommitForm({
         />
       </div>
 
-      {!isEditing && (
+      {(
         <div>
           <p style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--ink-2)', marginBottom: 8 }}>
             Credential source
@@ -453,6 +465,21 @@ function CodeCommitForm({
             )}
           </div>
         </>
+      )}
+
+      {credSource === 'aws-account' && (
+        <div className="field">
+          <label htmlFor="cc-aws-account">AWS account</label>
+          <select id="cc-aws-account" value={awsAccountId} onChange={(e) => onAwsAccountIdChange(e.target.value)}>
+            <option value="">Each repository's project default account</option>
+            {(awsAccounts || []).map((a) => <option key={a.id} value={a.id}>{a.name} ({a.region})</option>)}
+          </select>
+          <p className="field-hint">
+            Cloning uses the keys saved in that project's AWS tab (Workspaces), including the session token, so refreshing them there is enough.
+            Browsing a provider's repository list needs a specific account chosen here.
+            {awsAccounts && awsAccounts.length === 0 ? ' This project has no AWS account yet: add one in the AWS tab first.' : ''}
+          </p>
+        </div>
       )}
 
       {credSource === 'portal-sso' && (
@@ -587,7 +614,7 @@ function GenericGitForm({ token, onTokenChange, username, onUsernameChange, pass
 
 // ── Connection modal ──────────────────────────────────────────────────────────
 
-function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled, isAdmin, ssoSettings }) {
+function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled, isAdmin, ssoSettings, projectId }) {
   const dialogRef = useFocusTrap();
 
   const isEditing = Boolean(connection);
@@ -617,6 +644,7 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
   const [ccAccessKeyId,     setCcAccessKeyId]     = useState('');
   const [ccSecretAccessKey, setCcSecretAccessKey] = useState('');
   const [ccSessionToken,    setCcSessionToken]    = useState('');
+  const [ccAwsAccountId,    setCcAwsAccountId]    = useState('');
 
 
   // ── Bitbucket fields ──────────────────────────────────────────────────────
@@ -745,6 +773,7 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
       credentials = {
         mode: ccCredSource,
         region: ccRegion.trim() || 'us-east-1',
+        ...(ccCredSource === 'aws-account' ? { awsAccountId: ccAwsAccountId } : {}),
         ...(ccCredSource === 'keys' ? {
           accessKeyId:     ccAccessKeyId.trim(),
           secretAccessKey: ccSecretAccessKey,
@@ -897,6 +926,9 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
                   onNamePrefill={(profileName) => { if (!name.trim()) setName(profileName); }}
                   isEditing={isEditing}
                   ssoSettings={ssoSettings}
+                  projectId={projectId}
+                  awsAccountId={ccAwsAccountId}
+                  onAwsAccountIdChange={setCcAwsAccountId}
                 />
               )}
               {provider === 'bitbucket' && (
@@ -958,7 +990,7 @@ function ConnectionModal({ connection, onClose, onSave, githubDeviceFlowEnabled,
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function Connections({ user }) {
+export function Connections({ user, projectId }) {
   const [connections,  setConnections]  = useState([]);
   const { sorted: sortedConnections, sortProps } = useSort(connections, { name: (conn) => conn.name, provider: (conn) => conn.provider, scope: (conn) => conn.scope, created: (conn) => conn.created_at });
   const [loading,      setLoading]      = useState(true);
@@ -1264,6 +1296,7 @@ export function Connections({ user }) {
           githubDeviceFlowEnabled={githubDeviceFlowEnabled}
           isAdmin={isAdmin}
           ssoSettings={ssoSettings}
+          projectId={projectId}
         />
       )}
     </div>

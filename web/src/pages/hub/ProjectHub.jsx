@@ -140,6 +140,8 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
   const [urlName,     setUrlName]     = useState('');
   const [urlUrl,      setUrlUrl]      = useState('');
   const [urlProvider, setUrlProvider] = useState('github');
+  const [urlBranch, setUrlBranch] = useState('');
+  const [bulkBranch, setBulkBranch] = useState('');
   const [urlAdding,   setUrlAdding]   = useState(false);
   const [urlError,    setUrlError]    = useState(null);
 
@@ -264,7 +266,7 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
         repos: selectedRepos.map((r) => ({
           url:           r.url,
           name:          r.name,
-          defaultBranch: r.defaultBranch,
+          defaultBranch: bulkBranch.trim() || r.defaultBranch,
         })),
       });
       const added   = Array.isArray(r.added)   ? r.added   : [];
@@ -292,6 +294,7 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
         name:     urlName.trim(),
         url:      urlUrl.trim(),
         provider: urlProvider,
+        ...(urlBranch.trim() ? { defaultBranch: urlBranch.trim() } : {}),
       });
       onNewRepos([r.repo]);
       onClose();
@@ -507,6 +510,13 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
                   {repoList ? `${repoList.length} repositories loaded` : ''}
                 </div>
 
+                {!addSummary && (
+                  <div className="field" style={{ marginTop: 8 }}>
+                    <label htmlFor="ar-bulk-branch">Default branch <span className="muted">(optional, for the selected repositories)</span></label>
+                    <input id="ar-bulk-branch" type="text" value={bulkBranch} onChange={(e) => setBulkBranch(e.target.value)} placeholder="Empty: each repository's own default branch" maxLength={255} />
+                  </div>
+                )}
+
                 {addError && <p className="error-note" role="alert">{addError}</p>}
 
                 {addSummary && (
@@ -580,6 +590,18 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
                   placeholder="https://github.com/owner/repo"
                   aria-required="true"
                 />
+              </div>
+              <div className="field">
+                <label htmlFor="ar-branch">Default branch <span className="muted">(optional)</span></label>
+                <input
+                  id="ar-branch"
+                  type="text"
+                  value={urlBranch}
+                  onChange={(e) => setUrlBranch(e.target.value)}
+                  placeholder="e.g. main, develop (empty: the repository's own default)"
+                  maxLength={255}
+                />
+                <p className="muted small">Agents get the full history of this repository, starting on this branch.</p>
               </div>
               <div className="field">
                 <label htmlFor="ar-provider">Provider</label>

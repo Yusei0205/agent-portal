@@ -31,7 +31,7 @@ export const RUNNER_REPO_LIMITS = {
   urlChars: 2000,
   envEntries: 24,
   envValueChars: 8000,
-  cloneMs: 180_000,
+  cloneMs: 600_000,
 };
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -174,7 +174,7 @@ async function refreshExisting(
     emit({ type: 'status', text: `${repo.name} already has your session's changes; left as it is.` });
     return;
   }
-  const fetchArgs = [...trust, 'fetch', '--depth', '1', 'origin', ...(branch ? [branch] : [])];
+  const fetchArgs = [...trust, 'fetch', '--tags', 'origin', ...(branch ? [branch] : [])];
   const f = await runGit(fetchArgs, dest, env, 120_000);
   if (f.code !== 0) { emit({ type: 'status', text: `${repo.name}: kept the earlier copy (could not fetch updates).` }); return; }
   await runGit([...trust, 'reset', '--hard', 'FETCH_HEAD'], dest, env, 60_000);
@@ -193,7 +193,7 @@ function gitOut(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<st
 }
 
 /**
- * Puts each repository under `<workDir>/repos/<name>` (shallow clone). With `persistRoot`, the real folder is
+ * Puts each repository under `<workDir>/repos/<name>` (full clone: all branches and tags, the full history). With `persistRoot`, the real folder is
  * `<persistRoot>/repos` and `<workDir>/repos` is a link to it, so the copy survives until the session is released.
  * `homeDir` is the agent's HOME: it gets a `.gitconfig` that trusts those repository folders.
  * A repository that cannot be cloned is reported and skipped (the run continues). Returns the names available.
@@ -233,7 +233,7 @@ export async function cloneRunnerRepos(
     }
     fs.mkdirSync(reposDir, { recursive: true });
     emit({ type: 'status', text: `Cloning ${repo.name}${repo.branch ? ` @ ${repo.branch}` : ''}…` });
-    const args = ['clone', '--quiet', '--depth', '1', '--single-branch', '--no-tags',
+    const args = ['clone', '--quiet',
       ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, dest];
     let res = await runGit(args, reposDir, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs);
     if (res.code !== 0 && persist) {
@@ -245,7 +245,7 @@ export async function cloneRunnerRepos(
       const localDest = path.join(localRoot, repo.name);
       emit({ type: 'status', text: `${repo.name} did not fit in the session's storage; cloning to temporary disk instead…` });
       const retry = await runGit(
-        ['clone', '--quiet', '--depth', '1', '--single-branch', '--no-tags', ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, localDest],
+        ['clone', '--quiet', ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, localDest],
         localRoot, gitEnv(repo), RUNNER_REPO_LIMITS.cloneMs,
       );
       if (retry.code === 0) {

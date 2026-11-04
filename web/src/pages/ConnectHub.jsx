@@ -14,7 +14,7 @@ export const CONNECT_TABS = [
   {
     id: 'git',
     label: 'Git connections',
-    render: ({ user }) => <ConnectionsPage user={user} />,
+    render: ({ user, projectId }) => <ConnectionsPage user={user} projectId={projectId} />,
   },
   {
     id: 'sign-ins',

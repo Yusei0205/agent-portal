@@ -591,6 +591,7 @@ export async function resolveCodeCommitAwsCreds(creds: {
     };
   }
   if (creds.mode === 'aws-account' && creds.awsAccountId) {
+    // (With no account chosen, cloning uses each repository's project default; listing repositories needs a chosen one.)
     const acc = await getAwsAccountsRepository().getById(creds.awsAccountId);
     if (!acc) throw new Error(`AWS account ${creds.awsAccountId} not found`);
 
@@ -608,7 +609,7 @@ export async function resolveCodeCommitAwsCreds(creds: {
       const plain = decrypt(acc.credentials_enc, config.secretKey);
       const c = parseJson<Record<string, string>>(plain, {});
       if (c.accessKeyId && c.secretAccessKey) {
-        return { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey };
+        return { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey, ...(c.sessionToken ? { sessionToken: c.sessionToken } : {}) };
       }
     }
     return null; // instance-role / ambient

@@ -323,13 +323,18 @@ async function getCloneEnv(repo: Repository): Promise<Record<string, string>> {
       accessKeyId = creds.accessKeyId;
       secretAccessKey = creds.secretAccessKey;
       sessionToken = creds.sessionToken;
-    } else if (mode === 'aws-account' && creds.awsAccountId) {
-      const acc = await getAwsAccountsRepository().getById(creds.awsAccountId);
-      if (acc?.auth_method === 'keys' && acc.credentials_enc) {
+    } else if (mode === 'aws-account') {
+      // The project's AWS account (AWS tab): the one the connection names, else the project's default one. Changing the
+      // keys there changes what clones use. The account must belong to the repository's project.
+      const { readDefaultId } = await import('./project-aws.ts');
+      const accountId = creds.awsAccountId || (repo.project_id ? readDefaultId(String(repo.project_id)) : null);
+      const acc = accountId ? await getAwsAccountsRepository().getById(accountId) : null;
+      if (acc && (!repo.project_id || !acc.project_id || String(acc.project_id) === String(repo.project_id)) && acc.auth_method === 'keys' && acc.credentials_enc) {
         const plain = decrypt(acc.credentials_enc, config.secretKey);
         const c = parseJson<Record<string, string>>(plain, {});
         accessKeyId = c.accessKeyId;
         secretAccessKey = c.secretAccessKey;
+        sessionToken = c.sessionToken;
       }
     } else if (mode === 'portal-sso') {
       const { getBedrockSsoCredentials } = await import('./bedrock-sso.ts');

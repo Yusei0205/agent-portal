@@ -6,6 +6,6 @@
 
 import { Connections as GitConnections } from './Connections.jsx';
 
-export function ConnectionsPage({ user }) {
-  return <GitConnections user={user} />;
+export function ConnectionsPage({ user, projectId }) {
+  return <GitConnections user={user} projectId={projectId} />;
 }

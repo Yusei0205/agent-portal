@@ -88,7 +88,8 @@ async function requireMember(req: PortalRequest, res: PortalResponse, projectId:
   return true;
 }
 
-function readDefaultId(projectId: string): string | null {
+/** The project's default AWS account id (the one its agents use), or null. */
+export function readDefaultId(projectId: string): string | null {
   try {
     const raw = getSetting(getDb(), defaultKey(projectId));
     if (!raw) return null;
