@@ -222,10 +222,10 @@ function ComposerBar({
 
   const enginePlaceholder =
     workflow?.engine === 'kiro'
-      ? 'Ask Kiro to change something… (Enter to send, Shift+Enter for new line)'
+      ? 'Ask Kiro to change something…'
       : workflow?.engine === 'claude-code'
-      ? 'Ask Claude to change something… (Enter to send, Shift+Enter for new line)'
-      : 'Send a message… (Enter to send, Shift+Enter for new line)';
+      ? 'Ask Claude to change something…'
+      : 'Send a message…';
 
   // Command menu: opens while a "/command" is being typed (no space yet).
   const typedCommand = message.startsWith('/') && !/\s/.test(message) ? message.slice(1).toLowerCase() : null;
@@ -535,6 +535,7 @@ function ComposerBar({
         >
           <Icon name="attach" size={16} />
         </button>
+        <span className="ws-composer-prompt" aria-hidden="true">&gt;</span>
         <textarea
           ref={textareaRef}
           rows={1}
@@ -560,6 +561,11 @@ function ComposerBar({
               : <Icon name="send" size={14} />}
           </button>
         </div>
+      </div>
+      <div className="ws-composer-hints" aria-hidden="true">
+        <span><kbd>↵</kbd> send</span>
+        <span><kbd>⇧</kbd><kbd>↵</kbd> new line</span>
+        <span><kbd>/</kbd> commands</span>
       </div>
     </div>
   );

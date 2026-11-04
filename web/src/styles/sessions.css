@@ -1028,3 +1028,86 @@
 .ide-workspace .ide-sidebar .ide-resize-handle-x {
   right: -2px; /* straddle the border so it's always on the right edge */
 }
+
+/* ── Developer-style session transcript ─────────────────────────────────────
+   Agent text flows as plain text, your messages read like a prompt, tool calls are one line with a
+   result summary under them, and the status bar and message box carry small chips and key hints. */
+.live-message-label--agent { display: none; }
+.live-agent-message { padding: 8px 14px 4px 30px; position: relative; }
+.live-agent-message::before {
+  content: '';
+  position: absolute; left: 15px; top: 16px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+}
+.live-agent-bubble { background: none; border: 0; border-radius: 0; padding: 0; }
+.live-agent-bubble .live-markdown-body { font-size: 0.86rem; line-height: 1.65; }
+
+.live-human-message { justify-content: stretch; padding: 10px 12px 4px; }
+.live-user-message-wrap { max-width: 100%; width: 100%; }
+.live-message-label--user { display: none; }
+.live-user-bubble {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 12px 7px 28px;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  border: 0;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: color-mix(in srgb, var(--accent) 9%, var(--canvas));
+}
+.live-user-bubble::before {
+  content: '>';
+  position: absolute; left: 11px; top: 7px;
+  color: var(--accent); font-weight: 700;
+}
+.live-pending-message { justify-content: stretch; }
+.live-pending-message-wrap { max-width: 100%; width: 100%; }
+
+/* Tool calls: dot, name and command on one line, then a short result line */
+.live-tool-call { padding: 3px 14px; }
+.live-tool-call-row { align-items: flex-start; gap: 10px; padding: 1px 0; }
+.live-tool-dot {
+  flex: none; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%;
+  background: var(--ok);
+}
+.live-tool-dot--fail { background: var(--danger); }
+.live-tool-dot--run { background: var(--accent); animation: live-tool-pulse 1.1s ease-in-out infinite; }
+@keyframes live-tool-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .live-tool-dot--run { animation: none; } }
+.live-tool-line { display: flex; gap: 8px; min-width: 0; flex: 1; align-items: baseline; }
+.live-tool-name { color: var(--ink); }
+.live-tool-arg { color: var(--ink-3); min-width: 0; }
+.live-tool-summary {
+  margin: 0 0 2px 17px;
+  font-family: var(--mono); font-size: 0.74rem; color: var(--ink-3);
+}
+.live-tool-summary::before { content: '\23BF  '; opacity: 0.7; }
+.live-tool-call--failed .live-tool-summary { color: var(--danger); }
+.live-tool-result { margin-left: 17px; }
+
+/* Start-up notes and the working row */
+.live-status-text { font-style: normal; font-family: var(--mono); font-size: 0.74rem; padding-left: 30px; opacity: 0.8; }
+.live-thinking { padding-left: 14px; }
+.live-thinking-row { font-family: var(--mono); font-size: 0.8rem; }
+
+/* Message box: prompt glyph and key hints */
+.ws-composer-prompt {
+  align-self: flex-start; flex: none;
+  padding-top: 6px;
+  font-family: var(--mono); font-weight: 700; color: var(--accent);
+}
+.ws-composer-input { font-family: var(--mono); font-size: 0.82rem; }
+.ws-composer-hints {
+  display: flex; gap: 14px; padding: 5px 4px 0 40px;
+  font-size: 0.7rem; color: var(--ink-3);
+  flex-shrink: 0;
+}
+.ws-composer-hints kbd {
+  font-family: var(--mono); font-size: 0.68rem;
+  padding: 0 4px; margin-right: 2px;
+  border: 1px solid var(--line); border-radius: 3px; background: var(--canvas);
+}
+.ws-composer--manual .ws-composer-hints { display: none; }

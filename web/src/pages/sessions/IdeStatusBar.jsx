@@ -49,36 +49,30 @@ export function IdeStatusBar({ projectId, workflowId }) {
   const noTokens = isKiro || (!turn?.inputTokens && !session?.inputTokens);
   const approvalMode = bar?.toolApprovalMode;
 
+  const engineLabel = bar?.engine === 'kiro' ? 'KIRO' : bar?.engine === 'claude-code' ? 'CLAUDE' : (bar?.engine ? String(bar.engine).toUpperCase() : null);
+
   return (
     <div className="ide-status-bar" aria-label="Status bar" role="status">
-      {bar?.agent && (
-        <div className="ide-status-item">
-          <span>Agent: {bar.agent}</span>
-        </div>
-      )}
+      {engineLabel && <span className="ide-status-engine">{engineLabel}</span>}
       {bar?.model && (
-        <div className="ide-status-item ide-status-model" title="Model">
-          <span>{bar.model}</span>
-        </div>
+        <span className="ide-status-chip ide-status-model" title="Model"><span className="ide-status-key">model</span> {bar.model}</span>
       )}
-      <div className="ide-status-item" title={noTokens ? (isKiro ? 'Kiro does not report token counts' : undefined) : undefined}>
-        <span>
-          Tokens:{' '}
-          {noTokens
-            ? '—'
-            : `${formatTokens(turn?.inputTokens ?? null)} in / ${formatTokens(turn?.outputTokens ?? null)} out`}
+      {bar?.agent && (
+        <span className="ide-status-chip" title="Agent"><span className="ide-status-key">agent</span> {bar.agent}</span>
+      )}
+      {!noTokens && (
+        <span className="ide-status-chip" title="Tokens this turn">
+          <span className="ide-status-key">tokens</span> {formatTokens(turn?.inputTokens ?? null)} in / {formatTokens(turn?.outputTokens ?? null)} out
         </span>
-      </div>
-      <div className="ide-status-item">
-        <span>
-          Cost: {formatCostSmall(turn?.costUsd ?? null)} this turn ·{' '}
-          {formatCostSmall(session?.costUsd ?? null)} total
-        </span>
-      </div>
+      )}
+      <span className="ide-status-chip" title="Cost this turn and in total">
+        <span className="ide-status-key">cost</span> {formatCostSmall(turn?.costUsd ?? null)} · {formatCostSmall(session?.costUsd ?? null)} total
+      </span>
+      <span className="ide-status-spacer" />
       {approvalMode && (
-        <div className="ide-status-item">
-          <span>{approvalMode === 'trust-all' ? 'Trust all tools' : 'Ask before tool use'}</span>
-        </div>
+        <span className={`ide-status-pill${approvalMode === 'trust-all' ? ' ide-status-pill--warn' : ''}`}>
+          {approvalMode === 'trust-all' ? 'trust all tools' : 'ask before tool use'}
+        </span>
       )}
     </div>
   );

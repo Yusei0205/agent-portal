@@ -385,9 +385,10 @@
   align-items: center;
   gap: 0;
   padding: 0 8px;
-  height: 24px;
-  background: var(--accent);
-  color: rgba(255, 255, 255, 0.9);
+  height: 26px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
   font-size: 0.72rem;
   flex-shrink: 0;
   overflow: hidden;
@@ -1349,3 +1350,20 @@
 /* AgentCore Live View (cloud browser) */
 .idb-live-wrap { position: absolute; inset: 0; background: #202020; }
 .idb-live-shield { position: absolute; inset: 0; z-index: 5; cursor: not-allowed; }
+
+/* Status bar chips */
+.ide-status-bar { gap: 6px; padding: 0 10px; }
+.ide-status-engine {
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em;
+  padding: 1px 6px; border-radius: 4px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.ide-status-chip { white-space: nowrap; font-family: var(--mono); color: var(--ink-2); padding: 0 4px; }
+.ide-status-key { color: var(--ink-3); }
+.ide-status-spacer { flex: 1; }
+.ide-status-pill {
+  font-size: 0.68rem; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  color: var(--ink-2); border: 1px solid var(--line); background: var(--canvas);
+}
+.ide-status-pill--warn { color: var(--warn, #d9a441); border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, transparent); }

@@ -429,35 +429,34 @@ function ToolCallRow({ event }) {
   const toolName = payload.toolName || payload.tool || payload.name || 'Tool';
   const rawInput = payload.toolInput ?? payload.input ?? payload.command ?? payload.path ?? '';
   const inputStr = typeof rawInput === 'string' ? rawInput : JSON.stringify(rawInput);
-  const preview  = inputStr.slice(0, 80);
+  const hasInput = inputStr !== '' && inputStr !== '{}' && inputStr !== '[]';
+  const preview  = hasInput ? inputStr.replace(/\s+/g, ' ').slice(0, 200) : '';
 
   const isPending = !event._end;
   const failed    = endPayload?.status === 'failed';
 
-  let statusIcon;
-  if (isPending) {
-    statusIcon = <span className="spinner" aria-label="In progress" />;
-  } else if (failed) {
-    statusIcon = <span className="live-tool-status-fail" aria-label="Failed">✗</span>;
-  } else {
-    statusIcon = <span className="live-tool-status-ok" aria-label="Completed">✓</span>;
+  const output = endPayload?.output ?? endPayload?.result ?? null;
+  const outText = output === null || output === undefined ? '' : (typeof output === 'string' ? output : JSON.stringify(output, null, 2));
+  const outLines = outText.trim() ? outText.trimEnd().split('\n').length : 0;
+  let summary = null;
+  if (!isPending) {
+    if (failed) summary = 'failed';
+    else summary = outLines > 0 ? `${outLines} line${outLines === 1 ? '' : 's'} of output` : 'done';
   }
 
-  const output = endPayload?.output ?? endPayload?.result ?? null;
-
   return (
-    <div className="live-event live-tool-call" aria-label={`Tool: ${toolName}`}>
+    <div className={`live-event live-tool-call${failed ? ' live-tool-call--failed' : ''}`} aria-label={`Tool: ${toolName}`}>
       <button
         type="button"
         className="live-tool-call-row"
         onClick={() => setExpanded((o) => !o)}
         aria-expanded={expanded}
       >
-        <span className="live-tool-status-icon">{statusIcon}</span>
-        <span className="live-tool-name">{toolName}</span>
-        {!expanded && preview && (
-          <span className="live-tool-arg muted">{preview}</span>
-        )}
+        <span className={`live-tool-dot${isPending ? ' live-tool-dot--run' : failed ? ' live-tool-dot--fail' : ''}`} aria-label={isPending ? 'In progress' : failed ? 'Failed' : 'Completed'} />
+        <span className="live-tool-line">
+          <span className="live-tool-name">{toolName}</span>
+          {preview && <span className="live-tool-arg">{preview}</span>}
+        </span>
         <Icon
           name={expanded ? 'chevronDown' : 'chevronRight'}
           size={12}
@@ -465,15 +464,14 @@ function ToolCallRow({ event }) {
           aria-hidden="true"
         />
       </button>
+      {summary && <div className="live-tool-summary">{summary}</div>}
       {expanded && (
         <div>
           {inputStr && (
             <pre className="live-tool-result">{inputStr}</pre>
           )}
-          {output !== null && output !== undefined && (
-            <pre className="live-tool-result">
-              {typeof output === 'string' ? output : JSON.stringify(output, null, 2)}
-            </pre>
+          {outText && (
+            <pre className="live-tool-result">{outText}</pre>
           )}
         </div>
       )}
