@@ -44,10 +44,11 @@ Account / region: 366019841051 / ap-southeast-1
 | 7 | Low | The sessions repositories dropped `budget_usd`, so a per-workflow budget was ignored | Mapped in SQLite and DynamoDB. No API or screen sets it yet (section 5) |
 | 8 | Low | The runner's cost fallback priced every model as Haiku 4.5 | `pricing.ts` with the run's model |
 | 9 | Low | `agent-runner` type check failed (`baseUrl` is rejected by TypeScript 6), hiding real errors | Removed the unused option |
+| 10 | Medium | `@aws-sdk/client-sts` was imported but never installed, so "Test connection" for an AWS account with access keys always failed | Added at 3.1152.0 |
+| 11 | Medium | CI could not pass: 97 type errors stopped the first job, and the DynamoDB Local health check (`curl -f` on a URL that answers 400) never reported healthy | Type-only fixes (97 → 0); health check removed, and the wait step accepts any HTTP answer |
 
 **Not fixed here**
 
-- `npm run typecheck` reports 97 errors on main_v3, the same with this branch. Examples: missing `@aws-sdk/client-sts` types, and record types without index signatures in `aws-accounts.ts` and `integrations.ts`.
 - **Commands Claude Code judges read-only skip the portal.** Claude Code runs them (for example `cat`) without calling the host's permission check, so an "ask" rule for shell commands never sees them. This is engine behaviour, seen in the end-to-end test, and the same on the local engine.
 - **What an agent's shell can still reach in the microVM:**
   - The runtime role's credentials (container credentials endpoint). For the Claude runner that is Bedrock Claude only.
@@ -83,8 +84,7 @@ record spend, stop reason, budget
 1. Point the cloud portal at the new runtime (section 6), and attach the invoke policy to its role.
 2. Port harness PR 1.2 (safety switches) and 1.7 (loop progress and stop rules) into main_v3.
 3. Add the per-session spend cap and time limit to the session API and screen. The columns and repository support exist now.
-4. Fix main_v3's 97 type errors so CI can gate on the type check.
-5. Phase 2 sandbox, for what the shell can still reach.
+4. Phase 2 sandbox, for what the shell can still reach.
 
 ## 6. Deploying
 
@@ -130,8 +130,9 @@ To check the runtimes live: `PORTAL_LIVE_CLAUDE_RUNTIME_ARN=<ClaudeRuntimeArn> P
 | New unit tests (tool policy, broker, payloads): `test/agentcore-harness.test.ts` | 12 passed |
 | Portal relay, Claude and Kiro: `test/agentcore-portal.test.ts` | 7 passed |
 | End to end, real runner server + real Claude Code engine + stand-in model API: `npm run test:engine` | 4 passed (approve, decline + guard, spend cap, cancel) in 16 s |
-| Full suite (`test/*.test.ts`, Windows, Node 22.23.3) | 2,859 passed, 1 failed, 18 skipped. The failure (`user-config.test.ts`, clean-up timing) passes alone (91/91) and is in code this branch does not touch |
-| Portal type check | 97 errors, identical to main_v3 |
+| Full suite (`test/*.test.ts`, Windows, Node 22.23.3) | 2,860 passed, 0 failed, 18 skipped |
+| Portal type check | 0 errors (main_v3 had 97) |
+| Build | Pass |
 | `agent-runner` and `kiro-runner` type check and build | Pass |
 | `test:map:check` | Pass |
 | CDK synth of both new stacks | Pass |
