@@ -1,0 +1,167 @@
+# CI for main_v3 — runs on every pull request and on pushes to main_v3.
+#
+# "checks" job: type check, backend tests (affected modules only, --all for
+# shared-core changes), and the production build.  The UI smoke suite is NOT
+# run here — it requires a running server and headed Chromium, which exceeds
+# the ephemeral runner budget for every PR.  Run it locally or on a dedicated
+# self-hosted runner.
+#
+# "repo-contracts" job: runs the DynamoDB repository contract tests against
+# DynamoDB Local. Uses REQUIRE_DYNAMODB=1 so skips become failures.
+# Only runs the four repository modules:
+#   api-tokens, auth, permissions, audit, delegation
+#
+# Make both jobs required checks on main_v3 (Settings › Branches) so
+# nothing merges red.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main_v3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Types, backend tests, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Install the headless browser (browser-live tests)
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Backend tests (affected modules)
+        # --all so shared-core changes (db.ts, settings.ts, runner.ts …) run everything.
+        # --backend-only skips the UI smoke suite that needs a live browser.
+        run: npm run test:affected -- --backend-only --all
+        timeout-minutes: 20
+
+      - name: Validate test module map
+        run: npm run test:map:check
+
+      - name: Build
+        run: npm run build
+
+  repo-contracts:
+    name: Repository contract tests (DynamoDB Local)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    services:
+      # No container health check: the curl check never reported healthy (a bare GET /
+      # answers 400, and curl -f treats that as failure), so the job stopped before any
+      # test. The "Wait for DynamoDB Local" step below checks readiness from the runner.
+      dynamodb-local:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Wait for DynamoDB Local to be ready
+        run: |
+          echo "Waiting for DynamoDB Local..."
+          READY=0
+          for i in $(seq 1 20); do
+            # Any HTTP answer means it is up (a bare GET / returns 400, so no -f).
+            if curl -s -o /dev/null http://localhost:8000 2>&1; then
+              echo "DynamoDB Local is ready after attempt $i"
+              READY=1
+              break
+            fi
+            echo "Attempt $i: not ready yet, waiting 2s..."
+            sleep 2
+          done
+          if [ "$READY" -eq 0 ]; then
+            echo "ERROR: DynamoDB Local did not become ready after 40 seconds" >&2
+            exit 1
+          fi
+
+      - name: Repository contract tests (api-tokens)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module api-tokens --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (auth)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module auth --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (projects)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module projects --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (permissions)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module permissions --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (audit)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module audit --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (delegation)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module delegation --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (settings)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module settings --backend-only
+        timeout-minutes: 5

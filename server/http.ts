@@ -1,85 +1,216 @@
-import type { IncomingMessage, ServerResponse } from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
-import { HttpError } from './util.ts';
-import { config } from './config.ts';
+/**
+ * Thin HTTP router wrapping node:http.
+ *
+ * Usage:
+ *   import { router, requireAuth } from './http.ts';
+ *
+ *   router.get('/api/foo', async (req, res) => { ... });
+ *   router.post('/api/foo', requireAuth, async (req, res) => { ... });
+ *   router.sse('/api/foo/stream', (req, res) => { ... });
+ */
 
-export interface User {
+import { SCHEDULED_EVENT_PATH, handleScheduledEvent } from './scheduled-jobs.ts';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import http from 'node:http';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { timingSafeEqual } from 'node:crypto';
+import { realtimeEnabled, flushRealtime } from './realtime.ts';
+import { HttpError } from './util.ts';
+
+// ── Request / Response types ──────────────────────────────────────────────────
+
+export interface PortalUser {
   id: string;
   email: string;
   name: string;
   is_admin: number;
 }
 
-export interface Ctx {
-  req: IncomingMessage;
-  res: ServerResponse;
-  method: string;
-  path: string;
-  query: URLSearchParams;
+export interface PortalRequest extends IncomingMessage {
   params: Record<string, string>;
-  user: User | null;
+  query: URLSearchParams;
+  body: unknown;
+  user?: PortalUser | null;
   ip: string;
-  /** Parsed JSON body (lazy). */
-  json<T = any>(): Promise<T>;
-  /** Raw body buffer (lazy), for uploads. */
-  raw(limit?: number): Promise<Buffer>;
   secure: boolean;
+  /** Raw body buffer, lazily read. */
+  rawBody?: Buffer;
+  /** Scopes from the API token, if authenticated via Bearer token. Undefined for cookie/anon auth. */
+  tokenScopes?: string[];
+  /** True when the request was authenticated via an API token (not a browser cookie). */
+  authViaToken?: boolean;
+  /** For delegate-scoped tokens: the workflow ID the token is bound to. */
+  tokenWorkflowId?: string | null;
 }
 
-export type Handler = (ctx: Ctx) => Promise<unknown> | unknown;
+export type PortalResponse = ServerResponse;
 
-export interface RouteOpts {
-  /** 'public' = no login, 'user' = any signed-in user, 'admin' = admins only. */
-  auth?: 'public' | 'user' | 'admin';
+export type Handler = (req: PortalRequest, res: PortalResponse) => Promise<void> | void;
+
+// ── Background write tracker ──────────────────────────────────────────────────
+//
+// Lambda freezes the Node.js event loop after the HTTP response is dispatched.
+// Fire-and-forget writes (audit appends, updateLastUsed) can be silently lost.
+//
+// Writes are tracked per-request using AsyncLocalStorage so concurrent requests
+// do not interfere with each other.  Each write is drained BEFORE res.end() is
+// called (by wrapping res.end), ensuring Lambda cannot freeze mid-write.
+//
+// SSE and streaming responses bypass the wrapper (isSSE routes are excluded).
+
+/** Per-request set of pending write promises (populated via AsyncLocalStorage). */
+const _requestWriteStorage = new AsyncLocalStorage<Set<Promise<unknown>>>();
+
+/** Fallback global set for writes registered outside request context. */
+const _pendingWrites = new Set<Promise<unknown>>();
+
+// ── Pre-request hook ──────────────────────────────────────────────────────────
+//
+// Called at the start of every API request (before the route handler).
+// Used by the settings snapshot to check for stale data on Lambda.
+// Fails closed: if the hook throws, the request returns 500.
+
+let _preRequestHook: (() => Promise<void>) | null = null;
+
+/**
+ * Register a hook that runs before every API request handler.
+ * Only one hook can be registered; subsequent calls replace the previous.
+ * The hook is called after authentication and route matching but before the
+ * route handler runs.  If it throws, the request fails with a 500 error.
+ */
+export function setPreRequestHook(fn: () => Promise<void>): void {
+  _preRequestHook = fn;
 }
+
+/**
+ * Register a background write promise so it completes before the response ends.
+ * Tracked per-request when called inside a request handler; falls back to the
+ * global set otherwise.  Idempotent — the promise is removed once it settles.
+ */
+export function registerBackgroundWrite(p: Promise<unknown>): void {
+  const store = _requestWriteStorage.getStore() ?? _pendingWrites;
+  const settled = p.finally(() => store.delete(settled));
+  store.add(settled);
+}
+
+/**
+ * Wait for all registered background writes (global fallback set only), up to `timeoutMs`.
+ * Errors in individual writes are ignored.
+ * @deprecated Prefer per-request draining via the AsyncLocalStorage mechanism.
+ */
+export async function drainBackgroundWrites(timeoutMs = 500): Promise<void> {
+  if (_pendingWrites.size === 0) return;
+  const pending = [..._pendingWrites];
+  await Promise.race([
+    Promise.allSettled(pending),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref()),
+  ]);
+}
+
+/**
+ * Drain the per-request write set (from AsyncLocalStorage).
+ * Called from the wrapped res.end before the response body is sent.
+ */
+async function _drainRequestWrites(timeoutMs = 500): Promise<void> {
+  const store = _requestWriteStorage.getStore();
+  if (!store || store.size === 0) return;
+  const pending = [...store];
+  await Promise.race([
+    Promise.allSettled(pending),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref()),
+  ]);
+}
+
+// ── Auth info (populated by authenticator, consumed by request handler) ───────
+
+/** Side-channel output written by the authenticator for token-based auth. */
+export interface AuthInfo {
+  tokenScopes?: string[];
+  authViaToken?: boolean;
+  /** For delegate-scoped tokens: the workflow ID the token is bound to. */
+  tokenWorkflowId?: string | null;
+}
+
+// ── Route registry ────────────────────────────────────────────────────────────
 
 interface Route {
   method: string;
   re: RegExp;
   keys: string[];
   handler: Handler;
-  auth: 'public' | 'user' | 'admin';
+  isSSE: boolean;
+  /** Pattern the route was registered with, for debugging. */
+  pattern: string;
+  /** When true: skip CSRF check and body parsing (for API-token-only endpoints). */
+  bypassCsrf: boolean;
 }
 
 const routes: Route[] = [];
 
-export function route(method: string, pattern: string, handler: Handler, opts: RouteOpts = {}): void {
+/** Clear all registered routes (used in tests for clean state between test runs). */
+export function clearRoutes(): void {
+  routes.splice(0);
+}
+
+function registerRoute(
+  method: string,
+  pattern: string,
+  handler: Handler,
+  isSSE = false,
+  bypassCsrf = false,
+): void {
   const keys: string[] = [];
   const re = new RegExp(
     '^' +
-      pattern.replace(/\/:([A-Za-z_]+)/g, (_m, k) => {
+      pattern.replace(/\/:([A-Za-z_][A-Za-z0-9_]*)/g, (_m, k: string) => {
         keys.push(k);
         return '/([^/]+)';
       }) +
       '/?$',
   );
-  routes.push({ method, re, keys, handler, auth: opts.auth ?? 'user' });
+  routes.push({ method, re, keys, handler, isSSE, pattern, bypassCsrf });
 }
 
-export const get = (p: string, h: Handler, o?: RouteOpts) => route('GET', p, h, o);
-export const post = (p: string, h: Handler, o?: RouteOpts) => route('POST', p, h, o);
-export const put = (p: string, h: Handler, o?: RouteOpts) => route('PUT', p, h, o);
-export const patch = (p: string, h: Handler, o?: RouteOpts) => route('PATCH', p, h, o);
-export const del = (p: string, h: Handler, o?: RouteOpts) => route('DELETE', p, h, o);
+// ── Public router object ──────────────────────────────────────────────────────
 
-export function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on('data', (c: Buffer) => {
-      size += c.length;
-      if (size > limit) {
-        reject(new HttpError(413, `Upload is too large (max ${Math.round(limit / 1024 / 1024)} MB)`));
-        req.destroy();
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
+export const router = {
+  get(pattern: string, handler: Handler): void {
+    registerRoute('GET', pattern, handler);
+  },
+  post(pattern: string, handler: Handler): void {
+    registerRoute('POST', pattern, handler);
+  },
+  put(pattern: string, handler: Handler): void {
+    registerRoute('PUT', pattern, handler);
+  },
+  delete(pattern: string, handler: Handler): void {
+    registerRoute('DELETE', pattern, handler);
+  },
+  patch(pattern: string, handler: Handler): void {
+    registerRoute('PATCH', pattern, handler);
+  },
+  /** Register a Server-Sent Events endpoint. No CSRF check, no JSON body parsing. */
+  sse(pattern: string, handler: Handler): void {
+    registerRoute('GET', pattern, handler, true);
+  },
+  /**
+   * Register a POST endpoint that bypasses CSRF check and body parsing.
+   * Use for Bearer-token-only API endpoints (e.g. MCP). The handler is
+   * responsible for reading the body and enforcing its own authentication.
+   */
+  rawPost(pattern: string, handler: Handler): void {
+    registerRoute('POST', pattern, handler, false, true);
+  },
+  /**
+   * Register a GET endpoint that bypasses body parsing (body is never relevant for GET,
+   * but marks the route so the handler can opt out of standard processing if needed).
+   */
+  rawGet(pattern: string, handler: Handler): void {
+    registerRoute('GET', pattern, handler, false, true);
+  },
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -102,7 +233,7 @@ export function setCookie(
   if (opts.maxAge !== undefined) parts.push(`Max-Age=${opts.maxAge}`);
   if (opts.secure) parts.push('Secure');
   const prev = res.getHeader('Set-Cookie');
-  const list = Array.isArray(prev) ? prev : prev ? [String(prev)] : [];
+  const list = Array.isArray(prev) ? prev : prev != null ? [String(prev)] : [];
   res.setHeader('Set-Cookie', [...list, parts.join('; ')]);
 }
 
@@ -116,21 +247,29 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   res.end(text);
 }
 
-/** Marker for handlers that already wrote the response (files, SSE). */
-export const HANDLED = Symbol('handled');
-
-export function sendFile(res: ServerResponse, body: Buffer | string, type: string, filename?: string): typeof HANDLED {
-  const headers: Record<string, string | number> = {
-    'Content-Type': type,
-    'Content-Length': Buffer.byteLength(body),
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  };
-  if (filename) headers['Content-Disposition'] = `attachment; filename="${filename.replace(/[^\w.\- ]/g, '_')}"`;
-  res.writeHead(200, headers);
-  res.end(body);
-  return HANDLED;
+function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new HttpError(413, `Request body too large (max ${Math.round(limit / 1024)} KB)`));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
+
+// ── Static file serving ───────────────────────────────────────────────────────
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { config } from './config.ts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -145,10 +284,15 @@ const MIME: Record<string, string> = {
   '.map': 'application/json',
 };
 
-function serveStatic(ctx: Ctx): boolean {
-  if (ctx.method !== 'GET' && ctx.method !== 'HEAD') return false;
+function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   const root = config.webDir;
-  let rel = decodeURIComponent(ctx.path);
+  let rel: string;
+  try {
+    rel = decodeURIComponent(urlPath);
+  } catch {
+    return false;
+  }
   if (rel.includes('\0')) return false;
   let file = path.resolve(root, '.' + rel);
   if (!file.startsWith(path.resolve(root))) return false;
@@ -161,8 +305,8 @@ function serveStatic(ctx: Ctx): boolean {
   }
   const ext = path.extname(file);
   const body = fs.readFileSync(file);
-  ctx.res.writeHead(200, {
-    'Content-Type': MIME[ext] || 'application/octet-stream',
+  res.writeHead(200, {
+    'Content-Type': MIME[ext] ?? 'application/octet-stream',
     'Content-Length': body.length,
     'Cache-Control': isIndex || ext === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
     'X-Content-Type-Options': 'nosniff',
@@ -170,116 +314,310 @@ function serveStatic(ctx: Ctx): boolean {
     ...(ext === '.html'
       ? {
           'Content-Security-Policy':
-            "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+            "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src https://embed.diagrams.net; frame-ancestors 'none'",
           'X-Frame-Options': 'DENY',
         }
       : {}),
   });
-  ctx.res.end(ctx.method === 'HEAD' ? undefined : body);
+  res.end(req.method === 'HEAD' ? undefined : body);
   return true;
 }
 
-export type Authenticator = (ctx: Ctx) => User | null;
+// ── Authenticator injection ───────────────────────────────────────────────────
 
-export function createHandler(authenticate: Authenticator) {
-  return async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url || '/', 'http://localhost');
-    const forwardedProto = String(req.headers['x-forwarded-proto'] || '');
+export type Authenticator = (
+  req: IncomingMessage,
+  authInfo: AuthInfo,
+) => Promise<PortalUser | null> | PortalUser | null;
+
+let _authenticator: Authenticator = () => null;
+
+export function setAuthenticator(fn: Authenticator): void {
+  _authenticator = fn;
+}
+
+// ── requireAuth middleware ────────────────────────────────────────────────────
+
+/**
+ * Middleware that attaches the authenticated user to `req.user`.
+ * Returns 401 if not authenticated.
+ * Usage: wrap your handler or register as the handler after setting the authenticator.
+ */
+export function requireAuth(
+  handler: (req: PortalRequest, res: PortalResponse) => Promise<void> | void,
+): Handler {
+  return async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) {
+      sendJson(res, 401, { error: 'Sign in to continue' });
+      return;
+    }
+    return handler(req, res);
+  };
+}
+
+/**
+ * Middleware that requires browser-session authentication only.
+ * Rejects API token requests with 403.
+ * Use for routes that manage sensitive user data: tokens, credentials, settings.
+ */
+export function requireCookieAuth(
+  handler: (req: PortalRequest, res: PortalResponse) => Promise<void> | void,
+): Handler {
+  return async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) {
+      sendJson(res, 401, { error: 'Sign in to continue' });
+      return;
+    }
+    if (req.authViaToken) {
+      sendJson(res, 403, { error: 'This endpoint requires browser authentication, not an API token' });
+      return;
+    }
+    return handler(req, res);
+  };
+}
+
+// ── Request handler factory ───────────────────────────────────────────────────
+
+export function createRequestHandler(): (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<void> {
+  return async (rawReq: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const url = new URL(rawReq.url ?? '/', 'http://localhost');
+    const urlPath = url.pathname;
+
+    // Determine if request came over HTTPS (for cookie Secure flag)
+    const forwardedProto = String(rawReq.headers['x-forwarded-proto'] ?? '');
     const secure =
       config.cookieSecure === 'true' ||
-      (config.cookieSecure === 'auto' &&
-        ((req.socket as any).encrypted || (config.trustProxy && forwardedProto === 'https')));
-    let bodyCache: Buffer | null = null;
-    const ctx: Ctx = {
-      req,
-      res,
-      method: req.method || 'GET',
-      path: url.pathname,
-      query: url.searchParams,
-      params: {},
-      user: null,
-      ip: (config.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '',
-      secure: Boolean(secure),
-      async raw(limit = config.maxUploadBytes) {
-        if (!bodyCache) bodyCache = await readBody(req, limit);
-        return bodyCache;
-      },
-      async json() {
-        const buf = await ctx.raw(5 * 1024 * 1024);
-        if (!buf.length) return {} as any;
-        try {
-          return JSON.parse(buf.toString('utf8'));
-        } catch {
-          throw new HttpError(400, 'Request body is not valid JSON');
-        }
-      },
-    };
+      (config.cookieSecure !== 'false' &&
+        (config.trustProxy && forwardedProto === 'https'));
+
+    // Determine client IP
+    const forwardedFor =
+      config.trustProxy
+        ? String(rawReq.headers['x-forwarded-for'] ?? '').split(',')[0].trim()
+        : '';
+    const ip = forwardedFor || (rawReq.socket.remoteAddress ?? '');
+
+    // Build PortalRequest
+    const req = rawReq as PortalRequest;
+    req.params = {};
+    req.query = url.searchParams;
+    req.body = undefined;
+    req.user = null;
+    req.ip = ip;
+    req.secure = secure;
 
     try {
-      if (!ctx.path.startsWith('/api/')) {
-        if (serveStatic(ctx)) return;
+      // ── Static files (non-API paths) ─────────────────────────────────────
+      if (!urlPath.startsWith('/api/')) {
+        if (serveStatic(rawReq, res, urlPath)) return;
         sendJson(res, 404, { error: 'Not found' });
         return;
       }
-      // CSRF guard: state-changing API calls must carry the custom header that only same-origin scripts can set.
-      if (ctx.method !== 'GET' && ctx.method !== 'HEAD' && req.headers['x-requested-with'] !== 'agent-portal') {
-        throw new HttpError(403, 'Missing request header');
+
+      // ── CORS headers ──────────────────────────────────────────────────────
+      const origin = String(rawReq.headers.origin ?? '');
+      if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Vary', 'Origin');
       }
+
+      // ── OPTIONS preflight ──────────────────────────────────────────────────
+      if (rawReq.method === 'OPTIONS') {
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, Authorization');
+        res.setHeader('Access-Control-Max-Age', '86400');
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      // ── Authenticate ──────────────────────────────────────────────────────
+      const _authInfo: AuthInfo = {};
+      req.user = await _authenticator(rawReq, _authInfo);
+      if (_authInfo.tokenScopes !== undefined) req.tokenScopes = _authInfo.tokenScopes;
+      if (_authInfo.authViaToken) req.authViaToken = true;
+      if (_authInfo.tokenWorkflowId !== undefined) req.tokenWorkflowId = _authInfo.tokenWorkflowId;
+
+      // Delegate-scoped tokens may only reach the MCP endpoint — nothing on REST.
+      if (
+        req.authViaToken &&
+        req.tokenScopes?.length === 1 &&
+        req.tokenScopes[0] === 'delegate' &&
+        !urlPath.startsWith('/api/mcp')
+      ) {
+        throw new HttpError(401, 'Delegate tokens can only be used with the /api/mcp endpoint');
+      }
+
+      // ── Route matching ────────────────────────────────────────────────────
+      const method = rawReq.method ?? 'GET';
       let matched: Route | null = null;
       let methodMismatch = false;
-      for (const r of routes) {
-        const m = r.re.exec(ctx.path);
+
+      for (const route of routes) {
+        const m = route.re.exec(urlPath);
         if (!m) continue;
-        if (r.method !== ctx.method) {
+        if (route.method !== method) {
           methodMismatch = true;
           continue;
         }
-        matched = r;
-        r.keys.forEach((k, i) => (ctx.params[k] = decodeURIComponent(m[i + 1])));
+        matched = route;
+        route.keys.forEach((k, i) => {
+          req.params[k] = decodeURIComponent(m[i + 1] ?? '');
+        });
         break;
       }
-      if (!matched) throw new HttpError(methodMismatch ? 405 : 404, methodMismatch ? 'Method not allowed' : 'Not found');
-      ctx.user = authenticate(ctx);
-      if (matched.auth !== 'public' && !ctx.user) throw new HttpError(401, 'Sign in to continue');
-      if (matched.auth === 'admin' && !ctx.user?.is_admin) throw new HttpError(403, 'Only admins can do this');
-      const out = await matched.handler(ctx);
-      if (out === HANDLED || res.headersSent || res.writableEnded) return;
-      sendJson(res, 200, out === undefined ? { ok: true } : out);
-    } catch (e: any) {
-      const status = e instanceof HttpError ? e.status : 500;
-      if (status === 500) console.error(`[${new Date().toISOString()}] ${ctx.method} ${ctx.path}`, e);
-      if (!res.headersSent) sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server. Check the server log.' : e.message });
-      else res.end();
+
+      if (!matched) {
+        throw new HttpError(methodMismatch ? 405 : 404, methodMismatch ? 'Method not allowed' : 'Not found');
+      }
+
+      // ── CSRF guard ─────────────────────────────────────────────────────────
+      // State-changing API calls must carry the custom header that only same-origin scripts can set.
+      // SSE endpoints are read-only; GET/HEAD are safe; bypassCsrf routes use Bearer tokens (CSRF-safe).
+      if (
+        !matched.isSSE &&
+        !matched.bypassCsrf &&
+        method !== 'GET' &&
+        method !== 'HEAD' &&
+        rawReq.headers['x-requested-with'] !== 'agent-portal'
+      ) {
+        throw new HttpError(403, 'Missing request header');
+      }
+
+      // ── Body parsing (JSON) ───────────────────────────────────────────────
+      if (!matched.isSSE && !matched.bypassCsrf && method !== 'GET' && method !== 'HEAD') {
+        const ct = String(rawReq.headers['content-type'] ?? '');
+        // Multipart uploads can be up to maxUploadBytes; JSON is capped at 5 MB
+        const bodyLimit = ct.includes('multipart/form-data')
+          ? config.maxUploadBytes
+          : 5 * 1024 * 1024;
+        const raw = await readBody(rawReq, bodyLimit);
+        req.rawBody = raw;
+        if (raw.length > 0) {
+          if (ct.includes('application/json')) {
+            try {
+              req.body = JSON.parse(raw.toString('utf8'));
+            } catch {
+              throw new HttpError(400, 'Request body is not valid JSON');
+            }
+          }
+        }
+        if (req.body === undefined) req.body = {};
+      }
+
+      // ── Per-request write drain ───────────────────────────────────────────
+      // Wrap res.end so tracked writes settle BEFORE the response body is sent.
+      // Lambda Web Adapter may freeze the process as soon as res.end() writes its
+      // final bytes; draining first ensures audit / updateLastUsed writes complete.
+      // SSE routes are excluded: they keep the connection alive and are not frozen.
+      if (!matched.isSSE) {
+        const origEnd = res.end.bind(res) as typeof res.end;
+        let endCalled = false;
+        // @ts-ignore — intentional override of res.end signature
+        res.end = (...args: Parameters<typeof origEnd>) => {
+          if (endCalled) return origEnd(...args);
+          endCalled = true;
+          void _drainRequestWrites(500).then(
+            () => origEnd(...args),
+            () => origEnd(...args),
+          );
+          return res;
+        };
+      }
+
+      // ── Pre-request hook (e.g. settings snapshot freshness check) ──────────
+      if (_preRequestHook) {
+        await _preRequestHook();
+      }
+
+      await _requestWriteStorage.run(new Set<Promise<unknown>>(), async () => {
+        await matched!.handler(req, res);
+      });
+
+      // Safety net: drain any writes registered outside the ALS context (global set).
+      await drainBackgroundWrites(500);
+    } catch (err: unknown) {
+      const isHttp = err instanceof HttpError;
+      const status = isHttp ? err.status : 500;
+      const message = isHttp
+        ? err.message
+        : 'Something went wrong on the server. Check the server log.';
+      if (!isHttp) {
+        console.error(`[${new Date().toISOString()}] ${rawReq.method} ${rawReq.url}`, err);
+      }
+      if (!res.headersSent) {
+        sendJson(res, status, { error: message });
+      } else if (!res.writableEnded) {
+        res.end();
+      }
     }
   };
 }
 
-/** Server-sent events stream. */
-export function openSse(ctx: Ctx): { send: (event: string, data: unknown) => void; close: () => void; onClose: (fn: () => void) => void } {
-  const { res, req } = ctx;
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-store',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
+// ── WebSocket upgrade hook ────────────────────────────────────────────────────
+
+type WsUpgradeHandler = (
+  req: import('node:http').IncomingMessage,
+  socket: import('node:stream').Duplex,
+  head: Buffer,
+) => void;
+
+let _wsUpgradeHandler: WsUpgradeHandler | null = null;
+
+/**
+ * Register a handler for WebSocket upgrade requests.
+ * Only one handler can be registered; subsequent calls overwrite the previous one.
+ */
+export function setWsUpgradeHandler(fn: WsUpgradeHandler): void {
+  _wsUpgradeHandler = fn;
+}
+
+// ── HTTP server factory ───────────────────────────────────────────────────────
+
+export function createServer(): http.Server {
+  const handler = createRequestHandler();
+  // Behind CloudFront the Lambda Function URL is public, so only requests carrying CloudFront's
+  // secret header are served (/api/health stays open for the Lambda readiness check).
+  const originSecret = process.env.PORTAL_ORIGIN_SECRET;
+  const server = http.createServer((req, res) => {
+    // Lambda freezes once the response ends, so send queued live-update events first.
+    if (realtimeEnabled()) {
+      const end = res.end.bind(res) as (...a: unknown[]) => http.ServerResponse;
+      res.end = ((...a: unknown[]) => { void flushRealtime().finally(() => end(...a)); return res; }) as typeof res.end;
+    }
+    // EventBridge Scheduler events (forwarded by Lambda Web Adapter) carry their own secret in the body.
+    if (req.url === SCHEDULED_EVENT_PATH) {
+      void handleScheduledEvent(req, res, originSecret);
+      return;
+    }
+    if (originSecret && !req.url?.startsWith('/api/health')) {
+      const a = Buffer.from(String(req.headers['x-portal-origin'] ?? ''));
+      const b = Buffer.from(originSecret);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        sendJson(res, 403, { error: 'Forbidden' });
+        return;
+      }
+    }
+    handler(req, res).catch((err: unknown) => {
+      console.error('[http] Unhandled error in request handler', err);
+      if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
+    });
   });
-  res.write(': connected\n\n');
-  const closers: (() => void)[] = [];
-  const timer = setInterval(() => res.write(': ping\n\n'), 25_000);
-  const close = () => {
-    clearInterval(timer);
-    for (const fn of closers.splice(0)) fn();
-    if (!res.writableEnded) res.end();
-  };
-  req.on('close', close);
-  return {
-    send(event, data) {
-      if (res.writableEnded) return;
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    },
-    close,
-    onClose(fn) {
-      closers.push(fn);
-    },
-  };
+  server.requestTimeout = 0; // uploads and SSE streams can be long
+  server.headersTimeout = 60_000;
+
+  // WebSocket upgrade events (terminal, future live features)
+  server.on('upgrade', (req, socket, head) => {
+    if (_wsUpgradeHandler) {
+      _wsUpgradeHandler(req, socket, head);
+    } else {
+      socket.destroy();
+    }
+  });
+
+  return server;
 }

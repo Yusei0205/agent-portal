@@ -1,0 +1,53 @@
+{
+  "version": "1",
+  "entries": [
+    {
+      "module": "workflows",
+      "part": "backend",
+      "file": "test/workflows.test.ts",
+      "testName": "__process_timeout__",
+      "reason": "test/workflows.test.ts: modified workflow tests include slow agent operations that exceed the runner timeout; process killed after 3 minutes",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "attachments",
+      "part": "backend",
+      "file": "test/ai-attachments.test.ts",
+      "testName": "__process_timeout__",
+      "reason": "test/ai-attachments.test.ts: generate-based tests spin up a server that keeps the event loop alive past the runner timeout",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "reviews",
+      "part": "ui",
+      "sectionId": "reviews",
+      "testName": "Creating a review then opening it navigates to reviews/code/:rid",
+      "reason": "Review detail navigation route does not match expected /reviews/code/:rid",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "testing-module",
+      "part": "ui",
+      "sectionId": "testing-module",
+      "testName": "Async generate: dialog closes, indicator appears, done clears it and shows toast",
+      "reason": "Async generate flow: dialog-close and indicator-appear state transitions do not fire in the expected order",
+      "addedAt": "2026-10-31"
+    },
+    {
+      "module": "dashboard",
+      "part": "ui",
+      "sectionId": "dashboard",
+      "testName": "Agent Network single node sits at SVG centre, not at top-left corner",
+      "reason": "Agent Network panel was redesigned from SVG radial graph to HTML agent cards; .db-network-svg no longer exists",
+      "addedAt": "2026-11-01"
+    },
+    {
+      "module": "dashboard",
+      "part": "ui",
+      "sectionId": "dashboard",
+      "testName": "Zoom toolbar visible; zoom in and reset view work without errors",
+      "reason": "Zoom/pan toolbar was removed as part of the Agent Network redesign to card-based layout",
+      "addedAt": "2026-11-01"
+    }
+  ]
+}

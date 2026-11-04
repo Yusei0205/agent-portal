@@ -3,3 +3,29 @@ dist/
 data/
 .env
 *.log
+server.out.log
+server.err.log
+test/ui/screenshots/
+
+# Test affected — local pass record (never commit; content hashes are machine-local)
+.test-pass-record.json
+
+# Local test run artifacts
+data-playwright-test/
+data-screenshot-test/
+.playwright-mcp/
+test-*.txt
+
+# agent-runner build outputs and local shared copies (populated by Dockerfile COPY)
+agent-runner/node_modules/
+agent-runner/dist/
+agent-runner/shared/
+kiro-runner/shared/
+
+# infra CDK outputs and dependencies
+infra/node_modules/
+infra/cdk.out/
+# Spike C generated config (deployment-specific, not for commit)
+infra/scripts/spike-c-config.json
+# staged runner sources for the harness image build (infra/scripts/deploy-harness.mjs)
+infra/.harness-src/

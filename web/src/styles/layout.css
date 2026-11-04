@@ -1,0 +1,843 @@
+/* ── Shell grid ──────────────────────────────────────── */
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w, 236px) 1fr;
+  min-height: 100vh;
+}
+.shell.rail-collapsed {
+  grid-template-columns: 56px 1fr;
+}
+
+/* Right column wrapper — flex column, full viewport height */
+.shell-right {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ── Rail ────────────────────────────────────────────── */
+.rail {
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 6px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: hidden; /* only .rail-nav-wrap scrolls */
+  overflow-x: hidden;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 0.97rem;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 2px 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.brand-icon {
+  flex-shrink: 0;
+}
+
+/* ── Collapsed rail ─────────────────────────────────── */
+.rail-collapsed .brand span,
+.rail-collapsed .rail-link span,
+.rail-collapsed .rail-foot-name,
+.rail-collapsed .rail-collapse-btn span,
+.rail-collapsed .rail-count { display: none; }
+
+/* Tighten the rail container itself so all icons fit at 800 px viewport height.
+   Reduces padding from 8px→6px and the gap between flex children from 6px→4px.
+   Every nav link still meets the 28 px minimum hit-target requirement. */
+.rail-collapsed .rail {
+  padding: 6px;
+  gap: 4px;
+}
+
+/* Centre icons when collapsed */
+.rail-collapsed .brand {
+  justify-content: center;
+  padding: 2px;
+}
+/* 6 px vertical padding + 16 px icon = 28 px hit target (minimum). */
+.rail-collapsed .rail-link {
+  justify-content: center;
+  padding: 6px 0;
+  min-height: 28px;
+  gap: 0;
+}
+/* Thinner gap around the section-divider line. */
+.rail-collapsed .rail-section-divider {
+  margin: 2px 4px;
+}
+/* Tighter inter-section spacing in collapsed mode. */
+.rail-collapsed .rail-section + .rail-section {
+  margin-top: 2px;
+}
+/* No bottom padding inside the scrollable nav region when collapsed. */
+.rail-collapsed .rail-nav-wrap nav {
+  padding-bottom: 0;
+}
+/* 7 px padding + 15 px icon = 29 px — still comfortable. */
+.rail-collapsed .rail-collapse-btn {
+  justify-content: center;
+  padding: 7px 0;
+  min-height: 28px;
+}
+/* Reduce footer gap and top padding so the footer stays compact. */
+.rail-collapsed .rail-foot {
+  gap: 6px;
+  padding-top: 6px;
+}
+.rail-collapsed .rail-user {
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+}
+/* 3 px padding + 22 px avatar = 28 px hit target. */
+.rail-collapsed .rail-user-name {
+  padding: 3px;
+  justify-content: center;
+}
+.rail-collapsed .rail-user-name span,
+.rail-collapsed .rail-user-name .rail-foot-name {
+  display: none;
+}
+
+/* ── Rail resize separator ──────────────────────────── */
+.rail-sep {
+  position: fixed;
+  top: 0;
+  left: calc(var(--rail-w, 236px) - 2px);
+  width: 4px;
+  height: 100vh;
+  cursor: col-resize;
+  z-index: 50;
+  background: transparent;
+  transition: background 80ms;
+}
+.rail-sep:hover,
+.rail-sep:focus-visible {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  outline: none;
+}
+
+/* ── Project picker ──────────────────────────────────── */
+.project-picker-wrap {
+  flex-shrink: 0;
+}
+.project-picker-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
+}
+.project-picker-card:hover {
+  border-color: var(--accent);
+}
+.project-picker-card.no-project {
+  color: var(--ink-3);
+  border-style: dashed;
+}
+.project-picker-card-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: 0.67rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.project-picker-card-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-picker-card-chevron {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+
+/* Collapsed avatar button */
+.project-picker-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+  cursor: pointer;
+  margin: 0 auto;
+}
+.project-picker-avatar:hover { border-color: var(--accent); color: var(--ink); }
+.project-picker-avatar.has-project {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.project-picker-initials {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Project picker popover (rendered via portal into document.body) */
+.project-picker-popover {
+  position: fixed;
+  min-width: 220px;
+  max-width: 300px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow), 0 8px 32px rgba(0,0,0,0.15);
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+}
+.picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 499;
+  background: rgba(0,0,0,0.04);
+}
+.picker-header {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid var(--line-2);
+}
+.picker-search-wrap {
+  padding: 8px;
+  border-bottom: 1px solid var(--line-2);
+}
+.picker-search {
+  font: inherit;
+  font-size: 0.83rem;
+  width: 100%;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 9px;
+  color: var(--ink);
+  min-height: 30px;
+}
+.picker-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.picker-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+.picker-empty {
+  padding: 12px;
+  font-size: 0.83rem;
+  color: var(--ink-3);
+  text-align: center;
+}
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 530;
+  text-align: left;
+  cursor: pointer;
+}
+.picker-item:hover { background: color-mix(in srgb, var(--accent-wash) 60%, transparent); color: var(--ink); }
+.picker-item.is-active { background: var(--accent-wash); color: var(--link); font-weight: 600; }
+.picker-item-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.67rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.picker-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-item-check { color: var(--accent); margin-left: auto; }
+.picker-footer {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-top: 1px solid var(--line-2);
+}
+.picker-footer-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--ink-3);
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 530;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+}
+.picker-footer-link:hover { color: var(--ink); background: color-mix(in srgb, var(--panel) 60%, transparent); }
+
+/* ── Nav sections ────────────────────────────────────── */
+/* Outer wrapper: provides the flex: 1 slot and hosts fade pseudo-elements */
+.rail-nav-outer {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+/* Fade overlays — shown via data-can-up/down set by JS */
+.rail-nav-outer::before,
+.rail-nav-outer::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.rail-nav-outer::before {
+  top: 0;
+  background: linear-gradient(var(--rail), transparent);
+}
+.rail-nav-outer::after {
+  bottom: 0;
+  background: linear-gradient(transparent, var(--rail));
+}
+.rail-nav-outer[data-can-up="1"]::before  { opacity: 1; }
+.rail-nav-outer[data-can-down="1"]::after { opacity: 1; }
+
+/* Inner scroll region */
+.rail-nav-wrap {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.rail-nav-wrap nav { padding-bottom: 4px; }
+
+.rail-section { display: grid; gap: 1px; }
+.rail-section + .rail-section { margin-top: 4px; }
+.rail-section-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 0 9px 2px;
+  white-space: nowrap;
+}
+/* Collapsed: section label becomes a thin divider */
+.rail-section-divider {
+  height: 1px;
+  background: var(--line-2);
+  margin: 5px 4px;
+}
+.rail-section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+}
+
+/* Nav links */
+.rail-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: var(--radius);
+  color: var(--ink-2);
+  text-decoration: none;
+  font-weight: 530;
+  font-size: 0.83rem;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+}
+.rail-link:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.rail-link.is-active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.rail-link.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Inbox count badge */
+.rail-count {
+  margin-left: auto;
+  background: var(--warn-wash);
+  color: var(--warn);
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Collapsed inbox dot */
+.rail-badge-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex-shrink: 0;
+}
+
+/* Rail avatar initials */
+.rail-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Rail collapse toggle */
+.rail-collapse-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+}
+.rail-collapse-btn:hover { color: var(--ink); }
+
+/* Rail footer */
+.rail-foot {
+  margin-top: auto;
+  flex-shrink: 0;
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.rail-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.rail-user-name {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--ink-2);
+  text-decoration: none;
+  font-weight: 560;
+  font-size: 0.84rem;
+  padding: 4px 6px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rail-foot-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Drawer backdrop (mobile) ────────────────────────── */
+.drawer-backdrop {
+  display: none;
+}
+@media (max-width: 900px) {
+  .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(2px);
+  }
+}
+
+/* ── Main area ───────────────────────────────────────── */
+.main {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  outline: none;
+  overflow-y: auto; /* pages scroll within the content column */
+}
+.main.full-height {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* sessions shell fills the remaining space */
+}
+
+/* ── Page padding ────────────────────────────────────── */
+.page {
+  padding: 20px 24px 48px;
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  /* No max-width cap — pages fill the available content-area width on all screen sizes. */
+}
+/* .page.wide: no cap — kept for backwards compatibility in case it is added to JSX later. */
+.page.narrow { max-width: 760px; }
+.page-head,
+.page-header {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+/* Standard page header (components/PageHeader.jsx): title + description left, actions right. */
+.page-head-text { display: grid; gap: 4px; min-width: 0; }
+.page-head-text h1 { margin: 0; }
+.page-head-text p.muted { margin: 0; font-size: 0.88rem; }
+.page-head > .page-actions { align-self: flex-start; }
+/* Header for a tab inside a page: description left, that tab's actions right. */
+.section-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.section-head p.muted { margin: 0; font-size: 0.88rem; max-width: 80ch; }
+
+.page-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* Long description paragraphs under page headings: keep a comfortable reading width
+   without constraining the entire page. */
+.page-head p.muted,
+.page-header p.muted {
+  max-width: 80ch;
+}
+
+/* ── Three-panel sessions layout ─────────────────────── */
+.sessions-shell {
+  display: grid;
+  /* minmax(0, 1fr) lets the detail panel shrink below its content width instead of overflowing */
+  grid-template-columns: 280px minmax(0, 1fr);
+  height: 100%; /* parent flex provides the 100vh space */
+  overflow: hidden;
+}
+/* With a session open the shell still has two children (list + detail);
+   the detail panel takes all remaining width. */
+.sessions-shell.with-workspace {
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+.sessions-list-panel {
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sessions-detail-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sessions-workspace-panel {
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Topbar (mobile) ─────────────────────────────────── */
+.topbar { display: none; }
+
+/* ── Panels / cards ──────────────────────────────────── */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+/* ── Spacing helpers ─────────────────────────────────── */
+.stack    { display: grid; gap: 12px; }
+.stack-lg { display: grid; gap: 18px; }
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.row.tight { gap: 6px; }
+.row.wrap  { flex-wrap: wrap; }
+.row.between { justify-content: space-between; }
+.row > .field { flex: 1; }
+.push { margin-left: auto; }
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.span-2 { grid-column: 1 / -1; }
+
+/* ── Responsive ──────────────────────────────────────── */
+/* Sessions back button: hidden on desktop, shown in 900px breakpoint below */
+.sessions-back-btn { display: none; }
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  /* .shell.rail-collapsed uses grid-template-columns:56px 1fr with specificity
+     0,2,0 which beats the .shell rule above (0,1,0).  Override explicitly so
+     the collapsed-rail state doesn't shrink shell-right to 56 px on mobile. */
+  .shell.rail-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .rail {
+    display: none;
+  }
+  .shell.nav-open .rail {
+    display: flex;
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(var(--rail-w, 236px), 85vw);
+    z-index: 100;
+  }
+  /* Resize separator hidden in mobile drawer */
+  .shell.nav-open .rail-sep { display: none; }
+
+  /* ── Mobile drawer: always show expanded layout ────────────────────────── */
+  /* Restore elements that rail-collapsed hides via display:none */
+  .shell.nav-open.rail-collapsed .brand > span,
+  .shell.nav-open.rail-collapsed .rail-link > span,
+  .shell.nav-open.rail-collapsed .rail-count,
+  .shell.nav-open.rail-collapsed .rail-foot-name { display: inline; }
+  /* Avatar span needs its own display:flex for internal centering */
+  .shell.nav-open.rail-collapsed .rail-avatar { display: flex; }
+
+  /* Hide the collapse toggle — it does nothing on mobile */
+  .shell.nav-open .rail-collapse-btn { display: none; }
+
+  /* Restore expanded padding / gap on the rail container */
+  .shell.nav-open.rail-collapsed .rail { padding: 8px 6px; gap: 6px; }
+
+  /* Restore expanded brand row */
+  .shell.nav-open.rail-collapsed .brand { justify-content: flex-start; padding: 2px 6px; }
+
+  /* Restore expanded nav link layout */
+  .shell.nav-open.rail-collapsed .rail-link {
+    justify-content: flex-start;
+    padding: 5px 9px;
+    gap: 8px;
+    min-height: unset;
+  }
+
+  /* Restore section divider margin (section labels are rendered by JSX in expanded mode) */
+  .shell.nav-open.rail-collapsed .rail-section-divider { margin: 5px 4px; }
+  .shell.nav-open.rail-collapsed .rail-section + .rail-section { margin-top: 4px; }
+  .shell.nav-open.rail-collapsed .rail-nav-wrap nav { padding-bottom: 4px; }
+
+  /* Restore footer layout */
+  .shell.nav-open.rail-collapsed .rail-foot { gap: 8px; padding-top: 10px; }
+  .shell.nav-open.rail-collapsed .rail-user {
+    justify-content: space-between;
+    flex-direction: row;
+    gap: 0;
+  }
+  .shell.nav-open.rail-collapsed .rail-user-name { padding: 4px 6px; justify-content: flex-start; }
+  /* shell-right fills the single column; allow natural page scroll on non-sessions pages */
+  .shell-right {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  .main {
+    overflow-y: visible; /* body scroll on mobile */
+  }
+  /* Sessions page only: pin the shell to the visible viewport so the composer stays at the
+     bottom. :has() is supported in Chrome 105+, Safari 15.4+, Firefox 121+.
+     Overrides the .shell-right rule above (higher specificity: 3 class selectors vs 1). */
+  .shell-right:has(.main.full-height) {
+    height: 100vh;    /* fallback for browsers without dvh support */
+    height: 100dvh;   /* dynamic viewport height — excludes browser chrome on mobile */
+    min-height: 0;
+    overflow: hidden;
+  }
+  /* Remove the 88 px magic offset; rely on flex:1 inside the fixed-height shell-right. */
+  .main.full-height {
+    flex: 1;          /* fills the remaining height after topbar and app-header */
+    min-height: 0;
+    overflow: hidden;
+    height: auto;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--rail);
+    flex-shrink: 0; /* topbar must not shrink in the fixed-height sessions layout */
+  }
+  .topbar-title {
+    font-weight: 700;
+    font-size: 0.94rem;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Hide resize separator on mobile */
+  .rail-sep { display: none; }
+  /* Sessions: single column, one panel at a time.
+     minmax(0,1fr) prevents the track from expanding to the IDE body's
+     min-content size (editor+sidebar fixed widths).
+     Both variants (.with-workspace has specificity 0,2,0 on desktop) need to
+     be covered so the mobile single-column layout always wins. */
+  .sessions-shell,
+  .sessions-shell.with-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* No session selected → show list only */
+  .sessions-shell:not(.with-workspace) .sessions-detail-panel {
+    display: none;
+  }
+  /* Session selected → show detail only */
+  .sessions-shell.with-workspace .sessions-list-panel {
+    display: none;
+  }
+  .sessions-list-panel {
+    border-right: none;
+  }
+  /* Back button visible on mobile */
+  .sessions-back-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 14px;
+    border: none;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 0.84rem;
+    font-weight: 530;
+    text-align: left;
+    cursor: pointer;
+    flex-shrink: 0;
+    min-height: 44px;
+    width: 100%;
+  }
+  .sessions-back-btn:hover {
+    color: var(--ink);
+    background: var(--canvas);
+  }
+}
+@media (max-width: 640px) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Responsive global helpers ───────────────────────── */
+@media (max-width: 768px) {
+  /* Reduce page padding on small screens */
+  .page {
+    padding: 12px 12px 32px;
+  }
+  /* Stack page headers on small screens */
+  .page-head,
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* A page lays its children out with a gap, so a tab bar, a tab panel or a header must not add its own space on
+   top of it (that stacked to 50px between the tabs and the first button). */
+.page > .tab-bar,
+.page > .tab-nav { margin-bottom: 0; }
+.page > .tab-panel { padding-top: 0; }
+.page > .page-head,
+.page > .page-header { margin-bottom: 0; }
+.tab-panel > :first-child,
+.connect-panel > :first-child { margin-top: 0; }

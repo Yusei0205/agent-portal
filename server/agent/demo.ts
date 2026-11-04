@@ -1,399 +1,258 @@
 /**
- * Simulated agent. Emits the same message shapes as the Claude Agent SDK (system init,
- * assistant/user messages, subagent messages tagged with parent_tool_use_id, result) and
- * goes through the same approval and AskUserQuestion callbacks, so the whole portal can be
- * tested without an API key. File reads and searches are real; writes happen only after approval.
+ * Demo engine — simulates an agent run without calling any real AI.
+ *
+ * Produces a realistic sequence of events (thinking, file reads, a file write,
+ * a bash command, then completion) in 3-5 seconds total. All tool calls go
+ * through the standard guardrails check. Cost is always $0.00.
  */
+
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
-import type { ContentBlock, DemoContext, ProviderRunOptions, SdkMessage } from './types.ts';
-import { keywords, reviewDiff } from './heuristics.ts';
-import { estimateCost, tierOf } from './pricing.ts';
 import { sleep } from '../util.ts';
+import { evaluateCommand } from '../guardrails.ts';
+import type { RunContext } from './types.ts';
+import { createChildSession } from '../delegation.ts';
+import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
-const id = (p: string) => `${p}_${randomBytes(8).toString('hex')}`;
+// ── Public entry point ────────────────────────────────────────────────────────
 
-function modelId(alias: string): string {
-  const t = tierOf(alias);
-  return `claude-${t}-5-5`;
-}
+/**
+ * Run the demo scenario. Emits events via ctx.emit() and respects cancellation.
+ * Returns the final result text.
+ */
+export async function runDemo(ctx: RunContext): Promise<string> {
+  const { run, emit, awaitInput } = ctx;
+  const goal = run.goal;
+  const shortGoal = goal.replace(/\s+/g, ' ').slice(0, 80);
 
-interface Totals {
-  input: number;
-  output: number;
-  cost: number;
-  turns: number;
-}
-
-export async function* demoRun(opts: ProviderRunOptions): AsyncIterable<SdkMessage> {
-  if (!opts.demo) throw new Error('Demo context missing');
-  const d: DemoContext = opts.demo;
-  const session = opts.resume || id('demo-session');
-  const signal = opts.abort.signal;
-  const totals: Totals = { input: 0, output: 0, cost: 0, turns: 0 };
-  const mainModel = modelId(opts.model);
-  const started = Date.now();
-
-  const pause = async (ms: number) => {
-    if (d.speed > 0) await sleep(ms * d.speed);
-    if (signal.aborted) throw new DOMException('Run stopped', 'AbortError');
+  const pause = async (ms: number): Promise<void> => {
+    if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
+    await sleep(ms);
+    if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
   };
 
-  const assistant = (parent: string | null, content: ContentBlock[], model = mainModel): SdkMessage => {
-    const usage = {
-      input_tokens: 900 + Math.floor(Math.random() * 2600),
-      output_tokens: 80 + Math.floor(Math.random() * 500),
-      cache_read_input_tokens: parent ? 0 : 1800,
-    };
-    totals.input += usage.input_tokens;
-    totals.output += usage.output_tokens;
-    totals.cost += estimateCost(model, usage);
-    totals.turns++;
-    return {
-      type: 'assistant',
-      uuid: id('msg'),
-      session_id: session,
-      parent_tool_use_id: parent,
-      message: { id: id('msg'), role: 'assistant', model, content, usage },
-    };
-  };
-
-  const toolResult = (parent: string | null, toolUseId: string, content: string, isError = false): SdkMessage => ({
-    type: 'user',
-    uuid: id('msg'),
-    session_id: session,
-    parent_tool_use_id: parent,
-    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }] },
-  });
-
-  /** Ask for permission the way Claude Code would, then run the tool. */
-  async function* tool(
-    parent: string | null,
-    name: string,
-    input: Record<string, unknown>,
-    exec: (input: Record<string, unknown>) => string | Promise<string>,
-    needsPermission: boolean,
-    model = mainModel,
-  ): AsyncGenerator<SdkMessage, { ok: boolean; output: string; input: Record<string, unknown> }> {
-    const toolId = id('toolu');
-    yield assistant(parent, [{ type: 'tool_use', id: toolId, name, input }], model);
-    await pause(250);
-    const blocked = opts.guard?.(name, input);
-    if (blocked) {
-      yield toolResult(parent, toolId, blocked, true);
-      return { ok: false, output: blocked, input };
-    }
-    let finalInput = input;
-    if (needsPermission) {
-      const decision = await opts.canUseTool(name, input, { signal, toolUseID: toolId });
-      if (decision.behavior === 'deny') {
-        yield toolResult(parent, toolId, decision.message || 'The user denied this action.', true);
-        return { ok: false, output: decision.message, input };
-      }
-      finalInput = decision.updatedInput ?? input;
-    }
-    try {
-      const output = await exec(finalInput);
-      yield toolResult(parent, toolId, output);
+  // ── Delegation simulation (F7) ────────────────────────────────────────────
+  // When the goal contains "delegate:", create one child session to simulate
+  // what an agent would do with the delegate_session tool.
+  const delegationMatch = goal.match(/delegate:\s*(.+?)(?:\n|$)/i);
+  if (delegationMatch && run.credentialOwnerId) {
+    const delegationSettings = await getDelegationSettingsRepository().get();
+    if (delegationSettings.enabled) {
+      const delegatedTask = delegationMatch[1].trim();
+      emit('assistant-text', { text: `I'll delegate the sub-task to a child session: "${delegatedTask}"` });
       await pause(200);
-      return { ok: true, output, input: finalInput };
-    } catch (e: any) {
-      yield toolResult(parent, toolId, `Error: ${e?.message ?? e}`, true);
-      return { ok: false, output: String(e?.message ?? e), input: finalInput };
+
+      try {
+        const child = await createChildSession(run.workflowId, run.credentialOwnerId, delegatedTask, {
+          title: `Delegated: ${delegatedTask.slice(0, 50)}`,
+        });
+        const childId = String(child.id);
+        const childTitle = String(child.title || delegatedTask.slice(0, 60));
+        emit('tool-start', { toolName: 'delegate_session', toolInput: JSON.stringify({ task: delegatedTask }) });
+        await pause(100);
+        emit('tool-end', { toolName: 'delegate_session', output: JSON.stringify({ childWorkflowId: childId, title: childTitle, status: 'started' }) });
+        await pause(200);
+        emit('assistant-text', { text: `Child session started (ID: ${childId}). I'll wait for it to finish.` });
+      } catch (e: unknown) {
+        const msg = (e as Error)?.message ?? String(e);
+        emit('assistant-text', { text: `Could not delegate: ${msg}` });
+      }
+      await pause(300);
     }
   }
 
-  const grep = (query: string, limit = 6) => {
-    const hits = d.search(query, limit);
-    if (!hits.length) return 'No matches found.';
-    return hits.map((h) => `${h.file}:${h.line}: ${h.snippet}`).join('\n');
-  };
+  // 1. Thinking text
+  emit('assistant-text', { text: `I'll start by understanding the goal: "${shortGoal}". Let me look at the project structure first.` });
+  await pause(400);
 
-  const readRel = (rel: string, maxChars = 1800) => {
-    const abs = path.resolve(d.projectDir, rel);
-    if (!abs.startsWith(path.resolve(d.projectDir))) throw new Error('Path is outside the project');
-    if (!fs.existsSync(abs)) throw new Error(`File does not exist: ${rel}`);
-    const text = fs.readFileSync(abs, 'utf8');
-    return text.length > maxChars ? text.slice(0, maxChars) + '\n…' : text;
-  };
+  // 2. Read CLAUDE.md
+  const claudeMdPath = path.join(run.workDir, 'CLAUDE.md');
+  const claudeContent = readFileSafe(claudeMdPath, '(no CLAUDE.md found)');
+  const readToolInput = JSON.stringify({ file_path: 'CLAUDE.md', limit: 50 });
 
-  yield {
-    type: 'system',
-    subtype: 'init',
-    session_id: session,
-    model: mainModel,
-    cwd: opts.cwd,
-    permissionMode: opts.permissionMode,
-    tools: opts.tools ?? ['Agent', 'AskUserQuestion', 'Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Skill', 'TodoWrite', 'Write'],
-    agents: d.agents.map((a) => a.name),
-    skills: d.skills,
-    demo: true,
-  };
+  const readDecision = evaluateCommand(
+    { command: 'Read CLAUDE.md', category: 'read' },
+    run.permissions,
+    run.trusted,
+  );
+  if (readDecision.action === 'block') {
+    emit('tool-blocked', { toolName: 'Read', reason: readDecision.reason });
+  } else {
+    emit('tool-start', { toolName: 'Read', toolInput: readToolInput });
+    await pause(300);
+    emit('tool-end', { toolName: 'Read', output: claudeContent.slice(0, 500) });
+  }
+
+  // 3. Read decisions.md
+  const decisionsPath = path.join(run.workDir, 'docs', 'decisions.md');
+  const decisionsContent = readFileSafe(decisionsPath, '(empty)');
+  emit('tool-start', { toolName: 'Read', toolInput: JSON.stringify({ file_path: 'docs/decisions.md' }) });
+  await pause(200);
+  emit('tool-end', { toolName: 'Read', output: decisionsContent.slice(0, 300) });
+
+  await pause(300);
+  emit('assistant-text', { text: `I understand the project context. Now I'll work on: ${shortGoal}` });
+  await pause(400);
+
+  // 4. A bash command (read-only: ls)
+  const lsCommand = 'ls -la';
+  const lsInput = JSON.stringify({ command: lsCommand });
+  const lsDecision = evaluateCommand(
+    { command: lsCommand, category: 'bash' },
+    run.permissions,
+    run.trusted,
+  );
+
+  if (lsDecision.action === 'block') {
+    emit('tool-blocked', { toolName: 'Bash', toolInput: lsInput, reason: lsDecision.reason });
+  } else if (lsDecision.action === 'ask') {
+    // Request approval
+    emit('approval-request', {
+      toolName: 'Bash',
+      toolInput: lsInput,
+      reason: 'This command will list the working directory.',
+    });
+    const resp = await awaitInput('Bash', { command: JSON.parse(lsInput).command });
+    emit('approval-response', { toolName: 'Bash', decision: resp.decision });
+    if (resp.decision === 'allow') {
+      emit('tool-start', { toolName: 'Bash', toolInput: lsInput });
+      await pause(300);
+      emit('tool-end', { toolName: 'Bash', output: listWorkDir(run.workDir) });
+    }
+  } else {
+    emit('tool-start', { toolName: 'Bash', toolInput: lsInput });
+    await pause(300);
+    emit('tool-end', { toolName: 'Bash', output: listWorkDir(run.workDir) });
+  }
+
+  await pause(400);
+
+  // 5. Write a plan file
+  const planContent = buildPlanContent(goal);
+  const planRelPath = 'AGENT_PLAN.md';
+  const planAbsPath = path.join(run.workDir, planRelPath);
+  const writeInput = JSON.stringify({ file_path: planRelPath, content: planContent });
+
+  const writeDecision = evaluateCommand(
+    { command: `Write ${planRelPath}`, category: 'write' },
+    run.permissions,
+    run.trusted,
+  );
+
+  let wroteFile = false;
+  if (writeDecision.action === 'block') {
+    emit('tool-blocked', { toolName: 'Write', toolInput: writeInput, reason: writeDecision.reason });
+  } else if (writeDecision.action === 'ask') {
+    emit('approval-request', {
+      toolName: 'Write',
+      toolInput: writeInput,
+      reason: `Write AGENT_PLAN.md with the action plan.`,
+    });
+    const resp = await awaitInput('Write', { file_path: planRelPath, content: planContent });
+    emit('approval-response', { toolName: 'Write', decision: resp.decision });
+    if (resp.decision === 'allow') {
+      writeFileSafe(planAbsPath, planContent);
+      emit('tool-start', { toolName: 'Write', toolInput: writeInput });
+      await pause(350);
+      emit('tool-end', { toolName: 'Write', output: `File written: ${planRelPath}` });
+      wroteFile = true;
+    }
+  } else {
+    writeFileSafe(planAbsPath, planContent);
+    emit('tool-start', { toolName: 'Write', toolInput: writeInput });
+    await pause(350);
+    emit('tool-end', { toolName: 'Write', output: `File written: ${planRelPath}` });
+    wroteFile = true;
+  }
+
   await pause(300);
 
-  let finalText: string;
-  if (d.kind === 'review') {
-    finalText = yield* reviewScenario();
-  } else {
-    finalText = yield* workScenario();
+  // 6. Final summary
+  const summary = wroteFile
+    ? `Done. I analysed the goal and wrote an action plan to \`${planRelPath}\`.\n\n**Goal:** ${shortGoal}\n\n**Plan written.** Review \`AGENT_PLAN.md\` in the Changes tab and push when ready.`
+    : `Done. I analysed the goal: "${shortGoal}".\n\nI could not write the plan file (write not approved). Here is what I would do:\n\n${planContent}`;
+
+  // For code review workflows, emit a parseable findings block so that
+  // review-lifecycle.ts can extract at least one finding and verify the
+  // pipeline works end-to-end. Identified by the explicit workflow kind field
+  // (set by review.ts for both initial runs and re-runs) rather than goal-string
+  // sniffing, which missed the re-run goal prefix.
+  const isReviewRun = run.kind === 'review';
+  if (isReviewRun) {
+    const findingsBlock = JSON.stringify([{
+      file: 'src/demo-placeholder.ts',
+      line: 1,
+      severity: 'info',
+      title: 'Demo review placeholder',
+      body: 'Placeholder finding from the demo engine. No real code analysis was performed. Switch to a real model provider for actual code review.',
+      confidence: 0.5,
+    }]);
+    emit('assistant-text', {
+      text: `\n## Review Findings\n\n\`\`\`json\n${findingsBlock}\n\`\`\`\n`,
+      input_tokens: 0,
+      output_tokens: 0,
+    });
+    await pause(100);
   }
 
-  yield assistant(null, [{ type: 'text', text: finalText }]);
-  yield {
-    type: 'result',
-    subtype: 'success',
-    is_error: false,
-    session_id: session,
-    result: finalText,
-    num_turns: totals.turns,
-    duration_ms: Date.now() - started,
-    // Demo runs cost nothing; the estimate shows what the same run would cost on Claude.
-    total_cost_usd: 0,
-    estimated_cost_usd: Number(totals.cost.toFixed(4)),
-    usage: { input_tokens: totals.input, output_tokens: totals.output },
-  };
+  emit('run-complete', { result: summary, cost_usd: 0 });
+  // Record model used for this run
+  try {
+    await getSessionsRepository().updateRun(run.runId, { model: 'demo' });
+  } catch { /* non-fatal */ }
+  return summary;
+}
 
-  /* ---------------------------------------------------------------- */
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-  async function* reviewScenario(): AsyncGenerator<SdkMessage, string> {
-    const diff = opts.prompt.match(/<diff>\n?([\s\S]*?)<\/diff>/)?.[1] ?? '';
-    yield assistant(null, [{ type: 'text', text: 'I will read the changed files around each hunk, then check them against the review checklist.' }]);
-    await pause(300);
-    const files = [...diff.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)].map((m) => m[2]).slice(0, 4);
-    for (const f of files) {
-      const rel = path.posix.join(d.writeDirRel, f);
-      yield* tool(null, 'Read', { file_path: rel, limit: 80 }, () => {
-        try {
-          return readRel(rel, 1200);
-        } catch {
-          return '(file removed in this change)';
-        }
-      }, false);
-    }
-    const reviewer = d.agents.find((a) => /review/.test(a.name));
-    if (reviewer) {
-      const agentId = id('toolu');
-      yield assistant(null, [{ type: 'tool_use', id: agentId, name: 'Agent', input: { description: 'Second look at security and tests', prompt: 'Check the diff for security issues and missing tests.', subagent_type: reviewer.name } }]);
-      await pause(300);
-      yield assistant(agentId, [{ type: 'text', text: 'Checking for hard-coded secrets, injection risks and test coverage.' }], modelId(reviewer.model));
-      await pause(400);
-      yield toolResult(null, agentId, 'Security and test checks done; findings merged into the main list.');
-    }
-    const findings = reviewDiff(diff);
-    const summary = findings.length
-      ? `Found ${findings.length} issue(s): ${['critical', 'high', 'medium', 'low', 'info']
-          .map((s) => [s, findings.filter((f) => f.severity === s).length] as const)
-          .filter(([, n]) => n)
-          .map(([s, n]) => `${n} ${s}`)
-          .join(', ')}.`
-      : 'No issues found by the checklist.';
-    return `${summary}\n\n\`\`\`json\n${JSON.stringify({ summary, findings }, null, 2)}\n\`\`\``;
-  }
-
-  async function* workScenario(): AsyncGenerator<SdkMessage, string> {
-    const prompt = opts.prompt;
-    const userAsk = prompt.split('\n---\n').pop()!.trim();
-    const shortAsk = userAsk.replace(/\s+/g, ' ').slice(0, 80);
-    const kw = keywords(userAsk, 4);
-
-    yield assistant(null, [{ type: 'text', text: 'I’ll start with the decisions log and the project documents before doing anything else.' }]);
-    await pause(300);
-
-    if (d.skills.includes('project-docs')) {
-      yield* tool(null, 'Skill', { skill: 'project-docs' }, () => 'Loaded skill: project-docs', false);
-    }
-    yield* tool(null, 'Read', { file_path: 'docs/decisions.md' }, () => d.decisions.slice(0, 1600) || '(empty)', false);
-    const grepOut = (yield* tool(null, 'Grep', { pattern: kw.join('|') || shortAsk, path: 'docs/md' }, () => grep(kw.join(' ') || shortAsk), false)).output;
-
-    // Clarifying questions, unless the decisions log already answers them.
-    const approachQ = `Which approach should the team take for: “${shortAsk}”?`;
-    let approach = '';
-    let chosenRoles: string[] = [];
-    const isDesign = /\b(build|design|implement|plan|create|architect|develop|add|migrate|refactor|solution)\b/i.test(userAsk);
-    const already = d.decisions.includes(approachQ);
-    if (isDesign && !already && d.kind !== 'test') {
-      const roleOptions = (d.agents.length ? d.agents : [{ name: 'general-purpose', description: 'General work', model: 'sonnet' }])
-        .slice(0, 4)
-        .map((a) => ({ label: a.name, description: a.description.slice(0, 80) }));
-      const questions = [
-        {
-          question: approachQ,
-          header: 'Approach',
-          multiSelect: false,
-          options: [
-            { label: 'Extend existing code', description: 'Change the current modules; least new code.' },
-            { label: 'New module', description: 'Build it alongside the existing code behind a clear interface.' },
-            { label: 'Prototype first', description: 'A quick throwaway version to validate the idea.' },
-          ],
-        },
-        ...(roleOptions.length >= 2
-          ? [{ question: 'Which roles should work on this?', header: 'Roles', multiSelect: true, options: roleOptions }]
-          : []),
-      ];
-      const r = yield* tool(null, 'AskUserQuestion', { questions }, (input) => {
-        const answers = (input.answers ?? {}) as Record<string, string | string[]>;
-        const pairs = Object.entries(answers).map(([q, a]) => `"${q}"="${Array.isArray(a) ? a.join(', ') : a}"`);
-        return `User has answered your questions: ${pairs.join(', ')}. You can now continue with the user's answers in mind.`;
-      }, true);
-      if (r.ok) {
-        const answers = (r.input.answers ?? {}) as Record<string, string | string[]>;
-        const a = answers[approachQ];
-        approach = Array.isArray(a) ? a.join(', ') : a ?? '';
-        const roles = answers['Which roles should work on this?'];
-        chosenRoles = (Array.isArray(roles) ? roles : String(roles ?? '').split(','))
-          .map((s) => s.trim())
-          .filter((s) => d.agents.some((x) => x.name === s));
-      }
-    } else if (already) {
-      const line = d.decisions.split('\n').find((l, i, arr) => arr[i - 1]?.includes(approachQ) && l.startsWith('**A:**')) ?? '';
-      approach = line.replace(/^\*\*A:\*\*\s*/, '');
-      yield assistant(null, [{ type: 'text', text: `The decisions log already answers how to approach this (${approach || 'see decisions.md'}), so I won't ask again.` }]);
-      await pause(200);
-    }
-
-    // Delegate to role subagents.
-    let roles = chosenRoles.length ? d.agents.filter((a) => chosenRoles.includes(a.name)) : [];
-    const named = d.agents.filter((a) => userAsk.includes(a.name));
-    if (!roles.length && named.length) roles = named;
-    if (!roles.length) roles = d.agents.slice(0, 2);
-    const subagents = roles.length ? roles.slice(0, 3) : [{ name: 'general-purpose', description: 'General-purpose agent', model: 'sonnet' }];
-
-    const calls = subagents.map((a) => ({ a, toolId: id('toolu') }));
-    yield assistant(
-      null,
-      [
-        { type: 'text', text: `Delegating to ${calls.map((c) => c.a.name).join(', ')} in parallel.` },
-        ...calls.map((c) => ({
-          type: 'tool_use',
-          id: c.toolId,
-          name: 'Agent',
-          input: { description: `${c.a.name}: ${shortAsk}`.slice(0, 60), prompt: `${userAsk}\n\nUse the project documents and decisions log. Report concrete findings with sources.`, subagent_type: c.a.name },
-        })),
-      ],
-    );
-    await pause(400);
-
-    const reports = new Map<string, string>();
-    const steps = calls.map((c) => subagentSteps(c.a, c.toolId, userAsk, kw));
-    // Interleave subagent messages so they visibly run side by side.
-    let active = steps.map((s) => s[Symbol.asyncIterator]());
-    while (active.length) {
-      const next: typeof active = [];
-      for (const it of active) {
-        const r = await it.next();
-        if (r.done) {
-          reports.set(r.value.name, r.value.report);
-        } else {
-          yield r.value;
-          next.push(it);
-        }
-      }
-      active = next;
-      await pause(250);
-    }
-    for (const c of calls) {
-      yield toolResult(null, c.toolId, reports.get(c.a.name) ?? 'Done.');
-    }
-    await pause(200);
-
-    const plan = renderPlan(shortAsk, approach, calls.map((c) => ({ name: c.a.name, report: reports.get(c.a.name) ?? '' })), grepOut);
-
-    if (opts.permissionMode === 'plan') {
-      return `Here is the plan (plan mode, so no files were changed):\n\n${plan}`;
-    }
-    const target = path.posix.join(d.writeDirRel, 'AGENT_PLAN.md');
-    const w = yield* tool(
-      null,
-      'Write',
-      { file_path: target, content: plan },
-      (input) => {
-        const abs = path.resolve(d.projectDir, String(input.file_path));
-        fs.mkdirSync(path.dirname(abs), { recursive: true });
-        fs.writeFileSync(abs, String(input.content));
-        return `File created successfully at: ${input.file_path}`;
-      },
-      opts.permissionMode !== 'acceptEdits',
-    );
-    const decisionNote = approach ? `\n- Approach: **${approach}** (saved to the decisions log).` : '';
-    return w.ok
-      ? `Done. I wrote the plan to \`${target}\`.${decisionNote}\n- Roles consulted: ${calls.map((c) => c.a.name).join(', ')}.\n\n${plan}`
-      : `I did not write the file because the write was not approved. Here is the plan instead:${decisionNote}\n\n${plan}`;
-  }
-
-  async function* subagentSteps(
-    a: { name: string; description: string; model: string },
-    parent: string,
-    ask: string,
-    kw: string[],
-  ): AsyncGenerator<SdkMessage, { name: string; report: string }> {
-    const model = modelId(a.model);
-    const focus = roleFocus(a.name);
-    yield assistant(parent, [{ type: 'text', text: `${a.name}: looking for ${focus.lookFor} related to the request.` }], model);
-    const query = [...kw, ...focus.terms].join(' ');
-    const g = yield* tool(parent, 'Grep', { pattern: [...kw, ...focus.terms].slice(0, 4).join('|'), path: 'docs/md' }, () => grep(query, 4), false, model);
-    const firstFile = g.output.match(/^(docs\/md\/[^:]+):(\d+)/m);
-    let excerpt = '';
-    if (firstFile) {
-      const r = yield* tool(parent, 'Read', { file_path: firstFile[1], offset: Number(firstFile[2]), limit: 30 }, () => readRel(firstFile[1], 900), false, model);
-      excerpt = r.output;
-    }
-    const docLines = g.output.split('\n').filter((l) => !l.startsWith('docs/decisions.md'));
-    const bullets = !docLines.length || g.output === 'No matches found.'
-      ? [`No ${focus.lookFor} found in the documents for “${ask.slice(0, 60)}”. This needs input from the team.`]
-      : docLines
-          .slice(0, 3)
-          .map((l) => {
-            const m = l.match(/^(docs\/md\/[^:]+):\d+: (.*)$/);
-            return m ? `${m[2].slice(0, 160)} _(source: ${m[1]})_` : l;
-          });
-    const report = `**${focus.deliverable}**\n${bullets.map((b) => `- ${b}`).join('\n')}${excerpt ? '' : ''}`;
-    yield assistant(parent, [{ type: 'text', text: report }], model);
-    return { name: a.name, report };
+function readFileSafe(filePath: string, fallback: string): string {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return fallback;
   }
 }
 
-function roleFocus(name: string): { lookFor: string; deliverable: string; terms: string[] } {
-  const n = name.toLowerCase();
-  if (n.includes('analyst')) return { lookFor: 'requirements and business rules', deliverable: 'User stories and acceptance criteria', terms: ['must', 'shall', 'user'] };
-  if (n.includes('architect')) return { lookFor: 'components and interfaces', deliverable: 'Design notes', terms: ['service', 'component', 'interface'] };
-  if (n.includes('backend')) return { lookFor: 'APIs, data and business logic', deliverable: 'Backend changes', terms: ['api', 'endpoint', 'database'] };
-  if (n.includes('frontend')) return { lookFor: 'screens and user flows', deliverable: 'Screen changes', terms: ['screen', 'page', 'button'] };
-  if (n.includes('qa') || n.includes('test')) return { lookFor: 'acceptance criteria and edge cases', deliverable: 'Test cases', terms: ['error', 'invalid', 'limit'] };
-  if (n.includes('writer') || n.includes('trainer')) return { lookFor: 'terms and flows to explain', deliverable: 'Documentation outline', terms: ['overview', 'process'] };
-  if (n.includes('review')) return { lookFor: 'risks and conventions', deliverable: 'Risks', terms: ['security', 'risk'] };
-  return { lookFor: 'relevant information', deliverable: 'Findings', terms: [] };
+function writeFileSafe(filePath: string, content: string): void {
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+  } catch {
+    // Non-fatal in demo mode
+  }
 }
 
-function renderPlan(ask: string, approach: string, reports: { name: string; report: string }[], grepOut: string): string {
-  const sources = [...new Set([...grepOut.matchAll(/^(docs\/md\/[^:]+):/gm)].map((m) => m[1]))];
-  return `# Plan: ${ask}
+function listWorkDir(workDir: string): string {
+  try {
+    const entries = fs.readdirSync(workDir);
+    return entries.join('\n') || '(empty)';
+  } catch {
+    return '(cannot list directory)';
+  }
+}
 
-_Generated by the demo agent on ${new Date().toISOString().slice(0, 10)}._
+function buildPlanContent(goal: string): string {
+  const date = new Date().toISOString().slice(0, 10);
+  return `# Agent Plan
 
-## Decisions used
+_Generated by the demo agent on ${date}._
 
-- ${approach ? `Approach: ${approach}` : 'No approach decision recorded yet.'}
+## Goal
 
-## Findings by role
+${goal}
 
-${reports.map((r) => `### ${r.name}\n\n${r.report}`).join('\n\n')}
+## Proposed Steps
 
-## Next steps
+1. Review the existing codebase and relevant documents.
+2. Identify the components that need to change.
+3. Implement the changes with tests.
+4. Verify the implementation with the project's test suite.
+5. Update documentation as needed.
 
-1. Confirm the open points above with the team.
-2. Turn the user stories into tickets with acceptance criteria.
-3. Implement behind a feature flag, with tests for each acceptance criterion.
+## Notes
 
-## Sources
-
-${sources.length ? sources.map((s) => `- ${s}`).join('\n') : '- No matching documents yet. Upload the FSD and TSD in Knowledge.'}
+This plan was produced by the **Demo engine** — no real AI was called.
+Switch to a real provider under **Settings › Model provider** for actual agent runs.
 `;
 }
-
-/** Map the run's model alias to the demo's display model. */
-export function demoModel(alias: string): string {
-  return modelId(alias);
-}
-
-export type { DemoContext };

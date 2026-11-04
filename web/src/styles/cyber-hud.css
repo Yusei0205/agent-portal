@@ -1,0 +1,266 @@
+/**
+ * Cyber HUD — template-specific visual enhancements.
+ *
+ * All rules are gated on [data-template="cyber-hud"] so they have
+ * zero effect when another template is active.
+ *
+ * Effects:
+ *   - Faint circuit/scanline pattern (repeating-linear-gradient) on canvas (data-fx-grid)
+ *   - Panel cyan 1px borders with ::before corner-bracket accents
+ *   - Outer panel glow (data-fx-glow)
+ *   - Orbitron display headings with uppercase/letter-spacing
+ *   - Stat icons with neon tint squares
+ *
+ * All clip-path and ::before/::after corner brackets are CSS-only — no images or url().
+ * Text contrast verified: WCAG AA for ink on canvas/panel.
+ */
+
+/* ── Canvas: faint scanline and circuit grid ─────────────────────── */
+[data-template="cyber-hud"][data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    /* Scanlines — very subtle horizontal rule */
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 3px,
+      rgba(0,229,255,0.018) 3px,
+      rgba(0,229,255,0.018) 4px
+    ),
+    /* Circuit vertical traces */
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 59px,
+      rgba(0,229,255,0.025) 59px,
+      rgba(0,229,255,0.025) 60px
+    ),
+    /* Circuit horizontal traces */
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 59px,
+      rgba(0,229,255,0.025) 59px,
+      rgba(0,229,255,0.025) 60px
+    );
+  background-size: 100% 4px, 60px 60px, 60px 60px;
+}
+
+[data-template="cyber-hud"][data-mode="light"][data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 3px,
+      rgba(0,134,168,0.04) 3px,
+      rgba(0,134,168,0.04) 4px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 59px,
+      rgba(0,134,168,0.05) 59px,
+      rgba(0,134,168,0.05) 60px
+    );
+  background-size: 100% 4px, 60px 60px;
+}
+
+/* Disable effects behind IDE/editor/terminal */
+[data-template="cyber-hud"][data-fx-grid="true"] .ide-workspace,
+[data-template="cyber-hud"][data-fx-grid="true"] .ide-body,
+[data-template="cyber-hud"][data-fx-grid="true"] .ide-codemirror-host,
+[data-template="cyber-hud"][data-fx-grid="true"] .ide-terminal-panel {
+  background-image: none !important;
+}
+
+/* ── Panel: cyan border + outer glow ───────────────────────────────── */
+[data-template="cyber-hud"] .panel,
+[data-template="cyber-hud"] .project-card,
+[data-template="cyber-hud"] .stat-card {
+  border-color: rgba(0,229,255,0.22);
+}
+
+[data-template="cyber-hud"][data-fx-glow="true"] .panel,
+[data-template="cyber-hud"][data-fx-glow="true"] .project-card,
+[data-template="cyber-hud"][data-fx-glow="true"] .stat-card {
+  box-shadow: 0 0 0 1px rgba(0,229,255,0.10), 0 4px 20px rgba(0,229,255,0.05);
+}
+
+/* ── Panel corner brackets via ::before / ::after ──────────────────── */
+[data-template="cyber-hud"] .panel,
+[data-template="cyber-hud"] .project-card {
+  position: relative;
+  overflow: visible;
+}
+
+[data-template="cyber-hud"] .panel::before,
+[data-template="cyber-hud"] .project-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background:
+    /* top-left corner */
+    linear-gradient(to right,  rgba(0,229,255,0.50) 10px, transparent 10px) top left / 10px 1px no-repeat,
+    linear-gradient(to bottom, rgba(0,229,255,0.50) 10px, transparent 10px) top left / 1px 10px no-repeat,
+    /* top-right corner */
+    linear-gradient(to left,   rgba(0,229,255,0.50) 10px, transparent 10px) top right / 10px 1px no-repeat,
+    linear-gradient(to bottom, rgba(0,229,255,0.50) 10px, transparent 10px) top right / 1px 10px no-repeat,
+    /* bottom-left corner */
+    linear-gradient(to right,  rgba(0,229,255,0.50) 10px, transparent 10px) bottom left / 10px 1px no-repeat,
+    linear-gradient(to top,    rgba(0,229,255,0.50) 10px, transparent 10px) bottom left / 1px 10px no-repeat,
+    /* bottom-right corner */
+    linear-gradient(to left,   rgba(0,229,255,0.50) 10px, transparent 10px) bottom right / 10px 1px no-repeat,
+    linear-gradient(to top,    rgba(0,229,255,0.50) 10px, transparent 10px) bottom right / 1px 10px no-repeat;
+}
+
+/* Hover state — brighter corners and outer glow */
+[data-template="cyber-hud"] .project-card:hover {
+  border-color: rgba(0,229,255,0.45);
+  box-shadow:
+    0 0 0 1px rgba(0,229,255,0.20),
+    0 0 24px rgba(0,229,255,0.14),
+    0 4px 16px rgba(0,0,0,0.5);
+}
+
+[data-template="cyber-hud"] .project-card:hover::before {
+  background:
+    linear-gradient(to right,  rgba(0,229,255,0.80) 12px, transparent 12px) top left / 12px 1px no-repeat,
+    linear-gradient(to bottom, rgba(0,229,255,0.80) 12px, transparent 12px) top left / 1px 12px no-repeat,
+    linear-gradient(to left,   rgba(0,229,255,0.80) 12px, transparent 12px) top right / 12px 1px no-repeat,
+    linear-gradient(to bottom, rgba(0,229,255,0.80) 12px, transparent 12px) top right / 1px 12px no-repeat,
+    linear-gradient(to right,  rgba(0,229,255,0.80) 12px, transparent 12px) bottom left / 12px 1px no-repeat,
+    linear-gradient(to top,    rgba(0,229,255,0.80) 12px, transparent 12px) bottom left / 1px 12px no-repeat,
+    linear-gradient(to left,   rgba(0,229,255,0.80) 12px, transparent 12px) bottom right / 12px 1px no-repeat,
+    linear-gradient(to top,    rgba(0,229,255,0.80) 12px, transparent 12px) bottom right / 1px 12px no-repeat;
+}
+
+/* ── Light mode panels — muted steel borders ────────────────────────── */
+[data-template="cyber-hud"][data-mode="light"] .panel,
+[data-template="cyber-hud"][data-mode="light"] .project-card,
+[data-template="cyber-hud"][data-mode="light"] .stat-card {
+  border-color: rgba(0,134,168,0.25);
+}
+
+[data-template="cyber-hud"][data-mode="light"] .panel::before,
+[data-template="cyber-hud"][data-mode="light"] .project-card::before {
+  background:
+    linear-gradient(to right,  rgba(0,134,168,0.45) 10px, transparent 10px) top left / 10px 1px no-repeat,
+    linear-gradient(to bottom, rgba(0,134,168,0.45) 10px, transparent 10px) top left / 1px 10px no-repeat,
+    linear-gradient(to left,   rgba(0,134,168,0.45) 10px, transparent 10px) top right / 10px 1px no-repeat,
+    linear-gradient(to bottom, rgba(0,134,168,0.45) 10px, transparent 10px) top right / 1px 10px no-repeat,
+    linear-gradient(to right,  rgba(0,134,168,0.45) 10px, transparent 10px) bottom left / 10px 1px no-repeat,
+    linear-gradient(to top,    rgba(0,134,168,0.45) 10px, transparent 10px) bottom left / 1px 10px no-repeat,
+    linear-gradient(to left,   rgba(0,134,168,0.45) 10px, transparent 10px) bottom right / 10px 1px no-repeat,
+    linear-gradient(to top,    rgba(0,134,168,0.45) 10px, transparent 10px) bottom right / 1px 10px no-repeat;
+}
+
+/* ── Rail active pill ──────────────────────────────────────────────── */
+[data-template="cyber-hud"] .rail-link.is-active {
+  background: rgba(0,229,255,0.10);
+  color: var(--accent);
+  box-shadow:
+    inset 0 0 0 1px rgba(0,229,255,0.28),
+    0 0 10px rgba(0,229,255,0.10);
+  border-radius: var(--radius-md);
+  border: none;
+}
+
+[data-template="cyber-hud"] .rail-link.is-active svg {
+  color: var(--accent);
+}
+
+[data-template="cyber-hud"] .rail-group-btn.has-active-child {
+  background: rgba(0,229,255,0.08);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(0,229,255,0.20);
+  border: none;
+}
+
+[data-template="cyber-hud"][data-mode="light"] .rail-link.is-active {
+  background: rgba(0,134,168,0.10);
+  box-shadow: inset 0 0 0 1px rgba(0,134,168,0.25);
+}
+
+[data-template="cyber-hud"][data-mode="light"] .rail-group-btn.has-active-child {
+  background: rgba(0,134,168,0.08);
+  box-shadow: inset 0 0 0 1px rgba(0,134,168,0.18);
+}
+
+/* ── Display font — uppercase Orbitron headings ─────────────────────── */
+[data-template="cyber-hud"] .brand,
+[data-template="cyber-hud"] h1,
+[data-template="cyber-hud"] h2,
+[data-template="cyber-hud"] .page-title {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+[data-template="cyber-hud"] .brand {
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+}
+
+/* Orbitron draws zero with a slash (reads as Ø), so keep numbers in the body font. */
+[data-template="cyber-hud"] .kpi-value,
+[data-template="cyber-hud"] .stat-value {
+  font-family: var(--font-body);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* ── Stat icon tint squares ─────────────────────────────────────────── */
+[data-template="cyber-hud"] .stat-icon {
+  background: rgba(0,229,255,0.10);
+  border: 1px solid rgba(0,229,255,0.22);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+}
+
+/* ── Button: solid cyan fill (no gradient for HUD aesthetic) ─────────── */
+[data-template="cyber-hud"] .btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  box-shadow: 0 0 12px rgba(0,229,255,0.30);
+}
+
+[data-template="cyber-hud"] .btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  box-shadow: 0 0 20px rgba(0,229,255,0.50), 0 0 0 1px rgba(0,229,255,0.30) inset;
+  filter: brightness(1.08);
+  outline: none;
+}
+
+[data-template="cyber-hud"] .btn-primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0,229,255,0.40), 0 0 14px rgba(0,229,255,0.35);
+}
+
+/* ── Search palette trigger ─────────────────────────────────────────── */
+[data-template="cyber-hud"] .palette-trigger-btn {
+  background: var(--panel);
+  border-color: rgba(0,229,255,0.22);
+  border-radius: var(--radius-md);
+}
+
+[data-template="cyber-hud"] .palette-trigger-btn:hover {
+  border-color: rgba(0,229,255,0.45);
+  box-shadow: 0 0 10px rgba(0,229,255,0.14);
+}
+
+[data-template="cyber-hud"][data-fx-glow="true"] .palette-dialog {
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.60),
+    0 0 0 1px rgba(0,229,255,0.22);
+}
+
+/* ── Motion: none ─────────────────────────────────────────────────────── */
+[data-template="cyber-hud"][data-fx-motion="none"] *,
+[data-template="cyber-hud"][data-fx-motion="none"] *::before,
+[data-template="cyber-hud"][data-fx-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}

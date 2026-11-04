@@ -1,0 +1,745 @@
+/* ── Dashboard page ───────────────────────────────────────────────────────────
+   All animation rules are gated on the .db-anim parent class; when absent
+   (animations disabled), zero CSS animations run. Only transform/opacity
+   are animated to stay cheap.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Layout ─────────────────────────────────────────────────────────────────── */
+
+/* .page no longer sets a max-width — the dashboard fills available width.
+   Override only gap for the dashboard's tighter feel. */
+.db-root.page {
+  gap: 16px;
+}
+
+/* Header: greeting left, controls right */
+.db-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.db-greeting {
+  margin: 0;
+}
+
+.db-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.db-controls [role="group"] {
+  display: flex;
+  gap: 4px;
+}
+
+/* KPI row: auto-fit cards, min 220 px each — up to 4 on wide screens */
+.db-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 640px) {
+  .db-kpis { grid-template-columns: 1fr; }
+}
+
+/* Main grid: network (2fr) | active session (1fr) */
+.db-main-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .db-main-grid { grid-template-columns: 1fr; }
+}
+
+/* Bottom grid: recent sessions (1fr) | agent performance (1.6fr) */
+.db-bottom-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr;
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .db-bottom-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Panel shared ─────────────────────────────────────────────────────────────── */
+
+.db-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.88rem;
+  font-weight: 640;
+  color: var(--ink);
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.db-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-2);
+}
+.db-panel-header .db-panel-title {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  flex: 1;
+}
+
+.db-empty-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  text-align: center;
+}
+.db-empty-center .muted {
+  font-size: 0.84rem;
+}
+
+.db-skeleton-title {
+  width: 50%;
+  margin-bottom: 4px;
+}
+
+/* ── KPI card ─────────────────────────────────────────────────────────────────── */
+
+.db-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Network panel ────────────────────────────────────────────────────────────── */
+
+.db-network {
+  overflow: hidden;
+}
+
+/* ── Agent card network layout ─────────────────────────────────────────────── */
+
+/* Outer column: centres lead row, connector SVG, children row, hint, legend */
+.db-agent-net {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 8px 0 2px;
+}
+
+/* Lead agent row (always centered) */
+.db-agent-net-lead-row {
+  display: flex;
+  justify-content: center;
+}
+
+/* Children row below the connector SVG */
+.db-agent-net-children-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* Flat grid — no delegation hierarchy or > 8 children */
+.db-agent-card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* ── Agent card ──────────────────────────────────────────────────────────────── */
+
+.db-agent-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  /* width must match AGENT_CARD_W in Dashboard.jsx for connector SVG alignment */
+  width: 164px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--line);
+  background: var(--panel);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.db-agent-card:hover {
+  border-color: var(--ink-3);
+  background: var(--canvas);
+}
+.db-agent-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.db-agent-card.is-running {
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
+  background: color-mix(in srgb, var(--ok) 5%, var(--panel));
+}
+
+/* Pulsing glow ring — only rendered for running nodes.
+   .db-node-glow is queried by smoke tests for animation verification. */
+.db-card-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--ok);
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Agent avatar circle */
+.db-card-avatar {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 12%, var(--canvas));
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.db-agent-card.is-running .db-card-avatar {
+  background: color-mix(in srgb, var(--ok) 15%, var(--canvas));
+  color: var(--ok);
+}
+
+/* Card text body */
+.db-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.db-card-name {
+  font-size: 0.82rem;
+  font-weight: 620;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.db-card-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.73rem;
+  color: var(--ink-3);
+}
+.db-card-status.is-running {
+  color: var(--ok);
+}
+
+.db-card-stats {
+  display: flex;
+  gap: 7px;
+  font-size: 0.71rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Suppress running dot pulse when the Animations toggle is off */
+.db-root:not(.db-anim) .db-card-status .dot-running {
+  animation: none;
+}
+
+/* Hint shown when only one agent exists */
+.db-agent-net-hint {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  text-align: center;
+  padding: 6px 16px;
+  margin-top: 4px;
+}
+
+/* Legend bar */
+.db-net-legend-bar {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2);
+  width: 100%;
+}
+.db-net-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+/* fix 7: Glow ring on running agent cards — only animate when .db-anim is active */
+.db-anim .db-node-glow {
+  animation: db-node-glow 2s ease-in-out infinite;
+}
+@keyframes db-node-glow {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 0; }
+}
+
+/* Running edge flowing dash -- works on <path> as well as <line> */
+.db-anim .db-edge-running {
+  stroke-dasharray: 6 3;
+  animation: db-edge-flow 0.7s linear infinite;
+}
+@keyframes db-edge-flow {
+  from { stroke-dashoffset: 18; }
+  to   { stroke-dashoffset: 0;  }
+}
+
+/* Running node dot pulse */
+.db-anim .db-node-running-dot {
+  animation: db-dot-blink 1.5s ease-in-out infinite;
+}
+@keyframes db-dot-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+/* Glow enhancements for themes with data-fx-glow="true" */
+[data-fx-glow="true"] .db-agent-card.is-running {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 30%, transparent);
+}
+[data-fx-glow="true"] .db-anim .db-node-glow {
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--ok) 50%, transparent));
+}
+
+/* data-fx-motion override: suppress motion for themes that request it */
+:is([data-fx-motion="none"], [data-fx-motion="reduced"]) .db-agent-card {
+  animation: none !important;
+}
+
+/* fix 6: pause all dashboard CSS animations when the browser tab is hidden */
+.db-root.db-paused .db-node-glow,
+.db-root.db-paused .db-edge-running,
+.db-root.db-paused .db-node-running-dot,
+.db-root.db-paused .db-step-active .db-step-marker,
+.db-root.db-paused .db-step-spin {
+  animation-play-state: paused;
+}
+
+/* ── Active session panel ─────────────────────────────────────────────────────── */
+
+.db-active-title {
+  font-size: 0.84rem;
+  margin: 0 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Vertical step timeline */
+.db-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: grid;
+  gap: 0;
+  position: relative;
+}
+
+.db-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 5px 0;
+  position: relative;
+}
+
+/* Connector line between steps */
+.db-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 11px;       /* marker center (24px/2 = 12, minus 1 for line) */
+  top: 26px;
+  bottom: -5px;
+  width: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+
+.db-step-done::before  { background: var(--ok); }
+
+.db-step-marker {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--panel);
+  position: relative;
+  z-index: 1;
+  color: var(--ink-3);
+}
+
+.db-step-done .db-step-marker {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--accent-ink);
+}
+
+.db-step-active .db-step-marker {
+  background: var(--info-wash);
+  border-color: var(--info);
+  color: var(--info);
+}
+
+/* fix 3: failed/cancelled and blocked step marker styles */
+.db-step-failed .db-step-marker {
+  background: var(--danger-wash);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.db-step-blocked .db-step-marker {
+  background: var(--warn-wash);
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.db-step-paused .db-step-marker {
+  background: var(--line-2);
+  border-color: var(--ink-3);
+  color: var(--ink-3);
+}
+
+/* Inline spinner inside marker — static by default; spin only when .db-anim is active */
+.db-step-spin {
+  display: block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid color-mix(in srgb, var(--info) 30%, transparent);
+  border-top-color: var(--info);
+  border-radius: 50%;
+}
+
+/* fix 5: gate spin on .db-anim — zero continuous animation when toggle is OFF */
+.db-anim .db-step-spin {
+  animation: spin 0.7s linear infinite;
+}
+
+/* Pulse animation for in-progress marker */
+.db-anim .db-step-active .db-step-marker {
+  animation: db-step-pulse 2s ease-in-out infinite;
+}
+@keyframes db-step-pulse {
+  0%, 100% { box-shadow: 0 0 0 0   color-mix(in srgb, var(--info) 40%, transparent); }
+  50%       { box-shadow: 0 0 0 6px color-mix(in srgb, var(--info) 0%,  transparent); }
+}
+
+.db-step-body {
+  flex: 1;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.db-step-label {
+  font-size: 0.82rem;
+  font-weight: 540;
+  color: var(--ink);
+  display: block;
+}
+
+.db-step-pending .db-step-label { color: var(--ink-3); }
+
+/* ── Recent Sessions panel ─────────────────────────────────────────────────────── */
+
+.db-recent {
+  overflow: hidden;
+}
+
+.db-session-list {
+  display: grid;
+  gap: 0;
+}
+
+.db-session-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--line-2);
+  min-width: 0;
+}
+.db-session-item:last-child { border-bottom: none; }
+
+.db-session-status {
+  padding-top: 4px;
+  flex-shrink: 0;
+}
+
+.db-session-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.db-session-title {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 560;
+  color: var(--ink);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-session-title:hover { color: var(--link); text-decoration: underline; }
+
+.db-session-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.db-session-agents {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.db-session-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* ── Agent Performance panel ───────────────────────────────────────────────────── */
+
+.db-perf {
+  overflow: hidden;
+}
+
+.db-perf-table {
+  font-size: 0.81rem;
+}
+
+.db-perf-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.db-perf-row:hover td {
+  background: var(--canvas);
+}
+
+/* Drill modal — slightly wider for the runs table */
+.db-drill-modal {
+  width: min(780px, 95vw);
+}
+
+/* ── Node detail stats dl ──────────────────────────────────────────────────────── */
+.db-node-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 0;
+}
+.db-node-stats > div {
+  background: var(--canvas);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.db-node-stats dt {
+  font-size: 0.74rem;
+  color: var(--ink-3);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.db-node-stats dd {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* fix 3: status dot extensions for dashboard session list */
+.dot-done    { background: var(--ok); }
+.dot-blocked { background: var(--warn); }
+.dot-paused  { background: var(--ink-3); }
+
+/* ── Animation toggle switch ───────────────────────────────────────────────────── */
+
+.db-anim-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font: inherit;
+  font-size: 0.79rem;
+  font-weight: 580;
+  color: var(--ink-3);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: border-color var(--t-fast), color var(--t-fast);
+}
+.db-anim-toggle:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.db-anim-toggle.is-on {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.db-anim-toggle-track {
+  width: 28px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+  flex-shrink: 0;
+  transition: background var(--t-base);
+}
+.db-anim-toggle.is-on .db-anim-toggle-track {
+  background: var(--accent);
+}
+.db-anim-toggle-thumb {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--panel);
+  top: 2px;
+  left: 2px;
+  transition: transform var(--t-base);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+.db-anim-toggle.is-on .db-anim-toggle-thumb {
+  transform: translateX(13px);
+}
+
+/* ── Card entrance animation ─────────────────────────────────────────────────── */
+
+.db-anim .db-kpi-card {
+  animation: db-card-in 0.35s ease-out both;
+}
+.db-anim .db-kpis > *:nth-child(1) { animation-delay: 0.04s; }
+.db-anim .db-kpis > *:nth-child(2) { animation-delay: 0.08s; }
+.db-anim .db-kpis > *:nth-child(3) { animation-delay: 0.12s; }
+.db-anim .db-kpis > *:nth-child(4) { animation-delay: 0.16s; }
+
+@keyframes db-card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Panel slide in */
+.db-anim .db-main-grid > *,
+.db-anim .db-bottom-grid > * {
+  animation: db-panel-in 0.4s ease-out both;
+}
+.db-anim .db-main-grid > *:nth-child(2)  { animation-delay: 0.05s; }
+.db-anim .db-bottom-grid > *:nth-child(2) { animation-delay: 0.05s; }
+
+@keyframes db-panel-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Respect OS reduced-motion preference always, even when toggle is on */
+@media (prefers-reduced-motion: reduce) {
+  .db-anim .db-kpi-card,
+  .db-anim .db-main-grid > *,
+  .db-anim .db-bottom-grid > * {
+    animation: none !important;
+  }
+  .db-anim .db-node-glow,
+  .db-anim .db-edge-running,
+  .db-anim .db-node-running-dot,
+  .db-anim .db-step-active .db-step-marker,
+  .db-step-spin {
+    animation: none !important;
+  }
+  .db-anim-toggle-track,
+  .db-anim-toggle-thumb,
+  .db-anim-toggle {
+    transition: none;
+  }
+}
+
+/* ── Mobile responsive (≤ 768 px) ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Agent network: scroll rather than overflow when the SVG tree is wider than
+     the panel — typical when ≥ 3 child nodes are rendered in a tree layout.   */
+  .db-network {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .db-agent-net {
+    /* Allow the inner flex column to grow to its natural size for scrolling */
+    min-width: min-content;
+    width: max-content;
+  }
+
+  /* Legend: allow items to wrap */
+  .db-net-legend-bar { flex-wrap: wrap; gap: 10px; }
+
+  /* Controls bar: tighter gap */
+  .db-controls { gap: 6px; }
+
+  /* Node-stats drill modal: single column */
+  .db-node-stats { grid-template-columns: 1fr; }
+
+  /* KPI: already auto-fit, but force 2-up above 340 px for better use of space */
+  .db-kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+
+  /* Session item: allow the right-side pill/timestamp to wrap below */
+  .db-session-item {
+    flex-wrap: wrap;
+  }
+  .db-session-right {
+    flex-direction: row;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 400px) {
+  /* Very narrow: single KPI column */
+  .db-kpis { grid-template-columns: 1fr; }
+}
