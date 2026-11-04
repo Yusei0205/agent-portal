@@ -24,6 +24,7 @@ import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { AiChoicePicker } from '../../components/AiChoicePicker.jsx';
+import { InfoTip } from '../../components/InfoTip.jsx';
 import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -591,7 +592,7 @@ function GenerateDialog({ testProjectId, projectId, groupId, onClose, onGenerate
             Generation runs in the background — you can continue working while it completes.
           </p>
           <p className="muted" style={{ fontSize: '0.8rem', marginTop: -2 }}>
-            This generates <strong>automation steps</strong> (Playwright/API actions).{' '}
+            This writes a new <strong>script</strong> of automation steps (browser and API actions) in your first group. It does not run it; you review the steps and press Run.{' '}
             <button
               type="button"
               style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent, #6366f1)', cursor: 'pointer', fontSize: 'inherit', textDecoration: 'underline' }}
@@ -1439,16 +1440,49 @@ function ScriptsTab({ testProject, projectId, onOpenScript, onOpenCasesDialog })
     <div>
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />
+      <p className="muted small tests-intro">
+        Scripts are lists of steps that a real browser runs against your app.
+        <InfoTip title="How the Tests tabs fit together">
+          <strong>Scripts</strong> (this tab): lists of steps, kept in groups. They are what actually runs.
+          <span className="info-tip-line"><strong>Test cases</strong>: written test-case sheets for people to follow. They document tests; they do not run by themselves.</span>
+          <span className="info-tip-line"><strong>Runs</strong>: the result of every run, with screenshots and the failing step.</span>
+          <span className="info-tip-line"><strong>Vault</strong>: logins and files that scripts use by name, so secrets stay out of the steps.</span>
+          <span className="info-tip-line"><strong>Settings</strong>: your app's address and the rules the AI follows when it writes scripts.</span>
+        </InfoTip>
+      </p>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setAddingGroup(true)}>
-          <Icon name="plus" size={13} /> New group
-        </button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowGenerate(true)}>
-          <Icon name="agents" size={13} /> Generate with AI
-        </button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowImport(true)}>
-          Import test cases
-        </button>
+        <span className="tests-toolbar-item">
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setAddingGroup(true)}>
+            <Icon name="plus" size={13} /> New group
+          </button>
+          <InfoTip title="What is a group?">
+            A group is a folder of scripts that belong together, for example “Login”, “Checkout” or “Smoke tests”.
+            <span className="info-tip-line"><strong>Run group</strong> runs every script in it, one after another, as a single run; the result is in the Runs tab.</span>
+            <span className="info-tip-line">A group does not change what a script does; it only keeps scripts together and lets you run them in one go.</span>
+          </InfoTip>
+        </span>
+        <span className="tests-toolbar-item">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowGenerate(true)}>
+            <Icon name="agents" size={13} /> Generate with AI
+          </button>
+          <InfoTip title="What does it generate?">
+            You describe a scenario in plain words (and can attach requirement documents or screenshots). The AI writes a new <strong>script</strong>:
+            an ordered list of steps that a real browser runs against your app.
+            <span className="info-tip-line">Steps can open a page, click, type, choose an option, press a key, upload a file, check that text or a page appears, wait, call an API, or hand a step to an AI agent.</span>
+            <span className="info-tip-line">It uses your app address and rules from the Settings tab, and Vault entries for logins, so passwords are never written into a script.</span>
+            <span className="info-tip-line">It only writes the script, into the first group. Nothing runs until you press <strong>Run</strong>, so read the steps first.</span>
+          </InfoTip>
+        </span>
+        <span className="tests-toolbar-item">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowImport(true)}>
+            Import test cases
+          </button>
+          <InfoTip title="Import from a spreadsheet">
+            Paste a CSV with a <code>name</code> column and a <code>description</code> column, one test case per row. The AI turns each row into a script of steps,
+            in the same way as Generate with AI.
+            <span className="info-tip-line">Use it when you already keep your test cases in a spreadsheet.</span>
+          </InfoTip>
+        </span>
       </div>
 
       <GenerationTracker
@@ -1481,6 +1515,10 @@ function ScriptsTab({ testProject, projectId, onOpenScript, onOpenCasesDialog })
         <div className="ws-placeholder">
           <Icon name="play" size={32} />
           <p>No groups yet. Create a group to start adding scripts.</p>
+          <p className="muted small">
+            A group is a folder of scripts that belong together (for example “Login” or “Smoke tests”); you can run all of its scripts in one go.
+            A script is a list of steps that a real browser runs against your app. Generate with AI will also create a “Default” group for you.
+          </p>
         </div>
       )}
 
@@ -1489,7 +1527,13 @@ function ScriptsTab({ testProject, projectId, onOpenScript, onOpenCasesDialog })
         return (
           <section key={g.id} aria-label={`Group: ${g.name}`} style={{ marginBottom: 24 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <h3 style={{ margin: 0, fontSize: '0.95rem', flex: 1 }}>{g.name}</h3>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+                <h3 style={{ margin: 0, fontSize: '0.95rem' }}>{g.name}</h3>
+                <InfoTip title="Run group">
+                  Runs every script in this group one after another, as one run. Open the Runs tab to see each script's steps, screenshots and result.
+                  <span className="info-tip-line"><strong>Run</strong> beside a script runs just that script.</span>
+                </InfoTip>
+              </span>
               <span className="muted" style={{ fontSize: '0.78rem' }}>
                 {groupScripts.length} script{groupScripts.length !== 1 ? 's' : ''}
               </span>
