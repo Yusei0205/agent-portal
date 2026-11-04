@@ -163,6 +163,8 @@ export function registerUserRoutes(): void {
     // One use only: remove the link before changing the password.
     await setSetting(getDb(), key, '');
     await getAuthRepository().updateUserFields(user.id, { password_hash: hashPassword(password) });
+    // Whoever held the old password (or a stolen session) is signed out everywhere.
+    await getAuthRepository().deleteSessionsForUser(user.id, '').catch(() => 0);
     appendAudit(getDb(), user.id, 'auth.password_reset', `user:${user.id}`, {}, req.ip);
     sendJson(res, 200, { ok: true, email: user.email });
   });

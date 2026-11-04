@@ -160,6 +160,12 @@ export class SqliteAuthRepository implements AuthRepository {
     dbRun('DELETE FROM sessions WHERE token_hash = ?', tokenHash);
   }
 
+  async deleteSessionsForUser(userId: string, keepTokenHash: string): Promise<number> {
+    const rows = all<{ token_hash: string }>('SELECT token_hash FROM sessions WHERE user_id = ? AND token_hash <> ?', userId, keepTokenHash);
+    if (rows.length) dbRun('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', userId, keepTokenHash);
+    return rows.length;
+  }
+
   async deleteExpiredSessions(): Promise<void> {
     const { now } = await import('../util.ts');
     dbRun('DELETE FROM sessions WHERE expires_at < ?', now());

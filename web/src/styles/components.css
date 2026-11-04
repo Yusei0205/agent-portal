@@ -2057,7 +2057,7 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
   width: min(340px, 82vw); padding: 10px 12px;
   display: block; text-align: left; white-space: normal;
   font-size: 0.8rem; font-weight: 400; line-height: 1.5; letter-spacing: 0; text-transform: none; font-style: normal;
-  color: var(--ink); background: var(--raised, var(--panel)); border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--ink); background: linear-gradient(var(--raised, var(--panel)), var(--raised, var(--panel))), var(--canvas); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 .info-tip-pop--start { left: -8px; }
@@ -2091,3 +2091,11 @@ select optgroup { background-color: var(--canvas); color: var(--ink); }
 button.status-filter { font: inherit; cursor: pointer; }
 button.status-filter:hover { filter: brightness(1.15); }
 button.status-filter.is-active { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Account page */
+.account-page { display: grid; gap: 16px; max-width: 640px; align-content: start; }
+.account-page .panel { padding: 18px 20px; }
+.account-page h2 { margin: 0; font-size: 1.02rem; }
+.account-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; }
+.account-facts dt { color: var(--ink-3); }
+.account-facts dd { margin: 0; }

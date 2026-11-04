@@ -420,6 +420,16 @@ export function registerAuthRoutes(): void {
   });
 
   // POST /api/auth/password  (change own password)
+  // POST /api/auth/sign-out-others — end every other session of the signed-in person (other browsers and devices)
+  router.post('/api/auth/sign-out-others', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+    const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+    const keep = token ? sha256(decodeURIComponent(token)) : '';
+    const signedOut = await getAuthRepository().deleteSessionsForUser(req.user.id, keep);
+    appendAudit(null, req.user.id, 'auth.sign_out_others', `user:${req.user.id}`, { sessions: signedOut }, req.ip);
+    sendJson(res, 200, { ok: true, signedOut });
+  });
+
   router.post('/api/auth/password', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     const body = req.body as Record<string, unknown>;
@@ -434,6 +444,9 @@ export function registerAuthRoutes(): void {
       return;
     }
     await getAuthRepository().updateUserFields(req.user.id, { password_hash: hashPassword(newPassword) });
+    // A changed password ends the person's other sessions; this one stays.
+    const cookieToken = parseCookies(req.headers.cookie)[COOKIE_NAME];
+    await getAuthRepository().deleteSessionsForUser(req.user.id, cookieToken ? sha256(decodeURIComponent(cookieToken)) : '').catch(() => 0);
     appendAudit(null, req.user.id, 'auth.password_change', `user:${req.user.id}`, {}, req.ip);
     sendJson(res, 200, { ok: true });
   });

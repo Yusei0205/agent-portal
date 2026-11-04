@@ -166,6 +166,9 @@ export interface AuthRepository {
   /** Delete a single session (logout). */
   deleteSession(tokenHash: string): Promise<void>;
 
+  /** Delete every session of a user except the one with `keepTokenHash` (pass '' to delete all). Returns how many went. */
+  deleteSessionsForUser(userId: string, keepTokenHash: string): Promise<number>;
+
   /**
    * Delete all sessions with expires_at < now.
    * DynamoDB: TTL handles automatic expiry; this call is a no-op in DynamoDB mode.

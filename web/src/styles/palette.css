@@ -11,7 +11,7 @@
 }
 
 .palette-dialog {
-  background: var(--panel);
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   width: min(580px, 95vw);
@@ -199,7 +199,7 @@
 }
 
 .shortcuts-dialog {
-  background: var(--panel);
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   width: min(640px, 100%);
@@ -348,7 +348,7 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  background: var(--panel);
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   width: 240px;

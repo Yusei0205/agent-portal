@@ -214,7 +214,7 @@
   max-width: 300px;
   max-height: calc(100vh - 80px);
   overflow-y: auto;
-  background: var(--panel);
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow), 0 8px 32px rgba(0,0,0,0.15);

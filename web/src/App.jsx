@@ -29,6 +29,7 @@ import { Configuration } from './pages/Configuration.jsx';
 import { ReviewsPage } from './pages/ReviewsPage.jsx';
 import { TestsPage } from './pages/tests/TestsPage.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
+import { Account } from './pages/Account.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 
 // ── Shortcut definitions (registered once at module load) ─────────────────────
@@ -439,6 +440,7 @@ function Shell({ user, onSignOut }) {
   const isKnowledgeRoute  = route.projectId && route.tab === 'knowledge';
   const isVaultRoute      = route.projectId && route.tab === 'vault';
   const isUsersRoute      = !route.projectId && route.tab === 'users';
+  const isAccountRoute    = !route.projectId && route.tab === 'account';
   const isLoopSpecsRoute  = route.projectId && route.tab === 'loop-specs';
   const isWorkspacesRoute = route.projectId && route.tab === 'workspaces';
   const isApiRoute        = !route.projectId && route.tab === 'api';
@@ -544,6 +546,8 @@ function Shell({ user, onSignOut }) {
             <Knowledge projectId={route.projectId} />
           ) : isVaultRoute ? (
             <Vault projectId={route.projectId} user={user} />
+          ) : isAccountRoute ? (
+            <Account user={user} />
           ) : isUsersRoute ? (
             <AdminPanel user={user} />
           ) : isLoopSpecsRoute ? (

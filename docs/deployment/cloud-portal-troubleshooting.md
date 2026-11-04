@@ -332,3 +332,8 @@ The Integrations page has two parts. **Connected services** is an overview of si
 ### Settings › Providers: "Kiro CLI is not installed on this server" in the cloud portal
 - **Cause:** the Kiro section ran `kiro-cli whoami` on the portal's Lambda, which has no Kiro CLI (Kiro runs in the AgentCore runner), so it reported "not installed" while sessions worked.
 - **Fix:** when `PORTAL_KIRO_AGENTCORE_RUNTIME_ARN` is set, `GET /api/settings/kiro/status` answers `remote: true` and the section shows a note: nothing to install or sign in to on the server; each person signs in under Agent setup › Agent sign-ins.
+
+
+### Account page, sessions, and see-through pop-ups
+- **Account page** (`#/account`, opened from the name at the foot of the rail): profile (read-only), change password (`POST /api/auth/password`), and "Sign out other devices" (`POST /api/auth/sign-out-others`). Changing the password, and using an admin's reset link, now also end the person's other sessions (`deleteSessionsForUser` in both auth repositories; DynamoDB: a Query on `USER#<id>` / `SESSION#`, no scan). This closes the earlier limit that a reset left other devices signed in.
+- **Pop-ups that showed the page through them:** on glass themes (Aurora Glass) `--panel` is translucent, so every floating panel using it was half transparent. The project switcher, account menu, command palette, shortcuts sheet, info tips, dialogs and modals now paint `linear-gradient(var(--panel), var(--panel)), var(--canvas)`: the theme's colour laid over the opaque canvas. Use that for any new floating surface, never a bare `var(--panel)`.

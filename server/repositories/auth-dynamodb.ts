@@ -619,6 +619,30 @@ export class DynamoDbAuthRepository implements AuthRepository {
     );
   }
 
+  async deleteSessionsForUser(userId: string, keepTokenHash: string): Promise<number> {
+    let removed = 0;
+    let startKey: Record<string, AttributeValue> | undefined;
+    do {
+      const resp = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+          ExpressionAttributeValues: marshalItem({ ':pk': `USER#${userId}`, ':sk': 'SESSION#' }),
+          ProjectionExpression: 'SK',
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      for (const item of resp.Items ?? []) {
+        const sk = getString(item, 'SK') ?? '';
+        if (!sk || sk === `SESSION#${keepTokenHash}`) continue;
+        await this.client.send(new DeleteItemCommand({ TableName: this.tableName, Key: { PK: { S: `USER#${userId}` }, SK: { S: sk } } }));
+        removed++;
+      }
+      startKey = resp.LastEvaluatedKey;
+    } while (startKey);
+    return removed;
+  }
+
   async deleteExpiredSessions(): Promise<void> {
     // TTL handles automatic expiry in DynamoDB. No-op.
   }
