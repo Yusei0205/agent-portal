@@ -14,6 +14,17 @@
  *                    vars from the env passed to the SDK subprocess.
  * estimateCost     : shared/agent/pricing.ts, for runs that end without the SDK's total.
  *
+ * Several agents, several sessions
+ * ────────────────────────────────
+ * Subagents   : the project's agents arrive in the payload (`agents`) and go to the SDK, so
+ *               Claude can hand work to them with the Agent tool. Their tool calls go through
+ *               the same canUseTool. Their start and end are streamed as subagent-started /
+ *               subagent-finished / subagent-failed; their text carries `agent`.
+ * Sessions    : with `delegation`, Claude gets the delegate_session tool. A call is streamed as
+ *               a `delegate-request`; the portal starts a new session (its own run, in its own
+ *               microVM) and answers through the broker, like an approval. The child's result is
+ *               posted back to the parent session when it finishes.
+ *
  * Environment scrubbing note
  * ───────────────────────────
  * CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is NOT set — on Linux/arm64 it activates
@@ -42,7 +53,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { scrubEnvForShell } from '../shared/agent/env-scrub.ts';
-import { decideToolCall } from '../shared/agent/tool-policy.ts';
+import { decideToolCall, inputFingerprint } from '../shared/agent/tool-policy.ts';
 import { estimateCost } from '../shared/agent/pricing.ts';
 import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
 import {
@@ -89,6 +100,75 @@ function stopReasonOf(subtype: string, fallback: string): string {
   if (subtype === 'error_max_turns') return 'max_turns';
   if (subtype === 'error_during_execution') return 'error';
   return fallback;
+}
+
+/** The engine's tool that starts a subagent (named Task in older Claude Code versions). */
+const AGENT_TOOLS = new Set(['Agent', 'Task']);
+
+/**
+ * Bedrock models behind the aliases a subagent may name (haiku, sonnet, opus): the global
+ * profiles the runtime's role may call (infra/lib/harness-stack.ts).
+ */
+export const BEDROCK_ALIAS_MODELS = {
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+  ANTHROPIC_DEFAULT_SONNET_MODEL: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  ANTHROPIC_DEFAULT_OPUS_MODEL: 'global.anthropic.claude-opus-4-5-20251101-v1:0',
+} as const;
+
+// ── Child sessions (delegate_session) ────────────────────────────────────────
+
+export const DELEGATE_TOOL = 'delegate_session';
+/** MCP server name: the model sees the tool as mcp__portal__delegate_session. */
+export const PORTAL_MCP_SERVER = 'portal';
+/** How long a delegate call waits for the portal to start the session. */
+const DELEGATE_WAIT_MS = 120_000;
+
+const DELEGATE_DESCRIPTION =
+  'Start a new portal session for a separate piece of this task. The session runs on its own ' +
+  '(its own run and machine) with the same project, model and permission rules, and its result is ' +
+  'posted back to this session when it finishes. Use it for large, independent work that can go on ' +
+  'in parallel; for a quick, focused piece of work use the Agent tool instead. Give the session a ' +
+  "complete, self-contained task: it does not see this conversation. Returns the new session's ID and title.";
+
+/**
+ * The in-process MCP server with delegate_session, or undefined when the run has no delegation.
+ * A call opens a broker request, streams a delegate-request event, and waits for the portal's answer.
+ */
+async function portalMcpServers(
+  sdk: SdkModule,
+  payload: InvocationPayload,
+  emit: EmitFn,
+  broker: ApprovalBroker | undefined,
+  stop: AbortSignal,
+): Promise<Record<string, unknown> | undefined> {
+  if (!payload.delegation || !broker) return undefined;
+  if (typeof sdk.tool !== 'function' || typeof sdk.createSdkMcpServer !== 'function') {
+    emit({ type: 'status', text: 'Child sessions are not available: this Agent SDK has no in-process tools.' });
+    return undefined;
+  }
+  const { z } = await import('zod');
+  const delegate = sdk.tool(
+    DELEGATE_TOOL,
+    DELEGATE_DESCRIPTION,
+    {
+      task: z.string().min(1).max(20_000).describe('The complete task for the new session, with everything it needs to know'),
+      title: z.string().max(200).optional().describe('A short title for the new session'),
+    },
+    async (args: { task?: string; title?: string }) => {
+      const task = String(args.task ?? '').trim();
+      if (!task) return { content: [{ type: 'text', text: 'Error: "task" is required.' }], isError: true };
+      const input: Record<string, unknown> = { task };
+      const title = String(args.title ?? '').trim();
+      if (title) input.title = title;
+      const inputHash = inputFingerprint(DELEGATE_TOOL, input);
+      const req = broker.open(payload.runId, inputHash, DELEGATE_WAIT_MS, stop);
+      emit({ type: 'delegate-request', requestId: req.requestId, input, inputHash });
+      const outcome = await req.outcome;
+      if (outcome.decision === 'allow') return { content: [{ type: 'text', text: outcome.message || 'The session was started.' }] };
+      return { content: [{ type: 'text', text: outcome.message || 'The portal did not start the session.' }], isError: true };
+    },
+  );
+  return { [PORTAL_MCP_SERVER]: sdk.createSdkMcpServer({ name: PORTAL_MCP_SERVER, version: '1.0.0', tools: [delegate] }) };
 }
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
@@ -185,7 +265,7 @@ export async function runInvocation(
     ...scrubbed,
     ...(devAnthropicUrl
       ? { ANTHROPIC_BASE_URL: devAnthropicUrl, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? 'local-test-key' }
-      : { CLAUDE_CODE_USE_BEDROCK: '1' }),
+      : { CLAUDE_CODE_USE_BEDROCK: '1', ...BEDROCK_ALIAS_MODELS }),
     AWS_DEFAULT_REGION: region,
     AWS_REGION: region,
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
@@ -257,6 +337,11 @@ export async function runInvocation(
 
   // Pending tool-use tracking (for tool-end correlation)
   const pendingToolUses = new Map<string, { name: string; inputStr: string }>();
+  // Subagents: the agent each Agent tool call started (by tool_use id), and running subagent tasks.
+  const agentOfToolUse = new Map<string, string>();
+  const subagentTasks = new Map<string, { name: string; toolUseId: string | null }>();
+  const subagentOf = (agentId: unknown): string | undefined =>
+    typeof agentId === 'string' ? subagentTasks.get(agentId)?.name : undefined;
 
   // ── canUseTool ───────────────────────────────────────────────────────────────
   // The same decision as the portal's local engine (shared/agent/tool-policy.ts).
@@ -267,11 +352,13 @@ export async function runInvocation(
   const canUseTool = async (
     toolName: string,
     input: Record<string, unknown>,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; agentID?: string },
   ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> => {
     const inputStr = JSON.stringify(input);
+    // A call made inside a subagent names it, so the portal can show whose call it is.
+    const agent = subagentOf(opts?.agentID);
     const deny = (message: string) => {
-      emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: message });
+      emit({ type: 'tool-blocked', toolName, toolInput: inputStr, reason: message, ...(agent ? { agent } : {}) });
       return { behavior: 'deny' as const, message };
     };
 
@@ -305,12 +392,15 @@ export async function runInvocation(
       if (outcome.remember) allowed.add(decision.rememberKey);
     }
 
-    emit({ type: 'tool-start', toolName, toolInput: inputStr });
+    emit({ type: 'tool-start', toolName, toolInput: inputStr, ...(agent ? { agent } : {}) });
     return { behavior: 'allow', updatedInput: input };
   };
 
   // ── Run SDK ──────────────────────────────────────────────────────────────────
   try {
+    const mcpServers = await portalMcpServers(sdk, payload, emit, broker, abortController.signal);
+    const agentNames = Object.keys(payload.agents ?? {});
+    if (agentNames.length) emit({ type: 'status', text: `Project agents available: ${agentNames.join(', ')}` });
     const q = sdk.query({
       prompt: payload.prompt,
       options: {
@@ -332,6 +422,10 @@ export async function runInvocation(
         // result message (with total_cost_usd and stop_reason:"max_turns").
         // Our manual counter below remains for the turns metric.
         maxTurns,
+        // The project's subagents (the Agent tool can start them by name).
+        ...(agentNames.length ? { agents: payload.agents } : {}),
+        // delegate_session, when the portal lets this run start child sessions.
+        ...(mcpServers ? { mcpServers } : {}),
       },
     }) as AsyncIterable<Record<string, unknown>>;
 
@@ -357,6 +451,9 @@ export async function runInvocation(
 
         const message = msg.message as Record<string, unknown> | undefined;
         if (!message) continue;
+        // Set when a subagent wrote this message: the id of the Agent tool call that started it.
+        const parentToolUse = typeof msg.parent_tool_use_id === 'string' ? msg.parent_tool_use_id : null;
+        const agent = parentToolUse ? (agentOfToolUse.get(parentToolUse) ?? 'subagent') : null;
 
         const usage = message.usage as Record<string, number> | undefined;
         const inputTok = usage?.input_tokens ?? 0;
@@ -368,7 +465,9 @@ export async function runInvocation(
         totalOutputTokens += outputTok;
         totalCacheWriteTokens += cacheWriteTok;
         totalCacheReadTokens += cacheReadTok;
-        estimatedCostUsd += estimateCost(model, usage);
+        // A subagent may use another model than the run's: price its replies at their own model.
+        const replyModel = agent && typeof message.model === 'string' && message.model ? message.model : model;
+        estimatedCostUsd += estimateCost(replyModel, usage);
 
         const content = message.content;
         if (!Array.isArray(content)) continue;
@@ -384,6 +483,9 @@ export async function runInvocation(
             // Store short input summary for tool-end correlation
             const inputSummary = JSON.stringify(toolInput).slice(0, 200);
             pendingToolUses.set(id, { name, inputStr: inputSummary });
+            if (AGENT_TOOLS.has(name)) {
+              agentOfToolUse.set(id, String(toolInput.subagent_type ?? '').trim() || 'general-purpose');
+            }
 
             emit({
               type: 'tool-call',
@@ -394,12 +496,14 @@ export async function runInvocation(
         }
 
         if (textAccum) {
-          if (firstTokenMs === null) {
+          if (firstTokenMs === null && !agent) {
             firstTokenMs = Date.now() - invokeStart;
           }
           emit({
             type: 'assistant-text',
             text: textAccum,
+            // A subagent's text: shown under its name, and not part of the run's answer.
+            ...(agent ? { agent } : {}),
             tokens: {
               input: inputTok,
               output: outputTok,
@@ -427,6 +531,43 @@ export async function runInvocation(
               emit({ type: 'tool-result', name: pending.name, output });
             }
           }
+        }
+
+      } else if (msgType === 'system') {
+        // Subagent tasks: the engine reports when each one starts and how it ends.
+        const subtype = String(msg.subtype ?? '');
+        const taskId = typeof msg.task_id === 'string' ? msg.task_id : '';
+        const isAgentTask = msg.task_type === 'local_agent' || (msg.task_type === undefined && Boolean(msg.subagent_type));
+        if (subtype === 'task_started' && taskId && isAgentTask) {
+          const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : null;
+          const name = String(msg.subagent_type ?? '').trim() || (toolUseId ? agentOfToolUse.get(toolUseId) : undefined) || 'general-purpose';
+          subagentTasks.set(taskId, { name, toolUseId });
+          const parentId = typeof msg.parent_task_id === 'string' ? msg.parent_task_id : null;
+          const parent = parentId ? subagentTasks.get(parentId) : undefined;
+          emit({
+            type: 'subagent-started',
+            id: taskId,
+            name,
+            description: String(msg.description ?? '').slice(0, 300),
+            background: msg.is_backgrounded === true,
+            depth: typeof msg.spawn_depth === 'number' ? msg.spawn_depth : 1,
+            ...(parent ? { parentId, parentName: parent.name } : {}),
+          });
+        } else if (subtype === 'task_notification' && subagentTasks.has(taskId)) {
+          const task = subagentTasks.get(taskId)!;
+          const status = String(msg.status ?? 'completed');
+          const usage = (msg.usage ?? {}) as { total_tokens?: number; tool_uses?: number; duration_ms?: number };
+          emit({
+            type: status === 'completed' ? 'subagent-finished' : 'subagent-failed',
+            id: taskId,
+            name: task.name,
+            status,
+            summary: String(msg.summary ?? '').slice(0, 1000),
+            ...(typeof usage.total_tokens === 'number' ? { tokens: usage.total_tokens } : {}),
+            ...(typeof usage.tool_uses === 'number' ? { toolUses: usage.tool_uses } : {}),
+            ...(typeof usage.duration_ms === 'number' ? { durationMs: usage.duration_ms } : {}),
+          });
+          subagentTasks.delete(taskId);
         }
 
       } else if (msgType === 'result') {
@@ -458,6 +599,10 @@ export async function runInvocation(
   // Flush any pending tool-ends
   for (const [, pending] of pendingToolUses) {
     emit({ type: 'tool-result', name: pending.name, output: '(completed)' });
+  }
+  // A subagent still open here did not report its end (the run stopped first).
+  for (const [id, task] of subagentTasks) {
+    emit({ type: 'subagent-failed', id, name: task.name, status: 'stopped', summary: 'The run ended before this agent finished.' });
   }
 
   // Cost fallback: a stopped or cancelled run ends without the SDK's total.

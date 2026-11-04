@@ -115,3 +115,103 @@ export class ApprovalRelay {
   }
 
 }
+
+// ── Child sessions (delegate_session) ─────────────────────────────────────────
+
+/** The runner's tool that asks the portal for a child session (agent-runner/src/run.ts). */
+export const DELEGATE_TOOL = 'delegate_session';
+/** The name the model and the permission rules see for it (MCP server "portal"). */
+export const DELEGATE_TOOL_FULL_NAME = 'mcp__portal__delegate_session';
+
+export interface DelegateRequestEvent {
+  type: 'delegate-request';
+  requestId: string;
+  input: { task: string; title?: string };
+  inputHash: string;
+}
+
+export function isDelegateRequest(ev: Record<string, unknown>): ev is DelegateRequestEvent & Record<string, unknown> {
+  const input = ev.input as Record<string, unknown> | null;
+  return ev.type === 'delegate-request'
+    && typeof ev.requestId === 'string'
+    && typeof ev.inputHash === 'string'
+    && !!input && typeof input === 'object' && !Array.isArray(input)
+    && typeof input.task === 'string';
+}
+
+/** Starts a child session of this run's session. Throws with a message the agent can read. */
+export type StartChildSession = (task: string, title: string | undefined) => Promise<{ id: string; title: string }>;
+
+/** Longest answer the runner accepts (agentcore-approvals.ts parseApprovalAnswer). */
+const MAX_ANSWER = 4000;
+
+/**
+ * Starts child sessions for a run's delegate_session calls and sends each result back to the
+ * microVM as a mode "answer" invocation (the runner holds the call open in its broker).
+ * Each child is a portal session of its own: its own run, so on AgentCore its own microVM.
+ * When it finishes, the portal posts its result to the parent session (delegation.ts).
+ */
+export class DelegationRelay {
+  constructor(
+    private readonly ctx: RunContext,
+    private readonly send: ControlSender,
+    private readonly rules: readonly PolicyRule[],
+    /** Null when this run may not start child sessions: every request is declined. */
+    private readonly start: StartChildSession | null,
+  ) {}
+
+  /** The answer to one request: the new session as JSON, or why none was started. */
+  async decide(ev: DelegateRequestEvent): Promise<{ decision: 'allow' | 'deny'; message: string }> {
+    const input = ev.input as Record<string, unknown>;
+    const fields = Object.keys(input);
+    const exact = fields.every((k) => k === 'task' || k === 'title')
+      && (input.title === undefined || typeof input.title === 'string')
+      && inputFingerprint(DELEGATE_TOOL, input) === ev.inputHash;
+    if (!exact) return { decision: 'deny', message: 'The request did not match the call it describes, so no session was started.' };
+    if (!this.start) return { decision: 'deny', message: 'Child sessions are turned off for this run.' };
+
+    // The runner already applied the rules; the portal re-checks with its own copy (block rules).
+    const again = decideToolCall({ toolName: DELEGATE_TOOL_FULL_NAME, input, workDir: null, rules: this.rules, trusted: this.ctx.run.trusted, allowed: new Set() });
+    if (again.action === 'deny') return { decision: 'deny', message: again.reason };
+
+    const task = String(input.task).trim();
+    if (!task) return { decision: 'deny', message: 'The task is empty.' };
+    try {
+      const child = await this.start(task, typeof input.title === 'string' && input.title.trim() ? input.title.trim() : undefined);
+      this.ctx.emit('status', { text: `Started child session "${child.title}"` });
+      const message = JSON.stringify({
+        childWorkflowId: child.id,
+        title: child.title,
+        status: 'started',
+        note: 'It runs on its own. Its result is posted to this session when it finishes.',
+      });
+      return { decision: 'allow', message: message.slice(0, MAX_ANSWER) };
+    } catch (e) {
+      const reason = String((e as Error)?.message ?? e);
+      return { decision: 'deny', message: `No session was started: ${reason}`.slice(0, MAX_ANSWER) };
+    }
+  }
+
+  handle(ev: DelegateRequestEvent): void {
+    void (async () => {
+      const outcome = await this.decide(ev);
+      if (this.ctx.signal?.aborted) return;
+      const answer: ApprovalAnswerPayload = {
+        mode: 'answer',
+        runId: this.ctx.run.runId,
+        requestId: ev.requestId,
+        decision: outcome.decision,
+        inputHash: ev.inputHash,
+        remember: false,
+        message: outcome.message,
+      };
+      try {
+        const replies = await this.send(answer as unknown as Record<string, unknown>);
+        const rejected = replies.find((r) => r.type === 'answer-rejected');
+        if (rejected) this.ctx.emit('status', { text: `The agent did not take the session result: ${String(rejected.error ?? 'unknown reason')}` });
+      } catch (e) {
+        this.ctx.emit('status', { text: `Could not send the session result to the agent: ${String((e as Error)?.message ?? e).slice(0, 200)}` });
+      }
+    })();
+  }
+}
