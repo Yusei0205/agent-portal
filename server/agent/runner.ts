@@ -350,6 +350,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
   // Register abort controller
   const ctrl = registerRun(runId);
+  // Set when a limit (not a person) aborts the run; read on both the success and abort paths.
+  let _stopReason: string | null = null;
 
   try {
     // Materialise user config into run home (F5)
@@ -428,7 +430,6 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     const settingsTimeoutMinutes = getSettings().agents.runTimeoutMinutes;
     const effectiveTimeoutMinutes = wfTimeoutMinutes ?? settingsTimeoutMinutes;
     let timeLimitTimer: ReturnType<typeof setTimeout> | null = null;
-    let _stopReason: string | null = null;
     if (effectiveTimeoutMinutes != null && effectiveTimeoutMinutes > 0) {
       const limitAt = new Date(Date.now() + effectiveTimeoutMinutes * 60_000).toISOString();
       await repo.updateRun(runId, { time_limit_at: limitAt });
@@ -515,6 +516,12 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     if (!runStillExists) {
       deregisterRun(runId);
       return;
+    }
+
+    // The time limit stops the engine with an abort too, so the engine throws and the
+    // success path above never records which limit it was. Record it before finalising.
+    if (aborted && _stopReason) {
+      await repo.updateRun(runId, { stop_reason: _stopReason });
     }
 
     const failTs = now();

@@ -15,7 +15,7 @@ import { getDb, one } from '../server/db.ts';
 import { now, generateId } from '../server/util.ts';
 import { setConfig, type Config } from '../server/config.ts';
 import { _setAgentCoreInvokerOverride, runKiroViaAgentCore } from '../server/agent/kiro-agentcore.ts';
-import { runClaudeViaAgentCore, bedrockModelFor } from '../server/agent/claude-agentcore.ts';
+import { runClaudeViaAgentCore, bedrockModelFor, _setCancelGraceMs } from '../server/agent/claude-agentcore.ts';
 import { inputFingerprint } from '../server/agent/tool-policy.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 
@@ -73,15 +73,22 @@ function makeCtx(
   return { ctx, events, asked, ctrl };
 }
 
-/** A stand-in runner: records every invocation; a run waits for its answer before finishing. */
+/**
+ * A stand-in runner: records every invocation; a run waits for its answer before finishing.
+ * With holdOpen, the run streams until the portal closes it, or, with cancelResult, until a
+ * cancel arrives: then, like the real runner, it flushes a tool end and sends its final result.
+ */
 function fakeRuntime(script: {
   request?: { toolName: string; input: Record<string, unknown>; inputHash?: string };
   result?: Record<string, unknown>;
   holdOpen?: boolean;
+  cancelResult?: Record<string, unknown>;
 }) {
   const calls: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
   let answered: (p: Record<string, unknown>) => void = () => {};
   const answer = new Promise<Record<string, unknown>>((r) => { answered = r; });
+  let cancelled: () => void = () => {};
+  const cancelSeen = new Promise<void>((r) => { cancelled = r; });
   _setAgentCoreInvokerOverride(async function* (_arn, sessionId, payload, signal) {
     calls.push({ sessionId, payload });
     if (payload.mode === 'answer') {
@@ -90,6 +97,7 @@ function fakeRuntime(script: {
       return;
     }
     if (payload.mode === 'cancel') {
+      cancelled();
       yield { type: 'cancel-ack', runId: payload.runId } as never;
       return;
     }
@@ -108,7 +116,13 @@ function fakeRuntime(script: {
       await new Promise<void>((resolve, reject) => {
         if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
         signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        if (script.cancelResult) void cancelSeen.then(resolve);
       });
+      if (script.cancelResult) {
+        yield { type: 'tool-result', name: 'Bash', output: '(completed)' } as never;
+        yield script.cancelResult as never;
+        return;
+      }
     }
     yield (script.result ?? {
       type: 'result', runId: payload.runId, stop_reason: 'end_turn', subtype: 'success', costUsd: 0.0123, costEstimated: false,
@@ -195,16 +209,50 @@ describe('Claude on AgentCore — harness parity', () => {
     }
   });
 
-  it('sends a cancel to the microVM when the run is stopped', async () => {
+  it('a cancelled run still records the spend the runner reports when it stops', async () => {
     const ids = makeRun('claude-code');
-    const { ctx, ctrl } = makeCtx(ids, { engine: 'claude-code' });
-    const rt = fakeRuntime({ holdOpen: true });
+    const { ctx, ctrl, events } = makeCtx(ids, { engine: 'claude-code' });
+    const rt = fakeRuntime({
+      holdOpen: true,
+      cancelResult: {
+        type: 'result', runId: ids.runId, stop_reason: 'cancelled', subtype: null, costUsd: 0.0042, costEstimated: true,
+        model: 'global.anthropic.claude-haiku-4-5-20251001-v1:0', metrics: { inputTokens: 300, outputTokens: 40, cacheReadTokens: 900 },
+      },
+    });
     const p = runClaudeViaAgentCore(ctx, ARN);
     await new Promise((r) => setTimeout(r, 50));
+    const before = events.length;
     ctrl.abort();
     await assert.rejects(p, (e: Error) => e.name === 'AbortError');
-    await new Promise((r) => setTimeout(r, 20));
+
     assert.ok(rt.calls.some((c) => c.payload.mode === 'cancel' && c.payload.runId === ids.runId), 'cancel was sent');
+    assert.equal(events.length, before, 'nothing after the stop is relayed to the run');
+    const row = one<{ cost_usd: number; input_tokens: number; cache_read_tokens: number }>('SELECT cost_usd, input_tokens, cache_read_tokens FROM p6_runs WHERE id = ?', ids.runId)!;
+    assert.equal(row.cost_usd, 0.0042, 'the spend up to the stop is on the run');
+    assert.equal(row.input_tokens, 300);
+    assert.equal(row.cache_read_tokens, 900);
+    const spend = one<{ n: number; usd: number }>('SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM budget_usage WHERE workflow_id = ?', ids.workflowId)!;
+    assert.deepEqual([spend.n, spend.usd], [1, 0.0042], 'and counts toward the budget');
+  });
+
+  it('a runner that never answers the cancel is cut off after the grace period', async () => {
+    _setCancelGraceMs(50);
+    try {
+      const ids = makeRun('claude-code');
+      const { ctx, ctrl } = makeCtx(ids, { engine: 'claude-code' });
+      const rt = fakeRuntime({ holdOpen: true });
+      const p = runClaudeViaAgentCore(ctx, ARN);
+      await new Promise((r) => setTimeout(r, 50));
+      const stoppedAt = Date.now();
+      ctrl.abort();
+      await assert.rejects(p, (e: Error) => e.name === 'AbortError');
+      assert.ok(Date.now() - stoppedAt < 2_000, 'the portal does not wait past the grace period');
+      assert.ok(rt.calls.some((c) => c.payload.mode === 'cancel' && c.payload.runId === ids.runId), 'cancel was sent');
+      const row = one<{ cost_usd: number }>('SELECT cost_usd FROM p6_runs WHERE id = ?', ids.runId)!;
+      assert.equal(row.cost_usd, 0, 'no result, so no spend to record');
+    } finally {
+      _setCancelGraceMs(null);
+    }
   });
 
   it('maps model names to Bedrock IDs', () => {

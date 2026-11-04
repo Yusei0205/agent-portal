@@ -247,5 +247,8 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
     let status = '';
     for (let i = 0; i < 100 && (status = await ping()) !== 'Healthy'; i++) await new Promise((r) => setTimeout(r, 200));
     assert.equal(status, 'Healthy', 'the runner stopped the run and is idle');
+    // The model answered once before the stop: the runner's final result carries that spend.
+    const row = one<{ cost_usd: number; input_tokens: number }>('SELECT cost_usd, input_tokens FROM p6_runs WHERE id = ?', t.runId)!;
+    assert.ok(row.input_tokens > 0 && row.cost_usd > 0, `spend up to the stop recorded: ${JSON.stringify(row)}`);
   });
 });

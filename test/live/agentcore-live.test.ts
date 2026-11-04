@@ -130,6 +130,8 @@ describe('LIVE: Claude runs in AgentCore with the harness', { skip: ARN ? false 
     await assert.rejects(p, (e: Error) => e.name === 'AbortError');
     report('cancel', t);
     assert.ok(t.events.some((e) => e.type === 'tool-start'), 'the long command had started before the stop');
+    const row = one<{ cost_usd: number; input_tokens: number }>('SELECT cost_usd, input_tokens FROM p6_runs WHERE id = ?', t.runId)!;
+    assert.ok(row.cost_usd > 0 && row.input_tokens > 0, 'the spend up to the stop is recorded');
   });
 
   it('an answer for a different call is refused by the runner', async () => {

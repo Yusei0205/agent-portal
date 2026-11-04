@@ -537,17 +537,59 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     }
   };
 
+  // ── Spend: what the model used, recorded once per run (cancelled and time-limited runs too) ─
+  const recordSpend = async (): Promise<void> => {
+    // Estimate cost if the SDK didn't report it (it reports only in its final result).
+    if (totalCostUsd === 0 && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+      totalCostUsd = estimateCost(model, {
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+        cache_read_input_tokens: totalCacheReadTokens,
+        cache_creation_input_tokens: totalCacheWriteTokens,
+      });
+    }
+
+    // Persist totals to p6_runs
+    await repo.updateRun(run.runId, {
+      cost_usd: totalCostUsd,
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      cache_write_tokens: totalCacheWriteTokens,
+      cache_read_tokens: totalCacheReadTokens,
+      model,
+    });
+
+    // Insert budget_usage record
+    if (totalCostUsd > 0 || totalInputTokens > 0 || totalOutputTokens > 0) {
+      const { getBudgetRepository } = await import('../repositories/budget.ts');
+      const wfRowCC = await repo.getWorkflowById(run.workflowId);
+      await getBudgetRepository().record({
+        user_id: wfRowCC?.created_by ?? null,
+        project_id: run.projectId,
+        workflow_id: run.workflowId,
+        run_id: null,
+        cost_usd: totalCostUsd,
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+        provider: sdkEnv.CLAUDE_CODE_USE_BEDROCK ? 'bedrock' : sdkEnv.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'anthropic',
+        model,
+        created_at: now(),
+      });
+    }
+  };
+
+  // A cancel or the time limit aborts the engine. The model was still used up to then,
+  // so that spend is recorded before the abort is reported (below).
+  let stopped = false;
   try {
     await runSdkQuery();
   } catch (e: unknown) {
     const isAbort =
       (e as { name?: string })?.name === 'AbortError' || abortController.signal.aborted;
     if (isAbort) {
-      throw new DOMException('Run cancelled', 'AbortError');
-    }
-
-    // If we tried to resume and it failed, retry once without resume
-    if (resumeId && !didRetryWithoutResume) {
+      stopped = true;
+    } else if (resumeId && !didRetryWithoutResume) {
+      // If we tried to resume and it failed, retry once without resume
       const reason = String((e as Error)?.message ?? e).slice(0, 200);
       const recap = await buildConversationRecap(run.workflowId, run.runId);
       const basePrompt = run.kind === 'review' ? `${run.goal}\n\n${REVIEW_SYSTEM_APPEND}` : run.goal;
@@ -568,8 +610,8 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       } catch (e2: unknown) {
         const isAbort2 =
           (e2 as { name?: string })?.name === 'AbortError' || abortController.signal.aborted;
-        if (isAbort2) throw new DOMException('Run cancelled', 'AbortError');
-        throw e2;
+        if (!isAbort2) throw e2;
+        stopped = true;
       }
     } else {
       throw e;
@@ -584,9 +626,12 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     }
   }
 
-  // If the run was cancelled (loop exited via break), throw now so the runner
-  // marks the run as cancelled rather than done.
-  if (abortController.signal.aborted || ctx.signal?.aborted) {
+  // Cancelled or stopped by the time limit (the loop may also have exited via break):
+  // record the spend so far, then throw so the runner marks the run cancelled, not done.
+  if (stopped || abortController.signal.aborted || ctx.signal?.aborted) {
+    await recordSpend().catch((err: unknown) => {
+      console.warn(`[claude-code] Could not record the spend of stopped run ${run.runId}:`, err);
+    });
     throw new DOMException('Run cancelled', 'AbortError');
   }
 
@@ -595,43 +640,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     emit('tool-end', { toolName: pending.name, output: '(completed)' });
   }
 
-  // ── Estimate cost if SDK didn't report it ──────────────────────────────────
-  if (totalCostUsd === 0 && (totalInputTokens > 0 || totalOutputTokens > 0)) {
-    totalCostUsd = estimateCost(model, {
-      input_tokens: totalInputTokens,
-      output_tokens: totalOutputTokens,
-      cache_read_input_tokens: totalCacheReadTokens,
-      cache_creation_input_tokens: totalCacheWriteTokens,
-    });
-  }
-
-  // Persist totals to p6_runs
-  await repo.updateRun(run.runId, {
-    cost_usd: totalCostUsd,
-    input_tokens: totalInputTokens,
-    output_tokens: totalOutputTokens,
-    cache_write_tokens: totalCacheWriteTokens,
-    cache_read_tokens: totalCacheReadTokens,
-    model,
-  });
-
-  // ── Insert budget_usage record ─────────────────────────────────────────────
-  if (totalCostUsd > 0 || totalInputTokens > 0 || totalOutputTokens > 0) {
-    const { getBudgetRepository } = await import('../repositories/budget.ts');
-    const wfRowCC = await repo.getWorkflowById(run.workflowId);
-    await getBudgetRepository().record({
-      user_id: wfRowCC?.created_by ?? null,
-      project_id: run.projectId,
-      workflow_id: run.workflowId,
-      run_id: null,
-      cost_usd: totalCostUsd,
-      input_tokens: totalInputTokens,
-      output_tokens: totalOutputTokens,
-      provider: sdkEnv.CLAUDE_CODE_USE_BEDROCK ? 'bedrock' : sdkEnv.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'anthropic',
-      model,
-      created_at: now(),
-    });
-  }
+  await recordSpend();
 
   const summary = textParts.join('\n').trim() || 'Run complete.';
   emit('run-complete', { result: summary, cost_usd: totalCostUsd });
