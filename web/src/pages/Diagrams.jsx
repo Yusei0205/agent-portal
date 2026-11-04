@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
@@ -35,6 +36,7 @@ function StatusBadge({ status, stale }) {
 // ── New diagram modal ─────────────────────────────────────────────────────────
 
 function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated }) {
+  const [ai, setAi] = useState({});
   const KINDS = [
     { id: 'system_context', label: 'System context' },
     { id: 'components',     label: 'Components' },
@@ -70,6 +72,7 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
     setError(null);
     try {
       const r = await api.post(`/api/projects/${projectId}/diagrams`, {
+        ...ai,
         name: name.trim() || undefined,
         kind,
         style,
@@ -139,6 +142,9 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
               </div>
             )}
           </div>
+
+          <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="ai0" />
+          <p className="field-hint">The agent runs on this sign-in and model, and writes the file.</p>
 
           <div className="field">
             <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
@@ -215,6 +221,7 @@ function ViewDiagramModal({ diagram, onClose }) {
 // ── Refresh diagram dialog ────────────────────────────────────────────────────
 
 function RefreshDiagramDialog({ projectId, diagram, onClose, onRefreshed }) {
+  const [ai, setAi] = useState({});
   const [busy, setBusy]                   = useState(false);
   const [error, setError]                 = useState(null);
   const [attachmentIds, setAttachmentIds] = useState([]);
@@ -239,7 +246,7 @@ function RefreshDiagramDialog({ projectId, diagram, onClose, onRefreshed }) {
     try {
       await api.post(
         `/api/projects/${diagram.project_id}/diagrams/${diagram.id}/refresh`,
-        { attachmentIds: attachmentIds.length ? attachmentIds : undefined },
+        { ...ai, attachmentIds: attachmentIds.length ? attachmentIds : undefined },
       );
       onRefreshed();
       onClose();
@@ -285,6 +292,9 @@ function RefreshDiagramDialog({ projectId, diagram, onClose, onRefreshed }) {
           </p>
           <div className="field">
             <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+            <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="ai1" />
+            <p className="field-hint">The agent runs on this sign-in and model, and writes the file.</p>
+
             <AttachmentPicker
               projectId={projectId}
               initialAttachments={diagram.attachments ?? []}

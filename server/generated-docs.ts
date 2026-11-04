@@ -37,6 +37,9 @@ import {
   getAttachmentsView,
 } from './ai-attachments.ts';
 import { createWorkDir } from './workflows/working-copies.ts';
+import { buildDocx } from './docgen.ts';
+import { resolveCreateAi, type CreateAi } from './create-ai.ts';
+import { repoContext, stageKnowledgeDocs, type DocSources } from './create-context.ts';
 
 import { getMemberRow, getProjectRow } from './project-access.ts';
 export { DOC_TYPES, DOC_TYPE_LABELS, DOC_LIMITS, type DocType };
@@ -121,6 +124,42 @@ async function latestVersion(docId: string): Promise<Row | null> {
   return ((await getGeneratedDocRepository().getLatestVersion(docId)) as unknown as Row | null) ?? null;
 }
 
+/**
+ * The prompt and the staged inputs of a document run: the chosen repositories (cloned by the runner), chosen
+ * project documents (Markdown under docs/md/) and attachments (under attachments/).
+ */
+async function prepareDocRun(
+  project: Row,
+  doc: { type: DocType; title: string; audience: string },
+  sources: DocSources,
+  attachmentRows: Row[],
+): Promise<{ goal: string; preWorkflowId?: string; preWorkDir: string | null; repoIds: string[] }> {
+  const { repoIds, promptRepos } = await repoContext(String(project.id), sources.repoIds, DOC_LIMITS.repos);
+  const wantDocs = (sources.docIds?.length ?? 0) > 0;
+  let preWorkflowId: string | undefined;
+  let preWorkDir: string | null = null;
+  let stagedAttachments: Awaited<ReturnType<typeof stageAttachmentsToWorkDir>> = [];
+  let stagedDocs = 0;
+  if (attachmentRows.length > 0 || wantDocs) {
+    preWorkflowId = newId('w_');
+    const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
+    preWorkDir = await createWorkDir(preWorkflowId, projectDir);
+    if (attachmentRows.length > 0) stagedAttachments = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
+    if (wantDocs) stagedDocs = await stageKnowledgeDocs(String(project.id), String(project.slug), sources.docIds, preWorkDir);
+  }
+  let goal = composeDocPrompt({
+    type: doc.type,
+    title: doc.title,
+    audience: doc.audience,
+    repos: promptRepos,
+    knowledge: stagedDocs > 0,
+    decisions: false,
+    diagrams: [],
+  });
+  if (stagedAttachments.length) goal += buildAttachmentPromptBlock(stagedAttachments);
+  return { goal, preWorkflowId, preWorkDir, repoIds };
+}
+
 async function startDocRun(
   projectId: string,
   docId: string,
@@ -128,10 +167,12 @@ async function startDocRun(
   userId: string,
   leadAgent?: string | null,
   trustAllTools?: boolean,
-  preconfig?: { workflowId?: string; workDir?: string | null },
+  preconfig?: { workflowId?: string; workDir?: string | null; repoIds?: string[] },
+  ai?: CreateAi,
 ): Promise<string> {
   const workflowId = preconfig?.workflowId ?? newId('w_');
   const ts = now();
+  const aiChoice = ai ?? await resolveCreateAi(userId, {});
 
   const sessions = getSessionsRepository();
   await sessions.createWorkflow({
@@ -139,16 +180,17 @@ async function startDocRun(
     project_id: projectId,
     goal,
     status: 'pending',
-    engine: 'demo',
-    trust_tools: trustAllTools ? 1 : 0,
+    engine: aiChoice.engine,
+    // A one-shot cloud run cannot ask for approval, and the agent has to write the file.
+    trust_tools: aiChoice.engine === 'demo' ? (trustAllTools ? 1 : 0) : 1,
     lead_agent: leadAgent ?? null,
     workspace_id: null,
     output_files_enabled: 0,
-    repo_ids: '[]',
+    repo_ids: JSON.stringify(preconfig?.repoIds ?? []),
     iteration_count: 0,
     max_iterations: 1,
-    credential_id: null,
-    model: '',
+    credential_id: aiChoice.credential_id,
+    model: aiChoice.model,
     created_by: userId,
     created_at: ts,
     updated_at: ts,
@@ -200,6 +242,26 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
     }
   } catch { /* best effort */ }
 
+  // The agent writes Markdown; the Word file is built from it here.
+  let warnings: string | null = null;
+  if (mdPath && !docxPath) {
+    try {
+      const buf = await buildDocx(fs.readFileSync(mdPath, 'utf8'));
+      docxPath = path.join(path.dirname(mdPath), 'document.docx');
+      fs.writeFileSync(docxPath, buf);
+    } catch (e) {
+      warnings = `The Word file could not be built (${String((e as { message?: string })?.message ?? e).slice(0, 200)}). The Markdown is available.`;
+    }
+  }
+  if (!mdPath) {
+    // Nothing to download: say so instead of showing a document that cannot be opened.
+    await getGeneratedDocRepository().update(String(d.id), {
+      status: 'failed',
+      error: 'The agent finished without leaving a Markdown file. Try again, or choose a different model.',
+    });
+    return;
+  }
+
   if (mdPath) await persistFile(mdPath, 'text/markdown');
   if (docxPath) await persistFile(docxPath);
 
@@ -215,7 +277,7 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
     version_num: versionNum,
     md_path: mdPath,
     docx_path: docxPath,
-    warnings: null,
+    warnings,
     workflow_id: workflowId,
     created_at: ts,
   });
@@ -240,7 +302,7 @@ export function registerGeneratedDocRoutes(): void {
 
     const result = await Promise.all(docs.map(async (d) => {
       const v = d.latest_version_id
-        ? ((await getGeneratedDocRepository().getVersionById(String(d.latest_version_id))) as unknown as Row | null)
+        ? await latestVersion(String(d.id))
         : null;
       return await docView(d, v);
     }));
@@ -288,27 +350,14 @@ export function registerGeneratedDocRoutes(): void {
       throw badRequest(`A project can hold at most ${DOC_LIMITS.perProject} generated documents`);
     }
 
-    // Build the goal/prompt
-    let goal = composeDocPrompt({
-      type: docType as DocType,
-      title: name,
-      audience: audience ?? '',
-      repos: [],
-      knowledge: Boolean(sources.docIds?.length),
-      decisions: false,
-      diagrams: [],
-    });
-
-    // Pre-stage attachment files if provided
-    let preWorkflowId: string | undefined;
-    let preWorkDir: string | null = null;
-    if (attachmentRows.length > 0) {
-      preWorkflowId = newId('w_');
-      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
-      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
-      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
-      goal += buildAttachmentPromptBlock(staged);
-    }
+    // Which sign-in and model run it (checked before anything is created), then the prompt and the staged inputs.
+    const ai = await resolveCreateAi(req.user!.id, body);
+    const { goal, preWorkflowId, preWorkDir, repoIds } = await prepareDocRun(
+      project,
+      { type: docType as DocType, title: name, audience: audience ?? '' },
+      sources,
+      attachmentRows,
+    );
 
     const id = newId('gd_');
     const ts = now();
@@ -338,7 +387,8 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       leadAgent,
       trustAllTools,
-      { workflowId: preWorkflowId, workDir: preWorkDir },
+      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds },
+      ai,
     );
 
     // Link attachments to this document
@@ -402,25 +452,14 @@ export function registerGeneratedDocRoutes(): void {
       attachmentRows = rows ?? [];
     }
 
-    let goal = composeDocPrompt({
-      type: String(d.doc_type) as DocType,
-      title: String(d.name),
-      audience: String(d.audience ?? ''),
-      repos: [],
-      knowledge: false,
-      decisions: false,
-      diagrams: [],
-    });
-
-    let preWorkflowId: string | undefined;
-    let preWorkDir: string | null = null;
-    if (attachmentRows.length > 0) {
-      preWorkflowId = newId('w_');
-      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
-      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
-      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
-      goal += buildAttachmentPromptBlock(staged);
-    }
+    const sources = parseJson<DocSources>(String(d.sources_json ?? '{}'), {});
+    const ai = await resolveCreateAi(req.user!.id, body);
+    const { goal, preWorkflowId, preWorkDir, repoIds } = await prepareDocRun(
+      project,
+      { type: String(d.doc_type) as DocType, title: String(d.name), audience: String(d.audience ?? '') },
+      sources,
+      attachmentRows,
+    );
 
     const workflowId = await startDocRun(
       String(project.id),
@@ -429,7 +468,8 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       d.lead_agent ? String(d.lead_agent) : null,
       Boolean(d.trust_all_tools),
-      { workflowId: preWorkflowId, workDir: preWorkDir },
+      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds },
+      ai,
     );
 
     if (rawAttachmentIds !== null && rawAttachmentIds.length > 0) {
@@ -459,25 +499,14 @@ export function registerGeneratedDocRoutes(): void {
       attachmentRows = rows ?? [];
     }
 
-    let goal = composeDocPrompt({
-      type: String(d.doc_type) as DocType,
-      title: String(d.name),
-      audience: String(d.audience ?? ''),
-      repos: [],
-      knowledge: false,
-      decisions: false,
-      diagrams: [],
-    });
-
-    let preWorkflowId: string | undefined;
-    let preWorkDir: string | null = null;
-    if (attachmentRows.length > 0) {
-      preWorkflowId = newId('w_');
-      const projectDir = path.join(config.dataDir, 'projects', String(project.slug));
-      preWorkDir = await createWorkDir(preWorkflowId, projectDir);
-      const staged = await stageAttachmentsToWorkDir(attachmentRows, preWorkDir);
-      goal += buildAttachmentPromptBlock(staged);
-    }
+    const sources = parseJson<DocSources>(String(d.sources_json ?? '{}'), {});
+    const ai = await resolveCreateAi(req.user!.id, ((req.body ?? {}) as Record<string, unknown>));
+    const { goal, preWorkflowId, preWorkDir, repoIds } = await prepareDocRun(
+      project,
+      { type: String(d.doc_type) as DocType, title: String(d.name), audience: String(d.audience ?? '') },
+      sources,
+      attachmentRows,
+    );
 
     const workflowId = await startDocRun(
       String(project.id),
@@ -486,7 +515,8 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       d.lead_agent ? String(d.lead_agent) : null,
       Boolean(d.trust_all_tools),
-      { workflowId: preWorkflowId, workDir: preWorkDir },
+      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds },
+      ai,
     );
 
     if (effectiveAttachmentIds.length > 0) {
@@ -522,7 +552,7 @@ export function registerGeneratedDocRoutes(): void {
       return;
     }
 
-    const v = (await getGeneratedDocRepository().getVersionById(String(d.latest_version_id))) as unknown as Row | null;
+    const v = await latestVersion(String(d.id));
     if (!v) {
       sendJson(res, 404, { error: 'Version not found' });
       return;
@@ -530,7 +560,7 @@ export function registerGeneratedDocRoutes(): void {
 
     const filePath = format === 'docx' ? v.docx_path : v.md_path;
     if (!filePath || !(await restoreFile(String(filePath)))) {
-      sendJson(res, 404, { error: `No ${format.toUpperCase()} file available` });
+      sendJson(res, 404, { error: String(v.warnings ?? '').trim() || `No ${format.toUpperCase()} file available` });
       return;
     }
 

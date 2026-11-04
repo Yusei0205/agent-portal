@@ -41,7 +41,7 @@ import { execSync } from 'node:child_process';
 import { guardToolCall } from '../shared/guard.js';
 import { scrubEnvForShell } from '../shared/env-scrub.js';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
-import { emitRunnerFiles } from '../shared/runner-files.js';
+import { emitRunnerFiles, writeInputFiles } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
@@ -186,6 +186,12 @@ export async function runInvocation(
       const msg = (e as Error)?.message ?? String(e);
       throw new Error(`git clone failed: ${msg.slice(0, 300)}`);
     }
+  }
+
+  // Files the portal staged for this run (attachments, chosen project documents).
+  if (payload.inputFiles?.length) {
+    const n = writeInputFiles(workDir, payload.inputFiles);
+    emit({ type: 'status', text: `${n} input file${n === 1 ? '' : 's'} placed in the work folder` });
   }
 
   // ── The session's repositories (cloned under repos/) ───────────────────────

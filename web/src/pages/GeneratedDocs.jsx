@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
+import { CreateContextPicker } from '../components/CreateContextPicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
@@ -46,6 +48,8 @@ const DOC_TYPES = [
 ];
 
 function NewDocModal({ projectId, onClose, onCreated }) {
+  const [ai, setAi] = useState({});
+  const [ctx, setCtx] = useState({ repoIds: [], docIds: [] });
   const [name, setName] = useState('');
   const [docType, setDocType] = useState('overview');
   const [audience, setAudience] = useState('');
@@ -70,7 +74,8 @@ function NewDocModal({ projectId, onClose, onCreated }) {
         name:          name.trim(),
         docType,
         audience:      audience.trim() || undefined,
-        sources:       {},
+        ...ai,
+        sources:       ctx,
         attachmentIds: attachmentIds.length ? attachmentIds : undefined,
       });
       onCreated(r);
@@ -124,6 +129,11 @@ function NewDocModal({ projectId, onClose, onCreated }) {
 
           {error && <p className="error-msg" role="alert">{error}</p>}
 
+          <CreateContextPicker projectId={projectId} onChange={setCtx} disabled={busy} attachmentCount={attachmentIds.length} />
+
+          <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="ai0" />
+          <p className="field-hint">The agent runs on this sign-in and model, and writes the file.</p>
+
           <AttachmentPicker
             projectId={projectId}
             onAttachmentsChange={handleAttachments}
@@ -147,6 +157,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
 // ── Refresh document dialog ───────────────────────────────────────────────────
 
 function RefreshDocDialog({ projectId, doc, onClose, onRefreshed }) {
+  const [ai, setAi] = useState({});
   const [busy, setBusy]                   = useState(false);
   const [error, setError]                 = useState(null);
   const [attachmentIds, setAttachmentIds] = useState([]);
@@ -171,7 +182,7 @@ function RefreshDocDialog({ projectId, doc, onClose, onRefreshed }) {
     try {
       await api.post(
         `/api/projects/${projectId}/generated-docs/${doc.id}/refresh`,
-        { attachmentIds: attachmentIds.length ? attachmentIds : undefined },
+        { ...ai, attachmentIds: attachmentIds.length ? attachmentIds : undefined },
       );
       onRefreshed();
       onClose();
@@ -215,6 +226,9 @@ function RefreshDocDialog({ projectId, doc, onClose, onRefreshed }) {
             Regenerate <strong>{doc.name}</strong>. Attach additional files to supplement
             or replace the existing source material.
           </p>
+          <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="ai1" />
+          <p className="field-hint">The agent runs on this sign-in and model, and writes the file.</p>
+
           <div className="field">
             <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
             <AttachmentPicker

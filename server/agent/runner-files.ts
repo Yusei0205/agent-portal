@@ -63,6 +63,8 @@ export function collectRunnerFiles(workDir: string, sinceMs = 0): { files: Runne
       if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) {
         if (RUNNER_EXCLUDED_DIRS.has(e.name)) continue;
+        // Staged inputs (attachments, project documents) are not results.
+        if (r === 'attachments' || r === 'docs/md') continue;
         walk(abs, r);
         continue;
       }
@@ -184,4 +186,73 @@ export function createFileReceiver(workDir: string, onWritten?: (abs: string) =>
       if (onWritten) await onWritten(abs);
     },
   };
+}
+
+// ── Files going the other way: staged inputs ────────────────────────────────────────────────────────────────
+
+/** Folders of the work folder whose files are sent to the runner before the agent starts. */
+export const INPUT_DIRS = ['attachments', 'docs/md'] as const;
+
+export const INPUT_FILE_EXTS = new Set([
+  '.md', '.txt', '.csv', '.json', '.yaml', '.yml', '.html', '.pdf', '.docx', '.xlsx', '.pptx',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.drawio',
+]);
+
+export const INPUT_FILE_LIMITS = { files: 30, fileBytes: 2 * 1024 * 1024, totalBytes: 8 * 1024 * 1024 };
+
+export interface InputFile {
+  /** Relative path inside the work folder, under attachments/ or docs/md/. */
+  path: string;
+  /** File content, base64. */
+  data: string;
+}
+
+/** Portal side: the files staged for a run (attachments, chosen project documents), within the limits. */
+export function collectInputFiles(workDir: string): InputFile[] {
+  const out: InputFile[] = [];
+  let total = 0;
+  const walk = (abs: string, rel: string, depth: number): void => {
+    if (depth > 3) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
+      const a = path.join(abs, e.name);
+      const r = `${rel}/${e.name}`;
+      if (e.isDirectory()) { walk(a, r, depth + 1); continue; }
+      if (!e.isFile() || !INPUT_FILE_EXTS.has(path.extname(e.name).toLowerCase())) continue;
+      let st: fs.Stats;
+      try { st = fs.statSync(a); } catch { continue; }
+      if (st.size === 0 || st.size > INPUT_FILE_LIMITS.fileBytes) continue;
+      if (out.length >= INPUT_FILE_LIMITS.files || total + st.size > INPUT_FILE_LIMITS.totalBytes) continue;
+      try { out.push({ path: r, data: fs.readFileSync(a).toString('base64') }); total += st.size; } catch { /* skip */ }
+    }
+  };
+  for (const d of INPUT_DIRS) walk(path.join(workDir, ...d.split('/')), d, 0);
+  return out;
+}
+
+/** Runner side: write the files the portal sent into the work folder. Re-checks every path and limit. Returns how many were written. */
+export function writeInputFiles(workDir: string, files: unknown): number {
+  if (!Array.isArray(files)) return 0;
+  const root = path.resolve(workDir);
+  let written = 0;
+  let total = 0;
+  for (const f of files.slice(0, INPUT_FILE_LIMITS.files)) {
+    const rel = (f as { path?: unknown })?.path;
+    const data = (f as { data?: unknown })?.data;
+    if (typeof rel !== 'string' || typeof data !== 'string' || !rel || rel.length > 300 || rel.includes('\0') || rel.includes('\\') || rel.startsWith('/')) continue;
+    const norm = path.posix.normalize(rel);
+    if (norm.split('/').some((seg) => seg === '..' || seg === '') || !INPUT_DIRS.some((d) => norm.startsWith(`${d}/`))) continue;
+    if (!INPUT_FILE_EXTS.has(path.posix.extname(norm).toLowerCase())) continue;
+    const buf = Buffer.from(data, 'base64');
+    if (buf.length === 0 || buf.length > INPUT_FILE_LIMITS.fileBytes || total + buf.length > INPUT_FILE_LIMITS.totalBytes) continue;
+    const abs = path.resolve(root, ...norm.split('/'));
+    if (!abs.startsWith(root + path.sep)) continue;
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, buf);
+    total += buf.length;
+    written++;
+  }
+  return written;
 }

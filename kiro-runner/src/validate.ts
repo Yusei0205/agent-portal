@@ -40,6 +40,8 @@ export interface KiroRunPayload {
   mcpServers?: unknown[];
   /** AWS_* variables for the agent's shell: the project's AWS account. */
   awsEnv?: Record<string, string>;
+  /** Staged files to write into the work folder first (checked again by shared/runner-files.ts). */
+  inputFiles?: unknown[];
   /** Check steps to run after the agent finishes (checked again in run.ts by shared/runner-checks.ts). */
   checks?: unknown[];
   /** The model kiro-cli should use (chosen with session/set_model); kiro's own default when absent. */
@@ -180,6 +182,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
       ...(cleanAwsEnv(obj.awsEnv) ? { awsEnv: cleanAwsEnv(obj.awsEnv) } : {}),
+      ...(Array.isArray(obj.inputFiles) && obj.inputFiles.length <= 30 ? { inputFiles: obj.inputFiles as unknown[] } : {}),
       ...(Array.isArray(obj.checks) && obj.checks.length <= 8 ? { checks: obj.checks as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       token: {

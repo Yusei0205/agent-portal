@@ -1996,3 +1996,10 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 .aws-item { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .aws-item-main { display: grid; gap: 2px; margin-right: auto; min-width: 0; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--link, var(--accent)); cursor: pointer; font: inherit; text-decoration: underline; }
+
+/* What a generated document reads */
+.context-picker { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; display: grid; gap: 10px; margin: 0; }
+.context-picker legend { padding: 0 6px; font-size: 0.8rem; font-weight: 600; color: var(--ink-2); }
+.context-group { display: grid; gap: 4px; }
+.context-group-title { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); }
+.context-item { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; cursor: pointer; }

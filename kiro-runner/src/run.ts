@@ -14,7 +14,7 @@
  *   - Temp DB and temp dirs are deleted at the end regardless of outcome.
  */
 
-import { emitRunnerFiles } from '../shared/runner-files.js';
+import { emitRunnerFiles, writeInputFiles } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
@@ -345,6 +345,10 @@ export async function runKiroRun(
 
       workDir = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-work-${runId}-`));
       kiroHome = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-home-${runId}-`));
+      if (payload.inputFiles?.length) {
+        const n = writeInputFiles(workDir, payload.inputFiles);
+        emit({ type: 'status', text: `${n} input file${n === 1 ? '' : 's'} placed in the work folder` });
+      }
 
       // The session's repositories, under repos/ in the agent's work folder
       if (payload.repos?.length) {

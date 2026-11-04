@@ -39,6 +39,7 @@ import { runClaudeCode } from './claude-code.ts';
 import { runKiro } from './kiro.ts';
 import { materialiseForRun, cleanupRunHome } from '../user-config.ts';
 import { projectAwsEnv } from '../project-aws.ts';
+import { collectInputFiles } from './runner-files.ts';
 import { collectOutputFiles } from '../output-files.ts';
 import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
@@ -477,6 +478,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       if (loopState?.checks?.length) agentRun.runnerChecks = loopState.checks;
       agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null)
         .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
+      const inputFiles = collectInputFiles(workDir);
+      if (inputFiles.length) agentRun.runnerInputFiles = inputFiles;
       agentRun.runnerAwsEnv = (await projectAwsEnv(agentRun.projectId).catch((e) => { console.warn('[runner] AWS account skipped:', e); return null; })) ?? undefined;
       if (specs.length > 0) {
         agentRun.runnerRepos = specs;

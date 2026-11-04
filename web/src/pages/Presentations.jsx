@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
@@ -61,6 +62,7 @@ const SOURCE_KINDS = [
 ];
 
 function NewPresentationModal({ projectId, onClose, onCreated }) {
+  const [ai, setAi] = useState({});
   const [name, setName] = useState('');
   const [sourceKind, setSourceKind] = useState('topic');
   const [topic, setTopic] = useState('');
@@ -88,6 +90,7 @@ function NewPresentationModal({ projectId, onClose, onCreated }) {
     setError(null);
     try {
       const r = await api.post(`/api/projects/${projectId}/presentations`, {
+        ...ai,
         name:          name.trim(),
         sourceKind,
         topic:         sourceKind === 'topic' ? topic.trim() : undefined,
@@ -200,6 +203,9 @@ function NewPresentationModal({ projectId, onClose, onCreated }) {
 
           {error && <p className="error-msg" role="alert">{error}</p>}
 
+          <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="ai0" />
+          <p className="field-hint">The agent runs on this sign-in and model, and writes the file.</p>
+
           <AttachmentPicker
             projectId={projectId}
             onAttachmentsChange={handleAttachments}
@@ -223,6 +229,7 @@ function NewPresentationModal({ projectId, onClose, onCreated }) {
 // ── Refresh presentation dialog ───────────────────────────────────────────────
 
 function RefreshPresDialog({ projectId, presentation, onClose, onRefreshed }) {
+  const [ai, setAi] = useState({});
   const [busy, setBusy]                   = useState(false);
   const [error, setError]                 = useState(null);
   const [attachmentIds, setAttachmentIds] = useState([]);
@@ -247,7 +254,7 @@ function RefreshPresDialog({ projectId, presentation, onClose, onRefreshed }) {
     try {
       await api.post(
         `/api/projects/${projectId}/presentations/${presentation.id}/refresh`,
-        { attachmentIds: attachmentIds.length ? attachmentIds : undefined },
+        { ...ai, attachmentIds: attachmentIds.length ? attachmentIds : undefined },
       );
       onRefreshed();
       onClose();
@@ -291,6 +298,9 @@ function RefreshPresDialog({ projectId, presentation, onClose, onRefreshed }) {
             Regenerate <strong>{presentation.name}</strong>. Attach additional files to supplement
             or replace the existing source material.
           </p>
+          <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="ai1" />
+          <p className="field-hint">The agent runs on this sign-in and model, and writes the file.</p>
+
           <div className="field">
             <label>Attachments <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
             <AttachmentPicker

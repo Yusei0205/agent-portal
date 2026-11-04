@@ -195,6 +195,7 @@ ${REVIEW_SYSTEM_APPEND}`;
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
     awsEnv: run.runnerAwsEnv,
+    inputFiles: run.runnerInputFiles,
     checks: run.runnerChecks,
   });
 

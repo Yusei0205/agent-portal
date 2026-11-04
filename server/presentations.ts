@@ -37,6 +37,7 @@ import {
   getAttachmentsView,
 } from './ai-attachments.ts';
 import { createWorkDir } from './workflows/working-copies.ts';
+import { resolveCreateAi, type CreateAi } from './create-ai.ts';
 import { config } from './config.ts';
 
 import { getMemberRow, getProjectRow } from './project-access.ts';
@@ -114,9 +115,11 @@ async function startPresRun(
   leadAgent?: string | null,
   trustAllTools?: boolean,
   preconfig?: { workflowId?: string; workDir?: string | null },
+  ai?: CreateAi,
 ): Promise<string> {
   const workflowId = preconfig?.workflowId ?? newId('w_');
   const ts = now();
+  const aiChoice = ai ?? await resolveCreateAi(userId, {});
 
   const sessions = getSessionsRepository();
   await sessions.createWorkflow({
@@ -124,16 +127,17 @@ async function startPresRun(
     project_id: projectId,
     goal,
     status: 'pending',
-    engine: 'demo',
-    trust_tools: trustAllTools ? 1 : 0,
+    engine: aiChoice.engine,
+    // A one-shot cloud run cannot ask for approval, and the agent has to write the file.
+    trust_tools: aiChoice.engine === 'demo' ? (trustAllTools ? 1 : 0) : 1,
     lead_agent: leadAgent ?? null,
     workspace_id: null,
     output_files_enabled: 0,
     repo_ids: '[]',
     iteration_count: 0,
     max_iterations: 1,
-    credential_id: null,
-    model: '',
+    credential_id: aiChoice.credential_id,
+    model: aiChoice.model,
     created_by: userId,
     created_at: ts,
     updated_at: ts,
@@ -276,6 +280,9 @@ export function registerPresentationRoutes(): void {
       attachmentRows = rows!;
     }
 
+    // Which sign-in and model run it, checked before anything is created.
+    const ai = await resolveCreateAi(req.user!.id, body);
+
     // Check per-project limit
     const count = await getPresentationRepository().countByProject(String(project.id));
     if (count >= PRESENTATION_LIMITS.perProject) {
@@ -344,6 +351,7 @@ export function registerPresentationRoutes(): void {
       leadAgent,
       trustAllTools,
       { workflowId: preWorkflowId, workDir: preWorkDir },
+      ai,
     );
 
     // Link attachments and the workflow to the presentation
@@ -438,6 +446,7 @@ export function registerPresentationRoutes(): void {
       p.lead_agent ? String(p.lead_agent) : null,
       Boolean(p.trust_all_tools),
       { workflowId: preWorkflowId, workDir: preWorkDir },
+      await resolveCreateAi(req.user!.id, (req.body ?? {}) as Record<string, unknown>),
     );
 
     if (rawAttachmentIds !== null && rawAttachmentIds.length > 0) {
@@ -497,6 +506,7 @@ export function registerPresentationRoutes(): void {
       p.lead_agent ? String(p.lead_agent) : null,
       Boolean(p.trust_all_tools),
       { workflowId: preWorkflowId, workDir: preWorkDir },
+      await resolveCreateAi(req.user!.id, (req.body ?? {}) as Record<string, unknown>),
     );
 
     if (effectiveAttachmentIds.length > 0) {

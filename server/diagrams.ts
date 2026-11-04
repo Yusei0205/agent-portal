@@ -18,6 +18,7 @@
 import { getDiagramRepository } from './repositories/diagrams-data.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
+import { resolveCreateAi, type CreateAi } from './create-ai.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
@@ -238,9 +239,11 @@ async function startDiagramGeneration(
   diagramId: string,
   userId: string,
   attachmentRows: Row[] = [],
+  ai?: CreateAi,
 ): Promise<{ workflowId: string }> {
   const d = (await getDiagramRepository().getById(diagramId)) as unknown as Row | null;
   if (!d) throw notFound('Diagram not found');
+  const aiChoice = ai ?? await resolveCreateAi(userId, {});
 
   // Gather repos
   const repoIds = parseJson<string[]>(d.repo_ids as string, []);
@@ -280,16 +283,17 @@ async function startDiagramGeneration(
     project_id: String(d.project_id),
     goal,
     status: 'pending',
-    engine: 'demo',
-    trust_tools: Number(d.trust_tools ?? 0),
+    engine: aiChoice.engine,
+    // A one-shot cloud run cannot ask for approval, and the agent has to write the file.
+    trust_tools: aiChoice.engine === 'demo' ? Number(d.trust_tools ?? 0) : 1,
     lead_agent: d.lead_agent ? String(d.lead_agent) : null,
     workspace_id: null,
     output_files_enabled: 0,
     repo_ids: String(d.repo_ids),
     iteration_count: 0,
     max_iterations: 1,
-    credential_id: null,
-    model: '',
+    credential_id: aiChoice.credential_id,
+    model: aiChoice.model,
     created_by: userId,
     created_at: ts,
     updated_at: ts,
@@ -568,6 +572,7 @@ export function registerDiagramRoutes(): void {
     const rawAttachmentIds = Array.isArray(body.attachmentIds) ? (body.attachmentIds as unknown[]).map(String) : [];
 
     if (cloud && style !== 'icon') throw badRequest('A cloud only applies to the icon style');
+    const ai = await resolveCreateAi(req.user!.id, body);
 
     // Validate repo IDs
     const rawRepoIds = Array.isArray(body.repoIds) ? body.repoIds : body.repoId ? [body.repoId] : [];
@@ -628,7 +633,7 @@ export function registerDiagramRoutes(): void {
 
     let workflowId: string;
     try {
-      const gen = await startDiagramGeneration(id, req.user!.id, attachmentRows);
+      const gen = await startDiagramGeneration(id, req.user!.id, attachmentRows, ai);
       workflowId = gen.workflowId;
     } catch (e) {
       await getDiagramRepository().delete(id);
@@ -725,7 +730,7 @@ export function registerDiagramRoutes(): void {
       attachmentRows = rows ?? [];
     }
 
-    const gen = await startDiagramGeneration(String(dUpdated.id), req.user!.id, attachmentRows);
+    const gen = await startDiagramGeneration(String(dUpdated.id), req.user!.id, attachmentRows, await resolveCreateAi(req.user!.id, (req.body ?? {}) as Record<string, unknown>));
 
     // Link new attachment IDs (if replaced)
     if (rawAttachmentIds !== null && rawAttachmentIds.length > 0) {
@@ -757,7 +762,7 @@ export function registerDiagramRoutes(): void {
       attachmentRows = rows ?? [];
     }
 
-    const gen = await startDiagramGeneration(String(d.id), req.user!.id, attachmentRows);
+    const gen = await startDiagramGeneration(String(d.id), req.user!.id, attachmentRows, await resolveCreateAi(req.user!.id, (req.body ?? {}) as Record<string, unknown>));
 
     const updated = ((await getDiagramRepository().getById(String(d.id))) as unknown as Row);
     sendJson(res, 202, { diagram: await diagramView(updated), workflowId: gen.workflowId });

@@ -27,6 +27,8 @@ export interface AgentRun {
   runnerMcpServers?: import('./runner-mcp.ts').McpServerSpec[];
   /** The project's default AWS account as AWS_* variables for the agent's shell (server/project-aws.ts). */
   runnerAwsEnv?: Record<string, string>;
+  /** Files staged in the run folder (attachments, chosen project documents) to hand to the runner. */
+  runnerInputFiles?: import('./runner-files.ts').InputFile[];
   /** Set for a loop session's runs on an AgentCore runner: the check steps the runner runs after the agent finishes. */
   runnerChecks?: import('./runner-checks.ts').CheckStep[];
   leadAgent: string | null;
