@@ -19,6 +19,7 @@ import { getDb, one } from '../server/db.ts';
 import { generateId, now } from '../server/util.ts';
 import { encrypt } from '../server/secrets.ts';
 import { config } from '../server/config.ts';
+import { estimateCost } from '../server/agent/pricing.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_SDK = path.resolve(__dirname, 'fake-sdk.mjs');
@@ -263,8 +264,8 @@ describe('Time limit — run is aborted and stop_reason is recorded', () => {
     );
 
     // time_limit_at should have been set on the run
-    const runRow = one<{ status: string; time_limit_at: string | null; stop_reason: string | null; cost_usd: number; input_tokens: number; output_tokens: number }>(
-      'SELECT status, time_limit_at, stop_reason, cost_usd, input_tokens, output_tokens FROM p6_runs WHERE id = ?',
+    const runRow = one<{ status: string; time_limit_at: string | null; stop_reason: string | null; cost_usd: number; input_tokens: number; output_tokens: number; model: string }>(
+      'SELECT status, time_limit_at, stop_reason, cost_usd, input_tokens, output_tokens, model FROM p6_runs WHERE id = ?',
       runId,
     );
     assert.ok(runRow, 'Run row should exist');
@@ -276,6 +277,8 @@ describe('Time limit — run is aborted and stop_reason is recorded', () => {
     assert.equal(runRow.input_tokens, 50);
     assert.equal(runRow.output_tokens, 20);
     assert.ok(runRow.cost_usd > 0, `spend recorded: ${runRow.cost_usd}`);
+    // Priced for the run's own model (the engine reported no total before the stop).
+    assert.equal(runRow.cost_usd, estimateCost(runRow.model, { input_tokens: 50, output_tokens: 20 }), `model ${runRow.model}`);
     const spend = one<{ n: number }>('SELECT COUNT(*) AS n FROM budget_usage WHERE workflow_id = ?', workflowId)!;
     assert.equal(spend.n, 1, 'the stopped run counts toward the budget');
   });
