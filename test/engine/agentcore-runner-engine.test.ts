@@ -479,12 +479,15 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
     const savedArn = process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
     process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = ARN;
     try {
+      const task = 'Write the release notes for version 2.';
+      const childAnswer = 'CHILD RESULT: the release notes for version 2 are written.';
+      // A child's request starts with its own task; the parent's with its goal.
+      const isChild = (q: MockRequest): boolean => JSON.stringify(q.body?.messages?.[0] ?? '').includes(task);
       const from = api.requests.length;
       api.setScript([
-        { tool: DELEGATE, input: { task: 'Write the release notes for version 2.', title: 'Release notes' } },
+        { tool: DELEGATE, input: { task, title: 'Release notes' } },
         // The parent's and the child's next replies, in whichever order they ask.
-        { text: 'Release notes are ready.' },
-        { text: 'Started a child session for the release notes.' },
+        (req) => ({ text: isChild(req) ? childAnswer : 'Started a child session for the release notes.' }),
       ]);
       await runClaudeViaAgentCore(t.ctx, ARN);
 
@@ -506,12 +509,15 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
 
       // The child ran on its own; its result was posted to the parent.
       const posted = await waitFor(
-        () => all<{ data: string }>(`SELECT data FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'child-result'`, t.workflowId)
-          .map((e) => JSON.parse(e.data) as { childId: string; status: string })
+        () => all<{ body: string; data: string }>(`SELECT body, data FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'child-result'`, t.workflowId)
+          .map((e) => ({ body: e.body, ...(JSON.parse(e.data) as { childId: string; status: string; summary: string }) }))
           .find((d) => d.childId === child.id),
         'the child\'s result in the parent session',
       );
       assert.equal(posted.status, 'done', `the child finished: ${JSON.stringify(posted)}`);
+      // The child's answer is what returns: it is the parent's next input when the parent resumes.
+      assert.equal(posted.summary, childAnswer, 'the child\'s answer is posted to the parent');
+      assert.match(posted.body, /^Child session "Release notes" finished with status: done\.\nCHILD RESULT: /, 'and is in the message the parent reads');
 
       // Its run went to the other microVM (runner B, another session); the parent's stayed on A.
       const childRuns = all<{ id: string }>('SELECT id FROM p6_runs WHERE workflow_id = ?', child.id).map((r) => r.id);
