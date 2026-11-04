@@ -323,7 +323,9 @@ export async function runKiroRun(
   const invokeStart = Date.now();
   const { token, prompt, runId } = payload;
 
-  const fingerprint = JSON.stringify({ repos: payload.repos ?? null, mcp: payload.mcpServers ?? null, browser: Boolean(payload.browser) });
+  // Only what identifies the setup: credentials and tokens inside these change from message to message.
+  const pick = (list: unknown[] | undefined, keys: string[]) => (list ?? []).map((x) => keys.map((k) => String((x as Record<string, unknown>)?.[k] ?? '')));
+  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser) });
   // A cloud browser session lasts 15 minutes, so a browser session's kiro-cli is restarted after 12.
   const browserExpired = Boolean(payload.browser) && warm !== null && Date.now() - warm.startedAt > 12 * 60_000;
   if (warm && (browserExpired || warm.exited || warm.fingerprint !== fingerprint)) await disposeKiro(warm);
