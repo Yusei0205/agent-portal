@@ -37,7 +37,7 @@ function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId
   return true;
 }
 
-function safeAccount(a: { credentials_enc?: string | null; [k: string]: unknown }) {
+function safeAccount<T extends { credentials_enc?: string | null }>(a: T): Omit<T, 'credentials_enc'> {
   const { credentials_enc: _c, ...rest } = a;
   return rest;
 }

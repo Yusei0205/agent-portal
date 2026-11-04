@@ -47,11 +47,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const { run, emit, signal } = ctx;
   const repo = getSessionsRepository();
   const settings = getSettings();
-  const wf = (await repo.getWorkflowById(run.workflowId)) as Record<string, unknown> | null;
+  const wf = await repo.getWorkflowById(run.workflowId);
 
   // Limits: the workflow's own, else the portal's (same as the local engine and runner.ts).
-  const budget = wf?.['budget_usd'] != null ? Number(wf['budget_usd']) : settings.agents.maxBudgetUsdPerRun;
-  const minutes = wf?.['run_timeout_minutes'] != null ? Number(wf['run_timeout_minutes']) : settings.agents.runTimeoutMinutes;
+  const budget = wf?.budget_usd != null ? Number(wf.budget_usd) : settings.agents.maxBudgetUsdPerRun;
+  const minutes = wf?.run_timeout_minutes != null ? Number(wf.run_timeout_minutes) : settings.agents.runTimeoutMinutes;
   const model = bedrockModelFor(run.model) ?? bedrockModelFor(settings.defaultModel);
 
   const payload: Record<string, unknown> = {
@@ -150,7 +150,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   if (cost > 0 || (m.inputTokens ?? 0) > 0) {
     const { getBudgetRepository } = await import('../repositories/budget.ts');
     await getBudgetRepository().record({
-      user_id: (wf?.['created_by'] as string | null) ?? null,
+      user_id: wf?.created_by ?? null,
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,

@@ -4,6 +4,7 @@
  */
 
 import { one, all, run as dbRun, insert, update } from '../db.ts';
+import type { DbParam } from '../db.ts';
 import type { Row } from '../db.ts';
 import type {
   TestingRepository,
@@ -241,7 +242,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateTestProject(id: string, fields: Partial<TestProjectRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v;
-    update('test_projects', id, f);
+    update('test_projects', id, f as Record<string, DbParam>);
   }
 
   async deleteTestProject(id: string): Promise<void> {
@@ -280,7 +281,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateTestGroup(id: string, fields: Partial<TestGroupRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v;
-    update('test_groups', id, f);
+    update('test_groups', id, f as Record<string, DbParam>);
   }
 
   async deleteTestGroup(id: string): Promise<void> {
@@ -320,7 +321,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateTestScript(id: string, fields: Partial<TestScriptRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v;
-    update('test_scripts', id, f);
+    update('test_scripts', id, f as Record<string, DbParam>);
   }
 
   async deleteTestScript(id: string): Promise<void> {
@@ -356,7 +357,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateVaultItem(id: string, fields: Partial<TestVaultItemRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v;
-    update('test_vault_items', id, f);
+    update('test_vault_items', id, f as Record<string, DbParam>);
   }
 
   async deleteVaultItem(id: string): Promise<void> {
@@ -430,7 +431,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateTestRun(id: string, fields: Partial<TestRunRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v as unknown;
-    update('test_runs', id, f);
+    update('test_runs', id, f as Record<string, DbParam>);
   }
 
   // test_run_steps
@@ -485,7 +486,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateCaseSet(id: string, fields: Partial<TestCaseSetRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v as unknown;
-    update('test_case_sets', id, f);
+    update('test_case_sets', id, f as Record<string, DbParam>);
   }
 
   async deleteCaseSet(id: string): Promise<void> {
@@ -517,7 +518,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateCase(id: string, fields: Partial<TestCaseRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v as unknown;
-    update('test_cases', id, f);
+    update('test_cases', id, f as Record<string, DbParam>);
   }
 
   async deleteCase(id: string): Promise<void> {
@@ -577,7 +578,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateGeneration(id: string, fields: Partial<TestGenerationRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v as unknown;
-    update('test_generations', id, f);
+    update('test_generations', id, f as Record<string, DbParam>);
   }
 
   // trace_steps
@@ -595,7 +596,7 @@ export class SqliteTestingRepository implements TestingRepository {
   async updateTraceStep(id: string, fields: Partial<TraceStepRecord>): Promise<void> {
     const f: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) f[k] = v as unknown;
-    update('trace_steps', id, f);
+    update('trace_steps', id, f as Record<string, DbParam>);
   }
 
   async listTraceByCaseSet(caseSetId: string): Promise<TraceStepRecord[]> {

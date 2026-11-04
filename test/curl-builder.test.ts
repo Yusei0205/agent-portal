@@ -72,12 +72,10 @@ describe('buildCurl — returns empty for invalid input', () => {
   });
 
   it('returns empty string when url is missing', () => {
-    // @ts-expect-error — intentional bad input
     assert.equal(buildCurl({ method: 'POST' }), '');
   });
 
   it('returns empty string for undefined', () => {
-    // @ts-expect-error — intentional bad input
     assert.equal(buildCurl(undefined), '');
   });
 });

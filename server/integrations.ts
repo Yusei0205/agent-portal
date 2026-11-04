@@ -37,7 +37,7 @@ function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId
   return true;
 }
 
-function safeIntegration(i: { config_enc?: string | null; enabled: number; [k: string]: unknown }) {
+function safeIntegration<T extends { config_enc?: string | null; enabled: number | boolean }>(i: T): Omit<T, 'config_enc'> & { enabled: boolean } {
   const { config_enc: _c, ...rest } = i;
   return { ...rest, enabled: Boolean(i.enabled) };
 }

@@ -24,7 +24,7 @@ import {
   ResourceNotFoundException,
   ResourceInUseException,
 } from '@aws-sdk/client-dynamodb';
-import type { AttributeValue, DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import type { AttributeValue, DynamoDBClient, QueryCommandInput } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, type JsVal } from './dynamo-client.ts';
 import type {
   LearnRepository,
@@ -309,7 +309,7 @@ export class DynamoDbLearnRepository implements LearnRepository {
   }
 
   async listAttemptsByQuiz(quizId: string, userId?: string): Promise<QuizAttemptRecord[]> {
-    const params: Parameters<typeof QueryCommand>[0] = {
+    const params: QueryCommandInput = {
       TableName: this.tableName,
       KeyConditionExpression: userId
         ? 'PK = :pk AND begins_with(SK, :uid)'

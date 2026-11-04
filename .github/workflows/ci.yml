@@ -67,15 +67,13 @@ jobs:
     timeout-minutes: 15
 
     services:
+      # No container health check: the curl check never reported healthy (a bare GET /
+      # answers 400, and curl -f treats that as failure), so the job stopped before any
+      # test. The "Wait for DynamoDB Local" step below checks readiness from the runner.
       dynamodb-local:
         image: amazon/dynamodb-local
         ports:
           - 8000:8000
-        options: >-
-          --health-cmd "curl -sf http://localhost:8000/ > /dev/null"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,7 +93,8 @@ jobs:
           echo "Waiting for DynamoDB Local..."
           READY=0
           for i in $(seq 1 20); do
-            if curl -sf http://localhost:8000 > /dev/null 2>&1; then
+            # Any HTTP answer means it is up (a bare GET / returns 400, so no -f).
+            if curl -s -o /dev/null http://localhost:8000 2>&1; then
               echo "DynamoDB Local is ready after attempt $i"
               READY=1
               break

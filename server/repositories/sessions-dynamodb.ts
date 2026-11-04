@@ -47,7 +47,7 @@ import {
   TransactWriteItemsCommand,
   BatchWriteItemCommand,
 } from '@aws-sdk/client-dynamodb';
-import type { AttributeValue } from '@aws-sdk/client-dynamodb';
+import type { AttributeValue, GlobalSecondaryIndex } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
 import { now, HttpError } from '../util.ts';
 import type {
@@ -276,7 +276,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       } catch (e: unknown) {
         const name = (e as { name?: string }).name ?? '';
         if (name !== 'ResourceNotFoundException') throw e;
-        const gsiDefs = extraGsi ? [
+        const gsiDefs: GlobalSecondaryIndex[] = extraGsi ? [
           {
             IndexName: 'GSI-ProjectWorkflows',
             KeySchema: [

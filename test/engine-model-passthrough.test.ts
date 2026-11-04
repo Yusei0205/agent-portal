@@ -172,6 +172,7 @@ describe('Kiro engine — --model flag pass-through', () => {
       credentialId: null,
       credentialOwnerId: null,
       model: 'claude-sonnet-4-5',
+      engineSessionId: null,
     };
 
     const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
@@ -223,6 +224,7 @@ describe('Kiro engine — --model flag pass-through', () => {
       credentialId: null,
       credentialOwnerId: null,
       model: null,
+      engineSessionId: null,
     };
 
     const ctx: RunContext = {
@@ -300,6 +302,7 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
       credentialId: null,
       credentialOwnerId: null,
       model: null, // no per-workflow model
+      engineSessionId: null,
     };
 
     const ctx: RunContext = {
@@ -352,6 +355,7 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
       credentialId: null,
       credentialOwnerId: null,
       model: 'claude-opus-5.5', // explicit per-workflow model
+      engineSessionId: null,
     };
 
     const ctx: RunContext = {
@@ -404,6 +408,7 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
       credentialId: null,
       credentialOwnerId: null,
       model: null,
+      engineSessionId: null,
     };
 
     const ctx: RunContext = {
@@ -456,6 +461,7 @@ describe('Kiro engine — portal defaultModel applied when run.model is null', (
       credentialId: null,
       credentialOwnerId: null,
       model: null,
+      engineSessionId: null,
     };
 
     const ctx: RunContext = {

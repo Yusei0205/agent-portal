@@ -157,7 +157,7 @@ describe('findOutputFileMentions — multiple files', () => {
   it('finds two files mentioned in the same text', () => {
     const text = 'Generated arch.png and report.pdf as requested.';
     const results = findOutputFileMentions(text, FILES);
-    const ids = results.map((r) => r.file.id).sort();
+    const ids = results.map((r: { file: { id: string } }) => r.file.id).sort();
     assert.deepEqual(ids, ['f1', 'f3']);
   });
 
@@ -166,7 +166,7 @@ describe('findOutputFileMentions — multiple files', () => {
     const results = findOutputFileMentions(text, FILES);
     // Both mentions should be found
     assert.equal(results.length, 2);
-    results.forEach((r) => assert.equal(r.file.id, 'f1'));
+    results.forEach((r: { file: { id: string } }) => assert.equal(r.file.id, 'f1'));
   });
 });
 
@@ -191,7 +191,7 @@ describe('findOutputFileMentions — start/end positions', () => {
     // The long subpath also matches; dedup keeps the longest, but 'arch.png' starts later
     // in the search; the longer path 'repos/rhb/docs/architecture/arch.png' won't match
     // because it's not in the text. So 'arch.png' wins.
-    const match = results.find((r) => r.file.id === 'f1');
+    const match = results.find((r: { file: { id: string } }) => r.file.id === 'f1');
     assert.ok(match, 'f1 should match');
     assert.equal(text.slice(match.start, match.end), 'arch.png');
   });

@@ -157,8 +157,8 @@ function spawnGit(args: string[], cwd: string, env?: Record<string, string>): Pr
       env: { ...process.env, ...env },
     });
     proc.unref();
-    proc.stdout.unref();
-    proc.stderr.unref();
+    (proc.stdout as unknown as { unref(): void }).unref();
+    (proc.stderr as unknown as { unref(): void }).unref();
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     proc.stdout.on('data', (d: Buffer) => out.push(d));
@@ -194,8 +194,8 @@ function spawnGitWithProgress(
     // Unref everything so the event loop can exit once the server closes,
     // even if the git process is still running (e.g. slow network or test cleanup).
     proc.unref();
-    proc.stdout.unref();
-    proc.stderr.unref();
+    (proc.stdout as unknown as { unref(): void }).unref();
+    (proc.stderr as unknown as { unref(): void }).unref();
     activeGitProcs.add(proc);
     const out: Buffer[] = [];
     const err: Buffer[] = [];

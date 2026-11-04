@@ -8,6 +8,7 @@
  */
 
 import { one, all, run as dbRun, insert, getDb, tx } from '../db.ts';
+import type { DbParam } from '../db.ts';
 import type { Row } from '../db.ts';
 import { HttpError } from '../util.ts';
 import type {
@@ -140,14 +141,14 @@ function toWorkflowEvent(row: Row): WorkflowEventRecord {
 
 function buildPatchSet(patch: Record<string, unknown>): {
   setSql: string;
-  values: unknown[];
+  values: DbParam[];
 } {
   const parts: string[] = [];
-  const values: unknown[] = [];
+  const values: DbParam[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (v !== undefined) {
       parts.push(`${k} = ?`);
-      values.push(v);
+      values.push(v as DbParam);
     }
   }
   return { setSql: parts.join(', '), values };

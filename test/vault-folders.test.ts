@@ -55,7 +55,6 @@ describe('buildFolderList', () => {
 
   it('handles files with undefined folder property', () => {
     const files = [{ folder: undefined }, { folder: 'reports' }];
-    // @ts-expect-error testing undefined
     assert.deepEqual(buildFolderList(files), ['reports']);
   });
 

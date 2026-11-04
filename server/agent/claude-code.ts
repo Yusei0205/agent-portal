@@ -224,9 +224,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   // ── Run budget limit (FR-GUARD-10) ─────────────────────────────────────────
   const repo = getSessionsRepository();
   const wfForBudget = await repo.getWorkflowById(run.workflowId);
-  const wfBudget = (wfForBudget as Record<string, unknown>)?.['budget_usd'] != null
-    ? Number((wfForBudget as Record<string, unknown>)['budget_usd'])
-    : null;
+  const wfBudget = wfForBudget?.budget_usd != null ? Number(wfForBudget.budget_usd) : null;
   const globalBudget = getSettings().agents.maxBudgetUsdPerRun;
   const maxBudgetUsd = wfBudget ?? globalBudget;
 
