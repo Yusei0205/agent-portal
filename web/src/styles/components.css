@@ -2003,3 +2003,14 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 .context-group { display: grid; gap: 4px; }
 .context-group-title { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); }
 .context-item { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; cursor: pointer; }
+
+/* Create: what is generating now */
+.create-activity { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 10px 14px; display: grid; gap: 8px; }
+.create-activity-title { margin: 0; font-size: 0.8rem; font-weight: 600; color: var(--ink-2); letter-spacing: 0.02em; }
+.create-activity-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.create-activity-row { display: flex; align-items: center; gap: 10px; }
+.create-activity-main { display: grid; gap: 1px; margin-right: auto; min-width: 0; }
+.create-activity-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.create-activity-dot.is-failed { background: var(--danger); }
+.create-activity-dot.is-running { background: var(--accent); animation: live-tool-pulse 1.1s ease-in-out infinite; }
+

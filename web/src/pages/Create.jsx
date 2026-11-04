@@ -3,6 +3,7 @@ import { Diagrams } from './Diagrams.jsx';
 import { GeneratedDocs } from './GeneratedDocs.jsx';
 import { Presentations } from './Presentations.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { CreateActivity } from '../components/CreateActivity.jsx';
 
 const TABS = [
   { id: 'diagrams',  label: 'Diagrams' },
@@ -21,6 +22,7 @@ export function Create({ projectId }) {
   return (
     <div className="page create-hub">
       <PageHeader title="Create" description="Generate architecture diagrams, Word documents and slide decks from your repositories and knowledge." />
+      <CreateActivity projectId={projectId} />
       <div className="tab-bar" role="tablist" aria-label="Create">
         {TABS.map((tab) => (
           <button

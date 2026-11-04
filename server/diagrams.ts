@@ -181,6 +181,8 @@ async function diagramView(d: Row): Promise<object> {
     version: d.version ?? 0,
     stale: Boolean(d.stale),
     pending_workflow_id: d.pending_workflow_id ?? null,
+    // The run that is generating it now, or the last one that did.
+    workflow_id: d.pending_workflow_id ?? d.workflow_id ?? null,
     lead_agent: d.lead_agent ?? '',
     trust_tools: Boolean(d.trust_tools),
     created_by: d.created_by ?? null,

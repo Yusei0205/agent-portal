@@ -93,7 +93,7 @@ async function docView(d: Row, version?: Row | null) {
     status,
     error: d.error ?? null,
     retryable: status === 'failed',
-    workflow_id: version?.workflow_id ?? null,
+    workflow_id: d.workflow_id ?? version?.workflow_id ?? null,
     created_by: d.created_by ?? null,
     created_at: d.created_at,
     latest_version: version ? versionView(version) : null,
