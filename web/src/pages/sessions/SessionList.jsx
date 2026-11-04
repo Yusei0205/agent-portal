@@ -460,7 +460,22 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
         )}
       </div>
 
-      {/* Bulk select hint removed — checkboxes appear on hover */}
+      {/* Select all: acts on the sessions the search and filters currently show */}
+      {filtered.length > 0 && (
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', borderBottom: '1px solid var(--line)', fontSize: 12, cursor: 'pointer' }}
+        >
+          <input
+            type="checkbox"
+            checked={bulk.allSelected}
+            ref={(el) => { if (el) el.indeterminate = bulk.someSelected; }}
+            onChange={bulk.toggleAll}
+            aria-label={`Select all ${filtered.length} sessions`}
+          />
+          <span>{bulk.allSelected ? 'Deselect all' : 'Select all'}</span>
+          <span className="muted" style={{ marginLeft: 'auto' }}>{filtered.length}</span>
+        </label>
+      )}
 
       {/* List body */}
       <div className="ws-list-body">
