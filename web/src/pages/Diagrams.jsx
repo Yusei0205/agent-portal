@@ -214,7 +214,7 @@ function ViewDiagramModal({ diagram, onClose }) {
           {detail && detail.style === 'icon' && (
             <>
               {drawioXml
-                ? <DrawioViewer xml={drawioXml} />
+                ? <DrawioViewer xml={drawioXml} name={diagram.title} />
                 : (
                   <div className="drawio-placeholder">
                     <Icon name="builder" size={40} />
