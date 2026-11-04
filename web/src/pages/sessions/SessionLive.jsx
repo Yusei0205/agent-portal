@@ -615,6 +615,21 @@ function ApprovalCard({ event, workflowId, projectId, runId, onResolved }) {
  * Render a single run event.  The `event` object may have an `_end` property
  * (added by pairToolEvents) for tool-start events.
  */
+/**
+ * The start-up lines every run prints ("Running via AgentCore…", "kiro-cli ACP starting…", "Model: …",
+ * "Included a recap of earlier turns") are useful once, when the session starts. A run that carries the
+ * recap line is not the session's first, so its routine lines are left out.
+ */
+const ROUTINE_STATUS = /^(Included a recap of earlier turns|Running via AgentCore…?|kiro-cli ACP starting…?|Continuing in the same kiro-cli session\.?|Model: .+)$/;
+function dropRoutineStatus(events) {
+  const later = new Set();
+  for (const e of events) {
+    if (e.type === 'status' && e.run_id && e.payload?.text === 'Included a recap of earlier turns') later.add(e.run_id);
+  }
+  if (!later.size) return events;
+  return events.filter((e) => !(e.type === 'status' && later.has(e.run_id) && ROUTINE_STATUS.test(String(e.payload?.text ?? ''))));
+}
+
 function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName = 'Agent', outputFiles = [], vaultFolder }) {
   const { type, payload } = event;
 
@@ -924,12 +939,12 @@ export function SessionLive({
     : (workflow?.engine ? String(workflow.engine) : 'Agent');
 
   // Pair tool-start/tool-end before merging assistant-text
-  const pairedEvents       = pairToolEvents(events);
+  const pairedEvents       = pairToolEvents(dropRoutineStatus(events));
   const displayEvents      = mergeConsecutiveAssistantText(pairedEvents);
 
   // Earlier events from transcript — filter out current run's events (already in stream)
   const pairedEarlierEvents   = pairToolEvents(
-    earlierEvents.filter((e) => !(runId && e.run_id && e.run_id === runId)),
+    dropRoutineStatus(earlierEvents.filter((e) => !(runId && e.run_id && e.run_id === runId))),
   );
   const displayEarlierEventsAll = mergeConsecutiveAssistantText(pairedEarlierEvents);
 
