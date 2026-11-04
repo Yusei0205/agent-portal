@@ -29,6 +29,7 @@ import { resolveCreateAi } from '../create-ai.ts';
 import { auditRaw } from '../audit.ts';
 import { testingRepo } from './data.ts';
 import { decrypt } from '../secrets.ts';
+import { PASSWORD_PLACEHOLDER, passwordPlaceholder } from '../agent/run-secrets.ts';
 import { requireTestProject, hasScope } from './helpers.ts';
 import type { TestProject } from './helpers.ts';
 
@@ -67,7 +68,7 @@ interface CaseRow {
   ord: number;
 }
 
-export const MAX_CASES_PER_RUN = 60;
+export const MAX_CASES_PER_RUN = 30;
 const HISTORY_LIMIT = 100;
 const historyKey = (tpId: string): string => `tests.caseruns.${tpId}`;
 const linkKey = (workflowId: string): string => `tests.caserun.wf.${workflowId}`;
@@ -160,7 +161,22 @@ export function selectCases<T extends { status: string; category: string }>(all:
 }
 
 /** The prompt that makes an agent perform the cases and report in a fixed CSV. */
+/** A login given to the agent. The password is a placeholder in the stored prompt and filled in only when the run starts. */
 export interface RunLogin { name: string; username: string; password: string; hasTotp: boolean }
+
+/** Put the real passwords in place of the placeholders of a prompt; returns the text and the values to mask. */
+export async function resolvePasswordPlaceholders(text: string): Promise<{ text: string; secrets: string[] }> {
+  const secrets: string[] = [];
+  let out = text;
+  for (const m of [...text.matchAll(new RegExp(PASSWORD_PLACEHOLDER.source, 'g'))]) {
+    const item = (await testingRepo().getVaultItemByTestProjectAndName(m[1], decodeURIComponent(m[2]))) as unknown as { password_enc?: string | null } | null;
+    let pw = '';
+    try { pw = item?.password_enc ? decrypt(String(item.password_enc), config.secretKey) : ''; } catch { /* unreadable */ }
+    if (pw) secrets.push(pw);
+    out = out.split(m[0]).join(pw || '(no password)');
+  }
+  return { text: out, secrets };
+}
 
 export function buildRunPrompt(tp: { app_url: string; api_base_url: string | null; rules_for_ai: string }, cases: CaseRow[], instructions: string, logins: RunLogin[] = []): string {
   const accounts = logins.length
@@ -380,9 +396,8 @@ export function registerCaseRunRoutes(): void {
       const items = (await testingRepo().listVaultItemsByTestProject(tp.id)) as unknown as Array<{ name: string; kind: string; username: string | null; password_enc: string | null; totp_secret_enc: string | null }>;
       for (const it of items) {
         if (it.kind !== 'login' || !wanted.has(it.name)) continue;
-        let password = '';
-        try { password = it.password_enc ? decrypt(String(it.password_enc), config.secretKey) : ''; } catch { /* unreadable: give none */ }
-        logins.push({ name: it.name, username: it.username ?? '', password, hasTotp: !!it.totp_secret_enc });
+        // Only a placeholder is stored with the run; the password itself is read when the run starts.
+        logins.push({ name: it.name, username: it.username ?? '', password: it.password_enc ? passwordPlaceholder(tp.id, it.name) : '', hasTotp: !!it.totp_secret_enc });
       }
     }
 

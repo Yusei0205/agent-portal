@@ -1,5 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { maskRunSecrets, setRunSecrets, passwordPlaceholder } from '../server/agent/run-secrets.ts';
 import { normaliseStatus, parseCsv, parseAgentResults, csvField, tally, buildRunPrompt, buildResultsCsv, selectCases } from '../server/testing/case-runs.ts';
 
 describe('agent test runs: reading the agent\'s results.csv', () => {
@@ -39,6 +40,18 @@ describe('agent test runs: sign-in accounts', () => {
     assert.match(withLogin, /admin: username qa@x\.com, password pw1/);
     assert.match(withLogin, /two-step code/);
     assert.doesNotMatch(buildRunPrompt(tp, cases, ''), /Test accounts/);
+  });
+});
+
+describe('run secrets', () => {
+  test('a registered password is masked, also inside JSON', () => {
+    setRunSecrets('r1', ['p@ss"word1']);
+    const masked = maskRunSecrets('r1', JSON.stringify({ text: 'type p@ss"word1 into the field' }));
+    assert.doesNotMatch(masked, /word1/);
+    assert.equal(maskRunSecrets('other', 'p@ss"word1'), 'p@ss"word1');
+  });
+  test('placeholder round-trips a name with odd characters', () => {
+    assert.match(passwordPlaceholder('tp1', 'Admin: login'), /^\{\{password:tp1:Admin%3A%20login\}\}$/);
   });
 });
 

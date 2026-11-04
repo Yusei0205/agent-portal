@@ -10,7 +10,7 @@ import { InfoTip } from '../../components/InfoTip.jsx';
  * filled in, a results CSV is made, and the run is kept in a history with pass and fail counts.
  */
 
-const MAX_CASES = 60;
+const MAX_CASES = 30;
 
 export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onClose, onStarted }) {
   const base = `/api/projects/${projectId}/tests/${testProjectId}/case-sets/${caseSetId}`;

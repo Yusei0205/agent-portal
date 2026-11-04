@@ -17,6 +17,7 @@
 import { getReviewsRepository } from '../repositories/reviews.ts';
 import { buildRunnerRepos } from './runner-repo-specs.ts';
 import { createHash } from 'node:crypto';
+import { maskRunSecrets, setRunSecrets } from './run-secrets.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -195,9 +196,16 @@ export function cleanupRunEventChain(runId: string): void {
  *
  * SQLite behaviour is unchanged from the original synchronous implementation.
  */
-export function emitRunEvent(runId: string, projectId: string | null, workflowId: string | null, type: string, payload: object): void {
+export function emitRunEvent(runId: string, projectId: string | null, workflowId: string | null, type: string, payloadIn: object): void {
   const createdAt = now();
-  const payloadStr = JSON.stringify(payload);
+  // Anything the run was handed as a secret (a test account's password) is masked before it is stored or shown.
+  let payloadStr = JSON.stringify(payloadIn);
+  let payload: object = payloadIn;
+  const masked = maskRunSecrets(runId, payloadStr);
+  if (masked !== payloadStr) {
+    payloadStr = masked;
+    try { payload = JSON.parse(masked) as object; } catch { /* keep the original object out of the stream */ payload = { masked: true }; }
+  }
 
   if (!usesDynamoDb()) {
     // SQLite mode: synchronous insert gives us the real rowid for event bus de-dup
@@ -395,6 +403,17 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       deregisterRun(runId);
       return;
     }
+  }
+
+  // A prompt may hold placeholders for secrets (a test account's password): put the real values in now, and have
+  // every event of this run masked from here on. The stored prompt keeps only the placeholder.
+  if (prompt.includes('{{password:')) {
+    try {
+      const { resolvePasswordPlaceholders } = await import('../testing/case-runs.ts');
+      const r = await resolvePasswordPlaceholders(prompt);
+      prompt = r.text;
+      setRunSecrets(runId, r.secrets);
+    } catch (e) { console.warn('[runner] could not resolve secrets in the prompt:', e instanceof Error ? e.message : e); }
   }
 
   // Emit to project channel
