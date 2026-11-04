@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { PanZoom, TextZoom } from '../../components/PanZoom.jsx';
 import { Icon } from '../../components/Icon.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { sanitizeMarkdown } from '../../lib/sanitize.js';
@@ -67,11 +68,11 @@ function PreviewBody({ preview }) {
   }
 
   if (type === 'text') {
-    return <pre className="file-preview-text">{preview.content}</pre>;
+    return <TextZoom><pre className="file-preview-text">{preview.content}</pre></TextZoom>;
   }
 
   if (type === 'markdown') {
-    return <MdPreview content={preview.content} />;
+    return <TextZoom><MdPreview content={preview.content} /></TextZoom>;
   }
 
   if (type === 'pptx') {
@@ -92,19 +93,10 @@ function PreviewBody({ preview }) {
 // ── Zoomable image ────────────────────────────────────────────────────────────
 
 function ZoomableImage({ src, alt }) {
-  const [zoomed, setZoomed] = useState(false);
-  const toggle = () => setZoomed((z) => !z);
-
   return (
-    <button
-      type="button"
-      className={`file-preview-image-zoom-wrap${zoomed ? ' is-zoomed' : ''}`}
-      onClick={toggle}
-      aria-label={zoomed ? 'Click to fit image in view' : 'Click to zoom to actual size'}
-      title={zoomed ? 'Fit in view' : 'Zoom to actual size'}
-    >
-      <img src={src} alt={alt} />
-    </button>
+    <PanZoom label="Image" height="75vh">
+      <img src={src} alt={alt} draggable={false} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
+    </PanZoom>
   );
 }
 

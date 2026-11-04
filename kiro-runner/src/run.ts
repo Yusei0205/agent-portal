@@ -26,6 +26,7 @@ import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } f
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -327,10 +328,38 @@ function waitForExit(w: WarmKiro, ms: number): Promise<number | null> {
   });
 }
 
+/** Moves repos/ prepared in the persistent folder into the work folder (same disk, so a rename). */
+function adoptPersistedRepos(workDir: string): void {
+  const persist = usablePersistRoot(PERSIST_ROOT);
+  if (!persist) return;
+  const from = path.join(persist, 'repos');
+  const to = path.join(workDir, 'repos');
+  try {
+    if (fs.existsSync(from) && !fs.lstatSync(from).isSymbolicLink() && !fs.existsSync(to)) fs.renameSync(from, to);
+  } catch { /* the repositories are cloned again */ }
+}
+
+/** Puts repos/ back in the persistent folder so it outlives the work folder (and can be saved). */
+function stashRepos(workDir: string): void {
+  const persist = usablePersistRoot(PERSIST_ROOT);
+  if (!persist) return;
+  const from = path.join(workDir, 'repos');
+  const to = path.join(persist, 'repos');
+  try {
+    if (fs.existsSync(from) && !fs.lstatSync(from).isSymbolicLink() && !fs.existsSync(to)) fs.renameSync(from, to);
+  } catch { /* lost with the work folder; the saved copy or a clone brings it back */ }
+}
+
+/** Where the live workspace is right now: the warm session's work folder while it holds repos/, else null. */
+export function kiroWorkspaceRoot(): string | null {
+  try { return warm && fs.existsSync(path.join(warm.workDir, 'repos')) ? warm.workDir : null; } catch { return null; }
+}
+
 async function disposeKiro(w: WarmKiro): Promise<void> {
   if (warm === w) warm = null;
   try { w.acp.close(); } catch { /* ok */ }
   await waitForExit(w, 5_000);
+  stashRepos(w.workDir);
   for (const dir of [w.authTmpDir, w.workDir, w.kiroHome, ...(w.liveDir ? [w.liveDir] : [])]) {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* non-fatal */ });
   }
@@ -394,8 +423,14 @@ export async function runKiroRun(
       // The session's repositories, under repos/ in the agent's work folder
       if (payload.repos?.length) {
         const parsed = parseRunnerRepos(payload.repos);
-        if (parsed.ok) await restoreWorkspace(parseSnapshot(payload.snapshot), usablePersistRoot(PERSIST_ROOT), (ev) => emit(ev));
-        if (parsed.ok) await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: kiroHome });
+        // kiro-cli 3 refuses any path that reaches outside its work folder through a symlink (rule kiro-scope:workspace-escape),
+        // so repos/ is a real folder inside the work folder here, not a link to the persistent folder.
+        // Repositories prepared earlier on this machine are moved in; they move back when the session is released.
+        if (parsed.ok) {
+          adoptPersistedRepos(workDir);
+          await restoreWorkspace(parseSnapshot(payload.snapshot), workDir, (ev) => emit(ev));
+          await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { homeDir: kiroHome });
+        }
         else emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
       }
 
@@ -751,6 +786,7 @@ export async function runKiroRun(
     if (!keep) {
       if (w) await disposeKiro(w);
       else for (const dir of ([authTmpDir, workDir, kiroHome] as Array<string | undefined>)) {
+        if (dir === workDir && workDir) stashRepos(workDir);
         if (dir) fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* non-fatal */ });
       }
     }

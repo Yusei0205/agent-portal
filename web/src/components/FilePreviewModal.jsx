@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { sanitizeMarkdown } from '../lib/sanitize.js';
+import { PanZoom, TextZoom } from './PanZoom.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── FilePreviewModal ──────────────────────────────────────────────────────────
@@ -102,13 +103,14 @@ function PreviewContent({ preview, file }) {
   // Image
   if (type === 'inline' && preview.mime?.startsWith('image/')) {
     return (
-      <div className="preview-image-wrap">
+      <PanZoom label="Image" height="75vh">
         <img
           src={preview.url}
           alt={preview.name || file?.name || 'Image preview'}
-          style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }}
+          draggable={false}
+          style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }}
         />
-      </div>
+      </PanZoom>
     );
   }
 
@@ -136,25 +138,27 @@ function PreviewContent({ preview, file }) {
 
   // Markdown (rendered)
   if (type === 'markdown') {
-    return <MarkdownPreview content={preview.content} />;
+    return <TextZoom><MarkdownPreview content={preview.content} /></TextZoom>;
   }
 
   // Plain text
   if (type === 'text') {
     return (
-      <pre
-        className="preview-text"
-        style={{
-          whiteSpace: 'pre-wrap',
-          fontFamily: 'monospace',
-          fontSize: '0.85rem',
-          padding: '1rem',
-          overflowY: 'auto',
-          maxHeight: '70vh',
-        }}
-      >
-        {preview.content}
-      </pre>
+      <TextZoom>
+        <pre
+          className="preview-text"
+          style={{
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'monospace',
+            fontSize: '0.85em',
+            padding: '1rem',
+            overflowY: 'auto',
+            maxHeight: '70vh',
+          }}
+        >
+          {preview.content}
+        </pre>
+      </TextZoom>
     );
   }
 

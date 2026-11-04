@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { PanZoom } from './PanZoom.jsx';
 
 /**
  * Renders a Mermaid diagram from source text.
@@ -70,10 +71,8 @@ export function MermaidViewer({ mmd, className }) {
   }
 
   return (
-    <div
-      ref={containerRef}
-      className={`mermaid-viewer ${className || ''}`}
-      aria-label="Architecture diagram"
-    />
+    <PanZoom className={`mermaid-viewer ${className || ''}`} label="Architecture diagram">
+      <div ref={containerRef} aria-label="Architecture diagram" />
+    </PanZoom>
   );
 }

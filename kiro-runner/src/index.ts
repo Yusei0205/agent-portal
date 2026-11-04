@@ -17,7 +17,7 @@
 import http from 'node:http';
 import { validatePayload } from './validate.js';
 import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
-import { runKiroRun } from './run.js';
+import { runKiroRun, kiroWorkspaceRoot } from './run.js';
 import { runKiroLogin } from './login.js';
 import { runKiroListModels } from './list-models.js';
 import { runPrepareRepos } from './prepare.js';
@@ -197,7 +197,7 @@ const server = http.createServer(async (req, res) => {
       // Save the workspace once the reply is out; the machine stays "busy" until that is done.
       const p = validation.payload;
       if (p.mode === 'kiro-run' || p.mode === 'prepare-repos') {
-        saveWorkspaceInBackground(parseSnapshot(p.snapshot), usablePersistRoot(PERSIST_ROOT), () => { lastStatusChange = Math.floor(Date.now() / 1000); });
+        saveWorkspaceInBackground(parseSnapshot(p.snapshot), kiroWorkspaceRoot() ?? usablePersistRoot(PERSIST_ROOT), () => { lastStatusChange = Math.floor(Date.now() / 1000); });
       }
     }
     return;

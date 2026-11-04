@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { Markdown } from './Markdown.jsx';
+import { TextZoom } from './PanZoom.jsx';
 
 /**
  * Read a Knowledge document in the portal, with the passage a search or an answer pointed to highlighted.
@@ -70,7 +71,7 @@ export function KnowledgeDocViewer({ projectId, docId, name, passage, heading, o
         {error && <p className="error-note" role="alert">{error}</p>}
         {!doc && !error && <p className="muted">Opening…</p>}
         {doc && (
-          <div className="kdv-body">
+          <TextZoom><div className="kdv-body">
             {blocks.map((b) => (
               <div
                 key={b.i}
@@ -81,7 +82,7 @@ export function KnowledgeDocViewer({ projectId, docId, name, passage, heading, o
               </div>
             ))}
             {doc.truncated && <p className="muted small">The text is long; only the first part is shown here.</p>}
-          </div>
+          </div></TextZoom>
         )}
       </div>
     </div>

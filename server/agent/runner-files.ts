@@ -19,6 +19,10 @@ export const RUNNER_FILE_EXTS = new Set([
   '.md', '.docx', '.xlsx', '.pptx', '.csv', '.html', '.drawio',
 ]);
 
+/** The deck's slide list: a JSON file the portal turns into the PowerPoint (presentations.ts), the one JSON file sent back. */
+export const RUNNER_DECK_SPEC = 'deck.json';
+const allowedRunnerName = (name: string): boolean => RUNNER_FILE_EXTS.has(path.extname(name).toLowerCase()) || name === RUNNER_DECK_SPEC;
+
 /** Folders that hold tool state, clones or dependencies, not the agent's deliverables. */
 export const RUNNER_EXCLUDED_DIRS = new Set([
   'repos', 'home', '.browser', '.claude', '.kiro', '.git', 'node_modules', '.local', '.cache', '.npm',
@@ -69,7 +73,7 @@ export function collectRunnerFiles(workDir: string, sinceMs = 0): { files: Runne
         continue;
       }
       if (!e.isFile()) continue;
-      if (!RUNNER_FILE_EXTS.has(path.extname(e.name).toLowerCase())) continue;
+      if (!allowedRunnerName(e.name)) continue;
       let st: fs.Stats;
       try { st = fs.statSync(abs); } catch { continue; }
       if (st.mtimeMs < sinceMs) continue;
@@ -123,7 +127,7 @@ export function safeRelPath(p: unknown): string | null {
   if (norm === '.' || norm.startsWith('/')) return null;
   const parts = norm.split('/');
   if (parts.some((s) => RUNNER_EXCLUDED_DIRS.has(s) && s !== parts[parts.length - 1])) return null;
-  if (!RUNNER_FILE_EXTS.has(path.posix.extname(norm).toLowerCase())) return null;
+  if (!allowedRunnerName(path.posix.basename(norm))) return null;
   return norm;
 }
 

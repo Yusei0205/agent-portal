@@ -2099,3 +2099,16 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
 .account-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; }
 .account-facts dt { color: var(--ink-3); }
 .account-facts dd { margin: 0; }
+
+/* Pan and zoom (diagrams, pictures) and text zoom (documents) */
+.panzoom { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: linear-gradient(var(--panel), var(--panel)), var(--canvas); cursor: grab; touch-action: none; user-select: none; }
+.panzoom:active { cursor: grabbing; }
+.panzoom:focus-visible { outline: 2px solid var(--accent, #6d6dff); outline-offset: 2px; }
+.panzoom-stage { transform-origin: 0 0; display: inline-block; padding: 12px; will-change: transform; }
+.panzoom-stage svg, .panzoom-stage img { max-width: none; display: block; }
+.panzoom-bar { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px; background: linear-gradient(var(--panel), var(--panel)), var(--canvas); cursor: default; }
+.panzoom-bar .btn-icon { min-width: 28px; height: 28px; }
+.panzoom-pct { min-width: 44px; text-align: center; font-size: 12px; color: var(--muted, inherit); }
+.panzoom-reset { font-size: 12px; padding: 0 8px; }
+.textzoom { position: relative; }
+.textzoom-bar { position: sticky; top: 0; margin-left: auto; width: max-content; }

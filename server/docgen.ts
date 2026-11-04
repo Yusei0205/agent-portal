@@ -105,10 +105,20 @@ export async function buildPptx(slides: SlideData[], templatePath?: string): Pro
     pptx.layout = 'LAYOUT_WIDE';
     for (const s of slides) {
       const slide = pptx.addSlide();
+      if (s.layout === 'title' || s.layout === 'section') {
+        if (s.title) slide.addText(s.title, { x: 0.8, y: 2.4, w: 11.7, h: 1.4, fontSize: s.layout === 'title' ? 40 : 34, bold: true });
+        if (s.subtitle) slide.addText(s.subtitle, { x: 0.8, y: 3.9, w: 11.7, h: 1, fontSize: 20, color: '666666' });
+        if (s.notes) slide.addNotes(s.notes);
+        continue;
+      }
       if (s.title) {
         slide.addText(s.title, { x: 0.5, y: 0.3, w: 12, h: 1, fontSize: 28, bold: true });
       }
-      if (s.bullets?.length) {
+      if (s.table?.rows?.length) {
+        const head = (s.table.header ?? []).map((h) => ({ text: String(h), options: { bold: true, fill: { color: 'E8EAF0' } } }));
+        const body = s.table.rows.map((r) => r.map((c) => ({ text: String(c) })));
+        slide.addTable([...(head.length ? [head] : []), ...body], { x: 0.5, y: 1.5, w: 12, fontSize: 14, border: { type: 'solid', color: 'BBBBBB', pt: 1 } });
+      } else if (s.bullets?.length) {
         slide.addText(
           s.bullets.map((b) => ({ text: b, options: { bullet: true, breakLine: true } })),
           { x: 0.5, y: 1.5, w: 12, h: 5, fontSize: 18 },

@@ -406,8 +406,17 @@ export async function processDiagramOutput(
       const mmdSource = mmdFile ? fs.readFileSync(mmdFile, 'utf8') : null;
 
       // Try to get mermaid from run result if no file found
-      const run = (await getSessionsRepository().getRunById(runId)) as unknown as Row | null;
-      const result = String(run?.status === 'done' ? (run.result ?? '') : (mmdSource ?? ''));
+      // A run row has no result text; the final answer is the run-complete event (this is all there is on a cloud runner,
+      // where the agent's work folder is not on this server).
+      let result = mmdSource ?? '';
+      if (!result && runId) {
+        const evs = await getSessionsRepository().listRunEvents(runId, 20000).catch(() => []);
+        for (let i = evs.length - 1; i >= 0; i--) {
+          if (evs[i].type !== 'run-complete') continue;
+          try { result = String((JSON.parse(evs[i].payload) as { result?: unknown }).result ?? ''); } catch { /* no result */ }
+          break;
+        }
+      }
 
       // Try to extract from a mermaid fence in the result
       let mermaidSource = mmdSource ?? '';

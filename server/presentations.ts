@@ -28,6 +28,7 @@ import {
   type PresentationSourceKind,
 } from './presentation-text.ts';
 import { pptxSlides } from './convert.ts';
+import { buildPptx } from './docgen.ts';
 import {
   validateAttachmentIds,
   stageAttachmentsToWorkDir,
@@ -190,10 +191,28 @@ export async function processPresentationOutput(workflowId: string, runId: strin
 
   let pptxPath: string | null = null;
   let previewJson: string | null = null;
+  let buildError = '';
 
   try {
     if (fs.existsSync(workDir)) {
-      const files = fs.readdirSync(workDir);
+      let files = fs.readdirSync(workDir);
+      // The agent writes deck.json; the portal builds the PowerPoint file from it (no make-doc command is needed on the runner).
+      if (!files.some((f) => f.endsWith('.pptx'))) {
+        const specName = files.find((f) => f === 'deck.json') ?? files.find((f) => /\.spec\.json$/.test(f));
+        if (specName) {
+          try {
+            const spec = JSON.parse(fs.readFileSync(path.join(workDir, specName), 'utf8')) as { slides?: unknown };
+            const slides = Array.isArray(spec) ? spec : spec.slides;
+            if (Array.isArray(slides) && slides.length) {
+              const buf = await buildPptx(slides as never);
+              fs.writeFileSync(path.join(workDir, 'presentation.pptx'), buf);
+              files = fs.readdirSync(workDir);
+            } else buildError = 'deck.json has no slides.';
+          } catch (e) {
+            buildError = `The deck could not be built from deck.json: ${String((e as Error)?.message ?? e).slice(0, 200)}`;
+          }
+        }
+      }
       const pptxFile = files.find((f) => f.endsWith('.pptx'));
       if (pptxFile) {
         pptxPath = path.join(workDir, pptxFile);
@@ -215,8 +234,8 @@ export async function processPresentationOutput(workflowId: string, runId: strin
     pptx_path: pptxPath,
     preview_json: previewJson,
     stale: 0,
-    status: 'ready',
-    error: null,
+    status: pptxPath ? 'ready' : 'error',
+    error: pptxPath ? null : (buildError || 'The agent finished without producing a deck (no deck.json or .pptx file). Try again.'),
     updated_at: ts,
   });
 }

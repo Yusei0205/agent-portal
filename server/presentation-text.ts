@@ -48,12 +48,12 @@ export function composePresentationPrompt(p: PresentationPrompt): string {
     '',
     'How to work:',
     '1. Plan first: decide the one message the audience should leave with, then give each slide one idea. Slide titles state the point in at most 8 words. Use 3 to 5 bullets per slide of at most 12 words each, a table for comparisons, and a section slide to open each part of a long deck.',
-    '2. Use the make-documents skill. Write the deck as a JSON spec of type "pptx" with the Write tool (deck.spec.json in your run folder) and build it with the make-doc command. Do not use Python or any other tool, do not install anything, and do not download images: pictures come only from files in the project or from diagrams.',
-    '3. Show every diagram with a "mermaid" slide element (alone, or beside 2 or 3 bullets) with a caption; an icon diagram (a .drawio file) goes in an "image" element whose path is that file. Never redraw a diagram as bullets.',
+    '2. Write the deck as a JSON file named deck.json in your run folder, with the Write tool: {"slides":[{"layout":"title","title":"...","subtitle":"...","notes":"..."},{"layout":"bullets","title":"...","bullets":["..."],"notes":"..."},{"layout":"text","title":"...","text":"...","notes":"..."},{"layout":"table","title":"...","table":{"header":["A","B"],"rows":[["1","2"]]},"notes":"..."},{"layout":"section","title":"..."}]}. The portal builds the PowerPoint file from deck.json when you finish. Do not build a .pptx yourself, do not use Python or any other tool, do not install anything, and do not download images.',
+    '3. A diagram is not drawn in the deck: give it a slide that says in 3 to 5 bullets what the diagram shows (the parts and how they connect), from the diagram source.',
     '4. Write speaker notes of 2 to 4 sentences for every slide: what to say, and where the facts come from.',
-    '5. Name the file presentation.pptx and save it in your run folder (the folder you were told to put files in). If make-doc prints "warnings", fix what you can and run it again; mention any that remain in your reply.',
+    '5. Save deck.json in your run folder (the folder you were told to put files in); valid JSON only, no comments.',
     '6. Never invent figures, names or dates. If the source does not say, leave it out or mark it as open. Never copy secrets or credentials into the deck.',
-    'Reply with one line "Presentation: <path of the .pptx file>", then 3 to 6 short lines: the slide titles in order, and any warnings.',
+    'Reply with one line "Presentation: deck.json", then 3 to 6 short lines: the slide titles in order, and anything you left out.',
   ].join('\n');
 }
 

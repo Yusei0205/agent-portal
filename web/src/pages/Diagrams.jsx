@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
@@ -499,15 +499,19 @@ export function Diagrams({ projectId }) {
     }
   }, [projectId]);
 
+  // The latest list, read by the poll below. (Depending on `diagrams` in the effect made every load start another load,
+  // a request loop that hit the rate limit.)
+  const diagramsRef = useRef(diagrams);
+  diagramsRef.current = diagrams;
   useEffect(() => {
     load();
     // Poll for generating diagrams
     const interval = setInterval(() => {
-      const hasGenerating = diagrams.some((d) => d.status === 'generating');
+      const hasGenerating = diagramsRef.current.some((d) => d.status === 'generating');
       if (hasGenerating) load();
     }, 5000);
     return () => clearInterval(interval);
-  }, [load, diagrams]);
+  }, [load]);
 
   const toggleSelect = (id) => {
     setSelected((prev) => {
