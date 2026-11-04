@@ -6,7 +6,9 @@ Goal: a Claude run on Bedrock AgentCore can split its task, as the prompt calls 
 
 Branch: `feat/agentcore-multi-agent`, stacked on `fix/model-pricing` (PR #15), which is stacked on `fix/cancelled-run-spend` (PR #14). The PR goes to `fix/model-pricing`.
 
-## Done (first commit on the branch)
+## Done
+
+### First commit (7ee5f5e)
 
 | Area | Change |
 |---|---|
@@ -20,44 +22,41 @@ Branch: `feat/agentcore-multi-agent`, stacked on `fix/model-pricing` (PR #15), w
 | UI | Live view: a subagent's text under "Agent › name"; a row when a subagent starts or ends. Agents panel refreshes on subagent events and shows each one's task. |
 | Tests | `test/agent-defs.test.ts`, `test/agentcore-multi-agent.test.ts` (a real child session is started and its result reaches the parent), new cases in `test/agent-runner-validation.test.ts`. Portal and runner type checks pass; 102 tests in the touched areas pass. |
 
+### Second commit: finished, tested end to end, validated
+
+| Area | Change |
+|---|---|
+| `agent-runner/src/run.ts` | The `portal` MCP server is created with `alwaysLoad: true`, so `delegate_session` is in the prompt from the first turn and is never deferred behind tool search. |
+| `server/agent/agentcore-bridge.ts` | The header comment covers delegation: `DelegationRelay`'s four steps, and where the child's result goes. |
+| `test/test-map.json` | `test/agent-defs.test.ts` and `test/agentcore-multi-agent.test.ts` are in `kiro` (with `server/agent/agent-defs.ts`, next to `claude-agentcore.ts`); `agentcore-multi-agent` is also in `delegation`. |
+| `test/mock-anthropic-api.ts` | A script step may be a function of the request it answers (to use the tool name the engine offers, or to reply by who asks). |
+| `test/engine/agentcore-runner-engine.test.ts` | Two runner processes stand in for two microVMs: A takes the sessions of the runs a test starts, B every other session. Each runner gets a microVM's environment (none of the host's Claude Code or Anthropic variables) and has tool search on. Three new tests: a project agent the main agent waits for; a project agent in the background; a child session started with `delegate_session`. |
+
+### What the end-to-end tests showed (Agent SDK 0.3.303)
+- `canUseTool`'s `agentID` is the subagent's `task_id`, so the `agent` tag on a subagent's tool calls is right. The mapping in `run.ts` is unchanged.
+- Agents run in the background by default. The main agent's turn can end first (a first `result`); the engine tells it with a task notification when the agent ends, and it answers (a second `result`). The runner reads to the end, and `total_cost_usd` is cumulative, so the spend recorded is the whole run's.
+- An agent the main agent waits for (`run_in_background: false`) does not stream its last text: its report comes back as the tool result and as the `summary` of `subagent-finished`, which the live view shows under its name. A background agent's text is streamed with `agent`.
+- The engine starts an agent without calling `canUseTool`, so the hand-off shows as `subagent-started`, not as a tool call. Every tool the agent then uses goes through the run's rules.
+- With tool search on and no `alwaysLoad`, the first request offers `ToolSearch` but not `delegate_session`, and the child-session test fails. With `alwaysLoad: true` it passes.
+- No product bug besides the missing `alwaysLoad`.
+- The existing test "a person approves a shell command…" failed in a Claude Code cloud session, on `main_v3` too: the runner inherited the session's own Claude Code variables, so the engine sent the session's login instead of the test key. Fixed in the test (the microVM environment above).
+
+### Validation (Node 22.23.4)
+
+| Check | Result |
+|---|---|
+| `npm ci` (root and `agent-runner/`) | OK |
+| `npm run typecheck` | 0 errors |
+| `agent-runner`: `node build.mjs`, `npx tsc --noEmit` | OK, 0 errors |
+| `npm run test:engine` | 7 of 7 pass (4 existing, 3 new); 3 runs in a row |
+| `npm test` | 2,922 tests: 2,895 pass, 3 fail, 6 cancelled, 18 skipped. Every failure and cancellation is in `test/browser-live.test.ts`, which fails the same way on `main_v3`: the image has no Chromium headless shell for the project's Playwright version. |
+| AgentCore, delegation and agent tests (`agent-defs`, `agentcore-multi-agent`, `agent-runner-validation`, `agentcore-harness`, `agentcore-portal`, `kiro-agentcore`, `delegation`) | 140 of 140 pass |
+| `npm run test:map:check` | passes |
+| `npm run build` | OK |
+
 ## Still to do
 
-### 1. Finish the code
-1. `agent-runner/src/run.ts`: create the MCP server with `alwaysLoad: true`, so Claude Code never hides `delegate_session` behind tool search.
-2. `server/agent/agentcore-bridge.ts`: mention delegation in the header comment.
-3. `test/test-map.json`: add the two new test files to their modules; `npm run test:map:check` must pass.
-
-### 2. End-to-end test with the real runner and the real Claude Code engine
-File: `test/engine/agentcore-runner-engine.test.ts` (run with `npm run test:engine`; it uses `test/mock-anthropic-api.ts`, no API key).
-1. Start a second runner process as a second microVM. The invoker sends the parent run's session (its id starts with the parent's runId) to runner A and every other session to runner B.
-2. **Subagent test.** Write `file-writer.md` into `{dataDir}/projects/<slug>/.claude/agents/`. Script: `Agent` (subagent_type `file-writer`) → `Bash` inside the subagent (an "ask" rule) → the subagent's text → the main agent's text. Check:
-   - the agent's prompt reaches the model (a request's `system`);
-   - the person was asked about the subagent's command, and it ran (marker file);
-   - `subagent-started` and `subagent-finished` arrived;
-   - the run's answer is the main agent's text only;
-   - tool calls inside the subagent carry `agent`. If the SDK's `agentID` is not the `task_id`, change the mapping in `run.ts` (or drop the tag) rather than the test.
-   - Read the first request's `tools` to confirm the tool is named `Agent` (older engines: `Task`).
-3. **Child session test.** Insert a user, give the parent workflow `created_by`, set `PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN` so the child also runs through the AgentCore path, and restore it afterwards. Script: `mcp__portal__delegate_session` → text → text. Check:
-   - `mcp__portal__delegate_session` is in the request's `tools`;
-   - the child workflow exists with `parent_id`;
-   - the child's run went to runner B (another session);
-   - a `child-result` event with status `done` reached the parent;
-   - the parent's tool result contains `childWorkflowId`.
-
-### 3. Full validation
-- `npm run typecheck`, then `node build.mjs` and `npx tsc --noEmit` in `agent-runner/`.
-- `npm test` (all), `npm run test:engine`, `npm run test:map:check`, `npm run build`.
-- Compare any failure with `main_v3`. A known flake is the `user-config` "materialises kiro config" timing test.
-
-### 4. Commit, push, PR
-- Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- Open the PR to `fix/model-pricing`: "feat(agentcore): several agents and child sessions for Claude runs on AgentCore". The body ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
-- Say in the body:
-  - merging rebuilds the runner image and updates the runtime;
-  - child sessions on AgentCore start in an empty work folder, the same as every AgentCore run today; only the result text comes back to the parent.
-- Do not merge.
-
-### 5. After merge (needs AWS; not in the cloud session)
+### After merge (needs AWS; not in the cloud session)
 1. Merge in order: #14, then #15, then this PR. The deploy workflow then updates the runtimes. `aws-prod` has no reviewers.
 2. Extend `test/live/agentcore-live.test.ts` and run it against the deployed runtime (Haiku 4.5, about $0.10):
    - a run hands work to a project agent;
@@ -67,3 +66,5 @@ File: `test/engine/agentcore-runner-engine.test.ts` (run with `npm run test:engi
 ## Known limits (not in this change)
 - The local engine's `delegate_session` passes a hand-made schema object instead of zod. Check whether it works there; fix it in its own PR if not.
 - The engine sends one assistant message per content block, and usage on those is not final. Token totals may overcount, which affects estimates only.
+- A portal rule that blocks the Agent tool is not applied on AgentCore: the engine starts agents without asking `canUseTool`. The local engine is the same engine, so most likely the same there (not tested). The rules still apply to every tool the agent uses.
+- The deploy workflow's `verify` job names its portal AgentCore tests one by one, and the two new ones are not in that list. `ci.yml` runs them through the test map.
