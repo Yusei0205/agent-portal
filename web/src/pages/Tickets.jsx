@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useSort } from '../lib/useSort.jsx';
+import { statusSortKey, prioritySortKey } from '../lib/ticketSort.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { TicketPreview } from '../components/TicketPreview.jsx';
@@ -771,8 +772,8 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
   const { sorted: sortedIssues, sortProps } = useSort(issues, {
     key: (i) => i.key,
     summary: (i) => i.summary,
-    status: (i) => i.status,
-    priority: (i) => i.priority,
+    status: (i) => statusSortKey(i.status),
+    priority: (i) => prioritySortKey(i.priority),
     assignee: (i) => i.assignee,
     updated: (i) => i.updated,
   });
@@ -846,14 +847,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
       {/* Left: list */}
       <div className="stack" style={{ gap: 10 }}>
         {/* Filter bar */}
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            flexWrap: 'wrap',
-            alignItems: 'flex-end',
-          }}
-        >
+        <div className="ticket-filters">
           {/* Project dropdown — visible when multiple projects available */}
           {showProjectDropdown && (
             <div
@@ -943,10 +937,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
           )}
 
           {/* Assigned-to-me toggle */}
-          <label
-            className="choice"
-            style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}
-          >
+          <label className="choice ticket-filter-toggle">
             <input
               type="checkbox"
               checked={assigneeMe}
