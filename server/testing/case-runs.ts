@@ -28,6 +28,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import { resolveCreateAi } from '../create-ai.ts';
 import { auditRaw } from '../audit.ts';
 import { testingRepo } from './data.ts';
+import { decrypt } from '../secrets.ts';
 import { requireTestProject, hasScope } from './helpers.ts';
 import type { TestProject } from './helpers.ts';
 
@@ -159,7 +160,15 @@ export function selectCases<T extends { status: string; category: string }>(all:
 }
 
 /** The prompt that makes an agent perform the cases and report in a fixed CSV. */
-export function buildRunPrompt(tp: { app_url: string; api_base_url: string | null; rules_for_ai: string }, cases: CaseRow[], instructions: string): string {
+export interface RunLogin { name: string; username: string; password: string; hasTotp: boolean }
+
+export function buildRunPrompt(tp: { app_url: string; api_base_url: string | null; rules_for_ai: string }, cases: CaseRow[], instructions: string, logins: RunLogin[] = []): string {
+  const accounts = logins.length
+    ? [
+      'Test accounts you may sign in with (from the project\'s Test Vault; use them only for the cases that need a sign-in, and never write a password into results.csv or your reply):',
+      ...logins.map((l) => `- ${l.name}: username ${l.username || '(none)'}, password ${l.password || '(none)'}${l.hasTotp ? ' (this account also asks for a two-step code, which you cannot get: mark such a case Blocked)' : ''}`),
+    ].join('\n')
+    : '';
   const list = cases.map((c) => [
     `[${c.test_id}] ${c.category ? `${c.category}: ` : ''}${c.scenario}`,
     c.precondition ? `  Precondition: ${c.precondition}` : '',
@@ -171,6 +180,7 @@ export function buildRunPrompt(tp: { app_url: string; api_base_url: string | nul
     `You are a QA tester. Perform the test cases below against the application at ${tp.app_url}, using the browser tools: open pages, click, type, and read what is on the screen.`,
     tp.api_base_url ? `The application's API is at ${tp.api_base_url}.` : '',
     tp.rules_for_ai?.trim() ? `Rules from the team:\n${tp.rules_for_ai.trim()}` : '',
+    accounts,
     instructions.trim() ? `Instructions for this run:\n${instructions.trim()}` : '',
     '',
     'For each test case: follow its steps in order, compare what you see with its expected result, and decide:',
@@ -363,13 +373,26 @@ export function registerCaseRunRoutes(): void {
     const instructions = typeof body.instructions === 'string' ? body.instructions.slice(0, 4000) : '';
     const ai = await resolveCreateAi(req.user!.id, body);
 
+    // Logins the person chose from the Test Vault (by name); the agent gets them in its prompt, nothing else of the Vault.
+    const wanted = new Set(Array.isArray(body.vaultNames) ? body.vaultNames.map((n) => String(n)) : []);
+    const logins: RunLogin[] = [];
+    if (wanted.size) {
+      const items = (await testingRepo().listVaultItemsByTestProject(tp.id)) as unknown as Array<{ name: string; kind: string; username: string | null; password_enc: string | null; totp_secret_enc: string | null }>;
+      for (const it of items) {
+        if (it.kind !== 'login' || !wanted.has(it.name)) continue;
+        let password = '';
+        try { password = it.password_enc ? decrypt(String(it.password_enc), config.secretKey) : ''; } catch { /* unreadable: give none */ }
+        logins.push({ name: it.name, username: it.username ?? '', password, hasTotp: !!it.totp_secret_enc });
+      }
+    }
+
     const runId = newId('cr_');
     const workflowId = newId('w_');
     const ts = now();
     await getSessionsRepository().createWorkflow({
       id: workflowId,
       project_id: req.params.pid,
-      goal: buildRunPrompt(tp, cases, instructions),
+      goal: buildRunPrompt(tp, cases, instructions, logins),
       status: 'pending',
       engine: ai.engine,
       trust_tools: 1,
@@ -394,7 +417,7 @@ export function registerCaseRunRoutes(): void {
     await writeHistory(tp.id, [summary, ...readHistory(tp.id)]);
     const link: RunLink = { tpId: tp.id, runId, projectId: req.params.pid, caseSetId: cs.id, caseIds: cases.map((c) => c.id) };
     await setSetting(getDb(), linkKey(workflowId), JSON.stringify(link));
-    auditRaw(req.user!.id, 'test_case_run.start', `test_case_run:${runId}`, { caseSetId: cs.id, cases: cases.length });
+    auditRaw(req.user!.id, 'test_case_run.start', `test_case_run:${runId}`, { caseSetId: cs.id, cases: cases.length, logins: logins.map((l) => l.name) });
 
     setTimeout(async () => {
       try {

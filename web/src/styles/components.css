@@ -2084,3 +2084,5 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 /* The open list of a select is drawn by the browser: on glass themes the field is see-through and its text light, so the list needs its own solid colours. */
 select option,
 select optgroup { background-color: var(--canvas); color: var(--ink); }
+.arun-logins { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 0; display: grid; gap: 6px; }
+.arun-logins legend { padding: 0 6px; font-size: 0.85rem; font-weight: 600; }

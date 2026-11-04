@@ -31,6 +31,17 @@ describe('agent test runs: reading the agent\'s results.csv', () => {
   });
 });
 
+describe('agent test runs: sign-in accounts', () => {
+  const tp = { app_url: 'https://app.test', api_base_url: null, rules_for_ai: '' };
+  const cases = [{ test_id: 'TC-1', category: '', scenario: 's', precondition: '', steps: 'x', expected_result: 'y' }] as never[];
+  test('chosen logins are in the prompt; none means no section', () => {
+    const withLogin = buildRunPrompt(tp, cases, '', [{ name: 'admin', username: 'qa@x.com', password: 'pw1', hasTotp: true }]);
+    assert.match(withLogin, /admin: username qa@x\.com, password pw1/);
+    assert.match(withLogin, /two-step code/);
+    assert.doesNotMatch(buildRunPrompt(tp, cases, ''), /Test accounts/);
+  });
+});
+
 describe('agent test runs: which cases', () => {
   const all = [
     { id: 1, status: '', category: 'Login' }, { id: 2, status: 'Pass', category: 'Login' },

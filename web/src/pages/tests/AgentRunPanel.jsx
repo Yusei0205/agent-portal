@@ -20,6 +20,25 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
   const [category, setCategory] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [logins, setLogins] = useState([]);
+  const [chosen, setChosen] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    api.get(`/api/projects/${projectId}/tests/${testProjectId}/vault`).then((r) => {
+      if (!live) return;
+      const list = (r.items || []).filter((i) => i.kind === 'login');
+      setLogins(list);
+      setChosen(new Set(list.map((i) => i.name)));
+    }).catch(() => { if (live) setChosen(new Set()); });
+    return () => { live = false; };
+  }, [projectId, testProjectId]);
+
+  const toggleLogin = (name) => setChosen((prev) => {
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    return next;
+  });
 
   const categories = [...new Set(cases.map((c) => c.category).filter(Boolean))];
   const matching = cases.filter((c) => (!category || c.category === category)
@@ -30,7 +49,7 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
     setBusy(true);
     setError(null);
     try {
-      const r = await api.post(`${base}/agent-runs`, { ...ai, instructions, scope, category });
+      const r = await api.post(`${base}/agent-runs`, { ...ai, instructions, scope, category, vaultNames: [...(chosen || [])] });
       onStarted(r);
     } catch (e) {
       setError(e.message || 'Could not start the run');
@@ -48,7 +67,7 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
               An agent opens your app in a browser and performs each test case: it follows the steps, compares what it sees with the expected result,
               and decides Pass, Fail or Blocked, with a note.
               <span className="info-tip-line">Its answers fill the Status and Remarks columns of this sheet, a results CSV is made, and the run is kept in Run history with its pass and fail counts.</span>
-              <span className="info-tip-line">The app address and rules come from the Settings tab. The agent has no Vault logins; give a test account below if the app needs one.</span>
+              <span className="info-tip-line">The app address and rules come from the Settings tab. Tick the Vault logins the agent may sign in with; it gets no other part of the Vault.</span>
             </InfoTip>
           </h2>
           <button type="button" className="btn-icon" onClick={onClose} aria-label="Close" disabled={busy}>✕</button>
@@ -80,6 +99,22 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
                 {matching > MAX_CASES && <> {matching} cases match, and one run takes the first {MAX_CASES}. Choose “only cases not run yet” to run the next batch afterwards.</>}</>}
           </p>
           <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="arun-ai" />
+          <fieldset className="arun-logins">
+            <legend>Sign-in accounts the agent may use</legend>
+            {logins.length === 0
+              ? <p className="muted small">No login in this project's Vault yet, so cases that need a sign-in will come back Blocked. Add one in the Vault tab, or write a test account in the instructions below.</p>
+              : (
+                <>
+                  {logins.map((l) => (
+                    <label key={l.id || l.name} className="choice">
+                      <input type="checkbox" checked={!!chosen?.has(l.name)} onChange={() => toggleLogin(l.name)} disabled={busy} />
+                      <span>{l.name} <span className="muted small">{l.username}{l.hasTotp ? ' · two-step code (agent cannot use it)' : ''}</span></span>
+                    </label>
+                  ))}
+                  <p className="field-hint">The agent is given the username and password of each ticked account in its prompt, which is kept in the run's session transcript. Tick only test accounts.</p>
+                </>
+              )}
+          </fieldset>
           <div className="field">
             <label htmlFor="arun-notes">Instructions for the agent <span className="muted">(optional)</span></label>
             <textarea
