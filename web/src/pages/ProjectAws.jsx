@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { SectionHead } from '../components/PageHeader.jsx';
+import { parseAwsCredentials } from '../lib/awsCredParser.js';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
 const EMPTY = { name: '', region: 'ap-southeast-1', accessKeyId: '', secretAccessKey: '', sessionToken: '' };
@@ -18,6 +19,31 @@ function AccountForm({ projectId, account, onDone, onCancel }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  // "Get credentials" from the AWS access portal: paste the whole block (any of its formats) and the fields fill in.
+  const [paste, setPaste] = useState('');
+  const [pasteNote, setPasteNote] = useState(null); // null | { ok: boolean, text: string }
+  const fillFrom = (text) => {
+    const r = parseAwsCredentials(text);
+    if (!r || !r.accessKeyId || !r.secretAccessKey) {
+      setPasteNote({ ok: false, text: 'No access key and secret found in what you pasted. Copy the whole block from the access portal.' });
+      return;
+    }
+    setForm((f) => ({
+      ...f,
+      accessKeyId: r.accessKeyId,
+      secretAccessKey: r.secretAccessKey,
+      sessionToken: r.sessionToken ?? '',
+      name: f.name || (r.profileName ?? ''),
+    }));
+    setPaste('');
+    setPasteNote({
+      ok: true,
+      text: r.sessionToken || r.accessKeyId.startsWith('ASIA')
+        ? 'Filled the key, secret and session token. These are temporary keys: paste again here when they expire.'
+        : 'Filled the key and secret.',
+    });
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -43,6 +69,27 @@ function AccountForm({ projectId, account, onDone, onCancel }) {
 
   return (
     <form className="aws-form" onSubmit={submit} autoComplete="off">
+      <div className="field">
+        <label htmlFor="aws-paste">Paste from the AWS access portal <span className="muted">(fills the fields below)</span></label>
+        <textarea
+          id="aws-paste"
+          value={paste}
+          rows={3}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="AWS access portal → your account → Access keys: copy the whole block and paste it here"
+          onChange={(e) => { setPaste(e.target.value); setPasteNote(null); }}
+          onPaste={(e) => {
+            const text = (e.clipboardData || window.clipboardData)?.getData('text') ?? '';
+            if (!text.trim()) return;
+            e.preventDefault();
+            fillFrom(text);
+          }}
+        />
+        {paste && <button type="button" className="btn btn-sm" style={{ justifySelf: 'start' }} onClick={() => fillFrom(paste)}>Fill from pasted text</button>}
+        {pasteNote && <p className={pasteNote.ok ? 'success-note' : 'error-note'} role="status">{pasteNote.text}</p>}
+        <p className="field-hint">Works with the macOS/Linux, Windows CMD, PowerShell and credentials-file formats. Or fill the fields by hand.</p>
+      </div>
       <div className="aws-form-row">
         <div className="field">
           <label htmlFor="aws-name">Name</label>
