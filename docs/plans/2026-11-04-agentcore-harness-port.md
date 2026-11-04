@@ -85,8 +85,9 @@ record spend, stop reason, budget
 2. Port harness PR 1.2 (safety switches) and 1.7 (loop progress and stop rules) into main_v3.
 3. Add the per-session spend cap and time limit to the session API and screen. The columns and repository support exist now.
 4. Phase 2 sandbox, for what the shell can still reach.
-5. Record the spend of a cancelled AgentCore run. After sending the cancel, the portal could keep reading the stream for a few seconds to receive the runner's final `result` (section 7, "Seen live").
+5. ~~Record the spend of a cancelled AgentCore run.~~ **Fixed in [PR #14](https://github.com/Yusei0205/agent-portal/pull/14)**, together with the same gap on the local engine (cancelled and time-limited runs recorded $0) and the time-limit stop reason being lost for local Claude runs. Live re-run: the cancelled run now records $0.0010 and its tokens instead of $0.
 6. A repository admin protects the `aws-prod` environment with required reviewers and limits it to `main_v3`. Today it has neither, so any push to `main_v3` that touches the runners deploys straight away.
+7. Fix `server/agent/pricing.ts`. It prices every Haiku model at $0.10 / $0.50 per million tokens, while the engine's own live totals fit $1 / $5 for Haiku 4.5, so token-based estimates for stopped Haiku 4.5 runs are about 10x too low. It also groups models by family, not generation. Runs that end normally use the engine's own total and are not affected.
 
 ## 6. Deploying
 
@@ -193,7 +194,7 @@ The cloud portal (`AgentPortalCloud`) still points at the Spike A runtime until 
 | Cancel | Aborting in the portal stopped a 240-second command. The runtime's log shows the run ended with `stop_reason: cancelled` 6 s after it started | $0, no tokens (see below) |
 | Stray answer | An answer for a run that isn't waiting was refused | `answer-rejected`, 404 |
 
-**Seen live:** a cancelled run is recorded at $0 with no tokens, although the model had already answered once before the stop. The runner does send a final `result` with an estimated cost. But on abort, `server/agent/claude-agentcore.ts` closes the stream and throws at once, so it never reads that result. It is a small undercount and a follow-up (section 5).
+**Seen live:** a cancelled run is recorded at $0 with no tokens, although the model had already answered once before the stop. The runner does send a final `result` with an estimated cost. But on abort, `server/agent/claude-agentcore.ts` closes the stream and throws at once, so it never reads that result. It is a small undercount, fixed in [PR #14](https://github.com/Yusei0205/agent-portal/pull/14) (section 5).
 
 **Not live-tested:** the Kiro runtime. It needs a Kiro sign-in; the relay and guard are covered by `test/agentcore-portal.test.ts` and `test/kiro-agentcore.test.ts`.
 
