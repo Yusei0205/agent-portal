@@ -10,6 +10,15 @@
  *   4. Send the answer back to the same microVM as a mode "answer" invocation.
  *
  * Requests are handled concurrently, so one open approval never holds up the run's stream.
+ *
+ * Child sessions (delegation): with delegation on, the runner offers Claude delegate_session
+ * (mcp__portal__delegate_session) and streams each call as a `delegate-request`. DelegationRelay
+ *   1. checks the request's fingerprint against the call it describes,
+ *   2. re-checks the block rules for mcp__portal__delegate_session with the portal's own copy,
+ *   3. starts the child session (createChildSession: its own run, so its own microVM),
+ *   4. answers the microVM like an approval: the child's ID and title, or why none was started.
+ * The child runs on its own; when it finishes, its result is posted to the parent session
+ * (deliverChildResult in delegation.ts).
  */
 
 import { decideToolCall, inputFingerprint, type PolicyRule } from './tool-policy.ts';

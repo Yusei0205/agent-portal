@@ -168,7 +168,11 @@ async function portalMcpServers(
       return { content: [{ type: 'text', text: outcome.message || 'The portal did not start the session.' }], isError: true };
     },
   );
-  return { [PORTAL_MCP_SERVER]: sdk.createSdkMcpServer({ name: PORTAL_MCP_SERVER, version: '1.0.0', tools: [delegate] }) };
+  // alwaysLoad: the tool is always in the prompt, never deferred behind tool search, so
+  // Claude sees delegate_session from its first turn.
+  return {
+    [PORTAL_MCP_SERVER]: sdk.createSdkMcpServer({ name: PORTAL_MCP_SERVER, version: '1.0.0', tools: [delegate], alwaysLoad: true }),
+  };
 }
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
