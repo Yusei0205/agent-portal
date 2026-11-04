@@ -12,7 +12,7 @@ import { InfoTip } from '../../components/InfoTip.jsx';
 
 const MAX_CASES = 30;
 
-export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onClose, onStarted }) {
+export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onClose, onStarted, resume = null }) {
   const base = `/api/projects/${projectId}/tests/${testProjectId}/case-sets/${caseSetId}`;
   const [ai, setAi] = useState({});
   const [instructions, setInstructions] = useState('');
@@ -41,7 +41,7 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
   });
 
   const categories = [...new Set(cases.map((c) => c.category).filter(Boolean))];
-  const matching = cases.filter((c) => (!category || c.category === category)
+  const matching = resume ? resume.remaining : cases.filter((c) => (!category || c.category === category)
     && (scope === 'all' || (scope === 'notPassed' ? c.status !== 'Pass' : (!c.status || c.status === 'Not Run')))).length;
   const count = Math.min(matching, MAX_CASES);
 
@@ -49,7 +49,7 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
     setBusy(true);
     setError(null);
     try {
-      const r = await api.post(`${base}/agent-runs`, { ...ai, instructions, scope, category, vaultNames: [...(chosen || [])] });
+      const r = await api.post(`${base}/agent-runs`, { ...ai, instructions, scope, category, vaultNames: [...(chosen || [])], ...(resume ? { resumeOf: resume.id } : {}) });
       onStarted(r);
     } catch (e) {
       setError(e.message || 'Could not start the run');
@@ -62,7 +62,7 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
       <div className="modal">
         <div className="modal-header">
           <h2 id="arun-title">
-            Run with agent
+            {resume ? 'Resume the run' : 'Run with agent'}
             <InfoTip title="What happens">
               An agent opens your app in a browser and performs each test case: it follows the steps, compares what it sees with the expected result,
               and decides Pass, Fail or Blocked, with a note.
@@ -73,7 +73,12 @@ export function AgentRunDialog({ projectId, testProjectId, caseSetId, cases, onC
           <button type="button" className="btn-icon" onClick={onClose} aria-label="Close" disabled={busy}>✕</button>
         </div>
         <div className="stack">
-          <div className="arun-scope">
+          {resume && (
+            <p className="muted small">
+              {resume.remaining} case{resume.remaining === 1 ? '' : 's'} of the run from {formatRelative(resume.startedAt)} still {resume.remaining === 1 ? 'has' : 'have'} no result. The agent does only those; the ones that already have a result are left as they are.
+            </p>
+          )}
+          <div className="arun-scope" hidden={!!resume}>
             <div className="field">
               <label htmlFor="arun-scope">Which cases</label>
               <select id="arun-scope" value={scope} onChange={(e) => setScope(e.target.value)} disabled={busy}>
@@ -154,7 +159,7 @@ function Counts({ r }) {
   );
 }
 
-export function AgentRunHistory({ projectId, testProjectId, caseSetId, onClose, onChanged }) {
+export function AgentRunHistory({ projectId, testProjectId, caseSetId, onClose, onChanged, onResume }) {
   const base = `/api/projects/${projectId}/tests/${testProjectId}`;
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -244,6 +249,11 @@ export function AgentRunHistory({ projectId, testProjectId, caseSetId, onClose, 
                       <td>
                         <div className="row-actions">
                           <a className="btn btn-sm" href={`#/p/${projectId}/sessions/${r.workflowId}`}>{r.status === 'running' ? 'Watch live' : 'View run'}</a>
+                          {r.status !== 'running' && r.remaining > 0 && onResume && (
+                            <button type="button" className="btn btn-sm btn-primary" onClick={() => onResume(r)} title="Run the cases of this run that still have no result">
+                              Resume ({r.remaining})
+                            </button>
+                          )}
                           {r.hasCsv && <a className="btn btn-sm" href={`${base}/agent-runs/${r.id}/results.csv`} download>CSV</a>}
                         </div>
                       </td>

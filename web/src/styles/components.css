@@ -2086,3 +2086,8 @@ select option,
 select optgroup { background-color: var(--canvas); color: var(--ink); }
 .arun-logins { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 0; display: grid; gap: 6px; }
 .arun-logins legend { padding: 0 6px; font-size: 0.85rem; font-weight: 600; }
+
+/* Status counts above a case table are filters */
+button.status-filter { font: inherit; cursor: pointer; }
+button.status-filter:hover { filter: brightness(1.15); }
+button.status-filter.is-active { outline: 2px solid var(--accent); outline-offset: 1px; }

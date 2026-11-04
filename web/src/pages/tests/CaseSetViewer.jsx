@@ -20,7 +20,7 @@
  *   projectId   - string
  *   onBack()    - called when Back is clicked
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
@@ -678,7 +678,7 @@ function AddCaseDialog({ existingCategories, onAdd, onClose }) {
 
 // ── Status summary strip ──────────────────────────────────────────────────────
 
-function SummaryStrip({ cases, activeCategory, onCategoryClick }) {
+function SummaryStrip({ cases, activeCategory, onCategoryClick, activeStatus, onStatusClick }) {
   const total = cases.length;
   const byStatus = STATUS_OPTIONS.slice(1).map((s) => ({ status: s, count: cases.filter((c) => c.status === s).length }));
   const noStatus = cases.filter((c) => !c.status).length;
@@ -709,14 +709,29 @@ function SummaryStrip({ cases, activeCategory, onCategoryClick }) {
       {byStatus.filter((s) => s.count > 0).map(({ status, count }) => {
         const cls = statusPillClass(status);
         return (
-          <span key={status} className={cls || 'status-pill'}>
+          <button
+            key={status}
+            type="button"
+            className={`${cls || 'status-pill'} status-filter${activeStatus === status ? ' is-active' : ''}`}
+            onClick={() => onStatusClick(status)}
+            aria-pressed={activeStatus === status}
+            title={`Show only ${status} cases`}
+          >
             {status}: {count}
-          </span>
+          </button>
         );
       })}
 
       {noStatus > 0 && (
-        <span className="status-pill status-pill-not-run">Unset: {noStatus}</span>
+        <button
+          type="button"
+          className={`status-pill status-pill-not-run status-filter${activeStatus === '__unset' ? ' is-active' : ''}`}
+          onClick={() => onStatusClick('__unset')}
+          aria-pressed={activeStatus === '__unset'}
+          title="Show only cases with no result yet"
+        >
+          Unset: {noStatus}
+        </button>
       )}
 
       {byCat.length > 0 && (
@@ -742,15 +757,15 @@ function SummaryStrip({ cases, activeCategory, onCategoryClick }) {
         </button>
       ))}
 
-      {activeCategory && (
+      {(activeCategory || activeStatus) && (
         <button
           type="button"
           className="case-summary-chip"
-          onClick={() => onCategoryClick(null)}
-          aria-label="Clear category filter"
+          onClick={() => { if (activeCategory) onCategoryClick(null); if (activeStatus) onStatusClick(activeStatus); }}
+          aria-label="Clear filters"
           style={{ borderColor: 'var(--accent, #6366f1)', color: 'var(--accent, #6366f1)' }}
         >
-          <Icon name="x" size={11} /> Clear filter
+          <Icon name="x" size={11} /> Clear filter{activeCategory && activeStatus ? 's' : ''}
         </button>
       )}
     </div>
@@ -758,6 +773,38 @@ function SummaryStrip({ cases, activeCategory, onCategoryClick }) {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
+
+/** A remark that wraps and grows to show all of its text (a one-line input hid anything past the column width). */
+function RemarksField({ value, label, onChange, onCommit }) {
+  const ref = useRef(null);
+  const fit = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+  useLayoutEffect(fit, [value, fit]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    let w = el.clientWidth;
+    const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; fit(); } });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fit]);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => onCommit(e.target.value)}
+      aria-label={label}
+      placeholder="Add remarks…"
+      style={{ border: 'none', background: 'transparent', width: '100%', fontSize: '0.8rem', padding: '2px 0', resize: 'none', overflow: 'hidden', lineHeight: 1.35, fontFamily: 'inherit', color: 'inherit', display: 'block' }}
+    />
+  );
+}
 
 export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
   const [caseSet, setCaseSet]   = useState(null);
@@ -767,10 +814,12 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
   const [editName, setEditName] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [activeCategory, setActiveCategory] = useState(null);
+  const [activeStatus, setActiveStatus] = useState(null); // 'Pass' | 'Fail' | 'Blocked' | 'Not Run' | '__unset'
   const [searchQuery, setSearchQuery] = useState('');
   const [editRow, setEditRow]   = useState(null); // case row to edit
   const [showAdd, setShowAdd]   = useState(false);
   const [agentRunOpen, setAgentRunOpen] = useState(false);
+  const [resumeRun, setResumeRun] = useState(null);
   const [historyOpen, setHistoryOpen]   = useState(false);
 
   // Resume failed/interrupted generation
@@ -1071,6 +1120,7 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
       const opt    = optimistic[c.id];
       const merged = opt ? { ...c, ...opt } : c;
       if (activeCategory && merged.category !== activeCategory) return false;
+      if (activeStatus === '__unset' ? !!merged.status : (activeStatus && merged.status !== activeStatus)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (
@@ -1086,7 +1136,7 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
       }
       return true;
     });
-  }, [sortedCases, activeCategory, searchQuery, optimistic]);
+  }, [sortedCases, activeCategory, activeStatus, searchQuery, optimistic]);
 
   const isRunning = caseSet?.status === 'pending' || caseSet?.status === 'running';
   const isFailed  = caseSet?.status === 'failed';
@@ -1202,18 +1252,20 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
         ) : null}
       </div>
 
-      {agentRunOpen && (
+      {(agentRunOpen || resumeRun) && (
         <AgentRunDialog
+          resume={resumeRun}
           projectId={projectId}
           testProjectId={testProject.id}
           caseSetId={caseSetId}
           cases={cases}
-          onClose={() => setAgentRunOpen(false)}
-          onStarted={() => { setAgentRunOpen(false); setHistoryOpen(true); }}
+          onClose={() => { setAgentRunOpen(false); setResumeRun(null); }}
+          onStarted={() => { setAgentRunOpen(false); setResumeRun(null); setHistoryOpen(true); }}
         />
       )}
-      {historyOpen && (
+      {historyOpen && !resumeRun && (
         <AgentRunHistory
+          onResume={(r) => setResumeRun(r)}
           projectId={projectId}
           testProjectId={testProject.id}
           caseSetId={caseSetId}
@@ -1319,6 +1371,8 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
             cases={cases}
             activeCategory={activeCategory}
             onCategoryClick={(cat) => setActiveCategory((prev) => prev === cat ? null : cat)}
+            activeStatus={activeStatus}
+            onStatusClick={(st) => setActiveStatus((prev) => prev === st ? null : st)}
           />
 
           {/* Search + add row toolbar */}
@@ -1497,20 +1551,11 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
 
                           {/* Remarks — inline text */}
                           <td>
-                            <input
-                              type="text"
+                            <RemarksField
                               value={display.remarks || ''}
-                              onChange={(e) => setOptimistic((prev) => ({ ...prev, [c.id]: { ...(prev[c.id] || {}), remarks: e.target.value } }))}
-                              onBlur={(e) => updateCase(c.id, { remarks: e.target.value })}
-                              aria-label={`Remarks for ${display.testId || c.id}`}
-                              style={{
-                                border: 'none',
-                                background: 'transparent',
-                                width: '100%',
-                                fontSize: '0.8rem',
-                                padding: '2px 0',
-                              }}
-                              placeholder="Add remarks\u2026"
+                              label={`Remarks for ${display.testId || c.id}`}
+                              onChange={(v) => setOptimistic((prev) => ({ ...prev, [c.id]: { ...(prev[c.id] || {}), remarks: v } }))}
+                              onCommit={(v) => updateCase(c.id, { remarks: v })}
                             />
                           </td>
 

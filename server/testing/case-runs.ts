@@ -382,7 +382,16 @@ export function registerCaseRunRoutes(): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const all = ((await testingRepo().listCasesByCaseSet(cs.id)) as unknown as CaseRow[]).sort((a, b) => a.ord - b.ord);
-    const matching = selectCases(all, String(body.scope ?? (body.onlyNotPassed === true ? 'notPassed' : 'all')), typeof body.category === 'string' ? body.category : '');
+    let matching = selectCases(all, String(body.scope ?? (body.onlyNotPassed === true ? 'notPassed' : 'all')), typeof body.category === 'string' ? body.category : '');
+    // Resume: the cases of an earlier run that still have no result.
+    if (typeof body.resumeOf === 'string' && body.resumeOf) {
+      await refreshSnapshotIfStale().catch(() => {});
+      const prev = readHistory(tp.id).find((r) => r.id === body.resumeOf && r.caseSetId === cs.id);
+      const prevLink = prev ? readLink(prev.workflowId) : null;
+      if (!prev || !prevLink) { sendJson(res, 404, { error: 'That run was not found.' }); return; }
+      if (prev.status === 'running') { sendJson(res, 409, { error: 'That run is still going.' }); return; }
+      matching = all.filter((c) => prevLink.caseIds.includes(c.id) && (!c.status || c.status === 'Not Run'));
+    }
     if (!matching.length) { sendJson(res, 400, { error: all.length ? 'No case matches that choice, so there is nothing to run.' : 'This case set has no cases yet.' }); return; }
     // A run is one agent session, so it takes a batch; run again for the next one ("not run yet" picks up where this stopped).
     const cases = matching.slice(0, MAX_CASES_PER_RUN);
@@ -457,8 +466,14 @@ export function registerCaseRunRoutes(): void {
     const runs = readHistory(tp.id).filter((r) => r.caseSetId === cs.id);
     const cases = (await testingRepo().listCasesByCaseSet(cs.id)) as unknown as CaseRow[];
     const done = runs.filter((r) => r.status === 'done');
+    const unrun = new Set(cases.filter((c) => !c.status || c.status === 'Not Run').map((c) => c.id));
+    const withLeft = runs.map((r) => {
+      if (r.status === 'running') return { ...r, remaining: 0 };
+      const link = readLink(r.workflowId);
+      return { ...r, remaining: link ? link.caseIds.filter((id) => unrun.has(id)).length : 0 };
+    });
     sendJson(res, 200, {
-      runs,
+      runs: withLeft,
       current: tally(cases.map((c) => c.status)),
       totals: {
         runs: runs.length,
