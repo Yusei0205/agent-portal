@@ -102,6 +102,54 @@ function linkifyDomOutputFiles(container, outputFiles) {
 }
 
 /**
+ * Smooths streamed text. The agent's text reaches the browser in bursts (several chunks at once, then a pause),
+ * so a message that grows is revealed at a steady pace that catches up with what has arrived: fast when far behind,
+ * slow when close. Text that is already complete when the message first appears (history, a reload) is shown at once,
+ * as is text that is replaced rather than extended and anyone who prefers reduced motion.
+ */
+function useSmoothText(text) {
+  const [shown, setShown] = useState(text);
+  const shownText = useRef(text);   // what is on screen right now
+  const target = useRef(text);      // everything that has arrived
+  const frame = useRef(0);
+  const lastPaint = useRef(0);
+
+  useEffect(() => {
+    target.current = text;
+    const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const shownNow = shownText.current;
+    // Animate only when what is on screen is still the beginning of the new text and the gap is modest.
+    const extendsShown = text.startsWith(shownNow);
+    if (reduced || !extendsShown || text.length - shownNow.length > 6000) {
+      cancelAnimationFrame(frame.current);
+      shownText.current = text;
+      setShown(text);
+      return undefined;
+    }
+    const tick = (t) => {
+      const full = target.current;
+      const have = shownText.current.length;
+      const backlog = full.length - have;
+      if (backlog <= 0) return;
+      if (t - lastPaint.current >= 33) {            // about 30 repaints a second; markdown is not free
+        lastPaint.current = t;
+        let n = have + Math.max(1, Math.ceil(backlog * 0.18));
+        const code = full.charCodeAt(n - 1);
+        if (code >= 0xd800 && code <= 0xdbff) n += 1; // do not cut a surrogate pair in half
+        shownText.current = full.slice(0, Math.min(n, full.length));
+        setShown(shownText.current);
+      }
+      frame.current = requestAnimationFrame(tick);
+    };
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame.current);
+  }, [text]);
+
+  return shown;
+}
+
+/**
  * MarkdownMessage renders agent text as sanitized markdown.
  * When `outputFiles` is provided, file path mentions become clickable
  * <button> elements that open the OutputFilePreview modal.
@@ -115,8 +163,9 @@ function linkifyDomOutputFiles(container, outputFiles) {
  *   vaultFolder?: string | null,
  * }} props
  */
-function MarkdownMessage({ text, outputFiles = [], projectId, vaultFolder }) {
-  const [html, setHtml] = useState(() => renderMarkdownToHtml(text));
+function MarkdownMessage({ text: fullText, outputFiles = [], projectId, vaultFolder }) {
+  const text = useSmoothText(fullText);
+  const [html, setHtml] = useState(() => renderMarkdownToHtml(fullText));
   const containerRef = useRef(null);
   const [previewFile, setPreviewFile] = useState(null);
 
