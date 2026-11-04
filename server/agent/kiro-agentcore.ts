@@ -480,6 +480,8 @@ export interface AgentCoreRunOpts {
   repos?: import('./runner-repos.ts').RunnerRepo[];
   /** The project's remote MCP integrations (runner starts a proxy for each). */
   mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** The project's AWS account as AWS_* variables for the agent's shell. */
+  awsEnv?: Record<string, string>;
   /** A loop session's check steps, run by the runner after kiro finishes. */
   checks?: import('./runner-checks.ts').CheckStep[];
   /** The model to use (a Kiro model id); kiro's own default when absent. */
@@ -528,6 +530,7 @@ export async function runKiroViaAgentCore(
       ...(opts.browser ? { browser: true } : {}),
       ...(opts.repos?.length ? { repos: opts.repos } : {}),
       ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
+      ...(opts.awsEnv && Object.keys(opts.awsEnv).length ? { awsEnv: opts.awsEnv } : {}),
       ...(opts.checks?.length ? { checks: opts.checks } : {}),
       ...(opts.model ? { model: opts.model } : {}),
       ...(snapshot ? { snapshot } : {}),

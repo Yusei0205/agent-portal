@@ -194,6 +194,7 @@ ${REVIEW_SYSTEM_APPEND}`;
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
+    awsEnv: run.runnerAwsEnv,
     checks: run.runnerChecks,
   });
 

@@ -8,6 +8,7 @@ import { useSort } from '../lib/useSort.jsx';
 import { HubContext, PageHeader, SectionHead } from '../components/PageHeader.jsx';
 import { navigate } from '../lib/router.js';
 import { ProjectRepositories } from './hub/ProjectHub.jsx';
+import { ProjectAws } from './ProjectAws.jsx';
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
@@ -432,6 +433,7 @@ function WorkspacesList({ projectId }) {
 const WORKSPACE_TABS = [
   { id: 'workspaces', label: 'Workspaces' },
   { id: 'repositories', label: 'Repositories' },
+  { id: 'aws', label: 'AWS' },
 ];
 
 /** The project's work areas: named workspaces, and the repositories they are made of. */
@@ -439,7 +441,7 @@ export function Workspaces({ projectId, tab }) {
   const current = WORKSPACE_TABS.find((t) => t.id === tab) ?? WORKSPACE_TABS[0];
   return (
     <div className="page connect-hub">
-      <PageHeader title="Workspaces" description="Repositories, and the named groups of them that agents work in.">
+      <PageHeader title="Workspaces" description="What agents work on in this project: its repositories, named groups of them, and the AWS account they use.">
         <a className="btn btn-sm" href={`#/p/${projectId}/setup/overview`}>Project setup</a>
       </PageHeader>
       <div className="tab-bar" role="tablist" aria-label="Workspaces sections">
@@ -458,7 +460,7 @@ export function Workspaces({ projectId, tab }) {
       </div>
       <div className="connect-panel" role="tabpanel">
         <HubContext.Provider value>
-          {current.id === 'repositories' ? <ProjectRepositories projectId={projectId} /> : <WorkspacesList projectId={projectId} />}
+          {current.id === 'repositories' ? <ProjectRepositories projectId={projectId} /> : current.id === 'aws' ? <ProjectAws projectId={projectId} /> : <WorkspacesList projectId={projectId} />}
         </HubContext.Provider>
       </div>
     </div>

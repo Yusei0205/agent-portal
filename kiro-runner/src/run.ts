@@ -325,7 +325,7 @@ export async function runKiroRun(
 
   // Only what identifies the setup: credentials and tokens inside these change from message to message.
   const pick = (list: unknown[] | undefined, keys: string[]) => (list ?? []).map((x) => keys.map((k) => String((x as Record<string, unknown>)?.[k] ?? '')));
-  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser) });
+  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser), aws: payload.awsEnv?.AWS_ACCESS_KEY_ID ?? '' });
   // A cloud browser session lasts 15 minutes, so a browser session's kiro-cli is restarted after 12.
   const browserExpired = Boolean(payload.browser) && warm !== null && Date.now() - warm.startedAt > 12 * 60_000;
   if (warm && (browserExpired || warm.exited || warm.fingerprint !== fingerprint)) await disposeKiro(warm);
@@ -381,6 +381,12 @@ export async function runKiroRun(
       childEnv.USERPROFILE = kiroHome;
       // XDG_DATA_HOME must point into kiroHome so kiro-cli-chat finds the DB
       childEnv.XDG_DATA_HOME = path.join(kiroHome, '.local', 'share');
+      // The project's AWS account for the agent's shell. The machine's own role credentials are taken out so the
+      // agent can only act as the account it was given.
+      if (payload.awsEnv) {
+        for (const k of ['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI', 'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_PROFILE', 'AWS_SESSION_TOKEN']) delete childEnv[k];
+        Object.assign(childEnv, payload.awsEnv);
+      }
 
       const child = spawn('kiro-cli', ['acp'], {
         cwd: workDir,

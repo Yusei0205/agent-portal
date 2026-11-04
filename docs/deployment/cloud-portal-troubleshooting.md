@@ -267,3 +267,13 @@ The Integrations page has two parts. **Connected services** is an overview of si
 - **Cause:** `kiro-runner/src/run.ts` started `kiro-cli acp`, created an ACP session and closed everything at the end of every message.
 - **Fix:** after a run that went well, the runner keeps the kiro-cli process and its ACP session (`warm`), and the next message is only a `session/prompt` ("Continuing in the same kiro-cli session." in the status lines). A fresh start happens when the machine is new (idle 5 minutes), the repositories (name, address, branch), integrations (name, address) or browser setting changed (tokens inside them are ignored, they change every message), the last run failed or timed out, or the process is older than 12 minutes in a browser session (a cloud browser session lasts 15 minutes; the browser-session event is announced again on each message so the live view still finds it). Needs runner image `br-2026110512` (stack `AgentPortalSpikeB`); a warm machine keeps the old image until idle.
 
+### Too much space between a page's tabs and its first button
+- **Symptom:** about 50px of empty space under the tab bar on the Tests page (and 30 to 40px on several others).
+- **Cause:** `.page` is a grid with an 18px gap, and the tab bar (20px margin below), the tab panel (16px padding above) and some headers (inline `marginBottom: 16`) each added their own space on top of it.
+- **Fix:** `.page > .tab-bar`, `.page > .tab-nav`, `.page > .tab-panel` and `.page > .page-head` add no space of their own (layout.css); the three Tests headers lost their inline margin. Rule for new pages: let the page gap do the spacing.
+
+### AWS accounts for agents (per project)
+- **Where:** Workspaces › AWS. The account marked "agents use this" is the project's default; its keys are stored encrypted (`server/project-aws.ts`, table `aws_accounts`, setting `aws.default.<projectId>`).
+- **How agents get it:** when a cloud (AgentCore) session starts, the portal decrypts the keys and sends them in the invoke payload as `awsEnv` (only `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_DEFAULT_REGION`; the runners drop anything else). The Kiro runner puts them in kiro-cli's environment and removes the machine's own role variables, so the agent can only act as that account; the Claude runner does the same when the session uses an Anthropic credential (with Bedrock the machine's role is still needed, so the variables are not applied). Changing the account restarts a warm kiro-cli on the next message.
+- **Old tab:** Agent setup no longer has an AWS (~/.aws) tab: those files only reached local runs, never AgentCore sessions. Needs runner images `br-2026110514`.
+

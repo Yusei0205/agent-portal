@@ -52,6 +52,8 @@ export interface InvocationPayload {
   repos?: unknown[];
   /** Remote MCP integrations (checked in run.ts by shared/runner-mcp.ts). */
   mcpServers?: unknown[];
+  /** AWS_* variables for the agent's shell: the project's AWS account. */
+  awsEnv?: Record<string, string>;
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
   snapshot?: unknown;
   /** true = only put the repositories in place (no prompt, no agent run). */
@@ -82,8 +84,20 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'checks', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser',
+  'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'checks', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser',
 ]);
+const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
+
+/** Only the five AWS variables, as short plain strings; anything else is dropped. */
+export function cleanAwsEnv(v: unknown): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (AWS_ENV_KEYS.has(k) && typeof val === 'string' && val.length > 0 && val.length <= 4096 && !/[\r\n\0]/.test(val)) out[k] = val;
+  }
+  return out.AWS_ACCESS_KEY_ID && out.AWS_SECRET_ACCESS_KEY ? out : undefined;
+}
+
 const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
 const KNOWN_REPO_FIELDS = new Set(['url', 'branch']);
 const KNOWN_PORTAL_FIELDS = new Set(['url', 'runToken']);
@@ -263,6 +277,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       repo,
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
+      ...(cleanAwsEnv(obj.awsEnv) ? { awsEnv: cleanAwsEnv(obj.awsEnv) } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(obj.prepareOnly === true ? { prepareOnly: true } : {}),
       portal,

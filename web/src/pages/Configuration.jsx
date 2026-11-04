@@ -1,5 +1,5 @@
 /**
- * Configuration page (F5) — personal ~/.kiro, ~/.claude, ~/.aws editor.
+ * Agent setup page (F5) — personal ~/.kiro and ~/.claude editor. (AWS access is set per project, on Workspaces.)
  *
  * Three tabs per config folder. Each shows:
  *   - Team-default status card (following / customised + reset)
@@ -32,40 +32,7 @@ const TABS = [
     description:
       'CLAUDE.md, settings.json, agents, skills and commands that Claude Code loads, plus your MCP servers from ~/.claude.json.',
   },
-  {
-    id: 'aws',
-    label: 'AWS (~/.aws)',
-    description:
-      'AWS config and credentials files used by engines and tools that need AWS access in your sessions.',
-  },
 ];
-
-function AwsWarning() {
-  return (
-    <div
-      style={{
-        background: 'var(--warn-wash)',
-        border: '1px solid color-mix(in srgb, var(--warn) 30%, transparent)',
-        borderRadius: 'var(--radius)',
-        padding: '10px 14px',
-        marginBottom: 12,
-        fontSize: '0.84rem',
-        color: 'var(--warn)',
-        display: 'flex',
-        gap: 8,
-        alignItems: 'flex-start',
-      }}
-      role="note"
-    >
-      <Icon name="warning" size={15} style={{ flexShrink: 0 }} />
-      <span>
-        Keys stored here are plaintext in zip exports — handle with care. For engine
-        sign-ins, <a href="#/connect/sign-ins" style={{ color: 'inherit', textDecoration: 'underline' }}>Connect › Agent sign-ins</a>{' '}
-        is the safer place.
-      </span>
-    </div>
-  );
-}
 
 function ImportZipButton({ folder, onImported }) {
   const [busy, setBusy] = useState(false);
@@ -223,7 +190,6 @@ function ConfigTab({ folder, user, treeRefreshBump }) {
 
   return (
     <div>
-      {folder === 'aws' && <AwsWarning />}
 
       {!loadingStatus && status && (
         <ConfigStatus
@@ -277,7 +243,7 @@ export function Configuration({ user }) {
       {/* Page header: title + subtitle on left, zip buttons on right */}
       <PageHeader
         title="Agent setup"
-        description="How your agents behave: your own .kiro, .claude and .aws folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
+        description="How your agents behave: your own .kiro and .claude folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
       >
         <ImportZipButton folder={tab} onImported={handleImported} />
         <ExportZipButton folder={tab} />

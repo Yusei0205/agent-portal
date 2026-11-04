@@ -1009,7 +1009,7 @@ function ScriptEditor({ scriptId, testProjectId, projectId, onBack }) {
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 0 }}>
         <button type="button" className="btn-icon" onClick={onBack} aria-label="Back to scripts">
           <Icon name="chevronLeft" size={16} />
         </button>
@@ -1753,7 +1753,7 @@ function RunDetail({ runId, testProject, projectId, onBack }) {
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 0 }}>
         <button type="button" className="btn-icon" onClick={onBack} aria-label="Back">
           <Icon name="chevronLeft" size={16} />
         </button>
@@ -2315,7 +2315,7 @@ function TestProjectDetail({ testProjectId, activeTab, projectId, route, onBack 
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 0 }}>
         <button type="button" className="btn-icon" onClick={onBack} aria-label="Back to test projects">
           <Icon name="chevronLeft" size={16} />
         </button>

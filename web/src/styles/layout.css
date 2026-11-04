@@ -831,3 +831,13 @@
     align-items: flex-start;
   }
 }
+
+/* A page lays its children out with a gap, so a tab bar, a tab panel or a header must not add its own space on
+   top of it (that stacked to 50px between the tabs and the first button). */
+.page > .tab-bar,
+.page > .tab-nav { margin-bottom: 0; }
+.page > .tab-panel { padding-top: 0; }
+.page > .page-head,
+.page > .page-header { margin-bottom: 0; }
+.tab-panel > :first-child,
+.connect-panel > :first-child { margin-top: 0; }

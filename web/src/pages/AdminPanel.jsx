@@ -539,7 +539,7 @@ export function AdminPanel({ user }) {
         ))}
       </div>
 
-      <div className="tab-panel" style={{ paddingTop: '1rem' }}>
+      <div className="tab-panel">
         {tab === 'users' && <UsersPage />}
         {tab === 'audit' && <AuditLogTab />}
         {tab === 'tokens' && <ApiTokensTab isAdmin={Boolean(user.is_admin)} />}

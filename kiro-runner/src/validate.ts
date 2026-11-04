@@ -38,6 +38,8 @@ export interface KiroRunPayload {
   repos?: unknown[];
   /** Remote MCP integrations (checked in run.ts by shared/runner-mcp.ts). */
   mcpServers?: unknown[];
+  /** AWS_* variables for the agent's shell: the project's AWS account. */
+  awsEnv?: Record<string, string>;
   /** Check steps to run after the agent finishes (checked again in run.ts by shared/runner-checks.ts). */
   checks?: unknown[];
   /** The model kiro-cli should use (chosen with session/set_model); kiro's own default when absent. */
@@ -124,6 +126,18 @@ export function validatePayload(raw: unknown): ValidationResult {
   return validateKiroLogin(obj);
 }
 
+const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
+
+/** Only the five AWS variables, as short plain strings; anything else is dropped. */
+export function cleanAwsEnv(v: unknown): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (AWS_ENV_KEYS.has(k) && typeof val === 'string' && val.length > 0 && val.length <= 4096 && !/[\r\n\0]/.test(val)) out[k] = val;
+  }
+  return out.AWS_ACCESS_KEY_ID && out.AWS_SECRET_ACCESS_KEY ? out : undefined;
+}
+
 function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
   if (typeof obj.prompt !== 'string' || !obj.prompt.trim()) {
     return err('"prompt" must be a non-empty string');
@@ -165,6 +179,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       ...(typeof obj.model === 'string' && /^[A-Za-z0-9._:/@+-]{1,120}$/.test(obj.model) ? { model: obj.model } : {}),
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
+      ...(cleanAwsEnv(obj.awsEnv) ? { awsEnv: cleanAwsEnv(obj.awsEnv) } : {}),
       ...(Array.isArray(obj.checks) && obj.checks.length <= 8 ? { checks: obj.checks as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       token: {

@@ -39,6 +39,8 @@ export interface ClaudeAgentCoreOpts {
   repos?: import('./runner-repos.ts').RunnerRepo[];
   /** The project's remote MCP integrations (runner starts a proxy for each). */
   mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** The project's AWS account as AWS_* variables for the agent's shell. */
+  awsEnv?: Record<string, string>;
   /** A loop session's check steps, run by the runner after the agent finishes. */
   checks?: import('./runner-checks.ts').CheckStep[];
 }
@@ -100,6 +102,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.browser ? { browser: true } : {}),
     ...(opts.repos?.length ? { repos: opts.repos } : {}),
     ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
+    ...(opts.awsEnv && Object.keys(opts.awsEnv).length ? { awsEnv: opts.awsEnv } : {}),
     ...(opts.checks?.length ? { checks: opts.checks } : {}),
     ...(snapshot ? { snapshot } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
