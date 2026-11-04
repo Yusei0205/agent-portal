@@ -24,6 +24,7 @@ const SHARED = [
   // The runner's own pure modules (files, repositories, snapshots, MCP, checks).
   ['agent/runner-files.ts', 'runner-files.ts'],
   ['agent/runner-repos.ts', 'runner-repos.ts'],
+  ['agent/runner-inspect.ts', 'runner-inspect.ts'],
   ['agent/runner-snapshot.ts', 'runner-snapshot.ts'],
   ['agent/runner-mcp.ts', 'runner-mcp.ts'],
   ['agent/runner-checks.ts', 'runner-checks.ts'],

@@ -146,7 +146,7 @@ export function IdeEditor({ workflowId, openFile, onFileOpened }) {
                 loading:  false,
                 content:  data.content ?? '',
                 token:    data.token ?? null,
-                readOnly: data.tooLarge || openFile.scope === 'vault' || openFile.scope === 'vault:team',
+                readOnly: data.tooLarge || data.readOnly === true || openFile.scope === 'vault' || openFile.scope === 'vault:team',
               }
             : t,
         ));

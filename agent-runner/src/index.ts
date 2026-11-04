@@ -23,7 +23,8 @@
 import http from 'node:http';
 import { runInvocation } from './run.js';
 import { validatePayload } from './validate.js';
-import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground } from '../shared/runner-snapshot.js';
+import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace } from '../shared/runner-snapshot.js';
+import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
 
@@ -107,6 +108,28 @@ const server = http.createServer(async (req, res) => {
     // They arrive on the same session (AgentCore routes them to this microVM) while the
     // run's own invocation is still streaming, so they skip the busy check.
     const body = parsed as Record<string, unknown> | null;
+
+    // ── Read-only look into the workspace (Explorer / Source Control of a cloud session) ──
+    // Runs beside a run in progress; it never writes to the workspace.
+    if (body && typeof body === 'object' && !Array.isArray(body) && body.mode === 'inspect') {
+      let reply: Record<string, unknown>;
+      try {
+        const persist = usablePersistRoot(PERSIST_ROOT);
+        const roots = persist ? [persist] : [];
+        // A fresh machine of this session has no workspace yet: bring back the saved one first.
+        if (!hasWorkspaceContent(roots) && body.snapshot && persist && !runActive && !snapshotBusy()) {
+          await restoreWorkspace(parseSnapshot(body.snapshot), persist, () => { /* quiet */ }).catch(() => { /* an empty workspace is shown */ });
+        }
+        reply = { type: 'inspect', ...(await inspectWorkspace(roots, { op: body.op as never, path: typeof body.path === 'string' ? body.path : undefined, repo: typeof body.repo === 'string' ? body.repo : undefined })) };
+      } catch (e) {
+        reply = { type: 'inspect', ok: false, status: 500, error: e instanceof Error ? e.message : String(e) };
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      res.end(`data: ${JSON.stringify(reply)}
+
+`);
+      return;
+    }
     if (body && typeof body === 'object' && !Array.isArray(body) && (body.mode === 'answer' || body.mode === 'cancel')) {
       let reply: Record<string, unknown>;
       if (body.mode === 'answer') {

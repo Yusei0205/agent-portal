@@ -391,3 +391,15 @@ Ran a diagram, a document and a deck through the live portal. Findings and fixes
 **Cause:** the Git connection and the AWS tab are separate stores; cloning only read the connection's own keys unless the connection was switched to the "Project AWS account" source.
 
 **Fix:** `getCloneEnv` in `server/repos.ts` now checks first: for a CodeCommit URL, if the repository's project has a default AWS account with keys, it signs the clone with those (session token included). The Git connection is only used when there is no such account, and for GitHub, Bitbucket and generic git. Refreshing keys in Workspaces → AWS is enough.
+
+## Cloud sessions: Explorer and Source Control show the runner's files (read-only)
+
+**Symptom:** after the repositories were cloned, the session's Explorer and Source Control tabs showed nothing.
+
+**Cause:** both tabs read the portal's own disk, but a Kiro or Claude session on AgentCore keeps its files (and its `repos/`) on that session's runner machine.
+
+**Fix:** the runners (`server/agent/runner-inspect.ts`, copied into both images) answer a read-only `inspect` request: folder tree, file contents, `git status` and `git diff`. The portal's IDE routes (`server/session-files.ts`) ask the session's own AgentCore session for these when the session's engine runs on AgentCore (`server/agent/runner-inspect-client.ts`). An idle machine is woken and its saved workspace restored; a wake-up longer than 25 s returns "The session's machine is starting. Try again". Writes to the working copy of a cloud session are refused (409) for now. Paths with `..` or links out of the workspace are refused by the runner.
+
+## Clone progress
+
+The runner clones with `--progress` while preparing a session's repositories and reports phase, percent, object counts, size and speed per repository (up to 3 repositories in parallel), then the file count when each is ready. The composer shows them and keeps the result after finishing. A server instance that has not yet seen the status returns nothing: the page treats that as "still running".

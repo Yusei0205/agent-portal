@@ -33,6 +33,7 @@ COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/tool-policy.ts
 COPY server/real-path.ts ./shared/real-path.ts
 COPY server/agent/runner-files.ts ./shared/runner-files.ts
 COPY server/agent/runner-repos.ts ./shared/runner-repos.ts
+COPY server/agent/runner-inspect.ts ./shared/runner-inspect.ts
 COPY server/agent/runner-snapshot.ts ./shared/runner-snapshot.ts
 COPY server/agent/runner-mcp.ts ./shared/runner-mcp.ts
 COPY server/agent/runner-checks.ts ./shared/runner-checks.ts

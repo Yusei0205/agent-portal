@@ -36,6 +36,8 @@ import { appendAudit } from './audit.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { getDb } from './db.ts';
 import { persistFile, forgetFile, restoreTree, forgetTree, persistTree } from './durable-files.ts';
+import { inspectViaRunner, isCloudSession } from './agent/runner-inspect-client.ts';
+import type { InspectRequest } from './agent/runner-inspect.ts';
 
 import { getLatestRunRow, getMemberRow, getProjectRow, getWorkflowRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -395,6 +397,18 @@ function findGitRepos(workDir: string): string[] {
   return result;
 }
 
+/**
+ * A cloud session (Kiro or Claude on an AgentCore runner) keeps its files on its own runner machine: ask that machine
+ * (read-only) and send its answer. Returns false when the session is not a cloud one (the caller reads the portal's disk).
+ */
+async function answerFromRunner(wf: Row, res: PortalResponse, req: InspectRequest): Promise<boolean> {
+  if (!isCloudSession(String(wf.engine ?? ''))) return false;
+  const r = await inspectViaRunner(String(wf.id), String(wf.engine), req);
+  if (r.ok) sendJson(res, 200, r.data);
+  else sendJson(res, r.status >= 400 && r.status < 600 ? r.status : 502, { error: r.error });
+  return true;
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 export function registerSessionFileRoutes(): void {
@@ -454,6 +468,8 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
+    if (scope === 'work' && await answerFromRunner(wf, res, { op: 'tree', path: relPath })) return;
+
     const scopeRoot = scope === 'uploads' ? roots.uploadsDir : roots.workDir;
 
     // The top level of the working copy and of uploads can legitimately be empty (a Kiro or Claude run on
@@ -488,6 +504,8 @@ export function registerSessionFileRoutes(): void {
       sendJson(res, 400, { error: 'Use the vault download route for vault files' });
       return;
     }
+
+    if (scope === 'work' && await answerFromRunner(wf, res, { op: 'file', path: relPath })) return;
 
     const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots) {
@@ -561,6 +579,10 @@ export function registerSessionFileRoutes(): void {
 
     const body = req.body as Record<string, unknown>;
     const scope = (body.scope as IdeScope | undefined) ?? 'work';
+    if (scope === 'work' && isCloudSession(String(wf.engine ?? ''))) {
+      sendJson(res, 409, { error: "This session's files are on its cloud machine and can only be viewed here for now." });
+      return;
+    }
     const relPath = String(body.path ?? '');
     const content = String(body.content ?? '');
     const clientToken = body.token as string | undefined;
@@ -633,6 +655,10 @@ export function registerSessionFileRoutes(): void {
 
     const body = req.body as Record<string, unknown>;
     const scope = (body.scope as IdeScope | undefined) ?? 'work';
+    if (scope === 'work' && isCloudSession(String(wf.engine ?? ''))) {
+      sendJson(res, 409, { error: "This session's files are on its cloud machine and can only be viewed here for now." });
+      return;
+    }
     const relPath = String(body.path ?? '');
     const content = String(body.content ?? '');
 
@@ -692,6 +718,10 @@ export function registerSessionFileRoutes(): void {
 
     const body = req.body as Record<string, unknown>;
     const scope = (body.scope as IdeScope | undefined) ?? 'work';
+    if (scope === 'work' && isCloudSession(String(wf.engine ?? ''))) {
+      sendJson(res, 409, { error: "This session's files are on its cloud machine and can only be viewed here for now." });
+      return;
+    }
     const relPath = String(body.path ?? '');
 
     if (!relPath) {
@@ -731,6 +761,10 @@ export function registerSessionFileRoutes(): void {
     }
 
     const scope = (req.query.get('scope') as IdeScope | null) ?? 'work';
+    if (scope === 'work' && isCloudSession(String(wf.engine ?? ''))) {
+      sendJson(res, 409, { error: "This session's files are on its cloud machine and can only be viewed here for now." });
+      return;
+    }
     const relPath = req.query.get('path') ?? '';
 
     if (!relPath) {
@@ -800,6 +834,10 @@ export function registerSessionFileRoutes(): void {
 
     const body = req.body as Record<string, unknown>;
     const scope = (body.scope as IdeScope | undefined) ?? 'work';
+    if (scope === 'work' && isCloudSession(String(wf.engine ?? ''))) {
+      sendJson(res, 409, { error: "This session's files are on its cloud machine and can only be viewed here for now." });
+      return;
+    }
     // Support both { from, to } (contract) and { path, newPath } (legacy)
     const relPath = String(body.from ?? body.path ?? '');
     const newRelPath = String(body.to ?? body.newPath ?? '');
@@ -1041,6 +1079,8 @@ export function registerSessionFileRoutes(): void {
     const wf = await requireWorkflowReadAccess(req, res, req.params.id);
     if (!wf) return;
 
+    if (await answerFromRunner(wf, res, { op: 'git-status' })) return;
+
     const roots = await resolveWorkingCopyRoots(req.params.id);
     if (!roots || !fs.existsSync(roots.workDir)) {
       sendJson(res, 200, { repos: [] });
@@ -1168,6 +1208,17 @@ export function registerSessionFileRoutes(): void {
     if (!pathParam && !repoParam) {
       sendJson(res, 400, { error: 'path query parameter required' });
       return;
+    }
+
+    {
+      // Cloud session: the legacy form (path=repos/<name>/<file>) is turned into repo + file here.
+      let repoName = repoParam;
+      let fileName = pathParam;
+      if (!repoName) {
+        const parts = pathParam.split('/').filter(Boolean);
+        if (parts[0] === 'repos' && parts.length >= 2) { repoName = parts[1]; fileName = parts.slice(2).join('/'); }
+      }
+      if (await answerFromRunner(wf, res, { op: 'git-diff', repo: repoName, path: fileName })) return;
     }
 
     const roots = await resolveWorkingCopyRoots(req.params.id);

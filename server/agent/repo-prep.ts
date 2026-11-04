@@ -86,7 +86,7 @@ async function save(workflowId: string, st: RepoPrepState): Promise<void> {
   await setSetting(getDb(), key(workflowId), JSON.stringify(st));
 }
 
-function runtimeFor(engine: string): { arn: string; kind: 'kiro' | 'claude-code' } | null {
+export function runtimeFor(engine: string): { arn: string; kind: 'kiro' | 'claude-code' } | null {
   if (engine === 'kiro' && process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN) {
     return { arn: process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN, kind: 'kiro' };
   }
