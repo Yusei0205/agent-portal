@@ -371,6 +371,8 @@ export async function runInvocation(
         allowedTools: [],
         // Suppress loading CLAUDE.md / settings from the container's / directory
         settingSources: [],
+        // Send the text as the model writes it (stream_event messages) instead of once per finished message.
+        includePartialMessages: true,
         // SDK spend cap (FR-GUARD-10 compatible)
         maxBudgetUsd,
         ...(payload.effort ? { effort: payload.effort } : {}),
@@ -382,10 +384,32 @@ export async function runInvocation(
       },
     }) as AsyncIterable<Record<string, unknown>>;
 
+    // True once the current top-level message has been sent piece by piece, so its final copy is not sent twice.
+    let streamedMessage = false;
+
     for await (const msg of q) {
       if (abortController.signal.aborted) break;
 
       const msgType = String(msg.type ?? '');
+
+      if (msgType === 'stream_event') {
+        // Work done inside a sub-agent is shown as its finished message only.
+        if (msg.parent_tool_use_id) continue;
+        const ev = (msg.event ?? {}) as Record<string, unknown>;
+        if (ev.type === 'message_start') {
+          streamedMessage = false;
+        } else if (ev.type === 'content_block_delta') {
+          const delta = (ev.delta ?? {}) as Record<string, unknown>;
+          if (delta.type === 'text_delta' && typeof delta.text === 'string' && delta.text) {
+            if (firstTokenMs === null) firstTokenMs = Date.now() - invokeStart;
+            streamedMessage = true;
+            emit({ type: 'assistant-text', text: delta.text, stream: true });
+          } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking) {
+            emit({ type: 'thought', text: delta.thinking });
+          }
+        }
+        continue;
+      }
 
       if (msgType === 'assistant') {
         turns++;
@@ -439,7 +463,10 @@ export async function runInvocation(
           }
         }
 
-        if (textAccum) {
+        // A top-level message that was already streamed above is not sent again.
+        const alreadyStreamed = streamedMessage && !msg.parent_tool_use_id;
+        if (alreadyStreamed) streamedMessage = false;
+        if (textAccum && !alreadyStreamed) {
           if (firstTokenMs === null) {
             firstTokenMs = Date.now() - invokeStart;
           }

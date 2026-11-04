@@ -119,12 +119,21 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
         case 'assistant-text': {
           const text = String(ev.text ?? '');
           if (text) {
-            emit('assistant-text', { text });
-            parts.push(text);
+            // `stream` marks a piece of a longer message, which the viewer joins as-is.
+            emit('assistant-text', ev.stream === true ? { text, stream: true } : { text });
+            if (ev.stream === true && parts.length) parts[parts.length - 1] += text;
+            else parts.push(text);
           }
           break;
         }
+        case 'thought': {
+          const text = String(ev.text ?? '');
+          if (text) emit('agent-thought', { text });
+          break;
+        }
         case 'tool-call':
+          // A tool call ends the current text segment; the next piece starts a new one.
+          if (parts.length && parts[parts.length - 1] !== '') parts.push('');
           emit('tool-start', { toolCallId: '', toolName: String(ev.name ?? 'Tool'), toolInput: String(ev.input ?? '{}'), status: 'in_progress' });
           break;
         case 'tool-result':

@@ -256,3 +256,9 @@ The Integrations page has two parts. **Connected services** is an overview of si
 - `webhook` specs: `POST /api/hooks/loop-specs/<specId>` with header `x-portal-signature: sha256=<HMAC-SHA256 of the raw body, key = the spec's secret>` (`x-hub-signature-256` is accepted too). The secret is shown once on create (or from `POST .../loop-specs/<id>/webhook-secret`) and is never returned again. Wrong signature and unknown spec both return 401. Body values become `{{a.b}}` in the goal template.
 - A triggered session runs as the person who last saved the trigger (`runAs`) and only while they are still project editor or owner; "trust all tools" is always off, so a tool needing approval waits in the inbox; it does not start while the spec's previous session is still running (409) and starts at most `maxPerHour` (default 3) times an hour (429). "Run now" by a person skips the last two.
 - `github` and `jira` trigger types are accepted but do not start sessions yet; use a webhook.
+
+### Claude Code session text appears all at once after a long wait
+- **Symptom:** a Claude Code session on the AgentCore runner shows nothing while the model is working, then a whole reply (or several) appears at once. Kiro sessions were fine.
+- **Cause:** `agent-runner/src/run.ts` only forwarded the SDK's finished `assistant` messages, so text reached the portal once per message.
+- **Fix:** the runner now sets `includePartialMessages: true` and forwards each `text_delta` as `assistant-text` with `stream: true` (and `thinking_delta` as `thought`); the finished message's text is skipped when it was already streamed, and `server/claude-agentcore.ts` passes `stream` through so the viewer joins the pieces. Needs runner image `br-202611058` (stack `AgentPortalSpikeA`) and a portal deploy. A warm runner machine keeps the old image until it goes idle (5 minutes), so use a new session to test.
+
