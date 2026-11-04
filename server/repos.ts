@@ -298,6 +298,24 @@ export function _buildCodeCommitSigV4Password(
  * Always adds GIT_TERMINAL_PROMPT=0 so a missing credential fails fast.
  */
 async function getCloneEnv(repo: Repository): Promise<Record<string, string>> {
+  // A CodeCommit repository clones with the project's default AWS account (Workspaces → AWS) when it has usable keys:
+  // refreshing the keys there is enough, no Git connection is needed. Other hosts and projects without such an
+  // account fall through to the repository's Git connection.
+  if (repo.project_id && /git-codecommit(-fips)?\.[^.]+\.(vpce\.)?amazonaws\.com/.test(repo.url)) {
+    try {
+      const { readDefaultId } = await import('./project-aws.ts');
+      const accountId = readDefaultId(String(repo.project_id));
+      const acc = accountId ? await getAwsAccountsRepository().getById(accountId) : null;
+      if (acc && String(acc.project_id) === String(repo.project_id) && acc.auth_method === 'keys' && acc.credentials_enc) {
+        const c = parseJson<Record<string, string>>(decrypt(acc.credentials_enc, config.secretKey), {});
+        if (c.accessKeyId && c.secretAccessKey) {
+          const { username, password } = _buildCodeCommitSigV4Password(c.accessKeyId, c.secretAccessKey, c.sessionToken, repo.url);
+          return buildGitEnv({ username, password }, 'codecommit', repo.url);
+        }
+      }
+    } catch { /* fall back to the connection */ }
+  }
+
   if (!repo.connection_id) return { GIT_TERMINAL_PROMPT: '0' };
 
   const conn = await getGitConnectionsRepository().getById(repo.connection_id);

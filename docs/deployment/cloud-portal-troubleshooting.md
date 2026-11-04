@@ -383,3 +383,11 @@ Ran a diagram, a document and a deck through the live portal. Findings and fixes
 - **Full clone:** the runner now clones every branch and tag with the full history (`server/agent/runner-repos.ts`; before: `--depth 1 --single-branch --no-tags`), starting on the repository's default branch; the clone time limit is 10 minutes (was 3). Updates fetch with tags. Costs: slower first message on a new machine, more disk (about 7.6 GB free), and a larger saved workspace (S3).
 - **Default branch when adding a repository:** the Add repositories dialog has a "Default branch" field on the URL tab and one for the selected repositories on the Browse tab (blank = the provider's own default). The server already stored `defaultBranch`.
 - **403 "could not reach the repository" on CodeCommit:** the repositories use a Git connection (Connect > Git connections), whose saved temporary access keys expire. New credential source **"Project AWS account (the AWS tab of Workspaces)"**: the connection then uses the keys saved in the project's AWS tab (the chosen account, or each repository's project default), so refreshing them there is enough. Fixed on the way: that source dropped the **session token**, so temporary (ASIA) keys always failed with 403 (`repos.ts` and `git-connections.ts`). The account must belong to the repository's project. Browsing a provider's repository list still needs a specific account chosen on the connection.
+
+## CodeCommit clones use the project's AWS account automatically
+
+**Symptom:** the project's AWS tab had fresh keys, but cloning still returned 403 until the same keys were also put into the Git connection (Connections page).
+
+**Cause:** the Git connection and the AWS tab are separate stores; cloning only read the connection's own keys unless the connection was switched to the "Project AWS account" source.
+
+**Fix:** `getCloneEnv` in `server/repos.ts` now checks first: for a CodeCommit URL, if the repository's project has a default AWS account with keys, it signs the clone with those (session token included). The Git connection is only used when there is no such account, and for GitHub, Bitbucket and generic git. Refreshing keys in Workspaces → AWS is enough.
