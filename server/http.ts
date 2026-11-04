@@ -314,7 +314,7 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string)
     ...(ext === '.html'
       ? {
           'Content-Security-Policy':
-            "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+            "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src https://embed.diagrams.net; frame-ancestors 'none'",
           'X-Frame-Options': 'DENY',
         }
       : {}),

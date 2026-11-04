@@ -545,7 +545,7 @@ export function registerDiagramRoutes(): void {
 
     const rows = ((await getDiagramRepository().listByProject(String(project.id))) as unknown as Row[])
       .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-    const stylesInfo = await styleChoices();
+    const stylesInfo = await styleChoices(String(project.id));
 
     sendJson(res, 200, {
       diagrams: await Promise.all(rows.map(diagramView)),

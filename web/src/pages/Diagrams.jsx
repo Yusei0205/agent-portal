@@ -7,6 +7,7 @@ import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { DiagramStyle } from '../components/DiagramStyle.jsx';
+import { DrawioViewer } from '../components/DrawioViewer.jsx';
 import { MermaidViewer } from '../components/MermaidViewer.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
@@ -173,6 +174,7 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
 
 function ViewDiagramModal({ diagram, onClose }) {
   const [detail, setDetail] = useState(null);
+  const [drawioXml, setDrawioXml] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -181,6 +183,12 @@ function ViewDiagramModal({ diagram, onClose }) {
       try {
         const r = await api.get(`/api/projects/${diagram.project_id}/diagrams/${diagram.id}`);
         setDetail(r.diagram);
+        if (r.diagram?.style === 'icon' && r.diagram.version > 0) {
+          try {
+            const x = await fetch(`/api/projects/${r.diagram.project_id}/diagrams/${r.diagram.id}/versions/${r.diagram.version}/download?format=drawio`, { credentials: 'include' });
+            setDrawioXml(x.ok ? await x.text() : '');
+          } catch { setDrawioXml(''); }
+        }
       } catch (err) {
         setError(err.message || 'Failed to load diagram');
       } finally {
@@ -204,10 +212,17 @@ function ViewDiagramModal({ diagram, onClose }) {
             <MermaidViewer mmd={detail.mermaid} />
           )}
           {detail && detail.style === 'icon' && (
-            <div className="drawio-placeholder">
-              <Icon name="builder" size={40} />
-              <p>Icon diagram (.drawio). <a href={`/api/projects/${detail.project_id}/diagrams/${detail.id}/versions/${detail.version}/download?format=drawio`}>Download .drawio</a> to open in draw.io.</p>
-            </div>
+            <>
+              {drawioXml
+                ? <DrawioViewer xml={drawioXml} />
+                : (
+                  <div className="drawio-placeholder">
+                    <Icon name="builder" size={40} />
+                    <p>{drawioXml === null ? 'Drawing the diagram…' : 'The diagram could not be shown here.'}</p>
+                  </div>
+                )}
+              <p className="muted small">Icon diagram (.drawio). <a href={`/api/projects/${detail.project_id}/diagrams/${detail.id}/versions/${detail.version}/download?format=drawio`}>Download .drawio</a> to edit it in draw.io.</p>
+            </>
           )}
           {detail && !detail.mermaid && detail.style !== 'icon' && (
             <p className="muted">No diagram generated yet.</p>

@@ -17,6 +17,7 @@ import { drawioRendererProblem, renderDrawio } from './drawio-render.ts';
 import { DRAWIO_PACK_HINT, drawioPackState, ensureDrawioPackRestored } from './drawio-pack.ts';
 import { rendererProblem } from './docimage.ts';
 import { all } from './db.ts';
+import { getIntegrationsRepository } from './repositories/integrations.ts';
 import { repoDir, type Repo } from './repos.ts';
 import { detectCloud } from './drawio-cloud.ts';
 import { DEFAULT_CLOUD, type Cloud } from './drawio.ts';
@@ -37,18 +38,32 @@ export interface StyleInfo {
 }
 
 /** The drawing styles and what each needs, for the diagram list. */
-export async function styleChoices(): Promise<StyleInfo[]> {
+/** The project has the draw.io MCP server (https://mcp.draw.io/mcp) as an enabled integration named "drawio". */
+export async function hasDrawioIntegration(projectId?: string): Promise<boolean> {
+  if (!projectId) return false;
+  try {
+    const items = await getIntegrationsRepository().listByProject(projectId);
+    return items.some((i) => i.type === 'http' && Number(i.enabled) === 1 && String(i.name).trim().toLowerCase() === 'drawio');
+  } catch {
+    return false;
+  }
+}
+
+export async function styleChoices(projectId?: string): Promise<StyleInfo[]> {
   await ensureDrawioPackRestored().catch(() => {});
   const mermaidProblem = rendererProblem();
-  const tool = drawioPackState().tool;
-  const previewProblem = drawioRendererProblem();
+  // Shapes come from the local tool pack or, with no pack (the cloud portal), from the project's draw.io MCP integration;
+  // pictures come from the local viewer files or, with none, from the draw.io viewer the browser embeds.
+  const remote = await hasDrawioIntegration(projectId);
+  const tool = remote ? { ok: true, reason: '' } : drawioPackState().tool;
+  const previewProblem = remote ? null : drawioRendererProblem();
   return [
     { id: 'mermaid', label: STYLE_LABELS.mermaid, available: true, reason: null, preview: { available: mermaidProblem === null, reason: mermaidProblem } },
     {
       id: 'icon',
       label: STYLE_LABELS.icon,
       available: tool.ok,
-      reason: tool.ok ? null : `${tool.reason}. ${DRAWIO_PACK_HINT}.`,
+      reason: tool.ok ? null : `${tool.reason}. ${DRAWIO_PACK_HINT}, or add the draw.io server (https://mcp.draw.io/mcp) under Connections.`,
       preview: { available: previewProblem === null, reason: previewProblem },
     },
   ];
