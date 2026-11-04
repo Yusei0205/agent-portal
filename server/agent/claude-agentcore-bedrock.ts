@@ -7,7 +7,8 @@
  *   - calls that need a person relayed here as approval-request events and answered
  *     through the portal's approval flow (fingerprint, expiry, one answer wins),
  *   - the run's spend cap (maxBudgetUsd) and time limit, with the stop reason recorded,
- *   - a cancel from the portal stops the run in the microVM.
+ *   - a cancel from the portal stops the run in the microVM, and the spend up to the stop
+ *     is still recorded (the runner's final result arrives shortly after the cancel).
  * Model calls go to Bedrock with the runtime's execution role; no portal credential
  * is sent to the microVM.
  */
@@ -43,8 +44,22 @@ interface RunnerResult {
   metrics?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
 }
 
+/**
+ * After a cancel, how long the portal keeps reading the runner's stream for its final result,
+ * which carries the spend up to the stop. The runner answers a cancel within a second or two
+ * (seen live: 6 s from run start to the end of a cancelled run).
+ */
+const CANCEL_GRACE_MS = 10_000;
+let cancelGraceMs = CANCEL_GRACE_MS;
+
+/** Tests only: shorten the wait for a runner that never sends its final result. */
+export function _setCancelGraceMs(ms: number | null): void {
+  cancelGraceMs = ms ?? CANCEL_GRACE_MS;
+}
+
 export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string): Promise<string> {
   const { run, emit, signal } = ctx;
+  if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
   const repo = getSessionsRepository();
   const settings = getSettings();
   const wf = await repo.getWorkflowById(run.workflowId);
@@ -66,12 +81,49 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
     approvals: runnerApprovals(),
   };
 
+  // Spend from the runner's final result: on the run and in the budget. Returns the cost.
+  const recordSpend = async (r: RunnerResult): Promise<number> => {
+    const m = r.metrics ?? {};
+    const cost = Number(r.costUsd ?? 0);
+    const usedModel = r.model ?? model ?? 'bedrock-default';
+    await repo.updateRun(run.runId, {
+      cost_usd: cost,
+      input_tokens: m.inputTokens ?? 0,
+      output_tokens: m.outputTokens ?? 0,
+      cache_write_tokens: m.cacheWriteTokens ?? 0,
+      cache_read_tokens: m.cacheReadTokens ?? 0,
+      model: usedModel,
+    });
+    if (cost > 0 || (m.inputTokens ?? 0) > 0) {
+      const { getBudgetRepository } = await import('../repositories/budget.ts');
+      await getBudgetRepository().record({
+        user_id: wf?.created_by ?? null,
+        project_id: run.projectId,
+        workflow_id: run.workflowId,
+        run_id: null,
+        cost_usd: cost,
+        input_tokens: m.inputTokens ?? 0,
+        output_tokens: m.outputTokens ?? 0,
+        provider: 'bedrock',
+        model: usedModel,
+        created_at: now(),
+      });
+    }
+    return cost;
+  };
+
   // One session per run: AgentCore gives it its own microVM, and answers reach the same one.
   const sessionId = `${run.runId}-${randomUUID()}`;
   const send = agentCoreControlSender(runtimeArn, sessionId);
   const relay = new ApprovalRelay(ctx, send, run.permissions.rules);
+
+  // The stream has its own abort. A cancel tells the runner to stop; the portal then keeps
+  // reading for a few seconds so the runner's final result, with the spend so far, arrives.
+  const stream = new AbortController();
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
   const onCancel = (): void => {
-    void send({ mode: 'cancel', runId: run.runId }).catch(() => { /* the stream is closing anyway */ });
+    void send({ mode: 'cancel', runId: run.runId }).catch(() => { /* the grace timer closes the stream anyway */ });
+    graceTimer = setTimeout(() => stream.abort(), cancelGraceMs);
   };
   signal?.addEventListener('abort', onCancel, { once: true });
 
@@ -81,8 +133,16 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const textParts: string[] = [];
   let result: RunnerResult | null = null;
   try {
-    for await (const raw of invokeAgentCore(runtimeArn, sessionId, payload, signal ?? undefined)) {
+    for await (const raw of invokeAgentCore(runtimeArn, sessionId, payload, stream.signal)) {
       const ev = raw as unknown as Record<string, unknown>;
+      if (signal?.aborted) {
+        // Stopped: only the final result still matters (its spend). Nothing else is relayed.
+        if (ev.type === 'result') {
+          result = ev as RunnerResult;
+          break;
+        }
+        continue;
+      }
       switch (ev.type) {
         case 'assistant-text': {
           const text = String(ev.text ?? '');
@@ -116,11 +176,23 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
           break;
       }
     }
+  } catch (e: unknown) {
+    // After a cancel, a stream closed by the grace timer (or failing) just means no result came.
+    if (!signal?.aborted) throw e;
   } finally {
     signal?.removeEventListener('abort', onCancel);
+    clearTimeout(graceTimer);
+    stream.abort(); // closes the connection if reading stopped before the runner's end
   }
 
-  if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
+  if (signal?.aborted) {
+    if (result) {
+      await recordSpend(result).catch((err: unknown) => {
+        console.warn(`[claude-agentcore] Could not record the spend of cancelled run ${run.runId}:`, err);
+      });
+    }
+    throw new DOMException('Run cancelled', 'AbortError');
+  }
   if (!result) throw new HttpError(502, 'The AgentCore run ended without a result.');
 
   // ── Stop reasons (FR-GUARD-10) ─────────────────────────────────────────────
@@ -135,33 +207,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
     await repo.updateRun(run.runId, { stop_reason: 'turn limit reached' });
   }
 
-  // ── Spend ──────────────────────────────────────────────────────────────────
-  const m = r.metrics ?? {};
-  const cost = Number(r.costUsd ?? 0);
-  const usedModel = r.model ?? model ?? 'bedrock-default';
-  await repo.updateRun(run.runId, {
-    cost_usd: cost,
-    input_tokens: m.inputTokens ?? 0,
-    output_tokens: m.outputTokens ?? 0,
-    cache_write_tokens: m.cacheWriteTokens ?? 0,
-    cache_read_tokens: m.cacheReadTokens ?? 0,
-    model: usedModel,
-  });
-  if (cost > 0 || (m.inputTokens ?? 0) > 0) {
-    const { getBudgetRepository } = await import('../repositories/budget.ts');
-    await getBudgetRepository().record({
-      user_id: wf?.created_by ?? null,
-      project_id: run.projectId,
-      workflow_id: run.workflowId,
-      run_id: null,
-      cost_usd: cost,
-      input_tokens: m.inputTokens ?? 0,
-      output_tokens: m.outputTokens ?? 0,
-      provider: 'bedrock',
-      model: usedModel,
-      created_at: now(),
-    });
-  }
+  const cost = await recordSpend(r);
 
   const summary = textParts.join('\n').trim() || 'Run complete.';
   emit('run-complete', { result: summary, cost_usd: cost, ...(r.costEstimated ? { cost_estimated: true } : {}) });
