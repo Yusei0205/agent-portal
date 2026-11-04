@@ -62,6 +62,8 @@ if (app.node.tryGetContext('github')) {
     stackName: 'AgentPortalGithubDeploy',
     description: 'Agent Portal: GitHub OIDC role that deploys the harness runners (project=agent-portal, purpose=harness)',
     repository: 'Yusei0205/agent-portal',
+    // GitHub immutable subject: owner Yusei0205 (id 52206369), repository agent-portal (id 1426275824).
+    subjectPrefix: 'repo:Yusei0205@52206369/agent-portal@1426275824',
     environment: 'aws-prod',
   });
 }
