@@ -12,13 +12,13 @@ import { Integrations } from './Integrations.jsx';
 
 export const CONNECT_TABS = [
   {
-    id: 'code-hosts',
-    label: 'Code hosts',
+    id: 'git',
+    label: 'Git connections',
     render: ({ user }) => <ConnectionsPage user={user} />,
   },
   {
-    id: 'models',
-    label: 'Models & AWS',
+    id: 'sign-ins',
+    label: 'Agent sign-ins',
     render: ({ user }) => <Credentials user={user} />,
   },
   {
@@ -28,13 +28,17 @@ export const CONNECT_TABS = [
   },
 ];
 
+// Addresses from before the tabs were renamed.
+const TAB_ALIASES = { 'code-hosts': 'git', models: 'sign-ins' };
+
 export function ConnectHub({ tab, user, projectId }) {
-  const current = CONNECT_TABS.find((t) => t.id === tab) ?? CONNECT_TABS[0];
+  const wanted = TAB_ALIASES[tab] ?? tab;
+  const current = CONNECT_TABS.find((t) => t.id === wanted) ?? CONNECT_TABS[0];
   return (
     <div className="page connect-hub">
       <PageHeader
         title="Connect"
-        description="What the portal signs in to: code hosts, the model providers and AWS accounts that run agents, and the tools they can use."
+        description="What the portal signs in to: Git hosts, the Kiro and Claude accounts that run agents, and the tools agents can use."
       />
       <div className="tab-bar" role="tablist" aria-label="Connect sections">
         {CONNECT_TABS.map((t) => (

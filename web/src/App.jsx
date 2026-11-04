@@ -49,12 +49,12 @@ registerShortcuts([
   // Navigate — portal (always available)
   { id: 'goto_projects',      keys: 'g p',          label: 'Go to Projects',        group: 'Navigate' },
   { id: 'goto_inbox',         keys: 'g b',          label: 'Go to Inbox',           group: 'Navigate' },
-  { id: 'goto_connections',   keys: 'g n',          label: 'Go to Code hosts',      group: 'Navigate' },
+  { id: 'goto_connections',   keys: 'g n',          label: 'Go to Git connections', group: 'Navigate' },
   { id: 'goto_integrations',  keys: 'g j',          label: 'Go to Tools & services', group: 'Navigate' },
   { id: 'goto_api',           keys: 'g e',          label: 'Go to API access',      group: 'Navigate' },
   { id: 'goto_users',         keys: 'g m',          label: 'Go to Users',           group: 'Navigate' },
   { id: 'goto_settings',      keys: 'g t',          label: 'Go to Settings',        group: 'Navigate' },
-  { id: 'goto_credentials',   keys: 'g y',          label: 'Go to Models & AWS',     group: 'Navigate' },
+  { id: 'goto_credentials',   keys: 'g y',          label: 'Go to Agent sign-ins',    group: 'Navigate' },
   { id: 'goto_config',        keys: 'g x',          label: 'Go to Agent setup',       group: 'Navigate' },
   { id: 'goto_dashboard',     keys: 'g d',          label: 'Go to Dashboard',        group: 'Navigate' },
 ]);
@@ -287,12 +287,12 @@ function Shell({ user, onSignOut }) {
           case 'h': if (pid) navigate(`/p/${pid}/tests`);                         break;
           case 'p': navigate('/projects');                                         break;
           case 'b': navigate('/inbox');                                            break;
-          case 'n': navigate('/connect/code-hosts');                              break;
+          case 'n': navigate('/connect/git');                              break;
           case 'j': navigate('/connect/tools');                                   break;
           case 'e': navigate('/api');                                              break;
           case 'm': if (u?.is_admin) navigate('/users');                          break;
           case 't': navigate('/settings');                                         break;
-          case 'y': navigate('/connect/models');                                  break;
+          case 'y': navigate('/connect/sign-ins');                                  break;
           case 'x': navigate('/config');                                           break;
           case 'd': navigate('/dashboard');                                        break;
           default:  break;
@@ -349,12 +349,17 @@ function Shell({ user, onSignOut }) {
       return;
     }
     // Connections, Credentials and Integrations are tabs of the Connect page now; the old addresses still work.
+    // Repositories moved under Workspaces.
+    if (projectId && tab === 'setup' && rest?.[0] === 'repositories') {
+      navigateReplace(`/p/${projectId}/workspaces/repositories`);
+      return;
+    }
     if (!projectId && (tab === 'aws' || tab === 'connections')) {
-      navigateReplace('/connect/code-hosts');
+      navigateReplace('/connect/git');
       return;
     }
     if (!projectId && tab === 'credentials') {
-      navigateReplace('/connect/models');
+      navigateReplace('/connect/sign-ins');
       return;
     }
     if (tab === 'integrations') {
@@ -365,7 +370,7 @@ function Shell({ user, onSignOut }) {
       return;
     }
     if (!projectId && tab === 'connect' && (!rest || rest.length === 0)) {
-      navigateReplace('/connect/code-hosts');
+      navigateReplace('/connect/git');
       return;
     }
     // /reviews (old portal-level dashboard, no project) → last project's reviews or projects
@@ -544,7 +549,7 @@ function Shell({ user, onSignOut }) {
           ) : isLoopSpecsRoute ? (
             <LoopSpecs projectId={route.projectId} />
           ) : isWorkspacesRoute ? (
-            <Workspaces projectId={route.projectId} />
+            <Workspaces projectId={route.projectId} tab={route.rest?.[0]} />
           ) : isApiRoute ? (
             <ApiAccess />
           ) : isConnectRoute ? (

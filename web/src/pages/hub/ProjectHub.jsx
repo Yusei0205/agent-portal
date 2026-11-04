@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../lib/api.js';
+import { navigate } from '../../lib/router.js';
 import { formatRelative } from '../../lib/util.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
@@ -347,7 +348,7 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
               <div className="card">
                 <p className="muted" style={{ fontSize: '0.84rem' }}>
                   No Git connections configured.{' '}
-                  <a href="#/connect/code-hosts">Add a connection</a> first, then come back here.
+                  <a href="#/connect/git">Add a connection</a> first, then come back here.
                 </p>
               </div>
             ) : (
@@ -435,7 +436,7 @@ function AddReposModal({ projectId, existingRepos, onNewRepos, onClose }) {
                               No repositories found in {region}.
                               <div className="muted" style={{ marginTop: 4, fontSize: '0.82em' }}>
                                 The connection's region can be changed under{' '}
-                                <a href="#/connect/code-hosts">Connect › Code hosts</a>.
+                                <a href="#/connect/git">Connect › Git connections</a>.
                               </div>
                             </>
                           )
@@ -1202,10 +1203,39 @@ function PermissionsTab({ projectId, toast }) {
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'repositories', label: 'Repositories' },
   { id: 'team', label: 'Team & members' },
   { id: 'permissions', label: 'Permissions' },
 ];
+
+/**
+ * The project's repositories, as a panel of the Workspaces page: it loads its own list and brings its own
+ * confirmation and toast shelf.
+ */
+export function ProjectRepositories({ projectId }) {
+  const [repos, setRepos] = useState(null);
+  const [error, setError] = useState(null);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toasts, toast, removeToast } = useToast();
+
+  useEffect(() => {
+    let live = true;
+    setRepos(null);
+    api.get(`/api/projects/${projectId}/repos`)
+      .then((r) => { if (live) setRepos(r.repos || []); })
+      .catch((e) => { if (live) setError(e.message || 'Failed to load repositories'); });
+    return () => { live = false; };
+  }, [projectId]);
+
+  if (error) return <div className="error-note" role="alert">{error}</div>;
+  if (!repos) return <div className="spinner-wrap"><div className="spinner" aria-label="Loading…" /></div>;
+  return (
+    <>
+      <RepositoriesTab projectId={projectId} repos={repos} setRepos={setRepos} requestConfirm={requestConfirm} toast={toast} />
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
+    </>
+  );
+}
 
 /**
  * @param {{ projectId: string, user: object, initialTab?: string }} props
@@ -1290,10 +1320,7 @@ export function ProjectHub({ projectId, user, initialTab }) {
       {/* Tab panels */}
       <div role="tabpanel" id={`tabpanel-${activeTab}`} className="tab-panel">
         {activeTab === 'overview' && (
-          <OverviewTab projectId={projectId} repos={repos} members={members} onNavigateTab={setActiveTab} />
-        )}
-        {activeTab === 'repositories' && (
-          <RepositoriesTab projectId={projectId} repos={repos} setRepos={setRepos} requestConfirm={requestConfirm} toast={toast} />
+          <OverviewTab projectId={projectId} repos={repos} members={members} onNavigateTab={(t) => (t === 'repositories' ? navigate(`/p/${projectId}/workspaces/repositories`) : setActiveTab(t))} />
         )}
         {activeTab === 'team' && (
           <TeamTab

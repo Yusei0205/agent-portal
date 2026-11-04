@@ -28,7 +28,7 @@ function buildNavItems(route, user) {
   items.push(
     { id: 'goto_projects',    label: 'Projects',       description: 'All your projects',                    keys: 'g p', href: '#/projects'          },
     { id: 'goto_inbox',       label: 'Inbox',          description: 'Pending PR-review notifications',      keys: 'g b', href: '#/inbox'             },
-    { id: 'goto_connections', label: 'Code hosts',     description: 'Git hosts used to clone repositories', keys: 'g n', href: '#/connect/code-hosts' },
+    { id: 'goto_connections', label: 'Git connections', description: 'Git hosts used to clone repositories', keys: 'g n', href: '#/connect/git' },
     { id: 'goto_integrations',label: 'Tools & services', description: 'Portal-wide MCP tools and services', keys: 'g j', href: '#/connect/tools'     },
     { id: 'goto_api',         label: 'API access',     description: 'Personal access tokens and MCP URL',  keys: 'g e', href: '#/api'               },
   );
@@ -43,7 +43,7 @@ function buildNavItems(route, user) {
 
   // Always-available extra pages
   items.push(
-    { id: 'goto_credentials', label: 'Models & AWS',  description: 'Your Kiro, Claude and Bedrock sign-ins',   keys: 'g y', href: '#/connect/models' },
+    { id: 'goto_credentials', label: 'Agent sign-ins', description: 'Your Kiro and Claude accounts',   keys: 'g y', href: '#/connect/sign-ins' },
     { id: 'goto_config',      label: 'Agent setup',   description: 'Edit ~/.kiro, ~/.claude and ~/.aws config', keys: 'g x', href: '#/config'      },
   );
 

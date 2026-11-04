@@ -9,10 +9,10 @@
 export const EXTRA_NAV_ITEMS = [
   {
     id: 'goto_credentials',
-    label: 'Models & AWS',
-    description: 'Your Kiro, Claude and Bedrock sign-ins',
+    label: 'Agent sign-ins',
+    description: 'Your Kiro and Claude accounts',
     keys: 'g y',
-    href: '#/connect/models',
+    href: '#/connect/sign-ins',
   },
   {
     id: 'goto_config',

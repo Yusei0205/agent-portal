@@ -5,7 +5,9 @@ import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
-import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { HubContext, PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { navigate } from '../lib/router.js';
+import { ProjectRepositories } from './hub/ProjectHub.jsx';
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
@@ -142,7 +144,7 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
                 <label>Repositories</label>
                 <p className="field-hint">
                   This project has no repositories yet.{' '}
-                  <a href={`#/p/${projectId}/setup/repositories`} onClick={onClose}>
+                  <a href={`#/p/${projectId}/workspaces/repositories`} onClick={onClose}>
                     Add repositories
                   </a>{' '}
                   to include them in workspaces.
@@ -250,7 +252,7 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function Workspaces({ projectId }) {
+function WorkspacesList({ projectId }) {
   const [workspaces, setWorkspaces] = useState([]);
   const { sorted: sortedWorkspaces, sortProps } = useSort(workspaces, { name: (ws) => ws.name, repos: (ws) => (ws.repo_ids ?? []).length, created: (ws) => ws.created_at });
   const [repos, setRepos] = useState([]);
@@ -344,7 +346,7 @@ export function Workspaces({ projectId }) {
       {!loading && !error && repos.length === 0 && (
         <p className="muted" style={{ fontSize: '0.84rem' }}>
           This project has no repositories.{' '}
-          <a href={`#/p/${projectId}/setup/repositories`}>Add repositories</a>{' '}
+          <a href={`#/p/${projectId}/workspaces/repositories`}>Add repositories</a>{' '}
           to include them in workspaces.
         </p>
       )}
@@ -423,6 +425,42 @@ export function Workspaces({ projectId }) {
           onSave={handleSave}
         />
       )}
+    </div>
+  );
+}
+
+const WORKSPACE_TABS = [
+  { id: 'workspaces', label: 'Workspaces' },
+  { id: 'repositories', label: 'Repositories' },
+];
+
+/** The project's work areas: named workspaces, and the repositories they are made of. */
+export function Workspaces({ projectId, tab }) {
+  const current = WORKSPACE_TABS.find((t) => t.id === tab) ?? WORKSPACE_TABS[0];
+  return (
+    <div className="page connect-hub">
+      <PageHeader title="Workspaces" description="Repositories, and the named groups of them that agents work in.">
+        <a className="btn btn-sm" href={`#/p/${projectId}/setup/overview`}>Project setup</a>
+      </PageHeader>
+      <div className="tab-bar" role="tablist" aria-label="Workspaces sections">
+        {WORKSPACE_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={current.id === t.id}
+            className={`tab-btn${current.id === t.id ? ' is-active' : ''}`}
+            onClick={() => navigate(`/p/${projectId}/workspaces${t.id === 'workspaces' ? '' : `/${t.id}`}`)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="connect-panel" role="tabpanel">
+        <HubContext.Provider value>
+          {current.id === 'repositories' ? <ProjectRepositories projectId={projectId} /> : <WorkspacesList projectId={projectId} />}
+        </HubContext.Provider>
+      </div>
     </div>
   );
 }

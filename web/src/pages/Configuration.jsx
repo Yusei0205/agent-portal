@@ -60,7 +60,7 @@ function AwsWarning() {
       <Icon name="warning" size={15} style={{ flexShrink: 0 }} />
       <span>
         Keys stored here are plaintext in zip exports — handle with care. For engine
-        sign-ins, <a href="#/connect/models" style={{ color: 'inherit', textDecoration: 'underline' }}>Connect › Models &amp; AWS</a>{' '}
+        sign-ins, <a href="#/connect/sign-ins" style={{ color: 'inherit', textDecoration: 'underline' }}>Connect › Agent sign-ins</a>{' '}
         is the safer place.
       </span>
     </div>

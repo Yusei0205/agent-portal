@@ -540,7 +540,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                       >
                         Not set up yet —{' '}
                         <a
-                          href="#/connect/models"
+                          href="#/connect/sign-ins"
                           onClick={() => onClose()}
                           style={{ color: 'var(--accent)' }}
                         >
@@ -585,7 +585,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
             <p className="field-hint" style={{ fontSize: '0.82rem' }}>
               This project has no repositories yet.{' '}
               <a
-                href={`#/p/${project.id}/setup/repositories`}
+                href={`#/p/${project.id}/workspaces/repositories`}
                 onClick={onClose}
                 style={{ color: 'var(--link, var(--accent))' }}
               >
