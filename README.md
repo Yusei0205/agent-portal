@@ -330,6 +330,9 @@ npm run test:container # end-to-end container smoke test (needs Docker)
 npm run test:engine    # the real Claude Code engine against a scripted stand-in model (no API key, ~1 min)
 ```
 
+GitHub Actions runs all of these on every pull request (`.github/workflows/ci.yml`). Make its
+two checks required on the main branches so nothing merges red.
+
 ## Where things live
 
 ```
