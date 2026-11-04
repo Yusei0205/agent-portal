@@ -25,6 +25,8 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as budgets from 'aws-cdk-lib/aws-budgets';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as appsync from 'aws-cdk-lib/aws-appsync';
+import * as bedrock from 'aws-cdk-lib/aws-bedrock';
+import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import tablesJson from '../tables.json';
@@ -107,6 +109,8 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   publicUrl?: string;
   /** Emails / @domains allowed to sign in with Google without an invite, comma separated. */
   googleAllowed?: string;
+  /** Create a Bedrock Knowledge Base (S3 Vectors) for Knowledge search (-c knowledgeBase=true). Needs storageBucket. */
+  knowledgeBase?: boolean;
 }
 
 export class AgentPortalCloudStack extends cdk.Stack {
@@ -219,6 +223,71 @@ export class AgentPortalCloudStack extends cdk.Stack {
       secretStringValue: cdk.SecretValue.unsafePlainText('{"clientId":"","clientSecret":""}'),
     });
 
+    // ── Knowledge Base (optional): S3 Vectors store + Bedrock Knowledge Base over kb/ in the storage bucket ──
+    const embedModelArn = `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-multilingual-v3`;
+    let kbEnv: Record<string, string> = {};
+    let kbArn: string | undefined;
+    if (props.knowledgeBase && props.storageBucket) {
+      const vectorBucket = new s3vectors.CfnVectorBucket(this, 'KnowledgeVectors', {
+        vectorBucketName: `agent-portal-kb-${this.account}-${this.region}`,
+      });
+      const vectorIndex = new s3vectors.CfnIndex(this, 'KnowledgeIndex', {
+        vectorBucketArn: vectorBucket.attrVectorBucketArn,
+        indexName: 'documents',
+        dataType: 'float32',
+        dimension: 1024, // Cohere Embed v3
+        distanceMetric: 'cosine',
+        metadataConfiguration: { nonFilterableMetadataKeys: ['AMAZON_BEDROCK_TEXT', 'AMAZON_BEDROCK_METADATA'] },
+      });
+      const kbRole = new iam.Role(this, 'KnowledgeRole', {
+        assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
+          conditions: {
+            StringEquals: { 'aws:SourceAccount': this.account },
+            ArnLike: { 'aws:SourceArn': `arn:aws:bedrock:${this.region}:${this.account}:knowledge-base/*` },
+          },
+        }),
+      });
+      kbRole.addToPolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: [embedModelArn] }));
+      kbRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['s3:GetObject', 's3:ListBucket'],
+        resources: [`arn:aws:s3:::${props.storageBucket}`, `arn:aws:s3:::${props.storageBucket}/data/kb/*`],
+      }));
+      kbRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['s3vectors:GetIndex', 's3vectors:QueryVectors', 's3vectors:PutVectors', 's3vectors:GetVectors', 's3vectors:DeleteVectors', 's3vectors:ListVectors'],
+        resources: [vectorIndex.attrIndexArn],
+      }));
+      const kb = new bedrock.CfnKnowledgeBase(this, 'Knowledge', {
+        name: 'agent-portal-knowledge',
+        roleArn: kbRole.roleArn,
+        knowledgeBaseConfiguration: {
+          type: 'VECTOR',
+          vectorKnowledgeBaseConfiguration: { embeddingModelArn: embedModelArn },
+        },
+        storageConfiguration: {
+          type: 'S3_VECTORS',
+          s3VectorsConfiguration: { indexArn: vectorIndex.attrIndexArn },
+        },
+      });
+      kb.node.addDependency(kbRole);
+      kb.node.addDependency(vectorIndex);
+      const kbSource = new bedrock.CfnDataSource(this, 'KnowledgeSource', {
+        knowledgeBaseId: kb.attrKnowledgeBaseId,
+        name: 'project-documents',
+        dataSourceConfiguration: {
+          type: 'S3',
+          s3Configuration: { bucketArn: `arn:aws:s3:::${props.storageBucket}`, inclusionPrefixes: ['data/kb/'] },
+        },
+        vectorIngestionConfiguration: {
+          chunkingConfiguration: {
+            chunkingStrategy: 'FIXED_SIZE',
+            fixedSizeChunkingConfiguration: { maxTokens: 300, overlapPercentage: 20 },
+          },
+        },
+      });
+      kbEnv = { PORTAL_KB_ID: kb.attrKnowledgeBaseId, PORTAL_KB_DATA_SOURCE_ID: kbSource.attrDataSourceId, PORTAL_KB_REGION: this.region };
+      kbArn = kb.attrKnowledgeBaseArn;
+    }
+
     const fn = new lambda.DockerImageFunction(this, 'Portal', {
       functionName: PORTAL_FUNCTION_NAME,
       code: lambda.DockerImageCode.fromImageAsset(props.repoRoot, {
@@ -250,6 +319,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
         ...(props.agentcoreBrowser ? { PORTAL_AGENTCORE_BROWSER: '1' } : {}),
         ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
+        ...kbEnv,
       },
     });
     tables.forEach((t) => t.grantReadWriteData(fn));
@@ -264,6 +334,14 @@ export class AgentPortalCloudStack extends cdk.Stack {
       actions: ['bedrock-agentcore:ConnectBrowserLiveViewStream', 'bedrock-agentcore:UpdateBrowserStream', 'bedrock-agentcore:GetBrowserSession'],
       resources: ['*'],
     }));
+    // Meaning-based Knowledge search embeds passages and questions with this model.
+    fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: [embedModelArn] }));
+    if (kbArn) {
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['bedrock:Retrieve', 'bedrock:StartIngestionJob', 'bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
+        resources: [kbArn],
+      }));
+    }
     if (props.kiroRuntimeArn) {
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],

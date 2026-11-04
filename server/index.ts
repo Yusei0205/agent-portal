@@ -29,6 +29,7 @@ import { registerRunRoutes } from './runs.ts';
 import { registerInboxRoutes } from './inbox.ts';
 import { registerDiagramRoutes } from './diagrams.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
+import { registerKnowledgeSearchRoutes } from './knowledge-search.ts';
 import { registerVaultRoutes } from './vault.ts';
 import { registerOutputFileRoutes } from './output-files.ts';
 import { registerGeneratedDocRoutes } from './generated-docs.ts';
@@ -239,6 +240,7 @@ export async function startServer(
   registerInboxRoutes();
   registerDiagramRoutes();
   registerKnowledgeRoutes();
+  registerKnowledgeSearchRoutes();
   registerVaultRoutes();
   registerOutputFileRoutes();
   registerGeneratedDocRoutes();

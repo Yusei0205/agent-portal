@@ -51,5 +51,6 @@ if (budgetEmail) {
     agentcoreBrowser: String(app.node.tryGetContext('agentcoreBrowser')) === 'true',
     publicUrl: app.node.tryGetContext('publicUrl'),
     googleAllowed: app.node.tryGetContext('googleAllowed'),
+    knowledgeBase: String(app.node.tryGetContext('knowledgeBase')) === 'true',
   });
 }

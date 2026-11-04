@@ -4,6 +4,7 @@ import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Learn } from './Learn.jsx';
 import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
+import { KnowledgeSearchSetup } from '../components/KnowledgeSearchSetup.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
@@ -217,6 +218,8 @@ function SearchTab({ projectId }) {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [via, setVia] = useState(null);
+  const [searchNote, setSearchNote] = useState(null);
 
   const search = async (e) => {
     e.preventDefault();
@@ -226,6 +229,8 @@ function SearchTab({ projectId }) {
     try {
       const r = await api.get(`/api/projects/${projectId}/knowledge/search?q=${encodeURIComponent(q)}`);
       setResults(r.results || []);
+      setSearchNote(r.note || null);
+      setVia(r.via || null);
     } catch (err) {
       setError(err.message);
       setResults([]);
@@ -264,6 +269,8 @@ function SearchTab({ projectId }) {
         </button>
       </form>
 
+      {searchNote && <p className="field-hint" role="status">{searchNote}</p>}
+      {via && !searchNote && <p className="field-hint">Searched by {VIA_LABEL[via] || via}.</p>}
       {results !== null && results.length === 0 && (
         <p className="muted">No results found.</p>
       )}
@@ -277,6 +284,8 @@ function SearchTab({ projectId }) {
     </div>
   );
 }
+
+const VIA_LABEL = { keyword: 'keywords', embeddings: 'meaning and keywords', kb: 'the AWS Knowledge Base' };
 
 // ── Ask tab ───────────────────────────────────────────────────────────────────
 
@@ -346,6 +355,7 @@ function AskTab({ projectId }) {
         <div className="knowledge-answer">
           <h3>Answer</h3>
           {result.note && <p className="field-hint" role="status">{result.note}</p>}
+          {result.searchNote ? <p className="field-hint" role="status">{result.searchNote}</p> : result.via ? <p className="field-hint">Passages found by {VIA_LABEL[result.via] || result.via}.</p> : null}
           <p style={{ whiteSpace: 'pre-wrap' }}>{result.answer}</p>
           {result.sources?.length > 0 && (
             <div className="knowledge-sources">
@@ -438,10 +448,17 @@ const TABS = [
 
 export function Knowledge({ projectId }) {
   const [tab, setTab] = useState('docs');
+  const [setupOpen, setSetupOpen] = useState(false);
 
   return (
     <div className="page">
-      <PageHeader title="Knowledge" description="Documents, decisions and learning material that agents in this project can draw on." />
+      <PageHeader title="Knowledge" description="Documents, decisions and learning material that agents in this project can draw on.">
+        <button type="button" className="btn" onClick={() => setSetupOpen(true)}>
+          <Icon name="settings" size={14} />
+          Search setup
+        </button>
+      </PageHeader>
+      {setupOpen && <KnowledgeSearchSetup projectId={projectId} onClose={() => setSetupOpen(false)} />}
 
       <div className="tab-bar" role="tablist" aria-label="Knowledge sections">
         {TABS.map((t) => (

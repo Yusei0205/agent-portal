@@ -24,6 +24,7 @@ import { convertToMarkdown } from './convert.ts';
 import { getProjectRepository } from './repositories/projects.ts';
 import { getKnowledgeRepository } from './repositories/knowledge.ts';
 import { splitPassages, rankPassages, excerptAround, ASK_SYSTEM, buildAskUser, citedNumbers, type Passage } from './knowledge-answer.ts';
+import { retrieve, getSearchConfig, onDocumentReady, onDocumentDeleted } from './knowledge-search.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -137,6 +138,13 @@ async function processKnowledgeDoc(
     await repo.updateDoc(docId, { status: 'ready', markdown_path: mdPath, error: null });
 
     emit(projectId, { type: 'knowledge:ready', docId });
+
+    // Bring the chosen search backends (meaning-based index, Knowledge Base copy) up to date. Never fails the upload.
+    try {
+      const project = await getProjectRepository().getProjectById(projectId);
+      const doc = await repo.getDocById(docId);
+      if (project && doc) await onDocumentReady({ id: projectId, slug: project.slug }, docId, doc.original_name || doc.name, markdown);
+    } catch (e) { console.warn('[knowledge] search backends not updated:', e instanceof Error ? e.message : e); }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     await repo.updateDoc(docId, { status: 'error', error: msg }).catch(() => {});
@@ -267,6 +275,8 @@ export function registerKnowledgeRoutes(): void {
         }
       }
 
+      await onDocumentDeleted({ id: String(project.id), slug }, req.params.docId).catch(() => {});
+
       sendJson(res, 200, { ok: true });
     },
   );
@@ -281,6 +291,21 @@ export function registerKnowledgeRoutes(): void {
       const q = req.query.get('q') ?? '';
       if (!q.trim()) {
         sendJson(res, 200, { results: [] });
+        return;
+      }
+
+      // Meaning-based or Knowledge Base search: the best passages, one result per document.
+      const cfg = getSearchConfig(String(project.id));
+      if (cfg.backend !== 'keyword') {
+        const found = await retrieve({ id: String(project.id), slug: project.slug }, q, 15);
+        const seen = new Set<string>();
+        const docs = [];
+        for (const p of found.passages) {
+          if (seen.has(p.docId)) continue;
+          seen.add(p.docId);
+          docs.push({ docId: p.docId, name: p.docName, snippet: excerptAround(p.text, q), heading: p.heading || undefined });
+        }
+        sendJson(res, 200, { results: docs, via: found.via, note: found.note });
         return;
       }
 
@@ -304,19 +329,16 @@ export function registerKnowledgeRoutes(): void {
     const body = req.body as Record<string, unknown>;
     const question = str(body.question, 'question', { max: 2000 });
 
-    // 1. The keyword index finds the documents that use the question's words.
-    const candidates = await getKnowledgeRepository().searchDocs(req.params.id, question, 6).catch(() => []);
-    if (!candidates.length) {
-      sendJson(res, 200, { answer: null, needsTeam: true });
+    // 1. The project's search backend (keywords, meaning-based index or Knowledge Base) finds the best passages.
+    const found = await retrieve({ id: String(project.id), slug: project.slug }, question, 6);
+    if (!found.passages.length) {
+      sendJson(res, 200, { answer: null, needsTeam: true, via: found.via, searchNote: found.note });
       return;
     }
-    // 2. Their passages are ranked by the same words; the best few are what a model reads.
-    let passages = await passagesFor(project.slug, candidates.map((c) => ({ docId: c.docId, name: c.name })), question, 6);
-    if (!passages.length) {
-      passages = candidates.slice(0, 5).map((c) => ({ docId: c.docId, docName: c.name, heading: '', text: c.snippet }));
-    }
+    const passages = found.passages;
     const sources = passages.map((p, i) => ({ n: i + 1, docId: p.docId, name: p.docName, heading: p.heading || undefined, snippet: excerptAround(p.text, question, 360) }));
 
+    // 2. (the passages are numbered so the answer can cite them)
     // 3. A model answers from those passages only and cites them. Without a usable sign-in the passages themselves are the answer.
     try {
       const { callTextModel } = await import('./testing/model-provider.ts');
@@ -327,14 +349,14 @@ export function registerKnowledgeRoutes(): void {
       })).trim();
       if (!reply) throw new Error('The model returned no answer.');
       const used = citedNumbers(reply, passages.length);
-      sendJson(res, 200, { answer: reply, mode: 'model', sources, cited: used });
+      sendJson(res, 200, { answer: reply, mode: 'model', sources, cited: used, via: found.via, searchNote: found.note });
       return;
     } catch (e) {
       const why = String((e as { message?: string })?.message ?? e).slice(0, 200);
       const answer =
         `Based on the project documents:\n\n` +
         sources.map((x) => `**${x.name}${x.heading ? ` › ${x.heading}` : ''}**: ${x.snippet}`).join('\n\n');
-      sendJson(res, 200, { answer, mode: 'passages', sources, cited: [], note: `No model answered (${why}). These are the matching passages.` });
+      sendJson(res, 200, { answer, mode: 'passages', sources, cited: [], via: found.via, searchNote: found.note, note: `No model answered (${why}). These are the matching passages.` });
     }
   });
 

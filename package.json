@@ -28,6 +28,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.303",
     "@aws-sdk/client-bedrock": "3.1152.0",
+    "@aws-sdk/client-bedrock-agent": "^3.1152.0",
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.1152.0",
     "@aws-sdk/client-bedrock-runtime": "3.1152.0",
     "@aws-sdk/client-codecommit": "3.1152.0",
     "@aws-sdk/client-lambda": "^3.1152.0",

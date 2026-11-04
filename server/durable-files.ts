@@ -49,6 +49,14 @@ export async function restoreFile(absPath: string): Promise<boolean> {
   return true;
 }
 
+/** True when the file is on local disk or in the storage backend, without downloading it. */
+export async function existsDurable(absPath: string): Promise<boolean> {
+  if (fs.existsSync(absPath)) return true;
+  if (!enabled()) return false;
+  const key = keyFor(absPath);
+  return key ? getStorage().exists(key) : false;
+}
+
 export async function forgetFile(absPath: string): Promise<void> {
   if (!enabled()) return;
   const key = keyFor(absPath);
