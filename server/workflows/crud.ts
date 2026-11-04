@@ -332,7 +332,7 @@ export function registerWorkflowRoutes(): void {
     if (!project) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
+    const goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS, optional: true }).trim();
 
     // Validate engine from request (null = not specified, will use workspace/project/built-in default)
     const requestEngine: Engine | null = body.engine ? validateEngine(body.engine) : null;

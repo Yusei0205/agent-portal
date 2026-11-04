@@ -27,6 +27,46 @@ export interface RepoPrepState {
   /** true when the repositories were put in persistent storage (false: they will be cloned per message). */
   persisted?: boolean;
   repos?: string[];
+  /** One row per repository, for the progress panel. */
+  items?: RepoPrepItem[];
+}
+
+export interface RepoPrepItem {
+  name: string;
+  state: 'waiting' | 'working' | 'done' | 'failed';
+  text: string;
+}
+
+/** Update the repository rows from one status line of the runner. Returns true when a row changed. */
+export function applyPrepStatus(items: RepoPrepItem[], text: string): boolean {
+  const set = (name: string, state: RepoPrepItem['state'], t: string): boolean => {
+    const it = items.find((i) => i.name === name);
+    if (!it || (it.state === state && it.text === t)) return false;
+    it.state = state; it.text = t;
+    return true;
+  };
+  let m = /^Cloning (.+?)(?: @ .+)?…$/.exec(text);
+  if (m) return set(m[1], 'working', 'Cloning (full history)…');
+  m = /^(.+) is up to date\.$/.exec(text);
+  if (m) return set(m[1], 'done', 'Up to date');
+  m = /^(.+) already has your session's changes/.exec(text);
+  if (m) return set(m[1], 'done', 'Kept your changes');
+  m = /^(.+): kept the earlier copy/.exec(text);
+  if (m) return set(m[1], 'done', 'Kept the earlier copy');
+  m = /^(.+) did not fit in the session's storage/.exec(text);
+  if (m) return set(m[1], 'working', 'Cloning to temporary disk…');
+  m = /^Could not clone (.+?) \(([^)]*)\)/.exec(text);
+  if (m) return set(m[1], 'failed', `Could not clone (${m[2]})`);
+  m = /^Repositories available at: (.+)$/.exec(text);
+  if (m) {
+    let changed = false;
+    for (const part of m[1].split(',')) {
+      const n = /repos\/([^/]+)\//.exec(part)?.[1];
+      if (n) { const it = items.find((i) => i.name === n); if (it && it.state !== 'done') changed = set(n, 'done', 'Ready') || changed; }
+    }
+    return changed;
+  }
+  return false;
 }
 
 const key = (workflowId: string): string => `repoprep.${workflowId}`;
@@ -88,6 +128,9 @@ async function prepare(workflowId: string): Promise<void> {
     return;
   }
 
+  const items: RepoPrepItem[] = repos.map((r) => ({ name: String((r as { name?: string }).name ?? ''), state: 'waiting', text: 'Waiting…' }));
+  await save(workflowId, { state: 'running', at: now(), message: 'Preparing repositories…', items });
+
   const runId = `prep-${randomUUID()}`;
   const snapshot = await snapshotAccess(workflowId);
   const payload: Record<string, unknown> = rt.kind === 'kiro'
@@ -107,6 +150,7 @@ async function prepare(workflowId: string): Promise<void> {
       if (ev.type === 'status' && typeof ev.text === 'string' && !ev.text.startsWith('Work dir:')) {
         last = ev.text;
         if (ev.text.startsWith('Could not')) problems.push(ev.text);
+        if (applyPrepStatus(items, ev.text)) await save(workflowId, { state: 'running', at: now(), message: 'Preparing repositories…', items });
       }
       if (ev.type === 'error') failed = String(ev.message ?? 'The runner reported an error');
       if (ev.type === 'result') {
@@ -128,6 +172,7 @@ async function prepare(workflowId: string): Promise<void> {
     message: [...notes, message].filter(Boolean).join(' ').slice(0, 300),
     persisted,
     repos: names,
+    items: items.map((i) => (i.state === 'waiting' || i.state === 'working') ? { ...i, state: failed ? 'failed' : 'done', text: failed ? 'Not finished' : 'Ready' } : i),
   });
 }
 

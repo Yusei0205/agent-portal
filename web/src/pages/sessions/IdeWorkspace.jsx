@@ -224,8 +224,9 @@ function ComposerBar({
   // that is done (a message sent meanwhile would only wait for it). A preparation stuck for over 6 minutes is ignored.
   const repoKey = Array.isArray(workflow?.repo_ids) ? workflow.repo_ids.join(',') : '';
   const [cloning, setCloning] = useState(false);
+  const [prep, setPrep] = useState(null);
   useEffect(() => {
-    if (!workflow?.id || !repoKey) { setCloning(false); return undefined; }
+    if (!workflow?.id || !repoKey) { setCloning(false); setPrep(null); return undefined; }
     let cancelled = false;
     let timer = null;
     const tick = async () => {
@@ -235,6 +236,7 @@ function ComposerBar({
         const p = d.prep;
         const live = p?.state === 'running' && Date.now() - new Date(p.at).getTime() < 6 * 60_000;
         setCloning(Boolean(live));
+        setPrep(p ?? null);
         if (live) timer = setTimeout(tick, 3000);
       } catch {
         if (!cancelled) setCloning(false);
@@ -549,10 +551,26 @@ function ComposerBar({
           Commands starting with / are passed to the engine. /clear starts the next turn fresh.
         </div>
       )}
-      {cloning && (
-        <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', fontSize: '0.8rem', color: 'var(--ink-2)' }}>
-          <span className="spinner" style={{ width: 12, height: 12 }} />
-          Cloning the repositories into this session… you can send a message when it finishes.
+      {(cloning || prep?.state === 'failed') && (
+        <div className="clone-panel" role="status" aria-live="polite">
+          <div className="clone-panel-head">
+            <span>
+              {cloning
+                ? `Checking out ${(prep?.items?.length || repoKey.split(',').length)} ${((prep?.items?.length || repoKey.split(',').length) === 1) ? 'repository' : 'repositories'} · ${(prep?.items ?? []).filter((i) => i.state === 'done').length} of ${prep?.items?.length || repoKey.split(',').length} done`
+                : 'Some repositories could not be checked out'}
+            </span>
+            {!cloning && <span className="muted">{prep?.message}</span>}
+          </div>
+          {(prep?.items ?? []).map((i, n, all) => (
+            <div key={i.name} className="clone-row">
+              <div className="clone-row-line">
+                <strong>{i.name}/</strong>
+                <span className="muted">{i.text}{all.length > 1 ? ` · repo ${n + 1} of ${all.length}` : ''}</span>
+              </div>
+              <div className="clone-bar" data-state={i.state}><i /></div>
+            </div>
+          ))}
+          {cloning && <div className="muted" style={{ fontSize: '0.74rem', paddingTop: 2 }}>You can type once the repositories are ready.</div>}
         </div>
       )}
       <div className="ws-composer-row">

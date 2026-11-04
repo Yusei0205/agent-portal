@@ -2114,3 +2114,15 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
 .panzoom-bar { white-space: nowrap; }
 .textzoom { position: relative; }
 .textzoom-bar { position: sticky; top: 0; margin-left: auto; width: max-content; }
+
+/* Session composer: progress of checking out the session's repositories */
+.clone-panel{padding:8px 14px 6px;border-top:1px solid var(--line);font-size:.8rem;display:flex;flex-direction:column;gap:6px}
+.clone-panel-head{display:flex;justify-content:space-between;gap:12px;color:var(--ink-2)}
+.clone-row-line{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.clone-bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:3px;max-width:320px;position:relative}
+.clone-bar>i{display:block;height:100%;width:0;background:var(--accent,#d9962b);border-radius:3px}
+.clone-bar[data-state="working"]>i{width:40%;animation:clone-slide 1.4s ease-in-out infinite}
+.clone-bar[data-state="done"]>i{width:100%;background:var(--ok,#3fa66b)}
+.clone-bar[data-state="failed"]>i{width:100%;background:var(--danger,#c0392b)}
+@keyframes clone-slide{0%{margin-left:-40%}100%{margin-left:100%}}
+@media (prefers-reduced-motion:reduce){.clone-bar[data-state="working"]>i{animation:none;width:60%}}

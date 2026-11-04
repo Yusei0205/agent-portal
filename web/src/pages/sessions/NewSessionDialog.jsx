@@ -409,7 +409,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     });
   };
 
-  const canSubmit = (goal.trim().length > 0 || Boolean(ticket)) && !busy;
+  // A goal is optional: without one the session just opens (and checks out its repositories) and waits for the first message.
+  const canSubmit = !busy;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -433,7 +434,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
       }
 
       const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, payload);
-      await api.post(`/api/projects/${project.id}/workflows/${workflow.id}/start`);
+      if (goal.trim() || ticket) await api.post(`/api/projects/${project.id}/workflows/${workflow.id}/start`);
       if (onCreated) onCreated(workflow.id);
       navigate(href(project.id, 'sessions', workflow.id));
       onClose();
@@ -486,7 +487,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
           {/* Goal */}
           <div className="field">
             <label htmlFor="ns-goal">
-              Goal <span aria-hidden="true">*</span>
+              Goal <span className="muted" style={{ fontWeight: 400 }}>(optional — leave empty to open the session, check out the repositories, and type your first message there)</span>
             </label>
             <textarea
               id="ns-goal"
@@ -496,7 +497,6 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
               placeholder="What should be true when this is done? Describe the outcome."
-              aria-required="true"
             />
             <span className="field-hint" aria-live="polite">
               {goal.length}/{GOAL_MAX}
