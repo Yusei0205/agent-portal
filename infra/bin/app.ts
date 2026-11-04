@@ -5,6 +5,7 @@ import { AgentPortalSpikeAStack } from '../lib/spike-a-stack';
 import { AgentPortalSpikeBStack } from '../lib/spike-b-stack';
 import { AgentPortalSpikeCStack } from '../lib/spike-c-stack';
 import { AgentPortalHarnessBuildStack, AgentPortalHarnessStack } from '../lib/harness-stack';
+import { AgentPortalGithubDeployStack } from '../lib/github-deploy-stack';
 import * as path from 'path';
 
 const app = new cdk.App();
@@ -51,5 +52,16 @@ if (app.node.tryGetContext('harness')) {
     stackName: 'AgentPortalHarness',
     description: 'Agent Portal: Claude and Kiro AgentCore runtimes with approvals, rules, guard and limits (project=agent-portal, purpose=harness)',
     imageTag: String(app.node.tryGetContext('harnessImageTag') ?? 'unset'),
+  });
+}
+
+// GitHub Actions deploy role (one-time, by an account admin): -c github=1
+if (app.node.tryGetContext('github')) {
+  new AgentPortalGithubDeployStack(app, 'AgentPortalGithubDeploy', {
+    env: { account: '366019841051', region: 'ap-southeast-1' },
+    stackName: 'AgentPortalGithubDeploy',
+    description: 'Agent Portal: GitHub OIDC role that deploys the harness runners (project=agent-portal, purpose=harness)',
+    repository: 'Yusei0205/agent-portal',
+    environment: 'aws-prod',
   });
 }

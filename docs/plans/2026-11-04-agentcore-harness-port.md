@@ -88,6 +88,35 @@ record spend, stop reason, budget
 
 ## 6. Deploying
 
+### Through GitHub Actions (`.github/workflows/deploy-agentcore.yml`)
+
+| Job | When | What |
+|---|---|---|
+| `verify` | Pull requests that touch the runners; before every deploy | Runner builds and type checks; runner and AgentCore tests; end-to-end run with the real Claude Code engine (stand-in model API); infra type check |
+| `deploy` | Pushes to `main_v3` that touch the runners, or started by hand on `main_v3` | Signs in to AWS through GitHub OIDC (no stored keys) and runs `infra/scripts/deploy-harness.mjs` |
+
+**Trust.** Only this repository's jobs in the GitHub environment `aws-prod` can assume the deploy role `agent-portal-github-deploy`. Pull requests, including those from forks, never get AWS access.
+
+**What the role may do:**
+- Assume CDK's own bootstrap roles.
+- Start and read the runner image build.
+- Check which runner images exist.
+
+**One-time setup:**
+1. An account admin deploys the role:
+   ```bash
+   cd infra
+   npx -y aws-cdk@2.1147.0 deploy AgentPortalGithubDeploy -c github=1 --profile <admin-profile>
+   ```
+2. A repository admin opens Settings › Environments › `aws-prod`. GitHub creates this environment on the first deploy run. The admin:
+   - adds required reviewers, so every deploy waits for an approval;
+   - limits the environment to the `main_v3` branch.
+
+   Until then, any push to `main_v3` that touches the runners deploys without an approval.
+3. Optional: set the repository variable `AWS_DEPLOY_ROLE_ARN`. Without it, the workflow uses `arn:aws:iam::366019841051:role/agent-portal-github-deploy`.
+
+### By hand
+
 ```bash
 cd infra
 npm ci
