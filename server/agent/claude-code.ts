@@ -246,6 +246,8 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   let totalCacheWriteTokens = 0;
   let totalCacheReadTokens = 0;
   let totalCostUsd = 0;
+  // Priced per model reply (one request): used when the SDK reports no total (a stopped run).
+  let estimatedCostUsd = 0;
   const textParts: string[] = [];
 
   // ── canUseTool callback ────────────────────────────────────────────────────
@@ -440,6 +442,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         totalOutputTokens += outputTok;
         totalCacheWriteTokens += cacheWriteTok;
         totalCacheReadTokens += cacheReadTok;
+        estimatedCostUsd += estimateCost(model, usage);
 
         const content = message.content;
         if (!Array.isArray(content)) continue;
@@ -541,12 +544,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   const recordSpend = async (): Promise<void> => {
     // Estimate cost if the SDK didn't report it (it reports only in its final result).
     if (totalCostUsd === 0 && (totalInputTokens > 0 || totalOutputTokens > 0)) {
-      totalCostUsd = estimateCost(model, {
-        input_tokens: totalInputTokens,
-        output_tokens: totalOutputTokens,
-        cache_read_input_tokens: totalCacheReadTokens,
-        cache_creation_input_tokens: totalCacheWriteTokens,
-      });
+      totalCostUsd = estimatedCostUsd;
     }
 
     // Persist totals to p6_runs
@@ -603,7 +601,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       textParts.length = 0;
       totalInputTokens = 0; totalOutputTokens = 0;
       totalCacheWriteTokens = 0; totalCacheReadTokens = 0;
-      totalCostUsd = 0;
+      totalCostUsd = 0; estimatedCostUsd = 0;
       pendingToolUses.clear();
       try {
         await runSdkQuery();

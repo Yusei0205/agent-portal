@@ -924,7 +924,8 @@
       ],
       "tests": [
         "test/agent-runner-validation.test.ts",
-        "test/agentcore-harness.test.ts"
+        "test/agentcore-harness.test.ts",
+        "test/pricing.test.ts"
       ],
       "smokeIds": [],
       "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."

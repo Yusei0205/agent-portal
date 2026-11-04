@@ -247,6 +247,8 @@ export async function runInvocation(
   let totalCacheWriteTokens = 0;
   let totalCacheReadTokens = 0;
   let totalCostUsd = 0;
+  // Priced per model reply (one request): used when the SDK reports no total (a stopped run).
+  let estimatedCostUsd = 0;
   let turns = 0;
   let stopReason = 'end_turn';
   let resultSubtype = '';
@@ -366,6 +368,7 @@ export async function runInvocation(
         totalOutputTokens += outputTok;
         totalCacheWriteTokens += cacheWriteTok;
         totalCacheReadTokens += cacheReadTok;
+        estimatedCostUsd += estimateCost(model, usage);
 
         const content = message.content;
         if (!Array.isArray(content)) continue;
@@ -458,15 +461,10 @@ export async function runInvocation(
   }
 
   // Cost fallback: a stopped or cancelled run ends without the SDK's total.
-  // Estimate from the tokens seen, priced for the run's own model.
+  // Use the estimate built up per model reply, priced for the run's own model.
   let costEstimated = false;
   if (totalCostUsd === 0 && (totalInputTokens + totalOutputTokens + totalCacheWriteTokens + totalCacheReadTokens) > 0) {
-    totalCostUsd = estimateCost(model, {
-      input_tokens: totalInputTokens,
-      output_tokens: totalOutputTokens,
-      cache_read_input_tokens: totalCacheReadTokens,
-      cache_creation_input_tokens: totalCacheWriteTokens,
-    });
+    totalCostUsd = estimatedCostUsd;
     costEstimated = true;
   }
 
