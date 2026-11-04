@@ -241,6 +241,11 @@ export function registerKiroSettingsRoutes(): void {
       if (!requireAdminBrowser(req, res)) return;
 
       try {
+        // In the cloud portal Kiro runs in its own AgentCore runner, not on this server: there is no server CLI to check.
+        if (process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN) {
+          sendJson(res, 200, { installed: true, signedIn: false, method: null, startUrl: null, email: null, profile: null, remote: true });
+          return;
+        }
         const status = await getKiroStatus();
         sendJson(res, 200, status);
       } catch (e: unknown) {

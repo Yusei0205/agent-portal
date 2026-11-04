@@ -1295,6 +1295,21 @@ function KiroCliSection({
     method === 'identity-center' ? 'IAM Identity Center' :
     null;
 
+  // Cloud portal: Kiro runs in its own runner, so there is no CLI on this server to install or sign in.
+  if (kiroStatus?.remote) {
+    return (
+      <div className="stack">
+        <div className="sso-status-row">
+          <Icon name="info" size={14} style={{ flexShrink: 0 }} />
+          <span>
+            Kiro runs in the cloud runner (AgentCore), not on this server, so there is nothing to install or sign in to here.
+            Each person signs in under <strong>Agent setup › Agent sign-ins</strong>; a Kiro session uses that person's sign-in.
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="stack">
       {/* ── Not installed notice ─────────────────────────────────────── */}
