@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { Learn } from './Learn.jsx';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
@@ -269,7 +270,7 @@ function SearchTab({ projectId }) {
 
       {results?.map((r, i) => (
         <div key={i} className="knowledge-result-card">
-          <div className="knowledge-result-name">{r.name}</div>
+          <div className="knowledge-result-name">{r.name}{r.heading ? ` › ${r.heading}` : ""}</div>
           <p className="knowledge-result-snippet">{highlight(r.snippet)}</p>
         </div>
       ))}
@@ -285,6 +286,7 @@ function AskTab({ projectId }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [teamSent, setTeamSent] = useState(false);
+  const [ai, setAi] = useState({});
 
   const ask = async (e) => {
     e.preventDefault();
@@ -294,7 +296,7 @@ function AskTab({ projectId }) {
     setResult(null);
     setTeamSent(false);
     try {
-      const r = await api.post(`/api/projects/${projectId}/knowledge/ask`, { question });
+      const r = await api.post(`/api/projects/${projectId}/knowledge/ask`, { question, ...ai });
       setResult(r);
     } catch (err) {
       setError(err.message);
@@ -331,21 +333,29 @@ function AskTab({ projectId }) {
             className="input-textarea"
           />
         </div>
+        <AiChoicePicker onChange={setAi} disabled={loading} idPrefix="ask-ai" />
+        <p className="field-hint">
+          Ask finds the passages that use your words, then the model above answers from those passages only and cites them.
+        </p>
         <button type="submit" className="btn btn-primary" disabled={loading || !question.trim()}>
-          {loading ? 'Searching…' : 'Ask'}
+          {loading ? 'Reading the documents…' : 'Ask'}
         </button>
       </form>
 
       {result && !result.needsTeam && (
         <div className="knowledge-answer">
           <h3>Answer</h3>
+          {result.note && <p className="field-hint" role="status">{result.note}</p>}
           <p style={{ whiteSpace: 'pre-wrap' }}>{result.answer}</p>
           {result.sources?.length > 0 && (
             <div className="knowledge-sources">
               <h4>Sources</h4>
               {result.sources.map((s, i) => (
                 <div key={i} className="knowledge-source-item">
-                  <span className="knowledge-source-name">{s.name}</span>
+                  <span className="knowledge-source-name">
+                    {s.n ? `[${s.n}] ` : ''}{s.name}{s.heading ? ` › ${s.heading}` : ''}
+                    {result.mode === 'model' && result.cited?.includes(s.n) ? ' · cited' : ''}
+                  </span>
                   <span className="knowledge-source-snippet muted">{s.snippet}</span>
                 </div>
               ))}

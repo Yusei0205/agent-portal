@@ -284,3 +284,8 @@ The Integrations page has two parts. **Connected services** is an overview of si
 - **Old records:** documents and diagrams made before this fix came from the demo engine; use Refresh (or Delete) on them.
 - **Still true:** the agent can only read a repository the portal can clone. A Git connection that uses temporary AWS keys stops working when they expire (the repository shows `error` with a 403 from CodeCommit): update the keys under Connect › Git connections.
 
+### Knowledge Ask: how it answers
+- **Before:** Search and Ask were keyword-only. Ask pasted the first 500 characters of the top 5 documents under "Based on the project documents".
+- **Now:** the keyword index still finds the documents (`searchDocs`), but `server/knowledge-answer.ts` reads their Markdown, cuts it into passages under their headings, and ranks the passages by the question's words. Search shows the matching lines (with the heading). Ask gives the best 6 passages, numbered, to a model through `callTextModel` (the credential and model chosen on the Ask tab, else the person's default sign-in; a Kiro sign-in runs as a short session, so the first answer takes about 15 to 20 seconds) with instructions to answer only from them and cite `[n]`. The answer lists its sources, marking the cited ones.
+- **No sign-in or model failure:** Ask falls back to returning the matching passages themselves, with a note saying why. Matching is still by exact words, so a question with none of the document's words finds nothing.
+

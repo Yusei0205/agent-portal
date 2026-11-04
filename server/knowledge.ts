@@ -23,6 +23,7 @@ import { emit } from './events.ts';
 import { convertToMarkdown } from './convert.ts';
 import { getProjectRepository } from './repositories/projects.ts';
 import { getKnowledgeRepository } from './repositories/knowledge.ts';
+import { splitPassages, rankPassages, excerptAround, ASK_SYSTEM, buildAskUser, citedNumbers, type Passage } from './knowledge-answer.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -144,6 +145,19 @@ async function processKnowledgeDoc(
 }
 
 // ── Route registration ────────────────────────────────────────────────────────
+
+/** The passages of the given documents that best match a question (their Markdown is read from storage). */
+async function passagesFor(slug: string, docs: Array<{ docId: string; name: string }>, question: string, limit: number): Promise<Passage[]> {
+  const all: Passage[] = [];
+  for (const d of docs) {
+    const abs = knowledgeDir(slug, `docs/md/${d.docId}.md`);
+    try {
+      if (!(await restoreFile(abs))) continue;
+      all.push(...splitPassages(d.docId, d.name, fs.readFileSync(abs, 'utf8')));
+    } catch { /* a document that cannot be read is skipped */ }
+  }
+  return rankPassages(all, question, limit);
+}
 
 export function registerKnowledgeRoutes(): void {
   registerBackgroundJob('knowledge-process', async (a) => {
@@ -271,7 +285,14 @@ export function registerKnowledgeRoutes(): void {
       }
 
       const results = await getKnowledgeRepository().searchDocs(req.params.id, q, 20);
-      sendJson(res, 200, { results });
+      // Show the lines that matched instead of the start of the document (for the first few results).
+      const head = results.slice(0, 8);
+      const best = await passagesFor(project.slug, head.map((r) => ({ docId: r.docId, name: r.name })), q, 40);
+      const withSnippets = results.map((r) => {
+        const hit = best.find((p) => p.docId === r.docId);
+        return hit ? { ...r, snippet: excerptAround(hit.text, q), heading: hit.heading || undefined } : r;
+      });
+      sendJson(res, 200, { results: withSnippets });
     },
   );
 
@@ -283,18 +304,38 @@ export function registerKnowledgeRoutes(): void {
     const body = req.body as Record<string, unknown>;
     const question = str(body.question, 'question', { max: 2000 });
 
-    const sources = await getKnowledgeRepository().searchDocs(req.params.id, question, 5).catch(() => []);
-
-    if (!sources.length) {
+    // 1. The keyword index finds the documents that use the question's words.
+    const candidates = await getKnowledgeRepository().searchDocs(req.params.id, question, 6).catch(() => []);
+    if (!candidates.length) {
       sendJson(res, 200, { answer: null, needsTeam: true });
       return;
     }
+    // 2. Their passages are ranked by the same words; the best few are what a model reads.
+    let passages = await passagesFor(project.slug, candidates.map((c) => ({ docId: c.docId, name: c.name })), question, 6);
+    if (!passages.length) {
+      passages = candidates.slice(0, 5).map((c) => ({ docId: c.docId, docName: c.name, heading: '', text: c.snippet }));
+    }
+    const sources = passages.map((p, i) => ({ n: i + 1, docId: p.docId, name: p.docName, heading: p.heading || undefined, snippet: excerptAround(p.text, question, 360) }));
 
-    const answer =
-      `Based on the project documents:\n\n` +
-      sources.map((s) => `**${s.name}**: ${s.snippet}`).join('\n\n');
-
-    sendJson(res, 200, { answer, sources });
+    // 3. A model answers from those passages only and cites them. Without a usable sign-in the passages themselves are the answer.
+    try {
+      const { callTextModel } = await import('./testing/model-provider.ts');
+      const credentialId = typeof body.credentialId === 'string' && body.credentialId.trim() ? body.credentialId.trim() : null;
+      const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
+      const reply = (await callTextModel(ASK_SYSTEM, buildAskUser(question, passages), {
+        createdBy: req.user!.id, credentialId, model, maxTokens: 1200,
+      })).trim();
+      if (!reply) throw new Error('The model returned no answer.');
+      const used = citedNumbers(reply, passages.length);
+      sendJson(res, 200, { answer: reply, mode: 'model', sources, cited: used });
+      return;
+    } catch (e) {
+      const why = String((e as { message?: string })?.message ?? e).slice(0, 200);
+      const answer =
+        `Based on the project documents:\n\n` +
+        sources.map((x) => `**${x.name}${x.heading ? ` › ${x.heading}` : ''}**: ${x.snippet}`).join('\n\n');
+      sendJson(res, 200, { answer, mode: 'passages', sources, cited: [], note: `No model answered (${why}). These are the matching passages.` });
+    }
   });
 
   // GET /api/projects/:id/knowledge/decisions
