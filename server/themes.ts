@@ -34,6 +34,7 @@ import cyberHudJson from '../shared/themes/cyber-hud.json' with { type: 'json' }
 import twilightJson from '../shared/themes/twilight.json' with { type: 'json' };
 import terminalJson from '../shared/themes/terminal.json' with { type: 'json' };
 import kiroIdeJson from '../shared/themes/kiro-ide.json' with { type: 'json' };
+import graphiteJson from '../shared/themes/graphite.json' with { type: 'json' };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -497,6 +498,7 @@ export const CYBER_HUD: ThemeTemplate = cyberHudJson as unknown as ThemeTemplate
 export const TWILIGHT: ThemeTemplate = twilightJson as unknown as ThemeTemplate;
 export const TERMINAL: ThemeTemplate = terminalJson as unknown as ThemeTemplate;
 export const KIRO_IDE: ThemeTemplate = kiroIdeJson as unknown as ThemeTemplate;
+export const GRAPHITE: ThemeTemplate = graphiteJson as unknown as ThemeTemplate;
 export const BUILTIN_THEMES: ReadonlyMap<string, ThemeTemplate> = new Map([
   [AETHRIX_NIGHT.id, AETHRIX_NIGHT],
   [CLASSIC_TEAL.id, CLASSIC_TEAL],
@@ -507,6 +509,7 @@ export const BUILTIN_THEMES: ReadonlyMap<string, ThemeTemplate> = new Map([
   [TWILIGHT.id, TWILIGHT],
   [TERMINAL.id, TERMINAL],
   [KIRO_IDE.id, KIRO_IDE],
+  [GRAPHITE.id, GRAPHITE],
 ]);
 
 const BUILTIN_ETAGS: ReadonlyMap<string, string> = new Map(

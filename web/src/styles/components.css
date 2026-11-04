@@ -1981,4 +1981,5 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 
 /* Connect hub: the tab's own page sits flush under the tab bar */
 .connect-hub .page { padding: 0; max-width: none; }
-.connect-panel { padding-top: 18px; }
+.connect-panel { padding-top: 0; }
+.connect-hub .section-head { margin: 14px 0 12px; }

@@ -14,6 +14,7 @@ import cyberHudJson     from '../../../../shared/themes/cyber-hud.json';
 import twilightJson     from '../../../../shared/themes/twilight.json';
 import terminalJson     from '../../../../shared/themes/terminal.json';
 import kiroIdeJson      from '../../../../shared/themes/kiro-ide.json';
+import graphiteJson     from '../../../../shared/themes/graphite.json';
 
 // ── Font family name → full CSS stack ────────────────────────────────────────
 // Covers every name in the server validator allow-list.
@@ -150,3 +151,4 @@ registerTemplate(cyberHudJson);
 registerTemplate(twilightJson);
 registerTemplate(terminalJson);
 registerTemplate(kiroIdeJson);
+registerTemplate(graphiteJson);
