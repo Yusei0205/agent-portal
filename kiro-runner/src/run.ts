@@ -261,6 +261,57 @@ function extractText(content: unknown): string {
   }).join('');
 }
 
+// ── Warm kiro-cli (one per machine) ───────────────────────────────────────────
+//
+// An AgentCore machine serves one portal session, and the portal sends every chat message to it as its own run.
+// Starting kiro-cli, signing in, creating an ACP session and putting the repositories in place for each message
+// is slow and gives the agent no memory of the earlier messages. So after a run that went well the kiro-cli process
+// and its ACP session are kept, and the next message is simply another `session/prompt` on it.
+// A fresh start happens when the machine is new (idle for 5 minutes), the repositories or integrations changed,
+// the browser is on (its tools are started with the session), or the last run failed or timed out.
+
+interface WarmKiro {
+  child: ReturnType<typeof spawn>;
+  acp: AcpClient;
+  acpSessionId: string;
+  workDir: string;
+  kiroHome: string;
+  authTmpDir: string;
+  defaultDbPath: string;
+  fingerprint: string;
+  model?: string;
+  expiresAtBefore: unknown;
+  exited: boolean;
+  exitCode: number | null;
+  /** Folder browser-mcp drops live-view frames in (browser sessions only); lives as long as kiro-cli. */
+  liveDir: string | null;
+  startedAt: number;
+  /** The cloud browser session kiro-cli opened, announced again to the portal on each later message. */
+  browserSession: Record<string, unknown> | null;
+  /** Where the events of the message being worked on go; replaced at the start of each message. */
+  emit: EmitFn;
+  stderr: { tail: string };
+}
+
+let warm: WarmKiro | null = null;
+
+function waitForExit(w: WarmKiro, ms: number): Promise<number | null> {
+  if (w.exited) return Promise.resolve(w.exitCode);
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { try { w.child.kill('SIGKILL'); } catch { /* ok */ } }, ms);
+    w.child.once('close', (code) => { clearTimeout(t); resolve(code); });
+  });
+}
+
+async function disposeKiro(w: WarmKiro): Promise<void> {
+  if (warm === w) warm = null;
+  try { w.acp.close(); } catch { /* ok */ }
+  await waitForExit(w, 5_000);
+  for (const dir of [w.authTmpDir, w.workDir, w.kiroHome, ...(w.liveDir ? [w.liveDir] : [])]) {
+    fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* non-fatal */ });
+  }
+}
+
 // ── Run entry point ───────────────────────────────────────────────────────────
 
 export async function runKiroRun(
@@ -272,109 +323,135 @@ export async function runKiroRun(
   const invokeStart = Date.now();
   const { token, prompt, runId } = payload;
 
+  const fingerprint = JSON.stringify({ repos: payload.repos ?? null, mcp: payload.mcpServers ?? null, browser: Boolean(payload.browser) });
+  // A cloud browser session lasts 15 minutes, so a browser session's kiro-cli is restarted after 12.
+  const browserExpired = Boolean(payload.browser) && warm !== null && Date.now() - warm.startedAt > 12 * 60_000;
+  if (warm && (browserExpired || warm.exited || warm.fingerprint !== fingerprint)) await disposeKiro(warm);
+
+  let w: WarmKiro | null = warm;
+  const continuing = w !== null;
+  let keep = false;
   let authTmpDir: string | undefined;
   let workDir: string | undefined;
   let kiroHome: string | undefined;
 
   try {
-    const authResult = await materialiseKiroAuthDb(token);
-    authTmpDir = authResult.tmpDir;
-    const dbPath = authResult.dbPath;
+    if (!w) {
+      const authResult = await materialiseKiroAuthDb(token);
+      authTmpDir = authResult.tmpDir;
+      const dbPath = authResult.dbPath;
 
-    workDir = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-work-${runId}-`));
-    kiroHome = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-home-${runId}-`));
+      workDir = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-work-${runId}-`));
+      kiroHome = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-home-${runId}-`));
 
-    // The session's repositories, under repos/ in the agent's work folder
-    if (payload.repos?.length) {
-      const parsed = parseRunnerRepos(payload.repos);
-      if (parsed.ok) await restoreWorkspace(parseSnapshot(payload.snapshot), usablePersistRoot(PERSIST_ROOT), (ev) => emit(ev));
-      if (parsed.ok) await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: kiroHome });
-      else emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
+      // The session's repositories, under repos/ in the agent's work folder
+      if (payload.repos?.length) {
+        const parsed = parseRunnerRepos(payload.repos);
+        if (parsed.ok) await restoreWorkspace(parseSnapshot(payload.snapshot), usablePersistRoot(PERSIST_ROOT), (ev) => emit(ev));
+        if (parsed.ok) await cloneRunnerRepos(parsed.repos, workDir, (ev) => emit(ev), { persistRoot: PERSIST_ROOT, homeDir: kiroHome });
+        else emit({ type: 'status', text: `Repositories were not cloned: ${parsed.error}` });
+      }
+
+      // Place the DB at the default location for kiro-cli-chat.
+      // kiro-cli-chat (the ACP backend) reads from $HOME/.local/share/kiro-cli/data.sqlite3
+      // and does NOT honour KIRO_TEST_DB_PATH. We use kiroHome as HOME so kiro-cli-chat
+      // finds the token without touching the portal machine's real kiro-cli session.
+      const kiroDataDir = path.join(kiroHome, '.local', 'share', 'kiro-cli');
+      await fsp.mkdir(kiroDataDir, { recursive: true });
+      const defaultDbPath = path.join(kiroDataDir, 'data.sqlite3');
+      await fsp.copyFile(dbPath, defaultDbPath);
+
+      const liveDir = payload.browser ? await fsp.mkdtemp(path.join(os.tmpdir(), 'browser-live-')) : null;
+
+      emit({ type: 'status', text: 'kiro-cli ACP starting…' });
+
+      // Build child env — set HOME to isolated temp dir; DO NOT set KIRO_TEST_DB_PATH
+      // (kiro-cli-chat ignores it; we use the real default path instead)
+      const childEnv: Record<string, string> = Object.fromEntries(
+        Object.entries(process.env as Record<string, string | undefined>)
+          .filter(([k, v]) => v !== undefined
+            && k !== 'KIRO_CLI_SKIP_SETUP'
+            && k !== 'KIRO_CLI_NO_MODIFY_PATH'
+            && k !== KIRO_TEST_DB_ENV)
+          .map(([k, v]) => [k, v as string]),
+      );
+      childEnv.HOME = kiroHome;
+      childEnv.USERPROFILE = kiroHome;
+      // XDG_DATA_HOME must point into kiroHome so kiro-cli-chat finds the DB
+      childEnv.XDG_DATA_HOME = path.join(kiroHome, '.local', 'share');
+
+      const child = spawn('kiro-cli', ['acp'], {
+        cwd: workDir,
+        env: childEnv,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const acp = createAcpClient(child);
+      const made: WarmKiro = {
+        child, acp, acpSessionId: '', workDir, kiroHome, authTmpDir, defaultDbPath, fingerprint,
+        expiresAtBefore: token.expiresAt, exited: false, exitCode: null, liveDir, startedAt: Date.now(), browserSession: null, emit, stderr: { tail: '' },
+      };
+      w = made;
+
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk: string) => {
+        made.stderr.tail = (made.stderr.tail + chunk).slice(-4_000);
+      });
+      child.on('close', (code) => { made.exited = true; made.exitCode = code; });
+      child.on('error', (e: NodeJS.ErrnoException) => {
+        if (e.code === 'ENOENT') made.emit({ type: 'error', message: 'kiro-cli not found. Check container image.' });
+        else made.emit({ type: 'error', message: `kiro-cli spawn error: ${e.message}` });
+      });
+
+      acp.onNotification((method, params) => {
+        if (method !== 'session/update') return;
+        const p = params as { update?: SessionUpdatePayload };
+        const update = p?.update;
+        if (!update) return;
+        switch (update.sessionUpdate) {
+          case 'agent_message_chunk': {
+            const text = extractText(update.content);
+            if (text) made.emit({ type: 'text', text });
+            break;
+          }
+          case 'agent_thought_chunk': {
+            const text = extractText(update.content);
+            if (text) made.emit({ type: 'thought', text });
+            break;
+          }
+          case 'tool_call':
+            made.emit({ type: 'tool', name: update.title ?? update.name ?? 'Tool' });
+            break;
+        }
+      });
+
+      // Auto-allow all tool calls (trusted run in spike)
+      acp.onServerRequest(async (_method, params, _id) => {
+        const p = params as { options?: Array<{ optionId: string; kind: string }> };
+        const allowOpt = (p?.options ?? []).find(o => o.kind === 'allow_once' || o.kind === 'allow_always');
+        // ACP wants the choice wrapped as an outcome; a bare optionId is rejected ("missing field outcome").
+        return { outcome: { outcome: 'selected', optionId: allowOpt?.optionId ?? (p?.options ?? [])[0]?.optionId ?? 'allow_once' } };
+      });
+    } else {
+      w.emit = emit;
+      emit({ type: 'status', text: 'Continuing in the same kiro-cli session.' });
+      if (w.browserSession) emit({ type: 'browser-session', ...w.browserSession });
     }
 
-    // Place the DB at the default location for kiro-cli-chat.
-    // kiro-cli-chat (the ACP backend) reads from $HOME/.local/share/kiro-cli/data.sqlite3
-    // and does NOT honour KIRO_TEST_DB_PATH. We use kiroHome as HOME so kiro-cli-chat
-    // finds the token without touching the portal machine's real kiro-cli session.
-    const kiroDataDir = path.join(kiroHome, '.local', 'share', 'kiro-cli');
-    await fsp.mkdir(kiroDataDir, { recursive: true });
-    const defaultDbPath = path.join(kiroDataDir, 'data.sqlite3');
-    await fsp.copyFile(dbPath, defaultDbPath);
-
-    const expiresAtBefore = token.expiresAt;
-    emit({ type: 'status', text: 'kiro-cli ACP starting…' });
-
-    // Build child env — set HOME to isolated temp dir; DO NOT set KIRO_TEST_DB_PATH
-    // (kiro-cli-chat ignores it; we use the real default path instead)
-    const childEnv: Record<string, string> = Object.fromEntries(
-      Object.entries(process.env as Record<string, string | undefined>)
-        .filter(([k, v]) => v !== undefined
-          && k !== 'KIRO_CLI_SKIP_SETUP'
-          && k !== 'KIRO_CLI_NO_MODIFY_PATH'
-          && k !== KIRO_TEST_DB_ENV)
-        .map(([k, v]) => [k, v as string]),
-    );
-    childEnv.HOME = kiroHome;
-    childEnv.USERPROFILE = kiroHome;
-    // XDG_DATA_HOME must point into kiroHome so kiro-cli-chat finds the DB
-    childEnv.XDG_DATA_HOME = path.join(kiroHome, '.local', 'share');
-
-    const child = spawn('kiro-cli', ['acp'], {
-      cwd: workDir,
-      env: childEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stderrBuf = '';
-    child.stderr?.setEncoding('utf8');
-    child.stderr?.on('data', (chunk: string) => {
-      stderrBuf = (stderrBuf + chunk).slice(-4_000);
-    });
-
+    const run = w;
     const TIMEOUT_MS = 29 * 60_000; // just under the AgentCore maxLifetime (30 min)
     let timedOut = false;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      emit({ type: 'status', text: 'kiro-cli ACP wall-clock timeout (5 min). Terminating.' });
-      try { child.kill('SIGTERM'); } catch { /* ok */ }
-      setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ok */ } }, 3_000).unref();
+      emit({ type: 'status', text: 'kiro-cli ACP wall-clock timeout. Terminating.' });
+      try { run.child.kill('SIGTERM'); } catch { /* ok */ }
+      setTimeout(() => { try { run.child.kill('SIGKILL'); } catch { /* ok */ } }, 3_000).unref();
     }, TIMEOUT_MS);
 
-    const acp = createAcpClient(child);
-
-    acp.onNotification((method, params) => {
-      if (method !== 'session/update') return;
-      const p = params as { update?: SessionUpdatePayload };
-      const update = p?.update;
-      if (!update) return;
-      switch (update.sessionUpdate) {
-        case 'agent_message_chunk': {
-          const text = extractText(update.content);
-          if (text) emit({ type: 'text', text });
-          break;
-        }
-        case 'agent_thought_chunk': {
-          const text = extractText(update.content);
-          if (text) emit({ type: 'thought', text });
-          break;
-        }
-        case 'tool_call':
-          emit({ type: 'tool', name: update.title ?? update.name ?? 'Tool' });
-          break;
-      }
-    });
-
-    // Auto-allow all tool calls (trusted run in spike)
-    acp.onServerRequest(async (_method, params, _id) => {
-      const p = params as { options?: Array<{ optionId: string; kind: string }> };
-      const allowOpt = (p?.options ?? []).find(o => o.kind === 'allow_once' || o.kind === 'allow_always');
-      // ACP wants the choice wrapped as an outcome; a bare optionId is rejected ("missing field outcome").
-      return { outcome: { outcome: 'selected', optionId: allowOpt?.optionId ?? (p?.options ?? [])[0]?.optionId ?? 'allow_once' } };
-    });
+    const acp = run.acp;
 
     // Live Browser view: browser-mcp (a child of kiro-cli) drops a small picture in this folder after each action;
     // it is forwarded to the portal as browser events and never reaches the model.
-    const liveDir = payload.browser ? await fsp.mkdtemp(path.join(os.tmpdir(), 'browser-live-')) : null;
+    const liveDir = run.liveDir;
     let draining = false;
     const drainFrames = async (): Promise<void> => {
       if (!liveDir || draining) return;
@@ -386,7 +463,7 @@ export async function runKiroRun(
           const file = path.join(liveDir, n);
           try {
             const item = JSON.parse(await fsp.readFile(file, 'utf8')) as { url?: string; jpegBase64?: string; session?: Record<string, unknown> };
-            if (item.session) emit({ type: 'browser-session', ...item.session });
+            if (item.session) { run.browserSession = item.session; emit({ type: 'browser-session', ...item.session }); }
             else last = item;
           } catch { /* half written */ }
           await fsp.rm(file, { force: true });
@@ -399,48 +476,52 @@ export async function runKiroRun(
 
     let acpError: Error | undefined;
     try {
-      // ACP handshake
-      await acp.sendRequest('initialize', {
-        protocolVersion: '0.1',
-        capabilities: {},
-        clientInfo: { name: 'kiro-runner', version: '1.0' },
-      });
-      acp.sendNotification('notifications/initialized');
+      if (!continuing) {
+        // ACP handshake
+        await acp.sendRequest('initialize', {
+          protocolVersion: '0.1',
+          capabilities: {},
+          clientInfo: { name: 'kiro-runner', version: '1.0' },
+        });
+        acp.sendNotification('notifications/initialized');
 
-      // New session
-      // AgentCore Browser tools, served by dist/browser-mcp.mjs (started by kiro-cli on demand). The child gets
-      // the AWS credential variables explicitly because kiro-cli does not pass its own environment on.
-      const browserMcp = payload.browser
-        ? [{
-            name: 'browser',
-            command: 'node',
-            args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'browser-mcp.mjs')],
-            env: [...(liveDir ? [{ name: 'BROWSER_LIVE_DIR', value: liveDir }] : []), ...['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
-              'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
-              .filter((k) => process.env[k])
-              .map((k) => ({ name: k, value: process.env[k] as string }))],
-          }]
-        : [];
-      // Remote MCP integrations: each one runs behind a local stdio proxy that keeps its headers out of kiro-cli's
-      // config and hides write tools unless the integration allows them.
-      const proxyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs');
-      const integrationMcp = parseMcpServers(payload.mcpServers).map((s) => ({
-        name: s.name,
-        command: 'node',
-        args: [proxyPath],
-        env: [{ name: 'MCP_PROXY_SPEC', value: JSON.stringify(s) }],
-      }));
-      const sessionResult = await acp.sendRequest('session/new', {
-        cwd: workDir,
-        mcpServers: [...browserMcp, ...integrationMcp],
-      }) as { sessionId?: string };
-      const sessionId = sessionResult?.sessionId ?? '';
-      if (!sessionId) throw new Error('kiro-cli ACP did not return a sessionId');
+        // New session
+        // AgentCore Browser tools, served by dist/browser-mcp.mjs (started by kiro-cli on demand). The child gets
+        // the AWS credential variables explicitly because kiro-cli does not pass its own environment on.
+        const browserMcp = payload.browser
+          ? [{
+              name: 'browser',
+              command: 'node',
+              args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'browser-mcp.mjs')],
+              env: [...(liveDir ? [{ name: 'BROWSER_LIVE_DIR', value: liveDir }] : []), ...['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+                'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
+                .filter((k) => process.env[k])
+                .map((k) => ({ name: k, value: process.env[k] as string }))],
+            }]
+          : [];
+        // Remote MCP integrations: each one runs behind a local stdio proxy that keeps its headers out of kiro-cli's
+        // config and hides write tools unless the integration allows them.
+        const proxyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs');
+        const integrationMcp = parseMcpServers(payload.mcpServers).map((s) => ({
+          name: s.name,
+          command: 'node',
+          args: [proxyPath],
+          env: [{ name: 'MCP_PROXY_SPEC', value: JSON.stringify(s) }],
+        }));
+        const sessionResult = await acp.sendRequest('session/new', {
+          cwd: run.workDir,
+          mcpServers: [...browserMcp, ...integrationMcp],
+        }) as { sessionId?: string };
+        run.acpSessionId = sessionResult?.sessionId ?? '';
+        if (!run.acpSessionId) throw new Error('kiro-cli ACP did not return a sessionId');
+      }
+      const sessionId = run.acpSessionId;
 
       // The model the person chose. A model that cannot be set is reported and the run goes on with kiro's own default.
-      if (payload.model) {
+      if (payload.model && payload.model !== run.model) {
         try {
           await acp.sendRequest('session/set_model', { sessionId, modelId: payload.model });
+          run.model = payload.model;
           emit({ type: 'status', text: `Model: ${payload.model}` });
         } catch (e) {
           emit({ type: 'status', text: `Could not use model ${payload.model} (${String((e as Error)?.message ?? e).slice(0, 120)}); using kiro's default.` });
@@ -456,20 +537,17 @@ export async function runKiroRun(
       acpError = e as Error;
     } finally {
       clearTimeout(timeoutTimer);
-      acp.close();
       if (frameTimer) clearInterval(frameTimer);
       await drainFrames();
-      if (liveDir) await fsp.rm(liveDir, { recursive: true, force: true }).catch(() => undefined);
     }
 
-    const exitCode = await new Promise<number | null>((resolve) => {
-      child.on('error', (e: NodeJS.ErrnoException) => {
-        if (e.code === 'ENOENT') emit({ type: 'error', message: 'kiro-cli not found. Check container image.' });
-        else emit({ type: 'error', message: `kiro-cli spawn error: ${e.message}` });
-        resolve(null);
-      });
-      child.on('close', (code) => resolve(code));
-    });
+    // Keep kiro-cli for the next message only after a clean run without the browser.
+    const mustClose = Boolean(acpError) || timedOut || run.exited;
+    let exitCode: number | null = 0;
+    if (mustClose) {
+      try { acp.close(); } catch { /* ok */ }
+      exitCode = await waitForExit(run, 5_000);
+    }
 
     if (acpError) {
       emit({ type: 'error', message: `ACP error: ${acpError.message.slice(0, 500)}` });
@@ -477,13 +555,13 @@ export async function runKiroRun(
 
     const durationMs = Date.now() - invokeStart;
     // After run: detect token refresh by comparing what's in the DB now
-    const tokenAfter = readTokenFromDb(defaultDbPath);
+    const tokenAfter = readTokenFromDb(run.defaultDbPath);
     const tokenRefreshed = Boolean(
-      tokenAfter && tokenAfter.access_token && tokenAfter.expires_at !== expiresAtBefore,
+      tokenAfter && tokenAfter.access_token && tokenAfter.expires_at !== run.expiresAtBefore,
     );
 
     process.stdout.write(JSON.stringify({
-      event: 'run_complete', runId, exitCode, durationMs, coldStartMs,
+      event: 'run_complete', runId, exitCode, durationMs, coldStartMs, continued: continuing,
       tokenRefreshed, timedOut, acpError: acpError?.message?.slice(0, 200),
       prompt_preview: prompt.slice(0, 200) + (prompt.length > 200 ? '…' : ''),
     }) + '\n');
@@ -491,14 +569,14 @@ export async function runKiroRun(
     // Loop sessions: run the check steps where the code is and report the result for the next iteration.
     if (payload.checks?.length) {
       try {
-        emit({ type: 'check-result', ...(await runCheckSteps(payload.checks as never, workDir)) });
+        emit({ type: 'check-result', ...(await runCheckSteps(payload.checks as never, run.workDir)) });
       } catch (e) {
         emit({ type: 'check-result', ok: false, ranAt: new Date().toISOString(), steps: [{ step: 'checks', ok: false, output: String((e as Error)?.message ?? e).slice(0, 500), durationMs: 0, required: true }] });
       }
     }
 
     // Send back the files kiro wrote in the work folder, within size limits.
-    try { emitRunnerFiles(workDir, emit); } catch { /* best effort */ }
+    try { emitRunnerFiles(run.workDir, emit); } catch { /* best effort */ }
 
     emit({
       type: 'result',
@@ -514,12 +592,19 @@ export async function runKiroRun(
           ...(tokenAfter.refresh_token ? { refreshToken: tokenAfter.refresh_token } : {}),
         },
       } : {}),
-      stderrTail: (exitCode !== 0 || acpError) ? stderrBuf.trim().slice(-500) : undefined,
+      stderrTail: (exitCode !== 0 || acpError) ? run.stderr.tail.trim().slice(-500) : undefined,
     });
 
+    if (!mustClose) {
+      keep = true;
+      warm = run;
+    }
   } finally {
-    for (const dir of ([authTmpDir, workDir, kiroHome] as Array<string | undefined>)) {
-      if (dir) fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* non-fatal */ });
+    if (!keep) {
+      if (w) await disposeKiro(w);
+      else for (const dir of ([authTmpDir, workDir, kiroHome] as Array<string | undefined>)) {
+        if (dir) fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* non-fatal */ });
+      }
     }
   }
 }

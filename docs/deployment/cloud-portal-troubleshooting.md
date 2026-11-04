@@ -262,3 +262,8 @@ The Integrations page has two parts. **Connected services** is an overview of si
 - **Cause:** `agent-runner/src/run.ts` only forwarded the SDK's finished `assistant` messages, so text reached the portal once per message.
 - **Fix:** the runner now sets `includePartialMessages: true` and forwards each `text_delta` as `assistant-text` with `stream: true` (and `thinking_delta` as `thought`); the finished message's text is skipped when it was already streamed, and `server/claude-agentcore.ts` passes `stream` through so the viewer joins the pieces. Needs runner image `br-202611058` (stack `AgentPortalSpikeA`) and a portal deploy. A warm runner machine keeps the old image until it goes idle (5 minutes), so use a new session to test.
 
+### Every Kiro chat message restarted kiro-cli
+- **Symptom:** each message in a Kiro session showed "kiro-cli ACP starting…" again and was slow to begin; the repositories were put in place again each time.
+- **Cause:** `kiro-runner/src/run.ts` started `kiro-cli acp`, created an ACP session and closed everything at the end of every message.
+- **Fix:** after a run that went well, the runner keeps the kiro-cli process and its ACP session (`warm`), and the next message is only a `session/prompt` ("Continuing in the same kiro-cli session." in the status lines). A fresh start happens when the machine is new (idle 5 minutes), the repositories, integrations or browser setting changed, the last run failed or timed out, or the process is older than 12 minutes in a browser session (a cloud browser session lasts 15 minutes; the browser-session event is announced again on each message so the live view still finds it). Needs runner image `br-2026110511` (stack `AgentPortalSpikeB`); a warm machine keeps the old image until idle.
+
