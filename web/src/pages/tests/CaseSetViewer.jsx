@@ -31,6 +31,8 @@ import { GenerationTracker, StepTimeline } from './GenerationTracker.jsx';
 import { buildCurl, prettyBody } from '../../lib/curlBuilder.js';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import './tests-cases.css';
+import { AgentRunDialog, AgentRunHistory } from './AgentRunPanel.jsx';
+import { InfoTip } from '../../components/InfoTip.jsx';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -768,6 +770,8 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [editRow, setEditRow]   = useState(null); // case row to edit
   const [showAdd, setShowAdd]   = useState(false);
+  const [agentRunOpen, setAgentRunOpen] = useState(false);
+  const [historyOpen, setHistoryOpen]   = useState(false);
 
   // Resume failed/interrupted generation
   const [resuming, setResuming] = useState(false);
@@ -1170,6 +1174,21 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
           </button>
         )}
 
+        {!isRunning && cases.length > 0 && (
+          <>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setAgentRunOpen(true)} aria-label="Run the test cases with an agent">
+              <Icon name="agents" size={13} /> Run with agent
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setHistoryOpen(true)} aria-label="Open the run history">
+              <Icon name="clock" size={13} /> Run history
+            </button>
+            <InfoTip title="Run these cases with an agent" align="end">
+              An agent performs the test cases in a browser against your app and fills in each case's Status and Remarks.
+              <span className="info-tip-line">Run history keeps every run with how many cases passed, failed or were blocked, and a CSV of its results.</span>
+            </InfoTip>
+          </>
+        )}
+
         {(isDone || cases.length > 0) ? (
           <a
             href={exportUrl}
@@ -1182,6 +1201,26 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
           </a>
         ) : null}
       </div>
+
+      {agentRunOpen && (
+        <AgentRunDialog
+          projectId={projectId}
+          testProjectId={testProject.id}
+          caseSetId={caseSetId}
+          cases={cases}
+          onClose={() => setAgentRunOpen(false)}
+          onStarted={() => { setAgentRunOpen(false); setHistoryOpen(true); }}
+        />
+      )}
+      {historyOpen && (
+        <AgentRunHistory
+          projectId={projectId}
+          testProjectId={testProject.id}
+          caseSetId={caseSetId}
+          onClose={() => setHistoryOpen(false)}
+          onChanged={load}
+        />
+      )}
 
       {/* Generation steps panel (finished / failed) */}
       {showTrace && (

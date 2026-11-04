@@ -83,7 +83,7 @@
   padding: 16px;
 }
 .dialog {
-  background: var(--panel);
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   width: 100%;

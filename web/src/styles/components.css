@@ -659,7 +659,8 @@ input[type="radio"]:disabled {
   z-index: 200;
 }
 .modal {
-  background: var(--panel);
+  /* Glass themes make --panel see-through: lay it over the opaque canvas so the text never mixes with the page behind. */
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
   border: 1px solid var(--line);
   border-radius: var(--radius-xl, var(--radius-lg));
   padding: 24px;
@@ -2066,4 +2067,17 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 .tests-toolbar-item { display: inline-flex; align-items: center; gap: 2px; }
 .tests-intro { margin: 0 0 10px; display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .ws-placeholder p.muted.small { max-width: 520px; text-align: center; margin-inline: auto; }
+
+/* Tests: agent runs of a case set */
+.arun-history { max-width: 860px; width: 94vw; max-height: 88vh; overflow: auto; display: grid; gap: 12px; }
+.arun-summary { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.arun-summary > div { display: grid; gap: 2px; }
+.arun-summary > .btn { margin-left: auto; }
+.arun-counts { display: inline-flex; gap: 10px; flex-wrap: wrap; font-size: 0.84rem; }
+.arun-n { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.arun-pass { color: var(--ok); font-weight: 600; }
+.arun-fail { color: var(--danger); font-weight: 600; }
+.arun-blocked { color: var(--warn); font-weight: 600; }
+.arun-live { display: inline-flex; gap: 6px; align-items: center; color: var(--accent); }
+.arun-scope { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 

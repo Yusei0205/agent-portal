@@ -289,6 +289,15 @@ async function handleArtifactLifecycle(
   const wf = await getWorkflowRow(workflowId);
   const workDir = wf ? String(wf.work_dir ?? '') : '';
 
+  // An agent's run of test cases: read its results into the sheet and the history.
+  try {
+    const { isCaseRunWorkflow, finishCaseRun } = await import('./testing/case-runs.ts');
+    if (await isCaseRunWorkflow(workflowId)) {
+      await finishCaseRun(workflowId, workDir, event);
+      return;
+    }
+  } catch (e) { console.warn('[case-runs] could not close the run:', e instanceof Error ? e.message : e); }
+
   const projectId = wf?.project_id ? String(wf.project_id) : null;
   const diagrams = projectId ? ((await getDiagramRepository().listByProject(projectId)) as unknown as Row[]) : [];
   const gdocs = projectId ? ((await getGeneratedDocRepository().listByProject(projectId)) as unknown as Row[]) : [];

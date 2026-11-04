@@ -10,6 +10,7 @@ import { registerScriptRoutes } from './scripts.ts';
 import { registerRunRoutes } from './runner.ts';
 import { registerGenerateRoutes } from './generate.ts';
 import { registerCaseSetRoutes } from './case-sets.ts';
+import { registerCaseRunRoutes } from './case-runs.ts';
 
 export { setModelCallFn } from './generate.ts';
 export { extractJsonArray } from './generate.ts';
@@ -27,6 +28,7 @@ export function registerTestingRoutes(): void {
   registerRunRoutes();
   registerGenerateRoutes();
   registerCaseSetRoutes();
+  registerCaseRunRoutes();
 }
 
 // ── M25 migration SQL ──────────────────────────────────────────────────────────
