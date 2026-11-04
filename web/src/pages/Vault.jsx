@@ -456,6 +456,9 @@ function ProjectScopeTab({ projectId }) {
 
   // Bulk select only files visible in the current folder
   const bulk = useBulkSelect(filesHere);
+  // Folders ticked in the current view (by full path). A folder is virtual: ticking one means every file inside it.
+  const [folderSel, setFolderSel] = useState(() => new Set());
+  useEffect(() => { setFolderSel(new Set()); }, [currentFolder]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -505,6 +508,19 @@ function ProjectScopeTab({ projectId }) {
     const totalSize = contained.reduce((s, f) => s + (f.size_bytes || 0), 0);
     return { name: seg, fullPath, count: contained.length, totalSize };
   });
+
+  const filesInFolder = (fullPath) => allFiles.filter((f) => f.folder === fullPath || (f.folder && f.folder.startsWith(`${fullPath}/`)));
+  const toggleFolder = (fullPath) => setFolderSel((prev) => {
+    const next = new Set(prev);
+    if (next.has(fullPath)) next.delete(fullPath); else next.add(fullPath);
+    return next;
+  });
+  const allFoldersSelected = childFolders.length > 0 && childFolders.every((f) => folderSel.has(f.fullPath));
+  const someFoldersSelected = folderSel.size > 0 && !allFoldersSelected;
+  const toggleAllFolders = () => setFolderSel(allFoldersSelected ? new Set() : new Set(childFolders.map((f) => f.fullPath)));
+  const clearSelection = () => { bulk.clearAll(); setFolderSel(new Set()); };
+  // One count for the bar: ticked files plus ticked folders.
+  const combinedSelected = new Set([...bulk.selected, ...[...folderSel].map((p) => `folder:${p}`)]);
 
   // ── Breadcrumb ────────────────────────────────────────────────────────────
 
@@ -578,23 +594,51 @@ function ProjectScopeTab({ projectId }) {
     }
   };
 
-  const handleBulkDelete = async () => {
-    const n = bulk.selected.size;
-    if (!await requestConfirm(
-      `Delete ${n} file${n === 1 ? '' : 's'}? This cannot be undone.`,
-      'Delete', 'danger',
-    )) return;
+  // Delete the given files (a folder's files, ticked files, or both) in batches the server accepts.
+  const runDelete = async (ids) => {
     setBulkBusy(true);
-    const ids = [...bulk.selected];
+    let deleted = 0;
+    let skipped = 0;
     try {
-      await api.post(`/api/projects/${projectId}/vault/delete`, { fileIds: ids });
-      setAllFiles((prev) => prev.filter((x) => !ids.includes(x.id)));
-      bulk.clearAll();
+      for (let i = 0; i < ids.length; i += 500) {
+        const r = await api.post(`/api/projects/${projectId}/vault/delete`, { fileIds: ids.slice(i, i + 500), skipOthers: true });
+        deleted += r.deleted ?? 0;
+        skipped += r.skipped ?? 0;
+      }
+      toast(
+        `Deleted ${deleted} file${deleted === 1 ? '' : 's'}${skipped ? `; ${skipped} left because someone else uploaded ${skipped === 1 ? 'it' : 'them'}` : ''}`,
+        skipped ? 'info' : 'ok',
+      );
     } catch (err) {
       toast(err.message || 'Delete failed', 'error');
     } finally {
+      clearSelection();
       setBulkBusy(false);
+      await load();
     }
+  };
+
+  const handleBulkDelete = async () => {
+    const folders = [...folderSel];
+    const ids = [...new Set([...bulk.selected, ...folders.flatMap((p) => filesInFolder(p).map((f) => f.id))])];
+    const parts = [];
+    if (folders.length) parts.push(`${folders.length} folder${folders.length === 1 ? '' : 's'}`);
+    if (bulk.selected.size) parts.push(`${bulk.selected.size} file${bulk.selected.size === 1 ? '' : 's'}`);
+    const total = `${ids.length} file${ids.length === 1 ? '' : 's'}`;
+    if (!await requestConfirm(
+      `Delete ${parts.join(' and ')}${folders.length ? ` (${total} in all, including everything inside the folders)` : ''}? This cannot be undone.`,
+      'Delete', 'danger',
+    )) return;
+    await runDelete(ids);
+  };
+
+  const deleteFolder = async (folder) => {
+    const ids = filesInFolder(folder.fullPath).map((f) => f.id);
+    if (!await requestConfirm(
+      `Delete the folder "${folder.name}" and the ${ids.length} file${ids.length === 1 ? '' : 's'} inside it? This cannot be undone.`,
+      'Delete', 'danger',
+    )) return;
+    await runDelete(ids);
   };
 
   const handleBulkMove = async (folder) => {
@@ -692,11 +736,21 @@ function ProjectScopeTab({ projectId }) {
         </div>
       )}
 
+      <div style={{ position: 'relative' }}>
       {/* Folders table */}
       {childFolders.length > 0 && (
         <table className="data-table" aria-label="Sub-folders">
           <thead>
             <tr>
+              <th style={{ width: 32 }}>
+                <input
+                  type="checkbox"
+                  aria-label="Select all folders"
+                  checked={allFoldersSelected}
+                  ref={(el) => { if (el) el.indeterminate = someFoldersSelected; }}
+                  onChange={toggleAllFolders}
+                />
+              </th>
               <th>Folder</th>
               <th>Files</th>
               <th>Total size</th>
@@ -706,6 +760,14 @@ function ProjectScopeTab({ projectId }) {
           <tbody>
             {childFolders.map((folder) => (
               <tr key={folder.fullPath} className="vault-folder-row">
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select folder ${folder.name}`}
+                    checked={folderSel.has(folder.fullPath)}
+                    onChange={() => toggleFolder(folder.fullPath)}
+                  />
+                </td>
                 <td>
                   <button
                     type="button"
@@ -729,6 +791,15 @@ function ProjectScopeTab({ projectId }) {
                       title="Download folder as ZIP"
                     >
                       <Icon name="zip-download" size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => deleteFolder(folder)}
+                      aria-label={`Delete folder ${folder.name} and its files`}
+                      title="Delete folder and its files"
+                    >
+                      <Icon name="trash" size={14} />
                     </button>
                   </div>
                 </td>
@@ -803,36 +874,39 @@ function ProjectScopeTab({ projectId }) {
               ))}
             </tbody>
           </table>
-          <BulkActionBar
-            selected={bulk.selected}
-            onDelete={handleBulkDelete}
-            onClear={bulk.clearAll}
-            busy={bulkBusy}
-            noun="file"
-            extraActions={
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={() => setShowMoveDialog(true)}
-                disabled={bulkBusy}
-                aria-label={`Move ${bulk.selected.size} selected file${bulk.selected.size === 1 ? '' : 's'} to a folder`}
-              >
-                <Icon name="folder" size={13} />
-                Move to…
-              </button>
-            }
-          />
-          {showMoveDialog && (
-            <MoveFolderDialog
-              allFiles={allFiles}
-              currentFolder={currentFolder}
-              busy={bulkBusy}
-              onMove={handleBulkMove}
-              onClose={() => setShowMoveDialog(false)}
-            />
-          )}
         </div>
       )}
+      <BulkActionBar
+        selected={combinedSelected}
+        onDelete={handleBulkDelete}
+        onClear={clearSelection}
+        busy={bulkBusy}
+        noun="item"
+        extraActions={
+          bulk.selected.size > 0 && folderSel.size === 0 ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setShowMoveDialog(true)}
+              disabled={bulkBusy}
+              aria-label={`Move ${bulk.selected.size} selected file${bulk.selected.size === 1 ? '' : 's'} to a folder`}
+            >
+              <Icon name="folder" size={13} />
+              Move to…
+            </button>
+          ) : null
+        }
+      />
+      {showMoveDialog && (
+        <MoveFolderDialog
+          allFiles={allFiles}
+          currentFolder={currentFolder}
+          busy={bulkBusy}
+          onMove={handleBulkMove}
+          onClose={() => setShowMoveDialog(false)}
+        />
+      )}
+      </div>
     </div>
   );
 }

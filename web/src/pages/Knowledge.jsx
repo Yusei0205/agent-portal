@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon.jsx';
 import { Learn } from './Learn.jsx';
 import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 import { KnowledgeSearchSetup } from '../components/KnowledgeSearchSetup.jsx';
+import { KnowledgeDocViewer } from '../components/KnowledgeDocViewer.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useBulkSelect } from '../lib/useBulkSelect.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
@@ -28,7 +29,7 @@ function StatusBadge({ status }) {
 
 // ── Documents tab ─────────────────────────────────────────────────────────────
 
-function DocumentsTab({ projectId }) {
+function DocumentsTab({ projectId, onOpenDoc }) {
   const [docs, setDocs] = useState([]);
   const { sorted: sortedDocs, sortProps } = useSort(docs, { name: (doc) => doc.name, type: (doc) => doc.mime_type, size: (doc) => doc.size_bytes, status: (doc) => doc.status, uploaded: (doc) => doc.created_at });
   const [loading, setLoading] = useState(true);
@@ -178,7 +179,11 @@ function DocumentsTab({ projectId }) {
                       onChange={() => bulk.toggle(doc.id)}
                     />
                   </td>
-                  <td>{doc.name}</td>
+                  <td>
+                    {doc.status === 'ready'
+                      ? <button type="button" className="link-btn" onClick={() => onOpenDoc({ docId: doc.id, name: doc.name })} title="Read the document">{doc.name}</button>
+                      : doc.name}
+                  </td>
                   <td><span className="muted">{doc.mime_type || '—'}</span></td>
                   <td>{formatBytes(doc.size_bytes)}</td>
                   <td><StatusBadge status={doc.status} /></td>
@@ -213,7 +218,7 @@ function DocumentsTab({ projectId }) {
 
 // ── Search tab ────────────────────────────────────────────────────────────────
 
-function SearchTab({ projectId }) {
+function SearchTab({ projectId, onOpenDoc }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -279,6 +284,9 @@ function SearchTab({ projectId }) {
         <div key={i} className="knowledge-result-card">
           <div className="knowledge-result-name">{r.name}{r.heading ? ` › ${r.heading}` : ""}</div>
           <p className="knowledge-result-snippet">{highlight(r.snippet)}</p>
+          <button type="button" className="btn btn-sm" onClick={() => onOpenDoc({ docId: r.docId, name: r.name, passage: r.passage || r.snippet, heading: r.heading })}>
+            Open document
+          </button>
         </div>
       ))}
     </div>
@@ -289,7 +297,7 @@ const VIA_LABEL = { keyword: 'keywords', embeddings: 'meaning and keywords', kb:
 
 // ── Ask tab ───────────────────────────────────────────────────────────────────
 
-function AskTab({ projectId }) {
+function AskTab({ projectId, onOpenDoc }) {
   const [question, setQuestion] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -367,6 +375,9 @@ function AskTab({ projectId }) {
                     {result.mode === 'model' && result.cited?.includes(s.n) ? ' · cited' : ''}
                   </span>
                   <span className="knowledge-source-snippet muted">{s.snippet}</span>
+                  <button type="button" className="link-btn" onClick={() => onOpenDoc({ docId: s.docId, name: s.name, passage: s.passage || s.snippet, heading: s.heading })}>
+                    Open in the document
+                  </button>
                 </div>
               ))}
             </div>
@@ -449,6 +460,7 @@ const TABS = [
 export function Knowledge({ projectId }) {
   const [tab, setTab] = useState('docs');
   const [setupOpen, setSetupOpen] = useState(false);
+  const [viewer, setViewer] = useState(null); // { docId, name, passage?, heading? }
 
   return (
     <div className="page">
@@ -459,6 +471,7 @@ export function Knowledge({ projectId }) {
         </button>
       </PageHeader>
       {setupOpen && <KnowledgeSearchSetup projectId={projectId} onClose={() => setSetupOpen(false)} />}
+      {viewer && <KnowledgeDocViewer projectId={projectId} {...viewer} onClose={() => setViewer(null)} />}
 
       <div className="tab-bar" role="tablist" aria-label="Knowledge sections">
         {TABS.map((t) => (
@@ -476,9 +489,9 @@ export function Knowledge({ projectId }) {
       </div>
 
       <div className="tab-content">
-        {tab === 'docs'      && <DocumentsTab  projectId={projectId} />}
-        {tab === 'search'    && <SearchTab     projectId={projectId} />}
-        {tab === 'ask'       && <AskTab        projectId={projectId} />}
+        {tab === 'docs'      && <DocumentsTab  projectId={projectId} onOpenDoc={setViewer} />}
+        {tab === 'search'    && <SearchTab     projectId={projectId} onOpenDoc={setViewer} />}
+        {tab === 'ask'       && <AskTab        projectId={projectId} onOpenDoc={setViewer} />}
         {tab === 'decisions' && <DecisionsTab  projectId={projectId} />}
         {tab === 'learn'     && <Learn         projectId={projectId} />}
       </div>

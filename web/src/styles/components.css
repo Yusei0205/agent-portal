@@ -2028,3 +2028,11 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 .kss-option-head .badge { justify-self: start; }
 .kss-option-head strong { display: inline; }
 
+/* Knowledge: reading a document with the referred passage highlighted */
+.kdv-modal { max-width: 860px; width: 94vw; max-height: 88vh; display: flex; flex-direction: column; gap: 10px; }
+.kdv-body { overflow-y: auto; overflow-x: hidden; padding: 4px 0 12px; min-height: 0; }
+.kdv-block { padding: 2px 12px; border-left: 3px solid transparent; border-radius: 4px; overflow-wrap: anywhere; }
+.kdv-block.is-hit { background: color-mix(in srgb, var(--warn) 24%, transparent); border-left-color: var(--accent); }
+.kdv-block table { display: block; overflow-x: auto; }
+.kdv-note { margin: 0; }
+

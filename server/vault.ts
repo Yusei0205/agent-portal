@@ -408,29 +408,36 @@ export function registerVaultRoutes(): void {
 
       const fileIds = rawIds.map(String);
       const projectId = req.params.id;
+      // Deleting a folder sends every file in it: with skipOthers, files of someone else (and files already gone)
+      // are left out and counted, instead of refusing the whole request.
+      const skipOthers = body.skipOthers === true;
 
       const vaultFiles: VaultFileRecord[] = [];
+      let skipped = 0;
       for (const id of fileIds) {
         const vf = await getVaultFilesRepository().getById(id);
         if (!vf || vf.project_id !== projectId) {
+          if (skipOthers) { skipped++; continue; }
           sendJson(res, 404, { error: `File not found: ${id}` });
           return;
         }
         if (vf.user_id && vf.user_id !== req.user!.id && !req.user!.is_admin) {
+          if (skipOthers) { skipped++; continue; }
           sendJson(res, 403, { error: 'You can only delete your own files' });
           return;
         }
         vaultFiles.push(vf);
       }
 
-      await getVaultFilesRepository().bulkDelete(fileIds);
+      if (vaultFiles.length) await getVaultFilesRepository().bulkDelete(vaultFiles.map((v) => v.id));
 
       for (const vf of vaultFiles) {
         const absPath = path.join(config.dataDir, vf.path);
         try { fs.rmSync(absPath, { force: true }); } catch { /* non-fatal */ }
+        await forgetFile(absPath).catch(() => {});
       }
 
-      sendJson(res, 200, { deleted: fileIds.length });
+      sendJson(res, 200, { deleted: vaultFiles.length, skipped });
     },
   );
 

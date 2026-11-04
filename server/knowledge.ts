@@ -281,6 +281,32 @@ export function registerKnowledgeRoutes(): void {
     },
   );
 
+  // GET /api/projects/:id/knowledge/docs/:docId/content: the document's text (as converted), to read in the portal
+  router.get(
+    '/api/projects/:id/knowledge/docs/:docId/content',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireMember(req, res, req.params.id);
+      if (!project) return;
+      const doc = await getKnowledgeRepository().getDocById(req.params.docId);
+      if (!doc || doc.project_id !== req.params.id) { sendJson(res, 404, { error: 'Document not found' }); return; }
+      if (doc.status !== 'ready') { sendJson(res, 409, { error: 'The document is not ready yet.' }); return; }
+      const abs = knowledgeDir(project.slug, `docs/md/${doc.id}.md`);
+      let markdown = '';
+      try {
+        if (await restoreFile(abs)) markdown = fs.readFileSync(abs, 'utf8');
+      } catch { /* reported below */ }
+      if (!markdown) { sendJson(res, 404, { error: 'The converted text of this document is not available.' }); return; }
+      const LIMIT = 400_000;
+      sendJson(res, 200, {
+        id: doc.id,
+        name: doc.original_name || doc.name,
+        mimeType: doc.mime_type,
+        markdown: markdown.slice(0, LIMIT),
+        truncated: markdown.length > LIMIT,
+      });
+    },
+  );
+
   // GET /api/projects/:id/knowledge/search?q=
   router.get(
     '/api/projects/:id/knowledge/search',
@@ -303,7 +329,7 @@ export function registerKnowledgeRoutes(): void {
         for (const p of found.passages) {
           if (seen.has(p.docId)) continue;
           seen.add(p.docId);
-          docs.push({ docId: p.docId, name: p.docName, snippet: excerptAround(p.text, q), heading: p.heading || undefined });
+          docs.push({ docId: p.docId, name: p.docName, snippet: excerptAround(p.text, q), heading: p.heading || undefined, passage: p.text });
         }
         sendJson(res, 200, { results: docs, via: found.via, note: found.note });
         return;
@@ -315,7 +341,7 @@ export function registerKnowledgeRoutes(): void {
       const best = await passagesFor(project.slug, head.map((r) => ({ docId: r.docId, name: r.name })), q, 40);
       const withSnippets = results.map((r) => {
         const hit = best.find((p) => p.docId === r.docId);
-        return hit ? { ...r, snippet: excerptAround(hit.text, q), heading: hit.heading || undefined } : r;
+        return hit ? { ...r, snippet: excerptAround(hit.text, q), heading: hit.heading || undefined, passage: hit.text } : r;
       });
       sendJson(res, 200, { results: withSnippets });
     },
@@ -336,7 +362,7 @@ export function registerKnowledgeRoutes(): void {
       return;
     }
     const passages = found.passages;
-    const sources = passages.map((p, i) => ({ n: i + 1, docId: p.docId, name: p.docName, heading: p.heading || undefined, snippet: excerptAround(p.text, question, 360) }));
+    const sources = passages.map((p, i) => ({ n: i + 1, docId: p.docId, name: p.docName, heading: p.heading || undefined, snippet: excerptAround(p.text, question, 360), passage: p.text }));
 
     // 2. (the passages are numbered so the answer can cite them)
     // 3. A model answers from those passages only and cites them. Without a usable sign-in the passages themselves are the answer.
