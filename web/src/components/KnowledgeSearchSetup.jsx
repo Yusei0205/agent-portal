@@ -23,7 +23,10 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
   const base = `/api/projects/${projectId}/knowledge/search-setup`;
   const [info, setInfo] = useState(null);
   const [choice, setChoice] = useState('keyword');
-  const [kbForm, setKbForm] = useState({ knowledgeBaseId: '', dataSourceId: '', region: 'ap-southeast-1' });
+  const [kbName, setKbName] = useState('');
+  const [existing, setExisting] = useState(null); // null = not loaded; else the Knowledge Bases of the account
+  const [pick, setPick] = useState({}); // knowledgeBaseId -> chosen dataSourceId
+  const [linkNote, setLinkNote] = useState(null);
   const [busy, setBusy] = useState(null); // 'index' | 'sync' | 'test:<backend>' | 'save'
   const [test, setTest] = useState({});
   const [error, setError] = useState(null);
@@ -67,12 +70,39 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
     const r = await api.post(`${base}/test`, { backend });
     setTest((t) => ({ ...t, [backend]: r }));
   });
-  const createKb = () => run('create', async () => { await api.post('/api/knowledge-base', {}); await load(); });
-  const removeKb = () => run('remove', async () => { await api.delete('/api/knowledge-base'); setConfirmRemove(false); await load(); });
+  const loadExisting = () => run('list', async () => {
+    const r = await api.get('/api/knowledge-base');
+    setExisting(r.knowledgeBases || []);
+    setPick((cur) => {
+      const next = { ...cur };
+      for (const k of r.knowledgeBases || []) if (!next[k.knowledgeBaseId]) next[k.knowledgeBaseId] = (k.dataSources.find((d) => d.reads) || k.dataSources[0])?.dataSourceId || '';
+      return next;
+    });
+  });
+  const createKb = async () => {
+    setBusy('create');
+    setError(null);
+    setLinkNote(null);
+    try {
+      await api.post('/api/knowledge-base', { name: kbName || info.kb.defaultName });
+      await load();
+    } catch (e) {
+      setError(e.message || 'Could not create the Knowledge Base');
+      // A name that is taken: show what exists, so one of those can be used instead.
+      if (e.status === 409 || /already exists|being deleted/i.test(e.message || '')) { try { setExisting((await api.get('/api/knowledge-base')).knowledgeBases || []); } catch { /* the error above stays */ } }
+    } finally {
+      setBusy(null);
+    }
+  };
+  const linkKb = (k) => run(`link:${k.knowledgeBaseId}`, async () => {
+    const r = await api.post('/api/knowledge-base/link', { knowledgeBaseId: k.knowledgeBaseId, dataSourceId: pick[k.knowledgeBaseId] || undefined });
+    setLinkNote(r.warning || null);
+    await load();
+  });
+  const removeKb = () => run('remove', async () => { await api.delete('/api/knowledge-base'); setConfirmRemove(false); setExisting(null); await load(); });
   const [confirmRemove, setConfirmRemove] = useState(false);
   const save = () => run('save', async () => {
     const body = { backend: choice };
-    if (choice === 'kb' && !info.kb.configured) body.kb = kbForm;
     await api.put(base, body);
     onChanged?.(choice);
     onClose();
@@ -81,7 +111,7 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
   const total = info?.total ?? 0;
   const kb = info?.kb;
   const needsIndex = choice === 'embeddings' && info && total > 0 && info.embeddings.indexed === 0;
-  const needsKb = choice === 'kb' && info && !kb.configured && !(!kb.creatable && kbForm.knowledgeBaseId && kbForm.dataSourceId);
+  const needsKb = choice === 'kb' && info && !kb.configured;
   const sync = kb?.sync;
 
   return (
@@ -131,7 +161,8 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
                   <>
                     <p className="small">
                       Knowledge Base <code>{kb.knowledgeBaseId}</code> · data source <code>{kb.dataSourceId}</code> · {kb.region}
-                      <span className="muted"> ({kb.source === 'shared' ? 'shared by all projects' : 'entered by hand'})</span>
+                      {kb.name && <> · <strong>{kb.name}</strong></>}
+                      <span className="muted"> ({kb.owned ? 'created by the portal, shared by all projects' : 'linked, shared by all projects'})</span>
                     </p>
                     <p className="small"><strong>{kb.copied}</strong> of {total} document{total === 1 ? '' : 's'} copied to the data source
                       {sync ? <> · last sync <strong>{sync.status.toLowerCase().replace('_', ' ')}</strong>{sync.documents ? `, ${sync.documents.indexed} indexed, ${sync.documents.failed} failed` : ''}</> : ' · not synced yet'}
@@ -147,52 +178,79 @@ export function KnowledgeSearchSetup({ projectId, onClose, onChanged }) {
                     </div>
                     <Result r={test.kb} />
                     <p className="field-hint">The Knowledge Base reads documents only when it syncs. Uploads start a sync automatically once this is chosen; a sync takes a minute or two.</p>
-                    {kb.source === 'shared' && info.canAdminister && (
+                    {info.canAdminister && (
                       <p className="field-hint">
                         {confirmRemove ? (
-                          <>Remove the shared Knowledge Base for <strong>all projects</strong>? Their documents are kept; projects using it fall back to keywords.{' '}
-                            <button type="button" className="link-btn" onClick={removeKb} disabled={busy !== null}>{busy === 'remove' ? 'Removing…' : 'Yes, remove it'}</button>{' · '}
+                          <>{kb.owned
+                            ? <>Delete this Knowledge Base in AWS for <strong>all projects</strong>? Their documents are kept; projects using it fall back to keywords. AWS takes a minute or two to finish deleting.</>
+                            : <>Stop using this Knowledge Base for <strong>all projects</strong>? It is not deleted in AWS; projects using it fall back to keywords.</>}{' '}
+                            <button type="button" className="link-btn" onClick={removeKb} disabled={busy !== null}>{busy === 'remove' ? 'Working…' : kb.owned ? 'Yes, delete it' : 'Yes, unlink it'}</button>{' · '}
                             <button type="button" className="link-btn" onClick={() => setConfirmRemove(false)}>Keep it</button></>
                         ) : (
-                          <button type="button" className="link-btn" onClick={() => setConfirmRemove(true)}>Remove the shared Knowledge Base…</button>
+                          <button type="button" className="link-btn" onClick={() => setConfirmRemove(true)}>{kb.owned ? 'Delete the shared Knowledge Base…' : 'Unlink this Knowledge Base…'}</button>
                         )}
                       </p>
                     )}
-                  </>
-                ) : kb.creatable ? (
-                  <>
-                    <p className="small">
-                      There is no Knowledge Base yet. One is created for the whole portal and shared by every project: each project's documents carry
-                      their project's label, and a search only asks for its own. Creating it takes about a minute and costs nothing until documents are synced.
-                    </p>
-                    <div className="kss-actions">
-                      <button type="button" className="btn btn-sm btn-primary" onClick={createKb} disabled={busy !== null || !info.canAdminister}>
-                        {busy === 'create' ? 'Creating… (about a minute)' : 'Create the shared Knowledge Base'}
-                      </button>
-                    </div>
-                    {!info.canAdminister && <p className="field-hint">Only an admin can create it. Ask one to open this popup and press the button.</p>}
+                    {linkNote && <p className="error-note" role="status">{linkNote}</p>}
                   </>
                 ) : (
                   <>
                     <p className="small">
-                      This portal's stack does not have the Knowledge Base prerequisites (vector index and role); deploy the latest stack to get a
-                      one-click setup, or enter the ids of a Knowledge Base you already have.
+                      No Knowledge Base is in use. One is shared by every project: each project's documents carry their project's label, and a search
+                      only asks for its own.
                     </p>
-                    <div className="kss-fields">
-                      <div className="field">
-                        <label htmlFor="kss-kb">Knowledge Base id</label>
-                        <input id="kss-kb" value={kbForm.knowledgeBaseId} onChange={(e) => setKbForm((f) => ({ ...f, knowledgeBaseId: e.target.value.trim() }))} placeholder="ABCDEFGHIJ" maxLength={10} spellCheck={false} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor="kss-ds">Data source id</label>
-                        <input id="kss-ds" value={kbForm.dataSourceId} onChange={(e) => setKbForm((f) => ({ ...f, dataSourceId: e.target.value.trim() }))} placeholder="KLMNOPQRST" maxLength={10} spellCheck={false} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor="kss-region">Region</label>
-                        <input id="kss-region" value={kbForm.region} onChange={(e) => setKbForm((f) => ({ ...f, region: e.target.value.trim() }))} />
-                      </div>
-                    </div>
-                    <p className="field-hint">The data source must read <code>kb/</code> in the portal's storage bucket, where the portal copies each document's Markdown.</p>
+                    {!info.canAdminister && <p className="field-hint">Only an admin can set it up. Ask one to open this popup.</p>}
+                    {info.canAdminister && (
+                      <>
+                        {kb.creatable && (
+                          <div className="kss-create">
+                            <div className="field">
+                              <label htmlFor="kss-name">Create a new Knowledge Base named</label>
+                              <input id="kss-name" value={kbName} onChange={(e) => setKbName(e.target.value.replace(/[^0-9a-zA-Z_-]/g, ''))} placeholder={kb.defaultName} maxLength={100} spellCheck={false} />
+                            </div>
+                            <div className="kss-actions">
+                              <button type="button" className="btn btn-sm btn-primary" onClick={createKb} disabled={busy !== null}>
+                                {busy === 'create' ? 'Creating… (about a minute)' : 'Create'}
+                              </button>
+                            </div>
+                            <p className="field-hint">Takes about a minute and costs nothing until documents are synced.</p>
+                          </div>
+                        )}
+                        <div className="kss-existing">
+                          <div className="kss-actions">
+                            <button type="button" className="btn btn-sm" onClick={loadExisting} disabled={busy !== null}>
+                              {busy === 'list' ? 'Looking…' : existing ? 'Refresh the list' : 'Use a Knowledge Base that already exists'}
+                            </button>
+                          </div>
+                          {existing && existing.length === 0 && <p className="field-hint">There are no Knowledge Bases in this account and region yet.</p>}
+                          {existing && existing.length > 0 && (
+                            <ul className="kss-kb-list">
+                              {existing.map((k) => (
+                                <li key={k.knowledgeBaseId} className="kss-kb-row">
+                                  <div className="kss-kb-main">
+                                    <strong>{k.name}</strong> <code>{k.knowledgeBaseId}</code>{' '}
+                                    <span className={`badge ${k.status === 'ACTIVE' ? 'badge-ok' : 'badge-warn'}`}>{k.status.toLowerCase()}</span>
+                                    {k.status === 'ACTIVE' && k.dataSources.length > 1 && (
+                                      <select aria-label={`Data source of ${k.name}`} value={pick[k.knowledgeBaseId] || ''} onChange={(e) => setPick((p) => ({ ...p, [k.knowledgeBaseId]: e.target.value }))}>
+                                        {k.dataSources.map((d) => <option key={d.dataSourceId} value={d.dataSourceId}>{d.name}{d.reads ? '' : ' (does not read the portal\'s copies)'}</option>)}
+                                      </select>
+                                    )}
+                                    {k.status === 'ACTIVE' && k.dataSources.length === 1 && (
+                                      <span className="muted small"> · {k.dataSources[0].where}{k.dataSources[0].reads ? '' : ' (does not read the portal\'s copies)'}</span>
+                                    )}
+                                    {k.status === 'ACTIVE' && k.dataSources.length === 0 && <span className="muted small"> · no data source yet; one will be added</span>}
+                                  </div>
+                                  <button type="button" className="btn btn-sm btn-primary" onClick={() => linkKb(k)} disabled={busy !== null || k.status !== 'ACTIVE'}>
+                                    {busy === `link:${k.knowledgeBaseId}` ? 'Linking…' : 'Use this one'}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          <p className="field-hint">A linked Knowledge Base is never deleted by the portal. Its data source should read <code>data/kb/</code> of the portal's storage bucket, where the portal copies each document.</p>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
               </div>

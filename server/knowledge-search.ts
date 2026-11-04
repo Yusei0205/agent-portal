@@ -29,7 +29,7 @@ import { getMemberRow, getProjectRow } from './project-access.ts';
 import { getKnowledgeRepository } from './repositories/knowledge.ts';
 import { splitPassages, rankPassages, type Passage } from './knowledge-answer.ts';
 import { embedTexts, indexDocument, forgetEmbeddings, searchEmbeddings, countIndexed, EMBED_MODEL } from './knowledge-embeddings.ts';
-import { sharedKb, kbCreatable, createSharedKb, deleteSharedKb, kbRetrieve, kbStartSync, kbSyncState, writeKbCopy, removeKbCopy, listKbCopies, type KbRef } from './knowledge-kb.ts';
+import { sharedKb, kbCreatable, createSharedKb, linkSharedKb, listKbs, deleteSharedKb, KbNameTaken, DEFAULT_KB_NAME, kbRetrieve, kbStartSync, kbSyncState, writeKbCopy, removeKbCopy, listKbCopies, type KbRef } from './knowledge-kb.ts';
 
 export type SearchBackend = 'keyword' | 'embeddings' | 'kb';
 export interface SearchConfig { backend: SearchBackend; kb?: KbRef }
@@ -208,6 +208,8 @@ export function registerKnowledgeSearchRoutes(): void {
       kbInfo = {
         configured: true,
         source: cfg.kb ? 'custom' : 'shared',
+        owned: kb.owned !== false,
+        name: kb.name ?? null,
         knowledgeBaseId: kb.knowledgeBaseId,
         dataSourceId: kb.dataSourceId,
         region: kb.region,
@@ -220,7 +222,7 @@ export function registerKnowledgeSearchRoutes(): void {
       backend: cfg.backend,
       total: docs.length,
       embeddings: { model: EMBED_MODEL, indexed: await countIndexed(project.slug, docs.map((d) => d.docId)) },
-      kb: { ...kbInfo, creatable: kbCreatable() && !kb },
+      kb: { ...kbInfo, creatable: kbCreatable() && !kb, defaultName: DEFAULT_KB_NAME },
       canAdminister: Boolean(req.user!.is_admin),
     });
   });
@@ -298,26 +300,53 @@ export function registerKnowledgeSearchRoutes(): void {
     }
   });
 
-  // The shared Knowledge Base: one for the whole portal, created and removed by an admin.
-  router.post('/api/knowledge-base', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
-    if (!req.user.is_admin) { sendJson(res, 403, { error: 'Only an admin can create the shared Knowledge Base.' }); return; }
+  // The shared Knowledge Base: one for the whole portal, created, linked and removed by an admin.
+  const adminOnly = (req: PortalRequest, res: PortalResponse, what: string): boolean => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
+    if (!req.user.is_admin) { sendJson(res, 403, { error: `Only an admin can ${what}.` }); return false; }
+    return true;
+  };
+
+  // The Knowledge Bases that exist in this account and region (to link one).
+  router.get('/api/knowledge-base', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!adminOnly(req, res, 'see the Knowledge Bases of the account')) return;
     try {
-      const kb = await createSharedKb();
-      try { appendAudit(null, req.user.id, 'knowledge.kb-create', kb.knowledgeBaseId, null, null); } catch { /* audit must not break a request */ }
+      sendJson(res, 200, { knowledgeBases: await listKbs(), defaultName: DEFAULT_KB_NAME });
+    } catch (e) {
+      sendJson(res, 502, { error: `Could not list the Knowledge Bases: ${msg(e)}` });
+    }
+  });
+
+  router.post('/api/knowledge-base', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!adminOnly(req, res, 'create the shared Knowledge Base')) return;
+    try {
+      const kb = await createSharedKb(String((req.body as { name?: unknown } | undefined)?.name ?? ''));
+      try { appendAudit(null, req.user!.id, 'knowledge.kb-create', kb.knowledgeBaseId, null, null); } catch { /* audit must not break a request */ }
       sendJson(res, 201, { knowledgeBaseId: kb.knowledgeBaseId, dataSourceId: kb.dataSourceId });
     } catch (e) {
+      if (e instanceof KbNameTaken) { sendJson(res, 409, { error: e.message, nameTaken: true, deleting: e.deleting }); return; }
       sendJson(res, 502, { error: msg(e) });
     }
   });
 
-  router.delete('/api/knowledge-base', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
-    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
-    if (!req.user.is_admin) { sendJson(res, 403, { error: 'Only an admin can remove the shared Knowledge Base.' }); return; }
+  router.post('/api/knowledge-base/link', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!adminOnly(req, res, 'link a Knowledge Base')) return;
+    const body = (req.body ?? {}) as { knowledgeBaseId?: unknown; dataSourceId?: unknown };
     try {
-      await deleteSharedKb();
-      try { appendAudit(null, req.user.id, 'knowledge.kb-delete', null, null, null); } catch { /* audit must not break a request */ }
-      sendJson(res, 200, { ok: true });
+      const { ref, warning } = await linkSharedKb(String(body.knowledgeBaseId ?? ''), body.dataSourceId ? String(body.dataSourceId) : undefined);
+      try { appendAudit(null, req.user!.id, 'knowledge.kb-link', ref.knowledgeBaseId, null, null); } catch { /* audit must not break a request */ }
+      sendJson(res, 200, { knowledgeBaseId: ref.knowledgeBaseId, dataSourceId: ref.dataSourceId, warning });
+    } catch (e) {
+      sendJson(res, 400, { error: msg(e) });
+    }
+  });
+
+  router.delete('/api/knowledge-base', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!adminOnly(req, res, 'remove the shared Knowledge Base')) return;
+    try {
+      const { deleted } = await deleteSharedKb();
+      try { appendAudit(null, req.user!.id, deleted ? 'knowledge.kb-delete' : 'knowledge.kb-unlink', null, null, null); } catch { /* audit must not break a request */ }
+      sendJson(res, 200, { ok: true, deleted });
     } catch (e) {
       sendJson(res, 502, { error: msg(e) });
     }

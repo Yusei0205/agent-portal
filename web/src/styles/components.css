@@ -2035,4 +2035,8 @@ th.th-sorted[data-dir='desc']::after { content: '↓'; }
 .kdv-block.is-hit { background: color-mix(in srgb, var(--warn) 24%, transparent); border-left-color: var(--accent); }
 .kdv-block table { display: block; overflow-x: auto; }
 .kdv-note { margin: 0; }
+.kss-create, .kss-existing { display: grid; gap: 8px; }
+.kss-kb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.kss-kb-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.kss-kb-main { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 

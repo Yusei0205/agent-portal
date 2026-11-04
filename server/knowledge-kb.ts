@@ -21,6 +21,9 @@ export interface KbRef {
   knowledgeBaseId: string;
   dataSourceId: string;
   region: string;
+  /** The portal created it (so removing it deletes it). A linked Knowledge Base is only unlinked, never deleted. */
+  owned?: boolean;
+  name?: string;
 }
 
 const SHARED_KEY = 'knowledge.kb';
@@ -33,7 +36,7 @@ export function sharedKb(): KbRef | null {
     const raw = getSetting(getDb(), SHARED_KEY);
     if (raw) {
       const v = JSON.parse(raw) as Partial<KbRef>;
-      if (v.knowledgeBaseId && v.dataSourceId) return { knowledgeBaseId: v.knowledgeBaseId, dataSourceId: v.dataSourceId, region: v.region || regionOf() };
+      if (v.knowledgeBaseId && v.dataSourceId) return { knowledgeBaseId: v.knowledgeBaseId, dataSourceId: v.dataSourceId, region: v.region || regionOf(), owned: v.owned !== false, ...(v.name ? { name: v.name } : {}) };
     }
   } catch { /* none saved */ }
   const knowledgeBaseId = process.env.PORTAL_KB_ID;
@@ -51,41 +54,112 @@ export function kbCreatable(): boolean {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Create the shared Knowledge Base and its data source, and remember them. Throws a message fit for the person. */
-export async function createSharedKb(): Promise<KbRef> {
-  if (sharedKb()) throw new Error('A Knowledge Base already exists.');
+const KB_NAME_RE = /^[0-9a-zA-Z_-]{1,100}$/;
+export const DEFAULT_KB_NAME = 'agent-portal-knowledge';
+
+const sourceConfig = () => ({
+  dataSourceConfiguration: { type: 'S3' as const, s3Configuration: { bucketArn: process.env.PORTAL_KB_BUCKET_ARN!, inclusionPrefixes: ['data/kb/'] } },
+  vectorIngestionConfiguration: { chunkingConfiguration: { chunkingStrategy: 'FIXED_SIZE' as const, fixedSizeChunkingConfiguration: { maxTokens: 300, overlapPercentage: 20 } } },
+});
+
+/** Thrown when a name is taken, so the caller can offer to link the existing one instead. */
+export class KbNameTaken extends Error {
+  constructor(public readonly kbName: string, public readonly deleting: boolean) {
+    super(deleting
+      ? `A Knowledge Base named "${kbName}" is still being deleted (Bedrock takes a minute or two). Wait a little, pick another name, or link another existing one.`
+      : `A Knowledge Base named "${kbName}" already exists. Link it instead, or pick another name.`);
+  }
+}
+
+export interface KbSummary {
+  knowledgeBaseId: string;
+  name: string;
+  status: string;
+  description: string;
+  dataSources: Array<{ dataSourceId: string; name: string; status: string; reads: boolean; where: string }>;
+}
+
+/** Whether a data source reads the folder the portal copies documents to (data/kb/ of its storage bucket). */
+function readsPortalCopies(bucketArn: string | undefined, prefixes: string[] | undefined): boolean {
+  if (!bucketArn || bucketArn !== process.env.PORTAL_KB_BUCKET_ARN) return false;
+  if (!prefixes?.length) return true;
+  return prefixes.some((p) => 'data/kb/'.startsWith(p) || p.startsWith('data/kb/'));
+}
+
+/** The Knowledge Bases of this account and region, with their data sources (for "use an existing one"). */
+export async function listKbs(): Promise<KbSummary[]> {
+  const { BedrockAgentClient, ListKnowledgeBasesCommand, ListDataSourcesCommand, GetDataSourceCommand } = await import('@aws-sdk/client-bedrock-agent');
+  const client = new BedrockAgentClient({ region: regionOf() });
+  const out: KbSummary[] = [];
+  let token: string | undefined;
+  do {
+    const page = await client.send(new ListKnowledgeBasesCommand({ maxResults: 50, nextToken: token }));
+    for (const k of page.knowledgeBaseSummaries ?? []) {
+      if (!k.knowledgeBaseId) continue;
+      const row: KbSummary = { knowledgeBaseId: k.knowledgeBaseId, name: k.name ?? k.knowledgeBaseId, status: String(k.status ?? ''), description: k.description ?? '', dataSources: [] };
+      if (row.status === 'ACTIVE' && out.length < 30) {
+        const list = await client.send(new ListDataSourcesCommand({ knowledgeBaseId: k.knowledgeBaseId, maxResults: 10 })).catch(() => null);
+        for (const d of list?.dataSourceSummaries ?? []) {
+          if (!d.dataSourceId) continue;
+          const detail = await client.send(new GetDataSourceCommand({ knowledgeBaseId: k.knowledgeBaseId, dataSourceId: d.dataSourceId })).catch(() => null);
+          const s3 = detail?.dataSource?.dataSourceConfiguration?.s3Configuration;
+          row.dataSources.push({
+            dataSourceId: d.dataSourceId,
+            name: d.name ?? d.dataSourceId,
+            status: String(d.status ?? ''),
+            reads: readsPortalCopies(s3?.bucketArn, s3?.inclusionPrefixes),
+            where: s3?.bucketArn ? `${s3.bucketArn.replace('arn:aws:s3:::', 's3://')}/${(s3.inclusionPrefixes ?? []).join(',')}` : 'not an S3 data source',
+          });
+        }
+      }
+      out.push(row);
+    }
+    token = page.nextToken;
+  } while (token && out.length < 100);
+  return out;
+}
+
+/** Create the shared Knowledge Base (with the name the admin chose) and its data source, and remember them. */
+export async function createSharedKb(nameIn?: string): Promise<KbRef> {
+  if (sharedKb()) throw new Error('A Knowledge Base is already in use. Remove or unlink it first.');
   if (!kbCreatable()) throw new Error('This deployment has no Knowledge Base prerequisites (vector index and role). Deploy the latest stack first.');
+  const name = (nameIn ?? '').trim() || DEFAULT_KB_NAME;
+  if (!KB_NAME_RE.test(name)) throw new Error('The name may use letters, digits, hyphens and underscores only (up to 100 characters).');
   const { BedrockAgentClient, CreateKnowledgeBaseCommand, GetKnowledgeBaseCommand, CreateDataSourceCommand, DeleteKnowledgeBaseCommand } = await import('@aws-sdk/client-bedrock-agent');
   const region = regionOf();
   const client = new BedrockAgentClient({ region });
 
-  const created = await client.send(new CreateKnowledgeBaseCommand({
-    name: 'agent-portal-knowledge',
-    description: 'Project documents of the Agent Portal, kept apart by project.',
-    roleArn: process.env.PORTAL_KB_ROLE_ARN!,
-    knowledgeBaseConfiguration: { type: 'VECTOR', vectorKnowledgeBaseConfiguration: { embeddingModelArn: process.env.PORTAL_KB_EMBED_MODEL_ARN! } },
-    storageConfiguration: { type: 'S3_VECTORS', s3VectorsConfiguration: { indexArn: process.env.PORTAL_KB_INDEX_ARN! } },
-  }));
-  const knowledgeBaseId = created.knowledgeBase?.knowledgeBaseId;
+  let knowledgeBaseId: string | undefined;
+  try {
+    const created = await client.send(new CreateKnowledgeBaseCommand({
+      name,
+      description: 'Project documents of the Agent Portal, kept apart by project.',
+      roleArn: process.env.PORTAL_KB_ROLE_ARN!,
+      knowledgeBaseConfiguration: { type: 'VECTOR', vectorKnowledgeBaseConfiguration: { embeddingModelArn: process.env.PORTAL_KB_EMBED_MODEL_ARN! } },
+      storageConfiguration: { type: 'S3_VECTORS', s3VectorsConfiguration: { indexArn: process.env.PORTAL_KB_INDEX_ARN! } },
+    }));
+    knowledgeBaseId = created.knowledgeBase?.knowledgeBaseId;
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'ConflictException' || /already exists/i.test(String((e as Error)?.message))) {
+      const existing = (await listKbs().catch(() => [])).find((k) => k.name === name);
+      throw new KbNameTaken(name, existing?.status === 'DELETING');
+    }
+    throw e;
+  }
   if (!knowledgeBaseId) throw new Error('Bedrock did not return a Knowledge Base id.');
 
   try {
     // The data source can only be added once the Knowledge Base is active (usually within half a minute).
     for (let i = 0; i < 25; i++) {
-      const s = (await client.send(new GetKnowledgeBaseCommand({ knowledgeBaseId }))).knowledgeBase?.status;
-      if (s === 'ACTIVE') break;
-      if (s === 'FAILED') throw new Error('The Knowledge Base could not be created (Bedrock reported FAILED).');
+      const st = (await client.send(new GetKnowledgeBaseCommand({ knowledgeBaseId }))).knowledgeBase?.status;
+      if (st === 'ACTIVE') break;
+      if (st === 'FAILED') throw new Error('The Knowledge Base could not be created (Bedrock reported FAILED).');
       await sleep(3000);
     }
-    const ds = await client.send(new CreateDataSourceCommand({
-      knowledgeBaseId,
-      name: 'project-documents',
-      dataSourceConfiguration: { type: 'S3', s3Configuration: { bucketArn: process.env.PORTAL_KB_BUCKET_ARN!, inclusionPrefixes: ['data/kb/'] } },
-      vectorIngestionConfiguration: { chunkingConfiguration: { chunkingStrategy: 'FIXED_SIZE', fixedSizeChunkingConfiguration: { maxTokens: 300, overlapPercentage: 20 } } },
-    }));
+    const ds = await client.send(new CreateDataSourceCommand({ knowledgeBaseId, name: 'project-documents', ...sourceConfig() }));
     const dataSourceId = ds.dataSource?.dataSourceId;
     if (!dataSourceId) throw new Error('Bedrock did not return a data source id.');
-    const ref: KbRef = { knowledgeBaseId, dataSourceId, region };
+    const ref: KbRef = { knowledgeBaseId, dataSourceId, region, owned: true, name };
     await setSetting(getDb(), SHARED_KEY, JSON.stringify(ref));
     return ref;
   } catch (e) {
@@ -95,15 +169,55 @@ export async function createSharedKb(): Promise<KbRef> {
   }
 }
 
-/** Remove the shared Knowledge Base and its data source (the documents themselves are not touched). */
-export async function deleteSharedKb(): Promise<void> {
+/**
+ * Use a Knowledge Base that already exists. It must be active; if it has no data source, one that reads the portal's
+ * copies is added. Returns a warning when the chosen data source does not read the folder the portal copies to.
+ */
+export async function linkSharedKb(knowledgeBaseId: string, dataSourceIdIn?: string): Promise<{ ref: KbRef; warning?: string }> {
+  if (sharedKb()) throw new Error('A Knowledge Base is already in use. Remove or unlink it first.');
+  if (!/^[A-Za-z0-9]{10}$/.test(knowledgeBaseId)) throw new Error('A Knowledge Base id is 10 letters and digits.');
+  const { BedrockAgentClient, GetKnowledgeBaseCommand, ListDataSourcesCommand, GetDataSourceCommand, CreateDataSourceCommand } = await import('@aws-sdk/client-bedrock-agent');
+  const region = regionOf();
+  const client = new BedrockAgentClient({ region });
+  const kb = (await client.send(new GetKnowledgeBaseCommand({ knowledgeBaseId }))).knowledgeBase;
+  if (!kb) throw new Error('That Knowledge Base was not found in this region.');
+  if (kb.status !== 'ACTIVE') throw new Error(`That Knowledge Base is ${String(kb.status).toLowerCase()}, not active.`);
+
+  let dataSourceId = dataSourceIdIn;
+  if (!dataSourceId) {
+    const list = await client.send(new ListDataSourcesCommand({ knowledgeBaseId, maxResults: 10 }));
+    const sources = list.dataSourceSummaries ?? [];
+    if (sources.length === 1) dataSourceId = sources[0].dataSourceId;
+    else if (sources.length > 1) throw new Error('That Knowledge Base has several data sources; choose one.');
+    else {
+      if (!kbCreatable()) throw new Error('That Knowledge Base has no data source, and this deployment cannot add one.');
+      const ds = await client.send(new CreateDataSourceCommand({ knowledgeBaseId, name: 'project-documents', ...sourceConfig() }));
+      dataSourceId = ds.dataSource?.dataSourceId;
+    }
+  }
+  if (!dataSourceId) throw new Error('No data source could be chosen.');
+  const detail = await client.send(new GetDataSourceCommand({ knowledgeBaseId, dataSourceId }));
+  const s3 = detail.dataSource?.dataSourceConfiguration?.s3Configuration;
+  const warning = readsPortalCopies(s3?.bucketArn, s3?.inclusionPrefixes)
+    ? undefined
+    : 'This data source does not read the portal\'s copies (data/kb/ in the storage bucket), so searches will find nothing until it does.';
+  const ref: KbRef = { knowledgeBaseId, dataSourceId, region, owned: false, name: kb.name };
+  await setSetting(getDb(), SHARED_KEY, JSON.stringify(ref));
+  return { ref, ...(warning ? { warning } : {}) };
+}
+
+/** Stop using the shared Knowledge Base. One the portal created is deleted; a linked one is only unlinked. */
+export async function deleteSharedKb(): Promise<{ deleted: boolean }> {
   const kb = sharedKb();
-  if (!kb) return;
-  const { BedrockAgentClient, DeleteDataSourceCommand, DeleteKnowledgeBaseCommand } = await import('@aws-sdk/client-bedrock-agent');
-  const client = new BedrockAgentClient({ region: kb.region });
-  await client.send(new DeleteDataSourceCommand({ knowledgeBaseId: kb.knowledgeBaseId, dataSourceId: kb.dataSourceId })).catch(() => {});
-  await client.send(new DeleteKnowledgeBaseCommand({ knowledgeBaseId: kb.knowledgeBaseId }));
+  if (!kb) return { deleted: false };
+  if (kb.owned !== false) {
+    const { BedrockAgentClient, DeleteDataSourceCommand, DeleteKnowledgeBaseCommand } = await import('@aws-sdk/client-bedrock-agent');
+    const client = new BedrockAgentClient({ region: kb.region });
+    await client.send(new DeleteDataSourceCommand({ knowledgeBaseId: kb.knowledgeBaseId, dataSourceId: kb.dataSourceId })).catch(() => {});
+    await client.send(new DeleteKnowledgeBaseCommand({ knowledgeBaseId: kb.knowledgeBaseId }));
+  }
   await setSetting(getDb(), SHARED_KEY, JSON.stringify(''));
+  return { deleted: kb.owned !== false };
 }
 
 // ── The document copies a data source reads ───────────────────────────────────

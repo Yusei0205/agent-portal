@@ -319,11 +319,13 @@ export class AgentPortalCloudStack extends cdk.Stack {
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: [
           'bedrock:CreateKnowledgeBase', 'bedrock:DeleteKnowledgeBase', 'bedrock:GetKnowledgeBase',
-          'bedrock:CreateDataSource', 'bedrock:DeleteDataSource', 'bedrock:GetDataSource',
+          'bedrock:CreateDataSource', 'bedrock:DeleteDataSource', 'bedrock:GetDataSource', 'bedrock:ListDataSources',
           'bedrock:Retrieve', 'bedrock:StartIngestionJob', 'bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs',
         ],
         resources: kbArns,
       }));
+      // Listing has no resource to name: it shows which Knowledge Bases exist, so an admin can link one.
+      fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock:ListKnowledgeBases'], resources: ['*'] }));
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['iam:PassRole'],
         resources: [kbRoleArn],
