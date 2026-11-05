@@ -425,6 +425,7 @@
 }
 
 .account-menu-item {
+  text-decoration: none;
   display: flex;
   align-items: center;
   gap: 8px;

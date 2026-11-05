@@ -52,6 +52,9 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   that holds the portal's own code (the sender's text is quoted to the agent as data, and the session asks before changes).
   The pull request that session opens is linked back to the feedback and shown to the sender; the admin approves or rejects
   it there. The merge itself happens on the git host.
+- **Help** (Portal › Help, also in the account menu and the command palette): the user guide inside the portal. One
+  topic per page, saying what it is for and how to use it, with a link to open that page, a search box, and direct links
+  to a topic (`#/help/<topic>`). The content is in `web/src/lib/help-content.js`.
 - **Workspaces** are named sets of repositories (and integrations) that a session can use as a
   group.
 - **Vault** holds files you upload once (documents, templates, test data). Every run gets a copy.

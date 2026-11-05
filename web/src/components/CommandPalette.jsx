@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { href, navigate } from '../lib/router.js';
 import { getTheme, setTheme } from '../lib/theme.js';
 import { Icon } from './Icon.jsx';
+import { HELP_TOPICS, plainText } from '../lib/help-content.js';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Page catalogue ────────────────────────────────────────────────────────────
@@ -45,6 +46,9 @@ function buildNavItems(route, user) {
   items.push(
     { id: 'goto_credentials', label: 'Agent sign-ins', description: 'Your Kiro and Claude accounts',   keys: 'g y', href: '#/connect/sign-ins' },
     { id: 'goto_config',      label: 'Agent setup',   description: 'Edit ~/.kiro, ~/.claude and ~/.aws config', keys: 'g x', href: '#/config'      },
+    { id: 'goto_help',        label: 'Help',          description: 'User guide to every feature of the portal', href: '#/help' },
+    // One entry per guide topic, so "help reviews" jumps straight to it
+    ...HELP_TOPICS.map((t) => ({ id: `help_${t.id}`, label: `Help: ${t.title}`, description: plainText(t.summary), href: `#/help/${t.id}` })),
   );
 
   return items;

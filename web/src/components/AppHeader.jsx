@@ -19,6 +19,7 @@ const PAGE_NAMES = {
   projects:     'Projects',
   inbox:        'Inbox',
   feedback:     'Feedback',
+  help:         'Help',
   connections:  'Connections',
   api:          'API access',
   users:        'Users',
@@ -158,6 +159,17 @@ function AccountMenu({ user, onSignOut, onOpenShortcuts }) {
             Keyboard shortcuts
             <kbd className="palette-key" style={{ marginLeft: 'auto' }}>?</kbd>
           </button>
+
+          {/* User guide */}
+          <a
+            role="menuitem"
+            className="account-menu-item"
+            href="#/help"
+            onClick={() => setOpen(false)}
+          >
+            <Icon name="help" size={15} />
+            Help &amp; user guide
+          </a>
 
           <div className="account-menu-divider" role="separator" />
 
