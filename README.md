@@ -17,6 +17,8 @@ A self-hosted web portal for running Claude agents on your projects. Built on th
   shared library, and a one-click test run.
 - **Learn**: documentation in a plain-language version and an engineering version, glossaries,
   FAQs, quizzes checked against their sources, onboarding paths and team progress.
+- **Feedback**: anyone signed in can send feedback and follow its status. Admins sort it in an
+  inbox and can send an item to an agent that works on the portal's own code (see below).
 - **Demo mode**: a simulated agent so every feature works without an API key.
 
 Everything runs in one Node.js process with a built-in SQLite database. No other services.
@@ -85,6 +87,21 @@ AWS keys are stored at all.
    publish it, make a quiz from it, publish and take the quiz, then create an onboarding path.
    Re-upload a source document with a change and see the document flagged as out of date.
 8. **Settings**: set a monthly budget; switch to a real provider and repeat step 5.
+
+## Improving the portal from user feedback
+
+The portal can work on its own code through the normal agent run flow:
+
+1. Create a project for the portal itself (for example "Agent Portal") and connect this
+   repository under its **Repositories**. A GitHub token in *Settings* lets pushes open pull requests.
+2. Users send feedback from **Feedback** in the left menu. The page they came from is filled in.
+3. Admins open **Feedback › Inbox**, set a status, add a note for the agent, and press
+   **Start agent run**. The run uses the repository you pick (it is remembered) and always asks
+   before changes, because the feedback text comes from users. The prompt quotes that text as a
+   description of the problem, not as instructions.
+4. Review the run, then **Push changes** with a pull request. The pull request link is recorded on
+   the feedback, and the sender sees it under **Your feedback**. Mark it *Fixed* once it is merged
+   and deployed.
 
 ## Automated tests
 

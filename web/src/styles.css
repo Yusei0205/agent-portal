@@ -2623,3 +2623,25 @@ mark {
 .pad-sm {
   padding: 8px 12px;
 }
+
+/* ---- Feedback ---- */
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.narrow-panel {
+  max-width: 720px;
+}
+.feedback-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.table-scroll .table {
+  min-width: 620px;
+}

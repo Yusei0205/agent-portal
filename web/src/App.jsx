@@ -17,6 +17,7 @@ import { Repos } from './pages/Repos.jsx';
 import { Builder } from './pages/Builder.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { Account } from './pages/Account.jsx';
+import { Feedback } from './pages/Feedback.jsx';
 
 
 export function App() {
@@ -95,6 +96,8 @@ function Shell({ user, onSignOut }) {
             <Settings />
           ) : route.tab === 'account' ? (
             <Account />
+          ) : route.tab === 'feedback' ? (
+            <Feedback route={route} />
           ) : (
             <Projects />
           )}
@@ -155,6 +158,10 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
         )}
       </nav>
       <div className="rail-foot">
+        <a href="#/feedback" className={cx('rail-link', route.tab === 'feedback' && 'is-active')}>
+          <Icon name="inbox" />
+          <span>Feedback</span>
+        </a>
         {user.is_admin ? (
           <a href="#/settings" className={cx('rail-link', route.tab === 'settings' && 'is-active')}>
             <Icon name="settings" />

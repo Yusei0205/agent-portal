@@ -10,6 +10,7 @@ import { git } from './git.ts';
 import { answerInput, getRun, inputView, isActive, oneshot, runSummary, startRun, stopRun } from './agent/runner.ts';
 import { PRICES } from './agent/pricing.ts';
 import { providerMode } from './settings.ts';
+import { recordFeedbackPr } from './feedback.ts';
 
 const MODEL_CHOICES = ['haiku', 'sonnet', 'opus'];
 
@@ -186,6 +187,7 @@ export function registerRunRoutes(): void {
         draft: true,
       });
       pr = { number: created.number, url: created.html_url };
+      recordFeedbackPr(r.id, created.html_url);
     }
     return { ...out, branch, pr };
   });
