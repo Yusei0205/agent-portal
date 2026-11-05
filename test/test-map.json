@@ -927,10 +927,12 @@
         "agent-runner/src/run.ts",
         "agent-runner/src/index.ts",
         "server/agent/tool-policy.ts",
-        "server/agent/agentcore-approvals.ts"
+        "server/agent/agentcore-approvals.ts",
+        "server/agent/runner-finalize.ts"
       ],
       "tests": [
         "test/agent-runner-validation.test.ts",
+        "test/runner-finalize.test.ts",
         "test/agentcore-harness.test.ts",
         "test/pricing.test.ts"
       ],
