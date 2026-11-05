@@ -15,7 +15,10 @@ import { getDb, one } from '../server/db.ts';
 import { now, generateId } from '../server/util.ts';
 import { setConfig, type Config } from '../server/config.ts';
 import { _setAgentCoreInvokerOverride, runKiroViaAgentCore } from '../server/agent/kiro-agentcore.ts';
-import { runClaudeViaAgentCore, bedrockModelFor } from '../server/agent/claude-agentcore-bedrock.ts';
+import { runClaudeViaAgentCore, bedrockModelFor, _setCancelGraceMs } from '../server/agent/claude-agentcore-bedrock.ts';
+import { runClaudeViaAgentCore as runUserCredential, submitRepoChanges } from '../server/agent/claude-agentcore.ts';
+import { _setSessionPrDeps } from '../server/session-pr.ts';
+import { setPullRequestSettings } from '../server/project-settings-pr.ts';
 import { inputFingerprint } from '../server/agent/tool-policy.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 
@@ -73,15 +76,22 @@ function makeCtx(
   return { ctx, events, asked, ctrl };
 }
 
-/** A stand-in runner: records every invocation; a run waits for its answer before finishing. */
+/**
+ * A stand-in runner: records every invocation; a run waits for its answer before finishing.
+ * With holdOpen, the run streams until the portal closes it, or, with cancelResult, until a
+ * cancel arrives: then, like the real runner, it flushes a tool end and sends its final result.
+ */
 function fakeRuntime(script: {
   request?: { toolName: string; input: Record<string, unknown>; inputHash?: string };
   result?: Record<string, unknown>;
   holdOpen?: boolean;
+  cancelResult?: Record<string, unknown>;
 }) {
   const calls: Array<{ sessionId: string; payload: Record<string, unknown> }> = [];
   let answered: (p: Record<string, unknown>) => void = () => {};
   const answer = new Promise<Record<string, unknown>>((r) => { answered = r; });
+  let cancelled: () => void = () => {};
+  const cancelSeen = new Promise<void>((r) => { cancelled = r; });
   _setAgentCoreInvokerOverride(async function* (_arn, sessionId, payload, signal) {
     calls.push({ sessionId, payload });
     if (payload.mode === 'answer') {
@@ -90,6 +100,7 @@ function fakeRuntime(script: {
       return;
     }
     if (payload.mode === 'cancel') {
+      cancelled();
       yield { type: 'cancel-ack', runId: payload.runId } as never;
       return;
     }
@@ -108,7 +119,13 @@ function fakeRuntime(script: {
       await new Promise<void>((resolve, reject) => {
         if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
         signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        if (script.cancelResult) void cancelSeen.then(resolve);
       });
+      if (script.cancelResult) {
+        yield { type: 'tool-result', name: 'Bash', output: '(completed)' } as never;
+        yield script.cancelResult as never;
+        return;
+      }
     }
     yield (script.result ?? {
       type: 'result', runId: payload.runId, stop_reason: 'end_turn', subtype: 'success', costUsd: 0.0123, costEstimated: false,
@@ -195,16 +212,50 @@ describe('Claude on AgentCore — harness parity', () => {
     }
   });
 
-  it('sends a cancel to the microVM when the run is stopped', async () => {
+  it('a cancelled run still records the spend the runner reports when it stops', async () => {
     const ids = makeRun('claude-code');
-    const { ctx, ctrl } = makeCtx(ids, { engine: 'claude-code' });
-    const rt = fakeRuntime({ holdOpen: true });
+    const { ctx, ctrl, events } = makeCtx(ids, { engine: 'claude-code' });
+    const rt = fakeRuntime({
+      holdOpen: true,
+      cancelResult: {
+        type: 'result', runId: ids.runId, stop_reason: 'cancelled', subtype: null, costUsd: 0.0042, costEstimated: true,
+        model: 'global.anthropic.claude-haiku-4-5-20251001-v1:0', metrics: { inputTokens: 300, outputTokens: 40, cacheReadTokens: 900 },
+      },
+    });
     const p = runClaudeViaAgentCore(ctx, ARN);
     await new Promise((r) => setTimeout(r, 50));
+    const before = events.length;
     ctrl.abort();
     await assert.rejects(p, (e: Error) => e.name === 'AbortError');
-    await new Promise((r) => setTimeout(r, 20));
+
     assert.ok(rt.calls.some((c) => c.payload.mode === 'cancel' && c.payload.runId === ids.runId), 'cancel was sent');
+    assert.equal(events.length, before, 'nothing after the stop is relayed to the run');
+    const row = one<{ cost_usd: number; input_tokens: number; cache_read_tokens: number }>('SELECT cost_usd, input_tokens, cache_read_tokens FROM p6_runs WHERE id = ?', ids.runId)!;
+    assert.equal(row.cost_usd, 0.0042, 'the spend up to the stop is on the run');
+    assert.equal(row.input_tokens, 300);
+    assert.equal(row.cache_read_tokens, 900);
+    const spend = one<{ n: number; usd: number }>('SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM budget_usage WHERE workflow_id = ?', ids.workflowId)!;
+    assert.deepEqual([spend.n, spend.usd], [1, 0.0042], 'and counts toward the budget');
+  });
+
+  it('a runner that never answers the cancel is cut off after the grace period', async () => {
+    _setCancelGraceMs(50);
+    try {
+      const ids = makeRun('claude-code');
+      const { ctx, ctrl } = makeCtx(ids, { engine: 'claude-code' });
+      const rt = fakeRuntime({ holdOpen: true });
+      const p = runClaudeViaAgentCore(ctx, ARN);
+      await new Promise((r) => setTimeout(r, 50));
+      const stoppedAt = Date.now();
+      ctrl.abort();
+      await assert.rejects(p, (e: Error) => e.name === 'AbortError');
+      assert.ok(Date.now() - stoppedAt < 2_000, 'the portal does not wait past the grace period');
+      assert.ok(rt.calls.some((c) => c.payload.mode === 'cancel' && c.payload.runId === ids.runId), 'cancel was sent');
+      const row = one<{ cost_usd: number }>('SELECT cost_usd FROM p6_runs WHERE id = ?', ids.runId)!;
+      assert.equal(row.cost_usd, 0, 'no result, so no spend to record');
+    } finally {
+      _setCancelGraceMs(null);
+    }
   });
 
   it('maps model names to Bedrock IDs', () => {
@@ -233,5 +284,140 @@ describe('Kiro on AgentCore — approvals and trust', () => {
     const ans = rt.calls.find((c) => c.payload.mode === 'answer')!;
     assert.equal(ans.payload.decision, 'allow');
     assert.equal(ans.sessionId, run.sessionId);
+  });
+});
+
+describe('Claude on AgentCore — repository changes go to the pull request step', () => {
+  before(() => { createTestDb(); setConfig(makeConfig()); });
+  after(async () => { _setAgentCoreInvokerOverride(null); _setSessionPrDeps(); await cleanup(); });
+
+  const spec = [{ name: 'api', url: 'https://example.invalid/api.git' }] as never;
+  const change = { type: 'repo-changes', repo: 'api', base: 'main', commits: 1, files: 2 };
+  const done = { type: 'result', stop_reason: 'end_turn', costUsd: 0.01, metrics: { inputTokens: 10, outputTokens: 2 } };
+
+  function stub(events: Array<Record<string, unknown>>, onCall?: (p: Record<string, unknown>) => void) {
+    const sent: Array<Record<string, unknown>> = [];
+    _setAgentCoreInvokerOverride(async function* (_a, _s, payload) { sent.push(payload); onCall?.(payload); for (const e of events) yield e as never; });
+    return sent;
+  }
+  function hook(fail = false) {
+    const calls: Array<{ ctx: Record<string, unknown>; changes: unknown[] }> = [];
+    _setSessionPrDeps({ onRepoChanges: async (c, ch) => { calls.push({ ctx: c as never, changes: ch }); if (fail) throw new Error('push exploded'); } });
+    return calls;
+  }
+  const withRepos = (o: ReturnType<typeof makeCtx>) => { o.ctx.run.runnerRepos = spec; return o; };
+
+  it('harness path: asks for the check only with repositories and a reason, and hands the changes over', async () => {
+    const ids = makeRun('claude-code');
+    const c = withRepos(makeCtx(ids, { engine: 'claude-code' }));
+    const sent = stub([change, { type: 'assistant-text', text: 'ok' }, done]);
+    const calls = hook();
+    await runClaudeViaAgentCore(c.ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, true, 'setting is on by default');
+    assert.deepEqual(sent[0]!.repos, spec);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0]!.changes, [{ repo: 'api', base: 'main', commits: 1, files: 2 }]);
+    assert.deepEqual(calls[0]!.ctx, { workflowId: ids.workflowId, runId: ids.runId, projectId: ids.projectId, userId: null, engine: 'claude-code' });
+    assert.ok(!c.events.some((e) => e.type === 'repo-changes'), 'not a run event');
+    assert.ok(c.events.some((e) => e.type === 'run-complete'));
+  });
+
+  it('harness path: the flag follows the project setting and the ticket; no repositories means no flag', async () => {
+    const ids = makeRun('claude-code');
+    await setPullRequestSettings(ids.projectId, { openPullRequests: false });
+    let sent = stub([done]);
+    await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, undefined, 'setting off and no ticket');
+
+    getDb().prepare('UPDATE p6_workflows SET jira_key = ? WHERE id = ?').run('RLP-1', ids.workflowId);
+    sent = stub([done]);
+    await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, true, 'a ticket asks even with the setting off');
+
+    const other = makeRun('claude-code');
+    sent = stub([done]);
+    await runClaudeViaAgentCore(makeCtx(other, { engine: 'claude-code' }).ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, undefined, 'no repositories');
+    assert.equal(sent[0]!.repos, undefined);
+  });
+
+  it('harness path: no changes means no call; a failure in the step does not fail the run; a cancelled run does not call it', async () => {
+    const ids = makeRun('claude-code');
+    stub([done]);
+    let calls = hook();
+    await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(calls.length, 0);
+
+    stub([change, done]);
+    calls = hook(true);
+    const summary = await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(calls.length, 1);
+    assert.equal(summary, 'Run complete.');
+
+    const c = withRepos(makeCtx(ids, { engine: 'claude-code' }));
+    stub([change, done], () => c.ctrl.abort());
+    calls = hook();
+    await assert.rejects(() => runClaudeViaAgentCore(c.ctx, ARN), (e: Error) => e.name === 'AbortError');
+    assert.equal(calls.length, 0);
+  });
+
+  it('user-credential path: flag in the payload, changes on the result, and the same handover', async () => {
+    const ids = makeRun('claude-code');
+    const c = makeCtx(ids, { engine: 'claude-code' });
+    const sent = stub([change, { type: 'assistant-text', text: 'hi' }, done]);
+    const calls = hook();
+    const o = { runtimeArn: ARN, runId: ids.runId, prompt: 'x', model: 'claude-sonnet-4-5', auth: { kind: 'api_key' as const, secret: 'k' }, trustTools: false, repos: spec };
+    const res = await runUserCredential(c.ctx, o);
+    assert.equal(sent[0]!.finalizeCheck, true);
+    assert.deepEqual(res.repoChanges, [{ repo: 'api', base: 'main', commits: 1, files: 2 }]);
+    assert.ok(!c.events.some((e) => e.type === 'repo-changes'));
+    assert.equal(calls.length, 0, 'the caller hands them over after it has recorded the spend');
+
+    await submitRepoChanges(c.ctx.run, null, res.repoChanges);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.ctx.engine, 'claude-code');
+
+    await setPullRequestSettings(ids.projectId, { openPullRequests: false });
+    const sent2 = stub([done]);
+    const res2 = await runUserCredential(makeCtx(ids, { engine: 'claude-code' }).ctx, o);
+    assert.equal(sent2[0]!.finalizeCheck, undefined);
+    assert.equal(res2.repoChanges, undefined);
+    const sent3 = stub([done]);
+    await runUserCredential(makeCtx(ids, { engine: 'claude-code' }).ctx, { ...o, repos: undefined });
+    assert.equal(sent3[0]!.finalizeCheck, undefined);
+  });
+
+  it('harness path: the payload carries the workspace snapshot access only with repositories and when snapshots are available', async () => {
+    const ids = makeRun('claude-code');
+    const access = { putUrl: 'https://s3.invalid/put', getUrl: 'https://s3.invalid/get' };
+    const { setStorage } = await import('../server/storage-instance.ts');
+    setStorage({ presign: async (_p: string, m: string) => (m === 'put' ? access.putUrl : access.getUrl), exists: async () => true } as never);
+    try {
+      let sent = stub([done]);
+      await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+      assert.deepEqual(sent[0]!.snapshot, access);
+
+      sent = stub([done]);
+      await runClaudeViaAgentCore(makeCtx(ids, { engine: 'claude-code' }).ctx, ARN);
+      assert.equal(sent[0]!.snapshot, undefined, 'no repositories');
+
+      setStorage({ exists: async () => false } as never);
+      sent = stub([done]);
+      await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+      assert.equal(sent[0]!.snapshot, undefined, 'storage cannot presign (local mode)');
+    } finally {
+      setStorage(null as never);
+    }
+  });
+
+  it('submitRepoChanges never throws and does not wait past its bound', async () => {
+    const ids = makeRun('claude-code');
+    const run = makeCtx(ids, { engine: 'claude-code' }).ctx.run;
+    hook(true);
+    await submitRepoChanges(run, null, [{ repo: 'api', base: 'main', commits: 1, files: 1 }]);
+    _setSessionPrDeps({ onRepoChanges: () => new Promise<void>(() => {}) });
+    const t0 = Date.now();
+    await submitRepoChanges(run, null, [{ repo: 'api', base: 'main', commits: 1, files: 1 }], 50);
+    assert.ok(Date.now() - t0 < 2000);
   });
 });

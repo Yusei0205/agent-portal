@@ -46,6 +46,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Install runner dependencies
+        # The type check also compiles the tests, and they import code from the two runners, which keep their own
+        # package.json (AWS SDK clients, signing). Without these the compiler cannot find those modules.
+        run: |
+          npm ci --prefix agent-runner --no-audit --no-fund
+          npm ci --prefix kiro-runner --no-audit --no-fund
+
       - name: Type check
         run: npm run typecheck
 

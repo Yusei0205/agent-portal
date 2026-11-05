@@ -417,6 +417,20 @@ A diagram (FR-DIAG), a generated document (FR-GDOC) or a deck (FR-PRES) is made 
 
 Not built: a link from a session straight to a Vault folder (the Vault link opens the project vault), copies of older versions in the Vault, a Vault copy of the citation report or of the Word version's warnings, and choosing which kinds are copied (the setting is all or nothing).
 
+### 2.22 Pull requests from sessions (PR)
+
+| ID | Requirement | Evidence | Status |
+|---|---|---|---|
+| FR-PR-1 | **Detect.** At the end of a run on a cloud runner (Claude, Kiro) with repositories, the runner reports each repository with uncommitted changes or commits ahead of its base (`repo-changes`). It never pushes in that step. | code (`runner-finalize.ts`, `runner-finalize-run.ts`), test | Built |
+| FR-PR-2 | **Decide.** A session with a Jira ticket and the project switch on opens a pull request by itself. Without a ticket the portal puts a `push` item in the Inbox and waits for approval. Declined or expired leaves a **Create pull request** button. | code (`session-pr.ts`, `inbox.ts`), test | Built |
+| FR-PR-3 | **Push.** The portal calls the runner's `finalize` mode on the session. The runner pushes one new branch `portal/<KEY>-<slug>` with one commit, never forced, never to a protected branch (the project's list plus the default branch), checked in the runner and again in the portal. The saved workspace is restored first when the machine is new. | code, test | Built |
+| FR-PR-4 | **Create and review.** The portal opens the pull request on GitHub or CodeCommit (existing one reused), then starts a draft review with repository, base, head, PR number and Jira key. Other hosts: branch pushed, no pull request, clear message. | code (`pull-requests.ts`, `review.ts createReview`), test | Built |
+| FR-PR-5 | **Settings.** `GET/PUT /api/projects/:id/pull-request-settings`: `openPullRequests` (default on) and `protectedBranches` (default `main`, `master`, `develop`, `release/*`), edited by editors on Setup › Pull requests. | code (`project-settings-pr.ts`, `ProjectHub.jsx`), test | Built |
+| FR-PR-6 | **Session card and button.** `pull-request` session events drive a card per repository; `POST /api/sessions/:id/pull-request` retries or starts the step. | code (`PullRequestCard.jsx`, `pullRequestCard.js`), test | Built |
+| FR-PR-7 | **Branch lists.** `GET /api/projects/:id/repos/:repoId/branches` asks the host (`git ls-remote --heads`, cached 30 s, `?refresh=1`) and falls back to a local clone; New code review shows them as dropdowns. | code (`repos.ts`, `Review.jsx`), test | Built |
+
+Not verified live: the push permission of real GitHub tokens and CodeCommit IAM, and finalize on a different AgentCore session after an idle gap. Bitbucket and other hosts: not built.
+
 ## 3. Navigation map (current)
 
 Menu (D-5, simplified): Sessions, Workspaces, Code review, Knowledge, Create, Vault, Insights, Setup, then the Portal group, plus Tickets (after Workspaces) only when the project has Jira connected. Without a project picked, the menu is Projects, Vault, Insights and the Portal group. Workspaces and Vault stay where they were (owner decision).

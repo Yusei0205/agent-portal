@@ -721,13 +721,13 @@ export const _providers = {
 
 // ── Credential lookup helpers ─────────────────────────────────────────────────
 
-function parseGitHubOwnerRepo(url: string): { owner: string; repo: string } | null {
+export function parseGitHubOwnerRepo(url: string): { owner: string; repo: string } | null {
   const match = url.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?(?:[/?#]|$)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2] };
 }
 
-function parseCodeCommitRepoName(url: string): string | null {
+export function parseCodeCommitRepoName(url: string): string | null {
   const match = url.match(/\/repos\/([^/?#]+)/);
   return match ? match[1] : null;
 }
@@ -1210,6 +1210,151 @@ export async function triggerAutoPost(reviewId: string, _projectId?: string): Pr
 
 // ── Route registration ────────────────────────────────────────────────────────
 
+export class ReviewCreateError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'ReviewCreateError';
+  }
+}
+
+export interface CreateReviewParams {
+  projectId: string;
+  userId: string;
+  repoId?: string | null;
+  baseRef: string;
+  headRef: string;
+  prNumber?: number | null;
+  jiraKey?: string | null;
+  postMode?: 'auto' | 'draft';
+  minSeverity?: string;
+  sourceSha?: string | null;
+  destSha?: string | null;
+  headCommitSha?: string | null;
+  providerId?: string | null;
+  modelId?: string | null;
+  leadAgent?: string | null;
+}
+
+/** Validate, resolve context, and create a review (and its workflow). Shared by the route and automatic pull requests. */
+export async function createReview(input: CreateReviewParams): Promise<ReviewRecord> {
+  const { projectId, userId, baseRef, headRef } = input;
+  const repoId = input.repoId ?? null;
+  const prNumber = input.prNumber ?? null;
+  const minSeverity = input.minSeverity && SEVERITIES.includes(input.minSeverity as Severity) ? input.minSeverity : 'medium';
+  const sourceSha = input.sourceSha ?? null;
+  const destSha = input.destSha ?? null;
+  const headCommitSha = input.headCommitSha ?? sourceSha;
+  const providerId = input.providerId ?? null;
+  const modelId = input.modelId ?? null;
+
+  if (!baseRef) throw new ReviewCreateError(400, 'baseRef is required');
+  if (!headRef) throw new ReviewCreateError(400, 'headRef is required');
+
+  if (repoId) {
+    const repo = await getRepoInfo(repoId);
+    if (!repo || repo.project_id !== projectId) {
+      throw new ReviewCreateError(400, 'That repository belongs to another project');
+    }
+  }
+
+  const postMode = input.postMode
+    ?? (getPrCommentMode() === 'automatic' ? 'auto' : 'draft');
+  const explicitJiraKey = input.jiraKey ?? null;
+
+  const jiraCtx = await resolveJiraContext(projectId, headRef, explicitJiraKey);
+
+  // Item 4: If the client didn't supply sourceSha or destSha, attempt to resolve
+  // both from the provider so portal-created reviews always have both commit SHAs.
+  let resolvedSourceSha = sourceSha;
+  let resolvedDestSha = destSha;
+  if ((!resolvedSourceSha || !resolvedDestSha) && repoId && prNumber != null) {
+    try {
+      const repoRow = await getRepoInfo(repoId);
+      if (repoRow?.provider === 'github') {
+        const ownerRepo = parseGitHubOwnerRepo(repoRow.url);
+        const ghToken = await findGitHubToken(userId);
+        if (ownerRepo && ghToken) {
+          const shas = await _providers.githubGetPrShas(ownerRepo.owner, ownerRepo.repo, prNumber, ghToken);
+          if (!resolvedSourceSha && shas.sourceSha) resolvedSourceSha = shas.sourceSha.slice(0, 64);
+          if (!resolvedDestSha && shas.destSha) resolvedDestSha = shas.destSha.slice(0, 64);
+        }
+      } else if (repoRow?.provider === 'codecommit') {
+        const ccCreds = await findCodeCommitCreds(projectId, userId);
+        const ccRepoName = parseCodeCommitRepoName(repoRow.url);
+        if (ccCreds && ccRepoName) {
+          const shas = await _providers.codecommitGetPrShas(ccRepoName, String(prNumber), ccCreds);
+          if (!resolvedSourceSha && shas.sourceSha) resolvedSourceSha = shas.sourceSha.slice(0, 64);
+          if (!resolvedDestSha && shas.destSha) resolvedDestSha = shas.destSha.slice(0, 64);
+        }
+      }
+    } catch { /* best-effort: leave as null if provider lookup fails */ }
+  }
+
+  let goal = `Code review: ${baseRef} → ${headRef}${prNumber ? ` (PR #${prNumber})` : ''}`;
+  if (jiraCtx.summary) {
+    goal += `\n\nJira ticket: ${jiraCtx.key} — ${jiraCtx.summary}`;
+    if (jiraCtx.description) goal += `\n\nBackground: ${jiraCtx.description.slice(0, 1000)}`;
+  }
+
+  let workflowId: string | null = null;
+  try {
+    const wid = generateId();
+    const ts0 = now();
+    // Choose engine based on providerId or portal provider setting.
+    // 'litellm' → uses the LiteLLM review engine (runner.ts dispatches to runLiteLLM).
+    // Other provider modes → engine that matches (anthropic/bedrock → claude-code,
+    // kiro → kiro, demo → demo).
+    const portalMode = getSettings().provider.mode;
+    const effectiveProvider = providerId ?? portalMode;
+    const reviewEngine =
+      effectiveProvider === 'litellm' ? 'litellm'
+      : (effectiveProvider === 'anthropic' || effectiveProvider === 'bedrock') ? 'claude-code'
+      : effectiveProvider === 'kiro' ? 'kiro'
+      : 'demo';
+    await getSessionsRepository().createWorkflow({
+      id: wid,
+      project_id: projectId,
+      goal,
+      status: 'pending',
+      engine: reviewEngine,
+      trust_tools: 0,
+      lead_agent: input.leadAgent ?? null,
+      workspace_id: null,
+      output_files_enabled: 0,
+      repo_ids: repoId ? JSON.stringify([repoId]) : '[]',
+      iteration_count: 0,
+      max_iterations: 1,
+      credential_id: null,
+      model: '',
+      kind: 'review',
+      created_by: userId,
+      created_at: ts0,
+      updated_at: ts0,
+    });
+    workflowId = wid;
+    emit(projectId, { type: 'workflow.created', workflowId: wid });
+  } catch { /* continue without workflow */ }
+
+  const id = generateId();
+  const ts = now();
+
+  const review = await getReviewsRepository().create({
+    id, project_id: projectId, base_ref: baseRef, head_ref: headRef,
+    pr_number: prNumber, repo_id: repoId, status: 'pending', post_mode: postMode,
+    from_loop: null, workflow_id: workflowId, min_severity: minSeverity,
+    summary: null, raw_output: null, created_by: userId, created_at: ts,
+    parent_review_id: null, source_sha: resolvedSourceSha, dest_sha: resolvedDestSha,
+    head_commit_sha: headCommitSha ?? resolvedSourceSha,
+    provider_id: providerId, model_id: modelId, jira_context: JSON.stringify(jiraCtx),
+    run_log: '[]', input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0,
+    output_tokens: 0, llm_requests: 0, retry_count: 0, tool_calls: 0,
+    files_reviewed: 0, duration_ms: null, started_at: null,
+    merged_at: null, merged_by: null,
+  });
+
+  return review;
+}
+
 export function registerReviewRoutes(): void {
 
   // ── GET /api/settings/review ──────────────────────────────────────────────
@@ -1457,125 +1602,32 @@ export function registerReviewRoutes(): void {
     if (!await requireProjectEditor(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
-    const repoId = body.repoId != null ? String(body.repoId) : null;
-    const baseRef = String(body.baseRef ?? '').trim();
-    const headRef = String(body.headRef ?? '').trim();
-
-    if (!baseRef) { sendJson(res, 400, { error: 'baseRef is required' }); return; }
-    if (!headRef) { sendJson(res, 400, { error: 'headRef is required' }); return; }
-
-    if (repoId) {
-      const repo = await getRepoInfo(repoId);
-      if (!repo || repo.project_id !== req.params.id) {
-        sendJson(res, 400, { error: 'That repository belongs to another project' });
-        return;
-      }
-    }
-
     const prNumber = body.prNumber != null ? Number(body.prNumber) : null;
-    const postMode = body.postMode === 'auto'
-      ? 'auto'
-      : (body.postMode === 'draft' ? 'draft' : (getPrCommentMode() === 'automatic' ? 'auto' : 'draft'));
-    const minSeverity = SEVERITIES.includes(body.minSeverity as Severity) ? String(body.minSeverity) : 'medium';
     const sourceSha = body.sourceSha != null ? String(body.sourceSha).slice(0, 64) : null;
-    const destSha = body.destSha != null ? String(body.destSha).slice(0, 64) : null;
-    const headCommitSha = body.headCommitSha != null ? String(body.headCommitSha).slice(0, 64) : sourceSha;
-    const providerId = body.providerId != null ? String(body.providerId).slice(0, 100) : null;
-    const modelId = body.modelId != null ? String(body.modelId).slice(0, 200) : null;
-    const explicitJiraKey = body.jiraKey != null ? String(body.jiraKey).slice(0, 50) : null;
 
-    const jiraCtx = await resolveJiraContext(req.params.id, headRef, explicitJiraKey);
-
-    // Item 4: If the client didn't supply sourceSha or destSha, attempt to resolve
-    // both from the provider so portal-created reviews always have both commit SHAs.
-    let resolvedSourceSha = sourceSha;
-    let resolvedDestSha = destSha;
-    if ((!resolvedSourceSha || !resolvedDestSha) && repoId && prNumber != null) {
-      try {
-        const repoRow = await getRepoInfo(repoId);
-        if (repoRow?.provider === 'github') {
-          const ownerRepo = parseGitHubOwnerRepo(repoRow.url);
-          const ghToken = await findGitHubToken(req.user!.id);
-          if (ownerRepo && ghToken) {
-            const shas = await _providers.githubGetPrShas(ownerRepo.owner, ownerRepo.repo, prNumber, ghToken);
-            if (!resolvedSourceSha && shas.sourceSha) resolvedSourceSha = shas.sourceSha.slice(0, 64);
-            if (!resolvedDestSha && shas.destSha) resolvedDestSha = shas.destSha.slice(0, 64);
-          }
-        } else if (repoRow?.provider === 'codecommit') {
-          const ccCreds = await findCodeCommitCreds(req.params.id, req.user!.id);
-          const ccRepoName = parseCodeCommitRepoName(repoRow.url);
-          if (ccCreds && ccRepoName) {
-            const shas = await _providers.codecommitGetPrShas(ccRepoName, String(prNumber), ccCreds);
-            if (!resolvedSourceSha && shas.sourceSha) resolvedSourceSha = shas.sourceSha.slice(0, 64);
-            if (!resolvedDestSha && shas.destSha) resolvedDestSha = shas.destSha.slice(0, 64);
-          }
-        }
-      } catch { /* best-effort: leave as null if provider lookup fails */ }
-    }
-
-    let goal = `Code review: ${baseRef} → ${headRef}${prNumber ? ` (PR #${prNumber})` : ''}`;
-    if (jiraCtx.summary) {
-      goal += `\n\nJira ticket: ${jiraCtx.key} — ${jiraCtx.summary}`;
-      if (jiraCtx.description) goal += `\n\nBackground: ${jiraCtx.description.slice(0, 1000)}`;
-    }
-
-    let workflowId: string | null = null;
     try {
-      const wid = generateId();
-      const ts0 = now();
-      // Choose engine based on providerId or portal provider setting.
-      // 'litellm' → uses the LiteLLM review engine (runner.ts dispatches to runLiteLLM).
-      // Other provider modes → engine that matches (anthropic/bedrock → claude-code,
-      // kiro → kiro, demo → demo).
-      const portalMode = getSettings().provider.mode;
-      const effectiveProvider = providerId ?? portalMode;
-      const reviewEngine =
-        effectiveProvider === 'litellm' ? 'litellm'
-        : (effectiveProvider === 'anthropic' || effectiveProvider === 'bedrock') ? 'claude-code'
-        : effectiveProvider === 'kiro' ? 'kiro'
-        : 'demo';
-      await getSessionsRepository().createWorkflow({
-        id: wid,
-        project_id: req.params.id,
-        goal,
-        status: 'pending',
-        engine: reviewEngine,
-        trust_tools: 0,
-        lead_agent: body.leadAgent != null ? String(body.leadAgent) : null,
-        workspace_id: null,
-        output_files_enabled: 0,
-        repo_ids: repoId ? JSON.stringify([repoId]) : '[]',
-        iteration_count: 0,
-        max_iterations: 1,
-        credential_id: null,
-        model: '',
-        kind: 'review',
-        created_by: req.user!.id,
-        created_at: ts0,
-        updated_at: ts0,
+      const review = await createReview({
+        projectId: req.params.id,
+        userId: req.user!.id,
+        repoId: body.repoId != null ? String(body.repoId) : null,
+        baseRef: String(body.baseRef ?? '').trim(),
+        headRef: String(body.headRef ?? '').trim(),
+        prNumber,
+        jiraKey: body.jiraKey != null ? String(body.jiraKey).slice(0, 50) : null,
+        postMode: body.postMode === 'auto' ? 'auto' : (body.postMode === 'draft' ? 'draft' : undefined),
+        minSeverity: SEVERITIES.includes(body.minSeverity as Severity) ? String(body.minSeverity) : 'medium',
+        sourceSha,
+        destSha: body.destSha != null ? String(body.destSha).slice(0, 64) : null,
+        headCommitSha: body.headCommitSha != null ? String(body.headCommitSha).slice(0, 64) : sourceSha,
+        providerId: body.providerId != null ? String(body.providerId).slice(0, 100) : null,
+        modelId: body.modelId != null ? String(body.modelId).slice(0, 200) : null,
+        leadAgent: body.leadAgent != null ? String(body.leadAgent) : null,
       });
-      workflowId = wid;
-      emit(req.params.id, { type: 'workflow.created', workflowId: wid });
-    } catch { /* continue without workflow */ }
-
-    const id = generateId();
-    const ts = now();
-
-    const review = await getReviewsRepository().create({
-      id, project_id: req.params.id, base_ref: baseRef, head_ref: headRef,
-      pr_number: prNumber, repo_id: repoId, status: 'pending', post_mode: postMode,
-      from_loop: null, workflow_id: workflowId, min_severity: minSeverity,
-      summary: null, raw_output: null, created_by: req.user!.id, created_at: ts,
-      parent_review_id: null, source_sha: resolvedSourceSha, dest_sha: resolvedDestSha,
-      head_commit_sha: headCommitSha ?? resolvedSourceSha,
-      provider_id: providerId, model_id: modelId, jira_context: JSON.stringify(jiraCtx),
-      run_log: '[]', input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0,
-      output_tokens: 0, llm_requests: 0, retry_count: 0, tool_calls: 0,
-      files_reviewed: 0, duration_ms: null, started_at: null,
-      merged_at: null, merged_by: null,
-    });
-
-    sendJson(res, 201, { review });
+      sendJson(res, 201, { review });
+    } catch (err) {
+      if (err instanceof ReviewCreateError) { sendJson(res, err.status, { error: err.message }); return; }
+      throw err;
+    }
   });
 
   // ── GET /api/projects/:id/reviews/:rid ────────────────────────────────────

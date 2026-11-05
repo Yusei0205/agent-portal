@@ -97,7 +97,8 @@
         "test/delegate-token.test.ts",
         "test/delegation.test.ts",
         "test/delegation-repo.test.ts",
-        "test/delegation-session-repo.test.ts"
+        "test/delegation-session-repo.test.ts",
+        "test/agentcore-multi-agent.test.ts"
       ],
       "smokeIds": ["delegation"]
     },
@@ -105,6 +106,7 @@
       "description": "Project CRUD and listing, project/team repository layer",
       "sources": [
         "server/projects.ts",
+        "server/project-settings-pr.ts",
         "server/repositories/projects.ts",
         "server/repositories/projects-sqlite.ts",
         "server/repositories/projects-dynamodb.ts",
@@ -112,7 +114,8 @@
       ],
       "tests": [
         "test/projects.test.ts",
-        "test/projects-repo.test.ts"
+        "test/projects-repo.test.ts",
+        "test/project-pr-settings.test.ts"
       ],
       "smokeIds": ["projects"]
     },
@@ -162,6 +165,8 @@
         "web/src/lib/mergeEvents.js",
         "web/src/lib/outputFileMatch.js",
         "web/src/lib/outputFileUtils.js",
+        "web/src/lib/pullRequestCard.js",
+        "web/src/pages/sessions/PullRequestCard.jsx",
         "web/src/styles/sessions.css"
       ],
       "tests": [
@@ -171,6 +176,7 @@
         "test/sanitize-merge.test.ts",
         "test/output-files-match.test.ts",
         "test/output-file-utils.test.ts",
+        "test/web-pull-request-card.test.ts",
         "test/sessions-repo.test.ts"
       ],
       "smokeIds": ["sessions"]
@@ -442,6 +448,7 @@
       ],
       "tests": [
         "test/repos.test.ts",
+        "test/repos-branches.test.ts",
         "test/repos-progress.test.ts",
         "test/git-repos-repo.test.ts"
       ],
@@ -570,6 +577,7 @@
         "server/agent/kiro-agentcore.ts",
         "server/agent/agentcore-bridge.ts",
         "server/agent/claude-agentcore.ts",
+        "server/agent/agent-defs.ts",
         "server/repositories/agentcore-login.ts",
         "server/repositories/agentcore-login-sqlite.ts",
         "server/repositories/agentcore-login-dynamodb.ts"
@@ -582,7 +590,9 @@
         "test/kiro-win-env.test.ts",
         "test/kiro-agentcore.test.ts",
         "test/agentcore-portal.test.ts",
-        "test/agentcore-login-repo.test.ts"
+        "test/agentcore-login-repo.test.ts",
+        "test/agent-defs.test.ts",
+        "test/agentcore-multi-agent.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
@@ -592,6 +602,8 @@
       "sources": [
         "server/review.ts",
         "server/review-lifecycle.ts",
+        "server/pull-requests.ts",
+        "server/session-pr.ts",
         "server/control-plane.ts",
         "server/repositories/reviews.ts",
         "server/repositories/reviews-sqlite.ts",
@@ -603,7 +615,10 @@
       ],
       "tests": [
         "test/review.test.ts",
-        "test/reviews-repo.test.ts"
+        "test/reviews-repo.test.ts",
+        "test/pull-requests.test.ts",
+        "test/session-pr.test.ts",
+        "test/review-create.test.ts"
       ],
       "smokeIds": ["reviews"]
     },
@@ -922,11 +937,18 @@
         "agent-runner/src/run.ts",
         "agent-runner/src/index.ts",
         "server/agent/tool-policy.ts",
-        "server/agent/agentcore-approvals.ts"
+        "server/agent/agentcore-approvals.ts",
+        "server/agent/runner-finalize.ts",
+        "server/agent/runner-finalize-run.ts",
+        "agent-runner/src/finalize.ts"
       ],
       "tests": [
         "test/agent-runner-validation.test.ts",
-        "test/agentcore-harness.test.ts"
+        "test/runner-snapshot-finalize.test.ts",
+        "test/runner-finalize.test.ts",
+        "test/kiro-runner-finalize.test.ts",
+        "test/agentcore-harness.test.ts",
+        "test/pricing.test.ts"
       ],
       "smokeIds": [],
       "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."

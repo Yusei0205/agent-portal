@@ -7,19 +7,41 @@
  *   - calls that need a person relayed here as approval-request events and answered
  *     through the portal's approval flow (fingerprint, expiry, one answer wins),
  *   - the run's spend cap (maxBudgetUsd) and time limit, with the stop reason recorded,
- *   - a cancel from the portal stops the run in the microVM.
+ *   - a cancel from the portal stops the run in the microVM, and the spend up to the stop
+ *     is still recorded (the runner's final result arrives shortly after the cancel).
+ *
+ * Several agents and several sessions, decided by Claude from the prompt:
+ *   - subagents: the project's agents (.claude/agents/*.md in the owner's config and in the
+ *     project) go with the run, and Claude starts them with the Agent tool inside the microVM.
+ *     Their progress arrives as subagent-started / -finished / -failed events.
+ *   - child sessions: when delegation is on (Settings › Delegation), Claude has the
+ *     delegate_session tool. The portal starts each child as a session of its own (its own
+ *     run, so its own microVM), and posts the child's result back to this session.
+ *   - each AgentCore run is a new engine session, so a run after the first starts with a
+ *     recap of earlier turns (a parent resumed by its children's results keeps its context).
  * Model calls go to Bedrock with the runtime's execution role; no portal credential
  * is sent to the microVM.
  */
 
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { HttpError, now } from '../util.ts';
 import { getSettings } from '../settings.ts';
+import { config } from '../config.ts';
+import { one, type Row } from '../db.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
+import { createChildSession } from '../delegation.ts';
+import { getRunHomeDir } from '../user-config.ts';
 import { toPolicyRules } from './tool-policy.ts';
-import { ApprovalRelay, isApprovalRequest } from './agentcore-bridge.ts';
+import { loadAgentDefinitions, type AgentDefinitionPayload } from './agent-defs.ts';
+import { buildConversationRecap } from './recap.ts';
+import { ApprovalRelay, DelegationRelay, isApprovalRequest, isDelegateRequest } from './agentcore-bridge.ts';
 import { invokeAgentCore, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
-import type { RunContext } from './types.ts';
+import type { RunContext, AgentRun } from './types.ts';
+import { snapshotAccess } from './runner-snapshot-access.ts';
+import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
+import type { RepoChange } from '../session-pr.ts';
 
 /** Bedrock model ID for the runner: a Bedrock ID as given, otherwise the matching global profile. */
 export function bedrockModelFor(model: string | null | undefined): string | undefined {
@@ -33,6 +55,32 @@ export function bedrockModelFor(model: string | null | undefined): string | unde
   return undefined;
 }
 
+/** A subagent's model as the runner can use it: an alias it maps to Bedrock, or a Bedrock ID. */
+export function agentModelFor(model: string): string | undefined {
+  const m = model.trim().toLowerCase();
+  if (m === 'inherit' || m === 'haiku' || m === 'sonnet' || m === 'opus') return m;
+  return bedrockModelFor(model); // undefined: the agent uses the run's model
+}
+
+/**
+ * The run's subagents: the owner's (or team's) Claude agents materialised into the run's home,
+ * then the project's own .claude/agents/, which win on a name clash.
+ */
+export function runAgents(run: AgentRun): Record<string, AgentDefinitionPayload> {
+  const dirs: string[] = [];
+  const home = getRunHomeDir(run.runId);
+  if (home) dirs.push(path.join(home, '.claude', 'agents'));
+  if (run.projectId) {
+    try {
+      const project = one<Row>('SELECT slug FROM projects WHERE id = ?', run.projectId);
+      if (project?.slug) dirs.push(path.join(config.dataDir, 'projects', String(project.slug), '.claude', 'agents'));
+    } catch {
+      /* no project folder: the owner's agents only */
+    }
+  }
+  return loadAgentDefinitions(dirs, agentModelFor);
+}
+
 interface RunnerResult {
   stop_reason?: string;
   subtype?: string | null;
@@ -43,8 +91,48 @@ interface RunnerResult {
   metrics?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
 }
 
+/**
+ * After a cancel, how long the portal keeps reading the runner's stream for its final result,
+ * which carries the spend up to the stop. The runner answers a cancel within a second or two
+ * (seen live: 6 s from run start to the end of a cancelled run).
+ */
+const CANCEL_GRACE_MS = 10_000;
+let cancelGraceMs = CANCEL_GRACE_MS;
+
+/** Tests only: shorten the wait for a runner that never sends its final result. */
+export function _setCancelGraceMs(ms: number | null): void {
+  cancelGraceMs = ms ?? CANCEL_GRACE_MS;
+}
+
+/** A subagent name from the microVM, or null. Names are short; anything else is not shown as one. */
+function agentLabel(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim().slice(0, 64) : null;
+}
+
+/** The fields of a subagent event the portal keeps, with their sizes bounded. */
+function subagentEvent(ev: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    id: String(ev.id ?? '').slice(0, 128),
+    name: agentLabel(ev.name) ?? 'subagent',
+  };
+  const text = (k: string, max: number) => { if (typeof ev[k] === 'string' && ev[k]) out[k] = (ev[k] as string).slice(0, max); };
+  const num = (k: string) => { if (typeof ev[k] === 'number' && Number.isFinite(ev[k])) out[k] = ev[k]; };
+  text('description', 300);
+  text('status', 32);
+  text('summary', 1000);
+  text('parentId', 128);
+  if (agentLabel(ev.parentName)) out.parentName = agentLabel(ev.parentName);
+  if (typeof ev.background === 'boolean') out.background = ev.background;
+  num('depth');
+  num('tokens');
+  num('toolUses');
+  num('durationMs');
+  return out;
+}
+
 export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string): Promise<string> {
   const { run, emit, signal } = ctx;
+  if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
   const repo = getSessionsRepository();
   const settings = getSettings();
   const wf = await repo.getWorkflowById(run.workflowId);
@@ -54,24 +142,92 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const minutes = wf?.run_timeout_minutes != null ? Number(wf.run_timeout_minutes) : settings.agents.runTimeoutMinutes;
   const model = bedrockModelFor(run.model) ?? bedrockModelFor(settings.defaultModel);
 
+  // Each AgentCore run is a new engine session: give it the earlier turns as a recap.
+  let prompt = run.goal;
+  const recap = await buildConversationRecap(run.workflowId, run.runId).catch(() => '');
+  if (recap) {
+    prompt = recap + prompt;
+    emit('status', { text: 'Started with a recap of earlier turns' });
+  }
+
+  // Several agents: the project's subagents. Several sessions: delegate_session, when allowed.
+  const agents = runAgents(run);
+  const delegation = await getDelegationSettingsRepository().get().catch(() => null);
+  const canDelegate = Boolean(delegation?.enabled && run.credentialOwnerId && (delegation.allowNested || !wf?.parent_id));
+
+  const hasRepos = Boolean(run.runnerRepos?.length);
+  const finalizeCheck = hasRepos && run.projectId ? await finalizeCheckFor(run.projectId, Boolean(wf?.jira_key)) : false;
+  const changes: RepoChange[] = [];
+  // The runner saves the workspace after the run; the pull request step later restores it in the session's own
+  // AgentCore session (this run uses a per-run session id), so the repositories are found again to push.
+  const snapshot = hasRepos && run.workflowId ? await snapshotAccess(run.workflowId) : null;
+
   const payload: Record<string, unknown> = {
     mode: 'run',
     runId: run.runId,
-    prompt: run.goal,
+    prompt,
     maxTurns: 200,
     ...(model ? { model } : {}),
     ...(budget != null && budget > 0 ? { maxBudgetUsd: Math.min(budget, 100) } : {}),
     ...(minutes != null && minutes > 0 ? { maxMinutes: Math.min(minutes, 480) } : {}),
     policy: { trusted: run.trusted, rules: toPolicyRules(run.permissions.rules) },
     approvals: runnerApprovals(),
+    ...(Object.keys(agents).length ? { agents } : {}),
+    ...(canDelegate ? { delegation: { via: 'portal' } } : {}),
+    ...(hasRepos ? { repos: run.runnerRepos } : {}),
+    ...(snapshot ? { snapshot } : {}),
+    ...(finalizeCheck ? { finalizeCheck: true } : {}),
+  };
+
+  // Spend from the runner's final result: on the run and in the budget. Returns the cost.
+  const recordSpend = async (r: RunnerResult): Promise<number> => {
+    const m = r.metrics ?? {};
+    const cost = Number(r.costUsd ?? 0);
+    const usedModel = r.model ?? model ?? 'bedrock-default';
+    await repo.updateRun(run.runId, {
+      cost_usd: cost,
+      input_tokens: m.inputTokens ?? 0,
+      output_tokens: m.outputTokens ?? 0,
+      cache_write_tokens: m.cacheWriteTokens ?? 0,
+      cache_read_tokens: m.cacheReadTokens ?? 0,
+      model: usedModel,
+    });
+    if (cost > 0 || (m.inputTokens ?? 0) > 0) {
+      const { getBudgetRepository } = await import('../repositories/budget.ts');
+      await getBudgetRepository().record({
+        user_id: wf?.created_by ?? null,
+        project_id: run.projectId,
+        workflow_id: run.workflowId,
+        run_id: null,
+        cost_usd: cost,
+        input_tokens: m.inputTokens ?? 0,
+        output_tokens: m.outputTokens ?? 0,
+        provider: 'bedrock',
+        model: usedModel,
+        created_at: now(),
+      });
+    }
+    return cost;
   };
 
   // One session per run: AgentCore gives it its own microVM, and answers reach the same one.
   const sessionId = `${run.runId}-${randomUUID()}`;
   const send = agentCoreControlSender(runtimeArn, sessionId);
   const relay = new ApprovalRelay(ctx, send, run.permissions.rules);
+  const delegations = new DelegationRelay(ctx, send, run.permissions.rules, canDelegate
+    ? async (task, title) => {
+      const child = await createChildSession(run.workflowId, run.credentialOwnerId!, task, { title });
+      return { id: String(child.id), title: String(child.title || task.slice(0, 60)) };
+    }
+    : null);
+
+  // The stream has its own abort. A cancel tells the runner to stop; the portal then keeps
+  // reading for a few seconds so the runner's final result, with the spend so far, arrives.
+  const stream = new AbortController();
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
   const onCancel = (): void => {
-    void send({ mode: 'cancel', runId: run.runId }).catch(() => { /* the stream is closing anyway */ });
+    void send({ mode: 'cancel', runId: run.runId }).catch(() => { /* the grace timer closes the stream anyway */ });
+    graceTimer = setTimeout(() => stream.abort(), cancelGraceMs);
   };
   signal?.addEventListener('abort', onCancel, { once: true });
 
@@ -81,31 +237,59 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const textParts: string[] = [];
   let result: RunnerResult | null = null;
   try {
-    for await (const raw of invokeAgentCore(runtimeArn, sessionId, payload, signal ?? undefined)) {
+    for await (const raw of invokeAgentCore(runtimeArn, sessionId, payload, stream.signal)) {
       const ev = raw as unknown as Record<string, unknown>;
+      if (signal?.aborted) {
+        // Stopped: only the final result still matters (its spend). Nothing else is relayed.
+        if (ev.type === 'result') {
+          result = ev as RunnerResult;
+          break;
+        }
+        continue;
+      }
       switch (ev.type) {
         case 'assistant-text': {
           const text = String(ev.text ?? '');
-          if (text) {
+          const agent = agentLabel(ev.agent);
+          if (text && agent) {
+            // A subagent's text: shown under its name; the run's answer is the main agent's.
+            emit('assistant-text', { text, agent });
+          } else if (text) {
             textParts.push(text);
             emit('assistant-text', { text });
           }
           break;
         }
-        case 'tool-start':
-          emit('tool-start', { toolName: String(ev.toolName ?? ''), toolInput: String(ev.toolInput ?? '') });
+        case 'tool-start': {
+          const agent = agentLabel(ev.agent);
+          emit('tool-start', { toolName: String(ev.toolName ?? ''), toolInput: String(ev.toolInput ?? ''), ...(agent ? { agent } : {}) });
           break;
+        }
         case 'tool-result':
           emit('tool-end', { toolName: String(ev.name ?? ''), output: String(ev.output ?? '') });
           break;
-        case 'tool-blocked':
-          emit('tool-blocked', { toolName: String(ev.toolName ?? ''), toolInput: String(ev.toolInput ?? ''), reason: String(ev.reason ?? '') });
+        case 'tool-blocked': {
+          const agent = agentLabel(ev.agent);
+          emit('tool-blocked', { toolName: String(ev.toolName ?? ''), toolInput: String(ev.toolInput ?? ''), reason: String(ev.reason ?? ''), ...(agent ? { agent } : {}) });
           break;
+        }
         case 'approval-request':
           if (isApprovalRequest(ev)) relay.handle(ev);
           break;
+        case 'delegate-request':
+          if (isDelegateRequest(ev)) delegations.handle(ev);
+          break;
+        case 'subagent-started':
+        case 'subagent-finished':
+        case 'subagent-failed':
+          emit(ev.type, subagentEvent(ev));
+          break;
         case 'status':
           if (ev.text) emit('status', { text: String(ev.text) });
+          break;
+        case 'repo-changes':
+          // Not a run event: handed to the pull request step once the run has finished.
+          changes.push({ repo: String(ev.repo ?? ''), base: String(ev.base ?? ''), commits: Number(ev.commits) || 0, files: Number(ev.files) || 0 });
           break;
         case 'error':
           throw new HttpError(502, `AgentCore run error: ${String(ev.message ?? 'unknown')}`);
@@ -116,11 +300,23 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
           break;
       }
     }
+  } catch (e: unknown) {
+    // After a cancel, a stream closed by the grace timer (or failing) just means no result came.
+    if (!signal?.aborted) throw e;
   } finally {
     signal?.removeEventListener('abort', onCancel);
+    clearTimeout(graceTimer);
+    stream.abort(); // closes the connection if reading stopped before the runner's end
   }
 
-  if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
+  if (signal?.aborted) {
+    if (result) {
+      await recordSpend(result).catch((err: unknown) => {
+        console.warn(`[claude-agentcore] Could not record the spend of cancelled run ${run.runId}:`, err);
+      });
+    }
+    throw new DOMException('Run cancelled', 'AbortError');
+  }
   if (!result) throw new HttpError(502, 'The AgentCore run ended without a result.');
 
   // ── Stop reasons (FR-GUARD-10) ─────────────────────────────────────────────
@@ -135,36 +331,12 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
     await repo.updateRun(run.runId, { stop_reason: 'turn limit reached' });
   }
 
-  // ── Spend ──────────────────────────────────────────────────────────────────
-  const m = r.metrics ?? {};
-  const cost = Number(r.costUsd ?? 0);
-  const usedModel = r.model ?? model ?? 'bedrock-default';
-  await repo.updateRun(run.runId, {
-    cost_usd: cost,
-    input_tokens: m.inputTokens ?? 0,
-    output_tokens: m.outputTokens ?? 0,
-    cache_write_tokens: m.cacheWriteTokens ?? 0,
-    cache_read_tokens: m.cacheReadTokens ?? 0,
-    model: usedModel,
-  });
-  if (cost > 0 || (m.inputTokens ?? 0) > 0) {
-    const { getBudgetRepository } = await import('../repositories/budget.ts');
-    await getBudgetRepository().record({
-      user_id: wf?.created_by ?? null,
-      project_id: run.projectId,
-      workflow_id: run.workflowId,
-      run_id: null,
-      cost_usd: cost,
-      input_tokens: m.inputTokens ?? 0,
-      output_tokens: m.outputTokens ?? 0,
-      provider: 'bedrock',
-      model: usedModel,
-      created_at: now(),
-    });
-  }
+  const cost = await recordSpend(r);
 
   const summary = textParts.join('\n').trim() || 'Run complete.';
   emit('run-complete', { result: summary, cost_usd: cost, ...(r.costEstimated ? { cost_estimated: true } : {}) });
   emit('status', { state: 'idle' });
+  // Spend is recorded and the run is done: now the pull request step (never fails the run).
+  await submitRepoChanges(run, wf?.created_by ?? null, changes);
   return summary;
 }

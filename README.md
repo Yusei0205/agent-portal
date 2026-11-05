@@ -22,6 +22,11 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   A single run is a session with one iteration. Each session has a live agent tree, every tool
   call with its cost, changes and diffs, follow-up messages, an optional plan-first approval,
   delegation to child sessions, slash commands, and push to a new branch or a pull request.
+- **Pull requests from sessions.** When a session changes a project repository, the portal pushes a new
+  `portal/<TICKET>-<title>` branch, opens a pull request on GitHub or CodeCommit and starts a draft code review with
+  the branch, PR number and Jira key filled in. Sessions with a Jira ticket do it by themselves; sessions without one
+  ask in the Inbox first; no changes means no pull request. Project Setup has a switch and a list of protected
+  branches that are never pushed to. New code review shows the repository's branches in a dropdown.
 - **Loop specs** are reusable session recipes: a trigger (manual, cron, interval, webhook, GitHub
   event, Jira event), a goal template, rules, a verification pipeline (shell checks and an
   advisory judge), stop rules, memory between iterations and escalation. Seeded: investigate and

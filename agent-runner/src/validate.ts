@@ -55,6 +55,25 @@ export interface ApprovalsPayload {
   expiryMinutes: number;
 }
 
+/** A subagent Claude can hand work to with the Agent tool (the SDK's AgentDefinition, a subset). */
+export interface AgentDefinitionPayload {
+  description: string;
+  /** The agent's system prompt. */
+  prompt: string;
+  /** Tools it may use. Absent: the same tools as the main agent. */
+  tools?: string[];
+  disallowedTools?: string[];
+  /** haiku | sonnet | opus | inherit, or a Bedrock model ID. Absent: the main agent's model. */
+  model?: string;
+  maxTurns?: number;
+}
+
+/** Child sessions: the agent may start new portal sessions, each a run of its own in its own microVM. */
+export interface DelegationPayload {
+  /** The runner streams delegate-request events; the portal creates the session and answers. */
+  via: 'portal';
+}
+
 export interface InvocationPayload {
   /** Unique run ID provided by the caller. */
   runId: string;
@@ -84,6 +103,8 @@ export interface InvocationPayload {
   snapshot?: unknown;
   /** true = only put the repositories in place (no prompt, no agent run). */
   prepareOnly?: boolean;
+  /** true = at the end of the run, report which cloned repositories have changes (read-only; nothing is committed or pushed). */
+  finalizeCheck?: boolean;
   portal?: PortalConfig;
   /** Anthropic credential; without it the run uses Bedrock through the execution role. */
   auth?: AuthConfig;
@@ -97,6 +118,9 @@ export interface InvocationPayload {
   /** Permission rules and trust. Absent: no rules (everything the guard allows runs), untrusted. */
   policy?: PolicyPayload;
   approvals?: ApprovalsPayload;
+  /** The project's subagents, by name. */
+  agents?: Record<string, AgentDefinitionPayload>;
+  delegation?: DelegationPayload;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -113,7 +137,8 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser', 'policy', 'approvals',
+  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'policy', 'approvals',
+  'agents', 'delegation',
 ]);
 const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
 
@@ -128,6 +153,14 @@ export function cleanAwsEnv(v: unknown): Record<string, string> | undefined {
 }
 
 const KNOWN_AUTH_FIELDS = new Set(['kind', 'secret']);
+/** Same limits as the portal's server/agent/agent-defs.ts. */
+const MAX_AGENTS = 50;
+const AGENT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const MAX_AGENT_DESCRIPTION = 2_000;
+const MAX_AGENT_PROMPT = 50_000;
+const MAX_AGENT_TOOLS = 100;
+const MAX_TOOL_NAME = 200;
+const KNOWN_AGENT_FIELDS = new Set(['description', 'prompt', 'tools', 'disallowedTools', 'model', 'maxTurns']);
 const MAX_RULES = 1_000;
 const MAX_RULE_PATTERN = 2_000;
 /** Branch names git accepts and that cannot be read as an option. */
@@ -175,6 +208,9 @@ export function validatePayload(raw: unknown): ValidationResult {
   // prompt — required string
   if (obj.prepareOnly !== undefined && typeof obj.prepareOnly !== 'boolean') {
     return err('"prepareOnly" must be a boolean');
+  }
+  if (obj.finalizeCheck !== undefined && typeof obj.finalizeCheck !== 'boolean') {
+    return err('"finalizeCheck" must be a boolean');
   }
   if (obj.prepareOnly === true && obj.prompt === undefined) {
     obj.prompt = 'prepare';
@@ -327,6 +363,24 @@ export function validatePayload(raw: unknown): ValidationResult {
     approvals = { via: 'portal', expiryMinutes: a.expiryMinutes };
   }
 
+  let agents: Record<string, AgentDefinitionPayload> | undefined;
+  if (obj.agents !== undefined) {
+    const r = validateAgents(obj.agents);
+    if (typeof r === 'string') return err(r);
+    agents = r;
+  }
+
+  let delegation: DelegationPayload | undefined;
+  if (obj.delegation !== undefined) {
+    const d = obj.delegation as Record<string, unknown>;
+    if (typeof d !== 'object' || d === null || Array.isArray(d)) return err('"delegation" must be an object');
+    for (const key of Object.keys(d)) {
+      if (key !== 'via') return err(`Unknown field in "delegation": "${key}"`);
+    }
+    if (d.via !== 'portal') return err('"delegation.via" must be "portal"');
+    delegation = { via: 'portal' };
+  }
+
   return {
     ok: true,
     payload: {
@@ -345,14 +399,69 @@ export function validatePayload(raw: unknown): ValidationResult {
       ...(Array.isArray(obj.inputFiles) && obj.inputFiles.length <= 30 ? { inputFiles: obj.inputFiles as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(obj.prepareOnly === true ? { prepareOnly: true } : {}),
+      ...(obj.finalizeCheck === true ? { finalizeCheck: true } : {}),
       portal,
       auth,
       trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,
       browser: obj.browser === true ? true : undefined,
       policy,
       approvals,
+      agents,
+      delegation,
     },
   };
+}
+
+function validateAgents(raw: unknown): Record<string, AgentDefinitionPayload> | string {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return '"agents" must be an object of agent definitions by name';
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > MAX_AGENTS) return `"agents" has more than ${MAX_AGENTS} agents`;
+  const out: Record<string, AgentDefinitionPayload> = {};
+  const toolList = (v: unknown, where: string): string[] | string => {
+    if (!Array.isArray(v) || v.length > MAX_AGENT_TOOLS) return `${where} must be an array of at most ${MAX_AGENT_TOOLS} tool names`;
+    for (const t of v) {
+      if (typeof t !== 'string' || !t || t.length > MAX_TOOL_NAME) return `${where} must hold tool names of 1 to ${MAX_TOOL_NAME} characters`;
+    }
+    return v as string[];
+  };
+  for (const [name, value] of entries) {
+    const at = `"agents.${name.slice(0, 64)}"`;
+    if (!AGENT_NAME.test(name)) return `${at}: an agent name is 1 to 64 letters, digits, ".", "_" or "-"`;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return `${at} must be an object`;
+    const a = value as Record<string, unknown>;
+    for (const key of Object.keys(a)) {
+      if (!KNOWN_AGENT_FIELDS.has(key)) return `Unknown field in ${at}: "${key}"`;
+    }
+    if (typeof a.description !== 'string' || !a.description.trim() || a.description.length > MAX_AGENT_DESCRIPTION) {
+      return `${at}.description must be a non-empty string of at most ${MAX_AGENT_DESCRIPTION} characters`;
+    }
+    if (typeof a.prompt !== 'string' || !a.prompt.trim() || a.prompt.length > MAX_AGENT_PROMPT) {
+      return `${at}.prompt must be a non-empty string of at most ${MAX_AGENT_PROMPT} characters`;
+    }
+    const def: AgentDefinitionPayload = { description: a.description, prompt: a.prompt };
+    if (a.tools !== undefined) {
+      const t = toolList(a.tools, `${at}.tools`);
+      if (typeof t === 'string') return t;
+      def.tools = t;
+    }
+    if (a.disallowedTools !== undefined) {
+      const t = toolList(a.disallowedTools, `${at}.disallowedTools`);
+      if (typeof t === 'string') return t;
+      def.disallowedTools = t;
+    }
+    if (a.model !== undefined) {
+      if (typeof a.model !== 'string' || !a.model.trim() || a.model.length > 200) return `${at}.model must be a non-empty string of at most 200 characters`;
+      def.model = a.model.trim();
+    }
+    if (a.maxTurns !== undefined) {
+      if (typeof a.maxTurns !== 'number' || !Number.isInteger(a.maxTurns) || a.maxTurns < 1 || a.maxTurns > 200) {
+        return `${at}.maxTurns must be a positive integer ≤ 200`;
+      }
+      def.maxTurns = a.maxTurns;
+    }
+    out[name] = def;
+  }
+  return out;
 }
 
 function validatePolicy(raw: unknown): PolicyPayload | string {

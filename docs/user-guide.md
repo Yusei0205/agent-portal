@@ -174,6 +174,21 @@ Hover over a session row in the list and click the pencil icon, or use the **⋯
 
 Click the **Stop** button in the workspace header while the session is running.
 
+### Pull requests from sessions
+
+When a session changes code in a project repository, the portal can push the work to a new branch, open a pull request and start a code review of it.
+
+- **Sessions linked to a Jira ticket** open the pull request by themselves when a run ends. The branch is `portal/<TICKET>-<short-title>`, the title is `<TICKET>: <ticket summary>`, and a draft review starts with the branch, PR number and Jira key already filled in. Nothing is posted to the pull request until you approve the review.
+- **Sessions without a ticket** ask first. An item "Open a pull request for <repo>?" appears in the Inbox and on the session; nothing is pushed until you approve it.
+- **No changes, no pull request.** A session that did not change the repository pushes nothing.
+- The **Pull request** card on the session shows each step (asked, pushed, opened, review started) with links. If a step fails, or you declined or the question expired, the card has a **Create pull request** or **Try again** button.
+- Supported: **GitHub** and **AWS CodeCommit**. On other hosts the branch is pushed and the card says no pull request was opened.
+- The token or AWS account behind the repository needs write access: a GitHub token with repository write access, or CodeCommit `GitPush` and `CreatePullRequest`. Without it the card says "No permission to push to <repo>".
+
+**Settings** (project **Setup › Pull requests**, editors only): the switch *Open a pull request when a session fixes code* (on by default), and the list *Branches that are never pushed to* (default `main`, `master`, `develop`, `release/*`; the repository's default branch is always protected too). The portal never pushes to a listed branch and never force-pushes.
+
+**New code review** lists the repository's branches in the Base and Head fields (from the host, refreshed on request). You can still type a branch or ref that is not listed.
+
 ### Idle stop and resuming
 
 A session that has had no activity for the portal-configured idle timeout (default 30 minutes) is automatically stopped. A banner appears in the composer bar: "Session stopped — idle for N minutes. Send a message to resume." Send any message to resume it. You can also dismiss the banner without sending a message.

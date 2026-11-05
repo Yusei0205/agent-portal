@@ -75,6 +75,7 @@ export type AgentCoreSSEEvent =
   | { type: 'context'; percent: number }
   | { type: 'tool'; name: string }
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
+  | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number }
   | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
   | { type: 'browser-navigate'; url: string }
   | { type: 'browser-screenshot'; screenshotBase64: string; url?: string }
@@ -536,6 +537,35 @@ export interface AgentCoreRunOpts {
   model?: string | null;
 }
 
+// ── Pull requests: ask the runner for changed repositories, hand them to the portal ──
+
+interface RepoChangesHooks {
+  /** Value of `finalizeCheck` for this run. */
+  flag: (run: RunContext['run']) => Promise<boolean>;
+  handle: (ctx: import('../session-pr.ts').SessionPrContext, changes: import('../session-pr.ts').RepoChange[]) => Promise<void>;
+}
+
+// session-pr.ts imports this module, so it is loaded late.
+const defaultRepoChangesHooks: RepoChangesHooks = {
+  flag: async (run) => {
+    if (!run.projectId) return false;
+    const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
+    const { getSessionsRepository } = await import('../repositories/sessions.ts');
+    const w = await getSessionsRepository().getWorkflowById(run.workflowId);
+    return finalizeRunPayloadFlag(run.projectId, Boolean(String(w?.jira_key ?? '').trim()));
+  },
+  handle: async (ctx, changes) => {
+    const { handleRepoChanges } = await import('../session-pr.ts');
+    await handleRepoChanges(ctx, changes);
+  },
+};
+let repoChangesHooks: RepoChangesHooks = defaultRepoChangesHooks;
+
+/** Tests only. Call with no argument to restore the real behaviour. */
+export function _setRepoChangesHooks(over: Partial<RepoChangesHooks> | null = null): void {
+  repoChangesHooks = over ? { ...defaultRepoChangesHooks, ...over } : defaultRepoChangesHooks;
+}
+
 /**
  * Run kiro-cli via AgentCore and map the SSE events onto portal run events.
  * Returns the concatenated text output (same shape as runKiroAcp / runKiroLegacy).
@@ -567,9 +597,13 @@ export async function runKiroViaAgentCore(
     timedOut = true;
     ac.abort(new Error('AgentCore run timed out'));
   }, timeoutMs);
+  const repoChanges: Array<{ repo: string; base: string; commits: number; files: number }> = [];
 
   try {
     const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
+    const finalizeCheck = opts.repos?.length && ctx.run?.workflowId
+      ? await repoChangesHooks.flag(ctx.run).catch(() => false)
+      : false;
     const payload: Record<string, unknown> = {
       mode: 'kiro-run',
       runId: opts.runId,
@@ -583,6 +617,7 @@ export async function runKiroViaAgentCore(
       ...(opts.checks?.length ? { checks: opts.checks } : {}),
       ...(opts.model ? { model: opts.model } : {}),
       ...(snapshot ? { snapshot } : {}),
+      ...(finalizeCheck ? { finalizeCheck: true } : {}),
       // Same rule as the local Kiro engine: trusted runs allow what kiro-cli asks about,
       // untrusted runs ask a person (relayed below).
       policy: { trusted: ctx.run.trusted },
@@ -657,6 +692,14 @@ export async function runKiroViaAgentCore(
           break;
         }
 
+        case 'repo-changes': {
+          const rc = ev as { type: 'repo-changes'; repo?: unknown; base?: unknown; commits?: unknown; files?: unknown };
+          if (typeof rc.repo === 'string' && typeof rc.base === 'string') {
+            repoChanges.push({ repo: rc.repo, base: rc.base, commits: Number(rc.commits) || 0, files: Number(rc.files) || 0 });
+          }
+          break;
+        }
+
         case 'browser-session': {
           const sesEv = ev as { type: 'browser-session'; browserId?: string; sessionId?: string; width?: number; height?: number };
           if (sesEv.sessionId) emit('browser-session', { browserId: sesEv.browserId || 'aws.browser.v1', sessionId: sesEv.sessionId, width: Number(sesEv.width) || 1280, height: Number(sesEv.height) || 800 });
@@ -722,6 +765,16 @@ export async function runKiroViaAgentCore(
   }
 
   if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
+
+  // A successful run that changed repositories: let the portal decide about a pull request. Never fails the run.
+  if (repoChanges.length && ctx.run?.workflowId && ctx.run.projectId) {
+    try {
+      await repoChangesHooks.handle(
+        { workflowId: ctx.run.workflowId, runId: opts.runId, projectId: ctx.run.projectId, userId: ctx.run.credentialOwnerId ?? null, engine: 'kiro' },
+        repoChanges,
+      );
+    } catch { /* handleRepoChanges reports its own problems as events */ }
+  }
 
   emit('status', { state: 'idle' });
   return { textParts, credits };

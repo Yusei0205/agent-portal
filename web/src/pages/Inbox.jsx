@@ -38,6 +38,25 @@ function payloadSummary(item) {
   return null;
 }
 
+/** What the agent wants to do: the tool, and the part of its input a person decides on. */
+function approvalContext(item) {
+  const p = item.payload || {};
+  const input = p.toolInput && typeof p.toolInput === 'object' ? p.toolInput : {};
+  const main =
+    input.command ?? input.cmd ?? input.url ?? input.file_path ?? input.path ?? input.pattern ?? input.query ?? null;
+  const detail = input.description ?? null;
+  let text = main != null ? String(main) : '';
+  if (!text) {
+    const rest = Object.entries(input).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n');
+    text = rest;
+  }
+  return {
+    tool: p.toolName ? String(p.toolName) : 'Tool call',
+    detail: detail ? String(detail) : '',
+    text: text.length > 1200 ? text.slice(0, 1200) + '…' : text,
+  };
+}
+
 // ── Item renderers ─────────────────────────────────────────────────────────────
 
 function ApprovalItem({ item, onResolved }) {
@@ -57,10 +76,11 @@ function ApprovalItem({ item, onResolved }) {
     } catch (e) {
       toast(e.message, 'error');
       setBusy(false);
+      if (onResolved) onResolved();
     }
   };
 
-  const summary = payloadSummary(item);
+  const ctx = approvalContext(item);
 
   return (
     <div className={`inbox-item${resolved ? ' inbox-item-resolved' : ''}`}>
@@ -69,16 +89,21 @@ function ApprovalItem({ item, onResolved }) {
         {item.project_name && (
           <span className="badge">{item.project_name}</span>
         )}
-        {item.workflow_goal && (
+        {item.workflow_goal ? (
           <span className="inbox-item-session" title={item.workflow_goal}>
             {item.workflow_goal.length > 50 ? item.workflow_goal.slice(0, 49) + '…' : item.workflow_goal}
           </span>
-        )}
+        ) : item.workflow_id ? (
+          <a className="inbox-item-session" href={`/projects/${item.project_id}/sessions/${item.workflow_id}`}>Open session</a>
+        ) : null}
         <span className="muted" style={{ marginLeft: 'auto', whiteSpace: 'nowrap', fontSize: '0.78rem' }}>
           {formatRelative(item.created_at)}
         </span>
       </div>
-      {summary && <p className="inbox-item-body">{summary}</p>}
+      <p className="inbox-item-body"><strong>{ctx.tool}</strong> wants to run{ctx.detail ? ` — ${ctx.detail}` : ''}</p>
+      {ctx.text && (
+        <pre className="inbox-item-code" style={{ margin: '6px 0 10px', padding: '8px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.25)', fontSize: '0.78rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto' }}>{ctx.text}</pre>
+      )}
       {resolved ? (
         <div className="inbox-item-resolved-note">
           <Icon name="check" size={14} />

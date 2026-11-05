@@ -24,6 +24,7 @@ import { emitRunnerFiles, writeInputFiles } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
+import { reportRepoChanges } from '../shared/runner-finalize-run.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -382,6 +383,12 @@ function parseRawInput(raw: unknown): Record<string, unknown> {
 
 // ── Run entry point ───────────────────────────────────────────────────────────
 
+/** Errors from kiro's service that pass on their own. A request the model refused or a bad input is not one of them. */
+function isTransientKiroError(message: string): boolean {
+  return /dispatch failure|error in the response stream|unknown error occurred|throttl|too many requests|service unavailable|temporar|timed? ?out|ECONNRESET|socket hang up|overloaded|-32603/i.test(message)
+    && !/context (window|length)|content filter|not authori[sz]ed|invalid (token|credential)|expired/i.test(message);
+}
+
 export async function runKiroRun(
   payload: KiroRunPayload,
   emit: EmitFn,
@@ -710,11 +717,33 @@ export async function runKiroRun(
         }
       }
 
-      // Send prompt
-      await acp.sendRequest('session/prompt', {
-        sessionId,
-        prompt: [{ type: 'text', text: prompt }],
-      });
+      // Send the prompt. Kiro's service now and then drops a request ("dispatch failure", a broken response stream, a
+      // throttle). These pass on their own, so try again a few times before giving up. When nothing of the answer had
+      // arrived yet the same prompt is sent again; when part of it had, kiro is asked to carry on from where it stopped
+      // so that the earlier part is not repeated.
+      const baseEmit = run.emit;
+      let seen = 0;
+      run.emit = (ev) => { seen++; baseEmit(ev); };
+      try {
+        const delays = [2_000, 5_000, 10_000];
+        let text = prompt;
+        for (let attempt = 0; ; attempt++) {
+          seen = 0;
+          try {
+            await acp.sendRequest('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+            break;
+          } catch (e) {
+            const msg = String((e as Error)?.message ?? e);
+            if (attempt >= delays.length || cancelled || timedOut || run.exited || !isTransientKiroError(msg)) throw e;
+            if (seen > 0) text = 'A temporary error interrupted your last reply. Carry on from where you stopped, without repeating what you already did or said.';
+            baseEmit({ type: 'status', text: `Kiro had a temporary error (${msg.slice(0, 90)}). Trying again (${attempt + 1} of ${delays.length})…` });
+            await new Promise((r) => setTimeout(r, delays[attempt]));
+            if (cancelled || run.exited) throw e;
+          }
+        }
+      } finally {
+        run.emit = baseEmit;
+      }
     } catch (e) {
       acpError = e as Error;
     } finally {
@@ -758,6 +787,11 @@ export async function runKiroRun(
       } catch (e) {
         emit({ type: 'check-result', ok: false, ranAt: new Date().toISOString(), steps: [{ step: 'checks', ok: false, output: String((e as Error)?.message ?? e).slice(0, 500), durationMs: 0, required: true }] });
       }
+    }
+
+    // Pull requests: say which cloned repositories changed (read-only; nothing is committed or pushed here).
+    if (payload.finalizeCheck && payload.repos?.length) {
+      try { await reportRepoChanges(payload.repos, run.workDir, emit); } catch { /* best effort */ }
     }
 
     // Send back the files kiro wrote in the work folder, within size limits.

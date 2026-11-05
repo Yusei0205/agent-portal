@@ -48,6 +48,8 @@ export interface KiroRunPayload {
   model?: string;
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
   snapshot?: unknown;
+  /** true = at the end of the run, report which cloned repositories have changes (read-only; nothing is committed or pushed). */
+  finalizeCheck?: boolean;
   /**
    * Trust level of the run, as in the portal's local Kiro engine: trusted runs allow what
    * kiro-cli asks about; untrusted runs ask a person. Absent: trusted (the spike behaviour,
@@ -155,6 +157,9 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
   if (obj.prompt.length > MAX_PROMPT) {
     return err(`"prompt" exceeds maximum length of ${MAX_PROMPT}`);
   }
+  if (obj.finalizeCheck !== undefined && typeof obj.finalizeCheck !== 'boolean') {
+    return err('"finalizeCheck" must be a boolean');
+  }
 
   const t = obj.token;
   if (typeof t !== 'object' || t === null || Array.isArray(t)) {
@@ -211,6 +216,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       ...(Array.isArray(obj.inputFiles) && obj.inputFiles.length <= 30 ? { inputFiles: obj.inputFiles as unknown[] } : {}),
       ...(Array.isArray(obj.checks) && obj.checks.length <= 8 ? { checks: obj.checks as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
+      ...(obj.finalizeCheck === true ? { finalizeCheck: true } : {}),
       token: {
         accessToken: tok.accessToken as string,
         expiresAt: tok.expiresAt as string,
