@@ -60,6 +60,44 @@ export async function createInboxItem(opts: InboxItemCreate): Promise<string> {
   return id;
 }
 
+// ── Stale approvals ───────────────────────────────────────────────────────────
+
+/**
+ * An approval can be answered in the session, expire, or be cancelled with the run, and none of those paths knows the
+ * inbox item. Check each listed approval against its input record; the ones that are no longer waiting are closed here
+ * so they stop showing buttons that can only fail.
+ */
+async function dropStaleApprovals(items: InboxRecord[]): Promise<InboxRecord[]> {
+  const approvals = items.filter((i) => i.type === 'approval');
+  if (approvals.length === 0) return items;
+  const { getSessionsRepository } = await import('./repositories/sessions.ts');
+  const sessRepo = getSessionsRepository();
+  const inboxRepo = getInboxRepository();
+  const stale = new Set<string>();
+  await Promise.all(approvals.map(async (item) => {
+    try {
+      const pl = safeJson(item.payload, {}) as Record<string, unknown>;
+      const inputId = typeof pl.inputId === 'string' ? pl.inputId : null;
+      const runId = item.run_id ? String(item.run_id) : null;
+      if (!inputId || !runId) return;
+      const row = await sessRepo.getInputByRunAndId(runId, inputId);
+      if (row && row.status === 'pending') return;
+      stale.add(item.id);
+      await inboxRepo.resolveConditional(item.id, 'system', now());
+    } catch { /* leave it listed; the next load tries again */ }
+  }));
+  return stale.size ? items.filter((i) => !stale.has(i.id)) : items;
+}
+
+async function withoutStale(count: number, load: () => Promise<{ items: InboxRecord[] }>): Promise<number> {
+  if (count === 0) return 0;
+  try {
+    const { items } = await load();
+    const live = await dropStaleApprovals(items);
+    return Math.max(0, count - (items.length - live.length));
+  } catch { return count; }
+}
+
 // ── View helper ───────────────────────────────────────────────────────────────
 
 function inboxView(
@@ -155,8 +193,9 @@ export function registerInboxRoutes(): void {
       result = await inboxRepo.listUnresolvedByProjects(projectIds, { limit, offset });
     }
 
-    const enriched = await enrichItems(result.items);
-    sendJson(res, 200, { items: enriched, total: result.total });
+    const live = await dropStaleApprovals(result.items);
+    const enriched = await enrichItems(live);
+    sendJson(res, 200, { items: enriched, total: Math.max(0, result.total - (result.items.length - live.length)) });
   });
 
   // GET /api/inbox/count
@@ -167,11 +206,13 @@ export function registerInboxRoutes(): void {
     let count: number;
     if (req.user.is_admin) {
       count = await inboxRepo.countAllUnresolved();
+      count = await withoutStale(count, () => inboxRepo.listAllUnresolved({ limit: 200, offset: 0 }));
     } else {
       const projRepo = getProjectRepository();
       const myProjects = await projRepo.listMyProjects(String(req.user.id));
       const projectIds = myProjects.map((p) => p.id);
       count = await inboxRepo.countUnresolvedByProjects(projectIds);
+      count = await withoutStale(count, () => inboxRepo.listUnresolvedByProjects(projectIds, { limit: 200, offset: 0 }));
     }
 
     sendJson(res, 200, { count });
@@ -219,12 +260,14 @@ export function registerInboxRoutes(): void {
       const { getSessionsRepository } = await import('./repositories/sessions.ts');
       const sessRepo = getSessionsRepository();
       const inputRow = await sessRepo.getInputByRunAndId(runId, inputId);
-      if (!inputRow) {
+      if (!inputRow || inputRow.status === 'expired') {
+        await inboxRepo.resolveConditional(req.params.id, 'system', now()).catch(() => false);
         sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
         return;
       }
-      if (inputRow.status === 'expired') {
-        sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
+      if (inputRow.status !== 'pending') {
+        await inboxRepo.resolveConditional(req.params.id, 'system', now()).catch(() => false);
+        sendJson(res, 409, { error: 'This was already answered.' });
         return;
       }
 
