@@ -255,7 +255,7 @@ export function orderBranches(names: string[], defaultBranch: string | null): st
 }
 
 /** Ask the host for the repository's branches (works for GitHub, CodeCommit and any other git host). */
-async function listRemoteBranches(repo: Repository, env: Record<string, string>): Promise<string[]> {
+export async function listRemoteBranches(repo: Repository, env: Record<string, string>): Promise<string[]> {
   const out = await spawnGit(['ls-remote', '--heads', '--', repo.url], os.tmpdir(), env, 25_000);
   return parseLsRemoteHeads(out);
 }

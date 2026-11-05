@@ -600,6 +600,7 @@
         "server/review.ts",
         "server/review-lifecycle.ts",
         "server/pull-requests.ts",
+        "server/session-pr.ts",
         "server/control-plane.ts",
         "server/repositories/reviews.ts",
         "server/repositories/reviews-sqlite.ts",
@@ -613,6 +614,7 @@
         "test/review.test.ts",
         "test/reviews-repo.test.ts",
         "test/pull-requests.test.ts",
+        "test/session-pr.test.ts",
         "test/review-create.test.ts"
       ],
       "smokeIds": ["reviews"]

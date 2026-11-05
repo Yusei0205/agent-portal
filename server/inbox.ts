@@ -242,6 +242,10 @@ export function registerInboxRoutes(): void {
     const response = body.response ?? null;
 
     // ── Approval-specific checks
+    if (item.type === 'push' && response === 'approve' && req.authViaToken) {
+      sendJson(res, 403, { error: 'API tokens cannot approve a push. Approve it from a signed-in browser, or decline it.' });
+      return;
+    }
     if (item.type === 'approval' && response === 'approve' && req.authViaToken) {
       sendJson(res, 403, { error: 'API tokens cannot approve tool calls. Approve it from a signed-in browser, or decline it.' });
       return;
@@ -314,6 +318,22 @@ export function registerInboxRoutes(): void {
     if (!resolved) {
       sendJson(res, 409, { error: 'Someone resolved this a moment ago.' });
       return;
+    }
+
+    // A "push" question: approving opens the pull request (in the background), declining records it on the session.
+    if (item.type === 'push') {
+      const pl = safeJson(item.payload, {}) as Record<string, unknown>;
+      const wid = item.workflow_id ? String(item.workflow_id) : '';
+      const rid = typeof pl.repoId === 'string' ? pl.repoId : '';
+      if (wid && rid) {
+        const sp = await import('./session-pr.ts');
+        if (response === 'approve') {
+          void sp.createPullRequestForSession(wid, rid, { approvedBy: String(req.user.id) })
+            .catch((e: unknown) => console.error('[session-pr] approved pull request failed:', e));
+        } else {
+          await sp.declinePullRequestForSession(wid, rid).catch(() => undefined);
+        }
+      }
     }
 
     if (item.project_id) {
