@@ -105,6 +105,8 @@ interface AgentStats {
   p95DurationMs: number | null;
   avgDurationMs: number;
   costUsd: number;
+  /** Kiro credits (Kiro bills in credits, not dollars). */
+  credits: number;
   inputTokens: number;
   outputTokens: number;
   toolCalls: number;
@@ -239,6 +241,7 @@ async function computeDashboard(
     p95DurationMs: r.p95DurationMs,
     avgDurationMs: r.durationCount > 0 ? Math.round(r.totalDurationMs / r.durationCount) : 0,
     costUsd: r.costUsd,
+    credits: r.credits,
     inputTokens: r.inputTokens,
     outputTokens: r.outputTokens,
     toolCalls: r.toolCalls,
@@ -289,6 +292,7 @@ async function computeAgentRuns(
     provider: r.provider,
     durationMs: r.durationMs,
     costUsd: r.costUsd,
+    credits: r.credits,
     tokens: { input: r.inputTokens, output: r.outputTokens },
     toolCalls: r.toolCalls,
     error: r.error,

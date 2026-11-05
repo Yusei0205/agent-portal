@@ -365,6 +365,7 @@ export class SqliteStatsRepository implements StatsRepository {
       cancelled: number;
       finished: number;
       cost_usd: number;
+      credits: number;
       input_tokens: number;
       output_tokens: number;
       last_run_at: string | null;
@@ -377,6 +378,7 @@ export class SqliteStatsRepository implements StatsRepository {
          SUM(CASE WHEN r.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
          SUM(CASE WHEN r.status IN (${TERMINAL_STATUSES}) THEN 1 ELSE 0 END) AS finished,
          COALESCE(SUM(r.cost_usd), 0) AS cost_usd,
+         COALESCE(SUM(r.credits), 0) AS credits,
          COALESCE(SUM(r.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(r.output_tokens), 0) AS output_tokens,
          MAX(r.created_at) AS last_run_at
@@ -458,6 +460,7 @@ export class SqliteStatsRepository implements StatsRepository {
         p50DurationMs: percentile(durs, 50),
         p95DurationMs: percentile(durs, 95),
         costUsd: Number(r.cost_usd ?? 0),
+        credits: Number(r.credits ?? 0),
         inputTokens: Number(r.input_tokens ?? 0),
         outputTokens: Number(r.output_tokens ?? 0),
         toolCalls: tools.toolCalls,
@@ -685,6 +688,7 @@ export class SqliteStatsRepository implements StatsRepository {
       model: string | null;
       provider: string | null;
       cost_usd: number;
+      credits: number;
       input_tokens: number;
       output_tokens: number;
       error: string | null;
@@ -706,6 +710,7 @@ export class SqliteStatsRepository implements StatsRepository {
            ORDER BY bu.id DESC
            LIMIT 1) AS provider,
          COALESCE(r.cost_usd, 0) AS cost_usd,
+         COALESCE(r.credits, 0) AS credits,
          COALESCE(r.input_tokens, 0) AS input_tokens,
          COALESCE(r.output_tokens, 0) AS output_tokens,
          (SELECT JSON_EXTRACT(e.payload, '$.error')
@@ -741,6 +746,7 @@ export class SqliteStatsRepository implements StatsRepository {
       provider: r.provider ? String(r.provider) : null,
       durationMs: r.duration_ms != null ? Number(r.duration_ms) : null,
       costUsd: Number(r.cost_usd ?? 0),
+      credits: Number(r.credits ?? 0),
       inputTokens: Number(r.input_tokens ?? 0),
       outputTokens: Number(r.output_tokens ?? 0),
       toolCalls: Number(r.tool_calls ?? 0),

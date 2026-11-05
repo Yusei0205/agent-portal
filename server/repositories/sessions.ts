@@ -87,6 +87,8 @@ export interface RunRecord {
   started_at: string | null;
   finished_at: string | null;
   cost_usd: number;
+  /** Kiro credits used by the run. Kiro bills in credits, not dollars, so they are kept apart from cost_usd. */
+  credits: number;
   input_tokens: number;
   output_tokens: number;
   cache_write_tokens: number;
@@ -246,6 +248,8 @@ export interface ListWorkflowsOpts {
 
 export interface RunTotals {
   total_cost: number;
+  /** Sum of Kiro credits. */
+  total_credits: number;
   total_input: number;
   total_output: number;
 }

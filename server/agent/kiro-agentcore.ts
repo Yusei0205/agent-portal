@@ -73,6 +73,7 @@ export type AgentCoreSSEEvent =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string }
   | { type: 'context'; percent: number }
+  | { type: 'usage'; credits: number }
   | { type: 'tool'; name: string }
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
   | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number }
@@ -579,7 +580,7 @@ export async function runKiroViaAgentCore(
 ): Promise<{ textParts: string[]; credits: number }> {
   const { emit, signal } = ctx;
   const textParts: string[] = [];
-  const credits = 0;
+  let credits = 0;
   // One AgentCore session per portal session, so the session's persistent folder (repositories) is found again.
   const sessionId = ctx.run?.workflowId ? agentCoreSessionId(ctx.run.workflowId, 'kiro') : randomUUID();
   if (ctx.run?.workflowId && opts.repos?.length) await waitForRepoPrep(ctx.run.workflowId);
@@ -661,6 +662,16 @@ export async function runKiroViaAgentCore(
             emit('assistant-text', { text: textEv.text, stream: true });
             if (textParts.length) textParts[textParts.length - 1] += textEv.text;
             else textParts.push(textEv.text);
+          }
+          break;
+        }
+
+        case 'usage': {
+          // Kiro credits used so far in this turn (Kiro bills in credits, not dollars).
+          const n = Number((ev as { type: 'usage'; credits?: unknown }).credits);
+          if (Number.isFinite(n) && n >= 0) {
+            credits = n;
+            emit('cost-update', { credits, unit: 'credits' });
           }
           break;
         }

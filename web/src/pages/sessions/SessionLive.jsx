@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRunStream } from '../../lib/useRunStream.js';
 import { api } from '../../lib/api.js';
-import { formatCost } from '../../lib/util.js';
+import { formatCost, formatCredits } from '../../lib/util.js';
 import { Icon } from '../../components/Icon.jsx';
 import { sanitizeMarkdown } from '../../lib/sanitize.js';
 import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventLists } from '../../lib/mergeEvents.js';
@@ -878,11 +878,14 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
 function CostPill({ events }) {
   const last = [...events].reverse().find((e) => e.type === 'cost-update');
   if (!last) return null;
+  // Kiro reports credits (it bills in credits, not dollars); the other engines report dollars.
+  const credits = last.payload?.credits;
   const cost = last.payload?.cost_usd ?? last.payload?.total_usd;
-  if (cost == null) return null;
+  const text = credits != null ? formatCredits(credits) : cost != null ? formatCost(cost) : null;
+  if (text == null) return null;
   return (
-    <div className="live-cost-pill" aria-label={`Running cost: ${formatCost(cost)}`}>
-      {formatCost(cost)}
+    <div className="live-cost-pill" aria-label={`${credits != null ? 'Credits used' : 'Running cost'}: ${text}`}>
+      {text}
     </div>
   );
 }

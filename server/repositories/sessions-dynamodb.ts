@@ -149,6 +149,7 @@ function itemToRun(item: Record<string, AttributeValue>): RunRecord {
     started_at: getString(item, 'started_at'),
     finished_at: getString(item, 'finished_at'),
     cost_usd: getNumber(item, 'cost_usd'),
+    credits: getNumber(item, 'credits'),
     input_tokens: getNumber(item, 'input_tokens'),
     output_tokens: getNumber(item, 'output_tokens'),
     cache_write_tokens: getNumber(item, 'cache_write_tokens'),
@@ -1045,14 +1046,16 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
   async getRunTotals(workflowId: string): Promise<RunTotals> {
     const runs = await this.listRunsByWorkflow(workflowId, 1000);
     let total_cost = 0;
+    let total_credits = 0;
     let total_input = 0;
     let total_output = 0;
     for (const r of runs) {
       total_cost += r.cost_usd;
+      total_credits += r.credits;
       total_input += r.input_tokens;
       total_output += r.output_tokens;
     }
-    return { total_cost, total_input, total_output };
+    return { total_cost, total_credits, total_input, total_output };
   }
 
   async createRun(input: CreateRunInput): Promise<RunRecord> {
@@ -1085,6 +1088,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       started_at: input.started_at,
       finished_at: input.finished_at,
       cost_usd: input.cost_usd,
+      credits: 0,
       input_tokens: input.input_tokens,
       output_tokens: input.output_tokens,
       cache_write_tokens: 0,
@@ -1102,7 +1106,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     if (!run) return;
 
     const allowed: (keyof RunRecord)[] = [
-      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
       'stop_reason', 'time_limit_at', 'model', 'error',
     ];
@@ -1141,7 +1145,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     if (!run) return false;
 
     const allowed: (keyof RunRecord)[] = [
-      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
       'stop_reason', 'time_limit_at', 'model', 'error',
     ];
@@ -2046,7 +2050,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     if (!run) return false;
 
     const allowed: (keyof RunRecord)[] = [
-      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
       'stop_reason', 'time_limit_at', 'model', 'error',
     ];
@@ -2083,6 +2087,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
 
     // Cost/tokens from the run item (already updated by the engine before finalization)
     const costUsd = run.cost_usd || 0;
+    const credits = run.credits || 0;
     const inputTokens = run.input_tokens || 0;
     const outputTokens = run.output_tokens || 0;
 
@@ -2129,11 +2134,12 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
 
       // AGENTSTATS rollup (per-project per-agent per-day)
       // SK format: DAY#<date>#AGENT#<name>  — date-led so BETWEEN queries are bounded.
-      let asExpr = `ADD #asc :one, runs :one, costUsd :cost, inputTokens :inp, outputTokens :out`;
+      let asExpr = `ADD #asc :one, runs :one, costUsd :cost, credits :cred, inputTokens :inp, outputTokens :out`;
       const asNames: Record<string, string> = { '#asc': statusAttr };
       const asVals: Record<string, import('@aws-sdk/client-dynamodb').AttributeValue> = {
         ':one': { N: '1' },
         ':cost': { N: String(costUsd) },
+        ':cred': { N: String(credits) },
         ':inp': { N: String(inputTokens) },
         ':out': { N: String(outputTokens) },
       };

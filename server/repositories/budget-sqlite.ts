@@ -17,6 +17,7 @@ export class SqliteBudgetRepository implements BudgetRepository {
       workflow_id: input.workflow_id,
       run_id: input.run_id,
       cost_usd: input.cost_usd,
+      credits: input.credits ?? 0,
       input_tokens: input.input_tokens,
       output_tokens: input.output_tokens,
       provider: input.provider,

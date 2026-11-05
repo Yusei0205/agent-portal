@@ -19,7 +19,7 @@ import { subscribeGlobal } from '../lib/events.js';
 import { href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { CostPanel } from '../components/CostPanel.jsx';
-import { formatRelative, formatCost } from '../lib/util.js';
+import { formatRelative, formatUsage } from '../lib/util.js';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Format helpers ────────────────────────────────────────────────────────────
@@ -749,7 +749,7 @@ function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
                       </span>
                     </td>
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtMs(r.durationMs)}</td>
-                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{r.costUsd != null ? formatCost(r.costUsd) : '—'}</td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{formatUsage(r.costUsd, r.credits)}</td>
                     {/* fix 2: tokens is {input, output}; display total with tooltip for split */}
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>
                       {r.tokens != null
@@ -783,8 +783,8 @@ const PERF_COLS = [
   { key: 'p95DurationMs',  label: 'p95',         numeric: true  },
   { key: 'avgDurationMs',  label: 'Avg dur.',    numeric: true  },
   // fix 1: costUsd is the TOTAL; _avgCost = costUsd / runs for per-run average
-  { key: '_avgCost',       label: 'Avg cost',    numeric: true  },
-  { key: '_totalCost',     label: 'Total cost',  numeric: true  },
+  { key: '_avgCost',       label: 'Avg usage',   numeric: true  },
+  { key: '_totalCost',     label: 'Total usage', numeric: true  },
   { key: '_totalTokens',   label: 'Tokens',      numeric: true  },
   { key: 'toolCalls',      label: 'Tool calls',  numeric: true  },
   { key: 'toolErrors',     label: 'Errors',      numeric: true  },
@@ -836,6 +836,9 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
       ...a,
       _totalCost: a.costUsd || 0,
       _avgCost: (a.runs || 0) > 0 ? (a.costUsd || 0) / a.runs : 0,
+      // Kiro bills in credits, not dollars: kept apart and shown as credits
+      _totalCredits: a.credits || 0,
+      _avgCredits: (a.runs || 0) > 0 ? (a.credits || 0) / a.runs : 0,
       _totalTokens: (a.inputTokens || 0) + (a.outputTokens || 0),
     }));
   }, [rawAgents]);
@@ -902,8 +905,8 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p50DurationMs)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p95DurationMs)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.avgDurationMs)}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row._avgCost > 0 ? formatCost(row._avgCost) : '—'}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row._totalCost > 0 ? formatCost(row._totalCost) : '—'}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatUsage(row._avgCost, row._avgCredits)}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatUsage(row._totalCost, row._totalCredits)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtTokens(row._totalTokens)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.toolCalls ?? '—'}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>

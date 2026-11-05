@@ -11,6 +11,12 @@ function formatCostSmall(usd) {
   return `$${usd.toFixed(2)}`;
 }
 
+function formatCreditsSmall(credits) {
+  if (credits == null) return '—';
+  if (credits > 0 && credits < 0.01) return '<0.01';
+  return credits.toFixed(2);
+}
+
 function formatTokens(n) {
   if (n == null) return '—';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -76,9 +82,16 @@ export function IdeStatusBar({ projectId, workflowId }) {
           <span className="ide-status-key">tokens</span> {formatTokens(turn?.inputTokens ?? null)} in / {formatTokens(turn?.outputTokens ?? null)} out
         </span>
       )}
-      <span className="ide-status-chip" title="Cost this turn and in total">
-        <span className="ide-status-key">cost</span> {formatCostSmall(turn?.costUsd ?? null)} · {formatCostSmall(session?.costUsd ?? null)} total
-      </span>
+      {bar?.usageUnit === 'credits' ? (
+        // Kiro bills in credits, not dollars
+        <span className="ide-status-chip" title="Kiro credits used this turn and in total">
+          <span className="ide-status-key">credits</span> {formatCreditsSmall(turn?.credits ?? null)} · {formatCreditsSmall(session?.credits ?? null)} total
+        </span>
+      ) : (
+        <span className="ide-status-chip" title="Cost this turn and in total">
+          <span className="ide-status-key">cost</span> {formatCostSmall(turn?.costUsd ?? null)} · {formatCostSmall(session?.costUsd ?? null)} total
+        </span>
+      )}
       <span className="ide-status-spacer" />
       {approvalMode && (
         <span className={`ide-status-pill${approvalMode === 'trust-all' ? ' ide-status-pill--warn' : ''}`}>

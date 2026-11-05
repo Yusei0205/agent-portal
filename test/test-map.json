@@ -440,7 +440,8 @@
         "server/agent/kiro.ts"
       ],
       "tests": [
-        "test/budget-repo.test.ts"
+        "test/budget-repo.test.ts",
+        "test/usage-format.test.ts"
       ],
       "smokeIds": []
     },
