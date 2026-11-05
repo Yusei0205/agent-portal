@@ -533,9 +533,13 @@ export async function runKiroRun(
           return;
         }
         {
-          const u = (params as { update?: { sessionUpdate?: string; used?: unknown; size?: unknown } })?.update;
+          const u = (params as { update?: { sessionUpdate?: string; used?: unknown; size?: unknown; cost?: { amount?: unknown } } })?.update;
           if (u?.sessionUpdate === 'usage_update' && Number(u.size) > 0 && Number.isFinite(Number(u.used))) {
             reportContext((Number(u.used) / Number(u.size)) * 100);
+          }
+          // Kiro bills in credits; usage_update carries the credits used so far in this turn.
+          if (u?.sessionUpdate === 'usage_update' && u.cost && Number.isFinite(Number(u.cost.amount))) {
+            made.emit({ type: 'usage', credits: Number(u.cost.amount) });
           }
         }
         const p = params as { update?: SessionUpdatePayload };

@@ -820,7 +820,8 @@ describe('GET /api/projects/:id/workflows/:wid/status-bar', () => {
       id: (await import('../server/util.ts')).generateId(),
       workflow_id: kiroWfId,
       status: 'done',
-      cost_usd: 0.01,
+      cost_usd: 0,
+      credits: 1.25,
       input_tokens: 0,
       output_tokens: 0,
       created_at: now(),
@@ -834,9 +835,15 @@ describe('GET /api/projects/:id/workflows/:wid/status-bar', () => {
     assert.equal(r.status, 200);
     const body = r.body as {
       engine: string;
-      thisTurn: { inputTokens: null; outputTokens: null } | null;
+      usageUnit: string;
+      thisTurn: { inputTokens: null; outputTokens: null; credits: number } | null;
+      thisSession: { credits: number };
     };
     assert.equal(body.engine, 'kiro');
+    // Kiro bills in credits, not dollars
+    assert.equal(body.usageUnit, 'credits');
+    assert.equal(body.thisTurn?.credits, 1.25);
+    assert.equal(body.thisSession.credits, 1.25);
     assert.equal(body.thisTurn?.inputTokens, null, 'Kiro inputTokens should be null');
     assert.equal(body.thisTurn?.outputTokens, null, 'Kiro outputTokens should be null');
   });

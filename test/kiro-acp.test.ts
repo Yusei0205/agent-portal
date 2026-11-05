@@ -10,7 +10,7 @@
  *   - agent_thought_chunk → agent-thought events
  *   - tool_call / tool_call_update → tool-start / tool-end with toolCallId
  *   - plan → plan event with entries
- *   - usage_update → credits recorded in p6_runs
+ *   - usage_update → credits recorded in p6_runs.credits (not as dollars in cost_usd)
  *   - browser tool: rawInput URL → browser-navigate, image content → browser-screenshot
  *   - session/request_permission → awaitInput approve → allow_once response
  *   - session/request_permission → awaitInput deny → reject_once response
@@ -360,12 +360,26 @@ describe('Kiro ACP — usage_update → credits recorded', () => {
     await cleanup();
   });
 
-  it('stores credits as cost_usd in p6_runs from usage_update', async () => {
-    const { ctx } = await makeCtx(t);
+  it('stores usage_update credits as credits, not as dollars', async () => {
+    const { ctx, events } = await makeCtx(t);
     await runKiro(ctx);
-    const row = one<{ cost_usd: number }>('SELECT cost_usd FROM p6_runs WHERE id = ?', t.runId);
+    const row = one<{ cost_usd: number; credits: number }>('SELECT cost_usd, credits FROM p6_runs WHERE id = ?', t.runId);
     assert.ok(row, 'p6_runs row must exist');
-    assert.ok(Number(row.cost_usd) > 0, `cost_usd should be > 0, got ${row.cost_usd}`);
+    assert.ok(Number(row.credits) > 0, `credits should be > 0, got ${row.credits}`);
+    assert.equal(Number(row.cost_usd), 0, 'Kiro credits must not be stored as dollars');
+
+    const bu = one<{ cost_usd: number; credits: number }>(
+      "SELECT cost_usd, credits FROM budget_usage WHERE workflow_id = ? AND provider = 'kiro'", t.workflowId,
+    );
+    assert.ok(bu, 'budget_usage row must exist');
+    assert.equal(Number(bu.cost_usd), 0, 'Kiro credits must not count towards the dollar budget');
+    assert.equal(Number(bu.credits), Number(row.credits));
+
+    const live = events.filter((e) => e.type === 'cost-update');
+    assert.ok(live.length > 0, 'a live cost-update event is emitted');
+    assert.equal((live.at(-1)!.payload as { unit?: string }).unit, 'credits');
+    const done = events.find((e) => e.type === 'run-complete');
+    assert.equal((done?.payload as { credits?: number }).credits, Number(row.credits));
   });
 });
 

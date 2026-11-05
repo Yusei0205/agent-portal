@@ -529,7 +529,11 @@ async function runKiroAcp(
           handleAcpUpdate(p.update, ctx, textParts, lastUrl, toolNames);
           // Track credits from usage_update
           if (p.update.sessionUpdate === 'usage_update' && p.update.cost) {
-            credits = p.update.cost.amount;
+            const amount = Number(p.update.cost.amount);
+            if (Number.isFinite(amount) && amount >= 0) {
+              credits = amount;
+              emit('cost-update', { credits, unit: 'credits' });
+            }
           }
         }
       }
@@ -826,7 +830,10 @@ async function runKiroLegacy(
         const parsed = tryParseJsonLine(line);
         if (parsed) {
           handleLegacyJsonLine(parsed, ctx, textParts);
-          if (parsed.credits) credits = parsed.credits;
+          if (parsed.credits) {
+            credits = parsed.credits;
+            emit('cost-update', { credits, unit: 'credits' });
+          }
           continue;
         }
         jsonModeFailed = true;
@@ -992,16 +999,18 @@ async function runKiroViaAgentCoreAdapter(
   if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
 
   // Persist run stats (same as the local path)
-  const approxCostUsd = Number(kiroCredits.toFixed(4));
+  // Kiro bills in credits, not dollars: record them as credits and leave cost_usd at 0.
+  const usedCredits = Number(kiroCredits.toFixed(4));
   const repoKiro = getSessionsRepository();
   await repoKiro.updateRun(run.runId, {
-    cost_usd: approxCostUsd,
+    cost_usd: 0,
+    credits: usedCredits,
     input_tokens: 0,
     output_tokens: 0,
     model: run.model ?? run.leadAgent ?? 'kiro',
   });
 
-  if (approxCostUsd > 0) {
+  if (usedCredits > 0) {
     const { getBudgetRepository } = await import('../repositories/budget.ts');
     const wfRow = await repoKiro.getWorkflowById(run.workflowId);
     await getBudgetRepository().record({
@@ -1009,7 +1018,8 @@ async function runKiroViaAgentCoreAdapter(
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,
-      cost_usd: approxCostUsd,
+      cost_usd: 0,
+      credits: usedCredits,
       input_tokens: 0,
       output_tokens: 0,
       provider: 'kiro',
@@ -1019,7 +1029,7 @@ async function runKiroViaAgentCoreAdapter(
   }
 
   const summary = textParts.join('\n').trim() || 'Kiro run complete.';
-  emit('run-complete', { result: summary, cost_usd: approxCostUsd });
+  emit('run-complete', { result: summary, cost_usd: 0, credits: usedCredits });
   return summary;
 }
 
@@ -1301,16 +1311,18 @@ export async function runKiro(ctx: RunContext): Promise<string> {
   if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
 
   // ── Persist run stats ──────────────────────────────────────────────────────
-  const approxCostUsd = Number(kiroCredits.toFixed(4));
+  // Kiro bills in credits, not dollars: record them as credits and leave cost_usd at 0.
+  const usedCredits = Number(kiroCredits.toFixed(4));
   const repoKiro2 = getSessionsRepository();
   await repoKiro2.updateRun(run.runId, {
-    cost_usd: approxCostUsd,
+    cost_usd: 0,
+    credits: usedCredits,
     input_tokens: 0,
     output_tokens: 0,
     model: run.model ?? run.leadAgent ?? 'kiro',
   });
 
-  if (approxCostUsd > 0) {
+  if (usedCredits > 0) {
     const { getBudgetRepository } = await import('../repositories/budget.ts');
     const wfRowK = await repoKiro2.getWorkflowById(run.workflowId);
     await getBudgetRepository().record({
@@ -1318,7 +1330,8 @@ export async function runKiro(ctx: RunContext): Promise<string> {
       project_id: run.projectId,
       workflow_id: run.workflowId,
       run_id: null,
-      cost_usd: approxCostUsd,
+      cost_usd: 0,
+      credits: usedCredits,
       input_tokens: 0,
       output_tokens: 0,
       provider: 'kiro',
@@ -1328,6 +1341,6 @@ export async function runKiro(ctx: RunContext): Promise<string> {
   }
 
   const summary = textParts.join('\n').trim() || 'Kiro run complete.';
-  emit('run-complete', { result: summary, cost_usd: approxCostUsd });
+  emit('run-complete', { result: summary, cost_usd: 0, credits: usedCredits });
   return summary;
 }

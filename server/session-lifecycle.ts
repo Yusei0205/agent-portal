@@ -206,8 +206,9 @@ export function registerSessionLifecycleRoutes(): void {
   //   {
   //     agent: string|null, engine: string, model: string|null,
   //     toolApprovalMode: 'trust-all'|'ask',
-  //     thisTurn: { costUsd: number, inputTokens: number|null, outputTokens: number|null } | null,
-  //     thisSession: { costUsd: number, inputTokens: number|null, outputTokens: number|null }
+  //     usageUnit: 'usd'|'credits',   — Kiro bills in credits, the other engines in dollars
+  //     thisTurn: { costUsd: number, credits: number, inputTokens: number|null, outputTokens: number|null } | null,
+  //     thisSession: { costUsd: number, credits: number, inputTokens: number|null, outputTokens: number|null }
   //   }
   router.get(
     '/api/projects/:id/workflows/:wid/status-bar',
@@ -227,6 +228,7 @@ export function registerSessionLifecycleRoutes(): void {
       const thisTurn = latestRun
         ? {
             costUsd: latestRun.cost_usd ?? 0,
+            credits: latestRun.credits ?? 0,
             inputTokens: isKiro ? null : (latestRun.input_tokens ?? 0),
             outputTokens: isKiro ? null : (latestRun.output_tokens ?? 0),
           }
@@ -234,6 +236,7 @@ export function registerSessionLifecycleRoutes(): void {
 
       const thisSession = {
         costUsd: totals.total_cost,
+        credits: totals.total_credits,
         inputTokens: isKiro ? null : totals.total_input,
         outputTokens: isKiro ? null : totals.total_output,
       };
@@ -253,6 +256,7 @@ export function registerSessionLifecycleRoutes(): void {
         model: latestRun?.model ?? null,
         contextPercent,
         toolApprovalMode: w.trust_tools ? 'trust-all' : 'ask',
+        usageUnit: isKiro ? 'credits' : 'usd',
         thisTurn,
         thisSession,
       });

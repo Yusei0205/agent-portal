@@ -565,7 +565,7 @@ export class DynamoDbStatsRepository implements StatsRepository {
     // Aggregate by agent name
     const agentMap = new Map<string, {
       runs: number; doneCount: number; failedCount: number; cancelledCount: number;
-      costUsd: number; inputTokens: number; outputTokens: number;
+      costUsd: number; credits: number; inputTokens: number; outputTokens: number;
       totalDurationMs: number; durationCount: number;
       lastRunAt: string | null;
     }>();
@@ -578,7 +578,7 @@ export class DynamoDbStatsRepository implements StatsRepository {
       const agent = parts[1];
 
       if (!agentMap.has(agent)) {
-        agentMap.set(agent, { runs: 0, doneCount: 0, failedCount: 0, cancelledCount: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, totalDurationMs: 0, durationCount: 0, lastRunAt: null });
+        agentMap.set(agent, { runs: 0, doneCount: 0, failedCount: 0, cancelledCount: 0, costUsd: 0, credits: 0, inputTokens: 0, outputTokens: 0, totalDurationMs: 0, durationCount: 0, lastRunAt: null });
       }
       const agg = agentMap.get(agent)!;
       agg.runs += getNumber(item, 'runs');
@@ -586,6 +586,7 @@ export class DynamoDbStatsRepository implements StatsRepository {
       agg.failedCount += getNumber(item, 'failedCount');
       agg.cancelledCount += getNumber(item, 'cancelledCount');
       agg.costUsd += getNumber(item, 'costUsd');
+      agg.credits += getNumber(item, 'credits');
       agg.inputTokens += getNumber(item, 'inputTokens');
       agg.outputTokens += getNumber(item, 'outputTokens');
       agg.totalDurationMs += getNumber(item, 'totalDurationMs');
@@ -609,6 +610,7 @@ export class DynamoDbStatsRepository implements StatsRepository {
         p50DurationMs: null,
         p95DurationMs: null,
         costUsd: agg.costUsd,
+        credits: agg.credits,
         inputTokens: agg.inputTokens,
         outputTokens: agg.outputTokens,
         // toolCalls/toolErrors not in rollups — 0 in DynamoDB mode (documented approximation)
@@ -857,6 +859,7 @@ export class DynamoDbStatsRepository implements StatsRepository {
           provider: null, // documented approximation — not stored on run record
           durationMs,
           costUsd: r.cost_usd,
+          credits: r.credits,
           inputTokens: r.input_tokens,
           outputTokens: r.output_tokens,
           toolCalls: 0, // not stored on run record in DynamoDB mode

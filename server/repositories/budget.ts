@@ -59,6 +59,8 @@ export interface CreateBudgetInput {
   workflow_id: string | null;
   run_id: string | null;
   cost_usd: number;
+  /** Kiro credits (Kiro bills in credits, not dollars). Optional; 0 when left out. */
+  credits?: number;
   input_tokens: number;
   output_tokens: number;
   provider: string;

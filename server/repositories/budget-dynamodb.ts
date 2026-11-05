@@ -111,6 +111,7 @@ export class DynamoDbBudgetRepository implements BudgetRepository {
       SK: av(sortKey),
       id: av(id),
       cost_usd: { N: String(input.cost_usd) },
+      credits: { N: String(input.credits ?? 0) },
       input_tokens: { N: String(input.input_tokens) },
       output_tokens: { N: String(input.output_tokens) },
       provider: av(input.provider),
@@ -149,9 +150,10 @@ export class DynamoDbBudgetRepository implements BudgetRepository {
       },
     ];
 
-    const rollupExpr = 'ADD costUsd :cost, inputTokens :inp, outputTokens :out, runCount :one';
+    const rollupExpr = 'ADD costUsd :cost, credits :cred, inputTokens :inp, outputTokens :out, runCount :one';
     const rollupVals = {
       ':cost': { N: String(input.cost_usd) },
+      ':cred': { N: String(input.credits ?? 0) },
       ':inp': { N: String(input.input_tokens) },
       ':out': { N: String(input.output_tokens) },
       ':one': { N: '1' },

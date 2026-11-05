@@ -77,6 +77,8 @@ export interface AgentRollup {
   /** 95th percentile duration in ms; null in DynamoDB mode. */
   p95DurationMs: number | null;
   costUsd: number;
+  /** Kiro credits (Kiro bills in credits, not dollars). */
+  credits: number;
   inputTokens: number;
   outputTokens: number;
   /** Count of tool-start events; 0 in DynamoDB mode (not in rollups). */
@@ -132,6 +134,8 @@ export interface AgentRunItem {
   provider: string | null;
   durationMs: number | null;
   costUsd: number;
+  /** Kiro credits (Kiro bills in credits, not dollars). */
+  credits: number;
   inputTokens: number;
   outputTokens: number;
   toolCalls: number;

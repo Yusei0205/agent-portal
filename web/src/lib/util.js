@@ -49,3 +49,29 @@ export function formatCost(usd) {
   const digits = usd !== 0 && Math.abs(usd) < 0.1 ? 4 : 3;
   return `$${Number(usd).toFixed(digits)}`;
 }
+
+/**
+ * Format Kiro credits. Kiro bills in credits, not dollars, so they are never shown with a $ sign.
+ * @param {number | null | undefined} credits
+ * @returns {string} e.g. "1.25 credits", "1 credit", "<0.01 credits"
+ */
+export function formatCredits(credits) {
+  if (credits === null || credits === undefined) return '';
+  const n = Number(credits);
+  if (n > 0 && n < 0.01) return '<0.01 credits';
+  const text = String(Number(n.toFixed(2)));
+  return `${text} ${text === '1' ? 'credit' : 'credits'}`;
+}
+
+/**
+ * What a run or session used: dollars, Kiro credits, or both (an agent can run on either engine).
+ * @param {number | null | undefined} usd
+ * @param {number | null | undefined} credits
+ * @param {string} [empty] - returned when nothing was used
+ */
+export function formatUsage(usd, credits, empty = '—') {
+  const parts = [];
+  if (usd) parts.push(formatCost(usd));
+  if (credits) parts.push(formatCredits(credits));
+  return parts.length ? parts.join(' + ') : empty;
+}

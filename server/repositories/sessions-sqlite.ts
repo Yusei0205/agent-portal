@@ -85,6 +85,7 @@ function toRun(row: Row): RunRecord {
     started_at: row.started_at != null ? String(row.started_at) : null,
     finished_at: row.finished_at != null ? String(row.finished_at) : null,
     cost_usd: Number(row.cost_usd ?? 0),
+    credits: Number(row.credits ?? 0),
     input_tokens: Number(row.input_tokens ?? 0),
     output_tokens: Number(row.output_tokens ?? 0),
     cache_write_tokens: Number(row.cache_write_tokens ?? 0),
@@ -395,9 +396,10 @@ export class SqliteSessionsRepository implements SessionsRepository {
   }
 
   async getRunTotals(workflowId: string): Promise<RunTotals> {
-    const row = one<{ total_cost: number; total_input: number; total_output: number }>(
+    const row = one<{ total_cost: number; total_credits: number; total_input: number; total_output: number }>(
       `SELECT
          COALESCE(SUM(cost_usd), 0)     AS total_cost,
+         COALESCE(SUM(credits), 0)      AS total_credits,
          COALESCE(SUM(input_tokens), 0) AS total_input,
          COALESCE(SUM(output_tokens), 0) AS total_output
        FROM p6_runs WHERE workflow_id = ?`,
@@ -405,6 +407,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     );
     return {
       total_cost: Number(row?.total_cost ?? 0),
+      total_credits: Number(row?.total_credits ?? 0),
       total_input: Number(row?.total_input ?? 0),
       total_output: Number(row?.total_output ?? 0),
     };
@@ -428,7 +431,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
 
   async updateRun(id: string, patch: Partial<RunRecord>): Promise<void> {
     const allowed: (keyof RunRecord)[] = [
-      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
       'stop_reason', 'time_limit_at', 'model', 'error',
     ];
@@ -447,7 +450,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     patch: Partial<RunRecord>,
   ): Promise<boolean> {
     const allowed: (keyof RunRecord)[] = [
-      'status', 'started_at', 'finished_at', 'cost_usd', 'input_tokens',
+      'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
       'stop_reason', 'time_limit_at', 'model', 'error',
     ];

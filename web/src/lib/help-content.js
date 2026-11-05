@@ -116,7 +116,7 @@ export const HELP_TOPICS = [
           ['Active Session', 'The session running right now and its latest steps.'],
           ['Recent Sessions', 'The latest sessions across your projects; **View all** opens Projects.'],
           ['Agent Network', 'A graph of the agents that ran and how they delegated work to each other.'],
-          ['Agent Performance', 'Runs, success rate, duration and cost per agent for the chosen period. Click a column to sort.'],
+          ['Agent Performance', 'Runs, success rate, duration and usage per agent (dollars, or credits for Kiro) for the chosen period. Click a column to sort.'],
         ],
       },
     ],
@@ -153,7 +153,7 @@ export const HELP_TOPICS = [
           ['Browser', 'Watch the browser the agent drives.'],
           ['Agents Activity', 'Sub-agents and delegated child sessions.'],
           ['Session', 'Activity timeline, attached context, and settings (goal, trust tools, max iterations).'],
-          ['Status bar', 'Agent, model, tokens and cost for this turn and in total.'],
+          ['Status bar', 'Agent, model, tokens and usage for this turn and in total. Claude shows dollars; Kiro shows **credits**, because Kiro bills in credits.'],
         ],
       },
       {
