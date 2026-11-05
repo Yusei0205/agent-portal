@@ -24,6 +24,7 @@ import { emitRunnerFiles, writeInputFiles } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
+import { reportRepoChanges } from '../shared/runner-finalize-run.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -786,6 +787,11 @@ export async function runKiroRun(
       } catch (e) {
         emit({ type: 'check-result', ok: false, ranAt: new Date().toISOString(), steps: [{ step: 'checks', ok: false, output: String((e as Error)?.message ?? e).slice(0, 500), durationMs: 0, required: true }] });
       }
+    }
+
+    // Pull requests: say which cloned repositories changed (read-only; nothing is committed or pushed here).
+    if (payload.finalizeCheck && payload.repos?.length) {
+      try { await reportRepoChanges(payload.repos, run.workDir, emit); } catch { /* best effort */ }
     }
 
     // Send back the files kiro wrote in the work folder, within size limits.

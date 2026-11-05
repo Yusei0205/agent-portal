@@ -22,8 +22,8 @@
 
 import http from 'node:http';
 import { runInvocation } from './run.js';
-import { validatePayload, validateFinalizeRequest } from './validate.js';
-import { runFinalize } from './finalize.js';
+import { validatePayload } from './validate.js';
+import { runFinalize, validateFinalizeRequest } from './finalize.js';
 import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';

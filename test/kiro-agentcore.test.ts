@@ -38,6 +38,7 @@ import { loadRunPermissions } from '../server/guardrails.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 import {
   _setAgentCoreInvokerOverride,
+  _setRepoChangesHooks,
   runKiroViaAgentCore,
   saveRefreshedTokenConditional,
   startAgentCoreLogin,
@@ -830,5 +831,74 @@ describe('deviceUrlWithCode', () => {
     assert.equal(deviceUrlWithCode('https://d-1.awsapps.com/start/', 'AB-CD'), 'https://d-1.awsapps.com/start/#/device?user_code=AB-CD');
     const full = 'https://d-1.awsapps.com/start/#/device?user_code=AB-CD';
     assert.equal(deviceUrlWithCode(full, 'AB-CD'), full);
+  });
+});
+
+// ── Pull requests: finalizeCheck out, repo-changes in ────────────────────────
+
+describe('AgentCore — pull requests from Kiro runs', () => {
+  let cfg: Config;
+  const REPOS = [{ name: 'web', url: 'https://example.invalid/web.git' }];
+
+  before(() => {
+    createTestDb();
+    cfg = makeConfig();
+    setConfig(cfg);
+  });
+
+  afterEach(() => {
+    _setRepoChangesHooks(null);
+    _setAgentCoreInvokerOverride(null);
+  });
+
+  after(async () => { await cleanup(); });
+
+  async function runWith(events: AgentCoreSSEEvent[], flag: boolean, handle: (ctx: unknown, changes: unknown) => Promise<void>) {
+    const sent: Array<Record<string, unknown>> = [];
+    _setAgentCoreInvokerOverride(async function* (_arn, _sid, payload) {
+      sent.push(payload);
+      for (const e of events) yield e;
+    });
+    _setRepoChangesHooks({ flag: async () => flag, handle: handle as never });
+    const td = makeTestData(cfg);
+    const { ctx } = await makeCtx(td.runId, td.workflowId, td.projectId, td.workDir, cfg);
+    await runKiroViaAgentCore(ctx, { runtimeArn: FAKE_ARN, runId: td.runId, prompt: 'p', token: SAMPLE_TOKEN, credentialId: null, expectedCiphertext: null, repos: REPOS });
+    return { sent, td };
+  }
+
+  const done: AgentCoreSSEEvent = { type: 'result', runId: 'r1', exitCode: 0, durationMs: 1, coldStartMs: 1, tokenRefreshed: false };
+
+  it('sends finalizeCheck only when the portal asks for it', async () => {
+    const calls: unknown[] = [];
+    const on = await runWith([done], true, async (c) => { calls.push(c); });
+    assert.equal(on.sent[0].finalizeCheck, true);
+    const off = await runWith([done], false, async (c) => { calls.push(c); });
+    assert.equal('finalizeCheck' in off.sent[0], false);
+    assert.equal(calls.length, 0, 'no changes reported, nothing handled');
+  });
+
+  it('hands the runner\'s repo-changes events to handleRepoChanges with engine kiro', async () => {
+    let got: { ctx: Record<string, unknown>; changes: unknown } | null = null;
+    const { td } = await runWith([
+      { type: 'repo-changes', repo: 'web', base: 'main', commits: 2, files: 5 },
+      done,
+    ], true, async (ctx, changes) => { got = { ctx: ctx as Record<string, unknown>, changes }; });
+    assert.ok(got);
+    const g = got as { ctx: Record<string, unknown>; changes: unknown };
+    assert.deepEqual(g.changes, [{ repo: 'web', base: 'main', commits: 2, files: 5 }]);
+    assert.equal(g.ctx.engine, 'kiro');
+    assert.equal(g.ctx.workflowId, td.workflowId);
+    assert.equal(g.ctx.projectId, td.projectId);
+    assert.equal(g.ctx.runId, td.runId);
+  });
+
+  it('a failing handleRepoChanges does not fail the run', async () => {
+    await assert.doesNotReject(runWith([{ type: 'repo-changes', repo: 'web', base: 'main', commits: 0, files: 1 }, done], true, async () => { throw new Error('boom'); }));
+  });
+
+  it('does not hand over changes when the run fails', async () => {
+    let called = false;
+    await assert.rejects(runWith([{ type: 'repo-changes', repo: 'web', base: 'main', commits: 0, files: 1 }, { type: 'error', message: 'bad' }], true, async () => { called = true; }));
+    assert.equal(called, false);
   });
 });
