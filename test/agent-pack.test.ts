@@ -10,7 +10,7 @@ import path from 'node:path';
 
 // @ts-expect-error — plain JS module without type declarations
 import { PACK_AGENTS, PACK_SKILLS, kiroPackFiles, claudePackFiles, agentPackFiles } from '../web/src/lib/agent-pack/index.js';
-import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, AGENT_NAME, SKILL_NAME } from '../server/agent/agent-defs.ts';
+import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, AGENT_NAME, SKILL_NAME, AGENT_LIMITS } from '../server/agent/agent-defs.ts';
 import { leadAgentFor, anthropicAgentModel } from '../server/agent/run-agents.ts';
 import { collectKiroConfig, hasKiroAgent, KIRO_CONFIG_PATH } from '../server/agent/kiro-config-files.ts';
 import { parseKiroConfig, writeKiroConfig } from '../kiro-runner/src/kiro-config.ts';
@@ -72,6 +72,27 @@ describe('agent pack content', () => {
     }
     assert.match(text('statement-of-work'), /Out of scope/);
     assert.match(text('slide-design'), /python-pptx/);
+    for (const w of ['Express', 'Fastify', 'NestJS', 'zod', 'tsc --noEmit']) assert.ok(text('backend-node-typescript').includes(w), `node skill: ${w}`);
+    for (const w of ['ECS Fargate', 'Lambda', 'DynamoDB', 'OIDC', 'CodePipeline']) assert.ok(text('aws-compute-cicd').includes(w), `compute/CI-CD skill: ${w}`);
+    for (const w of ['Prompt injection', 'Excessive agency', 'Improper output handling', 'Unbounded consumption']) assert.ok(owasp.includes(w), `LLM risk: ${w}`);
+    assert.ok(agents.find((a) => a.name === 'backend-engineer')!.skills.includes('backend-node-typescript'));
+    assert.ok(agents.find((a) => a.name === 'infra-engineer')!.skills.includes('aws-compute-cicd'));
+  });
+
+  it('every agent knows what its machine has, and the lead knows how to hand work off', () => {
+    const prompts = agents.map((a) => (a as PackAgent & { prompt: string }).prompt);
+    for (const [i, p] of prompts.entries()) {
+      assert.match(p, /Your machine:/, `${agents[i].name}: machine notes`);
+      assert.match(p, /uvx /, `${agents[i].name}: Python tools without pip`);
+      assert.match(p, /no Java, Maven, Gradle, Terraform or AWS CLI/, `${agents[i].name}: what the cloud runner lacks`);
+      assert.match(p, /Do not push or open pull requests/, `${agents[i].name}: the portal publishes changes`);
+    }
+    const lead = (agents.find((a) => a.lead) as PackAgent & { prompt: string }).prompt;
+    assert.match(lead, /never hand work to lead-orchestrator/);
+    const delegation = skills.find((s) => s.name === 'task-delegation')!.body;
+    for (const w of ['subagent_type', 'run_in_background: false', 'delegate_session', 'Set `agent`', 'Never guess']) assert.ok(delegation.includes(w), `task-delegation: ${w}`);
+    // Commands an agent copies must work without pip (the cloud runners have Python and uv, no pip).
+    for (const t of [...skills.map((s) => s.body), ...prompts]) assert.doesNotMatch(t, /(^|[^v] )pip install/m);
   });
 });
 
@@ -121,6 +142,8 @@ describe('agent pack for Claude Code', () => {
       for (const a of agents) {
         for (const s of a.skills) assert.ok(defs[a.name].prompt.includes(`# Skill: ${s}`), `${a.name} preloads ${s}`);
         assert.equal(defs[a.name].model, 'inherit');
+        // With room to spare: a skill that would pass the limit is left out without a word.
+        assert.ok(defs[a.name].prompt.length < AGENT_LIMITS.maxPrompt / 2, `${a.name}: ${defs[a.name].prompt.length} characters with its skills`);
       }
       assert.equal(defs['lead-orchestrator'].tools, undefined, 'the lead keeps every tool, including Agent');
       assert.ok(!defs['security-reviewer'].tools!.includes('Agent'));

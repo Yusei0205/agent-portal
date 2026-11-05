@@ -441,7 +441,7 @@ export const HELP_TOPICS = [
         items: [
           'Pick a folder tab, then a file in the files panel, and edit it. JSON files are checked before they are saved.',
           'Agents you define here appear under **Lead agent** in the New session dialog.',
-          '**Agent pack** adds a ready-made team: **lead-orchestrator** (plans and hands tasks to the others), **backend-engineer** (Python, Java), **frontend-engineer** (React, TypeScript, Tailwind), **infra-engineer** (AWS VPC, security groups, IaC), **security-reviewer** (code scanning, OWASP Top 10), **slide-designer** and **tech-writer** (technical docs, SOWs), each with its skills. Files you already have are kept. Admins can publish the result as the team default.',
+          '**Agent pack** adds a ready-made team: **lead-orchestrator** (plans and hands tasks to the others), **backend-engineer** (Python, Java, Node.js / TypeScript), **frontend-engineer** (React, TypeScript, Tailwind), **infra-engineer** (AWS VPC, security groups, IaC, compute, databases, CI/CD), **security-reviewer** (code scanning, OWASP Top 10, AI and agent risks), **slide-designer** and **tech-writer** (technical docs, SOWs), each with its skills. Files you already have are kept. Admins can publish the result as the team default.',
           'Changes apply to sessions started or resumed afterwards.',
           'Import or export the whole folder as a ZIP.',
         ],
