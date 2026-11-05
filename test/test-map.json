@@ -106,6 +106,7 @@
       "description": "Project CRUD and listing, project/team repository layer",
       "sources": [
         "server/projects.ts",
+        "server/project-settings-pr.ts",
         "server/repositories/projects.ts",
         "server/repositories/projects-sqlite.ts",
         "server/repositories/projects-dynamodb.ts",
@@ -113,7 +114,8 @@
       ],
       "tests": [
         "test/projects.test.ts",
-        "test/projects-repo.test.ts"
+        "test/projects-repo.test.ts",
+        "test/project-pr-settings.test.ts"
       ],
       "smokeIds": ["projects"]
     },

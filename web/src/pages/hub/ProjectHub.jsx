@@ -1105,6 +1105,100 @@ function TeamTab({ projectId, members, setMembers, currentUserId, isAdmin, reque
 
 // ── Permissions tab ───────────────────────────────────────────────────────────
 
+function PullRequestsTab({ projectId, canEdit, toast }) {
+  const [settings, setSettings] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [newBranch, setNewBranch] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    api.get(`/api/projects/${projectId}/pull-request-settings`)
+      .then((r) => { if (live) setSettings(r); })
+      .catch((e) => { if (live) setError(e.message || 'Could not load the pull request settings'); });
+    return () => { live = false; };
+  }, [projectId]);
+
+  const save = async (patch) => {
+    setBusy(true);
+    try {
+      setSettings(await api.put(`/api/projects/${projectId}/pull-request-settings`, patch));
+      return true;
+    } catch (err) {
+      toast(err.message || 'Failed to save the pull request settings', 'error');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addBranch = async () => {
+    const name = newBranch.trim();
+    if (!name) return;
+    if (await save({ protectedBranches: [...settings.protectedBranches, name] })) setNewBranch('');
+  };
+
+  if (error) return <div className="error-note" role="alert">{error}</div>;
+  if (!settings) return <div className="spinner-wrap"><div className="spinner" aria-label="Loading…" /></div>;
+
+  return (
+    <div className="stack" role="group" aria-label="Pull requests">
+      <h2>Pull requests</h2>
+
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={settings.openPullRequests}
+          disabled={!canEdit || busy}
+          onChange={(e) => save({ openPullRequests: e.target.checked })}
+        />
+        Open a pull request when a session fixes code
+      </label>
+
+      <div>
+        <h3>Branches that are never pushed to</h3>
+        {settings.protectedBranches.length === 0 && (
+          <p className="muted small">No branches listed.</p>
+        )}
+        <div className="stack">
+          {settings.protectedBranches.map((b) => (
+            <div key={b} className="card row-between">
+              <span className="small"><strong>{b}</strong></span>
+              {canEdit && (
+                <button
+                  type="button"
+                  className="btn-icon"
+                  disabled={busy}
+                  onClick={() => save({ protectedBranches: settings.protectedBranches.filter((x) => x !== b) })}
+                  aria-label={`Remove ${b} from the protected branches`}
+                >
+                  <Icon name="x" size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        {canEdit && (
+          <div className="row gap-sm" style={{ marginTop: '1em' }}>
+            <input
+              type="text"
+              value={newBranch}
+              onChange={(e) => setNewBranch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addBranch(); } }}
+              placeholder="Branch name (e.g. release/*)"
+              aria-label="Branch name"
+              style={{ flex: 1 }}
+            />
+            <button type="button" className="btn" onClick={addBranch} disabled={busy || !newBranch.trim()}>Add</button>
+          </div>
+        )}
+        <p className="muted small">The repository's default branch is always protected. A * at the end matches any branch that starts with the same text, for example release/*.</p>
+      </div>
+      {!canEdit && <p className="muted small">Only project editors can change these settings.</p>}
+    </div>
+  );
+}
+
 function PermissionsTab({ projectId, toast }) {
   const [groups, setGroups] = useState([]);
   const [currentGroupId, setCurrentGroupId] = useState(null);
@@ -1227,6 +1321,7 @@ const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'team', label: 'Team & members' },
   { id: 'permissions', label: 'Permissions' },
+  { id: 'pull-requests', label: 'Pull requests' },
 ];
 
 /**
@@ -1314,6 +1409,8 @@ export function ProjectHub({ projectId, user, initialTab }) {
 
   const isAdmin = Boolean(user?.is_admin);
   const currentUserId = user?.id;
+  const myAccess = members.find((m) => m.user_id === currentUserId);
+  const canEditPr = isAdmin || ['editor', 'owner'].includes(String(myAccess?.access ?? myAccess?.role ?? ''));
 
   return (
     <div className="page">
@@ -1357,6 +1454,9 @@ export function ProjectHub({ projectId, user, initialTab }) {
         )}
         {activeTab === 'permissions' && (
           <PermissionsTab projectId={projectId} toast={toast} />
+        )}
+        {activeTab === 'pull-requests' && (
+          <PullRequestsTab projectId={projectId} canEdit={canEditPr} toast={toast} />
         )}
       </div>
       <ConfirmDialog state={confirmState} />
