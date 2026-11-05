@@ -876,6 +876,18 @@
       ],
       "smokeIds": []
     },
+    "help": {
+      "description": "Help page: the in-portal user guide to every feature",
+      "sources": [
+        "web/src/pages/Help.jsx",
+        "web/src/lib/help-content.js",
+        "web/src/styles/help.css"
+      ],
+      "tests": [
+        "test/help-content.test.ts"
+      ],
+      "smokeIds": []
+    },
     "attachments": {
       "description": "AI attachments — file upload, preview, and picker for session context",
       "sources": [
