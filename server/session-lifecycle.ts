@@ -451,6 +451,7 @@ export function registerSessionLifecycleRoutes(): void {
         finishedAt: string | null;
         source: 'event' | 'session';
         sessionId?: string;
+        description?: string;
       }> = [];
 
       const childSessions = await repo.listChildWorkflows(wid);
@@ -477,7 +478,9 @@ export function registerSessionLifecycleRoutes(): void {
       );
 
       const eventMap = new Map<string, (typeof agents)[number]>();
-      for (const ev of agentEvents) {
+      // The repository returns newest first; replay oldest first so a finish follows its start.
+      const oldestFirst = [...agentEvents].sort((a, b) => Number(a.id) - Number(b.id));
+      for (const ev of oldestFirst) {
         let payload: Record<string, unknown> = {};
         try {
           payload = JSON.parse(ev.payload ?? '{}');
@@ -485,7 +488,8 @@ export function registerSessionLifecycleRoutes(): void {
           continue;
         }
         const name = String(payload.name ?? payload.agentName ?? 'subagent');
-        const key = name;
+        // Engines that report a task id (the AgentCore runner) get one row per subagent run.
+        const key = typeof payload.id === 'string' && payload.id ? `${ev.run_id ?? ''}:${payload.id}` : name;
 
         if (ev.type === 'subagent-started') {
           eventMap.set(key, {
@@ -494,6 +498,7 @@ export function registerSessionLifecycleRoutes(): void {
             startedAt: String(ev.created_at),
             finishedAt: null,
             source: 'event',
+            ...(typeof payload.description === 'string' && payload.description ? { description: payload.description } : {}),
           });
         } else if (ev.type === 'subagent-finished') {
           const existing = eventMap.get(key);

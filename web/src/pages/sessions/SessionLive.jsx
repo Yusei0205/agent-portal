@@ -666,7 +666,9 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
     if (!text) return null;
     return (
       <div className="live-event live-agent-message" role="log" aria-live="polite">
-        <span className="live-message-label live-message-label--agent" aria-hidden="true">{agentName}</span>
+        <span className="live-message-label live-message-label--agent" aria-hidden="true">
+          {payload.agent ? `${agentName} › ${payload.agent}` : agentName}
+        </span>
         <div className="live-agent-bubble" aria-label="Agent output">
           <MarkdownMessage
             text={text}
@@ -804,6 +806,21 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
             {summary}
           </pre>
         )}
+      </div>
+    );
+  }
+
+  // ── Subagent started / finished ───────────────────────────────────────────
+  if (type === 'subagent-started' || type === 'subagent-finished' || type === 'subagent-failed') {
+    const name = payload?.name || 'subagent';
+    const what = type === 'subagent-started'
+      ? `started${payload?.background ? ' in the background' : ''}`
+      : type === 'subagent-finished' ? 'finished' : (payload?.status === 'stopped' ? 'stopped' : 'failed');
+    const detail = type === 'subagent-started' ? payload?.description : payload?.summary;
+    return (
+      <div className="live-event live-status-text" role="status" aria-label={`Subagent ${name} ${what}`}>
+        <Icon name="agents" size={13} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+        <strong>{name}</strong> {what}{detail ? `: ${detail.length > 160 ? `${detail.slice(0, 160)}…` : detail}` : ''}
       </div>
     );
   }

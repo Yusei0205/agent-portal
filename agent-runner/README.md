@@ -127,11 +127,32 @@ docker rm agent-runner-test
   "portal": {
     "url":      "(required) portal callback URL (part 2)",
     "runToken": "(required) per-run auth token (part 2)"
-  }
+  },
+  "policy":     "(optional) { trusted, rules[] }: the run's permission rules, applied to every tool call",
+  "approvals":  "(optional) { via: 'portal', expiryMinutes }: calls that need a person are streamed as approval-request",
+  "agents": {
+    "<name>": "(optional) the project's subagents: { description, prompt, tools?, disallowedTools?, model?, maxTurns? }"
+  },
+  "delegation": "(optional) { via: 'portal' }: offers the delegate_session tool (child sessions)"
 }
 ```
 
 Unknown top-level fields are rejected with HTTP 400.
+
+### Several agents, several sessions
+
+- **Subagents.** `agents` goes to the Agent SDK's `agents` option, so Claude can hand work to a
+  project agent with the Agent tool. At most 50 agents are accepted; agent names are 1 to 64
+  letters, digits, `.`, `_` or `-`.
+  - A subagent's tool calls go through the same permission check as the main agent's.
+  - Its `model` may be `haiku`, `sonnet`, `opus` or `inherit`. On Bedrock these aliases map to
+    the global profiles the runtime role allows (`ANTHROPIC_DEFAULT_*_MODEL`).
+- **Child sessions.** With `delegation`, Claude gets `mcp__portal__delegate_session` (task, title):
+  1. A call is streamed as a `delegate-request`.
+  2. The portal starts a child session, which is its own run, so on AgentCore its own microVM.
+  3. The portal answers with a mode `answer` invocation. The answer is bound to the call's
+     fingerprint, like an approval.
+  4. When the child finishes, the portal posts its result to the parent session.
 
 ---
 
@@ -148,10 +169,15 @@ Event types:
 | `type`          | Fields                                         |
 |-----------------|------------------------------------------------|
 | `status`        | `text`                                         |
-| `assistant-text`| `text`, `tokens.{input,output,cacheWrite,cacheRead}` |
+| `assistant-text`| `text`, `tokens.{input,output,cacheWrite,cacheRead}`, `agent` (a subagent's text) |
 | `tool-call`     | `name`, `input` (truncated to 200 chars)       |
+| `tool-start`    | `toolName`, `toolInput`, `agent` (a subagent's call): the call was allowed |
 | `tool-result`   | `name`, `output` (truncated to 500 chars)      |
-| `tool-blocked`  | `toolName`, `toolInput`, `reason`              |
+| `tool-blocked`  | `toolName`, `toolInput`, `reason`, `agent`     |
+| `approval-request` | `requestId`, `toolName`, `input`, `inputHash`, `expiresAt`: a person must answer |
+| `delegate-request` | `requestId`, `input.{task,title}`, `inputHash`: the portal starts a child session and answers |
+| `subagent-started` | `id`, `name`, `description`, `background`, `depth`, `parentId`/`parentName` (nested) |
+| `subagent-finished` / `subagent-failed` | `id`, `name`, `status`, `summary`, `tokens`, `toolUses`, `durationMs` |
 | `result`        | `runId`, `stop_reason`, `metrics`              |
 | `error`         | `message`                                      |
 

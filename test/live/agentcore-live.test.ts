@@ -7,6 +7,9 @@
  *   node --import tsx --test --test-timeout=900000 test/live/agentcore-live.test.ts
  *
  * Costs a few cents of Bedrock (Claude Haiku 4.5) per run.
+ *
+ * The last two tests check several agents and several sessions: a run hands work to a project
+ * agent inside its microVM, and a run starts a child session that runs in a microVM of its own.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createTestDb, cleanup } from '../fixtures.ts';
-import { getDb, one } from '../../server/db.ts';
+import { getDb, one, all } from '../../server/db.ts';
 import { now, generateId } from '../../server/util.ts';
 import { setConfig, type Config } from '../../server/config.ts';
 import { runClaudeViaAgentCore } from '../../server/agent/claude-agentcore-bedrock.ts';
@@ -26,14 +29,16 @@ const HAIKU = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 type Ev = { type: string; payload: Record<string, unknown> };
 
-function setup(opts: { rules?: unknown[]; trusted?: boolean; answer?: 'allow' | 'deny'; budget?: number; goal: string }) {
+let liveDataDir = '';
+
+function setup(opts: { rules?: unknown[]; trusted?: boolean; answer?: 'allow' | 'deny'; budget?: number; goal: string; ownerId?: string }) {
   const db = getDb();
   const projectId = `proj-${generateId()}`;
   const workflowId = `wf-${generateId()}`;
   const runId = `run-${generateId()}`;
   db.prepare('INSERT INTO projects (id, name, slug, created_at) VALUES (?, ?, ?, ?)').run(projectId, 'Live', `live-${projectId.slice(5, 13)}`, now());
-  db.prepare(`INSERT INTO p6_workflows (id, project_id, goal, status, engine, trust_tools, repo_ids, created_at, updated_at)
-    VALUES (?, ?, 'live', 'running', 'claude-code', ?, '[]', ?, ?)`).run(workflowId, projectId, opts.trusted ? 1 : 0, now(), now());
+  db.prepare(`INSERT INTO p6_workflows (id, project_id, goal, status, engine, trust_tools, repo_ids, model, created_by, created_at, updated_at)
+    VALUES (?, ?, 'live', 'running', 'claude-code', ?, '[]', ?, ?, ?, ?)`).run(workflowId, projectId, opts.trusted ? 1 : 0, HAIKU, opts.ownerId ?? null, now(), now());
   if (opts.budget != null) db.prepare('UPDATE p6_workflows SET budget_usd = ? WHERE id = ?').run(opts.budget, workflowId);
   db.prepare(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?, ?, 'running', ?)`).run(runId, workflowId, now());
   const events: Ev[] = [];
@@ -43,7 +48,7 @@ function setup(opts: { rules?: unknown[]; trusted?: boolean; answer?: 'allow' | 
     runId, workflowId, projectId, goal: opts.goal, kind: null, engine: 'claude-code',
     trusted: opts.trusted ?? false, dataDir: '', workDir: os.tmpdir(), repoIds: [], leadAgent: null,
     permissions: { rules: (opts.rules ?? []) as never, toolRules: [], projectId },
-    credentialId: null, credentialOwnerId: null, model: HAIKU, engineSessionId: null,
+    credentialId: null, credentialOwnerId: opts.ownerId ?? null, model: HAIKU, engineSessionId: null,
   };
   const started = Date.now();
   const ctx: RunContext = {
@@ -56,7 +61,8 @@ function setup(opts: { rules?: unknown[]; trusted?: boolean; answer?: 'allow' | 
     allowed: new Set(),
     signal: ctrl.signal,
   };
-  return { ctx, events, asked, ctrl, runId, started };
+  const projectDir = path.join(liveDataDir, 'projects', `live-${projectId.slice(5, 13)}`);
+  return { ctx, events, asked, ctrl, runId, started, workflowId, projectDir };
 }
 
 function report(name: string, t: ReturnType<typeof setup>) {
@@ -78,8 +84,9 @@ const askBash = [{ id: 'ask-bash', group_id: 'g', name: 'shell', pattern: null, 
 describe('LIVE: Claude runs in AgentCore with the harness', { skip: ARN ? false : 'set PORTAL_LIVE_CLAUDE_RUNTIME_ARN' }, () => {
   before(() => {
     createTestDb();
+    liveDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-live-'));
     setConfig({
-      root: process.cwd(), port: 0, host: '127.0.0.1', dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ac-live-')),
+      root: process.cwd(), port: 0, host: '127.0.0.1', dataDir: liveDataDir,
       webDir: '', secretKey: 'a'.repeat(64), cookieSecure: 'false', demoSpeed: 0, maxUploadBytes: 1 << 20,
       trustProxy: false, awsRegion: 'ap-southeast-1', deployTarget: null,
     } as Config);
@@ -140,5 +147,67 @@ describe('LIVE: Claude runs in AgentCore with the harness', { skip: ARN ? false 
     const replies = await send({ mode: 'answer', runId: 'nope', requestId: 'nope', decision: 'allow', inputHash: 'f'.repeat(64) });
     console.log(`LIVE ${JSON.stringify({ test: 'stray-answer', replies })}`);
     assert.equal(replies[0]?.type, 'answer-rejected');
+  });
+
+  it('Claude hands work to a project agent inside the microVM', async () => {
+    const t = setup({
+      trusted: true,
+      goal: 'Use the Agent tool with subagent_type "note-writer" to have it create the file notes.txt containing the words agent-ok. Wait for it to finish, then reply with the word DONE.',
+    });
+    fs.mkdirSync(path.join(t.projectDir, '.claude', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(t.projectDir, '.claude', 'agents', 'note-writer.md'), [
+      '---',
+      'name: note-writer',
+      'description: Writes small text files when asked. Use it for any request to write a note file.',
+      'tools: Write, Read, Bash',
+      'model: haiku',
+      '---',
+      'You write the file you are asked for with the Write tool, then reply with one short sentence.',
+      '',
+    ].join('\n'));
+    const summary = await runClaudeViaAgentCore(t.ctx, ARN);
+    report('subagent', t);
+    const started = t.events.find((e) => e.type === 'subagent-started');
+    const ended = t.events.find((e) => e.type === 'subagent-finished' || e.type === 'subagent-failed');
+    console.log(`LIVE ${JSON.stringify({ test: 'subagent-events', started: started?.payload, ended: ended?.payload, summary })}`);
+    assert.equal(started?.payload.name, 'note-writer', 'the project agent started');
+    assert.equal(ended?.type, 'subagent-finished', `the project agent finished: ${JSON.stringify(ended?.payload)}`);
+    assert.ok(t.events.some((e) => e.type === 'tool-start' && e.payload.agent === 'note-writer'), 'its tool calls ran under its name');
+    assert.match(summary, /DONE/i);
+  });
+
+  it('Claude starts a child session that runs in its own microVM and reports back', async () => {
+    const userId = `user-${generateId()}`;
+    getDb().prepare('INSERT INTO users (id, email, name, password_hash, is_admin, disabled, created_at) VALUES (?, ?, ?, ?, 0, 0, ?)')
+      .run(userId, `${userId}@example.com`, 'Live', 'x', now());
+    const t = setup({
+      trusted: true,
+      ownerId: userId,
+      goal: 'Use the delegate_session tool once, with task "Reply with exactly the words child-ok." and title "Live child". Then reply with the word DONE.',
+    });
+    // The child is a Claude session too: it runs on the same AgentCore runtime, in its own session.
+    const prev = process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
+    process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = ARN;
+    try {
+      await runClaudeViaAgentCore(t.ctx, ARN);
+      report('delegate', t);
+      const child = one<{ id: string; title: string }>('SELECT id, title FROM p6_workflows WHERE parent_id = ?', t.workflowId);
+      assert.ok(child, 'a child session was started');
+      let result: { data: string } | undefined;
+      for (let i = 0; i < 600 && !result; i++) {
+        result = all<{ data: string }>(`SELECT data FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'child-result'`, t.workflowId)[0];
+        if (!result) await new Promise((r) => setTimeout(r, 1000));
+      }
+      const childRun = one<Record<string, unknown>>('SELECT status, cost_usd, input_tokens, model FROM p6_runs WHERE workflow_id = ?', child.id);
+      console.log(`LIVE ${JSON.stringify({ test: 'child-session', child, result: result?.data, childRun })}`);
+      assert.ok(result, 'the child\'s result reached the parent');
+      const posted = JSON.parse(result.data) as { status: string; summary: string };
+      assert.equal(posted.status, 'done');
+      assert.match(posted.summary, /child-ok/i, 'the child\'s answer itself reached the parent');
+      assert.ok(Number(childRun?.cost_usd) > 0, 'the child called Bedrock in its own microVM');
+    } finally {
+      if (prev === undefined) delete process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
+      else process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = prev;
+    }
   });
 });
