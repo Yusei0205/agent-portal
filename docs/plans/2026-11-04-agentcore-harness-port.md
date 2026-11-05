@@ -1,7 +1,7 @@
 # Harness on AgentCore: review of main_v3 and the port
 
 Date: 2026-11-04
-Branch: `agentcore/harness` (from `main_v3` at 833ef79)
+Branch: `agentcore/harness` (from `main_v3` at 833ef79), merged in PR #12; deploy and live results added on `agentcore/deploy-live`
 Account / region: 366019841051 / ap-southeast-1
 
 ## 1. Summary
@@ -85,6 +85,9 @@ record spend, stop reason, budget
 2. Port harness PR 1.2 (safety switches) and 1.7 (loop progress and stop rules) into main_v3.
 3. Add the per-session spend cap and time limit to the session API and screen. The columns and repository support exist now.
 4. Phase 2 sandbox, for what the shell can still reach.
+5. ~~Record the spend of a cancelled AgentCore run.~~ **Fixed in [PR #14](https://github.com/Yusei0205/agent-portal/pull/14)**, together with the same gap on the local engine (cancelled and time-limited runs recorded $0) and the time-limit stop reason being lost for local Claude runs. Live re-run: the cancelled run now records $0.0010 and its tokens instead of $0.
+6. A repository admin protects the `aws-prod` environment with required reviewers and limits it to `main_v3`. Today it has neither, so any push to `main_v3` that touches the runners deploys straight away.
+7. Fix `server/agent/pricing.ts`. It prices every Haiku model at $0.10 / $0.50 per million tokens, while the engine's own live totals fit $1 / $5 for Haiku 4.5, so token-based estimates for stopped Haiku 4.5 runs are about 10x too low. It also groups models by family, not generation. Runs that end normally use the engine's own total and are not affected.
 
 ## 6. Deploying
 
@@ -103,16 +106,25 @@ record spend, stop reason, budget
 - Check which runner images exist.
 
 **One-time setup:**
-1. An account admin deploys the role:
+1. **Done on 2026-11-04.** The role was deployed to account 366019841051 (ap-southeast-1), stack `AgentPortalGithubDeploy`:
    ```bash
    cd infra
    npx -y aws-cdk@2.1147.0 deploy AgentPortalGithubDeploy -c github=1 --profile <admin-profile>
    ```
-2. A repository admin opens Settings › Environments › `aws-prod`. GitHub creates this environment on the first deploy run. The admin:
+   It created the GitHub OIDC provider and `arn:aws:iam::366019841051:role/agent-portal-github-deploy`.
+
+   **Trust is pinned to GitHub's immutable subject.** The repository uses GitHub's immutable OIDC subjects, so its tokens name the owner and repository by numeric ID: `repo:Yusei0205@52206369/agent-portal@1426275824:environment:aws-prod`. A renamed or re-created repository cannot reuse these IDs.
+   - The first version of the role expected the name-only form `repo:Yusei0205/agent-portal:environment:aws-prod`, so AWS refused GitHub's sign-in. CloudTrail showed the subject GitHub actually sent.
+   - `infra/bin/app.ts` now sets `subjectPrefix`. GitHub reports the value as `sub_claim_prefix` at `GET /repos/Yusei0205/agent-portal/actions/oidc/customization/sub`.
+
+   Checked with IAM's policy simulator:
+   - **Allowed:** the four CDK bootstrap roles (deploy, file publishing, image publishing, lookup); starting and reading builds of `agent-portal-runner-images`; listing images in the two runner repositories.
+   - **Refused:** assuming any other role (such as the runtime roles); reading secrets; starting any other CodeBuild project.
+2. A repository admin opens Settings › Environments, creates `aws-prod`, and:
    - adds required reviewers, so every deploy waits for an approval;
    - limits the environment to the `main_v3` branch.
 
-   Until then, any push to `main_v3` that touches the runners deploys without an approval.
+   If no one creates it first, GitHub creates `aws-prod` on the first deploy run with no protection, so that run deploys without an approval.
 3. Optional: set the repository variable `AWS_DEPLOY_ROLE_ARN`. Without it, the workflow uses `arn:aws:iam::366019841051:role/agent-portal-github-deploy`.
 
 ### By hand
@@ -152,7 +164,45 @@ To check the runtimes live: `PORTAL_LIVE_CLAUDE_RUNTIME_ARN=<ClaudeRuntimeArn> P
 
 ## 7. Validation
 
-**Live on AgentCore: not run yet.** The deploy (`node scripts/deploy-harness.mjs`) is waiting for approval. Once the runtimes exist, `test/live/agentcore-live.test.ts` runs approve, decline, guard, spend cap, cancel and a stray answer against real microVMs and Bedrock.
+### Deployed (2026-11-04)
+
+The deploy ran from GitHub Actions on `main_v3` at 54a7a7f, the merge of PR #12. It took three attempts:
+
+1. The first attempt ran before the deploy role existed.
+2. The second was refused because of the subject form (section 6).
+3. The third deployed everything in 5 minutes ([run 41813191293](https://github.com/Yusei0205/agent-portal/actions/runs/41813191293)).
+
+| Output | Value |
+|---|---|
+| Image tag (both runners) | `h-bbc925ebded24d49` (Claude runner 645 MB, Kiro runner 361 MB, compressed) |
+| `ClaudeRuntimeArn` | `arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalClaudeHarness-BW7D1pFqIl` |
+| `KiroRuntimeArn` | `arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalKiroHarness-cb9yhJCYyX` |
+| `InvokePolicyArn` | `arn:aws:iam::366019841051:policy/agent-portal-invoke-harness-runtimes` |
+
+The cloud portal (`AgentPortalCloud`) still points at the Spike A runtime until someone sets these ARNs on it (section 6).
+
+### Live on AgentCore: 6 passed
+
+`test/live/agentcore-live.test.ts` ran against the deployed Claude runtime, with real microVMs and Bedrock Claude Haiku 4.5, from Windows on 2026-11-04. All six tests took 26 s and cost about $0.05.
+
+| Test | What happened | Portal record |
+|---|---|---|
+| Approve | The runner asked about `echo live-ok > live.txt && cat live.txt`; the portal said allow; the command ran | $0.0238, stop: normal end |
+| Decline | The runner asked about `touch declined.txt`; the portal said deny; the command did not run, and the agent was told "The user declined" | $0.0089 |
+| Guard | Writing `.claude/settings.json` was refused inside the microVM ("Blocked by Agent Portal"); nobody was asked | $0.0108 |
+| Spend cap | With a $0.001 cap, the engine stopped after its first reply | "spend cap reached ($0.001)" |
+| Cancel | Aborting in the portal stopped a 240-second command. The runtime's log shows the run ended with `stop_reason: cancelled` 6 s after it started | $0, no tokens (see below) |
+| Stray answer | An answer for a run that isn't waiting was refused | `answer-rejected`, 404 |
+
+**Seen live:** a cancelled run is recorded at $0 with no tokens, although the model had already answered once before the stop. The runner does send a final `result` with an estimated cost. But on abort, `server/agent/claude-agentcore.ts` closes the stream and throws at once, so it never reads that result. It is a small undercount, fixed in [PR #14](https://github.com/Yusei0205/agent-portal/pull/14) (section 5).
+
+**Not live-tested:** the Kiro runtime. It needs a Kiro sign-in; the relay and guard are covered by `test/agentcore-portal.test.ts` and `test/kiro-agentcore.test.ts`.
+
+### CI on Linux
+
+On `main_v3` after the merge, CI passed: type check, backend tests and DynamoDB contract tests. The deploy workflow's `verify` job also passed, including `npm run test:engine`, which runs the real runner and Claude Code engine.
+
+### Local (Windows 11, Node 22.23.3)
 
 | Check | Result |
 |---|---|

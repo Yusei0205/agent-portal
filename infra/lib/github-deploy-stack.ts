@@ -9,7 +9,8 @@
  *   - role agent-portal-github-deploy, which only a workflow job of this repository running in
  *     the GitHub environment "aws-prod" can assume (.github/workflows/deploy-agentcore.yml)
  *
- * The repository is public, so trust is pinned to the exact repo and environment. Pull requests
+ * The repository is public, so trust is pinned to the exact repo (by its immutable owner and
+ * repository IDs) and environment. Pull requests
  * from forks never receive an OIDC token for it. In the repository settings, an admin should give
  * the "aws-prod" environment required reviewers and limit it to the main_v3 branch.
  *
@@ -25,8 +26,15 @@ import { Construct } from 'constructs';
 import { BUILD_PROJECT, CLAUDE_REPO, KIRO_REPO } from './harness-stack';
 
 export interface GithubDeployProps extends cdk.StackProps {
-  /** owner/name of the repository allowed to deploy. */
+  /** owner/name of the repository allowed to deploy (for the role's description). */
   repository: string;
+  /**
+   * The start of the `sub` claim in this repository's GitHub tokens. The repository uses GitHub's
+   * immutable subjects, so the claim carries the owner's and the repository's numeric IDs
+   * (repo:OWNER@OWNER_ID/NAME@REPO_ID), which a renamed or re-created repository cannot reuse.
+   * GitHub reports it as `sub_claim_prefix` at GET /repos/OWNER/NAME/actions/oidc/customization/sub.
+   */
+  subjectPrefix: string;
   /** GitHub environment the deploy job runs in. */
   environment: string;
 }
@@ -49,7 +57,7 @@ export class AgentPortalGithubDeployStack extends cdk.Stack {
       assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
         StringEquals: {
           'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-          'token.actions.githubusercontent.com:sub': `repo:${props.repository}:environment:${props.environment}`,
+          'token.actions.githubusercontent.com:sub': `${props.subjectPrefix}:environment:${props.environment}`,
         },
       }),
     });
