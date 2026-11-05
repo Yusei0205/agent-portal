@@ -39,6 +39,9 @@ import { buildConversationRecap } from './recap.ts';
 import { ApprovalRelay, DelegationRelay, isApprovalRequest, isDelegateRequest } from './agentcore-bridge.ts';
 import { invokeAgentCore, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
 import type { RunContext, AgentRun } from './types.ts';
+import { snapshotAccess } from './runner-snapshot-access.ts';
+import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
+import type { RepoChange } from '../session-pr.ts';
 
 /** Bedrock model ID for the runner: a Bedrock ID as given, otherwise the matching global profile. */
 export function bedrockModelFor(model: string | null | undefined): string | undefined {
@@ -152,6 +155,13 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const delegation = await getDelegationSettingsRepository().get().catch(() => null);
   const canDelegate = Boolean(delegation?.enabled && run.credentialOwnerId && (delegation.allowNested || !wf?.parent_id));
 
+  const hasRepos = Boolean(run.runnerRepos?.length);
+  const finalizeCheck = hasRepos && run.projectId ? await finalizeCheckFor(run.projectId, Boolean(wf?.jira_key)) : false;
+  const changes: RepoChange[] = [];
+  // The runner saves the workspace after the run; the pull request step later restores it in the session's own
+  // AgentCore session (this run uses a per-run session id), so the repositories are found again to push.
+  const snapshot = hasRepos && run.workflowId ? await snapshotAccess(run.workflowId) : null;
+
   const payload: Record<string, unknown> = {
     mode: 'run',
     runId: run.runId,
@@ -164,6 +174,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
     approvals: runnerApprovals(),
     ...(Object.keys(agents).length ? { agents } : {}),
     ...(canDelegate ? { delegation: { via: 'portal' } } : {}),
+    ...(hasRepos ? { repos: run.runnerRepos } : {}),
+    ...(snapshot ? { snapshot } : {}),
+    ...(finalizeCheck ? { finalizeCheck: true } : {}),
   };
 
   // Spend from the runner's final result: on the run and in the budget. Returns the cost.
@@ -274,6 +287,10 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
         case 'status':
           if (ev.text) emit('status', { text: String(ev.text) });
           break;
+        case 'repo-changes':
+          // Not a run event: handed to the pull request step once the run has finished.
+          changes.push({ repo: String(ev.repo ?? ''), base: String(ev.base ?? ''), commits: Number(ev.commits) || 0, files: Number(ev.files) || 0 });
+          break;
         case 'error':
           throw new HttpError(502, `AgentCore run error: ${String(ev.message ?? 'unknown')}`);
         case 'result':
@@ -319,5 +336,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const summary = textParts.join('\n').trim() || 'Run complete.';
   emit('run-complete', { result: summary, cost_usd: cost, ...(r.costEstimated ? { cost_estimated: true } : {}) });
   emit('status', { state: 'idle' });
+  // Spend is recorded and the run is done: now the pull request step (never fails the run).
+  await submitRepoChanges(run, wf?.created_by ?? null, changes);
   return summary;
 }

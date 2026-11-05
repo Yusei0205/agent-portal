@@ -42,7 +42,7 @@ import {
   claudeProjectDirName,
 } from './claude-sessions.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
-import { runClaudeViaAgentCore, anthropicAuthFromEnv } from './claude-agentcore.ts';
+import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from './claude-agentcore.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -201,6 +201,8 @@ ${REVIEW_SYSTEM_APPEND}`;
 
   const summary = res.text || 'Run complete.';
   emit('run-complete', { result: summary, cost_usd: costUsd });
+  // Spend is recorded and the run is done: now the pull request step (never fails the run).
+  await submitRepoChanges(run, wf?.created_by ?? null, res.repoChanges);
   return summary;
 }
 

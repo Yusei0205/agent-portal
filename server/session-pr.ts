@@ -63,6 +63,8 @@ const BODY_FINAL_MESSAGE_MAX = 3000;
 interface Deps {
   /** Branch names that exist on the repository's remote. */
   listBranches: (repo: Repository) => Promise<string[]>;
+  /** Replaces handleRepoChanges (tests of the callers only). */
+  onRepoChanges?: (ctx: SessionPrContext, changes: RepoChange[]) => Promise<void>;
 }
 const defaultDeps: Deps = {
   listBranches: async (repo) => listRemoteBranches(repo, await _getCloneEnv(repo)),
@@ -190,6 +192,7 @@ async function prBody(w: WorkflowRecord): Promise<string> {
  * `pull-request` event with state `failed`.
  */
 export async function handleRepoChanges(ctx: SessionPrContext, changes: RepoChange[]): Promise<void> {
+  if (deps.onRepoChanges) return deps.onRepoChanges(ctx, changes);
   for (const change of changes) {
     try {
       await handleOne(ctx, change);

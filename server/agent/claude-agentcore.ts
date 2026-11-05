@@ -21,6 +21,7 @@ import { persistFile } from '../durable-files.ts';
 import { snapshotAccess } from './runner-snapshot-access.ts';
 import { agentCoreSessionId } from './agentcore-session.ts';
 import { waitForRepoPrep } from './repo-prep.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 
 export interface ClaudeAgentCoreOpts {
   runtimeArn: string;
@@ -55,6 +56,48 @@ export interface ClaudeAgentCoreResult {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   stopReason: string;
+  /** Repositories the runner reported as changed (only when the payload asked with finalizeCheck). */
+  repoChanges?: import('../session-pr.ts').RepoChange[];
+}
+
+/** Whether to ask the runner to report changed repositories (the pull request step). Never throws. */
+export async function finalizeCheckFor(projectId: string, hasTicket: boolean): Promise<boolean> {
+  try {
+    const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
+    return await finalizeRunPayloadFlag(projectId, hasTicket);
+  } catch (e) {
+    console.warn('[claude-agentcore] finalizeCheck flag skipped:', e);
+    return false;
+  }
+}
+
+/**
+ * Hands the changed repositories to the pull request step. Called once the run is otherwise finished and its
+ * spend is recorded. Never throws. It waits a bounded time (so a quick "ask in the Inbox" result is written before
+ * the run closes, and the work is not left running in a frozen Lambda), then lets a slower push/PR carry on alone.
+ */
+export async function submitRepoChanges(
+  run: { runId: string; workflowId: string; projectId: string | null; credentialOwnerId?: string | null },
+  userId: string | null,
+  changes: import('../session-pr.ts').RepoChange[] | undefined,
+  waitMs = 30_000,
+): Promise<void> {
+  const projectId = run.projectId;
+  if (!changes?.length || !projectId) return;
+  try {
+    const { handleRepoChanges } = await import('../session-pr.ts');
+    const job = Promise.resolve()
+      .then(() => handleRepoChanges({
+        workflowId: run.workflowId, runId: run.runId, projectId,
+        userId: run.credentialOwnerId ?? userId, engine: 'claude-code',
+      }, changes))
+      .catch((e: unknown) => { console.warn(`[claude-agentcore] pull request step failed for run ${run.runId}:`, e); });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([job, new Promise<void>((r) => { timer = setTimeout(r, waitMs); })]);
+    clearTimeout(timer);
+  } catch (e) {
+    console.warn('[claude-agentcore] pull request step skipped:', e);
+  }
 }
 
 /** Picks the credential the runner should use from the env built by resolveCredentialEnv(). */
@@ -94,6 +137,12 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; ac.abort(new Error('AgentCore run timed out')); }, timeoutMs);
 
+  let finalizeCheck = false;
+  if (opts.repos?.length && ctx.run?.workflowId && ctx.run.projectId) {
+    const wf = await getSessionsRepository().getWorkflowById(ctx.run.workflowId).catch(() => null);
+    finalizeCheck = await finalizeCheckFor(ctx.run.projectId, Boolean(wf?.jira_key));
+  }
+  const changes: import('../session-pr.ts').RepoChange[] = [];
   const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
   const payload: Record<string, unknown> = {
     runId: opts.runId,
@@ -108,6 +157,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.inputFiles?.length ? { inputFiles: opts.inputFiles } : {}),
     ...(opts.checks?.length ? { checks: opts.checks } : {}),
     ...(snapshot ? { snapshot } : {}),
+    ...(finalizeCheck ? { finalizeCheck: true } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
     ...(opts.effort ? { effort: opts.effort } : {}),
@@ -170,6 +220,10 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
           if (text && !text.startsWith('Work dir:')) emit('status', { text });
           break;
         }
+        case 'repo-changes':
+          // Not a run event: handed to the pull request step once the run has finished.
+          changes.push({ repo: String(ev.repo ?? ''), base: String(ev.base ?? ''), commits: Number(ev.commits) || 0, files: Number(ev.files) || 0 });
+          break;
         case 'file':
           await receiver?.handle(ev);
           break;
@@ -200,5 +254,6 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   if (receiver?.received.length) emit('status', { text: `Received ${receiver.received.length} file${receiver.received.length === 1 ? '' : 's'} from the agent` });
   emit('status', { state: 'idle' });
   out.text = parts.join('\n').trim();
+  if (changes.length) out.repoChanges = changes;
   return out;
 }
