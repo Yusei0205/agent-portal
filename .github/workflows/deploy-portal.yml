@@ -122,6 +122,11 @@ jobs:
         # The stack uploads dist/web and does not build it.
         run: npm run build:web
 
+      - name: Enable ARM64 Docker builds
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
       - name: Deploy Codex AgentCore runner
         working-directory: infra
         run: npx aws-cdk@2.1147.0 deploy AgentPortalCodexRunner -c codexRunner=1 --require-approval never
