@@ -1273,10 +1273,24 @@ export async function listModelsForProvider(
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+/** Settings for the browser, with "last changed by" shown as the person's email instead of their internal id. */
+async function publicSettingsWithNames(): Promise<object> {
+  const view = publicSettings() as Record<string, unknown>;
+  const id = typeof view.lastChangedBy === 'string' ? view.lastChangedBy : '';
+  if (id) {
+    try {
+      const { getAuthRepository } = await import('./repositories/auth.ts');
+      const u = await getAuthRepository().getUserById(id);
+      if (u?.email) view.lastChangedBy = u.email;
+    } catch { /* keep what is stored */ }
+  }
+  return view;
+}
+
 export function registerSettingsRoutes(): void {
   // GET /api/settings — returns all settings (safe view)
-  router.get('/api/settings', requireAuth((req, res) => {
-    sendJson(res, 200, publicSettings());
+  router.get('/api/settings', requireAuth(async (req, res) => {
+    sendJson(res, 200, await publicSettingsWithNames());
   }));
 
   // PUT /api/settings — update settings (admin only)
@@ -1474,7 +1488,7 @@ export function registerSettingsRoutes(): void {
       }
     }
 
-    sendJson(res, 200, publicSettings());
+    sendJson(res, 200, await publicSettingsWithNames());
   }));
 
   // GET /api/settings/models — list models for a provider (admin only)

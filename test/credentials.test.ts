@@ -822,6 +822,15 @@ describe('F8 — Settings visibility', () => {
     // lastChangedAt should be a valid ISO date
     assert.ok(!isNaN(Date.parse(body.lastChangedAt!)), 'lastChangedAt should be a valid date');
   });
+
+  it('lastChangedBy is the email of the person, not their internal id, on PUT and on GET', async () => {
+    const put = await fetchJson(baseUrl, '/api/settings', { method: 'PUT', body: { claudeModels: 'test-model | Test' }, cookie: adminCookie });
+    const get = await fetchJson(baseUrl, '/api/settings', { cookie: adminCookie });
+    for (const r of [put, get]) {
+      const by = (r.body as { lastChangedBy: string }).lastChangedBy;
+      assert.match(by, /@/, `expected an email, got ${by}`);
+    }
+  });
 });
 
 // ── Bug 2: Device-poll error classification uses e.name ───────────────────────
