@@ -97,6 +97,17 @@ function workflowView(w: Row | WorkflowRecord) {
 }
 
 /**
+ * A session is stopped (needs Resume before anyone can write to it) when its status says so, or when its last run
+ * failed or was cancelled and nothing has reopened it since. Resume reopens a session by setting its status to
+ * `done`, so a `done` or `pending` session is open whatever its last run did.
+ */
+function isResumableState(wfStatus: string, lastRunStatus: string | null): boolean {
+  if (['failed', 'paused', 'stopped', 'cancelled'].includes(wfStatus)) return true;
+  if (['done', 'pending', 'running'].includes(wfStatus)) return false;
+  return lastRunStatus !== null && ['failed', 'cancelled'].includes(lastRunStatus);
+}
+
+/**
  * Enrich a single workflow row with parent_title, child_count, resumable, and lastRunStatus.
  * Uses the sessions repository.
  */
@@ -119,11 +130,7 @@ async function enrichWorkflowRow(w: Row | WorkflowRecord): Promise<WorkflowRecor
   const wfStatus = String(w.status ?? '');
   const latestRun = await repo.getLatestRun(id);
   const lastRunStatus = latestRun?.status ?? null;
-  const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
-  const resumableRunStatuses = new Set(['failed', 'cancelled']);
-  const resumable =
-    resumableStatuses.has(wfStatus) ||
-    (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus));
+  const resumable = isResumableState(wfStatus, lastRunStatus);
 
   // Build a WorkflowRecord merging enrichment with the original row
   const base: WorkflowRecord = typeof (w as WorkflowRecord).iteration_count === 'number'
@@ -815,33 +822,15 @@ export function registerWorkflowRoutes(): void {
     const wfStatus = w.status ?? '';
     const latestRun = await repo.getLatestRun(w.id);
     const lastRunStatus = latestRun?.status ?? null;
-    const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
-    const resumableRunStatuses = new Set(['failed', 'cancelled']);
-    const isResumable =
-      resumableStatuses.has(wfStatus) ||
-      (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus));
 
-    if (!isResumable) {
+    if (!isResumableState(wfStatus, lastRunStatus)) {
       sendJson(res, 409, { error: 'Workflow is not in a resumable state' });
       return;
     }
 
-    const resumeMessage = 'Continue where you left off. The previous run was interrupted.';
-    await repo.appendWorkflowEvent({
-      workflow_id: w.id,
-      kind: 'human',
-      body: resumeMessage,
-      data: JSON.stringify({ by: req.user!.id, resume: true }),
-      created_at: now(),
-    });
-
+    // Resume only reopens the session. No message is added and no agent is started: the person writes the next
+    // message themselves, and until then nothing runs. (The idle timer starts again from now.)
     const ts = now();
-    await repo.updateWorkflow(w.id, { last_turn_at: ts, stop_reason: '', updated_at: ts });
-
-    if (w.project_id) {
-      emit(w.project_id, { type: 'workflow.message', workflowId: w.id, body: resumeMessage, by: req.user!.id });
-    }
-
     try {
       // Re-acquire delegation slot if this is a child being resumed (idempotent).
       if (w.parent_id && w.created_by) {
@@ -854,9 +843,16 @@ export function registerWorkflowRoutes(): void {
           dlgSettings.maxRunningPerUser,
         );
       }
-      const runId = await startRun(w.id);
-      const run = await repo.getRunById(runId);
-      sendJson(res, 201, { runId, run: run ? runView(run) : null });
+      await repo.updateWorkflow(w.id, { status: 'done', last_turn_at: ts, stop_reason: '', updated_at: ts });
+      await repo.appendWorkflowEvent({
+        workflow_id: w.id,
+        kind: 'system',
+        body: 'Session resumed',
+        data: JSON.stringify({ by: req.user!.id, resume: true }),
+        created_at: ts,
+      });
+      if (w.project_id) emit(w.project_id, { type: 'workflow.updated', workflowId: w.id, status: 'done' });
+      sendJson(res, 200, { ok: true, reopened: true, status: 'done' });
     } catch (e: unknown) {
       const msg = (e as { message?: string })?.message ?? String(e);
       sendJson(res, 429, { error: msg });
