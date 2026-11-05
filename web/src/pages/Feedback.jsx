@@ -16,7 +16,9 @@ const KIND_LABEL = { bug: 'Bug', idea: 'Idea', question: 'Question', other: 'Oth
 const STATUSES = [
   { value: 'new', label: 'New', tone: 'accent' },
   { value: 'accepted', label: 'Accepted', tone: 'ok' },
-  { value: 'in_progress', label: 'In progress', tone: 'warn' },
+  { value: 'in_progress', label: 'In progress', tone: 'accent' },
+  { value: 'in_review', label: 'In review', tone: 'warn' },
+  { value: 'approved', label: 'Approved', tone: 'ok' },
   { value: 'fixed', label: 'Fixed', tone: 'ok' },
   { value: 'declined', label: 'Declined', tone: 'muted' },
 ];
@@ -133,18 +135,29 @@ function Mine() {
 
 function Inbox() {
   const [status, setStatus] = useState('new');
+  // Land on what needs a decision when there is something waiting.
+  const [picked, setPicked] = useState(false);
   const [openId, setOpenId] = useState(null);
   const list = useLoad(() => api.get(`/api/feedback${status === 'all' ? '' : `?status=${status}`}`), [status]);
   const counts = list.data?.counts || {};
   const items = list.data?.feedback || [];
   const open = items.find((f) => f.id === openId);
+  useEffect(() => {
+    if (picked || !list.data) return;
+    setPicked(true);
+    if (list.data.counts.in_review && status === 'new') setStatus('in_review');
+  }, [list.data, picked, status]);
+  const choose = (v) => {
+    setPicked(true);
+    setStatus(v);
+  };
   return (
     <div className="stack">
       <div className="row wrap">
         <Segmented
           label="Status"
           value={status}
-          onChange={setStatus}
+          onChange={choose}
           options={[...STATUSES.map((s) => ({ value: s.value, label: s.label, count: counts[s.value] })), { value: 'all', label: 'All' }]}
         />
       </div>
@@ -244,7 +257,7 @@ function Detail({ item, target, onClose, onChanged }) {
           <Field label="Status">
             {(id) => (
               <select id={id} className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                {STATUSES.map((s) => (
+                {STATUSES.filter((s) => s.value === item.status || !['in_review', 'approved'].includes(s.value)).map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
                   </option>
@@ -260,7 +273,15 @@ function Detail({ item, target, onClose, onChanged }) {
           </Field>
           <ErrorNote error={save.error} />
         </section>
-        <SendToAgent item={item} note={form.admin_note} target={target} onStarted={onChanged} />
+        {item.status === 'in_review' ? <ReviewChanges item={item} onDone={onChanged} /> : null}
+        {item.decided_at && item.status !== 'in_review' ? (
+          <p className="muted small">
+            {STATUS[item.status]?.label || item.status} by {item.decided_by_name || 'an admin'}, {timeAgo(item.decided_at)}
+            {item.decision_note ? `: “${item.decision_note}”` : ''}
+          </p>
+        ) : null}
+        {item.handin_error ? <HandInProblem item={item} onDone={onChanged} /> : null}
+        {item.status !== 'in_review' ? <SendToAgent item={item} note={form.admin_note} target={target} onStarted={onChanged} /> : null}
       </div>
     </Modal>
   );
@@ -281,7 +302,7 @@ function SendToAgent({ item, note, target, onStarted }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repos.data]);
   const act = useAction();
-  const running = item.run && ['queued', 'running', 'waiting'].includes(item.run.status);
+  const running = item.run?.active;
   const start = () =>
     act
       .run(async () => {
@@ -303,8 +324,8 @@ function SendToAgent({ item, note, target, onStarted }) {
         </p>
       ) : null}
       <p className="muted small">
-        The agent works in its own copy of the repository and asks before every change. When it is done, review its changes in the run and use{' '}
-        <em>Push changes</em> to open a pull request.
+        The agent works in its own copy of the repository and asks before every change. When it finishes, the portal pushes its changes to a
+        branch, opens a pull request and runs a code review. Nothing is merged until you approve it here.
       </p>
       <div className="two-col">
         <Field label="Project">
@@ -363,6 +384,151 @@ function SendToAgent({ item, note, target, onStarted }) {
         </Button>
         {running ? <span className="muted small">An agent is already working on this.</span> : null}
       </div>
+    </section>
+  );
+}
+
+function HandInProblem({ item, onDone }) {
+  const { toast } = useUi();
+  const act = useAction();
+  const retry = () =>
+    act
+      .run(async () => {
+        await api.post(`/api/feedback/${item.id}/submit`);
+        toast('Sent for review');
+        onDone();
+      })
+      .catch(() => {});
+  return (
+    <div className="stack">
+      <Note tone="warn">
+        <span>{item.handin_error}</span>
+      </Note>
+      {item.run && !item.run.active ? (
+        <div className="row">
+          <Button icon="refresh" busy={act.busy} onClick={retry}>
+            Submit for review again
+          </Button>
+        </div>
+      ) : null}
+      <ErrorNote error={act.error} />
+    </div>
+  );
+}
+
+function ReviewChanges({ item, onDone }) {
+  const { toast, confirm } = useUi();
+  const [comment, setComment] = useState('');
+  const [reason, setReason] = useState('');
+  const act = useAction();
+  const review = item.review;
+  const pid = item.run?.project_id;
+  const merges = Boolean(item.pr_number);
+
+  const approve = async () => {
+    let force = false;
+    if (review?.status === 'running' || review?.serious) {
+      const ok = await confirm({
+        title: 'Approve anyway?',
+        message: review.status === 'running' ? 'The code review has not finished yet.' : `The code review found ${review.serious} serious issue${review.serious === 1 ? '' : 's'}.`,
+        confirmLabel: merges ? 'Approve and merge' : 'Approve',
+        danger: true,
+      });
+      if (!ok) return;
+      force = true;
+    }
+    await act
+      .run(async () => {
+        const r = await api.post(`/api/feedback/${item.id}/approve`, { force });
+        toast(r.feedback.status === 'fixed' ? 'Approved and merged' : `Approved. Merge branch ${item.branch} to release it.`);
+        onDone();
+      })
+      .catch(() => {});
+  };
+  const sendBack = () =>
+    act
+      .run(async () => {
+        const r = await api.post(`/api/feedback/${item.id}/request-changes`, { comment });
+        toast('Sent back to the agent');
+        onDone();
+        go(r.run.project_id, 'runs', r.run.id);
+      })
+      .catch(() => {});
+  const reject = async () => {
+    const ok = await confirm({
+      title: 'Reject these changes?',
+      message: merges ? 'The pull request is closed and the feedback is marked declined.' : 'The feedback is marked declined. The branch is kept.',
+      confirmLabel: 'Reject',
+      danger: true,
+    });
+    if (!ok) return;
+    await act
+      .run(async () => {
+        await api.post(`/api/feedback/${item.id}/reject`, { reason });
+        toast('Rejected');
+        onDone();
+      })
+      .catch(() => {});
+  };
+
+  return (
+    <section className="panel stack review-panel">
+      <h3>Review the changes</h3>
+      <p className="muted small">The agent has finished. Check what it changed, then approve it, send it back with comments, or reject it.</p>
+      <ul className="review-links small">
+        {item.pr_url ? (
+          <li>
+            Pull request:{' '}
+            <a href={item.pr_url} target="_blank" rel="noreferrer">
+              #{item.pr_number || ''} on GitHub
+            </a>
+          </li>
+        ) : null}
+        {item.branch ? (
+          <li>
+            Branch: <code>{item.branch}</code>
+          </li>
+        ) : null}
+        {item.run ? (
+          <li>
+            <a href={href(pid, 'runs', item.run.id)}>The agent's run</a>, with its summary and <em>Files and changes</em>
+          </li>
+        ) : null}
+        {review ? (
+          <li>
+            <a href={href(review.project_id, 'review', review.id)}>Code review</a>{' '}
+            <Badge status={review.status} />{' '}
+            {review.status === 'done' ? (
+              <span className={review.serious ? 'danger' : 'muted'}>
+                {review.open_findings ? `${review.open_findings} finding${review.open_findings === 1 ? '' : 's'}${review.serious ? `, ${review.serious} serious` : ''}` : 'No findings'}
+              </span>
+            ) : null}
+          </li>
+        ) : null}
+      </ul>
+      {review?.summary ? <p className="small">{review.summary}</p> : null}
+      <div className="row wrap">
+        <Button variant="primary" icon="check" busy={act.busy} onClick={approve}>
+          {merges ? 'Approve and merge' : 'Approve'}
+        </Button>
+      </div>
+      <Field label="Request changes" hint="The agent continues in the same working copy with your comments and the open review findings, then it comes back here.">
+        {(id) => <textarea id={id} className="input" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Also handle tablets, and add a test." />}
+      </Field>
+      <div className="row wrap">
+        <Button icon="edit" busy={act.busy} disabled={!comment.trim()} onClick={sendBack}>
+          Send back to the agent
+        </Button>
+      </div>
+      <Field label="Reject" hint={merges ? 'Closes the pull request. Your reason is posted on it.' : 'Optional reason, kept with the feedback.'}>
+        {(id) => <input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Not something we want to change" />}
+      </Field>
+      <div className="row wrap">
+        <Button variant="danger" icon="x" busy={act.busy} onClick={reject}>
+          Reject changes
+        </Button>
+      </div>
+      <ErrorNote error={act.error} />
     </section>
   );
 }

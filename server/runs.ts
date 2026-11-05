@@ -187,7 +187,7 @@ export function registerRunRoutes(): void {
         draft: true,
       });
       pr = { number: created.number, url: created.html_url };
-      recordFeedbackPr(r.id, created.html_url);
+      recordFeedbackPr(r.id, created.html_url, created.number);
     }
     return { ...out, branch, pr };
   });

@@ -2645,3 +2645,12 @@ mark {
 .table-scroll .table {
   min-width: 620px;
 }
+.review-links {
+  margin: 0;
+  padding-left: 18px;
+  display: block;
+}
+.review-links li {
+  display: list-item;
+  margin: 4px 0;
+}

@@ -90,18 +90,27 @@ AWS keys are stored at all.
 
 ## Improving the portal from user feedback
 
-The portal can work on its own code through the normal agent run flow:
+The portal can work on its own code, with an admin approving every change:
 
 1. Create a project for the portal itself (for example "Agent Portal") and connect this
-   repository under its **Repositories**. A GitHub token in *Settings* lets pushes open pull requests.
+   repository under its **Repositories**. For GitHub, set a token (in *Settings* or on the
+   repository) that can push, open and merge pull requests.
 2. Users send feedback from **Feedback** in the left menu. The page they came from is filled in.
-3. Admins open **Feedback › Inbox**, set a status, add a note for the agent, and press
-   **Start agent run**. The run uses the repository you pick (it is remembered) and always asks
-   before changes, because the feedback text comes from users. The prompt quotes that text as a
-   description of the problem, not as instructions.
-4. Review the run, then **Push changes** with a pull request. The pull request link is recorded on
-   the feedback, and the sender sees it under **Your feedback**. Mark it *Fixed* once it is merged
-   and deployed.
+3. Admins open **Feedback › Inbox**, add a note for the agent if needed, and press
+   **Start agent run**. The run always asks before changes, because the feedback text comes from
+   users; the prompt quotes that text as a description of the problem, not as instructions.
+4. When the agent finishes, the portal pushes its work to a `feedback/…` branch, opens a pull
+   request (GitHub) and starts a code review. The feedback moves to **In review**.
+5. The admin decides in the feedback's **Review the changes** panel:
+   - **Approve and merge**: merges the pull request (squash). Other Git hosts are marked
+     *Approved*, and you merge the branch yourself. Serious review findings, or a review that is
+     still running, need an extra confirmation.
+   - **Send back to the agent**: the same run continues with your comments and the open review
+     findings, then the branch and pull request are updated and reviewed again.
+   - **Reject changes**: closes the pull request and marks the feedback *Declined*.
+
+The person who sent the feedback follows its status, and the pull request link, under
+**Your feedback**.
 
 ## Automated tests
 

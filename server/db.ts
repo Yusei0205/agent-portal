@@ -284,6 +284,16 @@ const MIGRATIONS: string[] = [
   CREATE INDEX feedback_user ON feedback(user_id, created_at);
   CREATE INDEX feedback_run ON feedback(run_id);
   `,
+  // 3: feedback changes go to a branch and pull request for an admin to approve, change or reject
+  `
+  ALTER TABLE feedback ADD COLUMN branch TEXT;
+  ALTER TABLE feedback ADD COLUMN pr_number INTEGER;
+  ALTER TABLE feedback ADD COLUMN review_id TEXT;
+  ALTER TABLE feedback ADD COLUMN handin_error TEXT;
+  ALTER TABLE feedback ADD COLUMN decided_by TEXT;
+  ALTER TABLE feedback ADD COLUMN decided_at TEXT;
+  ALTER TABLE feedback ADD COLUMN decision_note TEXT;
+  `,
 ];
 
 let db: DatabaseSync | null = null;
