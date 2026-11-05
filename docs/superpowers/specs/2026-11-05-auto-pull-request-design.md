@@ -2,7 +2,7 @@
 
 Date: 2026-11-05
 Branch: `feat/auto-pr` (from `feat/review-branch-dropdown`)
-Status: draft for review
+Status: approved by the owner on 2026-11-05 (with the protected-branches setting added)
 
 ## 1. Goal
 
@@ -53,7 +53,9 @@ Jira ticket, let the user approve. Assumed by me: the defaults in section 8.
      or the session goal: lowercase, `[a-z0-9-]`, at most 40 characters. A name that already exists on the
      remote gets `-2`, `-3`, and so on.
    - `git add -A` (files the protected-path guard blocks agents from editing are left out), one commit, a plain
-     push. Never a force push, never to the default branch or to `main`, `master`, `develop`, `release/*`.
+     push. Never a force push, and never to a protected branch: the repository's default branch plus the
+     project's **protected branches** list (section 4; default `main`, `master`, `develop`, `release/*`).
+     The new branch's own name is checked against that list too, so `portal/...` can be protected as well.
 5. **Create the PR** (in the portal): title `<KEY>: <ticket summary>`, or the first line of the session goal
    (at most 72 characters). Body: ticket link, session link, the agent's final message (cut and scrubbed of
    secret values), and a line saying it was opened by Agent Portal. If a PR for that head and base already
@@ -71,7 +73,7 @@ Jira ticket, let the user approve. Assumed by me: the defaults in section 8.
 | `pull-requests.ts` | `server/` | `createPullRequest({repo, base, head, title, body})` returning `{number, url, existing}`. GitHub through the REST API with the Git connection's token. CodeCommit through `CreatePullRequest` with the project's AWS account or the connection's keys (same resolution order as clones). Other hosts: a clear "not supported" error. | `getCloneEnv` credential sources, `@aws-sdk/client-codecommit` |
 | `session-pr.ts` | `server/` | Reads `repo-changes` events at run end, applies the rules in section 3, calls `createPullRequest`, starts the review, writes `pull-request` events. Idempotent per session, repo and branch. | `pull-requests.ts`, review creation |
 | Review creation | `server/review.ts` | Extract the body of the `POST /reviews` create step into a function the route and `session-pr.ts` both call. No behavior change to the route. | |
-| Project setting | project configuration | `openPullRequests`: on (default) or off. | |
+| Project settings | project configuration (Setup) | `openPullRequests`: on (default) or off. `protectedBranches`: a list of names or `*` patterns that the portal never pushes to (default `main`, `master`, `develop`, `release/*`; the repository's default branch is always protected on top of it). Sent to the runner with the run; the portal checks it again before creating the PR. | |
 | Session card | `web/src/pages/sessions/` | Shows the `pull-request` state, links, and the Create pull request button. | |
 
 Kiro: the Kiro runner (`kiro-runner`) gets the same finalize step from the shared module. The plan builds
@@ -113,7 +115,8 @@ run ends in the microVM
 ## 7. Security
 
 - Branch names pass the existing runner check (`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`, no `..`) and the
-  protected-name list above.
+  project's protected-branches list. The list is enforced twice, in the runner before the push and in the portal
+  before the PR, and only an editor of the project can change it.
 - Ticket text, goal and agent output are untrusted: they go to the host only as JSON fields and to git only as
   `execFile` arguments, never through a shell.
 - The finalize step uses the repository's own clone credentials; the microVM never holds a portal credential,
@@ -123,8 +126,8 @@ run ends in the microVM
 
 ## 8. Defaults I chose (change any of these in review)
 
-1. The project setting `openPullRequests` is **on** by default. With it on, a ticket session pushes a branch
-   without asking. Off by default is the safer alternative.
+1. The project setting `openPullRequests` is **on** by default (confirmed). With it on, a ticket session
+   pushes a branch without asking.
 2. One commit per repository, message `<KEY>: <summary>` (or the goal's first line).
 3. Reviews started this way use post mode `draft` and the project's default minimum severity.
 4. The PR body includes the session link only when the portal's public URL is configured.
@@ -141,7 +144,10 @@ run ends in the microVM
 - Runner end to end (`npm run test:engine`): the finalize step with the real engine, a local remote, and a
   stand-in model that edits a file.
 - Web: the card in each state.
-- Live (needs AWS, run by hand): a real CodeCommit repository and a real GitHub repository.
+- Live, one round (confirmed by the owner, needs AWS and a real repository): a ticket session on a CodeCommit
+  repository, and the same on GitHub if a test repository is available. The run checks the push, the PR, the
+  draft review and the card, and the permission-error text when the push is refused.
+- Protected branches: pushing to a listed name or pattern is refused in the runner and again in the portal.
 
 ## 10. Risks to confirm
 
