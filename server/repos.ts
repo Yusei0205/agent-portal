@@ -150,12 +150,13 @@ async function requireProjectAccess(req: PortalRequest, res: PortalResponse, pro
 }
 
 /** Run a git command, returning stdout or throwing on failure. */
-function spawnGit(args: string[], cwd: string, env?: Record<string, string>): Promise<string> {
+function spawnGit(args: string[], cwd: string, env?: Record<string, string>, timeoutMs?: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn('git', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
+      ...(timeoutMs ? { timeout: timeoutMs } : {}),
     });
     proc.unref();
     (proc.stdout as unknown as { unref(): void }).unref();
@@ -219,6 +220,44 @@ function spawnGitWithProgress(
       reject(e);
     });
   });
+}
+
+// ── Branch list ────────────────────────────────────────────────────────────────
+
+interface BranchList {
+  branches: string[];
+  defaultBranch: string | null;
+  /** 'remote' = asked the host just now, 'clone' = read from the local clone, 'none' = nothing available. */
+  source: 'remote' | 'clone' | 'none';
+  error?: string;
+}
+
+const BRANCH_LIST_TTL_MS = 30_000;
+const branchListCache = new Map<string, { at: number; data: BranchList }>();
+
+/** Tests only. */
+export function _clearBranchListCache(): void { branchListCache.clear(); }
+
+/** Branch names from `git ls-remote --heads` output (`<sha>\trefs/heads/<name>` per line). */
+export function parseLsRemoteHeads(output: string): string[] {
+  const names: string[] = [];
+  for (const line of output.split('\n')) {
+    const m = /^[0-9a-f]{7,64}\s+refs\/heads\/(.+?)\s*$/.exec(line.trim());
+    if (m) names.push(m[1]);
+  }
+  return [...new Set(names)];
+}
+
+/** The default branch first, then the rest alphabetically. */
+export function orderBranches(names: string[], defaultBranch: string | null): string[] {
+  const rest = [...new Set(names)].filter((n) => n !== defaultBranch).sort((a, b) => a.localeCompare(b));
+  return defaultBranch && names.includes(defaultBranch) ? [defaultBranch, ...rest] : rest;
+}
+
+/** Ask the host for the repository's branches (works for GitHub, CodeCommit and any other git host). */
+async function listRemoteBranches(repo: Repository, env: Record<string, string>): Promise<string[]> {
+  const out = await spawnGit(['ls-remote', '--heads', '--', repo.url], os.tmpdir(), env, 25_000);
+  return parseLsRemoteHeads(out);
 }
 
 // ── Git credential helpers ─────────────────────────────────────────────────────
@@ -626,22 +665,41 @@ export function registerRepoRoutes(): void {
     if (!slug) { sendJson(res, 404, { error: 'Project not found' }); return; }
 
     const cloneDir = repoCloneDir(slug, repo.name);
-
-    if (!fs.existsSync(path.join(cloneDir, '.git'))) {
-      sendJson(res, 200, { branches: [] });
+    const refresh = req.query.get('refresh') === '1';
+    const cached = branchListCache.get(repo.id);
+    if (!refresh && cached && Date.now() - cached.at < BRANCH_LIST_TTL_MS) {
+      sendJson(res, 200, cached.data);
       return;
     }
 
+    // The remote is the source of truth: it works in the cloud (no clone is kept there) and is never stale.
+    // A local clone is only the fallback when the remote cannot be reached.
+    let data: BranchList;
     try {
-      const output = await spawnGit(['branch', '-r', '--format=%(refname:short)'], cloneDir);
-      const branches = output
-        .split('\n')
-        .map((b) => b.trim().replace(/^origin\//, ''))
-        .filter((b) => b && b !== 'HEAD');
-      sendJson(res, 200, { branches: [...new Set(branches)] });
-    } catch {
-      sendJson(res, 200, { branches: [] });
+      const names = await listRemoteBranches(repo, await getCloneEnv(repo));
+      data = { branches: orderBranches(names, repo.default_branch), defaultBranch: repo.default_branch, source: 'remote' };
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : String(e);
+      const error = redactCredentials(raw).replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 300);
+      let local: string[] = [];
+      if (fs.existsSync(path.join(cloneDir, '.git'))) {
+        try {
+          const output = await spawnGit(['branch', '-r', '--format=%(refname:short)'], cloneDir);
+          local = output.split('\n').map((b) => b.trim().replace(/^origin\//, '')).filter((b) => b && b !== 'HEAD');
+        } catch { /* no local list either */ }
+      }
+      data = {
+        branches: orderBranches(local, repo.default_branch),
+        defaultBranch: repo.default_branch,
+        source: local.length ? 'clone' : 'none',
+        ...(local.length ? {} : { error }),
+      };
+      // A failure is not cached: the next open tries the remote again.
+      sendJson(res, 200, data);
+      return;
     }
+    branchListCache.set(repo.id, { at: Date.now(), data });
+    sendJson(res, 200, data);
   });
 
   // PUT /api/projects/:id/repos/:repoId/default-branch

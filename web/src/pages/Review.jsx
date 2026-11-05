@@ -158,6 +158,32 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
   const [error, setError] = useState(null);
   const trapRef = useFocusTrap();
 
+  // The chosen repository's branches, asked from its host. Typing still works: a ref or a branch not in the
+  // list (a brand-new one, a PR ref) is accepted as written.
+  const [branchInfo, setBranchInfo] = useState({ state: 'idle', branches: [], defaultBranch: null, error: null });
+  const baseTouched = useRef(false);
+
+  const loadBranches = useCallback(async (repoId, refresh = false) => {
+    if (!repoId) { setBranchInfo({ state: 'idle', branches: [], defaultBranch: null, error: null }); return; }
+    setBranchInfo((b) => ({ ...b, state: 'loading', error: null }));
+    try {
+      const r = await api.get(`/api/projects/${projectId}/repos/${repoId}/branches${refresh ? '?refresh=1' : ''}`);
+      setBranchInfo({
+        state: r.source === 'none' ? 'failed' : 'ready',
+        branches: r.branches ?? [],
+        defaultBranch: r.defaultBranch ?? null,
+        error: r.error ?? null,
+        source: r.source,
+      });
+      // Base follows the repository's default branch until the person types their own.
+      if (r.defaultBranch && !baseTouched.current) setForm((f) => ({ ...f, baseRef: r.defaultBranch }));
+    } catch (e) {
+      setBranchInfo({ state: 'failed', branches: [], defaultBranch: null, error: e.message });
+    }
+  }, [projectId]);
+
+  useEffect(() => { loadBranches(form.repoId); }, [form.repoId, loadBranches]);
+
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !loading) onClose(); };
     document.addEventListener('keydown', onKey);
@@ -217,7 +243,7 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
                 <select
                   id="nr-repo"
                   value={form.repoId}
-                  onChange={(e) => setForm((f) => ({ ...f, repoId: e.target.value }))}
+                  onChange={(e) => { baseTouched.current = false; setForm((f) => ({ ...f, repoId: e.target.value })); }}
                 >
                   <option value="">None</option>
                   {repos.map((r) => (
@@ -227,14 +253,20 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
               </div>
             )}
 
+            <datalist id="nr-branches">
+              {branchInfo.branches.map((b) => <option key={b} value={b} />)}
+            </datalist>
+
             <div className="field">
               <label htmlFor="nr-base">Base branch / ref</label>
               <input
                 id="nr-base"
                 type="text"
+                list="nr-branches"
                 value={form.baseRef}
-                onChange={(e) => setForm((f) => ({ ...f, baseRef: e.target.value }))}
+                onChange={(e) => { baseTouched.current = true; setForm((f) => ({ ...f, baseRef: e.target.value })); }}
                 placeholder="main"
+                autoComplete="off"
                 required
               />
             </div>
@@ -244,10 +276,32 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
               <input
                 id="nr-head"
                 type="text"
+                list="nr-branches"
                 value={form.headRef}
                 onChange={(e) => setForm((f) => ({ ...f, headRef: e.target.value }))}
-                placeholder="feature/my-branch"
+                placeholder={branchInfo.branches.length ? 'Pick or type a branch' : 'feature/my-branch'}
+                autoComplete="off"
+                aria-describedby="nr-branches-hint"
               />
+              <span id="nr-branches-hint" className="field-hint" role="status">
+                {!form.repoId && 'Choose a repository to pick from its branches.'}
+                {form.repoId && branchInfo.state === 'loading' && 'Loading branches…'}
+                {form.repoId && branchInfo.state === 'ready' && (
+                  <>
+                    {branchInfo.branches.length} branch{branchInfo.branches.length === 1 ? '' : 'es'}
+                    {branchInfo.source === 'clone' ? ' (from the local copy; the host could not be reached)' : ''}
+                    {' · '}
+                    <button type="button" className="btn-link" onClick={() => loadBranches(form.repoId, true)}>Refresh</button>
+                  </>
+                )}
+                {form.repoId && branchInfo.state === 'failed' && (
+                  <>
+                    Could not list branches{branchInfo.error ? `: ${branchInfo.error}` : ''}. Type the name instead.
+                    {' '}
+                    <button type="button" className="btn-link" onClick={() => loadBranches(form.repoId, true)}>Try again</button>
+                  </>
+                )}
+              </span>
             </div>
 
             <div className="field">

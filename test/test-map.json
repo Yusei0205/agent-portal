@@ -443,6 +443,7 @@
       ],
       "tests": [
         "test/repos.test.ts",
+        "test/repos-branches.test.ts",
         "test/repos-progress.test.ts",
         "test/git-repos-repo.test.ts"
       ],
