@@ -38,17 +38,23 @@ Jira ticket, let the user approve. Assumed by me: the defaults in section 8.
 
 ## 3. Behavior
 
+Two phases. The runner only looks; the portal decides and asks. This works on every Claude path, including runs
+that use the person's own Anthropic credential, where the runner has no way to ask a person anything.
+
 1. A run ends and the runner has a project repository checked out.
-2. **Detect.** For each repository under `repos/`, the runner compares with `origin/<base>`:
-   uncommitted changes, or commits ahead. Nothing found: stop, emit nothing.
-3. **Decide.**
-   - Session has a Jira key and the project setting is on: continue automatically.
-   - No Jira key: the runner sends an `approval-request` ("Open a pull request for N files changed in
-     `<repo>`?"). It appears in the Inbox and on the session through the normal approval flow. Declined or
-     expired: nothing is pushed, the changes stay in the session's saved workspace, and the session card offers
-     **Create pull request** to retry later.
-   - Project setting off: no automatic step; the card still offers the button.
-4. **Push** (in the runner, not through the agent's shell):
+2. **Detect (runner, read only).** For each repository under `repos/`, the runner compares with
+   `origin/<base>`: uncommitted changes, or commits ahead. It emits `repo-changes {repo, base, commits, files}`
+   and nothing else. Nothing found: it emits nothing and the feature stops here. Nothing is pushed in this phase.
+3. **Decide (portal, `session-pr.ts`).**
+   - Session has a Jira key and `openPullRequests` is on: go to step 4 automatically.
+   - No Jira key: the portal puts an Inbox item of type `push` ("Open a pull request for N files changed in
+     `<repo>`?") with Approve and Decline, and the session shows the same question. Declined or not answered
+     before it expires: nothing is pushed, and the session card offers **Create pull request** to retry later.
+   - `openPullRequests` off: no automatic step; the card still offers the button.
+4. **Push (runner, on the portal's call).** The portal calls the runner again on the same AgentCore session with
+   mode `finalize` and the branch name to use. If the machine has gone idle, the session's saved workspace is
+   restored first (the runner already does this for follow-up messages). The push is done by the runner's own
+   code, not through the agent's shell:
    - New branch `portal/<KEY>-<slug>`, or `portal/<slug>` without a ticket. `<slug>` is from the ticket summary
      or the session goal: lowercase, `[a-z0-9-]`, at most 40 characters. A name that already exists on the
      remote gets `-2`, `-3`, and so on.
@@ -69,11 +75,12 @@ Jira ticket, let the user approve. Assumed by me: the defaults in section 8.
 | Unit | Where | What it does | Depends on |
 |---|---|---|---|
 | `runner-finalize.ts` | `server/agent/` (shared with `agent-runner`, like `runner-checks.ts`) | `detectChanges(repoDir, base)` and `pushBranch(repoDir, branch, env)`. Pure git, no portal imports. | git, `execFile` with arguments (no shell) |
-| Finalize step | `agent-runner/src/run.ts`, after the checks | Calls detect, asks approval when needed, pushes, emits `repo-changes {repo, base, branch, commits, files, sha, pushed, error}`. Also a `finalize` mode so the button can run it on a restored workspace. | `runner-finalize.ts`, the approval relay |
+| Detect step | `agent-runner/src/run.ts`, after the checks | Calls `detectChanges` per repository and emits `repo-changes {repo, base, commits, files}`. Read only. | `runner-finalize.ts` |
+| Finalize mode | `agent-runner/src/index.ts` and `run.ts` (new request mode `finalize`, next to `prepareOnly`/`cancel`/`answer`) | On the portal's call: re-checks the branch name and protected list, commits, pushes, emits `repo-pushed {repo, branch, sha, error?}`. Used for the automatic path, the approved path and the button. | `runner-finalize.ts`, `validate.ts` |
 | `pull-requests.ts` | `server/` | `createPullRequest({repo, base, head, title, body})` returning `{number, url, existing}`. GitHub through the REST API with the Git connection's token. CodeCommit through `CreatePullRequest` with the project's AWS account or the connection's keys (same resolution order as clones). Other hosts: a clear "not supported" error. | `getCloneEnv` credential sources, `@aws-sdk/client-codecommit` |
-| `session-pr.ts` | `server/` | Reads `repo-changes` events at run end, applies the rules in section 3, calls `createPullRequest`, starts the review, writes `pull-request` events. Idempotent per session, repo and branch. | `pull-requests.ts`, review creation |
+| `session-pr.ts` | `server/` | Reads `repo-changes` events at run end, applies the rules in section 3 (including the Inbox question when there is no ticket), calls the runner's finalize mode, then `createPullRequest`, starts the review, writes `pull-request` events. Idempotent per session, repo and branch. | `pull-requests.ts`, `inbox.ts`, review creation, the AgentCore invoke helper |
 | Review creation | `server/review.ts` | Extract the body of the `POST /reviews` create step into a function the route and `session-pr.ts` both call. No behavior change to the route. | |
-| Project settings | project configuration (Setup) | `openPullRequests`: on (default) or off. `protectedBranches`: a list of names or `*` patterns that the portal never pushes to (default `main`, `master`, `develop`, `release/*`; the repository's default branch is always protected on top of it). Sent to the runner with the run; the portal checks it again before creating the PR. | |
+| Project settings | per-project settings keys (`setSetting`, as `project-aws.ts` does) edited on the project's Setup page | `openPullRequests`: on (default) or off. `protectedBranches`: a list of names or `*` patterns that the portal never pushes to (default `main`, `master`, `develop`, `release/*`; the repository's default branch is always protected on top of it). Sent to the runner with the run; the portal checks it again before creating the PR. | |
 | Session card | `web/src/pages/sessions/` | Shows the `pull-request` state, links, and the Create pull request button. | |
 
 Kiro: the Kiro runner (`kiro-runner`) gets the same finalize step from the shared module. The plan builds
@@ -87,13 +94,15 @@ looking the PR up on the host before creating one.
 ```
 run ends in the microVM
   runner: detect changes ──none──▶ end
-     │ changes
-     ├─ ticket + setting on ─────────────┐
-     └─ no ticket: approval-request ─▶ portal Inbox ─▶ answer
-                                          declined/expired ─▶ card: "Create pull request"
-                                                              │ approved
-  runner: branch, commit, push ◀──────────┘
-  runner ──repo-changes event──▶ portal session-pr.ts
+     │ changes: repo-changes event
+     ▼
+  portal session-pr.ts
+     ├─ ticket + setting on ───────────────┐
+     └─ no ticket: Inbox "push" item ─▶ person answers
+            declined/expired ─▶ card: "Create pull request"
+                                           │ approved (or button)
+                                           ▼
+  portal ──invoke, mode finalize──▶ runner: branch, commit, push ──repo-pushed──▶ portal
   portal: createPullRequest (GitHub / CodeCommit)  ──▶ pull-request event (opened)
   portal: create review (draft, filled in)          ──▶ pull-request event (review started)
 ```
@@ -107,8 +116,11 @@ run ends in the microVM
 - **PR already exists:** reused, no error.
 - **Host not supported** (Bitbucket, other git): the branch is still pushed and the card says no PR was opened.
 - **Several repositories changed:** one branch, PR and review per repository.
-- **Lambda's 15-minute limit:** waiting for a person's approval uses the existing approval expiry. Past it, the
-  request counts as declined and the button covers it.
+- **Waiting for a person:** the portal waits, not the microVM, so nothing idles in AgentCore and Lambda's
+  15-minute limit does not apply. The Inbox item has the usual expiry; past it the request counts as declined
+  and the button covers it.
+- **Machine gone by the time of approval:** finalize restores the saved workspace on a fresh machine. If the
+  workspace cannot be restored, the card says so and the changes are not lost from the session's files.
 - **Review start fails:** the PR stays; the card shows the reason and a link to start the review by hand.
 - No secrets in branch names, titles, bodies, events or error text; hosts' URLs are shown without credentials.
 
@@ -154,3 +166,6 @@ run ends in the microVM
 - The agent's checkout may be read-only for pushing today (token scope, IAM). The first live run tells us; the
   error message above is the fallback.
 - The Kiro runner's end-of-run point has not been inspected yet; the plan's first Kiro task is to confirm it.
+- Finalize after an idle gap depends on the saved-workspace restore (`runner-snapshot.ts`) covering the
+  repository folders under `repos/`. The plan's first Claude task checks this with a test before anything else
+  is built on it.
