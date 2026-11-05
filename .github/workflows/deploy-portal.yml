@@ -129,18 +129,23 @@ jobs:
 
       - name: Deploy Codex AgentCore runner
         working-directory: infra
-        run: npx aws-cdk@2.1147.0 deploy AgentPortalCodexRunner -c codexRunner=1 --require-approval never
+        run: >-
+          npx aws-cdk@2.1147.0 deploy AgentPortalCodexRunner
+          -c codexRunner=1
+          --require-approval never
+          --outputs-file "$RUNNER_TEMP/codex-runner-outputs.json"
 
       - name: Read Codex AgentCore runtime ARN
-        shell: bash
+        shell: node {0}
         run: |
-          ARN="$(aws cloudformation describe-stacks \
-            --stack-name AgentPortalCodexRunner \
-            --query "Stacks[0].Outputs[?OutputKey=='CodexRuntimeArn'].OutputValue | [0]" \
-            --output text)"
-          test -n "$ARN" && test "$ARN" != "None"
-          echo "CODEX_RUNTIME_ARN=$ARN" >> "$GITHUB_ENV"
-          echo "CODEX_OAUTH_REDIRECT_URI=${PUBLIC_URL%/}/api/codex/oauth/callback" >> "$GITHUB_ENV"
+          const fs = require('node:fs');
+          const outputs = JSON.parse(fs.readFileSync(process.env.OUTPUTS_FILE, 'utf8'));
+          const arn = outputs.AgentPortalCodexRunner?.CodexRuntimeArn;
+          if (!arn) throw new Error('CDK did not return the CodexRuntimeArn output');
+          const callback = `${process.env.PUBLIC_URL.replace(/\/+$/, '')}/api/codex/oauth/callback`;
+          fs.appendFileSync(process.env.GITHUB_ENV, `CODEX_RUNTIME_ARN=${arn}\nCODEX_OAUTH_REDIRECT_URI=${callback}\n`);
+        env:
+          OUTPUTS_FILE: ${{ runner.temp }}/codex-runner-outputs.json
 
       - name: Deploy AgentPortalCloud
         working-directory: infra
