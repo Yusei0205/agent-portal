@@ -1128,6 +1128,35 @@ mark {
   color: var(--accent-ink);
   font-weight: 600;
 }
+
+/* Help */
+.help-layout {
+  margin-top: 16px;
+}
+.help-layout .doc-outline a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+}
+.help-layout .doc-outline .is-dim a {
+  opacity: 0.45;
+}
+.help-sections {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.help-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.help-section .md th:first-child,
+.help-section .md td:first-child {
+  white-space: nowrap;
+}
 .doc-body {
   background: var(--panel);
   border: 1px solid var(--line);

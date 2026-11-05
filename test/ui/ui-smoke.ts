@@ -196,6 +196,19 @@ async function main() {
     await page.locator('.steps').waitFor();
     await shot(page, 'path');
 
+    console.log('help');
+    await page.getByRole('link', { name: 'Help', exact: true }).click();
+    await page.getByRole('heading', { name: 'Learn', exact: true, level: 1 }).waitFor();
+    check(page.url().endsWith('#/help/learn'), 'Help opens the guide for the page you were on');
+    await shot(page, 'help');
+    await page.getByLabel('Search the guide').fill('budget');
+    await page.locator('.help-section mark').first().waitFor();
+    check((await page.locator('.help-section').count()) >= 1, 'searching the guide shows matching sections');
+    await page.getByLabel('Search the guide').fill('');
+    await page.getByRole('navigation', { name: 'Help topics' }).getByRole('link', { name: 'Agent runs' }).click();
+    await page.getByRole('heading', { name: 'Start a run', exact: true }).waitFor();
+    await shot(page, 'help-runs');
+
     console.log('settings and mobile');
     await page.goto(`${base}/#/settings`);
     await page.getByRole('heading', { name: 'Model provider', exact: true }).waitFor();

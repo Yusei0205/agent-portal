@@ -18,6 +18,8 @@ import { Builder } from './pages/Builder.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { Account } from './pages/Account.jsx';
 import { Feedback } from './pages/Feedback.jsx';
+import { Help } from './pages/Help.jsx';
+import { helpSectionFor } from './lib/help.js';
 
 
 export function App() {
@@ -98,6 +100,8 @@ function Shell({ user, onSignOut }) {
             <Account />
           ) : route.tab === 'feedback' ? (
             <Feedback route={route} />
+          ) : route.tab === 'help' ? (
+            <Help route={route} />
           ) : (
             <Projects />
           )}
@@ -161,6 +165,14 @@ function Rail({ route, user, projects, meta, spend, onSignOut }) {
         <a href="#/feedback" className={cx('rail-link', route.tab === 'feedback' && 'is-active')}>
           <Icon name="inbox" />
           <span>Feedback</span>
+        </a>
+        <a
+          href={route.tab === 'help' ? href(null, 'help', route.rest[0]) : href(null, 'help', helpSectionFor(route))}
+          className={cx('rail-link', route.tab === 'help' && 'is-active')}
+          title="User guide for this page"
+        >
+          <Icon name="question" />
+          <span>Help</span>
         </a>
         {user.is_admin ? (
           <a href="#/settings" className={cx('rail-link', route.tab === 'settings' && 'is-active')}>

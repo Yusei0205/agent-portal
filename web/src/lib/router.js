@@ -7,6 +7,7 @@ export function parseHash(hash = window.location.hash) {
   if (parts[0] === 'settings') return { projectId: null, tab: 'settings', rest: parts.slice(1) };
   if (parts[0] === 'account') return { projectId: null, tab: 'account', rest: [] };
   if (parts[0] === 'feedback') return { projectId: null, tab: 'feedback', rest: parts.slice(1) };
+  if (parts[0] === 'help') return { projectId: null, tab: 'help', rest: parts.slice(1) };
   return { projectId: null, tab: 'projects', rest: parts.slice(1) };
 }
 
@@ -30,7 +31,7 @@ export function useRoute() {
 }
 
 export function href(projectId, tab, ...rest) {
-  if (!projectId) return tab === 'settings' || tab === 'account' || tab === 'feedback' ? `#/${tab}${rest.filter(Boolean).map((x) => '/' + encodeURIComponent(x)).join('')}` : '#/projects';
+  if (!projectId) return ['settings', 'account', 'feedback', 'help'].includes(tab) ? `#/${tab}${rest.filter(Boolean).map((x) => '/' + encodeURIComponent(x)).join('')}` : '#/projects';
   return `#/p/${encodeURIComponent(projectId)}/${tab}${rest.filter((x) => x !== undefined && x !== null && x !== '').map((x) => '/' + encodeURIComponent(x)).join('')}`;
 }
 
