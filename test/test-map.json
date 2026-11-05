@@ -938,12 +938,15 @@
         "agent-runner/src/index.ts",
         "server/agent/tool-policy.ts",
         "server/agent/agentcore-approvals.ts",
-        "server/agent/runner-finalize.ts"
+        "server/agent/runner-finalize.ts",
+        "server/agent/runner-finalize-run.ts",
+        "agent-runner/src/finalize.ts"
       ],
       "tests": [
         "test/agent-runner-validation.test.ts",
         "test/runner-snapshot-finalize.test.ts",
         "test/runner-finalize.test.ts",
+        "test/kiro-runner-finalize.test.ts",
         "test/agentcore-harness.test.ts",
         "test/pricing.test.ts"
       ],
