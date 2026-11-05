@@ -43,6 +43,7 @@ import {
 } from './claude-sessions.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from './claude-agentcore.ts';
+import { loadRunAgents, leadAgentFor, anthropicAgentModel } from './run-agents.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -146,9 +147,15 @@ ${REVIEW_SYSTEM_APPEND}`;
     emit('status', { text: 'Included a recap of earlier turns' });
   }
 
+  const agents = loadRunAgents(run, anthropicAgentModel);
+  const lead = leadAgentFor(run, agents);
+  if (lead) emit('status', { text: `Lead agent: ${lead}` });
+
   const res = await runClaudeViaAgentCore(ctx, {
     runtimeArn,
     runId: run.runId,
+    agents,
+    agent: lead,
     prompt,
     model,
     auth,
@@ -485,6 +492,13 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     emit('status', { text: 'Continuing the previous Claude Code session' });
   }
 
+  // The owner's and project's agents (with their skills). Settings are not loaded from disk (settingSources: []),
+  // so they are passed here; the session's lead agent runs the main conversation.
+  const runAgentDefs = loadRunAgents(run, anthropicAgentModel);
+  const leadAgent = leadAgentFor(run, runAgentDefs);
+  if (leadAgent) emit('status', { text: `Lead agent: ${leadAgent}` });
+  else if (run.leadAgent) emit('status', { text: `Lead agent "${run.leadAgent}" was not found in your Claude agents; using the default.` });
+
   // Active prompt may be rebuilt on retry (recap prepended)
   let activePrompt = prompt;
   let resumeId: string | null = run.engineSessionId;
@@ -513,6 +527,9 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         ...(getSettings().agents.effort ? { effort: getSettings().agents.effort } : {}),
         // In-process delegation MCP server (F7)
         ...(delegationMcpServers ? { mcpServers: delegationMcpServers as unknown as Record<string, object> } : {}),
+        // Agents the Agent tool can start by name, and the lead agent for the main conversation.
+        ...(Object.keys(runAgentDefs).length ? { agents: runAgentDefs } : {}),
+        ...(leadAgent ? { agent: leadAgent } : {}),
       },
     });
 

@@ -424,6 +424,15 @@ export async function* invokeAgentCore(
       return;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      // A runner image from before a newer, optional field (e.g. the lead agent) rejects it: ask again without it,
+      // so the run still works (without that feature) until the image is rebuilt.
+      const unknown = /Unknown field: \\?"(agent)\\?"/.exec(msg)?.[1];
+      if (!delivered && unknown && unknown in payload) {
+        const { [unknown]: _dropped, ...rest } = payload;
+        payload = rest;
+        yield { type: 'status', text: `The cloud runner does not support "${unknown}" yet (its image needs rebuilding); continuing without it.` } as AgentCoreSSEEvent;
+        continue;
+      }
       if (delivered || attempt >= 8 || signal?.aborted || !/\(409\)|HTTP 409/.test(msg)) throw e;
       await new Promise((r) => setTimeout(r, 5_000));
     }
@@ -520,6 +529,10 @@ export interface AgentCoreRunOpts {
   runId: string;
   prompt: string;
   token: KiroTokenPayload;
+  /** The owner's Kiro agents, skills and steering, written into kiro-cli's home on the runner. */
+  kiroConfig?: import('./kiro-config-files.ts').KiroConfigFile[];
+  /** The session's lead agent (kiro-cli --agent), one of kiroConfig's agents. */
+  agent?: string | null;
   credentialId: string | null;
   expectedCiphertext: string | null;
   /** Give kiro-cli the AgentCore Browser tools (MCP server in the runner). */
@@ -617,6 +630,8 @@ export async function runKiroViaAgentCore(
       ...(opts.inputFiles?.length ? { inputFiles: opts.inputFiles } : {}),
       ...(opts.checks?.length ? { checks: opts.checks } : {}),
       ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.kiroConfig?.length ? { kiroConfig: opts.kiroConfig } : {}),
+      ...(opts.agent ? { agent: opts.agent } : {}),
       ...(snapshot ? { snapshot } : {}),
       ...(finalizeCheck ? { finalizeCheck: true } : {}),
       // Same rule as the local Kiro engine: trusted runs allow what kiro-cli asks about,

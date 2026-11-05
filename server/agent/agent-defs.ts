@@ -11,8 +11,11 @@
  *   ---
  *   You are a careful reviewer…      (the agent's system prompt)
  *
- * AgentCore runs get these as the Agent SDK's `agents` option, so Claude in the microVM can
- * hand work to the project's own agents with the Agent tool. Files are read where a run's
+ * Runs get these as the Agent SDK's `agents` option, so Claude can hand work to the agents
+ * with the Agent tool, and the session's lead agent (the SDK's `agent` option) is one of them.
+ *
+ * `skills: [a, b]` in the front matter preloads those skills: their SKILL.md text is added to
+ * the agent's prompt here (runs load no settings from disk, so Claude would not find them). Files are read where a run's
  * agents live: the owner's (or team's) Claude config, materialised into the run's home, then
  * the project's own .claude/agents/, which wins on a name clash (Claude Code's precedence).
  */
@@ -95,6 +98,7 @@ export function parseAgentFile(
   text: string,
   fallbackName: string,
   mapModel: (model: string) => string | undefined = (m) => m,
+  readSkill: (name: string) => string | null = () => null,
 ): { name: string; def: AgentDefinitionPayload } | null {
   const fm = /^﻿?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/.exec(text);
   if (!fm) return null;
@@ -105,9 +109,18 @@ export function parseAgentFile(
   const prompt = fm[2].trim();
   if (!AGENT_NAME.test(name) || !description || !prompt) return null;
 
+  let fullPrompt = prompt;
+  for (const skill of asList(meta.skills) ?? []) {
+    if (!SKILL_NAME.test(skill)) continue;
+    const body = readSkill(skill);
+    if (!body) continue;
+    const section = `\n\n---\n# Skill: ${skill}\n\n${body.trim()}`;
+    if (fullPrompt.length + section.length > AGENT_LIMITS.maxPrompt) break;
+    fullPrompt += section;
+  }
   const def: AgentDefinitionPayload = {
     description: description.slice(0, AGENT_LIMITS.maxDescription),
-    prompt: prompt.slice(0, AGENT_LIMITS.maxPrompt),
+    prompt: fullPrompt.slice(0, AGENT_LIMITS.maxPrompt),
   };
   const tools = asList(meta.tools);
   if (tools) def.tools = tools;
@@ -123,6 +136,35 @@ export function parseAgentFile(
   return { name, def };
 }
 
+// ── Skills ────────────────────────────────────────────────────────────────────
+
+/** A skill folder name (Kiro and Claude Code: lowercase letters, digits and hyphens). */
+export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * Reads a skill's instructions (SKILL.md without its front matter) from the given skills folders, later folders
+ * winning (the project's own skills over the owner's). Null when not found, too large or unreadable.
+ */
+export function skillReader(skillDirs: ReadonlyArray<string | null | undefined>): (name: string) => string | null {
+  return (name: string): string | null => {
+    if (!SKILL_NAME.test(name)) return null;
+    for (const dir of [...skillDirs].reverse()) {
+      if (!dir) continue;
+      const file = path.join(dir, name, 'SKILL.md');
+      try {
+        const st = fs.statSync(file);
+        if (!st.isFile() || st.size > AGENT_LIMITS.maxFileBytes) continue;
+        const text = fs.readFileSync(file, 'utf8');
+        const m = /^\uFEFF?---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/.exec(text);
+        return (m ? m[1] : text).trim() || null;
+      } catch {
+        /* not in this folder */
+      }
+    }
+    return null;
+  };
+}
+
 // ── A run's agents ────────────────────────────────────────────────────────────
 
 /**
@@ -132,7 +174,9 @@ export function parseAgentFile(
 export function loadAgentDefinitions(
   dirs: ReadonlyArray<string | null | undefined>,
   mapModel?: (model: string) => string | undefined,
+  skillDirs: ReadonlyArray<string | null | undefined> = [],
 ): Record<string, AgentDefinitionPayload> {
+  const readSkill = skillReader(skillDirs);
   const found = new Map<string, AgentDefinitionPayload>();
   for (const dir of dirs) {
     if (!dir) continue;
@@ -147,7 +191,7 @@ export function loadAgentDefinitions(
       try {
         const st = fs.statSync(full);
         if (!st.isFile() || st.size > AGENT_LIMITS.maxFileBytes) continue;
-        const agent = parseAgentFile(fs.readFileSync(full, 'utf8'), file.slice(0, -3), mapModel);
+        const agent = parseAgentFile(fs.readFileSync(full, 'utf8'), file.slice(0, -3), mapModel, readSkill);
         if (!agent) continue;
         found.delete(agent.name); // a later folder's agent replaces it (and moves to the end)
         found.set(agent.name, agent.def);

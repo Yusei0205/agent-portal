@@ -15,6 +15,7 @@ import { api, ApiError } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
+import { agentPackFiles, PACK_AGENTS, PACK_SKILLS } from '../../lib/agent-pack/index.js';
 
 // ── Starter file definitions ───────────────────────────────────────────────────
 
@@ -144,6 +145,7 @@ export function ConfigFileTree({
   const [newFolderName, setNewFolderName] = useState('');
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [addingStarter, setAddingStarter] = useState(false);
+  const [addingPack, setAddingPack] = useState(false);
   const renameRef = useRef(null);
   const newFileRef = useRef(null);
   const newFolderRef = useRef(null);
@@ -296,6 +298,44 @@ export function ConfigFileTree({
     onTreeChange();
     if (firstFile) onSelectFile(firstFile);
     setAddingStarter(false);
+  };
+
+  // ── Agent pack: a lead agent, specialists and their skills ─────────────────
+
+  const handleAddPack = async () => {
+    const files = agentPackFiles(folder);
+    if (!files) return;
+    const ok = await requestConfirm(
+      `Add the agent pack to .${folder}? It adds ${PACK_AGENTS.length} agents (${PACK_AGENTS.map((a) => a.name).join(', ')}) `
+      + `and ${PACK_SKILLS.length} skills. Files you already have are kept as they are.`,
+      'Add agent pack',
+    );
+    if (!ok) return;
+    setAddingPack(true);
+    let added = 0;
+    let kept = 0;
+    let failed = 0;
+    for (const { path, content } of files) {
+      try {
+        await api.post(`/api/user-config/${folder}/file`, { path, content });
+        added++;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) kept++;
+        else { failed++; toast(`Could not create ${path}: ${e.message}`, 'error'); }
+      }
+    }
+    await loadRoot();
+    onTreeChange();
+    if (added) onSelectFile(folder === 'kiro' ? 'agents/lead-orchestrator.json' : 'agents/lead-orchestrator.md');
+    setAddingPack(false);
+    toast(
+      `Agent pack: ${added} file${added === 1 ? '' : 's'} added`
+      + (kept ? `, ${kept} you already had kept` : '')
+      + (failed ? `, ${failed} failed` : '')
+      + '. Pick an agent under Lead agent when you start a session.',
+      failed ? 'error' : 'ok',
+      8000,
+    );
   };
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
@@ -495,6 +535,21 @@ export function ConfigFileTree({
               <Icon name="folder-plus" size={12} />
               New Folder
             </button>
+            {hasStarter && (
+              <button
+                type="button"
+                className="btn btn-xs"
+                onClick={handleAddPack}
+                disabled={addingPack}
+                aria-label="Add agent pack"
+                title="Add a lead agent, backend, frontend, infra, security, slide and documentation agents, with their skills"
+              >
+                {addingPack
+                  ? <span className="spinner" style={{ width: 11, height: 11 }} aria-hidden="true" />
+                  : <Icon name="agents" size={12} />}
+                Agent pack
+              </button>
+            )}
           </span>
         )}
       </div>

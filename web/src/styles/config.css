@@ -144,6 +144,8 @@
 }
 .config-tree-header {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
@@ -157,7 +159,10 @@
 }
 .config-tree-header-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
+  text-transform: none;
+  letter-spacing: normal;
 }
 .config-tree-body {
   flex: 1;
