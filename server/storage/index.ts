@@ -27,6 +27,11 @@ export interface StorageBackend {
 
   /** Logical paths of every file whose path starts with `prefix` (recursive, no ordering guarantee). */
   list(prefix: string): Promise<string[]>;
+  /**
+   * Like `list`, with a version tag per file that changes whenever the file is rewritten (the S3 ETag).
+   * Optional: without it, callers can only tell whether a file exists, not whether it changed.
+   */
+  listVersions?(prefix: string): Promise<Array<{ path: string; version: string }>>;
 
   /**
    * Returns a URL the browser can use to access the file.

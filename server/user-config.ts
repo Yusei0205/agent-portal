@@ -47,6 +47,7 @@ import { encrypt, decrypt } from './secrets.ts';
 import { appendAudit, auditRaw } from './audit.ts';
 import { getDb } from './db.ts';
 import { getUserConfigRepository } from './repositories/user-config.ts';
+import { syncTree, persistFile, persistTree, forgetFile, forgetTree } from './durable-files.ts';
 
 import { getWorkflowRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -103,6 +104,29 @@ function resolveConfigPath(userId: string, folder: ConfigFolder, relPath: string
     throw badRequest('Path traversal detected');
   }
   return resolved;
+}
+
+// ── Durable copies (Lambda) ───────────────────────────────────────────────────
+// On Lambda the data folder is /tmp: empty after a restart, and separate for each server instance. Each
+// person's folder is mirrored to the storage backend (S3) and brought up to date before it is read or
+// changed. These do nothing unless STORAGE_BACKEND=s3.
+
+/** Bring this server's copy of the person's folder up to date with the stored one. */
+async function loadFolder(userId: string, folder: ConfigFolder): Promise<void> {
+  await syncTree(userConfigRoot(userId, folder));
+}
+
+/** Store the folder exactly as it is on disk now, replacing the stored copy (after a reset or import). */
+async function saveWholeFolder(userId: string, folder: ConfigFolder): Promise<void> {
+  const root = userConfigRoot(userId, folder);
+  await forgetTree(root);
+  await persistTree(root);
+}
+
+/** Before a change: this server's copy is up to date, and the person has their own copy to change. */
+async function prepareEdit(userId: string, folder: ConfigFolder): Promise<void> {
+  await loadFolder(userId, folder);
+  await ensureNotFollowing(userId, folder);
 }
 
 // ── Cache-file exclusion for zip exports ─────────────────────────────────────
@@ -201,6 +225,7 @@ async function ensureNotFollowing(userId: string, folder: ConfigFolder): Promise
         fs.writeFileSync(abs, f.content, 'utf8');
       }
     }
+    await persistTree(root);
   }
 
   const ts = now();
@@ -310,6 +335,7 @@ async function buildExportZip(userId: string, folder: ConfigFolder): Promise<Buf
       }
     }
   } else {
+    await loadFolder(userId, folder);
     const root = userConfigRoot(userId, folder);
     const walkDir = (dir: string): void => {
       let entries: fs.Dirent[];
@@ -783,6 +809,7 @@ export async function importLocalConfig(
   if (fs.existsSync(srcRoot)) {
     await walkDir(srcRoot, '');
   }
+  await saveWholeFolder(userId, folder);
 
   // Mark config as customised (following = false)
   const ts = now();
@@ -896,6 +923,7 @@ export async function materialiseForRun(
       } else {
         // Copy user's disk files (decrypting aws)
         const root = userConfigRoot(userId, folder);
+        await syncTree(root);
         if (!fs.existsSync(root)) continue;
         const copyDir = async (src: string, dst: string): Promise<void> => {
           await fsp.mkdir(dst, { recursive: true });
@@ -991,6 +1019,7 @@ export async function listAgentsForEngine(userId: string, engine: string): Promi
           .map((f) => ({ path: f.path, content: f.content! }));
       }
     } else {
+      await loadFolder(userId, 'kiro');
       const root = userConfigRoot(userId, 'kiro');
       const agentsDir = path.join(root, 'agents');
       if (fs.existsSync(agentsDir)) {
@@ -1026,6 +1055,7 @@ export async function listAgentsForEngine(userId: string, engine: string): Promi
           .map((f) => ({ path: f.path, content: f.content! }));
       }
     } else {
+      await loadFolder(userId, 'claude');
       const root = userConfigRoot(userId, 'claude');
       const agentsDir = path.join(root, 'agents');
       if (fs.existsSync(agentsDir)) {
@@ -1105,6 +1135,7 @@ export function registerUserConfigRoutes(): void {
       return;
     }
 
+    await loadFolder(userId, folder);
     const root = userConfigRoot(userId, folder);
     let absDir: string;
     try {
@@ -1152,6 +1183,7 @@ export function registerUserConfigRoutes(): void {
       return;
     }
 
+    await loadFolder(userId, folder);
     let absPath: string;
     try {
       absPath = resolveConfigPath(userId, folder, relPath);
@@ -1205,7 +1237,7 @@ export function registerUserConfigRoutes(): void {
       sendJson(res, 400, { error: `Invalid JSON: ${jsonError}`, invalidJson: true }); return;
     }
 
-    await ensureNotFollowing(userId, folder);
+    await prepareEdit(userId, folder);
 
     let absPath: string;
     try {
@@ -1216,6 +1248,7 @@ export function registerUserConfigRoutes(): void {
 
     try {
       writeConfigFileSync(absPath, content, folder);
+      await persistFile(absPath);
     } catch (e: unknown) {
       sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1251,7 +1284,7 @@ export function registerUserConfigRoutes(): void {
       sendJson(res, 400, { error: `Invalid JSON: ${jsonError}`, invalidJson: true }); return;
     }
 
-    await ensureNotFollowing(userId, folder);
+    await prepareEdit(userId, folder);
 
     let absPath: string;
     try {
@@ -1266,6 +1299,7 @@ export function registerUserConfigRoutes(): void {
 
     try {
       writeConfigFileSync(absPath, content, folder);
+      await persistFile(absPath);
     } catch (e: unknown) {
       sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1289,7 +1323,7 @@ export function registerUserConfigRoutes(): void {
     const relPath = req.query.get('path') ?? '';
     if (!relPath) { sendJson(res, 400, { error: 'path query parameter required' }); return; }
 
-    await ensureNotFollowing(userId, folder);
+    await prepareEdit(userId, folder);
 
     let absPath: string;
     try {
@@ -1307,8 +1341,10 @@ export function registerUserConfigRoutes(): void {
 
     if (fs.statSync(absPath).isDirectory()) {
       await fsp.rm(absPath, { recursive: true, force: true });
+      await forgetTree(absPath);
     } else {
       await fsp.rm(absPath, { force: true });
+      await forgetFile(absPath);
     }
 
     appendAudit(getDb(), userId, 'user-config.delete', `user:${userId}:${folder}:${relPath}`, { folder, path: relPath }, req.ip);
@@ -1331,7 +1367,7 @@ export function registerUserConfigRoutes(): void {
     const relPath = String(body.path ?? '');
     if (!relPath) { sendJson(res, 400, { error: 'path required' }); return; }
 
-    await ensureNotFollowing(userId, folder);
+    await prepareEdit(userId, folder);
 
     let absPath: string;
     try {
@@ -1340,6 +1376,7 @@ export function registerUserConfigRoutes(): void {
       sendJson(res, 400, { error: 'Invalid path' }); return;
     }
 
+    // Storage keeps files only: an empty folder is kept once a file is saved in it.
     await fsp.mkdir(absPath, { recursive: true });
     sendJson(res, 201, { ok: true, path: relPath });
   }));
@@ -1362,7 +1399,7 @@ export function registerUserConfigRoutes(): void {
 
     if (!from || !to) { sendJson(res, 400, { error: 'from and to are required' }); return; }
 
-    await ensureNotFollowing(userId, folder);
+    await prepareEdit(userId, folder);
 
     let srcPath: string;
     let dstPath: string;
@@ -1378,6 +1415,13 @@ export function registerUserConfigRoutes(): void {
 
     await fsp.mkdir(path.dirname(dstPath), { recursive: true });
     await fsp.rename(srcPath, dstPath);
+    if (fs.statSync(dstPath).isDirectory()) {
+      await persistTree(dstPath);
+      await forgetTree(srcPath);
+    } else {
+      await persistFile(dstPath);
+      await forgetFile(srcPath);
+    }
 
     appendAudit(getDb(), userId, 'user-config.rename', `user:${userId}:${folder}`, { folder, from, to }, req.ip);
     sendJson(res, 200, { ok: true, path: to });
@@ -1418,6 +1462,7 @@ export function registerUserConfigRoutes(): void {
         await fsp.writeFile(abs, f.content, 'utf8'); // already in right format (enc/plain)
       }
     }
+    await saveWholeFolder(userId, folder);
 
     // Mark as following
     await getUserConfigRepository().setState(userId, folder, {
@@ -1495,6 +1540,7 @@ export function registerUserConfigRoutes(): void {
       await fsp.mkdir(path.dirname(abs), { recursive: true });
       writeConfigFileSync(abs, e.content, folder);
     }
+    await saveWholeFolder(userId, folder);
 
     // Mark as customised
     const ts = now();

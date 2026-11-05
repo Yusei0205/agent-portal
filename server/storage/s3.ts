@@ -149,17 +149,22 @@ export class S3StorageBackend implements StorageBackend {
   }
 
   async list(prefix: string): Promise<string[]> {
+    return (await this.listVersions(prefix)).map((o) => o.path);
+  }
+
+  async listVersions(prefix: string): Promise<Array<{ path: string; version: string }>> {
     const mod = await s3Sdk();
     const client = await this.client();
     const base = this.prefix ? `${this.prefix.replace(/\/$/, '')}/` : '';
-    const out: string[] = [];
+    const out: Array<{ path: string; version: string }> = [];
     let token: string | undefined;
     do {
       const res = (await client.send(
         new mod.ListObjectsV2Command({ Bucket: this.bucket, Prefix: this.key(prefix), ...(token ? { ContinuationToken: token } : {}) }),
-      )) as { Contents?: Array<{ Key?: string }>; IsTruncated?: boolean; NextContinuationToken?: string };
+      )) as { Contents?: Array<{ Key?: string; ETag?: string }>; IsTruncated?: boolean; NextContinuationToken?: string };
       for (const o of res.Contents ?? []) {
-        if (o.Key && !o.Key.endsWith('/')) out.push(base && o.Key.startsWith(base) ? o.Key.slice(base.length) : o.Key);
+        if (!o.Key || o.Key.endsWith('/')) continue;
+        out.push({ path: base && o.Key.startsWith(base) ? o.Key.slice(base.length) : o.Key, version: o.ETag ?? '' });
       }
       token = res.IsTruncated ? res.NextContinuationToken : undefined;
     } while (token);

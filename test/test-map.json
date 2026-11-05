@@ -1019,7 +1019,8 @@
       ],
       "tests": [
         "test/user-config.test.ts",
-        "test/user-config-repo.test.ts"
+        "test/user-config-repo.test.ts",
+        "test/user-config-durable.test.ts"
       ],
       "smokeIds": []
     },
