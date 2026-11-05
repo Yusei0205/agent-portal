@@ -260,3 +260,49 @@ export function writeInputFiles(workDir: string, files: unknown): number {
   }
   return written;
 }
+
+// ── The user's Kiro setup (agents, steering, skills) ────────────────────────────────────────────────────────────
+
+/** Folders of `~/.kiro` that are sent to a cloud Kiro run. `settings/` (MCP servers, tokens) stays behind on purpose. */
+export const KIRO_CONFIG_DIRS = ['agents', 'steering', 'skills', 'prompts'] as const;
+export const KIRO_CONFIG_EXTS = new Set(['.json', '.md', '.txt', '.yaml', '.yml', '.toml', '.sh', '.py', '.js', '.ts']);
+export const KIRO_CONFIG_LIMITS = { files: 200, fileBytes: 256 * 1024, totalBytes: 2 * 1024 * 1024 };
+
+export interface KiroConfigFile {
+  /** Path inside `~/.kiro`, with forward slashes, for example `agents/reviewer.json`. */
+  path: string;
+  /** base64 */
+  data: string;
+}
+
+/** Whether a path inside `~/.kiro` may be sent (checked by the portal when it collects and again by the runner). */
+export function kiroConfigPathOk(rel: unknown): rel is string {
+  if (typeof rel !== 'string' || !rel || rel.length > 300 || rel.includes('\0') || rel.includes('\\') || rel.startsWith('/')) return false;
+  const norm = path.posix.normalize(rel);
+  if (norm !== rel || norm.split('/').some((seg) => seg === '..' || seg === '' || seg === '.')) return false;
+  if (!KIRO_CONFIG_DIRS.some((d) => norm.startsWith(`${d}/`))) return false;
+  return KIRO_CONFIG_EXTS.has(path.posix.extname(norm).toLowerCase());
+}
+
+/** Runner side: write the user's Kiro setup under `<home>/.kiro`. Re-checks every path and limit. Returns how many were written. */
+export function writeKiroConfigFiles(homeDir: string, files: unknown): number {
+  if (!Array.isArray(files)) return 0;
+  const root = path.resolve(homeDir, '.kiro');
+  let written = 0;
+  let total = 0;
+  for (const f of files.slice(0, KIRO_CONFIG_LIMITS.files)) {
+    const rel = (f as { path?: unknown })?.path;
+    const data = (f as { data?: unknown })?.data;
+    if (!kiroConfigPathOk(rel) || typeof data !== 'string') continue;
+    const buf = Buffer.from(data, 'base64');
+    if (buf.length > KIRO_CONFIG_LIMITS.fileBytes || total + buf.length > KIRO_CONFIG_LIMITS.totalBytes) continue;
+    const abs = path.resolve(root, ...rel.split('/'));
+    if (!abs.startsWith(root + path.sep)) continue;
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, buf);
+    total += buf.length;
+    written++;
+  }
+  return written;
+}
+

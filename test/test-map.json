@@ -867,6 +867,18 @@
         "theme"
       ]
     },
+    "kiro-config": {
+      "description": "The user's Kiro agents, steering and skills sent to a cloud Kiro run",
+      "sources": [
+        "server/agent/runner-files.ts",
+        "kiro-runner/src/validate.ts",
+        "kiro-runner/src/run.ts"
+      ],
+      "tests": [
+        "test/kiro-config-files.test.ts"
+      ],
+      "smokeIds": []
+    },
     "feedback": {
       "description": "Feedback from users: send, follow, admin inbox, link to a session and its pull request",
       "sources": [

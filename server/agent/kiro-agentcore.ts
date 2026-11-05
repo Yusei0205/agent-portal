@@ -536,6 +536,10 @@ export interface AgentCoreRunOpts {
   checks?: import('./runner-checks.ts').CheckStep[];
   /** The model to use (a Kiro model id); kiro's own default when absent. */
   model?: string | null;
+  /** The person's ~/.kiro agents, steering and skills, written into the runner's home before kiro-cli starts. */
+  kiroConfig?: Array<{ path: string; data: string }>;
+  /** The Kiro agent (from ~/.kiro/agents) the session runs as: `kiro-cli acp --agent <name>`. */
+  agent?: string | null;
 }
 
 // ── Pull requests: ask the runner for changed repositories, hand them to the portal ──
@@ -617,6 +621,8 @@ export async function runKiroViaAgentCore(
       ...(opts.inputFiles?.length ? { inputFiles: opts.inputFiles } : {}),
       ...(opts.checks?.length ? { checks: opts.checks } : {}),
       ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.kiroConfig?.length ? { kiroConfig: opts.kiroConfig } : {}),
+      ...(opts.agent ? { agent: opts.agent } : {}),
       ...(snapshot ? { snapshot } : {}),
       ...(finalizeCheck ? { finalizeCheck: true } : {}),
       // Same rule as the local Kiro engine: trusted runs allow what kiro-cli asks about,

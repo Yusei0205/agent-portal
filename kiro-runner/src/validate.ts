@@ -44,6 +44,10 @@ export interface KiroRunPayload {
   inputFiles?: unknown[];
   /** Check steps to run after the agent finishes (checked again in run.ts by shared/runner-checks.ts). */
   checks?: unknown[];
+  /** The person's ~/.kiro agents, steering and skills (base64), written under the runner's home first (checked by shared/runner-files.ts). */
+  kiroConfig?: unknown[];
+  /** A Kiro agent from kiroConfig to run as (`kiro-cli acp --agent`). */
+  agent?: string;
   /** The model kiro-cli should use (chosen with session/set_model); kiro's own default when absent. */
   model?: string;
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
@@ -210,6 +214,8 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       prompt: obj.prompt as string,
       ...(obj.browser === true ? { browser: true } : {}),
       ...(typeof obj.model === 'string' && /^[A-Za-z0-9._:/@+-]{1,120}$/.test(obj.model) ? { model: obj.model } : {}),
+      ...(Array.isArray(obj.kiroConfig) && obj.kiroConfig.length <= 200 ? { kiroConfig: obj.kiroConfig as unknown[] } : {}),
+      ...(typeof obj.agent === 'string' && /^[A-Za-z0-9._ -]{1,80}$/.test(obj.agent) && !obj.agent.startsWith('-') ? { agent: obj.agent } : {}),
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
       ...(cleanAwsEnv(obj.awsEnv) ? { awsEnv: cleanAwsEnv(obj.awsEnv) } : {}),

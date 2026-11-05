@@ -38,6 +38,8 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 import { persistFile, persistTree, forgetFile, forgetTree, syncTreeDown } from './durable-files.ts';
+import { KIRO_CONFIG_LIMITS, kiroConfigPathOk } from './agent/runner-files.ts';
+import type { KiroConfigFile } from './agent/runner-files.ts';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one } from './db.ts';
@@ -932,6 +934,58 @@ export async function materialiseForRun(
   } catch (e: unknown) {
     // Materialisation is non-fatal — log but don't abort the run
     console.warn(`[user-config] materialiseForRun failed for ${workflowId}:`, e);
+  }
+}
+
+/**
+ * The person's Kiro setup (agents, steering, skills, prompts) as files a cloud Kiro run can write under its own
+ * ~/.kiro. It is what Agent setup shows: the team default while they follow it, their own folder after they changed it.
+ * `settings/` (MCP servers, tokens) is not sent. Files over the limits are left out.
+ */
+export async function collectKiroConfigForUser(userId: string): Promise<KiroConfigFile[]> {
+  const found: Array<{ path: string; buf: Buffer }> = [];
+  const state = await getState(userId, 'kiro');
+  if (state.following) {
+    const tv = await getLatestTeamVersion('kiro');
+    if (tv) {
+      for (const f of parseTeamFiles(tv)) {
+        if (f.isDir || f.content === null || isCacheExcluded(f.path) || !kiroConfigPathOk(f.path)) continue;
+        found.push({ path: f.path, buf: Buffer.from(f.content, 'utf8') });
+      }
+    }
+  } else {
+    await syncDown(userId, 'kiro');
+    const root = userConfigRoot(userId, 'kiro');
+    const walk = (dir: string): void => {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const abs = path.join(dir, e.name);
+        const rel = path.relative(root, abs).replace(/\\/g, '/');
+        if (e.isDirectory()) { walk(abs); continue; }
+        if (!e.isFile() || isCacheExcluded(rel) || !kiroConfigPathOk(rel)) continue;
+        try { found.push({ path: rel, buf: fs.readFileSync(abs) }); } catch { /* skip */ }
+      }
+    };
+    walk(root);
+  }
+  const out: KiroConfigFile[] = [];
+  let total = 0;
+  for (const f of found.sort((a, b) => a.path.localeCompare(b.path))) {
+    if (out.length >= KIRO_CONFIG_LIMITS.files || f.buf.length > KIRO_CONFIG_LIMITS.fileBytes || total + f.buf.length > KIRO_CONFIG_LIMITS.totalBytes) continue;
+    total += f.buf.length;
+    out.push({ path: f.path, data: f.buf.toString('base64') });
+  }
+  return out;
+}
+
+/** The same for the person who owns a session. Empty when the session or its owner is unknown. */
+export async function collectKiroConfigForWorkflow(workflowId: string): Promise<KiroConfigFile[]> {
+  try {
+    const wf = await getWorkflowRow(workflowId);
+    return wf?.created_by ? await collectKiroConfigForUser(String(wf.created_by)) : [];
+  } catch {
+    return [];
   }
 }
 

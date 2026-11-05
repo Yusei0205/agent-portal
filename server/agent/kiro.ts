@@ -40,7 +40,7 @@ import {
   IDC_CLIENT_SECRET_EXPIRES_AT_KEY, IDC_PROFILE_ARN_KEY, IDC_PROFILE_NAME_KEY,
   refreshIdcCredentialToken,
 } from '../credentials.ts';
-import { getRunHomeDir } from '../user-config.ts';
+import { getRunHomeDir, collectKiroConfigForWorkflow } from '../user-config.ts';
 import { buildConversationRecap } from './recap.ts';
 import type { RunContext } from './types.ts';
 import { createRunToken, revokeRunToken } from '../delegation.ts';
@@ -994,6 +994,8 @@ async function runKiroViaAgentCoreAdapter(
     inputFiles: run.runnerInputFiles,
     checks: run.runnerChecks,
     model: run.model || null,
+    kiroConfig: await collectKiroConfigForWorkflow(run.workflowId),
+    agent: run.leadAgent || null,
   });
 
   if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
