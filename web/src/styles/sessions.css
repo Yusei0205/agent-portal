@@ -475,6 +475,11 @@
   padding: 6px 12px;
   background: var(--ok-wash);
 }
+/* Denied, expired, or no longer waiting: an answered card, not an alert */
+.live-approval-resolved.is-muted {
+  color: var(--ink-3);
+  background: var(--panel-2);
+}
 
 /* Running cost pill */
 .live-cost-pill {

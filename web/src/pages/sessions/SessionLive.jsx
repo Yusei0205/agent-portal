@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { approvalStates } from '../../lib/approvalState.js';
 import { useRunStream } from '../../lib/useRunStream.js';
 import { api } from '../../lib/api.js';
 import { formatCost, formatCredits } from '../../lib/util.js';
@@ -534,15 +535,20 @@ function ExpandableToolResult({ toolName, result }) {
 
 // ── Approval card ─────────────────────────────────────────────────────────────
 
+/** What became of each approval in this session (see lib/approvalState.js), so a reload shows answers, not buttons. */
+const ApprovalStateContext = createContext({ resolutions: new Map(), endedRuns: new Set() });
+
 function ApprovalCard({ event, workflowId, projectId, runId, onResolved }) {
   const payload     = event.payload;
   const inputId     = payload.inputId || payload.id || event.id;
   const inputHash   = payload.inputHash || null;
-  const description = payload.description || payload.command || payload.tool || 'Approval required';
+  const description = payload.description || payload.command || payload.tool || payload.toolName || 'Approval required';
   const [busy, setBusy]           = useState(false);
   const [resolved, setResolved]   = useState(false);
   const [resolutionLabel, setResolutionLabel] = useState('');
   const [error, setError]         = useState('');
+  const { resolutions, endedRuns } = useContext(ApprovalStateContext);
+  const saved = resolutions.get(String(inputId));
 
   const resolve = async (response, allowAll = false) => {
     setBusy(true);
@@ -568,6 +574,25 @@ function ApprovalCard({ event, workflowId, projectId, runId, onResolved }) {
       <div className="live-event live-approval-resolved" aria-label="Approval resolved">
         <Icon name="check" size={14} />
         {resolutionLabel}: {description}
+      </div>
+    );
+  }
+
+  // Answered earlier (here, in the Inbox, or by someone else), expired, or its turn is over: no buttons.
+  if (saved || endedRuns.has(String(runId))) {
+    const status = saved?.status ?? 'closed';
+    const label = status === 'approved' ? (saved.allowAll ? 'Approved all' : 'Approved')
+      : status === 'denied' ? 'Denied'
+      : status === 'expired' ? 'Expired (nobody answered in time)'
+      : 'No longer waiting';
+    const good = status === 'approved';
+    return (
+      <div
+        className={`live-event live-approval-resolved${good ? '' : ' is-muted'}`}
+        aria-label={`Approval ${label.toLowerCase()}`}
+      >
+        <Icon name={good ? 'check' : status === 'denied' ? 'x' : 'clock'} size={14} />
+        {label}{saved?.by ? ` by ${saved.by}` : ''}: {description}
       </div>
     );
   }
@@ -1033,6 +1058,12 @@ export function SessionLive({
   const isTerminal = (e) => e.type === 'run-complete' || e.type === 'run-failed';
   const lastTerminal = [...displayEarlierEventsAll, ...dedupedAll].filter(isTerminal).pop() ?? null;
   const dropStaleFailure = (e) => !(e.type === 'run-failed' && lastTerminal && e !== lastTerminal);
+  // What became of each approval request (answered, expired, or its turn ended), from everything loaded so far.
+  const approvalState = React.useMemo(
+    () => approvalStates([...earlierEvents, ...events], runId),
+    [earlierEvents, events, runId],
+  );
+
   // An engine switch made after the current run sits after that run, not among the earlier history above it.
   const currentRunEndAt = dedupedAll.length ? String(dedupedAll[dedupedAll.length - 1].created_at || '') : '';
   const isTrailingNote = (e) => e.type === 'engine-switch' && currentRunEndAt && String(e.created_at || '') > currentRunEndAt;
@@ -1329,6 +1360,7 @@ export function SessionLive({
   }
 
   return (
+    <ApprovalStateContext.Provider value={approvalState}>
     <div
       className="live-panel"
       style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}
@@ -1545,5 +1577,6 @@ export function SessionLive({
         />
       )}
     </div>
+    </ApprovalStateContext.Provider>
   );
 }

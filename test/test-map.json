@@ -178,6 +178,7 @@
         "web/src/pages/sessions/SessionChanges.jsx",
         "web/src/pages/sessions/NewSessionDialog.jsx",
         "web/src/pages/sessions/SwitchEngineDialog.jsx",
+        "web/src/lib/approvalState.js",
         "web/src/lib/useRunStream.js",
         "web/src/lib/mergeEvents.js",
         "web/src/lib/outputFileMatch.js",
@@ -195,7 +196,8 @@
         "test/output-file-utils.test.ts",
         "test/web-pull-request-card.test.ts",
         "test/sessions-repo.test.ts",
-        "test/engine-switch.test.ts"
+        "test/engine-switch.test.ts",
+        "test/approval-state.test.ts"
       ],
       "smokeIds": [
         "sessions"

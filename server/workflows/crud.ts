@@ -28,7 +28,7 @@ import { startRun } from './driver.ts';
 import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
 import { resolveApproval } from '../agent/approvals.ts';
-import { inputFingerprint } from '../agent/runner.ts';
+import { inputFingerprint, emitRunEvent } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
 import { createChildSession, checkDelegationLimits, getDelegationSettings, stopAndDeleteChildren } from '../delegation.ts';
 import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
@@ -760,6 +760,13 @@ export function registerWorkflowRoutes(): void {
     const decision: 'allow' | 'deny' = response === 'approve' ? 'allow' : 'deny';
     const message = typeof body.message === 'string' ? body.message.slice(0, 2000) : '';
     resolveApproval(r.id, inputId, decision, { remember: allowAll, message });
+    // Saved in the session's history, so the approval card shows the answer (not the buttons) after a reload.
+    emitRunEvent(r.id, w.project_id ? String(w.project_id) : null, w.id, 'approval-resolved', {
+      inputId,
+      status: decision === 'allow' ? 'approved' : 'denied',
+      allowAll: Boolean(allowAll && decision === 'allow'),
+      by: req.user?.name ?? null,
+    });
 
     if (w.project_id) {
       emit(w.project_id, { type: 'input.resolved', inputId, status: 'answered' });
