@@ -245,6 +245,16 @@ export function Configuration({ user }) {
         title="Agent setup"
         description="How your agents behave: your own .kiro and .claude folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
       >
+        <button
+          type="button"
+          className="btn"
+          onClick={handleImported}
+          title="Reload the file list and status, for example after an agent or skill was added somewhere else"
+          aria-label={`Refresh ${tab} config`}
+        >
+          <Icon name="refresh" size={14} />
+          Refresh
+        </button>
         <ImportZipButton folder={tab} onImported={handleImported} />
         <ExportZipButton folder={tab} />
       </PageHeader>

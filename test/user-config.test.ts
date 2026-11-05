@@ -337,6 +337,21 @@ describe('User Config team default layer', () => {
     return res.json() as Promise<Record<string, unknown>>;
   }
 
+  it('publish with no zip (what the page sends) publishes the admins own folder', async () => {
+    // Nothing in the admins folder yet: a clear message, not a zip error.
+    const empty = await fetchJson(baseUrl, '/api/admin/user-config/claude/publish', { method: 'POST', body: {}, cookie: adminCookie });
+    assert.equal(empty.status, 400);
+    assert.match(String((empty.body as { error: string }).error), /no files to publish/);
+
+    await fetchJson(baseUrl, '/api/user-config/claude/file', { method: 'POST', body: { path: 'agents/helper.md', content: '# helper' }, cookie: adminCookie });
+    const r = await fetchJson(baseUrl, '/api/admin/user-config/claude/publish', { method: 'POST', body: {}, cookie: adminCookie });
+    assert.equal(r.status, 201);
+    assert.equal((r.body as { fileCount: number }).fileCount, 1);
+
+    const member = await fetchJson(baseUrl, '/api/admin/user-config/claude/publish', { method: 'POST', body: {}, cookie: userCookie });
+    assert.equal(member.status, 403);
+  });
+
   it('publish → follower sees new version in status', async () => {
     const pubR = await publishTeamDefault('{"team":"v1"}');
     assert.ok(pubR.ok, 'publish must succeed');

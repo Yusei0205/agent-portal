@@ -1519,13 +1519,20 @@ export function registerUserConfigRoutes(): void {
     const folder = validateFolder(req, res);
     if (!folder) return;
 
-    if (!req.rawBody || req.rawBody.length === 0) {
-      sendJson(res, 400, { error: 'Upload a zip file' }); return;
+    // A zip body publishes that zip. The Agent setup page sends no zip (just `{}`): it means "publish my current
+    // folder", so the zip is built from the admin's own effective config, the same files Export Zip would give.
+    const raw = req.rawBody;
+    const isZip = Boolean(raw && raw.length >= 4 && raw[0] === 0x50 && raw[1] === 0x4b);
+    if (raw && raw.length > 0 && !isZip && !String(req.headers['content-type'] ?? '').includes('application/json')) {
+      sendJson(res, 400, { error: 'The upload is not a zip file' }); return;
     }
 
     let entries: Array<{ path: string; content: string }>;
     try {
-      entries = await parseImportZip(req.rawBody, folder);
+      const zipBuf = isZip ? (raw as Buffer) : await buildExportZip(String(req.user!.id), folder);
+      // A zip with no entries is only its 22-byte end record, which the zip reader rejects as corrupt.
+      if (zipBuf.length <= 22) { sendJson(res, 400, { error: `Your ${folder} folder has no files to publish yet` }); return; }
+      entries = await parseImportZip(zipBuf, folder);
     } catch (e: unknown) {
       sendJson(res, 400, { error: String((e as Error)?.message ?? e) }); return;
     }
