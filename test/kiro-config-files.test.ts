@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { kiroConfigPathOk, writeKiroConfigFiles, KIRO_CONFIG_LIMITS } from '../server/agent/runner-files.ts';
 import { validatePayload } from '../kiro-runner/src/validate.ts';
+import type { KiroRunPayload } from '../kiro-runner/src/validate.ts';
 
 const b64 = (s: string): string => Buffer.from(s).toString('base64');
 let home = '';
@@ -51,10 +52,11 @@ describe('kiro config files', () => {
     const ok = validatePayload({ ...base, agent: 'reviewer', kiroConfig: [{ path: 'agents/reviewer.json', data: b64('{}') }] });
     assert.equal(ok.ok, true);
     if (ok.ok) {
-      assert.equal(ok.payload.agent, 'reviewer');
-      assert.equal(ok.payload.kiroConfig?.length, 1);
+      const p = ok.payload as KiroRunPayload;
+      assert.equal(p.agent, 'reviewer');
+      assert.equal(p.kiroConfig?.length, 1);
     }
     const bad = validatePayload({ ...base, agent: '--trust-all-tools' });
-    assert.equal(bad.ok && bad.payload.agent, undefined, 'a flag-looking agent name is dropped');
+    assert.equal(bad.ok && (bad.payload as KiroRunPayload).agent, undefined, 'a flag-looking agent name is dropped');
   });
 });
