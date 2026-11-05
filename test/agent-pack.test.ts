@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 // @ts-expect-error — plain JS module without type declarations
-import { PACK_AGENTS, PACK_SKILLS, kiroPackFiles, claudePackFiles, agentPackFiles } from '../web/src/lib/agent-pack/index.js';
+import { PACK_AGENTS, PACK_SKILLS, kiroPackFiles, claudePackFiles, agentPackFiles, packUpdatePlan, packFileLabel } from '../web/src/lib/agent-pack/index.js';
 import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, AGENT_NAME, SKILL_NAME, AGENT_LIMITS } from '../server/agent/agent-defs.ts';
 import { leadAgentFor, anthropicAgentModel } from '../server/agent/run-agents.ts';
 import { collectKiroConfig, hasKiroAgent, KIRO_CONFIG_PATH } from '../server/agent/kiro-config-files.ts';
@@ -164,6 +164,48 @@ describe('agent pack for Claude Code', () => {
     assert.equal(agentPackFiles('kiro').length, agents.length + skills.length);
     assert.equal(agentPackFiles('claude').length, agents.length + skills.length);
     assert.equal(agentPackFiles('aws'), null);
+  });
+});
+
+describe('updating a pack that is already there (Agent setup › Agent pack)', () => {
+  type Plan = { add: PackFile[]; change: PackFile[]; same: PackFile[] };
+  const paths = (fs: PackFile[]) => fs.map((f) => f.path).sort();
+
+  it('adds everything to a folder without the pack, and nothing to one that is up to date', () => {
+    for (const folder of ['claude', 'kiro']) {
+      const files = agentPackFiles(folder) as PackFile[];
+      const none = packUpdatePlan(folder, {}) as Plan;
+      assert.deepEqual(paths(none.add), paths(files));
+      assert.equal(none.change.length + none.same.length, 0);
+
+      // The same files, saved by an editor with Windows line endings and a trailing newline, count as up to date.
+      const saved = Object.fromEntries(files.map((f) => [f.path, f.content.replace(/\n/g, '\r\n') + '\r\n']));
+      const current = packUpdatePlan(folder, saved) as Plan;
+      assert.equal(current.add.length + current.change.length, 0, `${folder}: up to date`);
+      assert.equal(current.same.length, files.length);
+    }
+  });
+
+  it('replaces pack files that differ, adds missing ones, and looks at no other file', () => {
+    const files = claudePackFiles() as PackFile[];
+    const existing: Record<string, string> = Object.fromEntries(files.map((f) => [f.path, f.content]));
+    existing['agents/backend-engineer.md'] = existing['agents/backend-engineer.md'].replace('Node.js / TypeScript', 'Go');   // an older version
+    delete existing['skills/backend-node-typescript/SKILL.md'];                                                               // a skill added since
+    existing['agents/my-own-agent.md'] = '---\nname: my-own-agent\ndescription: mine\n---\nMine.\n';                          // the person's own
+    existing['CLAUDE.md'] = '# Mine\n';
+    const plan = packUpdatePlan('claude', existing) as Plan;
+    assert.deepEqual(paths(plan.change), ['agents/backend-engineer.md']);
+    assert.deepEqual(paths(plan.add), ['skills/backend-node-typescript/SKILL.md']);
+    assert.equal(plan.same.length, files.length - 2);
+    const touched = [...plan.add, ...plan.change, ...plan.same].map((f) => f.path);
+    assert.ok(!touched.includes('agents/my-own-agent.md') && !touched.includes('CLAUDE.md'), 'other files are never part of an update');
+    assert.equal(packUpdatePlan('aws', {}), null);
+  });
+
+  it('names pack files the way people know them', () => {
+    assert.equal(packFileLabel('agents/lead-orchestrator.md'), 'lead-orchestrator');
+    assert.equal(packFileLabel('agents/tech-writer.json'), 'tech-writer');
+    assert.equal(packFileLabel('skills/task-delegation/SKILL.md'), 'skill task-delegation');
   });
 });
 

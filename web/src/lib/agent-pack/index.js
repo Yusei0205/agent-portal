@@ -7,7 +7,9 @@
  *   Claude Code  ~/.claude/agents/<name>.md      (YAML front matter; `skills:` preloads the agent's skills)
  *                ~/.claude/skills/<skill>/SKILL.md
  *
- * Added from Agent setup (Add agent pack); files the person already has are left as they are.
+ * Added from Agent setup (Agent pack). The first time, every file is added. Later, the same button updates the
+ * pack: missing files are added and pack files that differ from this version are replaced, after the person
+ * confirms a list of them (packUpdatePlan). Other files are never touched.
  * Formats: https://kiro.dev/docs/custom-agents/configuration-reference/ · https://kiro.dev/docs/skills/
  *          https://code.claude.com/docs/en/sub-agents · https://code.claude.com/docs/en/skills
  */
@@ -210,4 +212,39 @@ export function agentPackFiles(folder) {
   if (folder === 'kiro') return kiroPackFiles();
   if (folder === 'claude') return claudePackFiles();
   return null;
+}
+
+// ── Updating a pack that is already there ─────────────────────────────────────
+
+/** Same text, ignoring line endings and trailing white space (an editor may change either). */
+function sameText(a, b) {
+  const norm = (s) => String(s).replace(/\r\n/g, '\n').trimEnd();
+  return norm(a) === norm(b);
+}
+
+/**
+ * What adding the pack would do to a config folder that may already have some of it.
+ * `existing` maps a pack file's path to its current content; a path that is not in it is missing.
+ * Returns { add, change, same } (lists of pack files), or null for a folder without a pack.
+ * Only the pack's own paths are looked at: other files are never part of an update.
+ */
+export function packUpdatePlan(folder, existing) {
+  const files = agentPackFiles(folder);
+  if (!files) return null;
+  const plan = { add: [], change: [], same: [] };
+  for (const f of files) {
+    const now = Object.prototype.hasOwnProperty.call(existing, f.path) ? existing[f.path] : undefined;
+    if (now === undefined || now === null) plan.add.push(f);
+    else if (sameText(now, f.content)) plan.same.push(f);
+    else plan.change.push(f);
+  }
+  return plan;
+}
+
+/** A pack file's short name for people: the agent's name, or "skill <name>". */
+export function packFileLabel(path) {
+  const agent = /^agents\/([^/]+)\.(md|json)$/.exec(path);
+  if (agent) return agent[1];
+  const skill = /^skills\/([^/]+)\/SKILL\.md$/.exec(path);
+  return skill ? `skill ${skill[1]}` : path;
 }
