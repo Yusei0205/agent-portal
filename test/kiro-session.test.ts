@@ -602,6 +602,34 @@ describe('buildConversationRecap � time ordering and current message exclusion
     assert.equal(await buildConversationRecap(emptyWfId, emptyRunId), '', 'Empty recap when no prior runs');
   });
 
+  it('includes a failed run (e.g. Kiro credits ran out), so another engine can pick up from it', async () => {
+    const db = getDb();
+    const pId = `proj-${generateId()}`;
+    const wfId = `wf-${generateId()}`;
+    const failedRunId = `run-failed-${generateId()}`;
+    const nextRunId = `run-next-${generateId()}`;
+    db.prepare('INSERT INTO projects (id, name, slug, created_at) VALUES (?, ?, ?, ?)')
+      .run(pId, 'Failed run', `failed-run-recap-${Date.now()}`, now());
+    db.prepare(
+      `INSERT INTO p6_workflows (id, project_id, goal, status, engine, trust_tools, repo_ids, created_at, updated_at)
+       VALUES (?, ?, ?, 'failed', 'claude-code', 0, '[]', ?, ?)`,
+    ).run(wfId, pId, 'Fix the login bug', now(), now());
+    const ts = (offsetMs: number): string => new Date(Date.now() - 60_000 + offsetMs).toISOString();
+    db.prepare(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?, ?, 'failed', ?)`).run(failedRunId, wfId, ts(0));
+    db.prepare(`INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?, 'assistant-text', ?, ?)`)
+      .run(failedRunId, JSON.stringify({ text: 'I found the bug in auth.ts ' }), ts(1));
+    db.prepare(`INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?, 'assistant-text', ?, ?)`)
+      .run(failedRunId, JSON.stringify({ text: 'and started fixing it.' }), ts(2));
+    db.prepare(`INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?, 'run-failed', ?, ?)`)
+      .run(failedRunId, JSON.stringify({ error: 'Monthly credit limit reached' }), ts(3));
+    db.prepare(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?, ?, 'running', ?)`).run(nextRunId, wfId, now());
+
+    const recap = await buildConversationRecap(wfId, nextRunId);
+    assert.ok(recap.includes('Original goal: Fix the login bug'), recap);
+    assert.ok(recap.includes('I found the bug in auth.ts and started fixing it.'), 'what the failed run said, in order');
+    assert.ok(recap.includes('Monthly credit limit reached'), 'why it stopped');
+  });
+
   it('returns empty string after /clear', async () => {
     const db = getDb();
     const p2Id = `proj-${generateId()}`;

@@ -774,6 +774,20 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
   }
 
   // ── Child session result ──────────────────────────────────────────────────
+  // ── The session was moved to another engine ─────────────────────────────
+  if (type === 'engine-switch') {
+    const text = payload.text || payload.body || 'Switched engine';
+    return (
+      <div className="live-event live-engine-switch" role="note">
+        <span className="live-engine-switch-line" aria-hidden="true" />
+        <span className="live-engine-switch-text">
+          <Icon name="refresh" size={12} /> {text}. The next turn starts with a recap of earlier turns.
+        </span>
+        <span className="live-engine-switch-line" aria-hidden="true" />
+      </div>
+    );
+  }
+
   if (type === 'child-result' || event.kind === 'child-result') {
     const data = payload?.childTitle !== undefined ? payload : (
       (() => { try { return JSON.parse(payload?.body ?? event.body ?? '{}'); } catch { return {}; } })()
@@ -1019,7 +1033,11 @@ export function SessionLive({
   const isTerminal = (e) => e.type === 'run-complete' || e.type === 'run-failed';
   const lastTerminal = [...displayEarlierEventsAll, ...dedupedAll].filter(isTerminal).pop() ?? null;
   const dropStaleFailure = (e) => !(e.type === 'run-failed' && lastTerminal && e !== lastTerminal);
-  const displayEarlierEvents = displayEarlierEventsAll.filter(dropStaleFailure);
+  // An engine switch made after the current run sits after that run, not among the earlier history above it.
+  const currentRunEndAt = dedupedAll.length ? String(dedupedAll[dedupedAll.length - 1].created_at || '') : '';
+  const isTrailingNote = (e) => e.type === 'engine-switch' && currentRunEndAt && String(e.created_at || '') > currentRunEndAt;
+  const trailingNotes = displayEarlierEventsAll.filter(isTrailingNote);
+  const displayEarlierEvents = displayEarlierEventsAll.filter((e) => dropStaleFailure(e) && !isTrailingNote(e));
   const dedupedDisplayEvents = dedupedAll.filter(dropStaleFailure);
 
   // ── New-run handling: when runId changes, persist current events ─────────
@@ -1173,7 +1191,7 @@ export function SessionLive({
         if (cancelled) return;
         const saved = (data.events ?? [])
           .map(normaliseTranscriptEvent)
-          .filter((e) => e.src === 'w' && (e.type === 'command-result' || e.type === 'human'));
+          .filter((e) => e.src === 'w' && (e.type === 'command-result' || e.type === 'human' || e.type === 'engine-switch'));
         setEarlierEvents((prev) => mergeEventLists(prev, saved.reverse()));
       } catch { /* non-critical */ }
     })();
@@ -1448,6 +1466,21 @@ export function SessionLive({
             </React.Fragment>
           );
         })}
+
+        {/* Notes made after the current run (engine switch) */}
+        {trailingNotes.map((e, i) => (
+          <RunEvent
+            key={e.id ?? `note-${i}`}
+            event={e}
+            workflowId={workflowId}
+            projectId={projectId}
+            runId={runId}
+            agentName={agentName}
+            outputFiles={outputFiles}
+            vaultFolder={vaultFolder}
+            onResolved={undefined}
+          />
+        ))}
 
         {/* Pull request cards: latest pull-request event per repository */}
         <PullRequestCards events={[...earlierEvents, ...events]} workflowId={workflowId} projectId={projectId} />

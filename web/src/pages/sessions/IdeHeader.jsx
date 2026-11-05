@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
+import { SwitchEngineDialog } from './SwitchEngineDialog.jsx';
 
 // ── Delegate-a-task dialog ────────────────────────────────────────────────────
 
@@ -188,6 +189,7 @@ function DelegateDialog({ workflowId, projectId, engine, onClose, onDelegated })
  *   onRenamed: (title: string) => void,
  *   onOpenBrowser: () => void,
  *   onDelegated?: () => void,
+ *   onEngineSwitched?: (workflow: object) => void,
  *   integrationCount?: number,
  * }} props
  */
@@ -198,6 +200,7 @@ export function IdeHeader({
   onRenamed,
   onOpenBrowser,
   onDelegated,
+  onEngineSwitched,
   integrationCount = 0,
 }) {
   const [renaming, setRenaming]       = useState(false);
@@ -206,6 +209,7 @@ export function IdeHeader({
   const [stopping, setStopping]       = useState(false);
   const [menuOpen, setMenuOpen]       = useState(false);
   const [showDelegate, setShowDelegate] = useState(false);
+  const [showSwitch, setShowSwitch]     = useState(false);
   const menuRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -364,11 +368,32 @@ export function IdeHeader({
                   <Icon name="agents" size={14} />
                   Delegate a task…
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="account-menu-item"
+                  onClick={() => { setMenuOpen(false); setShowSwitch(true); }}
+                  disabled={isRunning}
+                  title={isRunning ? 'Stop the session, or wait for the turn to end, first' : 'Continue this session on another engine'}
+                >
+                  <Icon name="refresh" size={14} />
+                  Switch engine…
+                </button>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Switch engine dialog */}
+      {showSwitch && workflow && (
+        <SwitchEngineDialog
+          workflow={workflow}
+          projectId={projectId}
+          onClose={() => setShowSwitch(false)}
+          onSwitched={(w) => { if (onEngineSwitched) onEngineSwitched(w); }}
+        />
+      )}
 
       {/* Delegate dialog */}
       {showDelegate && workflow && (

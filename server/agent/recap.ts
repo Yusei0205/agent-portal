@@ -50,13 +50,18 @@ export async function buildConversationRecap(
   // ── Completed run summaries (excluding current run) ───────────────────────
   const completionRows = await repo.listRunCompletionEvents(workflowId, runId, lastClearTime ?? undefined);
 
-  if (completionRows.length === 0) {
+  // ── Failed runs (excluding current run) ──────────────────────────────────
+  // A run that failed part-way (e.g. Kiro credits ran out) has no run-complete summary, but what the agent had said
+  // before it failed is the context the next engine needs, above all after the session was switched to another one.
+  const failedTurns = await failedRunTurns(workflowId, runId, lastClearTime);
+
+  if (completionRows.length === 0 && failedTurns.length === 0) {
     return '';
   }
 
   // ── Human messages (prior turns only) ────────────────────────────────────
   // Exclude messages that are the current run's input (already in the prompt).
-  const lastCompletionTs = completionRows[completionRows.length - 1].created_at;
+  const lastCompletionTs = [...completionRows.map((r) => r.created_at), ...failedTurns.map((t) => t.ts)].sort().pop()!;
 
   let humanRows: Array<{ id: number; body: string; created_at: string }>;
   if (minExcludeEventId !== null) {
@@ -84,6 +89,8 @@ export async function buildConversationRecap(
     turns.push({ role: 'user', text: String(row.body).slice(0, 600), ts: row.created_at });
   }
 
+  for (const t of failedTurns) turns.push({ role: 'assistant', text: t.text, ts: t.ts });
+
   // Sort by timestamp ascending
   turns.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 
@@ -110,4 +117,37 @@ export async function buildConversationRecap(
   if (kept.length === 0) return '';
 
   return header + kept.join('') + footer;
+}
+
+/**
+ * One recap entry per failed earlier run: the end of what the agent wrote in it, and why it stopped.
+ * Runs before the last /clear and the current run are left out.
+ */
+async function failedRunTurns(
+  workflowId: string,
+  currentRunId: string,
+  lastClearTime: string | null,
+): Promise<Array<{ text: string; ts: string }>> {
+  const repo = getSessionsRepository();
+  const events = await repo.listWorkflowRunEventsByType(workflowId, ['run-failed', 'assistant-text'], 2000);
+  const failures = events.filter((e) => e.type === 'run-failed' && e.run_id !== currentRunId
+    && (!lastClearTime || String(e.created_at) > lastClearTime));
+  const out: Array<{ text: string; ts: string }> = [];
+  for (const f of failures) {
+    // Events come newest first; put this run's text back in order.
+    const said = events
+      .filter((e) => e.type === 'assistant-text' && e.run_id === f.run_id)
+      .reverse()
+      .map((e) => {
+        try { return String((JSON.parse(String(e.payload)) as { text?: unknown }).text ?? ''); } catch { return ''; }
+      })
+      .join('')
+      .trim();
+    let error = '';
+    try { error = String((JSON.parse(String(f.payload)) as { error?: unknown }).error ?? ''); } catch { /* none */ }
+    const tail = said.length > 500 ? `…${said.slice(-500)}` : said;
+    const text = `${tail ? `${tail}\n` : ''}(This turn stopped before it finished${error ? `: ${error.slice(0, 200)}` : ''}.)`;
+    out.push({ text, ts: String(f.created_at) });
+  }
+  return out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 }

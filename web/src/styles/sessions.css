@@ -1111,3 +1111,15 @@
   border: 1px solid var(--line); border-radius: 3px; background: var(--canvas);
 }
 .ws-composer--manual .ws-composer-hints { display: none; }
+
+/* Divider in the conversation where the session moved to another engine */
+.live-engine-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 12px;
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+.live-engine-switch-line { flex: 1; height: 1px; background: var(--line); }
+.live-engine-switch-text { display: inline-flex; align-items: center; gap: 6px; text-align: center; }

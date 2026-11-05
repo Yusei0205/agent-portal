@@ -112,6 +112,16 @@ function fireHook(workflowId: string, runId: string, event: 'start' | 'done' | '
 import { inputFingerprint, rememberKey, approvalView } from './tool-policy.ts';
 export { inputFingerprint, rememberKey, MAX_REVIEWABLE_COMMAND } from './tool-policy.ts';
 
+/**
+ * The stored engine session a run may resume, or null. Only the engine that created it may resume it: a session's
+ * engine can be switched, and a Kiro session id means nothing to Claude Code (and the other way round).
+ */
+export function resumableEngineSessionId(workflow: { engine?: unknown; engine_session_id?: unknown; engine_session_engine?: unknown }): string | null {
+  if (!workflow.engine_session_id) return null;
+  if (workflow.engine_session_engine && String(workflow.engine_session_engine) !== String(workflow.engine ?? '')) return null;
+  return String(workflow.engine_session_id);
+}
+
 // ── Pending approval map ──────────────────────────────────────────────────────
 // Moved to approvals.ts to break the runner→inbox→runner circular import.
 // Re-exported here so existing consumers (crud.ts) can keep their imports.
@@ -405,7 +415,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       credentialId: workflow.credential_id ? String(workflow.credential_id) : null,
       credentialOwnerId: workflow.created_by ? String(workflow.created_by) : null,
       model: workflow.model && String(workflow.model).trim() ? String(workflow.model).trim() : null,
-      engineSessionId: workflow.engine_session_id ? String(workflow.engine_session_id) : null,
+      engineSessionId: resumableEngineSessionId(workflow),
     };
 
     // Set up the run's approval map
