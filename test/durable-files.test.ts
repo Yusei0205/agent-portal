@@ -11,7 +11,7 @@ import { setConfig } from '../server/config.ts';
 import { createTestConfig } from './fixtures.ts';
 import { setStorage } from '../server/storage-instance.ts';
 import type { StorageBackend } from '../server/storage/index.ts';
-import { persistFile, restoreFile, forgetFile, restoreTree, forgetTree, persistTree } from '../server/durable-files.ts';
+import { persistFile, restoreFile, forgetFile, restoreTree, forgetTree, persistTree, syncTreeDown } from '../server/durable-files.ts';
 
 function memoryStorage(): StorageBackend & { objects: Map<string, Buffer> } {
   const objects = new Map<string, Buffer>();
@@ -107,5 +107,49 @@ describe('durable-files', () => {
     for (const f of [a, b]) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'x'); await persistFile(f); }
     await forgetTree(path.join(dir, 'w', 'one'));
     assert.deepEqual([...store.objects.keys()], ['w/keep/b.txt']);
+  });
+  test('syncTreeDown makes another instance see what was added and deleted elsewhere', async () => {
+    process.env.STORAGE_BACKEND = 's3';
+    const root = path.join(dir, 'user-config', 'u1', 'kiro');
+    const agent = path.join(root, 'agents', 'helper.json');
+    const old = path.join(root, 'steering', 'old.md');
+    const put = (f: string, c: string, ageMs = 0) => {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, c);
+      if (ageMs) { const t = new Date(Date.now() - ageMs); fs.utimesSync(f, t, t); }
+    };
+
+    // Instance A imports an agent; instance B (a fresh /tmp) has nothing yet.
+    put(agent, '{"name":"helper"}');
+    put(old, '# old');
+    await persistTree(root);
+    fs.rmSync(root, { recursive: true, force: true });
+    await syncTreeDown(root);
+    assert.equal(fs.readFileSync(agent, 'utf8'), '{"name":"helper"}');
+    assert.equal(fs.existsSync(old), true);
+
+    // A deletes a file. B still has it locally, and must drop it instead of bringing it back later.
+    await forgetFile(old);
+    const t = new Date(Date.now() - 10_000);
+    fs.utimesSync(old, t, t);
+    await syncTreeDown(root);
+    assert.equal(fs.existsSync(old), false);
+    assert.equal(fs.existsSync(agent), true);
+  });
+
+  test('syncTreeDown leaves local files alone when nothing is mirrored yet, and a file written a moment ago', async () => {
+    process.env.STORAGE_BACKEND = 's3';
+    const root = path.join(dir, 'user-config', 'u2', 'claude');
+    const f = path.join(root, 'agents', 'mine.md');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, 'x');
+    await syncTreeDown(root);
+    assert.equal(fs.existsSync(f), true, 'nothing mirrored: keep it');
+
+    const other = path.join(root, 'agents', 'other.md');
+    fs.writeFileSync(other, 'y');
+    await persistFile(other);
+    await syncTreeDown(root);
+    assert.equal(fs.existsSync(f), true, 'written after the sync began: kept');
   });
 });

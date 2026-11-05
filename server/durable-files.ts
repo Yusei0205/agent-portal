@@ -94,6 +94,46 @@ export async function restoreTree(absDir: string): Promise<void> {
   });
 }
 
+/**
+ * Make the local folder match the storage backend: download what is missing and remove local files that are no longer
+ * mirrored. For folders that several Lambda instances read and write (each has its own /tmp), where `restoreTree`,
+ * which only adds, would let a file deleted on one instance reappear from another. Local files newer than the start of
+ * this call are kept (they may be mid-write), and when nothing is mirrored yet the folder is left as it is.
+ */
+export async function syncTreeDown(absDir: string): Promise<void> {
+  if (!enabled()) return;
+  const key = keyFor(absDir);
+  if (!key) return;
+  const started = Date.now();
+  const storage = getStorage();
+  const keys = await storage.list(`${key}/`);
+  if (keys.length === 0) return;
+  const wanted = new Set(keys.map((k) => path.join(config.dataDir, ...k.split('/'))));
+  await forEachLimit(keys, 32, async (k) => {
+    const abs = path.join(config.dataDir, ...k.split('/'));
+    if (fs.existsSync(abs)) return;
+    try {
+      await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+      await fs.promises.writeFile(abs, await storage.read(k));
+    } catch (e) {
+      console.error('[durable-files] sync failed for', k, e instanceof Error ? e.message : e);
+    }
+  });
+  const prune = async (dir: string): Promise<void> => {
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { await prune(full); continue; }
+      if (wanted.has(full)) continue;
+      try {
+        if ((await fs.promises.stat(full)).mtimeMs < started - 2000) await fs.promises.rm(full, { force: true });
+      } catch { /* gone already */ }
+    }
+  };
+  await prune(absDir);
+}
+
 /** Run `fn` over `items` with at most `limit` running at once (folders can hold thousands of files). */
 async function forEachLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
