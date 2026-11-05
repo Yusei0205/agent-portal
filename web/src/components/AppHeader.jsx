@@ -18,6 +18,7 @@ const PAGE_NAMES = {
   setup:        'Setup',
   projects:     'Projects',
   inbox:        'Inbox',
+  feedback:     'Feedback',
   connections:  'Connections',
   api:          'API access',
   users:        'Users',

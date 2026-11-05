@@ -16,7 +16,9 @@
         "test/auth-repo.test.ts",
         "test/setup-security.test.ts"
       ],
-      "smokeIds": ["auth"]
+      "smokeIds": [
+        "auth"
+      ]
     },
     "setup": {
       "description": "First-run setup wizard",
@@ -33,7 +35,9 @@
         "web/src/styles/setup-wizard.css"
       ],
       "tests": [],
-      "smokeIds": ["setup"]
+      "smokeIds": [
+        "setup"
+      ]
     },
     "api-tokens": {
       "description": "API token management and token scope enforcement",
@@ -49,7 +53,9 @@
         "test/token-scopes.test.ts",
         "test/api-tokens-repo.test.ts"
       ],
-      "smokeIds": ["api-tokens"]
+      "smokeIds": [
+        "api-tokens"
+      ]
     },
     "permissions": {
       "description": "Role-based access control, permission checks",
@@ -65,7 +71,9 @@
         "test/permissions.test.ts",
         "test/permissions-repo.test.ts"
       ],
-      "smokeIds": ["permissions"]
+      "smokeIds": [
+        "permissions"
+      ]
     },
     "audit": {
       "description": "Audit log recording and retrieval",
@@ -80,7 +88,9 @@
         "test/audit-fixes-3.test.ts",
         "test/audit-repo.test.ts"
       ],
-      "smokeIds": ["audit"]
+      "smokeIds": [
+        "audit"
+      ]
     },
     "delegation": {
       "description": "Delegate tokens for sub-agent authentication",
@@ -100,7 +110,9 @@
         "test/delegation-session-repo.test.ts",
         "test/agentcore-multi-agent.test.ts"
       ],
-      "smokeIds": ["delegation"]
+      "smokeIds": [
+        "delegation"
+      ]
     },
     "projects": {
       "description": "Project CRUD and listing, project/team repository layer",
@@ -117,7 +129,9 @@
         "test/projects-repo.test.ts",
         "test/project-pr-settings.test.ts"
       ],
-      "smokeIds": ["projects"]
+      "smokeIds": [
+        "projects"
+      ]
     },
     "workspaces": {
       "description": "Workspace management per project",
@@ -135,7 +149,9 @@
         "test/workspaces.test.ts",
         "test/workspaces-repo.test.ts"
       ],
-      "smokeIds": ["workspaces"]
+      "smokeIds": [
+        "workspaces"
+      ]
     },
     "sessions": {
       "description": "Session lifecycle, context, files, and live run streaming",
@@ -179,7 +195,9 @@
         "test/web-pull-request-card.test.ts",
         "test/sessions-repo.test.ts"
       ],
-      "smokeIds": ["sessions"]
+      "smokeIds": [
+        "sessions"
+      ]
     },
     "workflows": {
       "description": "Workflow engine, controls, and driver",
@@ -203,7 +221,9 @@
         "test/transcript-coalesce.test.ts",
         "test/conditional-transitions.test.ts"
       ],
-      "smokeIds": ["sessions"],
+      "smokeIds": [
+        "sessions"
+      ],
       "note": "No dedicated smoke section. Session creation (section 31) exercises workflow engine; use sessions smoke ID."
     },
     "ide": {
@@ -235,7 +255,9 @@
         "test/terminal.test.ts",
         "test/terminal-pipe.test.ts"
       ],
-      "smokeIds": ["ide"]
+      "smokeIds": [
+        "ide"
+      ]
     },
     "dashboard": {
       "description": "Agent performance dashboard KPIs and drill-downs",
@@ -251,7 +273,9 @@
         "test/dashboard.test.ts",
         "test/stats-repo.test.ts"
       ],
-      "smokeIds": ["dashboard"]
+      "smokeIds": [
+        "dashboard"
+      ]
     },
     "knowledge": {
       "description": "Knowledge base documents, search, ask, decisions, and learning content",
@@ -273,7 +297,9 @@
         "test/knowledge-repo.test.ts",
         "test/learn-repo.test.ts"
       ],
-      "smokeIds": ["knowledge"]
+      "smokeIds": [
+        "knowledge"
+      ]
     },
     "create": {
       "description": "Create hub page (container for Diagrams / Documents / Decks tabs)",
@@ -283,7 +309,9 @@
       "tests": [
         "test/create-repos.test.ts"
       ],
-      "smokeIds": ["create"]
+      "smokeIds": [
+        "create"
+      ]
     },
     "diagrams": {
       "description": "Diagram creation and rendering — draw.io, mermaid, and icon packs",
@@ -307,7 +335,9 @@
         "test/diagrams.test.ts",
         "test/resume-retry.test.ts"
       ],
-      "smokeIds": ["create"],
+      "smokeIds": [
+        "create"
+      ],
       "note": "Section 5 (Create) covers the Diagrams tab. No standalone diagrams smoke section."
     },
     "generated-docs": {
@@ -335,7 +365,9 @@
         "test/generated-docs.test.ts",
         "test/resume-retry.test.ts"
       ],
-      "smokeIds": ["create"],
+      "smokeIds": [
+        "create"
+      ],
       "note": "Section 5 (Create) covers the Documents tab. No standalone generated-docs smoke section."
     },
     "presentations": {
@@ -354,7 +386,9 @@
         "test/presentations.test.ts",
         "test/resume-retry.test.ts"
       ],
-      "smokeIds": ["create"],
+      "smokeIds": [
+        "create"
+      ],
       "note": "Section 5 (Create) covers the Decks tab. No standalone presentations smoke section."
     },
     "vault": {
@@ -375,7 +409,9 @@
         "test/vault-folders.test.ts",
         "test/vault-files-repo.test.ts"
       ],
-      "smokeIds": ["vault"]
+      "smokeIds": [
+        "vault"
+      ]
     },
     "insights": {
       "description": "Session and cost insights analytics",
@@ -389,7 +425,9 @@
       "tests": [
         "test/insights.test.ts"
       ],
-      "smokeIds": ["insights"]
+      "smokeIds": [
+        "insights"
+      ]
     },
     "budget": {
       "description": "Budget usage tracking repository layer (budget_usage table)",
@@ -418,7 +456,9 @@
       "tests": [
         "test/inbox-repo.test.ts"
       ],
-      "smokeIds": ["inbox"]
+      "smokeIds": [
+        "inbox"
+      ]
     },
     "connections": {
       "description": "Git provider connections management",
@@ -435,7 +475,9 @@
         "test/git-connections.test.ts",
         "test/git-connections-repo.test.ts"
       ],
-      "smokeIds": ["connections"]
+      "smokeIds": [
+        "connections"
+      ]
     },
     "repos": {
       "description": "Repository listing, cloning, and clone progress tracking",
@@ -452,7 +494,9 @@
         "test/repos-progress.test.ts",
         "test/git-repos-repo.test.ts"
       ],
-      "smokeIds": ["repos"]
+      "smokeIds": [
+        "repos"
+      ]
     },
     "integrations": {
       "description": "Third-party integrations (Atlassian, etc.)",
@@ -466,7 +510,9 @@
       "tests": [
         "test/integrations-repo.test.ts"
       ],
-      "smokeIds": ["integrations"]
+      "smokeIds": [
+        "integrations"
+      ]
     },
     "jira": {
       "description": "Jira integration: OAuth/API-token auth, ticket browse, session context",
@@ -486,18 +532,20 @@
     "aws-accounts": {
       "description": "AWS account management and region selection",
       "sources": [
-        "server/aws-accounts.ts",
         "server/repositories/aws-accounts.ts",
         "server/repositories/aws-accounts-sqlite.ts",
         "server/repositories/aws-accounts-dynamodb.ts",
-        "web/src/pages/AwsAccounts.jsx",
         "web/src/components/AwsRegionSelect.jsx",
-        "web/src/lib/awsRegions.js"
+        "web/src/lib/awsRegions.js",
+        "server/project-aws.ts",
+        "web/src/pages/ProjectAws.jsx"
       ],
       "tests": [
         "test/aws-accounts-repo.test.ts"
       ],
-      "smokeIds": ["aws-accounts"]
+      "smokeIds": [
+        "aws-accounts"
+      ]
     },
     "credentials": {
       "description": "AWS credentials management and parser",
@@ -516,7 +564,9 @@
         "test/aws-cred-parser.test.ts",
         "test/credentials-repo.test.ts"
       ],
-      "smokeIds": ["credentials"]
+      "smokeIds": [
+        "credentials"
+      ]
     },
     "bedrock-sso": {
       "description": "Bedrock SSO via AWS Identity Center (IDC)",
@@ -551,7 +601,9 @@
         "test/settings.test.ts",
         "test/settings-repo.test.ts"
       ],
-      "smokeIds": ["settings"]
+      "smokeIds": [
+        "settings"
+      ]
     },
     "config": {
       "description": "Portal configuration — deploy target, cloud config, config file editor",
@@ -566,7 +618,9 @@
       "tests": [
         "test/cloud-config.test.ts"
       ],
-      "smokeIds": ["config"]
+      "smokeIds": [
+        "config"
+      ]
     },
     "kiro": {
       "description": "Kiro CLI integration — command runner, settings parser, MCP server",
@@ -620,7 +674,9 @@
         "test/session-pr.test.ts",
         "test/review-create.test.ts"
       ],
-      "smokeIds": ["reviews"]
+      "smokeIds": [
+        "reviews"
+      ]
     },
     "branch-scans": {
       "description": "Branch scan creation and detail views",
@@ -636,7 +692,9 @@
         "test/scan.test.ts",
         "test/scans-repo.test.ts"
       ],
-      "smokeIds": ["branch-scans"]
+      "smokeIds": [
+        "branch-scans"
+      ]
     },
     "testing-module": {
       "description": "Tests module — test project management, script generation, and MCP tools",
@@ -681,7 +739,9 @@
         "test/resume-retry.test.ts",
         "test/testing-data-repo.test.ts"
       ],
-      "smokeIds": ["testing-module"]
+      "smokeIds": [
+        "testing-module"
+      ]
     },
     "api-access": {
       "description": "API access page — scope checkboxes and MCP section (UI; backend covered by api-tokens)",
@@ -690,7 +750,10 @@
         "web/src/styles/tokens.css"
       ],
       "tests": [],
-      "smokeIds": ["api-access", "api-tokens"]
+      "smokeIds": [
+        "api-access",
+        "api-tokens"
+      ]
     },
     "loop-specs": {
       "description": "Loop specifications for multi-agent orchestration",
@@ -731,7 +794,9 @@
         "test/kiro-acp.test.ts",
         "test/kiro-session.test.ts"
       ],
-      "smokeIds": ["engines"]
+      "smokeIds": [
+        "engines"
+      ]
     },
     "shell": {
       "description": "App shell — rail navigation, command palette, shortcuts, header, breadcrumb, dialogs",
@@ -754,7 +819,9 @@
       "tests": [
         "test/overlay-dismiss.test.ts"
       ],
-      "smokeIds": ["shell"]
+      "smokeIds": [
+        "shell"
+      ]
     },
     "theme": {
       "description": "Theme system — theme cycling, persistence, and custom CSS templates",
@@ -791,7 +858,23 @@
         "test/themes.test.ts",
         "test/themes-repo.test.ts"
       ],
-      "smokeIds": ["theme"]
+      "smokeIds": [
+        "theme"
+      ]
+    },
+    "feedback": {
+      "description": "Feedback from users: send, follow, admin inbox, link to a session and its pull request",
+      "sources": [
+        "server/feedback.ts",
+        "server/repositories/feedback.ts",
+        "server/repositories/feedback-sqlite.ts",
+        "server/repositories/feedback-dynamodb.ts",
+        "web/src/pages/Feedback.jsx"
+      ],
+      "tests": [
+        "test/feedback.test.ts"
+      ],
+      "smokeIds": []
     },
     "attachments": {
       "description": "AI attachments — file upload, preview, and picker for session context",
@@ -928,7 +1011,9 @@
         "web/src/styles/jira.css"
       ],
       "tests": [],
-      "smokeIds": ["tickets"]
+      "smokeIds": [
+        "tickets"
+      ]
     },
     "agent-runner": {
       "description": "AgentCore Runtime container for Claude runs: payload validation, shared tool policy and approvals (backend-only; no smoke section)",
@@ -976,9 +1061,338 @@
       ],
       "smokeIds": [],
       "note": "Backend-only. Tests exercise the installer logic (spawn mocks, path resolution, verification) without a running server."
+    },
+    "agent-runner-browser": {
+      "description": "Tests in agent-runner-browser.test.ts",
+      "sources": [
+        "agent-runner/src/browser-tools.ts"
+      ],
+      "tests": [
+        "test/agent-runner-browser.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "aws-env": {
+      "description": "Tests in aws-env.test.ts",
+      "sources": [
+        "kiro-runner/src/validate.ts",
+        "agent-runner/src/validate.ts"
+      ],
+      "tests": [
+        "test/aws-env.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "background-jobs": {
+      "description": "Background jobs: local setImmediate, Lambda self-invoke, inline fallback, and dispatch from /internal/events.",
+      "sources": [
+        "server/background-jobs.ts",
+        "server/scheduled-jobs.ts"
+      ],
+      "tests": [
+        "test/background-jobs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "browser-live-view": {
+      "description": "Tests in browser-live-view.test.ts",
+      "sources": [
+        "server/browser-live-view.ts"
+      ],
+      "tests": [
+        "test/browser-live-view.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "case-runs": {
+      "description": "Tests in case-runs.test.ts",
+      "sources": [
+        "server/agent/run-secrets.ts",
+        "server/testing/case-runs.ts"
+      ],
+      "tests": [
+        "test/case-runs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "claude-agentcore": {
+      "description": "Claude on AgentCore: event mapping, credential selection, errors, cancel.",
+      "sources": [
+        "server/agent/kiro-agentcore.ts",
+        "server/agent/claude-agentcore.ts",
+        "server/session-pr.ts",
+        "server/agent/types.ts"
+      ],
+      "tests": [
+        "test/claude-agentcore.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "create-inputs": {
+      "description": "Tests in create-inputs.test.ts",
+      "sources": [
+        "server/agent/runner-files.ts",
+        "server/create-ai.ts",
+        "server/repositories/credentials.ts"
+      ],
+      "tests": [
+        "test/create-inputs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "doc-templates-routes": {
+      "description": "Doc template routes: upload, list, make default, delete (repository-backed).",
+      "sources": [
+        "server/docgen.ts"
+      ],
+      "tests": [
+        "test/doc-templates-routes.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "durable-files": {
+      "description": "durable-files: files under DATA_DIR are mirrored to the storage backend (S3) only when STORAGE_BACKEND=s3,",
+      "sources": [
+        "server/storage-instance.ts",
+        "server/storage/index.ts",
+        "server/durable-files.ts"
+      ],
+      "tests": [
+        "test/durable-files.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "google-auth": {
+      "description": "Tests in google-auth.test.ts",
+      "sources": [
+        "server/google-auth.ts"
+      ],
+      "tests": [
+        "test/google-auth.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "google-workspace": {
+      "description": "Tests in google-workspace.test.ts",
+      "sources": [
+        "server/google-workspace.ts"
+      ],
+      "tests": [
+        "test/google-workspace.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "harness-safety-switches": {
+      "description": "Safety switches ported from the harness work (Phase 1, PRs 1.2 and 1.3):",
+      "sources": [
+        "server/agent/runner.ts"
+      ],
+      "tests": [
+        "test/harness-safety-switches.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "knowledge-answer": {
+      "description": "Tests in knowledge-answer.test.ts",
+      "sources": [
+        "server/knowledge-answer.ts",
+        "server/knowledge-kb.ts"
+      ],
+      "tests": [
+        "test/knowledge-answer.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "knowledge-embeddings": {
+      "description": "Tests in knowledge-embeddings.test.ts",
+      "sources": [
+        "server/knowledge-embeddings.ts"
+      ],
+      "tests": [
+        "test/knowledge-embeddings.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "learn-routes": {
+      "description": "Learn routes: docs, quizzes (take + attempts) and learning paths with progress, on the learn repository.",
+      "sources": [
+        "server/repositories/learn.ts"
+      ],
+      "tests": [
+        "test/learn-routes.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "loop-iteration": {
+      "description": "Loop iteration logic: status parsing, stagnation (harness PR 1.7: loose matching, window of at least 2), the stop",
+      "sources": [
+        "server/loop-iteration.ts"
+      ],
+      "tests": [
+        "test/loop-iteration.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "loop-session": {
+      "description": "Loop sessions: after a run ends, the session either starts the next run or stops with the reason (workflows/loop.ts).",
+      "sources": [
+        "server/repositories/sessions.ts",
+        "server/workflows/loop.ts"
+      ],
+      "tests": [
+        "test/loop-session.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "mcp-core-tools": {
+      "description": "MCP core tools on the repositories: sessions, transcripts, reviews, scans.",
+      "sources": [
+        "server/repositories/reviews.ts",
+        "server/repositories/git-repos.ts"
+      ],
+      "tests": [
+        "test/mcp-core-tools.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "public-url": {
+      "description": "Tests in public-url.test.ts",
+      "sources": [
+        "server/public-url.ts"
+      ],
+      "tests": [
+        "test/public-url.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "realtime-token": {
+      "description": "Tests in realtime-token.test.ts",
+      "sources": [
+        "server/realtime.ts"
+      ],
+      "tests": [
+        "test/realtime-token.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-checks": {
+      "description": "Check steps for loop sessions (server/agent/runner-checks.ts): what a check command may be (harness PR 1.2) and how",
+      "sources": [
+        "server/agent/runner-checks.ts"
+      ],
+      "tests": [
+        "test/runner-checks.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-files": {
+      "description": "Files an agent writes in an AgentCore microVM come back to the portal: collect -> chunked events -> receiver.",
+      "sources": [
+        "server/agent/runner-files.ts",
+        "server/agent/kiro-agentcore.ts",
+        "server/agent/claude-agentcore.ts",
+        "server/agent/types.ts"
+      ],
+      "tests": [
+        "test/runner-files.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-inspect": {
+      "description": "Tests in runner-inspect.test.ts",
+      "sources": [
+        "server/agent/runner-inspect.ts"
+      ],
+      "tests": [
+        "test/runner-inspect.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-mcp": {
+      "description": "Tests in runner-mcp.test.ts",
+      "sources": [
+        "server/agent/runner-mcp.ts",
+        "server/agent/runner-integrations.ts"
+      ],
+      "tests": [
+        "test/runner-mcp.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-repos": {
+      "description": "Tests in runner-repos.test.ts",
+      "sources": [
+        "server/agent/runner-repos.ts"
+      ],
+      "tests": [
+        "test/runner-repos.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-snapshot": {
+      "description": "Tests in runner-snapshot.test.ts",
+      "sources": [
+        "server/agent/runner-snapshot.ts"
+      ],
+      "tests": [
+        "test/runner-snapshot.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "scheduled-jobs": {
+      "description": "Tests in scheduled-jobs.test.ts",
+      "sources": [
+        "server/scheduled-jobs.ts"
+      ],
+      "tests": [
+        "test/scheduled-jobs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "session-files-mirror": {
+      "description": "Session files are mirrored to the storage backend (S3 on Lambda) and come back after the local disk is lost.",
+      "sources": [
+        "server/storage-instance.ts",
+        "server/storage/index.ts"
+      ],
+      "tests": [
+        "test/session-files-mirror.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "slash-commands": {
+      "description": "Portal-handled slash commands (/tools, /rename, /cost, /status, /help) in an engine session:",
+      "sources": [
+        "test/slash-commands.test.ts"
+      ],
+      "tests": [
+        "test/slash-commands.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "testing-trace-steps": {
+      "description": "Trace helpers (startStep / finishStep / getCaseSetTrace / getGenerationTrace) on both backends.",
+      "sources": [
+        "server/repositories/testing-data-sqlite.ts",
+        "server/repositories/testing-data.ts",
+        "server/testing/trace.ts"
+      ],
+      "tests": [
+        "test/testing-trace-steps.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "ticket-sort": {
+      "description": "Tests in ticket-sort.test.ts",
+      "sources": [
+        "web/src/lib/ticketSort.js"
+      ],
+      "tests": [
+        "test/ticket-sort.test.ts"
+      ],
+      "smokeIds": []
     }
   },
-
   "shared": [
     {
       "description": "Core server infrastructure — database, HTTP routing, utilities, entry point, event bus",
@@ -1040,7 +1454,15 @@
         "server/agent/pricing.ts",
         "server/agent/types.ts"
       ],
-      "affects": ["sessions", "workflows", "reviews", "branch-scans", "testing-module", "engines", "ide"],
+      "affects": [
+        "sessions",
+        "workflows",
+        "reviews",
+        "branch-scans",
+        "testing-module",
+        "engines",
+        "ide"
+      ],
       "rationale": "The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. browser-headless.ts rewrites Playwright MCP entries; browser-manager.ts provides the per-session live browser. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction."
     },
     {
@@ -1076,7 +1498,11 @@
       "sources": [
         "web/src/lib/useRunStream.js"
       ],
-      "affects": ["sessions", "reviews", "testing-module"],
+      "affects": [
+        "sessions",
+        "reviews",
+        "testing-module"
+      ],
       "part": "ui",
       "rationale": "Only features that display real-time agent output use this hook. Web-only file — affects only UI parts."
     },
@@ -1085,7 +1511,24 @@
       "sources": [
         "web/src/lib/useOverlayDismiss.js"
       ],
-      "affects": ["shell", "sessions", "ide", "testing-module", "dashboard", "diagrams", "generated-docs", "presentations", "vault", "credentials", "loop-specs", "reviews", "branch-scans", "settings", "theme", "attachments"],
+      "affects": [
+        "shell",
+        "sessions",
+        "ide",
+        "testing-module",
+        "dashboard",
+        "diagrams",
+        "generated-docs",
+        "presentations",
+        "vault",
+        "credentials",
+        "loop-specs",
+        "reviews",
+        "branch-scans",
+        "settings",
+        "theme",
+        "attachments"
+      ],
       "part": "ui",
       "rationale": "Used by every dialog and modal overlay in the app. Web-only file — affects only UI parts."
     },
@@ -1094,7 +1537,11 @@
       "sources": [
         "web/src/lib/sanitize.js"
       ],
-      "affects": ["sessions", "attachments", "knowledge"],
+      "affects": [
+        "sessions",
+        "attachments",
+        "knowledge"
+      ],
       "part": "ui",
       "rationale": "Used in SessionLive.jsx (sessions) and FilePreviewModal.jsx (attachments, knowledge) to sanitize marked output. Web-only — affects only UI parts."
     },
@@ -1103,7 +1550,11 @@
       "sources": [
         "web/src/components/FilePreviewModal.jsx"
       ],
-      "affects": ["attachments", "sessions", "knowledge"],
+      "affects": [
+        "attachments",
+        "sessions",
+        "knowledge"
+      ],
       "part": "ui",
       "rationale": "Used for previewing uploaded files in sessions, knowledge base documents, and the attachments picker. Web-only file — affects only UI parts."
     },
@@ -1114,7 +1565,11 @@
         "web/src/lib/awsRegions.js",
         "web/src/components/AwsRegionSelect.jsx"
       ],
-      "affects": ["credentials", "aws-accounts", "bedrock-sso"],
+      "affects": [
+        "credentials",
+        "aws-accounts",
+        "bedrock-sso"
+      ],
       "part": "ui",
       "rationale": "Specific to AWS credential entry, account management, and Bedrock SSO flows. Web-only files — affects only UI parts."
     },
@@ -1123,7 +1578,11 @@
       "sources": [
         "web/src/components/DeviceCodeBox.jsx"
       ],
-      "affects": ["bedrock-sso", "auth", "credentials"],
+      "affects": [
+        "bedrock-sso",
+        "auth",
+        "credentials"
+      ],
       "part": "ui",
       "rationale": "Used in Bedrock SSO device-code flow, auth provider setup, and the Kiro IAM Identity Center re-authentication flow in the Credentials page. Web-only file — affects only UI parts."
     },
@@ -1132,7 +1591,11 @@
       "sources": [
         "web/src/components/WorkspaceHeader.jsx"
       ],
-      "affects": ["workspaces", "sessions", "ide"],
+      "affects": [
+        "workspaces",
+        "sessions",
+        "ide"
+      ],
       "part": "ui",
       "rationale": "Rendered in workspace and session views. Web-only file — affects only UI parts."
     },
@@ -1141,7 +1604,12 @@
       "sources": [
         "web/src/lib/router.js"
       ],
-      "affects": ["shell", "projects", "auth", "setup"],
+      "affects": [
+        "shell",
+        "projects",
+        "auth",
+        "setup"
+      ],
       "part": "ui",
       "rationale": "Route changes affect navigation in shell, project listing, post-login redirect, and setup wizard steps. Web-only file — affects only UI parts."
     },
@@ -1150,7 +1618,11 @@
       "sources": [
         "web/src/lib/templates/index.js"
       ],
-      "affects": ["knowledge", "generated-docs", "presentations"],
+      "affects": [
+        "knowledge",
+        "generated-docs",
+        "presentations"
+      ],
       "part": "ui",
       "rationale": "Document and presentation templates used across knowledge base, generated docs, and presentations. Web-only file — affects only UI parts."
     },
@@ -1159,7 +1631,9 @@
       "sources": [
         "shared/themes"
       ],
-      "affects": ["theme"],
+      "affects": [
+        "theme"
+      ],
       "part": "ui",
       "rationale": "Theme palette CSS definitions — web-only. Changes affect only the theme module's UI part."
     },
@@ -1169,7 +1643,13 @@
         "server/repositories/backend.ts",
         "server/repositories/dynamo-client.ts"
       ],
-      "affects": ["api-tokens", "auth", "permissions", "audit", "delegation"],
+      "affects": [
+        "api-tokens",
+        "auth",
+        "permissions",
+        "audit",
+        "delegation"
+      ],
       "part": "backend",
       "rationale": "Shared backend selector (usesDynamoDb), DynamoDB client singleton, and attribute-marshaling helpers used by all DynamoDB repository implementations. Backend only — not compiled into the web bundle."
     }
