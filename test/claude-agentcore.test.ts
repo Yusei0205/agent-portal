@@ -6,7 +6,8 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts';
 import type { AgentCoreSSEEvent } from '../server/agent/kiro-agentcore.ts';
-import { runClaudeViaAgentCore, anthropicAuthFromEnv } from '../server/agent/claude-agentcore.ts';
+import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from '../server/agent/claude-agentcore.ts';
+import { _setSessionPrDeps } from '../server/session-pr.ts';
 import type { RunContext } from '../server/agent/types.ts';
 
 type Ev = Record<string, unknown>;
@@ -115,5 +116,39 @@ describe('runClaudeViaAgentCore', () => {
     } finally {
       delete process.env.PORTAL_RUN_TIMEOUT_MS;
     }
+  });
+});
+
+describe('repo-changes events', () => {
+  afterEach(() => { _setAgentCoreInvokerOverride(null); _setSessionPrDeps(); });
+
+  it('are collected on the result and not forwarded as run events; no repositories means no finalizeCheck', async () => {
+    let sent: Record<string, unknown> = {};
+    _setAgentCoreInvokerOverride(async function* (_a, _s, payload) {
+      sent = payload;
+      yield { type: 'repo-changes', repo: 'api', base: 'main', commits: 2, files: 5 } as unknown as AgentCoreSSEEvent;
+      yield { type: 'result', stop_reason: 'end_turn', metrics: {} } as unknown as AgentCoreSSEEvent;
+    });
+    const { ctx, events } = makeCtx();
+    const res = await runClaudeViaAgentCore(ctx, opts());
+    assert.deepEqual(res.repoChanges, [{ repo: 'api', base: 'main', commits: 2, files: 5 }]);
+    assert.ok(!events.some((e) => e.type === 'repo-changes'));
+    assert.equal(sent.finalizeCheck, undefined);
+  });
+
+  it('submitRepoChanges calls the pull request step once, skips an empty list, and swallows its failure', async () => {
+    const calls: unknown[][] = [];
+    let fail = false;
+    _setSessionPrDeps({ onRepoChanges: async (c, ch) => { calls.push([c, ch]); if (fail) throw new Error('boom'); } });
+    const run = { runId: 'r1', workflowId: 'w1', projectId: 'p1', credentialOwnerId: 'u1' };
+    await submitRepoChanges(run, null, []);
+    await submitRepoChanges(run, null, undefined);
+    assert.equal(calls.length, 0);
+    const ch = [{ repo: 'api', base: 'main', commits: 1, files: 1 }];
+    await submitRepoChanges(run, 'creator', ch);
+    assert.deepEqual(calls[0], [{ workflowId: 'w1', runId: 'r1', projectId: 'p1', userId: 'u1', engine: 'claude-code' }, ch]);
+    fail = true;
+    await submitRepoChanges(run, null, ch);
+    assert.equal(calls.length, 2);
   });
 });

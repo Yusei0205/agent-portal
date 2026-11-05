@@ -16,6 +16,9 @@ import { now, generateId } from '../server/util.ts';
 import { setConfig, type Config } from '../server/config.ts';
 import { _setAgentCoreInvokerOverride, runKiroViaAgentCore } from '../server/agent/kiro-agentcore.ts';
 import { runClaudeViaAgentCore, bedrockModelFor, _setCancelGraceMs } from '../server/agent/claude-agentcore-bedrock.ts';
+import { runClaudeViaAgentCore as runUserCredential, submitRepoChanges } from '../server/agent/claude-agentcore.ts';
+import { _setSessionPrDeps } from '../server/session-pr.ts';
+import { setPullRequestSettings } from '../server/project-settings-pr.ts';
 import { inputFingerprint } from '../server/agent/tool-policy.ts';
 import type { RunContext, AgentRun } from '../server/agent/types.ts';
 
@@ -281,5 +284,117 @@ describe('Kiro on AgentCore — approvals and trust', () => {
     const ans = rt.calls.find((c) => c.payload.mode === 'answer')!;
     assert.equal(ans.payload.decision, 'allow');
     assert.equal(ans.sessionId, run.sessionId);
+  });
+});
+
+describe('Claude on AgentCore — repository changes go to the pull request step', () => {
+  before(() => { createTestDb(); setConfig(makeConfig()); });
+  after(async () => { _setAgentCoreInvokerOverride(null); _setSessionPrDeps(); await cleanup(); });
+
+  const spec = [{ name: 'api', url: 'https://example.invalid/api.git' }] as never;
+  const change = { type: 'repo-changes', repo: 'api', base: 'main', commits: 1, files: 2 };
+  const done = { type: 'result', stop_reason: 'end_turn', costUsd: 0.01, metrics: { inputTokens: 10, outputTokens: 2 } };
+
+  function stub(events: Array<Record<string, unknown>>, onCall?: (p: Record<string, unknown>) => void) {
+    const sent: Array<Record<string, unknown>> = [];
+    _setAgentCoreInvokerOverride(async function* (_a, _s, payload) { sent.push(payload); onCall?.(payload); for (const e of events) yield e as never; });
+    return sent;
+  }
+  function hook(fail = false) {
+    const calls: Array<{ ctx: Record<string, unknown>; changes: unknown[] }> = [];
+    _setSessionPrDeps({ onRepoChanges: async (c, ch) => { calls.push({ ctx: c as never, changes: ch }); if (fail) throw new Error('push exploded'); } });
+    return calls;
+  }
+  const withRepos = (o: ReturnType<typeof makeCtx>) => { o.ctx.run.runnerRepos = spec; return o; };
+
+  it('harness path: asks for the check only with repositories and a reason, and hands the changes over', async () => {
+    const ids = makeRun('claude-code');
+    const c = withRepos(makeCtx(ids, { engine: 'claude-code' }));
+    const sent = stub([change, { type: 'assistant-text', text: 'ok' }, done]);
+    const calls = hook();
+    await runClaudeViaAgentCore(c.ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, true, 'setting is on by default');
+    assert.deepEqual(sent[0]!.repos, spec);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0]!.changes, [{ repo: 'api', base: 'main', commits: 1, files: 2 }]);
+    assert.deepEqual(calls[0]!.ctx, { workflowId: ids.workflowId, runId: ids.runId, projectId: ids.projectId, userId: null, engine: 'claude-code' });
+    assert.ok(!c.events.some((e) => e.type === 'repo-changes'), 'not a run event');
+    assert.ok(c.events.some((e) => e.type === 'run-complete'));
+  });
+
+  it('harness path: the flag follows the project setting and the ticket; no repositories means no flag', async () => {
+    const ids = makeRun('claude-code');
+    await setPullRequestSettings(ids.projectId, { openPullRequests: false });
+    let sent = stub([done]);
+    await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, undefined, 'setting off and no ticket');
+
+    getDb().prepare('UPDATE p6_workflows SET jira_key = ? WHERE id = ?').run('RLP-1', ids.workflowId);
+    sent = stub([done]);
+    await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, true, 'a ticket asks even with the setting off');
+
+    const other = makeRun('claude-code');
+    sent = stub([done]);
+    await runClaudeViaAgentCore(makeCtx(other, { engine: 'claude-code' }).ctx, ARN);
+    assert.equal(sent[0]!.finalizeCheck, undefined, 'no repositories');
+    assert.equal(sent[0]!.repos, undefined);
+  });
+
+  it('harness path: no changes means no call; a failure in the step does not fail the run; a cancelled run does not call it', async () => {
+    const ids = makeRun('claude-code');
+    stub([done]);
+    let calls = hook();
+    await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(calls.length, 0);
+
+    stub([change, done]);
+    calls = hook(true);
+    const summary = await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+    assert.equal(calls.length, 1);
+    assert.equal(summary, 'Run complete.');
+
+    const c = withRepos(makeCtx(ids, { engine: 'claude-code' }));
+    stub([change, done], () => c.ctrl.abort());
+    calls = hook();
+    await assert.rejects(() => runClaudeViaAgentCore(c.ctx, ARN), (e: Error) => e.name === 'AbortError');
+    assert.equal(calls.length, 0);
+  });
+
+  it('user-credential path: flag in the payload, changes on the result, and the same handover', async () => {
+    const ids = makeRun('claude-code');
+    const c = makeCtx(ids, { engine: 'claude-code' });
+    const sent = stub([change, { type: 'assistant-text', text: 'hi' }, done]);
+    const calls = hook();
+    const o = { runtimeArn: ARN, runId: ids.runId, prompt: 'x', model: 'claude-sonnet-4-5', auth: { kind: 'api_key' as const, secret: 'k' }, trustTools: false, repos: spec };
+    const res = await runUserCredential(c.ctx, o);
+    assert.equal(sent[0]!.finalizeCheck, true);
+    assert.deepEqual(res.repoChanges, [{ repo: 'api', base: 'main', commits: 1, files: 2 }]);
+    assert.ok(!c.events.some((e) => e.type === 'repo-changes'));
+    assert.equal(calls.length, 0, 'the caller hands them over after it has recorded the spend');
+
+    await submitRepoChanges(c.ctx.run, null, res.repoChanges);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.ctx.engine, 'claude-code');
+
+    await setPullRequestSettings(ids.projectId, { openPullRequests: false });
+    const sent2 = stub([done]);
+    const res2 = await runUserCredential(makeCtx(ids, { engine: 'claude-code' }).ctx, o);
+    assert.equal(sent2[0]!.finalizeCheck, undefined);
+    assert.equal(res2.repoChanges, undefined);
+    const sent3 = stub([done]);
+    await runUserCredential(makeCtx(ids, { engine: 'claude-code' }).ctx, { ...o, repos: undefined });
+    assert.equal(sent3[0]!.finalizeCheck, undefined);
+  });
+
+  it('submitRepoChanges never throws and does not wait past its bound', async () => {
+    const ids = makeRun('claude-code');
+    const run = makeCtx(ids, { engine: 'claude-code' }).ctx.run;
+    hook(true);
+    await submitRepoChanges(run, null, [{ repo: 'api', base: 'main', commits: 1, files: 1 }]);
+    _setSessionPrDeps({ onRepoChanges: () => new Promise<void>(() => {}) });
+    const t0 = Date.now();
+    await submitRepoChanges(run, null, [{ repo: 'api', base: 'main', commits: 1, files: 1 }], 50);
+    assert.ok(Date.now() - t0 < 2000);
   });
 });
