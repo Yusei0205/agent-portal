@@ -92,13 +92,13 @@ describe('POST /api/projects/:id/workflows', () => {
     assert.equal(wf.iteration_count, 0);
   });
 
-  it('rejects when goal is missing', async () => {
+  it('opens a session without a goal (it waits for the first message)', async () => {
     const r = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, {
       method: 'POST',
       body: { engine: 'demo' },
       cookie,
     });
-    assert.equal(r.status, 400);
+    assert.equal(r.status, 201);
   });
 
   it('rejects when goal exceeds 8000 characters', async () => {
