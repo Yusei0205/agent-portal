@@ -59,6 +59,11 @@ export function IdeAgents({ workflowId, projectId }) {
         event.parentWorkflowId === workflowId
       ) {
         load();
+      } else if (
+        event.type === 'run.event' && event.workflowId === workflowId &&
+        typeof event.eventType === 'string' && event.eventType.startsWith('subagent-')
+      ) {
+        load();
       }
     });
     return unsub;
@@ -108,6 +113,11 @@ export function IdeAgents({ workflowId, projectId }) {
               <span className="badge" style={{ fontSize: '0.66rem', marginLeft: 4, flexShrink: 0 }}>delegated</span>
             )}
           </div>
+          {agent.description && (
+            <div className="ide-agent-item-meta" style={{ opacity: 0.8 }} title={agent.description}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.description}</span>
+            </div>
+          )}
           <div className="ide-agent-item-meta">
             <span>{statusLabel(agent.status)}</span>
             {agent.startedAt && <span>{formatRelative(agent.startedAt)}</span>}

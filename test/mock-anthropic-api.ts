@@ -2,11 +2,14 @@
 // Each request that offers tools (the agent's own turns) takes the next step of the script:
 //   { tool: 'Bash', input: { command: 'ls' } }   the model calls a tool
 //   { text: 'done' }                              the model ends its turn
+//   (req) => ({ tool: ..., input: ... })          a step worked out from the request it answers
 // Requests without tools (titles, summaries) get a short text reply. Every request is kept in `requests`.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 export type MockStep = { tool: string; input?: Record<string, unknown> } | { text: string; tool?: undefined; input?: undefined };
+/** A script step: fixed, or worked out from the request it answers (e.g. a tool name the engine offers). */
+export type MockScriptStep = MockStep | ((req: MockRequest) => MockStep);
 export interface MockRequest {
   method: string;
   url: string;
@@ -14,8 +17,8 @@ export interface MockRequest {
   body: any;
 }
 
-export async function startMockAnthropic({ script = [{ text: 'done' }] as MockStep[], usage = { input_tokens: 100, output_tokens: 20 } } = {}) {
-  let steps: MockStep[] = script;
+export async function startMockAnthropic({ script = [{ text: 'done' }] as MockScriptStep[], usage = { input_tokens: 100, output_tokens: 20 } } = {}) {
+  let steps: MockScriptStep[] = script;
   let step = 0;
   const requests: MockRequest[] = [];
 
@@ -30,14 +33,16 @@ export async function startMockAnthropic({ script = [{ text: 'done' }] as MockSt
         /* not JSON */
       }
       const url = req.url ?? '/';
-      requests.push({ method: req.method ?? 'GET', url, headers: req.headers, body });
+      const request: MockRequest = { method: req.method ?? 'GET', url, headers: req.headers, body };
+      requests.push(request);
       if (!url.startsWith('/v1/messages') || url.startsWith('/v1/messages/count_tokens')) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(url.includes('count_tokens') ? { input_tokens: 100 } : {}));
         return;
       }
       const offersTools = Array.isArray(body.tools) && body.tools.length > 0;
-      const s: MockStep = offersTools ? steps[Math.min(step++, steps.length - 1)] : { text: 'ok' };
+      const next: MockScriptStep = offersTools ? steps[Math.min(step++, steps.length - 1)] : { text: 'ok' };
+      const s: MockStep = typeof next === 'function' ? next(request) : next;
       type Block = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> } | { type: 'text'; text: string };
       const blocks: Block[] = s.tool
         ? [{ type: 'tool_use', id: `toolu_${Math.random().toString(36).slice(2, 12)}`, name: s.tool, input: s.input ?? {} }]
@@ -82,7 +87,7 @@ export async function startMockAnthropic({ script = [{ text: 'done' }] as MockSt
     url: `http://127.0.0.1:${port}`,
     requests,
     /** Start a new script for the next run. */
-    setScript(next: MockStep[]) {
+    setScript(next: MockScriptStep[]) {
       steps = next;
       step = 0;
     },
