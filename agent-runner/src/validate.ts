@@ -103,6 +103,8 @@ export interface InvocationPayload {
   snapshot?: unknown;
   /** true = only put the repositories in place (no prompt, no agent run). */
   prepareOnly?: boolean;
+  /** true = at the end of the run, report which cloned repositories have changes (read-only; nothing is committed or pushed). */
+  finalizeCheck?: boolean;
   portal?: PortalConfig;
   /** Anthropic credential; without it the run uses Bedrock through the execution role. */
   auth?: AuthConfig;
@@ -135,7 +137,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'portal', 'auth', 'trustTools', 'browser', 'policy', 'approvals',
+  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'policy', 'approvals',
   'agents', 'delegation',
 ]);
 const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
@@ -206,6 +208,9 @@ export function validatePayload(raw: unknown): ValidationResult {
   // prompt — required string
   if (obj.prepareOnly !== undefined && typeof obj.prepareOnly !== 'boolean') {
     return err('"prepareOnly" must be a boolean');
+  }
+  if (obj.finalizeCheck !== undefined && typeof obj.finalizeCheck !== 'boolean') {
+    return err('"finalizeCheck" must be a boolean');
   }
   if (obj.prepareOnly === true && obj.prompt === undefined) {
     obj.prompt = 'prepare';
@@ -394,6 +399,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       ...(Array.isArray(obj.inputFiles) && obj.inputFiles.length <= 30 ? { inputFiles: obj.inputFiles as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(obj.prepareOnly === true ? { prepareOnly: true } : {}),
+      ...(obj.finalizeCheck === true ? { finalizeCheck: true } : {}),
       portal,
       auth,
       trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,
@@ -402,6 +408,123 @@ export function validatePayload(raw: unknown): ValidationResult {
       approvals,
       agents,
       delegation,
+    },
+  };
+}
+
+// ── Finalize request (mode "finalize") ───────────────────────────────────────
+
+/** Push one new branch for a repository the session changed. See docs/superpowers/plans/2026-11-05-auto-pr-contracts.md, C. */
+export interface FinalizeRequest {
+  repo: string;
+  base: string;
+  branch: string;
+  message: string;
+  protectedBranches: string[];
+  defaultBranch?: string;
+  identity?: { name: string; email: string };
+  /** The repository's git settings (same rules as the `env` of a repo in a run's `repos`). */
+  env?: Record<string, string>;
+  snapshot?: unknown;
+}
+
+export type FinalizeValidation = { ok: true; request: FinalizeRequest } | ValidationErr;
+
+const FINALIZE_FIELDS = new Set(['mode', 'repo', 'base', 'branch', 'message', 'protectedBranches', 'defaultBranch', 'identity', 'env', 'snapshot']);
+const REPO_FOLDER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** Same pattern as a repository's branch in shared/runner-repos.ts (parseRunnerRepos). */
+const REPO_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+/** Same rules as the env of a repository in shared/runner-repos.ts: git settings only, http.* options or an empty credential.helper. */
+const GIT_ENV_KEY = /^(GIT_TERMINAL_PROMPT|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d{1,2}|GIT_CONFIG_VALUE_\d{1,2})$/;
+const MAX_PROTECTED = 50;
+const MAX_PROTECTED_LEN = 200;
+const MAX_FINALIZE_MESSAGE = 2_000;
+
+function validGitEnv(raw: unknown): Record<string, string> | string {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return '"env" must be an object';
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > 24) return '"env" has too many entries';
+  const env: Record<string, string> = {};
+  for (const [k, v] of entries) {
+    if (!GIT_ENV_KEY.test(k)) return `"env" may only hold git settings (got "${k}")`;
+    if (typeof v !== 'string' || v.length > 8_000) return `"env" "${k}" must be a string`;
+    env[k] = v;
+  }
+  for (const [k, v] of Object.entries(env)) {
+    const m = /^GIT_CONFIG_KEY_(\d{1,2})$/.exec(k);
+    if (!m) continue;
+    const isHttp = /^http\./i.test(v);
+    const isEmptyHelper = v === 'credential.helper' && env[`GIT_CONFIG_VALUE_${m[1]}`] === '';
+    if (!isHttp && !isEmptyHelper) return '"env" may only set http.* git options';
+  }
+  return env;
+}
+
+function shortLine(v: unknown, max: number): v is string {
+  return typeof v === 'string' && v.trim().length > 0 && v.length <= max && !/[\r\n\0]/.test(v);
+}
+
+export function validateFinalizeRequest(raw: unknown): FinalizeValidation {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return err('Payload must be a JSON object');
+  const obj = raw as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!FINALIZE_FIELDS.has(key)) return err(`Unknown field: "${key}"`);
+  }
+  if (obj.mode !== 'finalize') return err('"mode" must be "finalize"');
+  if (typeof obj.repo !== 'string' || !REPO_FOLDER.test(obj.repo) || obj.repo.length > 100 || obj.repo.includes('..')) {
+    return err('"repo" must be a repository folder name');
+  }
+  for (const f of ['base', 'branch'] as const) {
+    const v = obj[f];
+    if (typeof v !== 'string' || !REPO_BRANCH.test(v) || v.includes('..')) return err(`"${f}" is not a valid branch name`);
+  }
+  if (typeof obj.message !== 'string' || !obj.message.trim() || obj.message.length > MAX_FINALIZE_MESSAGE || obj.message.includes('\0')) {
+    return err(`"message" must be a non-empty string of at most ${MAX_FINALIZE_MESSAGE} characters`);
+  }
+  let protectedBranches: string[] = [];
+  if (obj.protectedBranches !== undefined) {
+    const p = obj.protectedBranches;
+    if (!Array.isArray(p) || p.length > MAX_PROTECTED || p.some((x) => typeof x !== 'string' || x.length > MAX_PROTECTED_LEN)) {
+      return err(`"protectedBranches" must be an array of at most ${MAX_PROTECTED} strings of at most ${MAX_PROTECTED_LEN} characters`);
+    }
+    protectedBranches = p as string[];
+  }
+  let defaultBranch: string | undefined;
+  if (obj.defaultBranch !== undefined) {
+    const d = obj.defaultBranch;
+    if (typeof d !== 'string' || !REPO_BRANCH.test(d) || d.includes('..')) return err('"defaultBranch" is not a valid branch name');
+    defaultBranch = d;
+  }
+  let identity: { name: string; email: string } | undefined;
+  if (obj.identity !== undefined) {
+    const i = obj.identity;
+    if (typeof i !== 'object' || i === null || Array.isArray(i)) return err('"identity" must be an object');
+    const o = i as Record<string, unknown>;
+    for (const key of Object.keys(o)) {
+      if (key !== 'name' && key !== 'email') return err(`Unknown field in "identity": "${key}"`);
+    }
+    if (!shortLine(o.name, 200)) return err('"identity.name" must be a short string');
+    if (!shortLine(o.email, 200)) return err('"identity.email" must be a short string');
+    identity = { name: o.name.trim(), email: o.email.trim() };
+  }
+  let env: Record<string, string> | undefined;
+  if (obj.env !== undefined) {
+    const e = validGitEnv(obj.env);
+    if (typeof e === 'string') return err(e);
+    env = e;
+  }
+  return {
+    ok: true,
+    request: {
+      repo: obj.repo,
+      base: obj.base as string,
+      branch: obj.branch as string,
+      message: obj.message,
+      protectedBranches,
+      ...(defaultBranch ? { defaultBranch } : {}),
+      ...(identity ? { identity } : {}),
+      ...(env ? { env } : {}),
+      ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
     },
   };
 }

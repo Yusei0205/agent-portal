@@ -9,6 +9,7 @@ import { test, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validatePayload,
+  validateFinalizeRequest,
   DEFAULT_MODEL,
   DEFAULT_MAX_TURNS,
   DEFAULT_MAX_BUDGET_USD,
@@ -359,5 +360,104 @@ describe('validatePayload — delegation', () => {
     fail({ ...minPayload(), delegation: true }, '"delegation"');
     fail({ ...minPayload(), delegation: { via: 'mcp' } }, '"delegation.via"');
     fail({ ...minPayload(), delegation: { via: 'portal', url: 'https://x' } }, 'Unknown field');
+  });
+});
+
+// ── finalizeCheck and the finalize mode ──────────────────────────────────────
+
+describe('validatePayload — finalizeCheck', () => {
+  test('a boolean is accepted and kept only when true', () => {
+    assert.equal(ok({ ...minPayload(), finalizeCheck: true }).finalizeCheck, true);
+    assert.equal(ok({ ...minPayload(), finalizeCheck: false }).finalizeCheck, undefined);
+    assert.equal(ok(minPayload()).finalizeCheck, undefined);
+  });
+  test('anything but a boolean is rejected', () => {
+    fail({ ...minPayload(), finalizeCheck: 'yes' }, '"finalizeCheck"');
+    fail({ ...minPayload(), finalizeCheck: 1 }, '"finalizeCheck"');
+  });
+});
+
+describe('validateFinalizeRequest', () => {
+  const good = (): Record<string, unknown> => ({
+    mode: 'finalize', repo: 'web', base: 'main', branch: 'portal/RLP-12-fix-login', message: 'RLP-12: Fix login redirect',
+    protectedBranches: ['main', 'master', 'release/*'], defaultBranch: 'main',
+    identity: { name: 'Agent Portal', email: 'agent-portal@users.noreply.invalid' },
+    env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: 'Authorization: Basic abc' },
+    snapshot: { putUrl: 'https://b.s3.amazonaws.com/p', getUrl: 'https://b.s3.amazonaws.com/g' },
+  });
+  const okF = (raw: unknown) => {
+    const r = validateFinalizeRequest(raw);
+    assert.ok(r.ok, r.ok ? '' : r.error);
+    if (!r.ok) throw new Error('x');
+    return r.request;
+  };
+  const failF = (raw: unknown, frag: string) => {
+    const r = validateFinalizeRequest(raw);
+    assert.ok(!r.ok, 'expected an error');
+    if (!r.ok) assert.ok(r.error.includes(frag), `"${r.error}" lacks "${frag}"`);
+  };
+
+  test('a complete request is accepted', () => {
+    const q = okF(good());
+    assert.equal(q.repo, 'web');
+    assert.equal(q.branch, 'portal/RLP-12-fix-login');
+    assert.deepEqual(q.protectedBranches, ['main', 'master', 'release/*']);
+    assert.equal(q.identity?.name, 'Agent Portal');
+    assert.equal(q.env?.GIT_CONFIG_COUNT, '1');
+    assert.ok(q.snapshot);
+  });
+  test('only the required fields are needed', () => {
+    const { repo, base, branch, message } = good() as Record<string, string>;
+    const q = okF({ mode: 'finalize', repo, base, branch, message });
+    assert.deepEqual(q.protectedBranches, []);
+    assert.equal(q.env, undefined);
+  });
+  test('unknown fields are rejected', () => {
+    failF({ ...good(), force: true }, 'Unknown field');
+    failF({ ...good(), identity: { name: 'a', email: 'b', x: 1 } }, 'Unknown field in "identity"');
+  });
+  test('the mode must be finalize', () => {
+    failF({ ...good(), mode: 'run' }, '"mode"');
+  });
+  test('repo must be a folder name', () => {
+    for (const repo of ['', '../x', 'a/b', '.hidden', 5]) failF({ ...good(), repo }, '"repo"');
+  });
+  test('branch and base are checked like repository branches', () => {
+    for (const branch of ['', '-rf', 'a..b', 'a b', 'x'.repeat(201), 7]) failF({ ...good(), branch }, '"branch"');
+    for (const base of ['', '--upload-pack=x', 'a..b', 3]) failF({ ...good(), base }, '"base"');
+  });
+  test('message is a non-empty string of at most 2000 characters', () => {
+    failF({ ...good(), message: '' }, '"message"');
+    failF({ ...good(), message: 'm'.repeat(2001) }, '"message"');
+    failF({ ...good(), message: 4 }, '"message"');
+  });
+  test('protectedBranches: array of at most 50 strings of at most 200 characters', () => {
+    failF({ ...good(), protectedBranches: 'main' }, '"protectedBranches"');
+    failF({ ...good(), protectedBranches: Array.from({ length: 51 }, (_, i) => 'b' + i) }, '"protectedBranches"');
+    failF({ ...good(), protectedBranches: ['x'.repeat(201)] }, '"protectedBranches"');
+    failF({ ...good(), protectedBranches: [1] }, '"protectedBranches"');
+    assert.equal(okF({ ...good(), protectedBranches: Array.from({ length: 50 }, (_, i) => 'b' + i) }).protectedBranches.length, 50);
+  });
+  test('defaultBranch is a valid branch name', () => {
+    failF({ ...good(), defaultBranch: 'a..b' }, '"defaultBranch"');
+    failF({ ...good(), defaultBranch: 9 }, '"defaultBranch"');
+  });
+  test('identity name and email are short strings without line breaks', () => {
+    failF({ ...good(), identity: { name: '', email: 'a@b' } }, '"identity.name"');
+    failF({ ...good(), identity: { name: 'n'.repeat(201), email: 'a@b' } }, '"identity.name"');
+    failF({ ...good(), identity: { name: 'n', email: 'a\nb' } }, '"identity.email"');
+    failF({ ...good(), identity: { name: 'n' } }, '"identity.email"');
+    failF({ ...good(), identity: 'me' }, '"identity"');
+  });
+  test('env may only hold git settings, and only http.* options or an empty credential.helper', () => {
+    failF({ ...good(), env: { PATH: '/evil' } }, '"env"');
+    failF({ ...good(), env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.sshCommand', GIT_CONFIG_VALUE_0: 'x' } }, 'http.*');
+    failF({ ...good(), env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '!sh' } }, 'http.*');
+    failF({ ...good(), env: { GIT_CONFIG_COUNT: 1 } }, '"env"');
+    failF({ ...good(), env: ['a'] }, '"env"');
+    okF({ ...good(), env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '' } });
+  });
+  test('snapshot is passed through like a normal run', () => {
+    assert.equal(okF({ ...good(), snapshot: undefined }).snapshot, undefined);
   });
 });
