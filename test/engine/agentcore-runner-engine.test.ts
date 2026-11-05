@@ -40,6 +40,10 @@ interface Runner { name: RunnerName; port: number; workRoot: string; proc: Child
 let api: Awaited<ReturnType<typeof startMockAnthropic>>;
 let dataDir = '';
 let workRoot = '';
+/** A local bare repository standing in for the remote, and the git config that maps a fake https URL onto it. */
+let bareRemote = '';
+let gitConfigGlobal = '';
+const FAKE_REPO_URL = 'https://git.example.test/proj.git';
 const runners = {} as Record<RunnerName, Runner>;
 /** Runs the tests start themselves: their sessions (`<runId>-<uuid>`) go to runner A. */
 const ownRuns = new Set<string>();
@@ -162,6 +166,9 @@ async function startRunner(name: RunnerName): Promise<Runner> {
       // Tool search on, as the engine has it for first-party hosts (it is off for a stand-in API
       // by default): MCP tools are then deferred behind it unless their server is always loaded.
       ENABLE_TOOL_SEARCH: 'true',
+      // The pull-request tests clone a fake https URL that git maps onto a local bare repository.
+      GIT_CONFIG_GLOBAL: gitConfigGlobal,
+      RUNNER_WORKSPACE_DIR: path.join(runner.workRoot, 'persist'),
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -270,6 +277,32 @@ function handOff(input: Record<string, unknown>, seen: { tool: string; offered: 
   };
 }
 
+/** A bare repository with one commit on main, and a git config that makes FAKE_REPO_URL point at it. */
+function makeBareRemote(): void {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-e2e-remote-'));
+  bareRemote = path.join(base, 'proj.git');
+  const seed = path.join(base, 'seed');
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=Seed', '-c', 'user.email=seed@example.test', '-c', 'commit.gpgsign=false', ...args], { cwd, stdio: 'pipe' });
+  fs.mkdirSync(seed, { recursive: true });
+  git(base, 'init', '--bare', '-b', 'main', bareRemote);
+  git(seed, 'init', '-b', 'main');
+  fs.writeFileSync(path.join(seed, 'README.md'), '# proj\n');
+  git(seed, 'add', '-A');
+  git(seed, 'commit', '-m', 'seed');
+  git(seed, 'push', bareRemote, 'main');
+  gitConfigGlobal = path.join(base, 'gitconfig');
+  fs.writeFileSync(gitConfigGlobal, `[url "${bareRemote.replace(/\\/g, '/')}"]\n\tinsteadOf = ${FAKE_REPO_URL}\n`);
+}
+
+/** Calls the runner like the portal does and collects the events of the reply (runner A takes sessions of ownRuns). */
+async function invokeRunner(sessionId: string, payload: Record<string, unknown>): Promise<Array<Record<string, unknown>>> {
+  const events: Array<Record<string, unknown>> = [];
+  for await (const ev of localInvoker(ARN, sessionId, payload)) events.push(ev as Record<string, unknown>);
+  return events;
+}
+
+const remoteBranches = (): string[] => execFileSync('git', ['--git-dir', bareRemote, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
+
 /** Replies by who asks, each from its own list: the main agent or the file-writer agent. */
 function byAgent(main: MockScriptStep[], agent: MockScriptStep[]): MockScriptStep {
   let m = 0;
@@ -292,6 +325,7 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
     execFileSync(process.execPath, [path.join(RUNNER, 'build.mjs')], { stdio: 'ignore' }); // copies shared/ portal modules
     api = await startMockAnthropic();
     workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-e2e-work-'));
+    makeBareRemote();
     runners.A = await startRunner('A');
     runners.B = await startRunner('B');
     _setAgentCoreInvokerOverride(localInvoker as never);
@@ -536,5 +570,98 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
     }
     assert.equal(await idle(runners.B), 'Healthy', 'runner B is idle again');
     assert.equal(await idle(runners.A), 'Healthy', 'runner A is idle again');
+  });
+
+  describe('pull requests: repository changes at run end, and the finalize mode', () => {
+    const PR_RUN = 'prtest';
+    ownRuns.add(PR_RUN);
+    const session = (): string => `${PR_RUN}-${generateId()}`;
+    const runPayload = (name: string, finalizeCheck: boolean) => ({
+      runId: `run-${generateId()}`, prompt: 'Make the change', maxTurns: 6,
+      repos: [{ name, url: FAKE_REPO_URL }],
+      ...(finalizeCheck ? { finalizeCheck: true } : {}),
+    });
+    const editedSession = session();
+
+    it('a run that edited a cloned repository reports exactly one repo-changes event', { timeout: 200_000 }, async () => {
+      api.setScript([
+        { tool: 'Bash', input: { command: 'echo changed >> repos/edited/README.md', description: 'Edit the readme' } },
+        { text: 'Done.' },
+      ]);
+      const events = await invokeRunner(editedSession, runPayload('edited', true));
+      assert.ok(events.some((e) => e.type === 'result'), logs());
+      const changes = events.filter((e) => e.type === 'repo-changes');
+      assert.equal(changes.length, 1, JSON.stringify(events.map((e) => e.type)) + logs());
+      assert.deepEqual(changes[0], { type: 'repo-changes', repo: 'edited', base: 'main', commits: 0, files: 1 });
+      assert.ok(events.findIndex((e) => e.type === 'repo-changes') < events.findIndex((e) => e.type === 'result'), 'before the final result');
+      assert.deepEqual(remoteBranches(), ['main'], 'a normal run pushes nothing');
+    });
+
+    it('a run that left the repository untouched reports nothing', { timeout: 200_000 }, async () => {
+      api.setScript([{ text: 'Nothing to change.' }]);
+      const events = await invokeRunner(session(), runPayload('untouched', true));
+      assert.ok(events.some((e) => e.type === 'result'), logs());
+      assert.equal(events.filter((e) => e.type === 'repo-changes').length, 0);
+    });
+
+    it('without finalizeCheck an edited repository is not reported', { timeout: 200_000 }, async () => {
+      api.setScript([
+        { tool: 'Bash', input: { command: 'echo changed >> repos/quiet/README.md', description: 'Edit the readme' } },
+        { text: 'Done.' },
+      ]);
+      const events = await invokeRunner(session(), runPayload('quiet', false));
+      assert.ok(events.some((e) => e.type === 'result'), logs());
+      assert.equal(events.filter((e) => e.type === 'repo-changes').length, 0);
+    });
+
+    it('finalize pushes the changes as a new branch; the remote gets it and main is untouched', { timeout: 200_000 }, async () => {
+      const mainBefore = execFileSync('git', ['--git-dir', bareRemote, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+      const events = await invokeRunner(editedSession, {
+        mode: 'finalize', repo: 'edited', base: 'main', branch: 'portal/RLP-12-fix-login', message: 'RLP-12: Fix login redirect',
+        protectedBranches: ['main', 'master', 'release/*'], defaultBranch: 'main',
+        identity: { name: 'Agent Portal', email: 'agent-portal@users.noreply.invalid' },
+      });
+      const pushed = events.filter((e) => e.type === 'repo-pushed');
+      assert.equal(pushed.length, 1, JSON.stringify(events) + logs());
+      assert.equal(pushed[0].error, undefined, String(pushed[0].error));
+      assert.match(String(pushed[0].sha), /^[0-9a-f]{40}$/);
+      assert.equal(pushed[0].branch, 'portal/RLP-12-fix-login');
+      assert.ok(remoteBranches().includes('portal/RLP-12-fix-login'), remoteBranches().join(','));
+      const remoteSha = execFileSync('git', ['--git-dir', bareRemote, 'rev-parse', 'portal/RLP-12-fix-login'], { encoding: 'utf8' }).trim();
+      assert.equal(remoteSha, pushed[0].sha);
+      assert.equal(execFileSync('git', ['--git-dir', bareRemote, 'rev-parse', 'main'], { encoding: 'utf8' }).trim(), mainBefore, 'main did not move');
+      const subject = execFileSync('git', ['--git-dir', bareRemote, 'log', '-1', '--format=%s|%an', remoteSha], { encoding: 'utf8' }).trim();
+      assert.equal(subject, 'RLP-12: Fix login redirect|Agent Portal');
+      assert.equal(await idle(runners.A), 'Healthy');
+    });
+
+    it('finalize refuses a protected branch name and pushes nothing', { timeout: 200_000 }, async () => {
+      const before = remoteBranches();
+      for (const branch of ['main', 'release/2.0']) {
+        const events = await invokeRunner(editedSession, {
+          mode: 'finalize', repo: 'edited', base: 'main', branch, message: 'x',
+          protectedBranches: ['master', 'release/*'], defaultBranch: 'main',
+        });
+        const pushed = events.filter((e) => e.type === 'repo-pushed');
+        assert.equal(pushed.length, 1);
+        assert.match(String(pushed[0].error), /protected branch/);
+        assert.equal(pushed[0].sha, undefined);
+      }
+      assert.deepEqual(remoteBranches(), before);
+    });
+
+    it('finalize on a machine without the workspace reports that the saved files are gone', { timeout: 200_000 }, async () => {
+      const events = await invokeRunner(`other-${generateId()}`, {
+        mode: 'finalize', repo: 'edited', base: 'main', branch: 'portal/x', message: 'x', protectedBranches: [],
+      });
+      const pushed = events.filter((e) => e.type === 'repo-pushed');
+      assert.equal(pushed.length, 1, JSON.stringify(events));
+      assert.equal(pushed[0].error, "The session's saved files could not be restored, so nothing was pushed.");
+    });
+
+    it('finalize rejects a malformed request', { timeout: 60_000 }, async () => {
+      await assert.rejects(invokeRunner(session(), { mode: 'finalize', repo: '../x', base: 'main', branch: 'b', message: 'm' }), /HTTP 400/);
+      await assert.rejects(invokeRunner(session(), { mode: 'finalize', repo: 'edited', base: 'main', branch: 'b', message: 'm', env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.sshCommand', GIT_CONFIG_VALUE_0: 'x' } }), /HTTP 400/);
+    });
   });
 });

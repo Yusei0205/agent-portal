@@ -62,6 +62,7 @@ import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
+import { reportRepoChanges } from './finalize.js';
 import { fileURLToPath } from 'node:url';
 import {
   type InvocationPayload,
@@ -786,6 +787,11 @@ export async function runInvocation(
     } catch (e) {
       emit({ type: 'check-result', ok: false, ranAt: new Date().toISOString(), steps: [{ step: 'checks', ok: false, output: String((e as Error)?.message ?? e).slice(0, 500), durationMs: 0, required: true }] });
     }
+  }
+
+  // Pull requests: say which cloned repositories changed (read-only; nothing is committed or pushed here).
+  if (payload.finalizeCheck && payload.repos?.length) {
+    try { await reportRepoChanges(payload.repos, workDir, emit); } catch { /* best effort */ }
   }
 
   // Send back the files the agent wrote (documents, images, spreadsheets...), within size limits.
