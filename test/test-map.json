@@ -931,6 +931,7 @@
       ],
       "tests": [
         "test/agent-runner-validation.test.ts",
+        "test/runner-snapshot-finalize.test.ts",
         "test/agentcore-harness.test.ts",
         "test/pricing.test.ts"
       ],
