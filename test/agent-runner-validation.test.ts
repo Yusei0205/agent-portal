@@ -9,12 +9,12 @@ import { test, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validatePayload,
-  validateFinalizeRequest,
   DEFAULT_MODEL,
   DEFAULT_MAX_TURNS,
   DEFAULT_MAX_BUDGET_USD,
   DEFAULT_MAX_MINUTES,
 } from '../agent-runner/src/validate.ts';
+import { validateFinalizeRequest } from '../server/agent/runner-finalize-run.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

@@ -12,6 +12,7 @@
  *   kiro-run   — materialise temp IdC DB, run `kiro-cli chat --no-interactive`
  *   kiro-login — run `kiro-cli login --use-device-flow`, stream verification URL/code
  *   kiro-list-models — run `kiro-cli chat --list-models --format json` with the user's token
+ *   finalize   — push one new branch for a repository the session changed (pull requests)
  */
 
 import http from 'node:http';
@@ -21,6 +22,7 @@ import { runKiroRun, kiroWorkspaceRoot } from './run.js';
 import { runKiroLogin } from './login.js';
 import { runKiroListModels } from './list-models.js';
 import { runPrepareRepos } from './prepare.js';
+import { validateFinalizeRequest, runFinalize } from '../shared/runner-finalize-run.js';
 import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
@@ -114,6 +116,34 @@ const server = http.createServer(async (req, res) => {
       res.end(`data: ${JSON.stringify(reply)}
 
 `);
+      return;
+    }
+    // ── Push one new branch for a repository the session changed (the "open a pull request" feature) ──
+    if (body && typeof body === 'object' && !Array.isArray(body) && body.mode === 'finalize') {
+      const v = validateFinalizeRequest(body);
+      if (!v.ok) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: v.error }));
+        return;
+      }
+      await cancelSnapshot();
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+      const send = (event: Record<string, unknown>): void => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`); };
+      if (runActive) {
+        send({ type: 'repo-pushed', repo: v.request.repo, branch: v.request.branch, error: 'A run is still in progress in this session; try again when it has finished.' });
+        res.end();
+        return;
+      }
+      setRunActive(true);
+      try {
+        // The warm session's work folder holds repos/ while it lives; otherwise they are in (or restored to) the persistent folder.
+        await runFinalize(v.request, { workDir: kiroWorkspaceRoot(), persist: usablePersistRoot(PERSIST_ROOT) }, send);
+      } finally {
+        setRunActive(false);
+        if (!res.writableEnded) res.end();
+        // The branch and commit changed the repository: save the workspace again once the reply is out.
+        saveWorkspaceInBackground(parseSnapshot(v.request.snapshot), kiroWorkspaceRoot() ?? usablePersistRoot(PERSIST_ROOT), () => { lastStatusChange = Math.floor(Date.now() / 1000); });
+      }
       return;
     }
     if (body && typeof body === 'object' && !Array.isArray(body) && (body.mode === 'answer' || body.mode === 'cancel')) {
