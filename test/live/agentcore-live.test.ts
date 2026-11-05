@@ -8,8 +8,10 @@
  *
  * Costs a few cents of Bedrock (Claude Haiku 4.5) per run.
  *
- * The last two tests check several agents and several sessions: a run hands work to a project
- * agent inside its microVM, and a run starts a child session that runs in a microVM of its own.
+ * The last tests check several agents and several sessions: a run hands work to a project
+ * agent inside its microVM, a run starts a child session that runs in a microVM of its own, and
+ * the Agent pack's lead agent gets a task done through its specialists
+ * (PORTAL_LIVE_LEAD_MODEL picks that test's Bedrock model; Haiku 4.5 by default).
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -23,6 +25,8 @@ import { setConfig, type Config } from '../../server/config.ts';
 import { runClaudeViaAgentCore } from '../../server/agent/claude-agentcore-bedrock.ts';
 import { agentCoreControlSender } from '../../server/agent/kiro-agentcore.ts';
 import type { RunContext, AgentRun } from '../../server/agent/types.ts';
+// @ts-expect-error — plain JS module without type declarations
+import { claudePackFiles, PACK_AGENTS } from '../../web/src/lib/agent-pack/index.js';
 
 const ARN = process.env.PORTAL_LIVE_CLAUDE_RUNTIME_ARN ?? '';
 const HAIKU = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
@@ -31,14 +35,15 @@ type Ev = { type: string; payload: Record<string, unknown> };
 
 let liveDataDir = '';
 
-function setup(opts: { rules?: unknown[]; trusted?: boolean; answer?: 'allow' | 'deny'; budget?: number; goal: string; ownerId?: string }) {
+function setup(opts: { rules?: unknown[]; trusted?: boolean; answer?: 'allow' | 'deny'; budget?: number; goal: string; ownerId?: string; model?: string }) {
+  const model = opts.model ?? HAIKU;
   const db = getDb();
   const projectId = `proj-${generateId()}`;
   const workflowId = `wf-${generateId()}`;
   const runId = `run-${generateId()}`;
   db.prepare('INSERT INTO projects (id, name, slug, created_at) VALUES (?, ?, ?, ?)').run(projectId, 'Live', `live-${projectId.slice(5, 13)}`, now());
   db.prepare(`INSERT INTO p6_workflows (id, project_id, goal, status, engine, trust_tools, repo_ids, model, created_by, created_at, updated_at)
-    VALUES (?, ?, 'live', 'running', 'claude-code', ?, '[]', ?, ?, ?, ?)`).run(workflowId, projectId, opts.trusted ? 1 : 0, HAIKU, opts.ownerId ?? null, now(), now());
+    VALUES (?, ?, 'live', 'running', 'claude-code', ?, '[]', ?, ?, ?, ?)`).run(workflowId, projectId, opts.trusted ? 1 : 0, model, opts.ownerId ?? null, now(), now());
   if (opts.budget != null) db.prepare('UPDATE p6_workflows SET budget_usd = ? WHERE id = ?').run(opts.budget, workflowId);
   db.prepare(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?, ?, 'running', ?)`).run(runId, workflowId, now());
   const events: Ev[] = [];
@@ -48,7 +53,7 @@ function setup(opts: { rules?: unknown[]; trusted?: boolean; answer?: 'allow' | 
     runId, workflowId, projectId, goal: opts.goal, kind: null, engine: 'claude-code',
     trusted: opts.trusted ?? false, dataDir: '', workDir: os.tmpdir(), repoIds: [], leadAgent: null,
     permissions: { rules: (opts.rules ?? []) as never, toolRules: [], projectId },
-    credentialId: null, credentialOwnerId: opts.ownerId ?? null, model: HAIKU, engineSessionId: null,
+    credentialId: null, credentialOwnerId: opts.ownerId ?? null, model, engineSessionId: null,
   };
   const started = Date.now();
   const ctx: RunContext = {
@@ -209,5 +214,38 @@ describe('LIVE: Claude runs in AgentCore with the harness', { skip: ARN ? false 
       if (prev === undefined) delete process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
       else process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = prev;
     }
+  });
+
+  it('the Agent pack\'s lead agent gets a two-part task done through its specialists', async () => {
+    const t = setup({
+      trusted: true,
+      model: process.env.PORTAL_LIVE_LEAD_MODEL || HAIKU,
+      goal: 'Create calc.py with a Python function add(a, b) that returns a + b, and a README.md that explains in two or three lines how to use it. '
+        + 'Hand each part to the right specialist, check their results, then reply with the word DONE and the files that were created.',
+    });
+    // Agent setup › Add agent pack, as the project's own .claude folder.
+    for (const f of claudePackFiles() as Array<{ path: string; content: string }>) {
+      fs.mkdirSync(path.dirname(path.join(t.projectDir, '.claude', f.path)), { recursive: true });
+      fs.writeFileSync(path.join(t.projectDir, '.claude', f.path), f.content);
+    }
+    t.ctx.run.leadAgent = 'lead-orchestrator';
+    const summary = await runClaudeViaAgentCore(t.ctx, ARN);
+    report('lead-agent', t);
+
+    const specialists = (PACK_AGENTS as Array<{ name: string; lead?: boolean }>).filter((a) => !a.lead).map((a) => a.name);
+    const started = t.events.filter((e) => e.type === 'subagent-started').map((e) => e.payload);
+    const ended = t.events.filter((e) => e.type === 'subagent-finished' || e.type === 'subagent-failed').map((e): Record<string, unknown> => ({ ...e.payload, type: e.type }));
+    const work = t.events.filter((e) => e.type === 'tool-start').map((e) => ({ agent: e.payload.agent ?? 'lead', tool: e.payload.toolName, input: String(e.payload.toolInput) }));
+    console.log(`LIVE ${JSON.stringify({ test: 'lead-agent-detail', started, ended, work: work.map((w) => ({ ...w, input: w.input.slice(-120) })), summary })}`);
+
+    assert.ok(t.events.some((e) => e.type === 'status' && /Lead agent: lead-orchestrator/.test(String(e.payload.text))), 'the lead agent runs the session');
+    const used = [...new Set(started.map((s) => String(s.name)))];
+    assert.ok(used.some((n) => specialists.includes(n)), `the lead handed work to its specialists; started: ${used.join(', ') || 'none'}`);
+    assert.ok(ended.length >= started.length && ended.every((e) => e.type === 'subagent-finished' && e.status === 'completed'), `every specialist finished: ${JSON.stringify(ended)}`);
+    const wrote = (file: string) => work.some((w) => specialists.includes(String(w.agent)) && /Write|Edit|Bash|PowerShell/.test(String(w.tool)) && w.input.includes(file));
+    assert.ok(wrote('calc.py'), `a specialist wrote calc.py: ${JSON.stringify(work)}`);
+    assert.ok(wrote('README'), `a specialist wrote the README: ${JSON.stringify(work)}`);
+    // Streamed pieces of the answer may arrive on separate lines on this path (a known display issue).
+    assert.match(summary.replace(/\s+/g, ''), /DONE/i, 'the lead reports back');
   });
 });

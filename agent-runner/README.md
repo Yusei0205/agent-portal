@@ -133,6 +133,7 @@ docker rm agent-runner-test
   "agents": {
     "<name>": "(optional) the project's subagents: { description, prompt, tools?, disallowedTools?, model?, maxTurns? }"
   },
+  "agent":      "(optional) the session's lead agent: one of agents, run as the main conversation",
   "delegation": "(optional) { via: 'portal' }: offers the delegate_session tool (child sessions)"
 }
 ```
@@ -147,9 +148,13 @@ Unknown top-level fields are rejected with HTTP 400.
   - A subagent's tool calls go through the same permission check as the main agent's.
   - Its `model` may be `haiku`, `sonnet`, `opus` or `inherit`. On Bedrock these aliases map to
     the global profiles the runtime role allows (`ANTHROPIC_DEFAULT_*_MODEL`).
-- **Child sessions.** With `delegation`, Claude gets `mcp__portal__delegate_session` (task, title):
+- **Lead agent.** `agent` runs one of `agents` as the main conversation (the Agent SDK's `agent`
+  option): its prompt, tools and model. It hands work to the other agents with the Agent tool.
+- **Child sessions.** With `delegation`, Claude gets `mcp__portal__delegate_session` (task, title,
+  and, when the run has `agents`, `agent`: which of them runs the child session as its lead agent):
   1. A call is streamed as a `delegate-request`.
   2. The portal starts a child session, which is its own run, so on AgentCore its own microVM.
+     The child's lead agent is the named one, or else the parent's.
   3. The portal answers with a mode `answer` invocation. The answer is bound to the call's
      fingerprint, like an approval.
   4. When the child finishes, the portal posts its result to the parent session.
@@ -175,7 +180,7 @@ Event types:
 | `tool-result`   | `name`, `output` (truncated to 500 chars)      |
 | `tool-blocked`  | `toolName`, `toolInput`, `reason`, `agent`     |
 | `approval-request` | `requestId`, `toolName`, `input`, `inputHash`, `expiresAt`: a person must answer |
-| `delegate-request` | `requestId`, `input.{task,title}`, `inputHash`: the portal starts a child session and answers |
+| `delegate-request` | `requestId`, `input.{task,title,agent}`, `inputHash`: the portal starts a child session and answers |
 | `subagent-started` | `id`, `name`, `description`, `background`, `depth`, `parentId`/`parentName` (nested) |
 | `subagent-finished` / `subagent-failed` | `id`, `name`, `status`, `summary`, `tokens`, `toolUses`, `durationMs` |
 | `result`        | `runId`, `stop_reason`, `metrics`              |

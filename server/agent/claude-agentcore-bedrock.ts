@@ -207,8 +207,12 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const send = agentCoreControlSender(runtimeArn, sessionId);
   const relay = new ApprovalRelay(ctx, send, run.permissions.rules);
   const delegations = new DelegationRelay(ctx, send, run.permissions.rules, canDelegate
-    ? async (task, title) => {
-      const child = await createChildSession(run.workflowId, run.credentialOwnerId!, task, { title });
+    ? async (task, title, agent) => {
+      // The child's lead agent: one this run has (the child loads the same owner and project agents).
+      if (agent && !Object.prototype.hasOwnProperty.call(agents, agent)) {
+        throw new Error(`there is no agent "${agent}" in this session (available: ${Object.keys(agents).join(', ') || 'none'})`);
+      }
+      const child = await createChildSession(run.workflowId, run.credentialOwnerId!, task, { title, ...(agent ? { leadAgent: agent } : {}) });
       return { id: String(child.id), title: String(child.title || task.slice(0, 60)) };
     }
     : null);

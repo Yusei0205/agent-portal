@@ -228,6 +228,43 @@ describe('Claude on AgentCore — several agents and several sessions', () => {
     assert.equal(childCount(), 0, 'no child session was started');
   });
 
+  it('delegate_session can name the agent that runs the child session; an agent the run does not have starts nothing', async () => {
+    const s = await newSession('Ship the release');
+    fs.mkdirSync(path.join(s.projectDir, '.claude', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(s.projectDir, '.claude', 'agents', 'tech-writer.md'),
+      '---\nname: tech-writer\ndescription: Writes documentation\n---\nYou write documentation.\n');
+    const leadOf = (id: string) => one<{ lead_agent: string | null }>('SELECT lead_agent FROM p6_workflows WHERE id = ?', id)?.lead_agent ?? '';
+    const ask = async (input: Record<string, unknown>) => {
+      let answer: Record<string, unknown> = {};
+      const rt = fakeRuntime(async function* (waitAnswer) {
+        yield { type: 'delegate-request', requestId: `r-${generateId()}`, input, inputHash: inputFingerprint('delegate_session', input) };
+        answer = await waitAnswer();
+        yield RESULT;
+      });
+      await runClaudeViaAgentCore(makeCtx(s).ctx, ARN);
+      return { answer, run: rt.calls.find((c) => c.mode === 'run')! };
+    };
+
+    const named = await ask({ task: 'Write the release notes', title: 'Notes', agent: 'tech-writer' });
+    assert.ok(named.run.agents && 'tech-writer' in (named.run.agents as Record<string, unknown>), 'the runner knows the agent');
+    assert.equal(named.answer.decision, 'allow', String(named.answer.message));
+    const child = JSON.parse(String(named.answer.message)) as { childWorkflowId: string };
+    assert.equal(leadOf(child.childWorkflowId), 'tech-writer', 'the named agent runs the child session');
+
+    const plain = await ask({ task: 'Check the changelog' });
+    assert.equal(plain.answer.decision, 'allow', String(plain.answer.message));
+    assert.equal(leadOf(JSON.parse(String(plain.answer.message)).childWorkflowId), leadOf(s.workflowId), 'without one, the parent\'s lead agent');
+
+    const before = all('SELECT id FROM p6_workflows WHERE parent_id = ?', s.workflowId).length;
+    const unknown = await ask({ task: 'Do part two', agent: 'nobody' });
+    assert.equal(unknown.answer.decision, 'deny');
+    assert.match(String(unknown.answer.message), /no agent "nobody".*tech-writer/);
+    const malformed = await ask({ task: 'Do part two', agent: 'not an agent name!' });
+    assert.equal(malformed.answer.decision, 'deny');
+    assert.match(String(malformed.answer.message), /did not match/);
+    assert.equal(all('SELECT id FROM p6_workflows WHERE parent_id = ?', s.workflowId).length, before, 'neither started a session');
+  });
+
   it('a session without an owner cannot start child sessions', async () => {
     const s = await newSession();
     const rt = fakeRuntime(async function* () { yield RESULT; });

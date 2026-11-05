@@ -27,6 +27,8 @@ import { _setAgentCoreInvokerOverride } from '../../server/agent/kiro-agentcore.
 import { runClaudeViaAgentCore } from '../../server/agent/claude-agentcore-bedrock.ts';
 import type { RunContext, AgentRun } from '../../server/agent/types.ts';
 import { startMockAnthropic, type MockRequest, type MockScriptStep } from '../mock-anthropic-api.ts';
+// @ts-expect-error — plain JS module without type declarations
+import { claudePackFiles, PACK_AGENTS } from '../../web/src/lib/agent-pack/index.js';
 
 const ROOT = process.cwd();
 const RUNNER = path.join(ROOT, 'agent-runner');
@@ -303,6 +305,21 @@ async function invokeRunner(sessionId: string, payload: Record<string, unknown>)
 
 const remoteBranches = (): string[] => execFileSync('git', ['--git-dir', bareRemote, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
 
+/** Installs the Agent pack (Agent setup › Add agent pack) as the project's .claude/agents and .claude/skills. */
+function writeAgentPack(slug: string): void {
+  const root = path.join(dataDir, 'projects', slug, '.claude');
+  for (const f of claudePackFiles() as Array<{ path: string; content: string }>) {
+    fs.mkdirSync(path.dirname(path.join(root, f.path)), { recursive: true });
+    fs.writeFileSync(path.join(root, f.path), f.content);
+  }
+}
+
+/** Lines from the pack's prompts, to tell the lead's requests from a specialist's. */
+const LEAD_MARKER = 'You are the lead engineer and orchestrator';
+const BACKEND_MARKER = 'You are a senior backend engineer';
+const PACK_SPECIALISTS = (PACK_AGENTS as Array<{ name: string; lead?: boolean }>).filter((a) => !a.lead).map((a) => a.name);
+const systemOf = (q: MockRequest | undefined): string => JSON.stringify(q?.body?.system ?? '');
+
 /** Replies by who asks, each from its own list: the main agent or the file-writer agent. */
 function byAgent(main: MockScriptStep[], agent: MockScriptStep[]): MockScriptStep {
   let m = 0;
@@ -500,6 +517,147 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
     assert.ok(lines.every((l) => l.startsWith('MAIN')), `the answer is the main agent's text only: ${summary}`);
     assert.ok(t.events.some((e) => e.type === 'assistant-text' && e.payload.agent === 'file-writer'), 'the agent\'s text is shown under its name');
     assert.equal(await ping(), 'Healthy', 'the runner is idle again');
+  });
+
+  it('the Agent pack\'s lead agent runs the session and gets the task done through a specialist', { timeout: 200_000 }, async () => {
+    const t = setup({ rules: askBash, answer: 'allow' });
+    writeAgentPack(t.slug);
+    t.ctx.run.leadAgent = 'lead-orchestrator';
+
+    const isLead = (q: MockRequest) => systemOf(q).includes(LEAD_MARKER);
+    const isBackend = (q: MockRequest) => systemOf(q).includes(BACKEND_MARKER);
+    const unexpected: MockRequest[] = [];
+    const seen = { tool: '', offered: [] as string[] };
+    const lead: MockScriptStep[] = [
+      (req) => {
+        seen.offered = toolsOf(req).map((x) => String(x.name));
+        seen.tool = seen.offered.find((n) => n === 'Agent' || n === 'Task') ?? '';
+        return {
+          tool: seen.tool || 'Agent',
+          input: {
+            subagent_type: 'backend-engineer',
+            description: 'Write the service file',
+            prompt: 'Goal: a service stub. Task: write backend-ok to service.txt. Done when: service.txt exists. Report back: what you wrote.',
+            run_in_background: false,
+          },
+        };
+      },
+      { text: 'LEAD ANSWER: backend-engineer wrote service.txt; checked and done.' },
+    ];
+    const backend: MockScriptStep[] = [
+      { tool: 'Bash', input: { command: 'echo backend-ok > service.txt', description: 'Write the service file' } },
+      { text: 'BACKEND REPORT: wrote service.txt (backend-ok).' },
+    ];
+    let l = 0;
+    let b = 0;
+    const from = api.requests.length;
+    api.setScript([(req) => {
+      const next = isBackend(req) ? backend[Math.min(b++, backend.length - 1)]
+        : isLead(req) ? lead[Math.min(l++, lead.length - 1)]
+          : (unexpected.push(req), { text: 'UNEXPECTED: a request from neither the lead nor the specialist.' });
+      return typeof next === 'function' ? next(req) : next;
+    }]);
+    const summary = await runClaudeViaAgentCore(t.ctx, ARN);
+    const mine = api.requests.slice(from);
+
+    // The lead agent runs the main conversation: its prompt and its preloaded skill reach the model.
+    assert.equal(unexpected.length, 0, `every request came from the lead or the specialist; others: ${unexpected.map((q) => systemOf(q).slice(0, 200)).join(' | ')}\n${logs()}`);
+    const leadRequests = mine.filter(isLead);
+    assert.ok(leadRequests.length >= 2, `the lead asked the model at least twice\n${logs()}`);
+    assert.match(systemOf(leadRequests[0]), /# Skill: task-delegation/, 'the lead\'s skill is preloaded into its prompt');
+    assert.ok(t.events.some((e) => e.type === 'status' && /Lead agent: lead-orchestrator/.test(String(e.payload.text))), 'the session says which lead agent runs it');
+
+    // The lead can hand work to every specialist with the Agent tool (the engine lists the agent
+    // types in a reminder in the conversation, not in the tool's description).
+    assert.ok(seen.tool, `the lead is offered the Agent tool; offered: ${seen.offered.join(', ')}`);
+    const reminder = JSON.stringify(leadRequests[0].body?.messages ?? '').split('Available agent types for the Agent tool:')[1] ?? '';
+    assert.ok(reminder, 'the lead is told which agents it can start');
+    for (const name of PACK_SPECIALISTS) assert.ok(reminder.includes(`- ${name}:`), `the lead can start ${name}`);
+
+    // The specialist got its own prompt and skills, and every tool (its file has no tools line).
+    const backendRequests = mine.filter(isBackend);
+    assert.ok(backendRequests.length > 0, `backend-engineer asked the model\n${logs()}`);
+    assert.match(systemOf(backendRequests[0]), /# Skill: backend-python[\s\S]*# Skill: api-design/, 'its skills are preloaded');
+    assert.ok(toolsOf(backendRequests[0]).some((x) => x.name === 'Bash'), 'it may run commands');
+
+    // Its command went through the run's "ask" rule, was approved and ran in the microVM.
+    assert.deepEqual(t.asked.map((a) => [a.toolName, a.input.command]), [['Bash', 'echo backend-ok > service.txt']], 'a person was asked about the specialist\'s command');
+    assert.deepEqual(findFiles(runners.A.workRoot, 'service.txt').map((x) => x.trim()), ['backend-ok'], 'the specialist\'s work is done');
+
+    // The portal shows the hand-off under the specialist's name; the answer is the lead's.
+    const started = t.events.find((e) => e.type === 'subagent-started');
+    assert.equal(started?.payload.name, 'backend-engineer', `the specialist's start reached the portal: ${JSON.stringify(started?.payload)}`);
+    const finished = t.events.find((e) => e.type === 'subagent-finished');
+    assert.equal(finished?.payload.status, 'completed');
+    assert.equal(finished?.payload.summary, 'BACKEND REPORT: wrote service.txt (backend-ok).', 'its report is shown under its name');
+    const bash = t.events.find((e) => e.type === 'tool-start' && e.payload.toolName === 'Bash');
+    assert.equal(bash?.payload.agent, 'backend-engineer', 'its tool call carries its name');
+    assert.equal(summary, 'LEAD ANSWER: backend-engineer wrote service.txt; checked and done.', 'the session\'s answer is the lead\'s');
+    assert.equal(await ping(), 'Healthy', 'the runner is idle again');
+  });
+
+  it('the lead agent hands a whole piece to a specialist as a child session, which that specialist runs', { timeout: 300_000 }, async () => {
+    const userId = `user-${generateId()}`;
+    getDb().prepare('INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(userId, `${userId}@example.com`, 'E2E owner', 'not-a-password-hash', now());
+    const t = setup({ owner: userId, answer: 'allow' });
+    writeAgentPack(t.slug);
+    t.ctx.run.leadAgent = 'lead-orchestrator';
+
+    const savedArn = process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
+    process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = ARN;
+    try {
+      const WRITER_MARKER = 'You are a senior technical writer';
+      const childAnswer = 'CHILD (tech-writer): the user guide is written.';
+      const task = 'Write the user guide for the calc module. Done when: docs/guide.md explains add(a, b).';
+      const isWriter = (q: MockRequest) => systemOf(q).includes(WRITER_MARKER);
+      const from = api.requests.length;
+      let delegateSchema: Record<string, unknown> | undefined;
+      let l = 0;
+      api.setScript([(req) => {
+        if (isWriter(req)) return { text: childAnswer };
+        if (l++ === 0) {
+          delegateSchema = toolsOf(req).find((x) => x.name === DELEGATE)?.input_schema as Record<string, unknown> | undefined;
+          return { tool: DELEGATE, input: { task, title: 'User guide', agent: 'tech-writer' } };
+        }
+        return { text: 'LEAD: tech-writer is writing the guide in its own session.' };
+      }]);
+      await runClaudeViaAgentCore(t.ctx, ARN);
+
+      // The lead may name any of the session's agents.
+      const agentField = (delegateSchema?.properties as Record<string, { enum?: string[] }> | undefined)?.agent;
+      assert.ok(agentField, `delegate_session has an "agent" field: ${JSON.stringify(delegateSchema)}`);
+      for (const name of PACK_SPECIALISTS) assert.ok(agentField.enum?.includes(name), `it offers ${name}`);
+
+      // The child session belongs to this one and is run by the named specialist.
+      const child = await waitFor(
+        () => one<{ id: string; lead_agent: string }>('SELECT id, lead_agent FROM p6_workflows WHERE parent_id = ?', t.workflowId),
+        'the child session',
+      );
+      assert.equal(child.lead_agent, 'tech-writer');
+      const posted = await waitFor(
+        () => all<{ data: string }>(`SELECT data FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'child-result'`, t.workflowId)
+          .map((e) => JSON.parse(e.data) as { childId: string; status: string; summary: string })
+          .find((d) => d.childId === child.id),
+        'the child\'s result in the parent session',
+      );
+      assert.equal(posted.status, 'done', JSON.stringify(posted));
+      assert.equal(posted.summary, childAnswer, 'the specialist\'s answer reaches the lead\'s session');
+
+      // The specialist ran the child's main conversation, with its skills, on the other runner.
+      const writerRequests = api.requests.slice(from).filter(isWriter);
+      assert.ok(writerRequests.length > 0, `tech-writer ran the child session\n${logs()}`);
+      assert.ok(JSON.stringify(writerRequests[0].body?.messages?.[0] ?? '').includes('Write the user guide'), 'as its main conversation, with the task');
+      assert.match(systemOf(writerRequests[0]), /# Skill: technical-documentation/, 'with its skills');
+      const childRuns = all<{ id: string }>('SELECT id FROM p6_runs WHERE workflow_id = ?', child.id).map((r) => r.id);
+      const childCalls = invocations.filter((i) => childRuns.some((id) => i.sessionId.startsWith(`${id}-`)));
+      assert.deepEqual([...new Set(childCalls.map((i) => i.runner))], ['B'], 'in its own microVM');
+    } finally {
+      if (savedArn === undefined) delete process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
+      else process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = savedArn;
+    }
+    assert.equal(await idle(runners.B), 'Healthy', 'runner B is idle again');
+    assert.equal(await idle(runners.A), 'Healthy', 'runner A is idle again');
   });
 
   it('Claude starts a child session: it runs in another microVM and its result reaches the parent', { timeout: 300_000 }, async () => {

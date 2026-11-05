@@ -167,19 +167,33 @@ async function portalMcpServers(
     return undefined;
   }
   const { z } = await import('zod');
+  // The run's agents can each run a child session as its lead agent (a lead hands a whole piece to a specialist).
+  const agentNames = Object.keys(payload.agents ?? {});
   const delegate = sdk.tool(
     DELEGATE_TOOL,
-    DELEGATE_DESCRIPTION,
+    agentNames.length
+      ? `${DELEGATE_DESCRIPTION} Set "agent" to have one of this session's agents run the new session as its lead (its prompt, tools and skills); without it the session uses this session's lead agent.`
+      : DELEGATE_DESCRIPTION,
     {
       task: z.string().min(1).max(20_000).describe('The complete task for the new session, with everything it needs to know'),
       title: z.string().max(200).optional().describe('A short title for the new session'),
+      ...(agentNames.length
+        ? { agent: z.enum(agentNames as [string, ...string[]]).optional().describe('The agent that runs the new session as its lead agent') }
+        : {}),
     },
-    async (args: { task?: string; title?: string }) => {
+    async (args: { task?: string; title?: string; agent?: string }) => {
       const task = String(args.task ?? '').trim();
       if (!task) return { content: [{ type: 'text', text: 'Error: "task" is required.' }], isError: true };
       const input: Record<string, unknown> = { task };
       const title = String(args.title ?? '').trim();
       if (title) input.title = title;
+      const agent = String(args.agent ?? '').trim();
+      if (agent) {
+        if (!agentNames.includes(agent)) {
+          return { content: [{ type: 'text', text: `Error: "agent" must be one of: ${agentNames.join(', ') || '(none)'}.` }], isError: true };
+        }
+        input.agent = agent;
+      }
       const inputHash = inputFingerprint(DELEGATE_TOOL, input);
       const req = broker.open(payload.runId, inputHash, DELEGATE_WAIT_MS, stop);
       emit({ type: 'delegate-request', requestId: req.requestId, input, inputHash });
