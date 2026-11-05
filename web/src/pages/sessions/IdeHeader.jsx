@@ -263,7 +263,7 @@ export function IdeHeader({
 
   const isRunning    = workflow?.status === 'running' || workflow?.status === 'pending';
   const title        = workflow?.title || workflow?.goal || `Session ${(workflow?.id ?? '').slice(0, 8)}`;
-  const engineLabel  = workflow?.engine === 'kiro' ? 'kiro' : workflow?.engine === 'claude-code' ? 'claude' : workflow?.engine ?? 'demo';
+  const engineLabel  = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'kiro' ? 'kiro' : workflow?.engine === 'claude-code' ? 'claude' : workflow?.engine ?? 'demo';
   const engineClass  = workflow?.engine === 'kiro' ? 'badge badge-engine-kiro' : workflow?.engine === 'claude-code' ? 'badge badge-engine-claude' : 'badge';
 
   return (

@@ -31,7 +31,7 @@
  * @param {Array<{type: string, id?: string, payload?: Record<string,unknown>}>} events
  * @returns {Array}
  */
-export function mergeConsecutiveAssistantText(events) {
+export function mergeConsecutiveAssistantText(events, engine = '') {
   if (!events.length) return events;
   const result = [];
   let i = 0;
@@ -47,7 +47,9 @@ export function mergeConsecutiveAssistantText(events) {
           // Streamed chunks (Kiro ACP, payload.stream) are partial text and join
           // as-is. Otherwise insert a newline when the running text doesn't
           // already end with one, so trimmed chunks don't run together.
-          const streamed = events[j].payload?.stream === true && events[j - 1].payload?.stream === true;
+          // Earlier Codex builds omitted stream:true on native deltas. Recover those saved responses too.
+          const isStream = e => e.payload?.stream === true || (engine === 'codex' && e.payload?.stream === undefined);
+          const streamed = isStream(events[j]) && isStream(events[j - 1]);
           if (!streamed && text && !text.endsWith('\n')) {
             text += '\n';
           }

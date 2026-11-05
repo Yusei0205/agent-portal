@@ -104,6 +104,10 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   /** https://<cloudfront domain>; needed for Google sign-in (redirect URI). */
   /** AgentCore runtime that runs Claude (the agent-runner image); enables Claude sessions on the cloud portal. */
   claudeRuntimeArn?: string;
+  codexRuntimeArn?: string;
+  codexOAuthClientId?: string;
+  codexOAuthRedirectUri?: string;
+  codexOAuthSecretArn?: string;
   /** Give Claude runs on AgentCore the Browser tools (-c agentcoreBrowser=true). */
   agentcoreBrowser?: boolean;
   publicUrl?: string;
@@ -294,12 +298,17 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.publicUrl ? { PORTAL_PUBLIC_URL: props.publicUrl } : {}),
         ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
         ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
+        ...(props.codexRuntimeArn ? { PORTAL_CODEX_AGENTCORE_RUNTIME_ARN: props.codexRuntimeArn } : {}),
+        ...(props.codexOAuthClientId ? { PORTAL_CODEX_OAUTH_CLIENT_ID: props.codexOAuthClientId } : {}),
+        ...(props.codexOAuthRedirectUri ? { PORTAL_CODEX_OAUTH_REDIRECT_URI: props.codexOAuthRedirectUri } : {}),
+        ...(props.codexOAuthSecretArn ? { PORTAL_CODEX_OAUTH_CLIENT_SECRET_ARN: props.codexOAuthSecretArn, PORTAL_CODEX_OAUTH_CLIENT_AUTH: 'client_secret_basic' } : {}),
         ...(props.agentcoreBrowser ? { PORTAL_AGENTCORE_BROWSER: '1' } : {}),
         ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
         ...kbEnv,
       },
     });
     tables.forEach((t) => t.grantReadWriteData(fn));
+    if (props.codexOAuthSecretArn) fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [props.codexOAuthSecretArn] }));
     masterKey.grantRead(fn);
     googleSecret.grantRead(fn);
     fn.addToRolePolicy(new iam.PolicyStatement({
@@ -356,6 +365,10 @@ export class AgentPortalCloudStack extends cdk.Stack {
         resources: [props.claudeRuntimeArn, `${props.claudeRuntimeArn}/*`],
       }));
     }
+    if (props.codexRuntimeArn) fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],
+      resources: [props.codexRuntimeArn, `${props.codexRuntimeArn}/*`],
+    }));
     if (props.storageBucket) {
       const storage = s3.Bucket.fromBucketName(this, 'StorageBucket', props.storageBucket);
       storage.grantReadWrite(fn);

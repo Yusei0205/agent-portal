@@ -7,7 +7,14 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim AS codex-runtime
+# Codex runs in this container, so its CLI must ship with the runtime image.
+ARG CODEX_VERSION=0.166.0
+RUN npm install --global --ignore-scripts --no-audit --no-fund @openai/codex@${CODEX_VERSION} \
+ && codex --version
+ENV PORTAL_CODEX_BIN=/usr/local/bin/codex
+
+FROM codex-runtime
 # git for repositories; pandoc for .odt/.rtf/.epub uploads; awscli + git-remote-codecommit for CodeCommit;
 # python-pptx, python-docx and docxtpl for the documentation and presentation role teams.
 RUN apt-get update \

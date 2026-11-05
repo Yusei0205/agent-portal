@@ -33,7 +33,7 @@ import { usesDynamoDb } from './repositories/backend.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type ProviderMode = 'demo' | 'anthropic' | 'bedrock' | 'kiro' | 'litellm';
+export type ProviderMode = 'demo' | 'anthropic' | 'bedrock' | 'kiro' | 'codex' | 'litellm';
 export type AwsAuth = 'ambient' | 'profile' | 'keys' | 'bedrock-key' | 'sso';
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -564,10 +564,18 @@ async function checkKiroSignedIn(): Promise<{ installed: boolean; signedIn: bool
 async function testConnection(
   modeOverride?: string,
   db?: DatabaseSync,
+  userId?: string,
 ): Promise<{ ok: boolean; models?: string[]; error?: string }> {
   const d = db ?? getDb();
   const s = getSettings(d);
   const mode = (modeOverride as ProviderMode) ?? s.provider.mode;
+
+  if (mode === 'codex') {
+    if (!userId) return { ok: false, error: 'Sign in to the portal and connect your ChatGPT account.' };
+    const { getEngineModels } = await import('./models.ts');
+    const response = await getEngineModels('codex', userId, null, true);
+    return { ok: !response.error && response.models.length > 0, models: response.models.map(m => m.id), ...(response.error ? { error: response.error } : {}) };
+  }
 
   if (mode === 'demo') {
     return { ok: true, models: ['demo-model'] };
@@ -1021,10 +1029,17 @@ export async function listModelsForProvider(
   provider: string,
   db?: DatabaseSync,
   refresh = false,
+  userId?: string,
 ): Promise<ModelListResponse> {
   const d = db ?? getDb();
   const s = getSettings(d);
 
+  if (provider === 'codex') {
+    if (!userId) return { provider, source: 'fallback', error: 'Connect your ChatGPT account in Agent sign-ins.', groups: [] };
+    const { getEngineModels } = await import('./models.ts');
+    const response = await getEngineModels('codex', userId, null, refresh);
+    return { provider, source: 'live', error: response.error ?? null, groups: [{ label: 'Your Codex account', models: response.models.map(m => ({ id: m.id, label: m.label })) }] };
+  }
   const cacheKey = provider;
   if (!refresh) {
     const entry = modelListCache.get(cacheKey);
@@ -1308,7 +1323,7 @@ export function registerSettingsRoutes(): void {
       const p = body.provider as Record<string, unknown>;
       if (p.mode !== undefined) {
         const mode = String(p.mode);
-        if (!['demo', 'anthropic', 'bedrock', 'kiro', 'litellm'].includes(mode)) {
+        if (!['demo', 'anthropic', 'bedrock', 'kiro', 'codex', 'litellm'].includes(mode)) {
           throw badRequest('Unknown provider mode');
         }
         set('provider.mode', mode);
@@ -1499,13 +1514,13 @@ export function registerSettingsRoutes(): void {
     const providerParam = qs.get('provider') ?? '';
     const refresh = qs.get('refresh') === '1';
 
-    const validProviders = ['demo', 'anthropic', 'bedrock', 'kiro', 'litellm'];
+    const validProviders = ['demo', 'anthropic', 'bedrock', 'kiro', 'codex', 'litellm'];
     if (!validProviders.includes(providerParam)) {
       sendJson(res, 400, { error: `provider must be one of: ${validProviders.join(', ')}` });
       return;
     }
 
-    const result = await listModelsForProvider(providerParam, undefined, refresh);
+    const result = await listModelsForProvider(providerParam, undefined, refresh, req.user!.id);
     sendJson(res, 200, result);
   }));
 
@@ -1516,7 +1531,7 @@ export function registerSettingsRoutes(): void {
     const body = req.body as Record<string, unknown>;
     const modeOverride = body.modeOverride ? String(body.modeOverride) : undefined;
 
-    const result = await testConnection(modeOverride);
+    const result = await testConnection(modeOverride, undefined, req.user!.id);
     sendJson(res, 200, result);
   }));
 

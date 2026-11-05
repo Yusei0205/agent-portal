@@ -19,6 +19,12 @@ import { agentPackFiles, PACK_AGENTS, PACK_SKILLS } from '../../lib/agent-pack/i
 
 // ── Starter file definitions ───────────────────────────────────────────────────
 
+const CODEX_STARTER = [
+  { path: 'AGENTS.md', content: '# Codex instructions\n\nDescribe your team conventions and project guidance here.\n' },
+  { path: 'config.toml', content: '# Reasoning and response preferences\nmodel_reasoning_effort = "medium"\n' },
+  { path: 'agents/example-agent.toml', content: 'name = "example-agent"\ndescription = "A focused assistant for your project."\ndeveloper_instructions = "Read the project instructions and complete the assigned task within the workspace."\n' },
+  { path: 'skills/example/SKILL.md', content: '---\nname: example\ndescription: A reusable workflow for your project tasks.\n---\n\nWrite the workflow instructions here.\n' },
+];
 const KIRO_STARTER = [
   {
     path: 'agents/example-agent.json',
@@ -278,7 +284,7 @@ export function ConfigFileTree({
   // ── Starter structure ──────────────────────────────────────────────────────
 
   const handleAddStarter = async () => {
-    const starterFiles = folder === 'kiro' ? KIRO_STARTER : folder === 'claude' ? CLAUDE_STARTER : null;
+    const starterFiles = folder === 'kiro' ? KIRO_STARTER : folder === 'claude' ? CLAUDE_STARTER : folder === 'codex' ? CODEX_STARTER : null;
     if (!starterFiles) return;
 
     setAddingStarter(true);
@@ -326,7 +332,7 @@ export function ConfigFileTree({
     }
     await loadRoot();
     onTreeChange();
-    if (added) onSelectFile(folder === 'kiro' ? 'agents/lead-orchestrator.json' : 'agents/lead-orchestrator.md');
+    if (added) onSelectFile(folder === 'kiro' ? 'agents/lead-orchestrator.json' : folder === 'codex' ? 'agents/lead-orchestrator.toml' : 'agents/lead-orchestrator.md');
     setAddingPack(false);
     toast(
       `Agent pack: ${added} file${added === 1 ? '' : 's'} added`
@@ -502,7 +508,7 @@ export function ConfigFileTree({
     );
   }
 
-  const hasStarter = folder === 'kiro' || folder === 'claude';
+  const hasStarter = folder === 'kiro' || folder === 'claude' || folder === 'codex';
   const isEmpty = entries.length === 0;
 
   return (

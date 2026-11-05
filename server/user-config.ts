@@ -32,6 +32,7 @@
  */
 
 import fs from 'node:fs';
+import { parseCodexFiles, validateCodexFile, CODEX_CONFIG_PATH, codexAgents, type CodexConfigFile } from './agent/codex-config.ts';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -52,7 +53,7 @@ import { getUserConfigRepository } from './repositories/user-config.ts';
 import { getWorkflowRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const VALID_FOLDERS = ['kiro', 'claude', 'aws'] as const;
+const VALID_FOLDERS = ['kiro', 'claude', 'codex', 'aws'] as const;
 export type ConfigFolder = (typeof VALID_FOLDERS)[number];
 
 /** Max file content size when reading/writing via API. */
@@ -135,6 +136,7 @@ export function isCacheExcluded(relPath: string): boolean {
     if (p === dir || p.startsWith(dir + '/')) return true;
   }
   const base = p.split('/').pop() ?? '';
+  if (base === 'auth.json' || /^state_\d+\.sqlite/.test(base) || ['sessions', 'archived_sessions', 'logs'].includes(p.split('/')[0])) return true;
   if (base.endsWith('.token') || base.endsWith('.tokeninfo')) return true;
   if (CACHE_FILE_NAMES.has(base)) return true;
   return false;
@@ -487,7 +489,7 @@ const LOCAL_EXCLUDED_RES: RegExp[] = [
  * @param sizeBytes File size in bytes
  */
 export function shouldIncludeLocalFile(
-  folder: 'kiro' | 'claude',
+  folder: 'kiro' | 'claude' | 'codex',
   relPath: string,
   sizeBytes: number,
 ): { include: boolean; reason?: string } {
@@ -501,7 +503,9 @@ export function shouldIncludeLocalFile(
   const isRoot = parts.length === 1;
 
   // 1. Per-folder top-level include guard
-  if (folder === 'kiro') {
+  if (folder === 'codex') {
+    if (!CODEX_CONFIG_PATH.test(p) || p.includes('..')) return { include: false, reason: 'not a Codex setup file' };
+  } else if (folder === 'kiro') {
     if (!KIRO_INCLUDE_DIRS.has(topDir)) {
       return { include: false, reason: `not in an included kiro directory (${topDir})` };
     }
@@ -700,11 +704,11 @@ export async function backupUserConfigFolder(
  */
 export async function importLocalConfig(
   userId: string,
-  folder: 'kiro' | 'claude',
+  folder: 'kiro' | 'claude' | 'codex',
   homeDir?: string,
 ): Promise<LocalImportSummary> {
   const home = homeDir ?? os.homedir();
-  const srcRoot = path.join(home, folder === 'kiro' ? '.kiro' : '.claude');
+  const srcRoot = path.join(home, '.' + folder);
   const destRoot = userConfigRoot(userId, folder);
 
   // Back up existing portal config before touching anything
@@ -760,6 +764,10 @@ export async function importLocalConfig(
         continue;
       }
 
+      if (folder === 'codex') {
+        try { validateCodexFile({ path: relPath, content }); }
+        catch { skipped.push({ path: relPath, reason: 'unsupported or invalid Codex setup' }); continue; }
+      }
       // Redact obvious secrets in JSON
       const { content: clean, redacted } = redactJsonSecrets(relPath, content);
       content = clean;
@@ -985,7 +993,15 @@ interface AgentEntry {
   description?: string;
 }
 
+export async function getCodexConfigFiles(userId: string): Promise<CodexConfigFile[]> {
+  const zip = await JSZip.loadAsync(await buildExportZip(userId, 'codex'));
+  const files: CodexConfigFile[] = [];
+  for (const entry of Object.values(zip.files)) if (!entry.dir) files.push({ path: entry.name, content: await entry.async('string') });
+  return parseCodexFiles(files);
+}
+
 export async function listAgentsForEngine(userId: string, engine: string): Promise<AgentEntry[]> {
+  if (engine === 'codex') return codexAgents(await getCodexConfigFiles(userId));
   const agents: AgentEntry[] = [];
 
   if (engine === 'kiro') {
@@ -1082,8 +1098,8 @@ export function registerUserConfigRoutes(): void {
   // GET /api/user-config/agents?engine=kiro|claude-code
   router.get('/api/user-config/agents', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     const engine = req.query.get('engine') ?? '';
-    if (!['kiro', 'claude-code'].includes(engine)) {
-      sendJson(res, 400, { error: 'engine must be kiro or claude-code' });
+    if (!['kiro', 'claude-code', 'codex'].includes(engine)) {
+      sendJson(res, 400, { error: 'engine must be kiro, claude-code or codex' });
       return;
     }
     const agents = await listAgentsForEngine(req.user!.id, engine);
@@ -1215,6 +1231,10 @@ export function registerUserConfigRoutes(): void {
       sendJson(res, 413, { error: `File content exceeds ${MAX_FILE_BYTES / 1024} KB limit` }); return;
     }
 
+    if (folder === 'codex') {
+      try { validateCodexFile({ path: relPath, content }); }
+      catch (e) { sendJson(res, 400, { error: String((e as Error).message) }); return; }
+    }
     const jsonError = validateJson(relPath, content);
     if (jsonError && !force) {
       sendJson(res, 400, { error: `Invalid JSON: ${jsonError}`, invalidJson: true }); return;
@@ -1262,6 +1282,10 @@ export function registerUserConfigRoutes(): void {
       sendJson(res, 413, { error: `File content exceeds ${MAX_FILE_BYTES / 1024} KB limit` }); return;
     }
 
+    if (folder === 'codex') {
+      try { validateCodexFile({ path: relPath, content }); }
+      catch (e) { sendJson(res, 400, { error: String((e as Error).message) }); return; }
+    }
     const jsonError = validateJson(relPath, content);
     if (jsonError && !force) {
       sendJson(res, 400, { error: `Invalid JSON: ${jsonError}`, invalidJson: true }); return;
@@ -1502,6 +1526,7 @@ export function registerUserConfigRoutes(): void {
     let entries: Array<{ path: string; content: string }>;
     try {
       entries = await parseImportZip(req.rawBody, folder);
+      if (folder === 'codex') parseCodexFiles(entries);
     } catch (e: unknown) {
       sendJson(res, 400, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1559,6 +1584,7 @@ export function registerUserConfigRoutes(): void {
       // A zip with no entries is only its 22-byte end record, which the zip reader rejects as corrupt.
       if (zipBuf.length <= 22) { sendJson(res, 400, { error: `Your ${folder} folder has no files to publish yet` }); return; }
       entries = await parseImportZip(zipBuf, folder);
+      if (folder === 'codex') parseCodexFiles(entries);
     } catch (e: unknown) {
       sendJson(res, 400, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1626,7 +1652,7 @@ export function registerUserConfigRoutes(): void {
     const userId = req.user!.id;
     let summary: LocalImportSummary;
     try {
-      summary = await importLocalConfig(userId, folder as 'kiro' | 'claude');
+      summary = await importLocalConfig(userId, folder as 'kiro' | 'claude' | 'codex');
       await persistTree(userConfigRoot(userId, folder));
     } catch (e: unknown) {
       sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;

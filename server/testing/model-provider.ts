@@ -102,7 +102,7 @@ export interface CallTextModelOptions {
 
 // ── Which engine's credential a call uses ────────────────────────────────────
 
-export type TextEngine = 'claude-code' | 'kiro';
+export type TextEngine = 'claude-code' | 'kiro' | 'codex';
 
 /**
  * The engine a text call should use for this person: the engine of the credential they chose, otherwise their default
@@ -111,6 +111,11 @@ export type TextEngine = 'claude-code' | 'kiro';
  */
 export async function pickTextEngine(userId: string | null, credentialId: string | null): Promise<TextEngine | null> {
   if (!userId) return null;
+  if (credentialId === 'codex-account') {
+    const { hasCodexLogin } = await import('../codex-auth.ts');
+    if (!await hasCodexLogin(userId)) throw new Error('Connect your ChatGPT account in Agent sign-ins.');
+    return 'codex';
+  }
   const { getCredentialsRepository } = await import('../repositories/credentials.ts');
   const repo = getCredentialsRepository();
   if (credentialId) {
@@ -203,6 +208,13 @@ export async function callTextModel(
   const { config: _config } = await import('../config.ts');
 
   const settings = getSettings();
+  const personalEngine = await pickTextEngine(createdBy, credentialId);
+  if (personalEngine === 'codex' || (!personalEngine && settings.provider.mode === 'codex')) {
+    if (!createdBy) throw new Error('Codex AI generation requires a signed-in portal user with a ChatGPT connection.');
+    if (images.length) throw new Error('Codex portal AI generation currently accepts text only. Remove image attachments or select an image-capable provider.');
+    const { callCodexText } = await import('../agent/codex-text.ts');
+    return callCodexText(systemPrompt + '\n\n' + userMessage + '\n\nReturn only the requested output. Do not use tools or ask questions.', createdBy, modelOverride || (settings.provider.mode === 'codex' ? settings.defaultModel : null));
+  }
 
   // A person who works with Kiro has a Kiro credential and no Claude one: the prompt goes to the Kiro runner.
   if (process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN || _kiroRunnerOverride) {

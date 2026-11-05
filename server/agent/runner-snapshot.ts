@@ -225,7 +225,7 @@ async function changedSinceSave(root: string, signal: AbortSignal): Promise<bool
   return changed;
 }
 
-async function saveWorkspace(snap: WorkspaceSnapshot, root: string, signal: AbortSignal): Promise<void> {
+async function saveWorkspace(snap: WorkspaceSnapshot, root: string, signal: AbortSignal, strict = false): Promise<void> {
   if (!hasRepos(root)) return;
   if (!(await changedSinceSave(root, signal))) { log('workspace_save_skipped', { reason: 'unchanged' }); return; }
 
@@ -239,11 +239,13 @@ async function saveWorkspace(snap: WorkspaceSnapshot, root: string, signal: Abor
     if (signal.aborted) { log('workspace_save_cancelled', { step: 'pack' }); return; }
     if (t.code !== 0 && t.code !== 1) { // 1 = "file changed as we read it", still a usable archive
       log('workspace_save_failed', { step: 'pack', code: t.code, err: t.err.slice(0, 300) });
+      if (strict) throw new Error('Could not pack the session workspace');
       return;
     }
     const size = fs.statSync(packed).size;
     if (size > MAX_SNAPSHOT_BYTES) {
       log('workspace_save_skipped', { reason: 'too large', bytes: size });
+      if (strict) throw new Error('The session workspace exceeds the snapshot size limit');
       return;
     }
     const res = await fetch(snap.putUrl, {
@@ -256,6 +258,7 @@ async function saveWorkspace(snap: WorkspaceSnapshot, root: string, signal: Abor
     } as RequestInit);
     if (!res.ok) {
       log('workspace_save_failed', { step: 'upload', status: res.status });
+      if (strict) throw new Error('Could not upload the session workspace');
       return;
     }
     fs.renameSync(newStamp, path.join(root, STAMP));
@@ -264,10 +267,17 @@ async function saveWorkspace(snap: WorkspaceSnapshot, root: string, signal: Abor
   } catch (e: unknown) {
     if (signal.aborted) log('workspace_save_cancelled', { step: 'upload' });
     else log('workspace_save_failed', { error: String((e as Error)?.message ?? e).slice(0, 300) });
+    if (strict) throw new Error('Could not persist the session workspace');
   } finally {
     try { fs.rmSync(packed, { force: true }); } catch { /* ok */ }
     try { fs.rmSync(newStamp, { force: true }); } catch { /* ok */ }
   }
+}
+
+/** Codex confirms completion only after required repository snapshots are durably saved. */
+export async function flushWorkspaceStrict(snap: WorkspaceSnapshot | null, root: string | null): Promise<void> {
+  await settleSnapshot();
+  if (snap && root) await saveWorkspace(snap, root, new AbortController().signal, true);
 }
 
 let pending: Promise<void> | null = null;

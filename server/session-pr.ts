@@ -37,7 +37,7 @@ export interface RepoChange { repo: string; base: string; commits: number; files
 
 export interface SessionPrContext {
   workflowId: string; runId: string; projectId: string; userId: string | null;
-  engine: 'claude-code' | 'kiro';
+  engine: 'claude-code' | 'kiro' | 'codex';
 }
 
 type PrState =
@@ -308,7 +308,7 @@ async function runPullRequest(
   const title = prTitle(w);
   const settings = getPullRequestSettings(projectId);
   const baseBranch = start.base || repo.default_branch || 'main';
-  const engine = (String(w.engine) === 'kiro' ? 'kiro' : 'claude-code') as 'kiro' | 'claude-code';
+  const engine = (String(w.engine) === 'kiro' ? 'kiro' : String(w.engine) === 'codex' ? 'codex' : 'claude-code') as 'kiro' | 'claude-code' | 'codex';
 
   let branch = start.branch ?? '';
   if (!branch) {

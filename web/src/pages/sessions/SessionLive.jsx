@@ -992,19 +992,19 @@ export function SessionLive({
 
   // ── Derived values ──────────────────────────────────────────────────────
 
-  const agentName = workflow?.engine === 'kiro'         ? 'Kiro'
+  const agentName = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'kiro'         ? 'Kiro'
     : workflow?.engine === 'claude-code' ? 'Claude'
     : (workflow?.engine ? String(workflow.engine) : 'Agent');
 
   // Pair tool-start/tool-end before merging assistant-text
   const pairedEvents       = pairToolEvents(dropRoutineStatus(events));
-  const displayEvents      = mergeConsecutiveAssistantText(pairedEvents);
+  const displayEvents      = mergeConsecutiveAssistantText(pairedEvents, workflow?.engine);
 
   // Earlier events from transcript — filter out current run's events (already in stream)
   const pairedEarlierEvents   = pairToolEvents(
     dropRoutineStatus(earlierEvents.filter((e) => !(runId && e.run_id && e.run_id === runId))),
   );
-  const displayEarlierEventsAll = mergeConsecutiveAssistantText(pairedEarlierEvents);
+  const displayEarlierEventsAll = mergeConsecutiveAssistantText(pairedEarlierEvents, workflow?.engine);
 
   const goalText = typeof workflow?.goal === 'string' ? workflow.goal.trim() : '';
   // Show the goal bubble only once we know there is no earlier history (i.e.

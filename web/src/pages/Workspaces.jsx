@@ -170,6 +170,7 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
                   >
                     <option value="">None</option>
                     <option value="kiro">Kiro</option>
+                    <option value="codex">Codex</option>
                     <option value="claude-code">Claude Code</option>
                   </select>
                 </div>
@@ -376,7 +377,7 @@ function WorkspacesList({ projectId }) {
                   {(ws.default_engine || ws.default_agent || ws.default_model) && (
                     <div className="muted" style={{ fontSize: '0.78rem', marginTop: 2 }}>
                       {[
-                        ws.default_engine === 'kiro' ? 'Kiro' : ws.default_engine === 'claude-code' ? 'Claude Code' : ws.default_engine,
+                        ws.default_engine === 'codex' ? 'Codex' : ws.default_engine === 'kiro' ? 'Kiro' : ws.default_engine === 'claude-code' ? 'Claude Code' : ws.default_engine,
                         ws.default_agent,
                         ws.default_model,
                       ].filter(Boolean).join(' · ')}

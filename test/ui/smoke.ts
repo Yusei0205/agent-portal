@@ -82,6 +82,7 @@ const SECTIONS: ReadonlyArray<{ id: string; label: string; modules: string[] }> 
   { id: '27',  label: 'Command palette — repeated open/close',          modules: ['shell'] },
   { id: '28',  label: 'Session IDE workspace',                          modules: ['ide', 'sessions'] },
   { id: '29',  label: 'Credentials page',                               modules: ['credentials'] },
+  { id: 'codex-setup', label: 'Codex provider and agent pack', modules: ['codex-setup'] },
   { id: '30',  label: 'Configuration page',                             modules: ['config'] },
   { id: '31',  label: 'New session dialog',                             modules: ['sessions', 'engines'] },
   { id: '32',  label: 'Settings — Portal AI provider + Sessions tab',   modules: ['settings'] },
@@ -1567,13 +1568,76 @@ async function main() {
 
     await test('Credentials page renders with engine sections', async (p) => {
       await goto(p, '/credentials', 1000);
-      await assertHeading(p, 'Credentials');
+      await assertHeading(p, 'Connect');
       // Should show both engine sections
       const bodyText = await p.evaluate(() => document.body.innerText);
       const hasKiro = /kiro/i.test(bodyText);
       const hasClaude = /claude code/i.test(bodyText);
       if (!hasKiro) throw new Error('Credentials page missing Kiro section');
       if (!hasClaude) throw new Error('Credentials page missing Claude Code section');
+      if (!/codex/i.test(bodyText)) throw new Error('Credentials page missing Codex section');
+    }, page);
+
+    await test('Codex device sign-in shows code and completes after polling', async (p) => {
+      let signedIn = false;
+      const statusPattern = '**/api/codex/status';
+      const loginPattern = '**/api/codex/login';
+      await p.route(statusPattern, route => route.fulfill({ json: {
+        installed: true, signedIn, email: signedIn ? 'codex@example.test' : null,
+        login: signedIn ? { status: 'complete' } : null,
+      } }));
+      await p.route(loginPattern, route => route.fulfill({ json: {
+        status: 'pending', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'TEST-1234',
+      } }));
+      try {
+        await goto(p, '/credentials', 500);
+        const section = p.locator('section[aria-labelledby="codex-credentials-title"]');
+        await section.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+        await section.getByText('TEST-1234', { exact: true }).waitFor();
+        signedIn = true;
+        await section.getByText('Signed in as codex@example.test').waitFor({ timeout: 10000 });
+        await section.getByRole('button', { name: 'Sign out of Codex', exact: true }).waitFor();
+      } finally {
+        await p.unroute(statusPattern);
+        await p.unroute(loginPattern);
+      }
+    }, page);
+
+    await test('Codex uses credential cards and explains unavailable cloud runtimes', async (p) => {
+      const pattern = '**/api/codex/status';
+      await p.route(pattern, route => route.fulfill({ json: {
+        supported: false, installed: null, signedIn: false, canImportHostLogin: false,
+        code: 'codex_worker_required', error: 'Codex requires an AgentCore runner for this deployment.',
+      } }));
+      try {
+        await goto(p, '/credentials', 500);
+        const section = p.locator('section[aria-labelledby="codex-credentials-title"]');
+        await section.locator('.cred-card').waitFor();
+        await section.getByRole('alert').filter({ hasText: 'Codex requires an AgentCore runner' }).waitFor();
+        if (!await section.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).isDisabled()) throw new Error('Cloud sign-in must be disabled until a runner is connected');
+        if (await section.getByRole('button', { name: "Use this machine's Codex sign-in" }).count()) throw new Error('Cloud UI must not offer host-login import');
+      } finally { await p.unroute(pattern); }
+    }, page);
+
+    await test('Codex cloud sign-in redirects and preserves callback errors', async (p) => {
+      const statusPattern = '**/api/codex/status', loginPattern = '**/api/codex/login';
+      await p.route(statusPattern, route => route.fulfill({ json: { supported: true, installed: null,
+        signedIn: false, remote: true, canImportHostLogin: false } }));
+      await p.route(loginPattern, route => route.fulfill({ json: { status: 'redirect',
+        authorizationUrl: BASE + '/#/connect/sign-ins?oauth_fixture=1' } }));
+      try {
+        await goto(p, '/connect/sign-ins', 500);
+        await p.reload({ waitUntil: 'domcontentloaded' });
+        const section = p.locator('section[aria-labelledby="codex-credentials-title"]');
+        await section.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+        await p.waitForURL('**oauth_fixture=1');
+        await goto(p, '/connect/sign-ins?codex_error=authorization_failed', 500);
+        await p.reload({ waitUntil: 'domcontentloaded' });
+        await section.getByRole('alert').filter({ hasText: 'OpenAI authorization could not be completed' }).waitFor();
+        await section.getByRole('button', { name: 'Refresh status', exact: true }).click();
+        await section.getByRole('alert').filter({ hasText: 'OpenAI authorization could not be completed' }).waitFor();
+        if (await section.locator('.device-code-box').count()) throw new Error('Cloud sign-in must use the registered redirect flow');
+      } finally { await p.unroute(statusPattern); await p.unroute(loginPattern); }
     }, page);
 
     await test('Add a Claude API key credential and see last 4 only', async (p) => {
@@ -1678,6 +1742,43 @@ async function main() {
     } // end §29 credentials
 
     // ── 30. Configuration page (F5) ──────────────────────────────────────
+    if (sectionEnabled('codex-setup')) {
+      currentSectionId = 'codex-setup';
+      console.log('\nCodex provider and Agent setup');
+      await test('Codex provider appears in Settings and saves its mode', async (p) => {
+        await p.route('**/api/settings/models?provider=codex*', r => r.fulfill({ json: { provider: 'codex', source: 'live', error: null, groups: [{ label: 'Codex', models: [{ id: 'fixture-model', label: 'Fixture' }] }] } }));
+        await p.route('**/api/codex/status', r => r.fulfill({ json: { supported: true, installed: true, signedIn: false, canImportHostLogin: false } }));
+        try {
+          await goto(p, '/settings', 800);
+          await p.getByRole('tab', { name: 'Portal AI provider', exact: true }).click();
+          await p.locator('.provider-card').filter({ hasText: 'OpenAI Codex' }).click();
+          await p.locator('#codex-credentials-title').waitFor();
+          await p.getByRole('button', { name: 'Save', exact: true }).click();
+          await p.getByText('Settings saved.', { exact: true }).waitFor();
+        } finally { await p.unroute('**/api/settings/models?provider=codex*'); await p.unroute('**/api/codex/status'); }
+      }, page);
+      await test('Codex pack installs and opens its native lead agent file', async (p) => {
+        await goto(p, '/config', 800);
+        await p.getByRole('tab', { name: 'Codex (~/.codex)', exact: true }).click();
+        await p.getByRole('button', { name: 'Add agent pack', exact: true }).click();
+        await p.getByRole('dialog').getByRole('button', { name: 'Add agent pack', exact: true }).click();
+        await p.getByLabel('Editing agents/lead-orchestrator.toml', { exact: true }).waitFor({ timeout: 15000 });
+        const response = await p.request.get(BASE + '/api/user-config/agents?engine=codex');
+        if ((await response.json()).agents.length !== 7) throw new Error('Codex pack must expose seven roles');
+      }, page);
+      await test('Codex sessions offer the installed lead agent', async (p) => {
+        await p.route('**/api/credentials/summary', r => r.fulfill({ json: { summary: [{ engine: 'codex', configured: true, credentials: [] }] } }));
+        await p.route('**/api/engines/codex/models*', r => r.fulfill({ json: { models: [{ id: 'fixture-model', label: 'Fixture' }] } }));
+        try {
+          await goto(p, '/p/' + projectId + '/sessions', 800);
+          await p.getByRole('button', { name: /new session/i }).first().click();
+          await p.locator('[name="ns-engine"][value="codex"]').check();
+          await p.locator('#ns-agent option[value="lead-orchestrator"]').waitFor({ state: 'attached' });
+          await p.locator('#ns-agent').selectOption('lead-orchestrator');
+          if (await p.locator('#ns-agent').inputValue() !== 'lead-orchestrator') throw new Error('Codex lead selection was lost');
+        } finally { await p.keyboard.press('Escape'); await p.unroute('**/api/credentials/summary'); await p.unroute('**/api/engines/codex/models*'); }
+      }, page);
+    }
     if (sectionEnabled('config')) {
     console.log('\n30. Configuration page (F5)');
     currentSectionId = '30';
@@ -2183,11 +2284,11 @@ async function main() {
     console.log('\n33. Nav — Credentials and Configuration');
     currentSectionId = '33';
 
-    await test('Nav includes Credentials and Configuration links (always visible, no dropdown)', async (p) => {
+    await test('Nav includes Connections and Agent setup links', async (p) => {
       await goto(p, '/projects', 600);
       await p.waitForSelector('.rail', { timeout: 5000 });
       // New flat nav: links are always visible without expanding any group
-      const credLink = p.locator('.rail [href="#/credentials"]').first();
+      const credLink = p.locator('.rail a[href*="/connect/"]').first();
       await credLink.waitFor({ timeout: 5000 });
       const configLink = p.locator('.rail [href="#/config"]').first();
       await configLink.waitFor({ timeout: 3000 });
@@ -2210,8 +2311,8 @@ async function main() {
       await p.keyboard.press('y');
       await p.waitForTimeout(600);
       const url = p.url();
-      if (!url.includes('#/credentials')) {
-        throw new Error(`g+y should navigate to #/credentials, got: ${url}`);
+      if (!url.includes('#/connect/sign-ins')) {
+        throw new Error(`g+y should navigate to #/connect/sign-ins, got: ${url}`);
       }
     }, page);
     } // end §33 shell/credentials/config

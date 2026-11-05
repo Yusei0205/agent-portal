@@ -32,7 +32,7 @@ import { generateId, now, parseJson } from './util.ts';
 const GOAL_MAX_CHARS = 8_000;
 const MIN_INTERVAL_MINUTES = 5;
 const DEFAULT_MAX_PER_HOUR = 3;
-const ENGINES = ['demo', 'claude-code', 'kiro'];
+const ENGINES = ['demo', 'claude-code', 'kiro', 'codex'];
 
 // ── Cron ─────────────────────────────────────────────────────────────────────
 

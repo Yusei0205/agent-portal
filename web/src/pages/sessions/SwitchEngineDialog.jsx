@@ -24,6 +24,7 @@ export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched })
   // Default to the other real engine: the usual reason to switch is that the current one can't go on.
   const [engine, setEngine] = useState(current === 'kiro' ? 'claude-code' : current === 'claude-code' ? 'kiro' : 'claude-code');
   const [credSummary, setCredSummary] = useState(null);
+  const [codexReady, setCodexReady] = useState(false);
   const [portalMode, setPortalMode] = useState('demo');
   const [credentialId, setCredentialId] = useState('');
   const [model, setModel] = useState('');
@@ -41,6 +42,7 @@ export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched })
       const map = {};
       for (const entry of cs.summary || []) map[entry.engine] = entry.credentials || [];
       setCredSummary(map);
+      setCodexReady((cs.summary || []).some(e => e.engine === 'codex' && e.configured));
       setPortalMode(s.provider?.mode || 'demo');
     });
   }, []);
@@ -61,6 +63,7 @@ export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched })
   }, [onClose]);
 
   const isAvailable = (id) => {
+    if (id === 'codex') return codexReady;
     if (id === 'demo' || !credSummary) return true;
     const hasCreds = (credSummary[id] || []).length > 0;
     return hasCreds || Boolean(ENGINES.find((e) => e.id === id)?.providerModes?.includes(portalMode));

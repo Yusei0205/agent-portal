@@ -35,7 +35,7 @@ describe('M48 migration: Kiro credits out of cost_usd', () => {
     const fs = await import('node:fs');
     const os = await import('node:os');
     const path = await import('node:path');
-    const { openDb, SCHEMA_VERSION } = await import('../server/db.ts');
+    const { openDb } = await import('../server/db.ts');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'm48-'));
     const file = path.join(dir, 'portal.db');
     try {
@@ -49,7 +49,7 @@ describe('M48 migration: Kiro credits out of cost_usd', () => {
           ('rk', 'wk', 'done', 2.5, '2026-01-01'),
           ('rc', 'wc', 'done', 0.75, '2026-01-01');
         INSERT INTO budget_usage (cost_usd, provider, model) VALUES (2.5, 'kiro', 'm'), (0.75, 'claude-code', 'm');
-        DELETE FROM schema_migrations WHERE id = ${SCHEMA_VERSION}; -- M48 is the last migration
+        DELETE FROM schema_migrations WHERE id = 47; -- M48_KIRO_CREDITS (M24 was skipped)
       `);
       db.close();
 

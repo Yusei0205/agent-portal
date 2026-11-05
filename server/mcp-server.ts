@@ -324,7 +324,7 @@ export function createMcpServer(user: PortalUser, scopes: Set<string>, tokenWork
         inputSchema: {
           projectId: z.string().describe('Project ID'),
           goal: z.string().max(8000).describe('Goal or task for the session'),
-          engine: z.enum(['claude-code', 'kiro', 'demo']).optional().default('demo').describe('Agent engine to use'),
+          engine: z.enum(['claude-code', 'kiro', 'codex', 'demo']).optional().default('demo').describe('Agent engine to use'),
           trustTools: z.boolean().optional().default(false).describe('Auto-approve all tool calls'),
         },
       },

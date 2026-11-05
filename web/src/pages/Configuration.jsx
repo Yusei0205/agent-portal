@@ -20,6 +20,7 @@ import { ConfigEditor } from './config/ConfigEditor.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
 const TABS = [
+  { id: 'codex', label: 'Codex (~/.codex)', description: 'AGENTS.md, reasoning settings, custom agents and skills used by local and cloud Codex sessions. Sign-ins and MCP connections are managed in Connect.' },
   {
     id: 'kiro',
     label: 'Kiro (~/.kiro)',
@@ -243,7 +244,7 @@ export function Configuration({ user }) {
       {/* Page header: title + subtitle on left, zip buttons on right */}
       <PageHeader
         title="Agent setup"
-        description="How your agents behave: your own .kiro and .claude folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
+        description="How your agents behave: your own .codex, .kiro and .claude folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
       >
         <button
           type="button"

@@ -10,14 +10,14 @@ export const EXTRA_NAV_ITEMS = [
   {
     id: 'goto_credentials',
     label: 'Agent sign-ins',
-    description: 'Your Kiro and Claude accounts',
+    description: 'Your Codex, Kiro and Claude accounts',
     keys: 'g y',
     href: '#/connect/sign-ins',
   },
   {
     id: 'goto_config',
     label: 'Agent setup',
-    description: 'Edit ~/.kiro, ~/.claude and ~/.aws per-user config',
+    description: 'Edit ~/.codex, ~/.kiro and ~/.claude per-user config',
     keys: 'g x',
     href: '#/config',
   },

@@ -16,6 +16,7 @@ import { getDb } from './db.ts';
 import { encrypt, decrypt } from './secrets.ts';
 import { getAgentEnv } from './settings.ts';
 import { config } from './config.ts';
+import { hasCodexLogin } from './codex-auth.ts';
 import { generateId, now, str, badRequest, HttpError } from './util.ts';
 import { appendAudit } from './audit.ts';
 import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
@@ -1504,6 +1505,7 @@ export function registerCredentialRoutes(): void {
       };
     }));
 
-    sendJson(res, 200, { summary });
+    const codexConfigured = await hasCodexLogin(req.user!.id);
+    sendJson(res, 200, { summary: [...summary, { engine: 'codex', configured: codexConfigured, credentials: [] }] });
   });
 }
