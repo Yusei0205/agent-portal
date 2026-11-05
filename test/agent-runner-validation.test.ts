@@ -260,3 +260,50 @@ describe('validatePayload — portal', () => {
     assert.equal(p.portal, undefined);
   });
 });
+
+// ── agents (the project's subagents) ─────────────────────────────────────────
+
+describe('validatePayload — agents', () => {
+  const reviewer = { description: 'Reviews a diff', prompt: 'You review diffs.', tools: ['Read', 'Grep'], model: 'sonnet', maxTurns: 5 };
+
+  test('agents by name are accepted and kept field for field', () => {
+    const p = ok({ ...minPayload(), agents: { reviewer, 'test-runner': { description: 'Runs tests', prompt: 'Run the tests.' } } });
+    assert.deepEqual(p.agents?.reviewer, reviewer);
+    assert.deepEqual(p.agents?.['test-runner'], { description: 'Runs tests', prompt: 'Run the tests.' });
+  });
+  test('absent agents stay absent', () => {
+    assert.equal(ok(minPayload()).agents, undefined);
+  });
+  test('a name Claude Code would refuse is rejected', () => {
+    fail({ ...minPayload(), agents: { 'bad name': reviewer } }, 'agent name');
+    fail({ ...minPayload(), agents: { ['x'.repeat(65)]: reviewer } }, 'agent name');
+  });
+  test('description and prompt are required and bounded', () => {
+    fail({ ...minPayload(), agents: { a: { prompt: 'p' } } }, '.description');
+    fail({ ...minPayload(), agents: { a: { description: 'd' } } }, '.prompt');
+    fail({ ...minPayload(), agents: { a: { description: 'd', prompt: 'p'.repeat(50_001) } } }, '.prompt');
+  });
+  test('tools must be a list of names; unknown fields are rejected', () => {
+    fail({ ...minPayload(), agents: { a: { ...reviewer, tools: 'Read' } } }, '.tools');
+    fail({ ...minPayload(), agents: { a: { ...reviewer, tools: [''] } } }, '.tools');
+    fail({ ...minPayload(), agents: { a: { ...reviewer, permissionMode: 'bypassPermissions' } } }, 'Unknown field');
+    fail({ ...minPayload(), agents: { a: { ...reviewer, maxTurns: 0 } } }, '.maxTurns');
+  });
+  test('at most 50 agents', () => {
+    const many = Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`a${i}`, reviewer]));
+    fail({ ...minPayload(), agents: many }, 'more than 50');
+  });
+});
+
+// ── delegation (child sessions) ──────────────────────────────────────────────
+
+describe('validatePayload — delegation', () => {
+  test('delegation via the portal is accepted', () => {
+    assert.deepEqual(ok({ ...minPayload(), delegation: { via: 'portal' } }).delegation, { via: 'portal' });
+  });
+  test('anything else is rejected', () => {
+    fail({ ...minPayload(), delegation: true }, '"delegation"');
+    fail({ ...minPayload(), delegation: { via: 'mcp' } }, '"delegation.via"');
+    fail({ ...minPayload(), delegation: { via: 'portal', url: 'https://x' } }, 'Unknown field');
+  });
+});

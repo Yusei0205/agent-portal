@@ -235,15 +235,26 @@ export async function createChildSession(
 
 // ── Child result delivery ─────────────────────────────────────────────────────
 
+/** Longest child result posted to the parent. It becomes part of the parent's next prompt. */
+export const MAX_CHILD_RESULT_CHARS = 8_000;
+
+/** A child run's result as the parent gets it: trimmed, and cut to MAX_CHILD_RESULT_CHARS. */
+export function childResultText(result: string | null | undefined): string {
+  const text = String(result ?? '').trim();
+  if (text.length <= MAX_CHILD_RESULT_CHARS) return text;
+  return `${text.slice(0, MAX_CHILD_RESULT_CHARS)}\n[The result was cut here. The child session has all of it.]`;
+}
+
 /**
  * Deliver a child-result event to the parent workflow.
- * Called after a child run finishes (done or failed).
+ * Called after a child run finishes (done or failed), with the run's result: the agent's
+ * answer, or why the run failed. That text is what the parent gets back from the child.
  *
  * If the parent is paused or done, it is resumed (new run started).
  * The delegation slot is released so the per-parent and per-user counters
  * are updated.
  */
-export async function deliverChildResult(childWorkflowId: string): Promise<void> {
+export async function deliverChildResult(childWorkflowId: string, result = ''): Promise<void> {
   try {
     const repo = getSessionsRepository();
     const child = await repo.getWorkflowById(childWorkflowId);
@@ -255,6 +266,7 @@ export async function deliverChildResult(childWorkflowId: string): Promise<void>
 
     const childTitle = child.title || child.goal.slice(0, 60);
     const childStatus = child.status ?? 'done';
+    const summary = childResultText(result);
 
     // Release delegation running-child slot — idempotent via dlgSlotHeld flag.
     // SQLite: no-op. DynamoDB: TransactWriteItems clearing dlgSlotHeld + decrement counters.
@@ -268,12 +280,12 @@ export async function deliverChildResult(childWorkflowId: string): Promise<void>
     await repo.appendWorkflowEvent({
       workflow_id: parentId,
       kind: 'child-result',
-      body: `Child session "${childTitle}" finished with status: ${childStatus}.\n${String((child as { summary?: string }).summary ?? '')}`.trim(),
+      body: `Child session "${childTitle}" finished with status: ${childStatus}.\n${summary}`.trim(),
       data: JSON.stringify({
         childId: childWorkflowId,
         childTitle,
         status: childStatus,
-        summary: (child as { summary?: string }).summary ?? '',
+        summary,
       }),
       created_at: now(),
     });
