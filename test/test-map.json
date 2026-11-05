@@ -597,6 +597,7 @@
       "sources": [
         "server/review.ts",
         "server/review-lifecycle.ts",
+        "server/pull-requests.ts",
         "server/control-plane.ts",
         "server/repositories/reviews.ts",
         "server/repositories/reviews-sqlite.ts",
@@ -608,7 +609,8 @@
       ],
       "tests": [
         "test/review.test.ts",
-        "test/reviews-repo.test.ts"
+        "test/reviews-repo.test.ts",
+        "test/pull-requests.test.ts"
       ],
       "smokeIds": ["reviews"]
     },
