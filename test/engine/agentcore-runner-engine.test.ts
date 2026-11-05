@@ -657,6 +657,7 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
       const pushed = events.filter((e) => e.type === 'repo-pushed');
       assert.equal(pushed.length, 1, JSON.stringify(events));
       assert.equal(pushed[0].error, "The session's saved files could not be restored, so nothing was pushed.");
+      assert.equal(pushed[0].errorCode, 'no-workspace');
     });
 
     it('finalize rejects a malformed request', { timeout: 60_000 }, async () => {

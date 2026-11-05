@@ -9,7 +9,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { detectChanges, pushBranch } from '../shared/runner-finalize.js';
+import { classifyPushError, detectChanges, pushBranch } from '../shared/runner-finalize.js';
+import type { PushErrorCode } from '../shared/runner-finalize.js';
 import { parseRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import type { FinalizeRequest } from './validate.js';
@@ -109,8 +110,9 @@ function findRepoDir(workDir: string, persist: string | null, name: string): str
  */
 export async function runFinalize(req: FinalizeRequest, sessionId: string | undefined, emit: Emit): Promise<void> {
   const env = req.env ?? {};
-  const fail = (error: string): void => {
-    emit({ type: 'repo-pushed', repo: req.repo, branch: req.branch, error: scrub(error, env).slice(0, 500) });
+  const fail = (error: string, errorCode?: PushErrorCode): void => {
+    const clean = scrub(error, env).slice(0, 500);
+    emit({ type: 'repo-pushed', repo: req.repo, branch: req.branch, error: clean, errorCode: errorCode ?? classifyPushError(clean) });
   };
   try {
     const workDir = workDirFor(sessionId, `finalize-${req.repo}`);
@@ -120,7 +122,7 @@ export async function runFinalize(req: FinalizeRequest, sessionId: string | unde
       await restoreWorkspace(parseSnapshot(req.snapshot), persist, (ev) => emit(ev)).catch(() => false);
       dir = findRepoDir(workDir, persist, req.repo);
     }
-    if (!dir) return fail(WORKSPACE_GONE);
+    if (!dir) return fail(WORKSPACE_GONE, 'no-workspace');
     emit({ type: 'status', text: `Pushing ${req.branch} for ${req.repo}…` });
     const { sha } = await pushBranch({
       repoDir: dir,

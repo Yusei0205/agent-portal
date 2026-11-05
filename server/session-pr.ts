@@ -29,7 +29,7 @@ import { agentCoreSessionId } from './agent/agentcore-session.ts';
 import { snapshotAccess } from './agent/runner-snapshot-access.ts';
 import { buildRunnerRepos } from './agent/runner-repo-specs.ts';
 import { runtimeFor } from './agent/repo-prep.ts';
-import { branchNameFor, isProtectedBranch } from './agent/runner-finalize.ts';
+import { branchNameFor, classifyPushError, isProtectedBranch } from './agent/runner-finalize.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -181,12 +181,6 @@ async function prBody(w: WorkflowRecord): Promise<string> {
   }
   lines.push('', 'Opened by Agent Portal.');
   return lines.join('\n');
-}
-
-function classifyPushError(text: string): ErrorCode {
-  if (/restore|snapshot|workspace|repos\/ (is )?missing|no such (file|directory)/i.test(text) && !/permission/i.test(text)) return 'no-workspace';
-  if (/permission|denied|forbidden|\b40[13]\b|not authori[sz]ed|authentication|could not read username|access/i.test(text)) return 'no-permission';
-  return 'failed';
 }
 
 // ── Public: runner reports changes ────────────────────────────────────────────
@@ -348,11 +342,17 @@ async function runPullRequest(
     };
     let pushed = false;
     let pushError = '';
+    let pushCode: ErrorCode | null = null;
     try {
       for await (const raw of invokeAgentCore(rt.arn, agentCoreSessionId(workflowId, engine), payload)) {
         const ev = raw as unknown as Record<string, unknown>;
         if (ev.type === 'repo-pushed' && ev.repo === r.runnerName) {
-          if (ev.error) pushError = scrubSecrets(String(ev.error));
+          if (ev.error) {
+            pushError = scrubSecrets(String(ev.error));
+            // The runner names the kind of failure itself; only an older runner leaves it to the wording.
+            const c = ev.errorCode;
+            if (c === 'no-permission' || c === 'no-workspace' || c === 'failed') pushCode = c;
+          }
           else if (ev.sha) pushed = true;
         } else if (ev.type === 'error') {
           pushError = pushError || scrubSecrets(String(ev.message ?? 'The push failed'));
@@ -362,7 +362,7 @@ async function runPullRequest(
       pushError = pushError || errText(e);
     }
     if (!pushed) {
-      const code = classifyPushError(pushError);
+      const code: ErrorCode = pushCode ?? classifyPushError(pushError);
       const error = code === 'no-permission'
         ? `No permission to push to ${repo.name}. A GitHub token needs repo write access; CodeCommit needs GitPush and CreatePullRequest.`
         : code === 'no-workspace'

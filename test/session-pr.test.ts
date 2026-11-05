@@ -210,6 +210,15 @@ describe('session pull requests', () => {
     assert.equal(ghCalls.length, 0);
   });
 
+  it('trusts the error code the runner sends over the wording of its message', async () => {
+    pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, error: 'something odd happened', errorCode: 'no-permission' }];
+    const s = makeSession({ jiraKey: 'RLP-5', summary: 'Coded' });
+    await handleRepoChanges(ctxOf(s), [change]);
+    const last = prEvents(s).at(-1)!;
+    assert.equal(last.errorCode, 'no-permission');
+    assert.match(String(last.error), /^No permission to push to shop\./);
+  });
+
   it('keeps the branch when the pull request fails after a push, and the button only creates the pull request', async () => {
     ghStatus = 500;
     const s = makeSession({ jiraKey: 'RLP-5', summary: 'Half' });

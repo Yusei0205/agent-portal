@@ -9,12 +9,33 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { slugify, branchNameFor, isProtectedBranch, detectChanges, pushBranch } from '../server/agent/runner-finalize.ts';
+import { slugify, branchNameFor, isProtectedBranch, detectChanges, pushBranch, classifyPushError } from '../server/agent/runner-finalize.ts';
 
 const GIT_ENV = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...GIT_ENV } }).trim();
 }
+
+describe('classifyPushError', () => {
+  it('recognises a refused push as a permission problem', () => {
+    for (const t of [
+      'remote: Permission to org/repo.git denied to user.',
+      'fatal: unable to access https://github.com/o/r.git/: The requested URL returned error: 403',
+      'remote: HTTP 401 Unauthorized',
+      'fatal: Authentication failed for https://x/y.git',
+      'fatal: could not read Username for https://github.com: terminal prompts disabled',
+      'User: arn:aws:iam::1:user/x is not authorized to perform: codecommit:GitPush',
+    ]) assert.equal(classifyPushError(t), 'no-permission', t);
+  });
+  it('recognises missing saved files', () => {
+    assert.equal(classifyPushError("The session's saved files could not be restored, so nothing was pushed."), 'no-workspace');
+    assert.equal(classifyPushError('repos/ is missing'), 'no-workspace');
+  });
+  it('keeps everything else as a plain failure, and does not read digits inside words as a status', () => {
+    assert.equal(classifyPushError('error: failed to push some refs (non-fast-forward)'), 'failed');
+    assert.equal(classifyPushError('object 14031a2b is corrupt'), 'failed');
+  });
+});
 
 let root: string;
 let seq = 0;

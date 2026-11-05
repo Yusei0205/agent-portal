@@ -20,6 +20,15 @@ export function slugify(text: string, max = 40): string {
 }
 
 /** `portal/<KEY>-<slug>` or `portal/<slug>`; on a clash with `taken` append -2, -3, ... */
+export type PushErrorCode = 'no-permission' | 'no-workspace' | 'failed';
+
+/** Sorts a push failure into what the person should be told. Shared by the runner (which sends the code) and the portal (fallback). */
+export function classifyPushError(text: string): PushErrorCode {
+  if (/restore|snapshot|workspace|repos\/ (is )?missing|no such (file|directory)/i.test(text) && !/permission/i.test(text)) return 'no-workspace';
+  if (/permission|denied|forbidden|\b40[13]\b|not authori[sz]ed|authentication|could not read username|access/i.test(text)) return 'no-permission';
+  return 'failed';
+}
+
 export function branchNameFor(opts: { ticketKey?: string | null; title: string; taken?: string[] }): string {
   const key = String(opts.ticketKey ?? '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const slug = slugify(opts.title) || 'changes';
