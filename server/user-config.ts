@@ -37,6 +37,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
+import { persistFile, persistTree, forgetFile, forgetTree, syncTreeDown } from './durable-files.ts';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one } from './db.ts';
@@ -80,6 +81,13 @@ interface TreeEntry {
 
 function userConfigRoot(userId: string, folder: ConfigFolder): string {
   return path.join(config.dataDir, 'user-config', userId, folder);
+}
+
+// On the cloud portal each Lambda instance has its own /tmp, and it is wiped when the instance is replaced. The
+// folders live in the storage backend (S3) as well: every change is written there, and every read first brings the
+// local copy in line with it, so whichever instance answers sees the same files. No-ops on a local install.
+async function syncDown(userId: string, folder: ConfigFolder): Promise<void> {
+  await syncTreeDown(userConfigRoot(userId, folder));
 }
 
 /**
@@ -201,6 +209,7 @@ async function ensureNotFollowing(userId: string, folder: ConfigFolder): Promise
         fs.writeFileSync(abs, f.content, 'utf8');
       }
     }
+    await persistTree(root);
   }
 
   const ts = now();
@@ -311,6 +320,7 @@ async function buildExportZip(userId: string, folder: ConfigFolder): Promise<Buf
     }
   } else {
     const root = userConfigRoot(userId, folder);
+    await syncDown(userId, folder);
     const walkDir = (dir: string): void => {
       let entries: fs.Dirent[];
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -896,6 +906,7 @@ export async function materialiseForRun(
       } else {
         // Copy user's disk files (decrypting aws)
         const root = userConfigRoot(userId, folder);
+        await syncDown(userId, folder);
         if (!fs.existsSync(root)) continue;
         const copyDir = async (src: string, dst: string): Promise<void> => {
           await fsp.mkdir(dst, { recursive: true });
@@ -992,6 +1003,7 @@ export async function listAgentsForEngine(userId: string, engine: string): Promi
       }
     } else {
       const root = userConfigRoot(userId, 'kiro');
+      await syncDown(userId, 'kiro');
       const agentsDir = path.join(root, 'agents');
       if (fs.existsSync(agentsDir)) {
         for (const name of fs.readdirSync(agentsDir)) {
@@ -1027,6 +1039,7 @@ export async function listAgentsForEngine(userId: string, engine: string): Promi
       }
     } else {
       const root = userConfigRoot(userId, 'claude');
+      await syncDown(userId, 'claude');
       const agentsDir = path.join(root, 'agents');
       if (fs.existsSync(agentsDir)) {
         for (const name of fs.readdirSync(agentsDir)) {
@@ -1106,6 +1119,7 @@ export function registerUserConfigRoutes(): void {
     }
 
     const root = userConfigRoot(userId, folder);
+    await syncDown(userId, folder);
     let absDir: string;
     try {
       absDir = relPath ? resolveConfigPath(userId, folder, relPath) : root;
@@ -1152,6 +1166,7 @@ export function registerUserConfigRoutes(): void {
       return;
     }
 
+    await syncDown(userId, folder);
     let absPath: string;
     try {
       absPath = resolveConfigPath(userId, folder, relPath);
@@ -1216,6 +1231,7 @@ export function registerUserConfigRoutes(): void {
 
     try {
       writeConfigFileSync(absPath, content, folder);
+      await persistFile(absPath);
     } catch (e: unknown) {
       sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1266,6 +1282,7 @@ export function registerUserConfigRoutes(): void {
 
     try {
       writeConfigFileSync(absPath, content, folder);
+      await persistFile(absPath);
     } catch (e: unknown) {
       sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1307,8 +1324,10 @@ export function registerUserConfigRoutes(): void {
 
     if (fs.statSync(absPath).isDirectory()) {
       await fsp.rm(absPath, { recursive: true, force: true });
+      await forgetTree(absPath);
     } else {
       await fsp.rm(absPath, { force: true });
+      await forgetFile(absPath);
     }
 
     appendAudit(getDb(), userId, 'user-config.delete', `user:${userId}:${folder}:${relPath}`, { folder, path: relPath }, req.ip);
@@ -1377,7 +1396,10 @@ export function registerUserConfigRoutes(): void {
     if (fs.existsSync(dstPath)) { sendJson(res, 409, { error: 'Destination already exists' }); return; }
 
     await fsp.mkdir(path.dirname(dstPath), { recursive: true });
+    const movedDir = fs.statSync(srcPath).isDirectory();
     await fsp.rename(srcPath, dstPath);
+    if (movedDir) { await forgetTree(srcPath); await persistTree(dstPath); }
+    else { await forgetFile(srcPath); await persistFile(dstPath); }
 
     appendAudit(getDb(), userId, 'user-config.rename', `user:${userId}:${folder}`, { folder, from, to }, req.ip);
     sendJson(res, 200, { ok: true, path: to });
@@ -1405,6 +1427,7 @@ export function registerUserConfigRoutes(): void {
     if (fs.existsSync(root)) {
       await fsp.rm(root, { recursive: true, force: true });
     }
+    await forgetTree(root);
     await fsp.mkdir(root, { recursive: true });
 
     // Restore team version files to disk
@@ -1418,6 +1441,7 @@ export function registerUserConfigRoutes(): void {
         await fsp.writeFile(abs, f.content, 'utf8'); // already in right format (enc/plain)
       }
     }
+    await persistTree(root);
 
     // Mark as following
     await getUserConfigRepository().setState(userId, folder, {
@@ -1487,6 +1511,7 @@ export function registerUserConfigRoutes(): void {
     if (fs.existsSync(root)) {
       await fsp.rm(root, { recursive: true, force: true });
     }
+    await forgetTree(root);
     await fsp.mkdir(root, { recursive: true });
 
     // Write files (encrypt if aws)
@@ -1495,6 +1520,7 @@ export function registerUserConfigRoutes(): void {
       await fsp.mkdir(path.dirname(abs), { recursive: true });
       writeConfigFileSync(abs, e.content, folder);
     }
+    await persistTree(root);
 
     // Mark as customised
     const ts = now();
@@ -1601,6 +1627,7 @@ export function registerUserConfigRoutes(): void {
     let summary: LocalImportSummary;
     try {
       summary = await importLocalConfig(userId, folder as 'kiro' | 'claude');
+      await persistTree(userConfigRoot(userId, folder));
     } catch (e: unknown) {
       sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;
     }
