@@ -37,7 +37,7 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
   const arg = rest.join(' ').trim();
   const engine = String(w.engine);
   const repo = getSessionsRepository();
-  const hasEngine = engine === 'kiro' || engine === 'claude-code';
+  const hasEngine = engine === 'kiro' || engine === 'claude-code' || engine === 'codex';
 
   switch (name) {
     case 'help':
@@ -48,8 +48,8 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
       return 'The next message starts a new engine session with a short recap of this conversation.';
 
     case 'model': {
-      if (!hasEngine) return 'Models can be changed in Kiro and Claude Code sessions.';
-      const res = await getEngineModels(engine as 'kiro' | 'claude-code', userId, w.credential_id ?? null, false);
+      if (!hasEngine) return 'Models can be changed in Codex, Kiro and Claude Code sessions.';
+      const res = await getEngineModels(engine as 'kiro' | 'claude-code' | 'codex', userId, w.credential_id ?? null, false);
       const models = res.models ?? [];
       const current = w.model || models.find((m) => m.default)?.id || '(default)';
       if (!arg) {
@@ -74,6 +74,7 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
     }
 
     case 'agent': {
+      if (engine === 'codex') return 'Codex uses its native agent instructions. Kiro and Claude lead agents do not apply.';
       if (!hasEngine) return 'Agents can be changed in Kiro and Claude Code sessions.';
       const agents = await listAgentsForEngine(userId, engine);
       const current = w.lead_agent || '(default)';
@@ -116,6 +117,10 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
 
     case 'cost':
     case 'usage': {
+      if (engine === 'codex') {
+        const totals = await repo.getRunTotals(w.id);
+        return 'Codex uses your ChatGPT plan. Dollar cost is unavailable.\nSession tokens: ' + totals.total_input + ' in / ' + totals.total_output + ' out';
+      }
       const latest = await repo.getLatestRun(w.id);
       const totals = await repo.getRunTotals(w.id);
       const tokens = totals.total_input || totals.total_output

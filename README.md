@@ -3,7 +3,7 @@
 A self-hosted web portal for running AI coding agents on your projects, to speed up delivery, QA and
 code review. It runs agents through the official
 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/typescript) (Anthropic API or Amazon
-Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of what it does is in
+Bedrock) or through Kiro CLI or OpenAI Codex, and has a simulated Demo mode. The full list of what it does is in
 [docs/requirements-spec.md](docs/requirements-spec.md).
 
 - **Projects** hold documents, repositories, agents, skills, sessions and members. **Setup** is one
@@ -202,6 +202,50 @@ and the "Icon diagrams" integration.
 - `/tools` — show the status of all four tool packs.
 - `/browser on` / `/browser off` — enable or disable the web browser for the current session.
 - `/aws on` / `/aws off` — enable or disable the AWS integration for the current session.
+
+#### Codex login
+
+Install the official [Codex CLI](https://developers.openai.com/codex/cli) on the machine that runs the
+portal (tested with `codex-cli 0.166.0`). The server launches the native `codex` executable from `PATH`.
+If needed, set `PORTAL_CODEX_BIN` to its absolute path. Windows desktop installation locations are
+discovered automatically; npm installations use the official JS launcher without a command shell.
+The standard Docker image now includes the pinned Codex CLI; keep its `/data` volume persistent.
+The Lambda + AgentCore path has a dedicated ARM64 Codex runner, encrypted OAuth connections,
+distributed token renewal, and durable thread snapshots. Cloud sign-in requires a registered
+OpenAI client with ChatGPT plan inference access. See [Codex deployment](docs/codex-deployment.md)
+for image builds, CDK deployment, registration settings, and remaining live verification.
+
+Open **Connect > Agent sign-ins**, then **Codex > Sign in with ChatGPT**. Open the displayed URL,
+enter the one-time code and finish authorization. Device-code sign-in must be enabled for your
+ChatGPT account/workspace. Then choose **Codex** when creating a session or using **Switch engine**.
+The model picker lists the CLI catalog; a successful run verifies account access to a model. No OpenAI API key is required.
+
+For a local single-user installation, an administrator can instead click **Use this machine's Codex
+sign-in**. This explicitly copies the host's existing ChatGPT Codex login into their own portal
+login store. It reads `CODEX_HOME/auth.json`, or `~/.codex/auth.json` by default. A login stored only
+in the operating system keychain cannot be imported this way; use device sign-in instead. Separate
+device sign-in is preferable if both applications need to refresh credentials independently.
+
+For local runs, Codex owns token refresh and stores its native credentials under `DATA_DIR/codex/<user-hash>/`.
+Treat this directory as sensitive when backing up the data volume. It is separate from run folders
+and other users' Codex homes. The portal never sends these tokens to the browser. Sessions resume
+their stored Codex thread; `/clear` starts fresh and `/compact` starts with a conversation recap.
+
+Codex uses its native sandbox and approval policy: safe read commands may run without a portal
+prompt. Approval requests sent by Codex are checked against portal rules and shown in the existing
+approval UI. Ordinary sessions start read-only; trusted sessions allow writes within the workspace.
+The portal never enables Codex's full-access bypass mode. Unknown approval requests fail closed.
+Local runs support native tools. Cloud runs also connect portal MCP integrations, repository preparation,
+checks, approvals, cancellation, and output files through the Codex runner. Agent setup includes a Codex tab and a native Codex agent pack; select its lead agent when starting or switching sessions. Subscription runs record reported token use; dollar cost is unavailable
+and is not estimated against API prices.
+
+To use Codex for portal AI features, select **Settings > Portal AI provider > OpenAI Codex** and save.
+Each requesting user must connect their own ChatGPT account. **Agent setup > Codex (~/.codex)**
+provides a starter structure, the shared specialist agent pack in native TOML format, skills,
+zip import/export, and team defaults. Setup applies to local and AgentCore sessions. Portal AI
+requests currently accept text; image attachments require another provider.
+
+The integration uses the official [Codex app-server protocol](https://developers.openai.com/codex/app-server).
 
 #### Kiro login
 

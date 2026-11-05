@@ -86,7 +86,8 @@ async function save(workflowId: string, st: RepoPrepState): Promise<void> {
   await setSetting(getDb(), key(workflowId), JSON.stringify(st));
 }
 
-export function runtimeFor(engine: string): { arn: string; kind: 'kiro' | 'claude-code' } | null {
+export function runtimeFor(engine: string): { arn: string; kind: 'kiro' | 'claude-code' | 'codex' } | null {
+  if (engine === 'codex' && process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN) return { arn: process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN, kind: 'codex' };
   if (engine === 'kiro' && process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN) {
     return { arn: process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN, kind: 'kiro' };
   }
@@ -138,7 +139,7 @@ async function prepare(workflowId: string): Promise<void> {
 
   const runId = `prep-${randomUUID()}`;
   const snapshot = await snapshotAccess(workflowId);
-  const payload: Record<string, unknown> = rt.kind === 'kiro'
+  const payload: Record<string, unknown> = rt.kind !== 'claude-code'
     ? { mode: 'prepare-repos', runId, repos, ...(snapshot ? { snapshot } : {}) }
     : { runId, prepareOnly: true, repos, ...(snapshot ? { snapshot } : {}) };
 

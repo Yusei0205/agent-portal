@@ -38,7 +38,7 @@ export function ConnectHub({ tab, user, projectId }) {
     <div className="page connect-hub">
       <PageHeader
         title="Connect"
-        description="What the portal signs in to: Git hosts, the Kiro and Claude accounts that run agents, and the tools agents can use."
+        description="What the portal signs in to: Git hosts, the Codex, Kiro and Claude accounts that run agents, and the tools agents can use."
       />
       <div className="tab-bar" role="tablist" aria-label="Connect sections">
         {CONNECT_TABS.map((t) => (

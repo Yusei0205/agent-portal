@@ -1414,6 +1414,35 @@
         "test/ticket-sort.test.ts"
       ],
       "smokeIds": []
+    },
+    "codex": {
+      "description": "Codex sign-in, stdio transport, engine runs, and credential isolation",
+      "sources": [
+        "server/codex-auth.ts",
+        "server/codex-command.ts",
+        "server/codex-client.ts",
+        "server/agent/codex.ts",
+        "web/src/components/CodexCredentials.jsx",
+        "server/codex-oauth.ts",
+        "server/repositories/codex-store.ts",
+        "server/agent/codex-session.ts",
+        "server/agent/codex-agentcore.ts",
+        "codex-runner/src/service.ts",
+        "codex-runner/src/state.ts",
+        "server/agent/codex-config.ts",
+        "server/agent/codex-text.ts"
+      ],
+      "tests": [
+        "test/codex.test.ts",
+        "test/codex-oauth.test.ts",
+        "test/codex-runner.test.ts",
+        "test/codex-store.test.ts",
+        "test/codex-setup.test.ts"
+      ],
+      "smokeIds": [
+        "credentials",
+        "codex-setup"
+      ]
     }
   },
   "shared": [

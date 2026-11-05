@@ -22,6 +22,7 @@ function dotClass(status) {
 
 /** Engine badge label. */
 function engineLabel(engine) {
+  if (engine === 'codex') return 'Codex';
   if (engine === 'kiro') return 'kiro';
   if (engine === 'claude-code') return 'claude';
   return engine || 'demo';
@@ -342,10 +343,10 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
   // Determine whether to show engine filter (both kiro and claude-code sessions exist)
   const engines = useMemo(() => {
     const set = new Set((workflows || []).map((w) => w.engine));
-    return { hasKiro: set.has('kiro'), hasClaude: set.has('claude-code') };
+    return { count: set.size };
   }, [workflows]);
 
-  const showEngineFilter = engines.hasKiro && engines.hasClaude;
+  const showEngineFilter = engines.count > 1;
 
   const groups = useMemo(() => groupWorkflows(filtered), [filtered]);
 
@@ -444,6 +445,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
             {[
               { value: 'all', label: 'All engines' },
               { value: 'kiro', label: 'Kiro' },
+              { value: 'codex', label: 'Codex' },
               { value: 'claude-code', label: 'Claude Code' },
             ].map((f) => (
               <button

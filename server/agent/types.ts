@@ -13,7 +13,7 @@ export interface AgentRun {
   goal: string;
   /** Explicit workflow kind — 'review' for code-review runs; null for generic runs. */
   kind: string | null;
-  engine: 'claude-code' | 'kiro' | 'demo';
+  engine: 'claude-code' | 'kiro' | 'codex' | 'demo';
   trusted: boolean;
   dataDir: string;
   /** Absolute path: DATA_DIR/projects/<slug>/work/<runId>/ */

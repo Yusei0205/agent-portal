@@ -8,7 +8,7 @@
 
 import { createHash } from 'node:crypto';
 
-export function agentCoreSessionId(workflowId: string, engine: 'kiro' | 'claude-code'): string {
+export function agentCoreSessionId(workflowId: string, engine: 'kiro' | 'claude-code' | 'codex'): string {
   const h = createHash('sha256').update(`${engine}|${workflowId}`).digest('hex');
-  return `wf-${engine === 'kiro' ? 'k' : 'c'}-${h.slice(0, 40)}`;
+  return `wf-${engine === 'kiro' ? 'k' : engine === 'codex' ? 'x' : 'c'}-${h.slice(0, 40)}`;
 }

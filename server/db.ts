@@ -2169,7 +2169,62 @@ const M48_KIRO_CREDITS = `
   UPDATE budget_usage SET credits = cost_usd, cost_usd = 0 WHERE provider = 'kiro' AND cost_usd > 0;
 `;
 
-const MIGRATIONS: string[] = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS];
+/** Expand only the engine CHECK; keep workflow rows, child foreign keys, and indexes intact.
+ * SQLite's documented schema-edit procedure avoids dropping this heavily referenced table.
+ */
+export function migrateCodexEngine(database: DatabaseSync): void {
+  const row = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'p6_workflows'").get() as { sql: string };
+  const before = "CHECK(engine IN ('claude-code','kiro','demo'))";
+  const after = "CHECK(engine IN ('claude-code','kiro','codex','demo'))";
+  if (row.sql.includes(after)) return;
+  if (!row.sql.includes(before)) throw new Error('Unexpected workflow engine constraint');
+  const version = Number((database.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version);
+  database.exec('PRAGMA writable_schema = ON');
+  try {
+    database.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = 'p6_workflows'").run(row.sql.replace(before, after));
+    database.exec('PRAGMA schema_version = ' + (version + 1));
+  } finally {
+    database.exec('PRAGMA writable_schema = RESET');
+  }
+  const check = database.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+  if (check.integrity_check !== 'ok') throw new Error('Codex schema migration integrity check failed');
+}
+
+const M50_CODEX_CLOUD = `
+  CREATE TABLE IF NOT EXISTS codex_connections (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    ciphertext TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    lease_owner TEXT,
+    lease_until INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS codex_oauth_attempts (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    state_hash TEXT PRIMARY KEY,
+    ciphertext TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS codex_oauth_expiry ON codex_oauth_attempts(expires_at);
+`;
+
+export function migrateCodexConfig(database: DatabaseSync): void {
+  const before = "CHECK(folder IN ('kiro','claude','aws'))";
+  const after = "CHECK(folder IN ('kiro','claude','codex','aws'))";
+  const version = Number((database.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version);
+  database.exec('PRAGMA writable_schema = ON');
+  try {
+    for (const name of ['user_config_state', 'team_config_versions']) {
+      const row = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?").get(name) as { sql: string };
+      if (row.sql.includes(after)) continue;
+      if (!row.sql.includes(before)) throw new Error('Unexpected configuration folder constraint');
+      database.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = ?").run(row.sql.replace(before, after), name);
+    }
+    database.exec('PRAGMA schema_version = ' + (version + 1));
+  } finally { database.exec('PRAGMA writable_schema = RESET'); }
+  if ((database.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check !== 'ok') throw new Error('Codex setup migration integrity check failed');
+}
+
+const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig];
 
 // IDs are array positions (1-based): M1_CORE=1, ..., M43_RESUME_RETRY=42, M44_APPROVAL_BINDING=43, M45_RUN_LIMITS=44.
 export const SCHEMA_VERSION = MIGRATIONS.length; // = 42
@@ -2201,7 +2256,9 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
       // Split the migration into individual statements so ALTER TABLE ADD COLUMN
       // can be made idempotent: SQLite has no IF NOT EXISTS for column additions,
       // so we skip "duplicate column name" errors rather than rolling back.
-      const stmts = MIGRATIONS[i]
+      const migration = MIGRATIONS[i];
+      if (typeof migration === 'function') migration(db);
+      const stmts = (typeof migration === 'string' ? migration : '')
         .split(';')
         .map((s) => s.trim())
         .filter(Boolean);

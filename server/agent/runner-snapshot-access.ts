@@ -24,11 +24,19 @@ export interface SnapshotAccess {
 
 /** Null when snapshots are not available (local storage, or the URLs could not be made). Never throws. */
 export async function snapshotAccess(workflowId: string): Promise<SnapshotAccess | null> {
+  return accessForKey(snapshotKey(workflowId));
+}
+
+/** Codex thread files are separate from cross-engine repository snapshots; never pack credentials. */
+export async function codexStateAccess(workflowId: string): Promise<SnapshotAccess | null> {
+  return accessForKey(`codex-state-snapshots/${workflowId}.tar.gz`);
+}
+
+async function accessForKey(key: string): Promise<SnapshotAccess | null> {
   try {
     const storage = getStorage();
     if (typeof (storage as unknown as Partial<Presigning>).presign !== 'function') return null;
     const s3 = storage as unknown as Presigning;
-    const key = snapshotKey(workflowId);
     const putUrl = await s3.presign(key, 'put', URL_LIFETIME_SECONDS);
     // Only offer a download when an earlier copy exists, so a first run does not go looking for nothing.
     const getUrl = (await storage.exists(key)) ? await s3.presign(key, 'get', URL_LIFETIME_SECONDS) : undefined;
@@ -41,4 +49,5 @@ export async function snapshotAccess(workflowId: string): Promise<SnapshotAccess
 /** Removes the saved workspace of a deleted session. */
 export async function deleteSnapshot(workflowId: string): Promise<void> {
   try { await getStorage().delete(snapshotKey(workflowId)); } catch { /* the bucket's expiry rule removes it anyway */ }
+  try { await getStorage().delete(`codex-state-snapshots/${workflowId}.tar.gz`); } catch { /* the bucket's expiry rule removes it anyway */ }
 }

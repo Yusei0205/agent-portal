@@ -7,9 +7,17 @@ import { AgentPortalSpikeCStack } from '../lib/spike-c-stack';
 import { AgentPortalCloudStack } from '../lib/portal-stack';
 import { AgentPortalHarnessBuildStack, AgentPortalHarnessStack } from '../lib/harness-stack';
 import { AgentPortalGithubDeployStack } from '../lib/github-deploy-stack';
+import { AgentPortalCodexRunnerStack } from '../lib/codex-runner-stack';
 import * as path from 'node:path';
 
 const app = new cdk.App();
+
+if (app.node.tryGetContext('codexRunner')) {
+  new AgentPortalCodexRunnerStack(app, 'AgentPortalCodexRunner', {
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT || '366019841051', region: process.env.CDK_DEFAULT_REGION || 'ap-southeast-1' },
+    repoRoot: path.resolve(__dirname, '..', '..'), description: 'Agent Portal Codex AgentCore runner',
+  });
+}
 
 new AgentPortalSpikeAStack(app, 'AgentPortalSpikeA', {
   env: {
@@ -50,6 +58,10 @@ if (budgetEmail) {
     budgetEmail,
     storageBucket: app.node.tryGetContext('storageBucket'),
     claudeRuntimeArn: app.node.tryGetContext('claudeRuntimeArn'),
+    codexRuntimeArn: app.node.tryGetContext('codexRuntimeArn'),
+    codexOAuthClientId: app.node.tryGetContext('codexOAuthClientId'),
+    codexOAuthRedirectUri: app.node.tryGetContext('codexOAuthRedirectUri'),
+    codexOAuthSecretArn: app.node.tryGetContext('codexOAuthSecretArn'),
     agentcoreBrowser: String(app.node.tryGetContext('agentcoreBrowser')) === 'true',
     publicUrl: app.node.tryGetContext('publicUrl'),
     googleAllowed: app.node.tryGetContext('googleAllowed'),

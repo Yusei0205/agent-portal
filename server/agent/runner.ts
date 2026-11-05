@@ -38,6 +38,7 @@ import type { AgentRun, RunContext } from './types.ts';
 import { runDemo } from './demo.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { runKiro } from './kiro.ts';
+import { runCodex } from './codex.ts';
 import { materialiseForRun, cleanupRunHome } from '../user-config.ts';
 import { projectAwsEnv } from '../project-aws.ts';
 import { collectInputFiles } from './runner-files.ts';
@@ -404,7 +405,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       projectId: workflow.project_id ? String(workflow.project_id) : null,
       goal: prompt,  // pending messages on resume; original goal on first run
       kind: workflow.kind ? String(workflow.kind) : null,
-      engine: (workflow.engine as 'claude-code' | 'kiro' | 'demo') || 'demo',
+      engine: (workflow.engine as 'claude-code' | 'kiro' | 'codex' | 'demo') || 'demo',
       trusted: Boolean(workflow.trust_tools),
       dataDir: config.dataDir,
       workDir,
@@ -448,7 +449,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     // clones, so the runner clones the repositories itself, with short-lived access built here.
     const runsOnAgentCore =
       (agentRun.engine === 'kiro' && Boolean(process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN))
-      || (agentRun.engine === 'claude-code' && Boolean(process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN));
+      || (agentRun.engine === 'claude-code' && Boolean(process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN))
+      || (agentRun.engine === 'codex' && Boolean(process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN));
     let availableRepoNames: string[] = [];
     if (runsOnAgentCore) {
       const specs = await buildRunnerRepos(
@@ -509,11 +511,13 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         result = await runDemo(runContext);
       } else if (agentRun.engine === 'claude-code') {
         result = await runClaudeCode(runContext);
+      } else if (agentRun.engine === 'codex') {
+        result = await runCodex(runContext);
       } else if (agentRun.engine === 'kiro') {
         result = await runKiro(runContext);
       } else {
         // Unknown engine: fail with a clear error (requirement D-12 — no silent fallback)
-        throw new Error(`Unknown engine "${agentRun.engine}". Set the workflow engine to claude-code, kiro, or demo.`);
+        throw new Error(`Unknown engine "${agentRun.engine}". Set the workflow engine to claude-code, kiro, codex, or demo.`);
       }
     } finally {
       if (timeLimitTimer) clearTimeout(timeLimitTimer);

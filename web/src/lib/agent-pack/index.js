@@ -199,7 +199,19 @@ export function claudePackFiles() {
 
 /** The pack's files for a config folder ('kiro' | 'claude'), or null. */
 export function agentPackFiles(folder) {
+  if (folder === 'codex') return codexPackFiles();
   if (folder === 'kiro') return kiroPackFiles();
   if (folder === 'claude') return claudePackFiles();
   return null;
+}
+
+/** Codex native TOML agent definitions and Agent Skills. */
+export function codexPackFiles() {
+  return [
+    { path: 'config.toml', content: '[features]\nmulti_agent = true\n' },
+    { path: 'AGENTS.md', content: '# Agent Portal team\n\nUse the configured lead agent for coordination. Delegate focused work to the specialists when useful. Read the relevant skills before acting. Respect portal approvals and workspace boundaries.\n' },
+    ...PACK_AGENTS.map(a => ({ path: 'agents/' + a.name + '.toml', content:
+      'name = ' + JSON.stringify(a.name) + '\ndescription = ' + JSON.stringify(a.description) + '\ndeveloper_instructions = ' + JSON.stringify(a.prompt.trim() + '\n\nUse these skills when relevant: ' + a.skills.map(s => '$' + s).join(', ')) + '\n' })),
+    ...PACK_SKILLS.map(s => ({ path: 'skills/' + s.name + '/SKILL.md', content: skillFile(s) })),
+  ];
 }

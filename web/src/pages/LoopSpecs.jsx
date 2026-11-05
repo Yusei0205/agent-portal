@@ -223,6 +223,7 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
               <select id="ls-engine" value={form.engine} onChange={(e) => setForm((f) => ({ ...f, engine: e.target.value }))}>
                 <option value="claude-code">Claude Code</option>
                 <option value="kiro">Kiro</option>
+                    <option value="codex">Codex</option>
                 <option value="demo">Demo (no AI)</option>
               </select>
             </div>
