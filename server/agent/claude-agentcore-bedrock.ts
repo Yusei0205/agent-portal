@@ -39,6 +39,7 @@ import { buildConversationRecap } from './recap.ts';
 import { ApprovalRelay, DelegationRelay, isApprovalRequest, isDelegateRequest } from './agentcore-bridge.ts';
 import { invokeAgentCore, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
 import type { RunContext, AgentRun } from './types.ts';
+import { snapshotAccess } from './runner-snapshot-access.ts';
 import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
 import type { RepoChange } from '../session-pr.ts';
 
@@ -157,6 +158,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const hasRepos = Boolean(run.runnerRepos?.length);
   const finalizeCheck = hasRepos && run.projectId ? await finalizeCheckFor(run.projectId, Boolean(wf?.jira_key)) : false;
   const changes: RepoChange[] = [];
+  // The runner saves the workspace after the run; the pull request step later restores it in the session's own
+  // AgentCore session (this run uses a per-run session id), so the repositories are found again to push.
+  const snapshot = hasRepos && run.workflowId ? await snapshotAccess(run.workflowId) : null;
 
   const payload: Record<string, unknown> = {
     mode: 'run',
@@ -171,6 +175,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
     ...(Object.keys(agents).length ? { agents } : {}),
     ...(canDelegate ? { delegation: { via: 'portal' } } : {}),
     ...(hasRepos ? { repos: run.runnerRepos } : {}),
+    ...(snapshot ? { snapshot } : {}),
     ...(finalizeCheck ? { finalizeCheck: true } : {}),
   };
 

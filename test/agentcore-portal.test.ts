@@ -387,6 +387,29 @@ describe('Claude on AgentCore — repository changes go to the pull request step
     assert.equal(sent3[0]!.finalizeCheck, undefined);
   });
 
+  it('harness path: the payload carries the workspace snapshot access only with repositories and when snapshots are available', async () => {
+    const ids = makeRun('claude-code');
+    const access = { putUrl: 'https://s3.invalid/put', getUrl: 'https://s3.invalid/get' };
+    const { setStorage } = await import('../server/storage-instance.ts');
+    setStorage({ presign: async (_p: string, m: string) => (m === 'put' ? access.putUrl : access.getUrl), exists: async () => true } as never);
+    try {
+      let sent = stub([done]);
+      await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+      assert.deepEqual(sent[0]!.snapshot, access);
+
+      sent = stub([done]);
+      await runClaudeViaAgentCore(makeCtx(ids, { engine: 'claude-code' }).ctx, ARN);
+      assert.equal(sent[0]!.snapshot, undefined, 'no repositories');
+
+      setStorage({ exists: async () => false } as never);
+      sent = stub([done]);
+      await runClaudeViaAgentCore(withRepos(makeCtx(ids, { engine: 'claude-code' })).ctx, ARN);
+      assert.equal(sent[0]!.snapshot, undefined, 'storage cannot presign (local mode)');
+    } finally {
+      setStorage(null as never);
+    }
+  });
+
   it('submitRepoChanges never throws and does not wait past its bound', async () => {
     const ids = makeRun('claude-code');
     const run = makeCtx(ids, { engine: 'claude-code' }).ctx.run;
