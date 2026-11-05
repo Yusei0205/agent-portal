@@ -245,7 +245,8 @@ describe('LIVE: Claude runs in AgentCore with the harness', { skip: ARN ? false 
     const wrote = (file: string) => work.some((w) => specialists.includes(String(w.agent)) && /Write|Edit|Bash|PowerShell/.test(String(w.tool)) && w.input.includes(file));
     assert.ok(wrote('calc.py'), `a specialist wrote calc.py: ${JSON.stringify(work)}`);
     assert.ok(wrote('README'), `a specialist wrote the README: ${JSON.stringify(work)}`);
-    // Streamed pieces of the answer may arrive on separate lines on this path (a known display issue).
-    assert.match(summary.replace(/\s+/g, ''), /DONE/i, 'the lead reports back');
+    assert.match(summary, /DONE/, 'the lead reports back');
+    // The answer is streamed in small pieces; they join into whole lines, not one piece per line.
+    assert.ok(summary.split('\n').length < 40, `the lead's report reads as text: ${JSON.stringify(summary.slice(0, 300))}`);
   });
 });

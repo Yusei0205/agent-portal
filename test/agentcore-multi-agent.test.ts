@@ -265,6 +265,26 @@ describe('Claude on AgentCore — several agents and several sessions', () => {
     assert.equal(all('SELECT id FROM p6_workflows WHERE parent_id = ?', s.workflowId).length, before, 'neither started a session');
   });
 
+  it('a streamed reply joins into one line of the answer; the next reply starts a new one', async () => {
+    const s = await newSession();
+    fakeRuntime(async function* () {
+      for (const text of ['I\'ll del', 'egate th', 'is.']) yield { type: 'assistant-text', text, stream: true };
+      yield { type: 'tool-start', toolName: 'Agent', toolInput: '{}' };
+      yield { type: 'assistant-text', text: 'Subagent notes.', agent: 'reviewer' };
+      for (const text of ['Both ', 'are done.']) yield { type: 'assistant-text', text, stream: true };
+      yield { type: 'context', percent: 3 };
+      for (const text of ['**DO', 'NE**']) yield { type: 'assistant-text', text, stream: true };
+      yield { type: 'assistant-text', text: 'A whole reply.' };
+      yield RESULT;
+    });
+    const t = makeCtx(s);
+    const summary = await runClaudeViaAgentCore(t.ctx, ARN);
+    assert.equal(summary, 'I\'ll delegate this.\nBoth are done.\n**DONE**\nA whole reply.');
+    const shown = t.events.filter((e) => e.type === 'assistant-text' && !e.payload.agent);
+    assert.deepEqual(shown.map((e) => e.payload.stream === true), [true, true, true, true, true, true, true, false],
+      'the pieces are shown as pieces of one reply (the viewer joins them)');
+  });
+
   it('a session without an owner cannot start child sessions', async () => {
     const s = await newSession();
     const rt = fakeRuntime(async function* () { yield RESULT; });
