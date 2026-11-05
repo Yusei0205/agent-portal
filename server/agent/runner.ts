@@ -242,6 +242,22 @@ export interface StartedRun {
   done: Promise<Row>;
 }
 
+type FinishListener = (run: Row) => void | Promise<void>;
+const finishListeners: FinishListener[] = [];
+
+/** Call `fn` with the final run row whenever a run ends (completed, failed or stopped). */
+export function onRunFinished(fn: FinishListener): void {
+  finishListeners.push(fn);
+}
+
+function notifyFinished(run: Row): void {
+  for (const fn of finishListeners) {
+    Promise.resolve()
+      .then(() => fn(run))
+      .catch((e) => console.error(`[run ${run.id}] finish listener failed`, e));
+  }
+}
+
 export async function startRun(input: StartRunInput): Promise<StartedRun> {
   assertBudget();
   const settings = getSettings();
@@ -314,7 +330,9 @@ export async function startRun(input: StartRunInput): Promise<StartedRun> {
       }
       active.delete(runId);
     }
-    return getRun(runId);
+    const final = getRun(runId);
+    notifyFinished(final);
+    return final;
   })();
   return { run: getRun(runId), done };
 }

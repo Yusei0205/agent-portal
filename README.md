@@ -17,6 +17,8 @@ A self-hosted web portal for running Claude agents on your projects. Built on th
   shared library, and a one-click test run.
 - **Learn**: documentation in a plain-language version and an engineering version, glossaries,
   FAQs, quizzes checked against their sources, onboarding paths and team progress.
+- **Feedback**: anyone signed in can send feedback and follow its status. Admins sort it in an
+  inbox and can send an item to an agent that works on the portal's own code (see below).
 - **Demo mode**: a simulated agent so every feature works without an API key.
 
 Everything runs in one Node.js process with a built-in SQLite database. No other services.
@@ -85,6 +87,30 @@ AWS keys are stored at all.
    publish it, make a quiz from it, publish and take the quiz, then create an onboarding path.
    Re-upload a source document with a change and see the document flagged as out of date.
 8. **Settings**: set a monthly budget; switch to a real provider and repeat step 5.
+
+## Improving the portal from user feedback
+
+The portal can work on its own code, with an admin approving every change:
+
+1. Create a project for the portal itself (for example "Agent Portal") and connect this
+   repository under its **Repositories**. For GitHub, set a token (in *Settings* or on the
+   repository) that can push, open and merge pull requests.
+2. Users send feedback from **Feedback** in the left menu. The page they came from is filled in.
+3. Admins open **Feedback › Inbox**, add a note for the agent if needed, and press
+   **Start agent run**. The run always asks before changes, because the feedback text comes from
+   users; the prompt quotes that text as a description of the problem, not as instructions.
+4. When the agent finishes, the portal pushes its work to a `feedback/…` branch, opens a pull
+   request (GitHub) and starts a code review. The feedback moves to **In review**.
+5. The admin decides in the feedback's **Review the changes** panel:
+   - **Approve and merge**: merges the pull request (squash). Other Git hosts are marked
+     *Approved*, and you merge the branch yourself. Serious review findings, or a review that is
+     still running, need an extra confirmation.
+   - **Send back to the agent**: the same run continues with your comments and the open review
+     findings, then the branch and pull request are updated and reviewed again.
+   - **Reject changes**: closes the pull request and marks the feedback *Declined*.
+
+The person who sent the feedback follows its status, and the pull request link, under
+**Your feedback**.
 
 ## Automated tests
 

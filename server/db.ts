@@ -263,6 +263,37 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (user_id, learn_doc_id)
   );
   `,
+  // 2: feedback from portal users, optionally handed to an agent run on the portal's own code
+  `
+  CREATE TABLE feedback (
+    id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    page TEXT,
+    status TEXT NOT NULL DEFAULT 'new',
+    admin_note TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    pr_url TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX feedback_status ON feedback(status, created_at);
+  CREATE INDEX feedback_user ON feedback(user_id, created_at);
+  CREATE INDEX feedback_run ON feedback(run_id);
+  `,
+  // 3: feedback changes go to a branch and pull request for an admin to approve, change or reject
+  `
+  ALTER TABLE feedback ADD COLUMN branch TEXT;
+  ALTER TABLE feedback ADD COLUMN pr_number INTEGER;
+  ALTER TABLE feedback ADD COLUMN review_id TEXT;
+  ALTER TABLE feedback ADD COLUMN handin_error TEXT;
+  ALTER TABLE feedback ADD COLUMN decided_by TEXT;
+  ALTER TABLE feedback ADD COLUMN decided_at TEXT;
+  ALTER TABLE feedback ADD COLUMN decision_note TEXT;
+  `,
 ];
 
 let db: DatabaseSync | null = null;

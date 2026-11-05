@@ -13,6 +13,7 @@ import { registerBuilderRoutes } from './builder.ts';
 import { registerRunRoutes } from './runs.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLearnRoutes } from './learn.ts';
+import { registerFeedbackRoutes } from './feedback.ts';
 import { recoverRuns } from './agent/runner.ts';
 
 let routesRegistered = false;
@@ -32,6 +33,7 @@ export async function startServer(opts: { port?: number; host?: string } = {}): 
     registerRunRoutes();
     registerReviewRoutes();
     registerLearnRoutes();
+    registerFeedbackRoutes();
     routesRegistered = true;
   }
   recoverRuns();

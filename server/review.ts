@@ -125,7 +125,53 @@ async function executeReview(reviewId: string, userId: string): Promise<void> {
   notifyProject(review.project_id, 'review.updated', { id: review.id });
 }
 
-function reviewView(r: Row) {
+/** Start a review of a GitHub pull request, or of `head` against `base`. Returns at once; the review runs in the background. */
+export async function createReview(opts: { repo: Repo; userId: string; prNumber?: number | null; base?: string; head?: string; deep?: boolean }) {
+  const { repo } = opts;
+  await ensureFresh(repo);
+  let base: string;
+  let head: string;
+  let prNumber: number | null = null;
+  let headSha: string | null = null;
+  if (opts.prNumber) {
+    if (repo.provider !== 'github') throw badRequest('Pull request numbers work for GitHub repositories only');
+    prNumber = opts.prNumber;
+    const pr = await githubApi(repo, 'GET', `/pulls/${prNumber}`);
+    base = checkBranch(pr.base.ref);
+    headSha = pr.head.sha;
+    head = await fetchPullRef(repo, prNumber);
+  } else {
+    base = checkBranch(opts.base);
+    head = checkBranch(opts.head);
+    if (base === head) throw badRequest('Pick two different branches');
+  }
+  const raw = await diffRefs(repo, base, head);
+  if (!raw.trim()) throw badRequest(`No differences between ${base} and ${head}`);
+  const { diff, truncated } = trimDiff(raw);
+  const files = parseUnifiedDiff(diff).map((f) => ({ path: f.newPath, oldPath: f.oldPath, status: f.status, additions: f.additions, deletions: f.deletions, binary: f.binary }));
+  const id = newId('v_');
+  insert('reviews', {
+    id,
+    project_id: repo.project_id,
+    repo_id: repo.id,
+    base,
+    head,
+    pr_number: prNumber,
+    head_sha: headSha,
+    diff,
+    files: JSON.stringify(files),
+    status: 'running',
+    deep: opts.deep ? 1 : 0,
+    summary: truncated ? 'The diff was very large, so only the first files were reviewed.' : null,
+    created_by: opts.userId,
+    created_at: now(),
+  });
+  notifyProject(repo.project_id, 'review.updated', { id });
+  void executeReview(id, opts.userId);
+  return reviewView(one<Row>('SELECT * FROM reviews WHERE id = ?', id)!);
+}
+
+function reviewView(r: Row): Row {
   return { ...r, files: parseJson(r.files, []), diff: undefined };
 }
 
@@ -148,47 +194,15 @@ export function registerReviewRoutes(): void {
     const body = await ctx.json();
     const repo = getRepo(String(body.repoId ?? ''));
     if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
-    await ensureFresh(repo);
-    let base: string;
-    let head: string;
-    let prNumber: number | null = null;
-    let headSha: string | null = null;
-    if (body.prNumber) {
-      if (repo.provider !== 'github') throw badRequest('Pull request numbers work for GitHub repositories only');
-      prNumber = int(body.prNumber, 'Pull request', undefined, 1);
-      const pr = await githubApi(repo, 'GET', `/pulls/${prNumber}`);
-      base = checkBranch(pr.base.ref);
-      headSha = pr.head.sha;
-      head = await fetchPullRef(repo, prNumber);
-    } else {
-      base = checkBranch(body.base);
-      head = checkBranch(body.head);
-      if (base === head) throw badRequest('Pick two different branches');
-    }
-    const raw = await diffRefs(repo, base, head);
-    if (!raw.trim()) throw badRequest(`No differences between ${base} and ${head}`);
-    const { diff, truncated } = trimDiff(raw);
-    const files = parseUnifiedDiff(diff).map((f) => ({ path: f.newPath, oldPath: f.oldPath, status: f.status, additions: f.additions, deletions: f.deletions, binary: f.binary }));
-    const id = newId('v_');
-    insert('reviews', {
-      id,
-      project_id: project.id,
-      repo_id: repo.id,
-      base,
-      head,
-      pr_number: prNumber,
-      head_sha: headSha,
-      diff,
-      files: JSON.stringify(files),
-      status: 'running',
-      deep: body.deep ? 1 : 0,
-      summary: truncated ? 'The diff was very large, so only the first files were reviewed.' : null,
-      created_by: ctx.user!.id,
-      created_at: now(),
+    const review = await createReview({
+      repo,
+      userId: ctx.user!.id,
+      prNumber: body.prNumber ? int(body.prNumber, 'Pull request', undefined, 1) : null,
+      base: body.base,
+      head: body.head,
+      deep: Boolean(body.deep),
     });
-    notifyProject(project.id, 'review.updated', { id });
-    void executeReview(id, ctx.user!.id);
-    return { review: reviewView(one('SELECT * FROM reviews WHERE id = ?', id)!) };
+    return { review };
   });
 
   get('/api/reviews/:id', (ctx) => {
