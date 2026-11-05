@@ -311,6 +311,12 @@ export class AgentPortalCloudStack extends cdk.Stack {
       actions: ['bedrock-agentcore:ConnectBrowserLiveViewStream', 'bedrock-agentcore:UpdateBrowserStream', 'bedrock-agentcore:GetBrowserSession'],
       resources: ['*'],
     }));
+    // Settings › Model provider › Test connection, and the model pickers, list what Bedrock offers. Read-only, and
+    // the list calls do not support resource-level permissions.
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:ListFoundationModels', 'bedrock:GetFoundationModel', 'bedrock:ListInferenceProfiles', 'bedrock:GetInferenceProfile'],
+      resources: ['*'],
+    }));
     // Meaning-based Knowledge search embeds passages and questions with this model.
     fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: [embedModelArn] }));
     if (kbRoleArn) {
