@@ -44,13 +44,13 @@ from `runner-finalize.ts`, and restores the saved workspace first when `repos/` 
 One event type `pull-request`, written to the session's run events, one per state change per repository:
 
 ```json
-{ "type": "pull-request", "repo": "<name>", "repoId": "<id>", "state": "<state>",
+{ "type": "pull-request", "repo": "<name>", "repoId": "<id>", "provider": "github|codecommit|bitbucket|git", "state": "<state>",
   "branch": "portal/...", "base": "main", "number": 42, "url": "https://...",
   "reviewId": "<id>", "title": "RLP-12: Fix login redirect", "commits": 2, "files": 5,
   "inboxId": "<id>", "error": "<text>", "errorCode": "no-permission|unsupported|failed|no-workspace" }
 ```
 
-`state` is one of: `asked` (waiting for a person, has `inboxId`), `declined`, `available` (setting off or
+Events are written through the run's persistent event path, attached to the run that produced the change, so they appear on reload and on an open stream. `state` is one of: `asked` (waiting for a person, has `inboxId`), `declined`, `available` (setting off or
 expired; the button is offered), `pushing`, `pushed` (has `branch`), `opened` (has `number`, `url`),
 `review-started` (adds `reviewId`), `review-failed` (PR stays, has `error`), `failed` (has `error`, and
 `errorCode`; keeps `branch` if the push worked). Only the fields relevant to the state are present. The latest
