@@ -587,41 +587,43 @@ describe('Workflow session resume', () => {
     assert.equal(r.status, 409, `Expected 409 for pending workflow, got ${r.status}`);
   });
 
-  it('resume a failed workflow: message queued and run started (201)', async () => {
+  it('resume a failed workflow only reopens it: no run, no message, writable afterwards', async () => {
     const wid = await createWorkflow('Fail then resume');
 
-    // Start a run so it fails
     const startR = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wid}/start`, {
       method: 'POST', cookie,
     });
     assert.equal(startR.status, 201);
     const runId = (startR.body as { runId: string }).runId;
-
-    // Wait for run to complete (demo engine succeeds, so workflow becomes 'done')
     await waitForWorkflowStatus(wid, 'done');
 
     // Force to failed status
     const { getDb } = await import('../server/db.ts');
     getDb().prepare("UPDATE p6_workflows SET status = 'failed' WHERE id = ?").run(wid);
+    const before = (await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wid}`, { cookie })).body as { workflow: { resumable: boolean } };
+    assert.equal(before.workflow.resumable, true, 'a failed session is stopped');
 
-    // Resume
     const resumeR = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wid}/resume`, {
       method: 'POST', cookie,
     });
-    assert.equal(resumeR.status, 201, `resume: ${JSON.stringify(resumeR.body)}`);
-    const newRunId = (resumeR.body as { runId: string }).runId;
-    assert.ok(newRunId, 'Should return runId');
-    assert.notEqual(newRunId, runId, 'Should be a new run');
+    assert.equal(resumeR.status, 200, `resume: ${JSON.stringify(resumeR.body)}`);
+    assert.equal((resumeR.body as { reopened: boolean }).reopened, true);
+    assert.equal((resumeR.body as { runId?: string }).runId, undefined, 'no run is started');
 
-    // Verify human message was queued in p6_workflow_events
-    const events = getDb().prepare(
-      "SELECT body FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'human' ORDER BY id DESC LIMIT 1",
-    ).get(wid) as Record<string, unknown> | undefined;
-    assert.ok(events, 'Should have a workflow event');
-    assert.ok(
-      String(events.body).includes('Continue where you left off'),
-      `Message should contain resume text: ${events.body}`,
-    );
+    // No agent run was added and no "continue" message was written.
+    const runs = getDb().prepare('SELECT COUNT(*) AS n FROM p6_runs WHERE workflow_id = ?').get(wid) as { n: number };
+    assert.equal(runs.n, 1, 'still only the first run');
+    const human = getDb().prepare("SELECT COUNT(*) AS n FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'human'").get(wid) as { n: number };
+    assert.equal(human.n, 0, 'no message was added for the agent');
+
+    // The session is open: not resumable, even though its last run failed or was cancelled earlier.
+    const after = (await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wid}`, { cookie })).body as { workflow: { resumable: boolean; status: string } };
+    assert.equal(after.workflow.status, 'done');
+    assert.equal(after.workflow.resumable, false);
+
+    // Resuming a session that is already open is refused.
+    const again = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wid}/resume`, { method: 'POST', cookie });
+    assert.equal(again.status, 409);
     _ = runId;
   });
 

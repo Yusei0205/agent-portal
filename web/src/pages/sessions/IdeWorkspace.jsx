@@ -219,6 +219,8 @@ function ComposerBar({
   const dragStartH  = useRef(0);
 
   const isRunning = workflow?.status === 'running' || workflow?.status === 'pending';
+  // A stopped session (idle-stopped, paused, cancelled, failed) cannot be written to until it is resumed.
+  const stopped = Boolean(workflow?.resumable) && !isRunning;
 
   // The repositories are cloned into the session's storage in the background: say so, and hold the message box until
   // that is done (a message sent meanwhile would only wait for it). A preparation stuck for over 6 minutes is ignored.
@@ -392,7 +394,9 @@ function ComposerBar({
     setResuming(true);
     setResumeError(null);
     try {
+      // Resume only reopens the session; nothing runs until the person writes a message.
       await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/resume`, {});
+      if (idleStopped && onDismissIdle) onDismissIdle();
       if (onSent) onSent();
     } catch (e) {
       setResumeError(e.message);
@@ -403,7 +407,7 @@ function ComposerBar({
 
   const send = async () => {
     const text = message.trim();
-    if (!text || busy) return;
+    if (!text || busy || stopped) return;
     const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const isSlash = text.startsWith('/');
 
@@ -506,7 +510,7 @@ function ComposerBar({
         <div className="ide-idle-banner" role="alert">
           <Icon name="idle-stop" size={15} />
           <span className="ide-idle-banner-msg">
-            Session stopped — idle for {idleStopped} minutes. Send a message to resume.
+            Session stopped — idle for {idleStopped} minutes. Press Resume to write to it again.
           </span>
           <button
             type="button"
@@ -524,7 +528,7 @@ function ComposerBar({
       {workflow?.resumable && !isRunning && (
         <div className="ide-idle-banner" role="status">
           <span className="ide-idle-banner-msg">
-            Continues the same conversation.
+            This session is stopped. Resume it to write again; nothing runs until you send a message.
           </span>
           {resumeError && (
             <span role="alert" style={{ fontSize: '0.78rem', color: 'var(--danger)', marginLeft: 4 }}>
@@ -619,11 +623,11 @@ function ComposerBar({
           ref={textareaRef}
           rows={1}
           className="ws-composer-input"
-          placeholder={cloning ? 'Cloning the repositories…' : enginePlaceholder}
+          placeholder={cloning ? 'Cloning the repositories…' : stopped ? 'Session stopped. Press Resume to write.' : enginePlaceholder}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={!workflow || cloning}
+          disabled={!workflow || cloning || stopped}
           aria-label="Message"
         />
         <div className="ws-composer-actions">
@@ -631,7 +635,7 @@ function ComposerBar({
             type="button"
             className="btn btn-sm btn-primary"
             onClick={send}
-            disabled={busy || !message.trim() || !workflow || cloning}
+            disabled={busy || !message.trim() || !workflow || cloning || stopped}
             aria-label="Send (Enter)"
             title="Send (Enter)"
           >
