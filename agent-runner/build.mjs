@@ -30,6 +30,7 @@ const SHARED = [
   ['agent/runner-snapshot.ts', 'runner-snapshot.ts'],
   ['agent/runner-mcp.ts', 'runner-mcp.ts'],
   ['agent/runner-checks.ts', 'runner-checks.ts'],
+  ['agent/runner-finalize.ts', 'runner-finalize.ts'],
 ];
 const serverDir = path.join(root, '..', 'server');
 if (fs.existsSync(serverDir)) {
