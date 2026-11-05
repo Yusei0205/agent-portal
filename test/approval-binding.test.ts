@@ -249,6 +249,15 @@ describe('Approval binding — fingerprint verification', () => {
     // Status is now 'answered' in DB
     const row = one<{ status: string }>('SELECT status FROM p6_inputs WHERE id = ?', inputId)!;
     assert.equal(row.status, 'answered');
+
+    // The answer is in the session's history, so the card shows it (not the buttons) after a reload.
+    const ev = one<{ payload: string }>("SELECT payload FROM p6_events WHERE run_id = ? AND type = 'approval-resolved'", runId);
+    assert.ok(ev, 'approval-resolved event saved');
+    const p = JSON.parse(ev!.payload) as { inputId: string; status: string; allowAll: boolean; by: string };
+    assert.equal(p.inputId, inputId);
+    assert.equal(p.status, 'approved');
+    assert.equal(p.allowAll, false);
+    assert.equal(p.by, 'Admin');
   });
 });
 
@@ -625,6 +634,11 @@ describe('Approval binding — inbox resolve applies fingerprint rules', () => {
     // Inbox item must be resolved
     const inboxRow = one<{ resolved: number }>('SELECT resolved FROM p6_inbox WHERE id = ?', inboxId)!;
     assert.equal(inboxRow.resolved, 1);
+
+    // Answered from the Inbox: the session's card shows it too.
+    const ev = one<{ payload: string }>("SELECT payload FROM p6_events WHERE run_id = ? AND type = 'approval-resolved'", runId);
+    assert.ok(ev, 'approval-resolved event saved');
+    assert.equal((JSON.parse(ev!.payload) as { inputId: string; status: string }).status, 'approved');
   });
 
   it('inbox approve for expired input → 409', async () => {

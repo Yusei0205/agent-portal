@@ -47,3 +47,33 @@ export async function inspectViaRunner(workflowId: string, engine: string, req: 
     clearTimeout(timer);
   }
 }
+
+export type FlushResult = { ok: true; skipped?: string } | { ok: false; error: string };
+
+/**
+ * Asks the session's machine for `engine` to save its workspace now and waits until it is saved. Used when the
+ * session is switched to another engine: that engine's machine then restores these files (the saved copy is per
+ * session, see runner-snapshot.ts). Nothing to do when `engine` does not run on AgentCore or snapshots are off.
+ */
+export async function flushWorkspaceViaRunner(workflowId: string, engine: string, timeoutMs = 3 * 60_000): Promise<FlushResult> {
+  const rt = runtimeFor(engine);
+  if (!rt) return { ok: true, skipped: 'not a cloud engine' };
+  const snapshot = await snapshotAccess(workflowId).catch(() => null);
+  if (!snapshot) return { ok: true, skipped: 'workspace snapshots are off' };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error('timed out')), timeoutMs);
+  try {
+    const payload = { mode: 'flush-workspace', runId: `flush-${randomUUID()}`, snapshot };
+    for await (const raw of invokeAgentCore(rt.arn, agentCoreSessionId(workflowId, rt.kind), payload, ac.signal)) {
+      const ev = raw as unknown as Record<string, unknown>;
+      if (ev.type === 'flush') return ev.ok === true ? { ok: true } : { ok: false, error: String(ev.error ?? 'The runner could not save the workspace') };
+    }
+    // A runner image from before this request existed answers nothing we know.
+    return { ok: false, error: 'the runner did not confirm the save (its image may need updating)' };
+  } catch (e) {
+    if (ac.signal.aborted) return { ok: false, error: 'saving took too long' };
+    return { ok: false, error: e instanceof Error ? e.message.slice(0, 200) : 'the machine could not be reached' };
+  } finally {
+    clearTimeout(timer);
+  }
+}

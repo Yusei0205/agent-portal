@@ -947,6 +947,7 @@ export function IdeWorkspace({ id, project }) {
         onRenamed={(t) => setTitle(t)}
         onOpenBrowser={() => setSidebarPanel((p) => p === 'browser' ? null : 'browser')}
         onDelegated={() => setSidebarPanel('agents')}
+        onEngineSwitched={() => { load(); setCommandTick((t) => t + 1); }}
       />
 
       {/* Body */}
@@ -1228,7 +1229,7 @@ export function IdeWorkspace({ id, project }) {
       </div>
 
       {/* Status bar */}
-      <IdeStatusBar projectId={project.id} workflowId={id} />
+      <IdeStatusBar projectId={project.id} workflowId={id} engine={workflow?.engine} />
 
       {/* Composer */}
       <ComposerBar

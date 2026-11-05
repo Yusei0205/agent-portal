@@ -303,6 +303,14 @@ export function registerInboxRoutes(): void {
 
       const decision: 'allow' | 'deny' = response === 'approve' ? 'allow' : 'deny';
       resolveApproval(runId, inputId, decision, { remember: false, message: '' });
+      // Saved in the session's history, so the approval card in the session shows the answer after a reload.
+      const { emitRunEvent } = await import('./agent/runner.ts');
+      emitRunEvent(runId, item.project_id ?? null, item.workflow_id ?? null, 'approval-resolved', {
+        inputId,
+        status: decision === 'allow' ? 'approved' : 'denied',
+        allowAll: false,
+        by: req.user.name ?? null,
+      });
 
       if (item.project_id) {
         emit(item.project_id, { type: 'input.resolved', inputId, status: 'answered' });

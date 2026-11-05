@@ -7,7 +7,7 @@ import { api } from '../../lib/api.js';
 
 function formatCostSmall(usd) {
   if (usd == null) return '—';
-  if (usd < 0.01) return '<$0.01';
+  if (usd > 0 && usd < 0.01) return '<$0.01';
   return `$${usd.toFixed(2)}`;
 }
 
@@ -28,9 +28,10 @@ function formatTokens(n) {
  * @param {{
  *   projectId: string,
  *   workflowId: string,
+ *   engine?: string,   — the session's engine; the bar reloads when it changes
  * }} props
  */
-export function IdeStatusBar({ projectId, workflowId }) {
+export function IdeStatusBar({ projectId, workflowId, engine }) {
   const [bar, setBar] = useState(null);
 
   const load = useCallback(async () => {
@@ -41,7 +42,7 @@ export function IdeStatusBar({ projectId, workflowId }) {
       // 404 = endpoint not built yet, or no data — show minimal bar
       setBar(null);
     }
-  }, [projectId, workflowId]);
+  }, [projectId, workflowId, engine]); // engine: reload at once when the session is switched to another engine
 
   useEffect(() => {
     load();
@@ -86,10 +87,13 @@ export function IdeStatusBar({ projectId, workflowId }) {
         // Kiro bills in credits, not dollars
         <span className="ide-status-chip" title="Kiro credits used this turn and in total">
           <span className="ide-status-key">credits</span> {formatCreditsSmall(turn?.credits ?? null)} · {formatCreditsSmall(session?.credits ?? null)} total
+          {session?.costUsd > 0 && <> + {formatCostSmall(session.costUsd)} on another engine</>}
         </span>
       ) : (
         <span className="ide-status-chip" title="Cost this turn and in total">
           <span className="ide-status-key">cost</span> {formatCostSmall(turn?.costUsd ?? null)} · {formatCostSmall(session?.costUsd ?? null)} total
+          {/* A session switched from Kiro keeps the credits it used there */}
+          {session?.credits > 0 && <> + {formatCreditsSmall(session.credits)} Kiro credits</>}
         </span>
       )}
       <span className="ide-status-spacer" />

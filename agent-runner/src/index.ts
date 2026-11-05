@@ -24,7 +24,7 @@ import http from 'node:http';
 import { runInvocation } from './run.js';
 import { validatePayload } from './validate.js';
 import { runFinalize, validateFinalizeRequest } from './finalize.js';
-import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace } from '../shared/runner-snapshot.js';
+import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace, flushWorkspace } from '../shared/runner-snapshot.js';
 import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
@@ -109,6 +109,25 @@ const server = http.createServer(async (req, res) => {
     // They arrive on the same session (AgentCore routes them to this microVM) while the
     // run's own invocation is still streaming, so they skip the busy check.
     const body = parsed as Record<string, unknown> | null;
+
+    // ── Save the workspace now and wait for it (the session is being switched to another engine) ──
+    // The portal asks before the other engine's first run, so that engine restores the latest files.
+    if (body && typeof body === 'object' && !Array.isArray(body) && body.mode === 'flush-workspace') {
+      let reply: Record<string, unknown>;
+      if (runActive) {
+        reply = { type: 'flush', ok: false, error: 'A run is in progress in this session.' };
+      } else {
+        try {
+          await flushWorkspace(parseSnapshot(body.snapshot), usablePersistRoot(PERSIST_ROOT), () => { lastStatusChange = Math.floor(Date.now() / 1000); });
+          reply = { type: 'flush', ok: true };
+        } catch (e) {
+          reply = { type: 'flush', ok: false, error: e instanceof Error ? e.message.slice(0, 300) : String(e) };
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      res.end(`data: ${JSON.stringify(reply)}\n\n`);
+      return;
+    }
 
     // ── Read-only look into the workspace (Explorer / Source Control of a cloud session) ──
     // Runs beside a run in progress; it never writes to the workspace.

@@ -27,7 +27,7 @@ const GOAL_MAX = 8000;
 
 // ── Engine definitions ─────────────────────────────────────────────────────────
 
-const ENGINES = [
+export const ENGINES = [
   {
     id: 'demo',
     label: 'Demo',
@@ -50,7 +50,7 @@ const ENGINES = [
 
 // ── Agent select ───────────────────────────────────────────────────────────────
 
-function AgentPicker({ engine, value, onChange }) {
+export function AgentPicker({ engine, value, onChange }) {
   const [agents, setAgents] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -115,7 +115,7 @@ function AgentPicker({ engine, value, onChange }) {
  * "Engine default" is always available — it remains selectable even when the
  * endpoint returns an error or an empty list.
  */
-function ModelPicker({ engine, credentialId, value, onChange }) {
+export function ModelPicker({ engine, credentialId, value, onChange }) {
   const [models, setModels] = useState([]);
   const [runsAs, setRunsAs] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -216,7 +216,7 @@ function ModelPicker({ engine, credentialId, value, onChange }) {
 
 // ── Credential picker ──────────────────────────────────────────────────────────
 
-function CredentialPicker({ engine, credentials, value, onChange }) {
+export function CredentialPicker({ engine, credentials, value, onChange }) {
   // Only show when there's more than one credential for the engine
   const filtered = (credentials || []).filter((c) => c.engine === engine);
   if (filtered.length <= 1) return null;

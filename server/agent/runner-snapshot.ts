@@ -8,7 +8,13 @@
  *    the portal handed over; this happens after the reply has ended, while the machine reports itself busy, so the
  *    chat is not held up and the machine is not released half-way;
  *  - at the start of a run on a machine that has no `repos/` yet, the saved copy is downloaded and unpacked, and the
- *    normal "bring the repository up to date" step then only has to fetch what changed.
+ *    normal "bring the repository up to date" step then only has to fetch what changed;
+ *  - the copy is per portal session, not per engine. A session switched from Kiro to Claude Code (or back) runs on
+ *    the other engine's machine, which may still hold an older copy from before the switch. Each machine remembers
+ *    which saved copy it holds (S3's ETag); when the saved copy is newer and this machine changed nothing since, the
+ *    newer one replaces it. Changes this machine has not saved are never thrown away;
+ *  - `flushWorkspace` saves at once and waits for it: the portal asks the old engine's machine for that when a session
+ *    is switched, so the new engine starts from the latest files.
  *
  * The runner holds no AWS credentials for this: it only ever talks to the two presigned URLs in the payload (https,
  * amazonaws.com host). Nothing here is ever echoed to the chat except plain progress text.
@@ -33,6 +39,42 @@ export interface WorkspaceSnapshot {
 /** Largest packed workspace that is worth saving. */
 export const MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024 * 1024;
 const STAMP = '.snapshot-stamp';
+/** The ETag of the saved copy this machine's `repos/` came from or was last saved as. */
+const ETAG = '.snapshot-etag';
+
+function readEtag(root: string): string | null {
+  try { return fs.readFileSync(path.join(root, ETAG), 'utf8').trim() || null; } catch { return null; }
+}
+function writeEtag(root: string, etag: string | null): void {
+  try {
+    if (etag) fs.writeFileSync(path.join(root, ETAG), etag, 'utf8');
+    else fs.rmSync(path.join(root, ETAG), { force: true });
+  } catch { /* only an optimisation */ }
+}
+
+/**
+ * Moves the "which saved copy is this" marks along when `repos/` is moved to another folder (the Kiro runner moves it
+ * between its work folder and the persistent folder), so the next save and refresh still know where it came from.
+ */
+export function moveSnapshotMarks(fromRoot: string, toRoot: string): void {
+  for (const name of [STAMP, ETAG]) {
+    try {
+      if (fs.existsSync(path.join(fromRoot, name))) fs.renameSync(path.join(fromRoot, name), path.join(toRoot, name));
+    } catch { /* only an optimisation */ }
+  }
+}
+
+/** The saved copy's ETag, read with a one-byte download (a presigned GET URL does not allow HEAD). */
+async function remoteEtag(getUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(getUrl, { headers: { range: 'bytes=0-0' }, signal: AbortSignal.timeout(30_000) });
+    await res.body?.cancel().catch(() => { /* ok */ });
+    if (!res.ok) return null;
+    return res.headers.get('etag');
+  } catch {
+    return null;
+  }
+}
 
 function okUrl(u: unknown): u is string {
   if (typeof u !== 'string' || u.length > 4000) return false;
@@ -83,9 +125,54 @@ export async function restoreWorkspace(
   root: string | null,
   emit: (e: { type: 'status'; text: string }) => void,
 ): Promise<boolean> {
-  if (!snap?.getUrl || !root || hasRepos(root)) return false;
+  if (!snap?.getUrl || !root) return false;
+  if (hasRepos(root)) return refreshWorkspace(snap.getUrl, root, emit);
+  return unpackSaved(snap.getUrl, root, emit, 'Restoring the saved workspace…');
+}
+
+/**
+ * This machine already has `repos/`. When the saved copy is newer (saved by the session's other engine after a
+ * switch) and nothing changed here since this machine last saved or restored, the newer copy replaces it.
+ * A machine that never recorded an ETag (an older runner) is left alone, as before.
+ */
+async function refreshWorkspace(
+  getUrl: string,
+  root: string,
+  emit: (e: { type: 'status'; text: string }) => void,
+): Promise<boolean> {
+  const mine = readEtag(root);
+  if (!mine) return false;
+  const latest = await remoteEtag(getUrl);
+  if (!latest || latest === mine) return false;
+  if (await changedSinceSave(root, AbortSignal.timeout(60_000))) {
+    emit({ type: 'status', text: 'The saved workspace was updated elsewhere, but this machine has changes of its own that were not saved: keeping this machine\'s copy.' });
+    log('workspace_refresh_skipped', { reason: 'local changes' });
+    return false;
+  }
+  const aside = path.join(root, 'repos.previous');
+  fs.rmSync(aside, { recursive: true, force: true });
+  fs.renameSync(path.join(root, 'repos'), aside);
+  const ok = await unpackSaved(getUrl, root, emit, 'Bringing in the latest saved workspace (it was changed by the session\'s other engine)…');
+  if (ok) {
+    fs.rmSync(aside, { recursive: true, force: true });
+  } else {
+    fs.rmSync(path.join(root, 'repos'), { recursive: true, force: true });
+    fs.renameSync(aside, path.join(root, 'repos'));
+    emit({ type: 'status', text: 'Kept this machine\'s copy of the workspace.' });
+  }
+  return ok;
+}
+
+/** Downloads the saved copy and unpacks it into `root` (which has no `repos/`). */
+async function unpackSaved(
+  getUrl: string,
+  root: string,
+  emit: (e: { type: 'status'; text: string }) => void,
+  startText: string,
+): Promise<boolean> {
+  const snap = { getUrl };
   const started = Date.now();
-  emit({ type: 'status', text: 'Restoring the saved workspace…' });
+  emit({ type: 'status', text: startText });
   try {
     const res = await fetch(snap.getUrl, { signal: AbortSignal.timeout(10 * 60_000) });
     if (!res.ok || !res.body) {
@@ -108,6 +195,7 @@ export async function restoreWorkspace(
       return false;
     }
     fs.writeFileSync(path.join(root, STAMP), String(Date.now()), 'utf8');
+    writeEtag(root, res.headers.get('etag'));
     const seconds = Math.round((Date.now() - started) / 1000);
     log('workspace_restored', { seconds });
     emit({ type: 'status', text: `Workspace restored in ${seconds}s.` });
@@ -171,6 +259,7 @@ async function saveWorkspace(snap: WorkspaceSnapshot, root: string, signal: Abor
       return;
     }
     fs.renameSync(newStamp, path.join(root, STAMP));
+    writeEtag(root, res.headers.get('etag'));
     log('workspace_saved', { bytes: size, seconds: Math.round((Date.now() - started) / 1000) });
   } catch (e: unknown) {
     if (signal.aborted) log('workspace_save_cancelled', { step: 'upload' });
@@ -201,6 +290,20 @@ export async function cancelSnapshot(): Promise<void> {
 /** Waits for a running save to finish without cancelling it (used by tests). */
 export async function settleSnapshot(): Promise<void> {
   while (pending) await pending.catch(() => { /* logged */ });
+}
+
+/**
+ * Saves the workspace now and waits until it is uploaded (or found unchanged). A save already under way is let finish
+ * first, not cancelled. Used when the session is switched to another engine, so that engine starts from these files.
+ */
+export async function flushWorkspace(
+  snap: WorkspaceSnapshot | null,
+  root: string | null,
+  onChange?: () => void,
+): Promise<void> {
+  await settleSnapshot();
+  saveWorkspaceInBackground(snap, root, onChange);
+  await settleSnapshot();
 }
 
 /** Saves the workspace after the reply has ended. `onChange` is told when the busy state flips. */

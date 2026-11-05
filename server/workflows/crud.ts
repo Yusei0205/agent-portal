@@ -28,7 +28,7 @@ import { startRun } from './driver.ts';
 import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
 import { resolveApproval } from '../agent/approvals.ts';
-import { inputFingerprint } from '../agent/runner.ts';
+import { inputFingerprint, emitRunEvent } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
 import { createChildSession, checkDelegationLimits, getDelegationSettings, stopAndDeleteChildren } from '../delegation.ts';
 import { getDelegationSettingsRepository } from '../repositories/delegation-settings.ts';
@@ -38,6 +38,8 @@ import { getProjectRepository } from '../repositories/projects.ts';
 import { getWorkspacesRepository } from '../repositories/workspaces.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
+import { getCredentialsRepository } from '../repositories/credentials.ts';
+import { flushWorkspaceViaRunner } from '../agent/runner-inspect-client.ts';
 import { parseSessionIntegrations, encodeSessionIntegrations, integrationIsPersonal } from '../agent/runner-integrations.ts';
 import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
 import { newLoopState } from './loop.ts';
@@ -758,6 +760,13 @@ export function registerWorkflowRoutes(): void {
     const decision: 'allow' | 'deny' = response === 'approve' ? 'allow' : 'deny';
     const message = typeof body.message === 'string' ? body.message.slice(0, 2000) : '';
     resolveApproval(r.id, inputId, decision, { remember: allowAll, message });
+    // Saved in the session's history, so the approval card shows the answer (not the buttons) after a reload.
+    emitRunEvent(r.id, w.project_id ? String(w.project_id) : null, w.id, 'approval-resolved', {
+      inputId,
+      status: decision === 'allow' ? 'approved' : 'denied',
+      allowAll: Boolean(allowAll && decision === 'allow'),
+      by: req.user?.name ?? null,
+    });
 
     if (w.project_id) {
       emit(w.project_id, { type: 'input.resolved', inputId, status: 'answered' });
@@ -1062,6 +1071,101 @@ export function registerWorkflowRoutes(): void {
     }
 
     if (hasRepoIds) await requestRepoPrep(w.id).catch((e) => console.error('[repo-prep] request failed:', e));
+
+    const updated = await repo.getWorkflowById(w.id);
+    const enriched = updated ? await enrichWorkflowRow(updated) : w;
+    sendJson(res, 200, { workflow: workflowView(enriched) });
+  });
+
+  // POST /api/projects/:id/workflows/:wid/engine — continue the session with another engine
+  //
+  //   Body: { engine: 'claude-code'|'kiro'|'demo', credentialId?: string, model?: string, leadAgent?: string }
+  //
+  //   For when one provider can't go on (e.g. Kiro credits are used up). The session keeps its conversation,
+  //   repositories and work folder; the stored engine session is dropped, so the next turn starts on the new
+  //   engine with a recap of earlier turns. Not while a run is going. Only the person who started the session
+  //   can switch it: the session runs as them, on their sign-ins.
+  router.post('/api/projects/:id/workflows/:wid/engine', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+
+    if (w.created_by && String(w.created_by) !== req.user!.id) {
+      sendJson(res, 403, { error: 'Only the person who started this session can switch its engine: the session runs on their sign-ins.' });
+      return;
+    }
+    if (w.status === 'running' || await repo.getActiveRun(w.id)) {
+      sendJson(res, 409, { error: 'The session is running. Stop it, or wait for the turn to end, before switching engine.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!body.engine) throw badRequest('engine is required');
+    const engine = validateEngine(body.engine);
+
+    let credentialId: string | null = null;
+    if (body.credentialId) {
+      credentialId = str(body.credentialId as string, 'credentialId', { max: 200 });
+      const owner = w.created_by ? String(w.created_by) : req.user!.id;
+      const cred = await getCredentialsRepository().getByIdAndUser(credentialId, owner);
+      if (!cred) throw badRequest('Sign-in not found');
+      if (cred.engine !== engine) throw badRequest(`That sign-in is for ${cred.engine}, not ${engine}`);
+    }
+
+    let model = '';
+    if (typeof body.model === 'string' && body.model.trim()) {
+      model = body.model.trim();
+      if (!MODEL_RE.test(model)) throw badRequest('model is not a valid model ID (allowed: A-Z a-z 0-9 . _ : / @ -)');
+    }
+    const leadAgent = typeof body.leadAgent === 'string' && body.leadAgent.trim()
+      ? str(body.leadAgent, 'leadAgent', { max: 200 }).trim()
+      : null;
+
+    const fromEngine = String(w.engine || 'demo');
+    const label = (e: string) => (e === 'claude-code' ? 'Claude Code' : e === 'kiro' ? 'Kiro' : e === 'demo' ? 'Demo' : e);
+    const sameSetup = engine === fromEngine
+      && (credentialId ?? null) === (w.credential_id ?? null)
+      && model === String(w.model || '')
+      && (leadAgent ?? null) === (w.lead_agent || null);
+    if (sameSetup) throw badRequest('The session already runs with this engine, sign-in and model');
+
+    // Cloud sessions: the old engine's machine saves its workspace now, so the new engine's machine restores the
+    // latest files (including changes not committed). A failure does not stop the switch; it is said in the note.
+    let workspaceNote = '';
+    if (engine !== fromEngine && (safeJson(w.repo_ids, []) as unknown[]).length > 0) {
+      const flushed = await flushWorkspaceViaRunner(w.id, fromEngine);
+      if (!flushed.ok) workspaceNote = ` (${label(fromEngine)}'s latest files could not be saved: ${flushed.error}; the new engine starts from the last saved copy)`;
+    }
+
+    const ts = now();
+    await repo.updateWorkflow(w.id, {
+      engine,
+      credential_id: credentialId,
+      model,
+      // Agents are defined per engine (.kiro or .claude), so one only carries over when it is chosen again.
+      lead_agent: leadAgent,
+      // The stored session belongs to the old engine; the new one starts fresh with a recap of earlier turns.
+      engine_session_id: null,
+      engine_session_engine: null,
+      stop_reason: '',
+      updated_at: ts,
+    });
+
+    const note = (engine === fromEngine
+      ? `Switched ${label(engine)} sign-in or model`
+      : `Switched engine from ${label(fromEngine)} to ${label(engine)}`) + workspaceNote;
+    await repo.appendWorkflowEvent({
+      workflow_id: w.id,
+      kind: 'engine-switch',
+      body: note,
+      data: JSON.stringify({ from: fromEngine, to: engine, credentialId, model, leadAgent, by: req.user!.id }),
+      created_at: ts,
+    });
+    appendAudit(getDb(), req.user!.id, 'session.engine-switch', `workflow:${w.id}`, { from: fromEngine, to: engine, credentialId, model }, req.ip);
+    if (w.project_id) emit(w.project_id, { type: 'workflow.updated', workflowId: w.id });
 
     const updated = await repo.getWorkflowById(w.id);
     const enriched = updated ? await enrichWorkflowRow(updated) : w;

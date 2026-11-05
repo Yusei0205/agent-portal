@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   parseSnapshot, restoreWorkspace, saveWorkspaceInBackground, settleSnapshot, cancelSnapshot, snapshotBusy,
+  flushWorkspace, moveSnapshotMarks,
 } from '../server/agent/runner-snapshot.ts';
 
 const haveTools = ['tar', 'gzip', 'find'].every((c) => spawnSync(c, ['--version'], { stdio: 'ignore' }).status === 0);
@@ -108,6 +109,115 @@ describe('workspace snapshots', { skip: !haveTools && 'tar, gzip and find are ne
       server.closeAllConnections();
       server.close();
     }
+  });
+
+  // One saved copy per session, written by whichever engine ran last (Kiro and Claude Code have separate machines).
+  describe('switching engines', () => {
+    /** A stand-in for S3: keeps the last upload, answers with its ETag, and serves one-byte ranges. */
+    async function fakeS3() {
+      let stored: Buffer | null = null;
+      let version = 0;
+      const server = http.createServer((req, res) => {
+        if (req.method === 'PUT') {
+          const chunks: Buffer[] = [];
+          req.on('data', (c: Buffer) => chunks.push(c));
+          req.on('end', () => { stored = Buffer.concat(chunks); version++; res.writeHead(200, { etag: `"v${version}"` }); res.end(); });
+          return;
+        }
+        if (!stored) { res.writeHead(404); res.end(); return; }
+        const body = stored as Buffer;
+        if (req.headers.range === 'bytes=0-0') { res.writeHead(206, { etag: `"v${version}"`, 'content-length': 1 }); res.end(body.subarray(0, 1)); return; }
+        res.writeHead(200, { etag: `"v${version}"`, 'content-length': body.length });
+        res.end(body);
+      });
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+      const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/snap`;
+      return { server, snap: { putUrl: url, getUrl: url } };
+    }
+    const mk = (prefix: string, text: string): string => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      fs.mkdirSync(path.join(d, 'repos', 'proj'), { recursive: true });
+      fs.writeFileSync(path.join(d, 'repos', 'proj', 'src.txt'), text);
+      return d;
+    };
+    const read = (d: string) => fs.readFileSync(path.join(d, 'repos', 'proj', 'src.txt'), 'utf8');
+
+    it("brings the other engine's newer copy onto a machine that changed nothing since", async () => {
+      const { server, snap } = await fakeS3();
+      try {
+        const claude = mk('ws-claude-', 'v1 by claude');
+        await flushWorkspace(snap, claude);                      // Claude saved v1
+        const kiro = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-kiro-'));
+        assert.equal(await restoreWorkspace(snap, kiro, () => {}), true);
+        await new Promise((r) => setTimeout(r, 50));
+        fs.writeFileSync(path.join(kiro, 'repos', 'proj', 'src.txt'), 'v2 by kiro, not committed');
+        await flushWorkspace(snap, kiro);                        // switch back: Kiro's machine saves v2 first
+
+        const msgs: string[] = [];
+        assert.equal(await restoreWorkspace(snap, claude, (e) => msgs.push(e.text)), true, 'out-of-date copy is replaced');
+        assert.equal(read(claude), 'v2 by kiro, not committed');
+        assert.ok(msgs.some((m) => /other engine/.test(m)), msgs.join(' | '));
+        assert.equal(fs.existsSync(path.join(claude, 'repos.previous')), false, 'the old copy is removed');
+
+        assert.equal(await restoreWorkspace(snap, claude, () => {}), false, 'up to date: nothing to do');
+        for (const d of [claude, kiro]) fs.rmSync(d, { recursive: true, force: true });
+      } finally { server.close(); }
+    });
+
+    it('never throws away changes the machine has not saved', async () => {
+      const { server, snap } = await fakeS3();
+      try {
+        const a = mk('ws-a2-', 'one');
+        await flushWorkspace(snap, a);
+        const b = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-b2-'));
+        await restoreWorkspace(snap, b, () => {});
+        await new Promise((r) => setTimeout(r, 50));
+        fs.writeFileSync(path.join(b, 'repos', 'proj', 'src.txt'), 'two');
+        await flushWorkspace(snap, b);
+        await new Promise((r) => setTimeout(r, 50));
+        fs.writeFileSync(path.join(a, 'repos', 'proj', 'src.txt'), 'local edit not saved');
+
+        const msgs: string[] = [];
+        assert.equal(await restoreWorkspace(snap, a, (e) => msgs.push(e.text)), false);
+        assert.equal(read(a), 'local edit not saved');
+        assert.ok(msgs.some((m) => /changes of its own/.test(m)));
+        for (const d of [a, b]) fs.rmSync(d, { recursive: true, force: true });
+      } finally { server.close(); }
+    });
+
+    it('leaves a machine alone that never recorded which copy it holds (an older runner)', async () => {
+      const { server, snap } = await fakeS3();
+      try {
+        const a = mk('ws-a3-', 'saved');
+        await flushWorkspace(snap, a);
+        const old = mk('ws-old-', 'older runner');
+        assert.equal(await restoreWorkspace(snap, old, () => {}), false);
+        assert.equal(read(old), 'older runner');
+        for (const d of [a, old]) fs.rmSync(d, { recursive: true, force: true });
+      } finally { server.close(); }
+    });
+
+    it('flushWorkspace waits for the upload', async () => {
+      const { server, snap } = await fakeS3();
+      try {
+        const a = mk('ws-a4-', 'x');
+        await flushWorkspace(snap, a);
+        assert.equal(snapshotBusy(), false);
+        assert.equal(fs.readFileSync(path.join(a, '.snapshot-etag'), 'utf8'), '"v1"');
+        fs.rmSync(a, { recursive: true, force: true });
+      } finally { server.close(); }
+    });
+
+    it('moveSnapshotMarks carries the marks along with repos/', () => {
+      const from = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-m1-'));
+      const to = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-m2-'));
+      fs.writeFileSync(path.join(from, '.snapshot-stamp'), '1');
+      fs.writeFileSync(path.join(from, '.snapshot-etag'), '"v3"');
+      moveSnapshotMarks(from, to);
+      assert.equal(fs.readFileSync(path.join(to, '.snapshot-etag'), 'utf8'), '"v3"');
+      assert.equal(fs.existsSync(path.join(from, '.snapshot-stamp')), false);
+      for (const d of [from, to]) fs.rmSync(d, { recursive: true, force: true });
+    });
   });
 
   it('does nothing when there is no saved copy to download', async () => {
