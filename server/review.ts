@@ -721,13 +721,13 @@ export const _providers = {
 
 // ── Credential lookup helpers ─────────────────────────────────────────────────
 
-function parseGitHubOwnerRepo(url: string): { owner: string; repo: string } | null {
+export function parseGitHubOwnerRepo(url: string): { owner: string; repo: string } | null {
   const match = url.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?(?:[/?#]|$)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2] };
 }
 
-function parseCodeCommitRepoName(url: string): string | null {
+export function parseCodeCommitRepoName(url: string): string | null {
   const match = url.match(/\/repos\/([^/?#]+)/);
   return match ? match[1] : null;
 }
