@@ -118,7 +118,7 @@ describe('Session IDE Files API', () => {
     const scopes = (body.roots as Array<{ scope: string }>).map((e) => e.scope);
     assert.ok(scopes.includes('work'), 'work scope present');
     assert.ok(scopes.includes('uploads'), 'uploads scope present');
-    assert.ok(scopes.includes('vault'), 'vault scope present');
+    // The vault is listed by asking for scope=vault or scope=vault:team, not as a root of the working copy.
   });
 
   it('GET /ide/tree?scope=work returns empty entries when no work dir', async () => {
