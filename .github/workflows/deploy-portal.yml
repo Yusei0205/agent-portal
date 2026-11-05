@@ -13,7 +13,7 @@
 # variable of the same name (Settings › Variables) when the runtimes or bucket change; a value dropped
 # from `cdk deploy` removes the matching setting or resource, so keep the set complete.
 #
-# The runner images and runtimes are deployed by deploy-agentcore.yml. This workflow does not touch them.
+# The Codex runner is deployed here before the portal so the runtime ARN can be passed into Lambda.
 name: Deploy portal
 
 on:
@@ -92,6 +92,8 @@ jobs:
       CLAUDE_RUNTIME_ARN: ${{ vars.CLAUDE_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalClaudeHarness-BW7D1pFqIl' }}
       STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET || 'cy-ai-bucket' }}
       PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
+      CODEX_OAUTH_CLIENT_ID: ${{ vars.CODEX_OAUTH_CLIENT_ID }}
+      CODEX_OAUTH_CLIENT_SECRET_ARN: ${{ vars.CODEX_OAUTH_CLIENT_SECRET_ARN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -120,16 +122,41 @@ jobs:
         # The stack uploads dist/web and does not build it.
         run: npm run build:web
 
+      - name: Deploy Codex AgentCore runner
+        working-directory: infra
+        run: npx aws-cdk@2.1147.0 deploy AgentPortalCodexRunner -c codexRunner=1 --require-approval never
+
+      - name: Read Codex AgentCore runtime ARN
+        shell: bash
+        run: |
+          ARN="$(aws cloudformation describe-stacks \
+            --stack-name AgentPortalCodexRunner \
+            --query "Stacks[0].Outputs[?OutputKey=='CodexRuntimeArn'].OutputValue | [0]" \
+            --output text)"
+          test -n "$ARN" && test "$ARN" != "None"
+          echo "CODEX_RUNTIME_ARN=$ARN" >> "$GITHUB_ENV"
+          echo "CODEX_OAUTH_REDIRECT_URI=${PUBLIC_URL%/}/api/codex/oauth/callback" >> "$GITHUB_ENV"
+
       - name: Deploy AgentPortalCloud
         working-directory: infra
-        run: >-
-          npx aws-cdk@2.1147.0 deploy AgentPortalCloud --require-approval never
-          -c budgetEmail="$BUDGET_EMAIL"
-          -c kiroRuntimeArn="$KIRO_RUNTIME_ARN"
-          -c claudeRuntimeArn="$CLAUDE_RUNTIME_ARN"
-          -c storageBucket="$STORAGE_BUCKET"
-          -c agentcoreBrowser=true
-          -c publicUrl="$PUBLIC_URL"
+        shell: bash
+        run: |
+          args=(
+            deploy AgentPortalCloud --require-approval never
+            -c "budgetEmail=$BUDGET_EMAIL"
+            -c "kiroRuntimeArn=$KIRO_RUNTIME_ARN"
+            -c "claudeRuntimeArn=$CLAUDE_RUNTIME_ARN"
+            -c "storageBucket=$STORAGE_BUCKET"
+            -c agentcoreBrowser=true
+            -c "publicUrl=$PUBLIC_URL"
+            -c "codexRuntimeArn=$CODEX_RUNTIME_ARN"
+            -c "codexOAuthClientId=$CODEX_OAUTH_CLIENT_ID"
+            -c "codexOAuthRedirectUri=$CODEX_OAUTH_REDIRECT_URI"
+          )
+          if [[ -n "$CODEX_OAUTH_CLIENT_SECRET_ARN" ]]; then
+            args+=(-c "codexOAuthSecretArn=$CODEX_OAUTH_CLIENT_SECRET_ARN")
+          fi
+          npx aws-cdk@2.1147.0 "${args[@]}"
 
       - name: Summary
         if: always()
@@ -137,4 +164,5 @@ jobs:
           {
             echo "### Portal deploy"
             echo "Commit \`${GITHUB_SHA::7}\` → AgentPortalCloud, ${PUBLIC_URL}"
+            echo "Codex AgentCore runner deployed and linked to the portal."
           } >> "$GITHUB_STEP_SUMMARY"
