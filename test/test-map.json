@@ -612,7 +612,8 @@
       "tests": [
         "test/review.test.ts",
         "test/reviews-repo.test.ts",
-        "test/pull-requests.test.ts"
+        "test/pull-requests.test.ts",
+        "test/review-create.test.ts"
       ],
       "smokeIds": ["reviews"]
     },
