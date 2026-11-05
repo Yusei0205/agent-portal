@@ -47,6 +47,11 @@ Bedrock) or through Kiro CLI, and has a simulated Demo mode. The full list of wh
   summary comment.
 - **Inbox** is one list across projects of everything that needs a person: approvals, questions,
   pending pushes and blocked sessions, with a live count and answers right in the list.
+- **Feedback** (Portal › Feedback): anyone signed in sends feedback with the page they came from and follows its
+  status. Admins sort it in an inbox, add a note, and use *Send to agent* to start an ordinary session on the repository
+  that holds the portal's own code (the sender's text is quoted to the agent as data, and the session asks before changes).
+  The pull request that session opens is linked back to the feedback and shown to the sender; the admin approves or rejects
+  it there. The merge itself happens on the git host.
 - **Workspaces** are named sets of repositories (and integrations) that a session can use as a
   group.
 - **Vault** holds files you upload once (documents, templates, test data). Every run gets a copy.

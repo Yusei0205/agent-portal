@@ -89,6 +89,7 @@ const NAV_SECTIONS = [
       { tab: 'settings', label: 'Settings',   icon: 'settings' },
       { tab: 'users',    label: 'Users',      icon: 'shield-user', adminOnly: true },
       { tab: 'api',      label: 'API access', icon: 'code-2' },
+      { tab: 'feedback', label: 'Feedback',   icon: 'inbox' },
     ],
   },
 ];

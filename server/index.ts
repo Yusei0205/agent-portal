@@ -59,6 +59,7 @@ import { registerScanRoutes } from './scan.ts';
 import { registerMcpRoutes } from './mcp-routes.ts';
 import { registerTestingRoutes } from './testing/index.ts';
 import { registerThemeRoutes } from './themes.ts';
+import { registerFeedbackRoutes } from './feedback.ts';
 import { registerPortalEventsRoutes } from './portal-events.ts';
 import { registerAiAttachmentRoutes, cleanupOrphanedAttachments } from './ai-attachments.ts';
 import { runDueTriggers } from './loop-triggers.ts';
@@ -162,12 +163,14 @@ export async function startServer(
   const { initAwsAccountsRepository } = await import('./repositories/aws-accounts.ts');
   const { initIntegrationsRepository } = await import('./repositories/integrations.ts');
   const { initThemesRepository } = await import('./repositories/themes.ts');
+  const { initFeedbackRepository } = await import('./repositories/feedback.ts');
   const { initUserConfigRepository } = await import('./repositories/user-config.ts');
   const { initAgentcoreLoginRepository } = await import('./repositories/agentcore-login.ts');
   await initCredentialsRepository();
   await initAwsAccountsRepository();
   await initIntegrationsRepository();
   await initThemesRepository();
+  await initFeedbackRepository();
   await initUserConfigRepository();
   await initAgentcoreLoginRepository();
 
@@ -272,6 +275,7 @@ export async function startServer(
   registerMcpRoutes();
   registerTestingRoutes();
   registerThemeRoutes();
+  registerFeedbackRoutes();
   registerPortalEventsRoutes();
   registerAiAttachmentRoutes();
   registerBedrockSsoRoutes();

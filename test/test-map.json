@@ -793,6 +793,20 @@
       ],
       "smokeIds": ["theme"]
     },
+    "feedback": {
+      "description": "Feedback from users: send, follow, admin inbox, link to a session and its pull request",
+      "sources": [
+        "server/feedback.ts",
+        "server/repositories/feedback.ts",
+        "server/repositories/feedback-sqlite.ts",
+        "server/repositories/feedback-dynamodb.ts",
+        "web/src/pages/Feedback.jsx"
+      ],
+      "tests": [
+        "test/feedback.test.ts"
+      ],
+      "smokeIds": []
+    },
     "attachments": {
       "description": "AI attachments — file upload, preview, and picker for session context",
       "sources": [
