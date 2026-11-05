@@ -2,7 +2,7 @@
  * Repository interface for user feedback.
  *
  * Feedback is a small, low-volume list (a person sends it, an admin sorts it), so the DynamoDB version keeps it in
- * the portal-config table (PK=FEEDBACK, SK=FB#<id>) and filters in memory; no new table or index is needed.
+ * the portal-feedback table (PK=FEEDBACK, SK=FB#<id>) and filters in memory; no index is needed.
  */
 
 import { SqliteFeedbackRepository } from './feedback-sqlite.ts';

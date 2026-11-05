@@ -1,7 +1,7 @@
 /**
  * DynamoDB implementation of FeedbackRepository.
  *
- * Table: portal-config  (DYNAMODB_TABLE_PORTAL_CONFIG, default 'portal-config')
+ * Table: portal-feedback  (DYNAMODB_TABLE_PORTAL_FEEDBACK, default 'portal-feedback'; defined in infra/tables.json)
  * Key design:  PK=FEEDBACK   SK=FB#<id>
  * Updates read, merge and write the whole item. Feedback is edited by a few admins and never in a hot loop.
  */
@@ -12,7 +12,34 @@ import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dyna
 import type { FeedbackPatch, FeedbackRecord, FeedbackRepository } from './feedback.ts';
 
 function table(): string {
-  return process.env.DYNAMODB_TABLE_PORTAL_CONFIG ?? 'portal-config';
+  return process.env.DYNAMODB_TABLE_PORTAL_FEEDBACK ?? 'portal-feedback';
+}
+
+export async function ensureFeedbackTableExists(client: DynamoDBClient): Promise<void> {
+  const { CreateTableCommand, DescribeTableCommand } = await import('@aws-sdk/client-dynamodb');
+  const tableName = table();
+  try {
+    await client.send(new DescribeTableCommand({ TableName: tableName }));
+  } catch (e: unknown) {
+    if ((e as { name?: string }).name !== 'ResourceNotFoundException') throw e;
+    await client.send(new CreateTableCommand({
+      TableName: tableName,
+      BillingMode: 'PAY_PER_REQUEST',
+      KeySchema: [
+        { AttributeName: 'PK', KeyType: 'HASH' },
+        { AttributeName: 'SK', KeyType: 'RANGE' },
+      ],
+      AttributeDefinitions: [
+        { AttributeName: 'PK', AttributeType: 'S' },
+        { AttributeName: 'SK', AttributeType: 'S' },
+      ],
+    }));
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      const desc = await client.send(new DescribeTableCommand({ TableName: tableName }));
+      if (desc.Table?.TableStatus === 'ACTIVE') break;
+    }
+  }
 }
 
 function itemToRecord(item: Record<string, AttributeValue>): FeedbackRecord {
@@ -51,6 +78,10 @@ function recordToItem(rec: FeedbackRecord): Record<string, AttributeValue> {
 export class DynamoDbFeedbackRepository implements FeedbackRepository {
   private readonly client: DynamoDBClient;
   constructor() { this.client = getDynamoDbClient(); }
+
+  async ensureTables(): Promise<void> {
+    await ensureFeedbackTableExists(this.client);
+  }
 
   async create(rec: FeedbackRecord): Promise<void> {
     await this.client.send(new PutItemCommand({ TableName: table(), Item: recordToItem(rec) }));
