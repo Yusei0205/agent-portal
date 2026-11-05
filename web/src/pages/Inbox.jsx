@@ -47,8 +47,7 @@ function approvalContext(item) {
   const detail = input.description ?? null;
   let text = main != null ? String(main) : '';
   if (!text) {
-    const rest = Object.entries(input).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('
-');
+    const rest = Object.entries(input).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n');
     text = rest;
   }
   return {
