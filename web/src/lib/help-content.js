@@ -163,7 +163,7 @@ export const HELP_TOPICS = [
           'Click **Stop** in the session header to stop a running session.',
           'A session idle for the configured time (default 30 minutes) stops by itself. Send any message to resume it.',
           'Rename a session from its row in the list (pencil icon) or from the **⋯** menu.',
-          'Out of Kiro credits, or want another provider? **⋯ › Switch engine…** moves the session to Claude Code (or back to Kiro). The conversation, repositories and files stay, and the next turn starts with a recap of earlier turns, including one that failed. Only the person who started the session can switch it, and not while a run is going.',
+          'Out of Kiro credits, or want another provider? **⋯ › Switch engine…** moves the session to Claude Code (or back to Kiro). The conversation, repositories and files stay (in cloud sessions the old engine\'s machine saves its files first), and the next turn starts with a recap of earlier turns, including one that failed. Only the person who started the session can switch it, and not while a run is going.',
         ],
       },
       {

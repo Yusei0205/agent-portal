@@ -23,7 +23,7 @@
 import { emitRunnerFiles, writeInputFiles } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
-import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
+import { parseSnapshot, restoreWorkspace, moveSnapshotMarks } from '../shared/runner-snapshot.js';
 import { reportRepoChanges } from '../shared/runner-finalize-run.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
 import { spawn } from 'node:child_process';
@@ -336,7 +336,10 @@ function adoptPersistedRepos(workDir: string): void {
   const from = path.join(persist, 'repos');
   const to = path.join(workDir, 'repos');
   try {
-    if (fs.existsSync(from) && !fs.lstatSync(from).isSymbolicLink() && !fs.existsSync(to)) fs.renameSync(from, to);
+    if (fs.existsSync(from) && !fs.lstatSync(from).isSymbolicLink() && !fs.existsSync(to)) {
+      fs.renameSync(from, to);
+      moveSnapshotMarks(persist, workDir);
+    }
   } catch { /* the repositories are cloned again */ }
 }
 
@@ -347,7 +350,10 @@ function stashRepos(workDir: string): void {
   const from = path.join(workDir, 'repos');
   const to = path.join(persist, 'repos');
   try {
-    if (fs.existsSync(from) && !fs.lstatSync(from).isSymbolicLink() && !fs.existsSync(to)) fs.renameSync(from, to);
+    if (fs.existsSync(from) && !fs.lstatSync(from).isSymbolicLink() && !fs.existsSync(to)) {
+      fs.renameSync(from, to);
+      moveSnapshotMarks(workDir, persist);
+    }
   } catch { /* lost with the work folder; the saved copy or a clone brings it back */ }
 }
 
@@ -607,6 +613,9 @@ export async function runKiroRun(
       w.emit = emit;
       emit({ type: 'status', text: 'Continuing in the same kiro-cli session.' });
       if (w.browserSession) emit({ type: 'browser-session', ...w.browserSession });
+      // The session may have run on Claude Code meanwhile (engine switch): bring in its newer saved workspace, unless
+      // this machine has unsaved changes of its own (restoreWorkspace only replaces an unchanged, out-of-date copy).
+      if (payload.repos?.length) await restoreWorkspace(parseSnapshot(payload.snapshot), w.workDir, (ev) => emit(ev));
     }
 
     const run = w;

@@ -8,6 +8,7 @@ import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { run as dbRun, one, insert } from '../server/db.ts';
 import { now, generateId } from '../server/util.ts';
 import { resumableEngineSessionId } from '../server/agent/runner.ts';
+import { flushWorkspaceViaRunner } from '../server/agent/runner-inspect-client.ts';
 
 async function setupAdmin(baseUrl: string): Promise<string> {
   const email = 'es-admin@example.com';
@@ -27,6 +28,19 @@ describe('resumableEngineSessionId', () => {
     // Older rows did not record the engine: keep resuming as before.
     assert.equal(resumableEngineSessionId({ engine: 'kiro', engine_session_id: 's1', engine_session_engine: null }), 's1');
     assert.equal(resumableEngineSessionId({ engine: 'kiro', engine_session_id: null }), null);
+  });
+});
+
+describe('flushWorkspaceViaRunner', () => {
+  it('has nothing to do for an engine that does not run in the cloud', async () => {
+    const saved = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+    delete process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+    try {
+      assert.deepEqual(await flushWorkspaceViaRunner('wf-x', 'kiro'), { ok: true, skipped: 'not a cloud engine' });
+      assert.deepEqual(await flushWorkspaceViaRunner('wf-x', 'demo'), { ok: true, skipped: 'not a cloud engine' });
+    } finally {
+      if (saved !== undefined) process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = saved;
+    }
   });
 });
 

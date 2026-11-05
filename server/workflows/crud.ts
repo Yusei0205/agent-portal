@@ -39,6 +39,7 @@ import { getWorkspacesRepository } from '../repositories/workspaces.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { getCredentialsRepository } from '../repositories/credentials.ts';
+import { flushWorkspaceViaRunner } from '../agent/runner-inspect-client.ts';
 import { parseSessionIntegrations, encodeSessionIntegrations, integrationIsPersonal } from '../agent/runner-integrations.ts';
 import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
 import { newLoopState } from './loop.ts';
@@ -1117,11 +1118,20 @@ export function registerWorkflowRoutes(): void {
       : null;
 
     const fromEngine = String(w.engine || 'demo');
+    const label = (e: string) => (e === 'claude-code' ? 'Claude Code' : e === 'kiro' ? 'Kiro' : e === 'demo' ? 'Demo' : e);
     const sameSetup = engine === fromEngine
       && (credentialId ?? null) === (w.credential_id ?? null)
       && model === String(w.model || '')
       && (leadAgent ?? null) === (w.lead_agent || null);
     if (sameSetup) throw badRequest('The session already runs with this engine, sign-in and model');
+
+    // Cloud sessions: the old engine's machine saves its workspace now, so the new engine's machine restores the
+    // latest files (including changes not committed). A failure does not stop the switch; it is said in the note.
+    let workspaceNote = '';
+    if (engine !== fromEngine && (safeJson(w.repo_ids, []) as unknown[]).length > 0) {
+      const flushed = await flushWorkspaceViaRunner(w.id, fromEngine);
+      if (!flushed.ok) workspaceNote = ` (${label(fromEngine)}'s latest files could not be saved: ${flushed.error}; the new engine starts from the last saved copy)`;
+    }
 
     const ts = now();
     await repo.updateWorkflow(w.id, {
@@ -1137,10 +1147,9 @@ export function registerWorkflowRoutes(): void {
       updated_at: ts,
     });
 
-    const label = (e: string) => (e === 'claude-code' ? 'Claude Code' : e === 'kiro' ? 'Kiro' : e === 'demo' ? 'Demo' : e);
-    const note = engine === fromEngine
+    const note = (engine === fromEngine
       ? `Switched ${label(engine)} sign-in or model`
-      : `Switched engine from ${label(fromEngine)} to ${label(engine)}`;
+      : `Switched engine from ${label(fromEngine)} to ${label(engine)}`) + workspaceNote;
     await repo.appendWorkflowEvent({
       workflow_id: w.id,
       kind: 'engine-switch',

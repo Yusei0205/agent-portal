@@ -148,8 +148,8 @@ export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched })
           )}
 
           <p className="field-hint" style={{ margin: 0 }}>
-            Changes the agent has not committed stay in the session&rsquo;s folder on this server. In cloud sessions
-            each engine has its own workspace, so ask the agent to commit and push first.
+            Files the agent changed carry over, committed or not. In cloud sessions the current engine&rsquo;s
+            machine saves its workspace first, so switching can take a moment.
           </p>
 
           {error && <div className="error-note" role="alert">{error}</div>}
@@ -159,7 +159,7 @@ export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched })
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button type="button" className="btn btn-primary" onClick={submit} disabled={busy || unchanged || !isAvailable(engine)}>
             {busy
-              ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Switching…</>
+              ? <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Saving files and switching…</>
               : <>Switch to {label(engine)}</>}
           </button>
         </div>
