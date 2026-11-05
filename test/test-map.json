@@ -165,6 +165,8 @@
         "web/src/lib/mergeEvents.js",
         "web/src/lib/outputFileMatch.js",
         "web/src/lib/outputFileUtils.js",
+        "web/src/lib/pullRequestCard.js",
+        "web/src/pages/sessions/PullRequestCard.jsx",
         "web/src/styles/sessions.css"
       ],
       "tests": [
@@ -174,6 +176,7 @@
         "test/sanitize-merge.test.ts",
         "test/output-files-match.test.ts",
         "test/output-file-utils.test.ts",
+        "test/web-pull-request-card.test.ts",
         "test/sessions-repo.test.ts"
       ],
       "smokeIds": ["sessions"]

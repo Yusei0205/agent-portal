@@ -8,6 +8,7 @@ import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventList
 import { findOutputFileMentions } from '../../lib/outputFileMatch.js';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
 import { RunOutputsCard } from './RunOutputsCard.jsx';
+import { PullRequestCards } from './PullRequestCard.jsx';
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
@@ -1444,6 +1445,9 @@ export function SessionLive({
             </React.Fragment>
           );
         })}
+
+        {/* Pull request cards: latest pull-request event per repository */}
+        <PullRequestCards events={[...earlierEvents, ...events]} workflowId={workflowId} projectId={projectId} />
 
         {/* Pending (optimistic) user messages */}
         {pendingMessages.map((msg) => (
