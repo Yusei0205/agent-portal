@@ -39,7 +39,13 @@ if (fs.existsSync(serverDir)) {
     fs.copyFileSync(path.join(serverDir, from), dest);
   }
 }
-for (const [, to] of SHARED) {
+// The browser tools live in agent-runner and are shared with this runner (the Dockerfile copies the same file).
+const browserTools = path.join(root, '..', 'agent-runner', 'src', 'browser-tools.ts');
+if (fs.existsSync(browserTools)) {
+  fs.mkdirSync(path.join(root, 'shared'), { recursive: true });
+  fs.copyFileSync(browserTools, path.join(root, 'shared', 'browser-tools.ts'));
+}
+for (const to of [...SHARED.map((x) => x[1]), 'browser-tools.ts']) {
   if (!fs.existsSync(path.join(root, 'shared', to))) throw new Error(`shared/${to} is missing: build from the repo checkout or the Dockerfile`);
 }
 
