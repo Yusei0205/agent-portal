@@ -34,7 +34,8 @@ import { getDelegationSettingsRepository } from '../repositories/delegation-sett
 import { createChildSession } from '../delegation.ts';
 import { getRunHomeDir } from '../user-config.ts';
 import { toPolicyRules } from './tool-policy.ts';
-import { loadAgentDefinitions, type AgentDefinitionPayload } from './agent-defs.ts';
+import { type AgentDefinitionPayload } from './agent-defs.ts';
+import { loadRunAgents, leadAgentFor } from './run-agents.ts';
 import { buildConversationRecap } from './recap.ts';
 import { ApprovalRelay, DelegationRelay, isApprovalRequest, isDelegateRequest } from './agentcore-bridge.ts';
 import { invokeAgentCore, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
@@ -67,18 +68,7 @@ export function agentModelFor(model: string): string | undefined {
  * then the project's own .claude/agents/, which win on a name clash.
  */
 export function runAgents(run: AgentRun): Record<string, AgentDefinitionPayload> {
-  const dirs: string[] = [];
-  const home = getRunHomeDir(run.runId);
-  if (home) dirs.push(path.join(home, '.claude', 'agents'));
-  if (run.projectId) {
-    try {
-      const project = one<Row>('SELECT slug FROM projects WHERE id = ?', run.projectId);
-      if (project?.slug) dirs.push(path.join(config.dataDir, 'projects', String(project.slug), '.claude', 'agents'));
-    } catch {
-      /* no project folder: the owner's agents only */
-    }
-  }
-  return loadAgentDefinitions(dirs, agentModelFor);
+  return loadRunAgents(run, agentModelFor);
 }
 
 interface RunnerResult {
@@ -173,6 +163,8 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
     policy: { trusted: run.trusted, rules: toPolicyRules(run.permissions.rules) },
     approvals: runnerApprovals(),
     ...(Object.keys(agents).length ? { agents } : {}),
+    // The session's lead agent runs the main conversation (its prompt, tools and skills).
+    ...(leadAgentFor(run, agents) ? { agent: leadAgentFor(run, agents) } : {}),
     ...(canDelegate ? { delegation: { via: 'portal' } } : {}),
     ...(hasRepos ? { repos: run.runnerRepos } : {}),
     ...(snapshot ? { snapshot } : {}),

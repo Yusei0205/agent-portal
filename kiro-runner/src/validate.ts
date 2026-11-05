@@ -8,6 +8,8 @@
  * Token fields are validated for presence but NEVER logged anywhere in this module.
  */
 
+import { parseKiroConfig, KIRO_AGENT_NAME, type KiroConfigFile } from './kiro-config.js';
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -46,6 +48,10 @@ export interface KiroRunPayload {
   checks?: unknown[];
   /** The model kiro-cli should use (chosen with session/set_model); kiro's own default when absent. */
   model?: string;
+  /** The owner's Kiro agents, skills and steering, written into kiro-cli's home (see kiro-config.ts). */
+  kiroConfig?: KiroConfigFile[];
+  /** The lead agent (kiro-cli --agent): one of kiroConfig's agents. */
+  agent?: string;
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
   snapshot?: unknown;
   /** true = at the end of the run, report which cloned repositories have changes (read-only; nothing is committed or pushed). */
@@ -210,6 +216,8 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       prompt: obj.prompt as string,
       ...(obj.browser === true ? { browser: true } : {}),
       ...(typeof obj.model === 'string' && /^[A-Za-z0-9._:/@+-]{1,120}$/.test(obj.model) ? { model: obj.model } : {}),
+      ...(parseKiroConfig(obj.kiroConfig).length ? { kiroConfig: parseKiroConfig(obj.kiroConfig) } : {}),
+      ...(typeof obj.agent === 'string' && KIRO_AGENT_NAME.test(obj.agent) ? { agent: obj.agent } : {}),
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
       ...(cleanAwsEnv(obj.awsEnv) ? { awsEnv: cleanAwsEnv(obj.awsEnv) } : {}),

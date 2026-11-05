@@ -120,6 +120,8 @@ export interface InvocationPayload {
   approvals?: ApprovalsPayload;
   /** The project's subagents, by name. */
   agents?: Record<string, AgentDefinitionPayload>;
+  /** The session's lead agent: one of `agents`, run as the main conversation. */
+  agent?: string;
   delegation?: DelegationPayload;
 }
 
@@ -138,7 +140,7 @@ const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
   'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'policy', 'approvals',
-  'agents', 'delegation',
+  'agents', 'agent', 'delegation',
 ]);
 const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
 
@@ -370,6 +372,13 @@ export function validatePayload(raw: unknown): ValidationResult {
     agents = r;
   }
 
+  let agent: string | undefined;
+  if (obj.agent !== undefined) {
+    if (typeof obj.agent !== 'string' || !AGENT_NAME.test(obj.agent)) return err('"agent" must be an agent name');
+    if (!agents || !Object.prototype.hasOwnProperty.call(agents, obj.agent)) return err('"agent" must be one of "agents"');
+    agent = obj.agent;
+  }
+
   let delegation: DelegationPayload | undefined;
   if (obj.delegation !== undefined) {
     const d = obj.delegation as Record<string, unknown>;
@@ -407,6 +416,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       policy,
       approvals,
       agents,
+      ...(agent ? { agent } : {}),
       delegation,
     },
   };

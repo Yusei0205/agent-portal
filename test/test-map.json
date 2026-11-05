@@ -637,6 +637,11 @@
         "server/agent/agentcore-bridge.ts",
         "server/agent/claude-agentcore.ts",
         "server/agent/agent-defs.ts",
+        "server/agent/run-agents.ts",
+        "server/agent/kiro-config-files.ts",
+        "kiro-runner/src/kiro-config.ts",
+        "web/src/lib/agent-pack/index.js",
+        "web/src/lib/agent-pack/skills.js",
         "server/repositories/agentcore-login.ts",
         "server/repositories/agentcore-login-sqlite.ts",
         "server/repositories/agentcore-login-dynamodb.ts"
@@ -651,6 +656,7 @@
         "test/agentcore-portal.test.ts",
         "test/agentcore-login-repo.test.ts",
         "test/agent-defs.test.ts",
+        "test/agent-pack.test.ts",
         "test/agentcore-multi-agent.test.ts"
       ],
       "smokeIds": [],

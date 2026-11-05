@@ -46,6 +46,10 @@ export interface ClaudeAgentCoreOpts {
   inputFiles?: import('./runner-files.ts').InputFile[];
   /** A loop session's check steps, run by the runner after the agent finishes. */
   checks?: import('./runner-checks.ts').CheckStep[];
+  /** The owner's and project's Claude agents (the Agent tool can start them by name). */
+  agents?: Record<string, import('./agent-defs.ts').AgentDefinitionPayload>;
+  /** The session's lead agent: one of `agents`, run as the main conversation. */
+  agent?: string | null;
 }
 
 export interface ClaudeAgentCoreResult {
@@ -156,6 +160,8 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.awsEnv && Object.keys(opts.awsEnv).length ? { awsEnv: opts.awsEnv } : {}),
     ...(opts.inputFiles?.length ? { inputFiles: opts.inputFiles } : {}),
     ...(opts.checks?.length ? { checks: opts.checks } : {}),
+    ...(opts.agents && Object.keys(opts.agents).length ? { agents: opts.agents } : {}),
+    ...(opts.agent && opts.agents?.[opts.agent] ? { agent: opts.agent } : {}),
     ...(snapshot ? { snapshot } : {}),
     ...(finalizeCheck ? { finalizeCheck: true } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),

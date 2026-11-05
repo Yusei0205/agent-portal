@@ -38,6 +38,8 @@ import { guardToolCall } from '../shared/agent/guard.ts';
 import { scrubEnvForShell } from '../shared/agent/env-scrub.ts';
 import { inputFingerprint } from '../shared/agent/tool-policy.ts';
 import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
+import { writeKiroConfig } from './kiro-config.js';
+import { createHash } from 'node:crypto';
 
 export type EmitFn = (event: Record<string, unknown>) => void;
 
@@ -408,7 +410,7 @@ export async function runKiroRun(
 
   // Only what identifies the setup: credentials and tokens inside these change from message to message.
   const pick = (list: unknown[] | undefined, keys: string[]) => (list ?? []).map((x) => keys.map((k) => String((x as Record<string, unknown>)?.[k] ?? '')));
-  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser), aws: payload.awsEnv?.AWS_ACCESS_KEY_ID ?? '', model: payload.model ?? '' });
+  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser), aws: payload.awsEnv?.AWS_ACCESS_KEY_ID ?? '', model: payload.model ?? '', agent: payload.agent ?? '', config: payload.kiroConfig?.length ? createHash('sha256').update(JSON.stringify(payload.kiroConfig)).digest('hex') : '' });
   // A cloud browser session lasts 15 minutes, so a browser session's kiro-cli is restarted after 12.
   const browserExpired = Boolean(payload.browser) && warm !== null && Date.now() - warm.startedAt > 12 * 60_000;
   if (warm && (browserExpired || warm.exited || warm.fingerprint !== fingerprint)) await disposeKiro(warm);
@@ -458,6 +460,9 @@ export async function runKiroRun(
 
       const liveDir = payload.browser ? await fsp.mkdtemp(path.join(os.tmpdir(), 'browser-live-')) : null;
 
+      // The owner's agents, skills and steering, as kiro-cli finds them in ~/.kiro locally.
+      if (payload.kiroConfig?.length) writeKiroConfig(kiroHome, payload.kiroConfig);
+
       emit({ type: 'status', text: 'kiro-cli ACP starting…' });
 
       // Build child env — set HOME to isolated temp dir; DO NOT set KIRO_TEST_DB_PATH
@@ -484,7 +489,9 @@ export async function runKiroRun(
 
       // kiro-cli 3 refuses session/set_model ("no persistence classification"), so the model is given at start. A
       // different model later starts a new kiro-cli (the model is part of the fingerprint above).
-      const child = spawn('kiro-cli', payload.model ? ['acp', '--model', payload.model] : ['acp'], {
+      const acpArgs = ['acp', ...(payload.model ? ['--model', payload.model] : []), ...(payload.agent ? ['--agent', payload.agent] : [])];
+      if (payload.agent) emit({ type: 'status', text: `Lead agent: ${payload.agent}` });
+      const child = spawn('kiro-cli', acpArgs, {
         cwd: workDir,
         env: childEnv,
         stdio: ['pipe', 'pipe', 'pipe'],

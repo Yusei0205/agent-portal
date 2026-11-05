@@ -498,6 +498,7 @@ export async function runInvocation(
     const mcpServers = await portalMcpServers(sdk, payload, emit, broker, abortController.signal);
     const agentNames = Object.keys(payload.agents ?? {});
     if (agentNames.length) emit({ type: 'status', text: `Project agents available: ${agentNames.join(', ')}` });
+    if (payload.agent) emit({ type: 'status', text: `Lead agent: ${payload.agent}` });
     const q = sdk.query({
       prompt: payload.prompt,
       options: {
@@ -524,6 +525,8 @@ export async function runInvocation(
         maxTurns,
         // The project's subagents (the Agent tool can start them by name).
         ...(agentNames.length ? { agents: payload.agents } : {}),
+        // The session's lead agent runs the main conversation (its prompt, tools and preloaded skills).
+        ...(payload.agent ? { agent: payload.agent } : {}),
         // Browser tools, project integrations and (when the portal allows child sessions) delegate_session.
         ...(browser || integrations.length || mcpServers ? { mcpServers: { ...(browser ? { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser) } : {}), ...integrationServers, ...(mcpServers ?? {}) } } : {}),
       },

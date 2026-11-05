@@ -41,6 +41,7 @@ import {
   refreshIdcCredentialToken,
 } from '../credentials.ts';
 import { getRunHomeDir } from '../user-config.ts';
+import { collectKiroConfig, hasKiroAgent } from './kiro-config-files.ts';
 import { buildConversationRecap } from './recap.ts';
 import type { RunContext } from './types.ts';
 import { createRunToken, revokeRunToken } from '../delegation.ts';
@@ -980,11 +981,19 @@ async function runKiroViaAgentCoreAdapter(
 
   const token = kiroTokenFromEnv(childEnv);
 
+  // The owner's (or team's) Kiro agents, skills and steering go with the run; the lead agent is used when it is one of them.
+  const kiroConfig = collectKiroConfig(getRunHomeDir(run.runId));
+  const agent = hasKiroAgent(kiroConfig, run.leadAgent) ? run.leadAgent : null;
+  if (agent) emit('status', { text: `Lead agent: ${agent}` });
+  else if (run.leadAgent) emit('status', { text: `Lead agent "${run.leadAgent}" was not found in your Kiro agents; using the default.` });
+
   const { textParts, credits: kiroCredits } = await runKiroViaAgentCore(ctx, {
     runtimeArn,
     runId: run.runId,
     prompt,
     token,
+    kiroConfig,
+    agent,
     credentialId: run.credentialId,
     expectedCiphertext,
     browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
