@@ -63,9 +63,23 @@ Keep the same `PORTAL_SECRET_KEY` across restarts.
 ### On a server
 
 Run it behind HTTPS (Caddy is the least work: `reverse_proxy 127.0.0.1:8787`), and set
-`TRUST_PROXY=1`. Do not expose port 8787 directly. On EC2, give the instance a role with
-Bedrock invoke and CodeCommit access and choose “Server’s own AWS identity” in Settings, so no
-AWS keys are stored at all.
+`TRUST_PROXY=1`. Do not expose port 8787 directly. On EC2 or ECS, give the server a role with
+the permissions in [`docs/aws-iam-policy.json`](docs/aws-iam-policy.json) and choose “Server’s
+own AWS identity” in Settings, so no AWS keys are stored at all.
+
+The policy lets the server call Claude models, list the models and inference profiles in the
+account, and use CodeCommit. The list permissions (`bedrock:ListFoundationModels`,
+`bedrock:ListInferenceProfiles`) only work with `"Resource": "*"`. Without them,
+**Test connection** fails with `not authorized to perform: bedrock:ListFoundationModels`. To add
+the policy to an existing role:
+
+```bash
+aws iam put-role-policy --role-name YOUR_ROLE_NAME --policy-name AgentPortalAccess --policy-document file://docs/aws-iam-policy.json
+```
+
+If the role is created by CloudFormation or CDK, add the same statements there instead, so the
+next deploy keeps them. If you keep secrets in SSM Parameter Store, also allow
+`ssm:GetParameter` and `ssm:PutParameter` on `arn:aws:ssm:*:*:parameter/agent-portal/*`.
 
 ## How to test it (about 15 minutes, Demo mode)
 
