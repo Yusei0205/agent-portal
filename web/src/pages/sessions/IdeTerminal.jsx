@@ -31,17 +31,20 @@ function loadTerminalModule() {
  *   height?: number,  // kept for API compat; no longer used for sizing
  * }} props
  */
-export function IdeTerminal({ workflowId }) {
+export function IdeTerminal({ workflowId, engine }) {
   const [capability, setCapability] = useState(null);
   const [TermComponent, setTermComponent] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [key, setKey] = useState(0); // increment to reconnect
 
   useEffect(() => {
-    api.get('/api/terminal/capability')
-      .then((data) => setCapability(data))
-      .catch(() => setCapability({ available: false, reason: 'Could not check terminal availability' }));
-  }, []);
+    let live = true;
+    setCapability(null);
+    api.get(`/api/terminal/capability?workflowId=${encodeURIComponent(workflowId)}`)
+      .then((data) => { if (live) setCapability(data); })
+      .catch(() => { if (live) setCapability({ available: false, reason: 'Could not check terminal availability' }); });
+    return () => { live = false; };
+  }, [workflowId, engine]);
 
   useEffect(() => {
     if (!capability?.available) return;
@@ -113,8 +116,9 @@ export function IdeTerminal({ workflowId }) {
   return (
     <div style={outerStyle}>
       <TermComponent
-        key={key}
+        key={`${engine}:${key}`}
         workflowId={workflowId}
+        transport={capability.transport}
         onClose={() => setKey((k) => k + 1)}
       />
       <div style={{ position: 'absolute', top: 4, right: 8, display: 'flex', gap: 4 }}>

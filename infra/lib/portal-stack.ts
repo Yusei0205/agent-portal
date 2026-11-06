@@ -352,7 +352,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
     }
     if (props.kiroRuntimeArn) {
       fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],
+        actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream', 'bedrock-agentcore:StopRuntimeSession'],
         resources: [props.kiroRuntimeArn, `${props.kiroRuntimeArn}/*`],
       }));
     }
@@ -364,12 +364,12 @@ export class AgentPortalCloudStack extends cdk.Stack {
     }));
     if (props.claudeRuntimeArn) {
       fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],
+        actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream', 'bedrock-agentcore:StopRuntimeSession'],
         resources: [props.claudeRuntimeArn, `${props.claudeRuntimeArn}/*`],
       }));
     }
     if (props.codexRuntimeArn) fn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:StopRuntimeSession'],
+      actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream', 'bedrock-agentcore:StopRuntimeSession'],
       resources: [props.codexRuntimeArn, `${props.codexRuntimeArn}/*`],
     }));
     if (props.storageBucket) {

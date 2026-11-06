@@ -34,6 +34,8 @@ COPY server/agent/runner-files.ts ./shared/runner-files.ts
 COPY server/agent/runner-repos.ts ./shared/runner-repos.ts
 COPY server/agent/runner-inspect.ts ./shared/runner-inspect.ts
 COPY server/agent/runner-snapshot.ts ./shared/runner-snapshot.ts
+COPY server/agent/runner-terminal.ts ./shared/runner-terminal.ts
+COPY server/agent/runner-terminal-auth.ts ./shared/runner-terminal-auth.ts
 COPY server/agent/runner-mcp.ts ./shared/runner-mcp.ts
 COPY server/agent/runner-checks.ts ./shared/runner-checks.ts
 COPY server/agent/runner-finalize.ts ./shared/runner-finalize.ts

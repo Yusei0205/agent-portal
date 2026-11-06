@@ -1,0 +1,82 @@
+import { before, after, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
+import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
+import { run, one } from '../server/db.ts';
+import { generateId, now } from '../server/util.ts';
+import { getAuthRepository } from '../server/repositories/auth.ts';
+import { getStorage, setStorage } from '../server/storage-instance.ts';
+import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts';
+import { agentCoreSessionId } from '../server/agent/agentcore-session.ts';
+import { verifyTerminalGrant } from '../server/agent/runner-terminal-auth.ts';
+
+describe('cloud terminal transport and authorization', () => {
+  let base: string, cookie: string, project: string, workflow: string, user: string;
+  let oldStorage: ReturnType<typeof getStorage>;
+  const sent: Array<{ session: string; payload: Record<string, unknown> }> = [];
+  const env = ['AWS_LAMBDA_FUNCTION_NAME', 'PORTAL_CODEX_AGENTCORE_RUNTIME_ARN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'PORTAL_AGENTCORE_AWS_PROFILE'];
+  const saved = new Map(env.map(k => [k, process.env[k]]));
+  before(async () => {
+    ({ baseUrl: base } = await createTestServer());
+    const setup = await fetchJson(base, '/api/auth/setup', { method: 'POST', body: { email: 'terminal@example.test', name: 'Admin', password: 'password1234', provider: 'demo' } });
+    cookie = setup.cookie!; user = one<{ id: string }>('SELECT id FROM users LIMIT 1')!.id;
+    project = generateId(); workflow = generateId();
+    run('INSERT INTO projects (id,slug,name,description,notes,created_at) VALUES (?,?,?,?,?,?)', project, 'terminal-project', 'Terminal', '', '', now());
+    run('INSERT INTO p6_workflows (id,project_id,goal,status,engine,trust_tools,repo_ids,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', workflow, project, 'Terminal fixture', 'done', 'codex', 0, '[]', user, now(), now());
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'fixture-portal';
+    process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/codex-fixture';
+    process.env.AWS_ACCESS_KEY_ID = 'fixture-access-key'; process.env.AWS_SECRET_ACCESS_KEY = 'fixture-secret-key';
+    delete process.env.AWS_SESSION_TOKEN; delete process.env.AWS_PROFILE; delete process.env.PORTAL_AGENTCORE_AWS_PROFILE;
+    oldStorage = getStorage();
+    setStorage({ exists: async () => false, presign: async () => 'https://fixture.s3.amazonaws.com/workspace' } as never);
+    _setAgentCoreInvokerOverride(async function* (_arn, session, payload) { sent.push({ session, payload }); yield { type: 'terminal-ticket', ticket: 'a'.repeat(64) } as never; });
+  });
+  after(async () => {
+    _setAgentCoreInvokerOverride(null); setStorage(oldStorage);
+    for (const [key, value] of saved) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    await cleanup();
+  });
+  it('advertises AgentCore and signs a short-lived URL bound to the same session as its one-use ticket', async () => {
+    const capability = await fetchJson(base, `/api/terminal/capability?workflowId=${workflow}`, { cookie });
+    assert.equal((capability.body as any).transport, 'agentcore');
+    const response = await fetchJson(base, '/api/terminal/connect', { method: 'POST', cookie, body: { workflowId: workflow } });
+    assert.equal(response.status, 200);
+    const value = response.body as any, url = new URL(value.url);
+    assert.equal(url.protocol, 'wss:'); assert.equal(url.hostname, 'bedrock-agentcore.ap-southeast-1.amazonaws.com');
+    assert.equal(url.searchParams.get('X-Amzn-Bedrock-AgentCore-Runtime-Session-Id'), agentCoreSessionId(workflow, 'codex'));
+    assert.equal(url.searchParams.get('X-Amz-Expires'), '60');
+    assert.equal(url.searchParams.get('X-Amz-SignedHeaders'), 'host');
+    assert.equal(sent[0].session, agentCoreSessionId(workflow, 'codex'));
+    assert.equal(sent[0].payload.mode, 'terminal-ticket'); assert.equal(sent[0].payload.workflowId, workflow);
+    const publicKey = await fetchJson(base, '/api/terminal/public-key');
+    assert.equal(publicKey.status, 200);
+    assert.match(verifyTerminalGrant(sent[0].payload, (publicKey.body as any).publicKey, 'codex').nonce, /^[a-f0-9]{64}$/);
+    assert.equal(value.ticket, 'a'.repeat(64));
+    assert.equal(JSON.stringify(value).includes('fixture-secret-key'), false);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  });
+  it('refuses unauthenticated users, unknown sessions, and non-owner project editors before invoking the runner', async () => {
+    const count = sent.length;
+    assert.equal((await fetchJson(base, '/api/terminal/connect', { method: 'POST', body: { workflowId: workflow } })).status, 401);
+    assert.equal((await fetchJson(base, '/api/terminal/connect', { method: 'POST', cookie, body: { workflowId: 'missing' } })).status, 404);
+    const created = await fetchJson(base, '/api/api-tokens', { cookie, body: { name: 'Terminal denial fixture', scope: 'write' } });
+    assert.equal(created.status, 201);
+    const apiToken = (created.body as any).token;
+    assert.equal(typeof apiToken, 'string');
+    assert.equal((await fetchJson(base, '/api/terminal/connect', { method: 'POST', headers: { Authorization: `Bearer ${apiToken}` }, body: { workflowId: workflow } })).status, 403);
+    const actor = generateId(), token = randomBytes(32).toString('hex');
+    await getAuthRepository().createUser({ id: actor, email: 'editor@example.test', name: 'Editor', password_hash: 'fixture', is_admin: 0, disabled: 0, created_at: now() });
+    await getAuthRepository().createSession({ token_hash: createHash('sha256').update(token).digest('hex'), user_id: actor, expires_at: new Date(Date.now() + 60_000).toISOString(), created_at: now() });
+    run('INSERT INTO project_members (project_id,user_id,access,role) VALUES (?,?,?,?)', project, actor, 'editor', '');
+    const denied = await fetchJson(base, '/api/terminal/connect', { method: 'POST', cookie: `portal_session=${token}`, body: { workflowId: workflow } });
+    assert.equal(denied.status, 403);
+    assert.equal(sent.length, count);
+  });
+  it('honors the administrator terminal switch and does not advertise the Lambda WebSocket path', async () => {
+    assert.equal((await fetchJson(base, '/api/admin/terminal/settings', { method: 'PUT', cookie, body: { enabled: false } })).status, 200);
+    const capability = await fetchJson(base, `/api/terminal/capability?workflowId=${workflow}`, { cookie });
+    assert.equal((capability.body as any).available, false);
+    assert.equal((await fetchJson(base, '/api/terminal/connect', { method: 'POST', cookie, body: { workflowId: workflow } })).status, 403);
+    await fetchJson(base, '/api/admin/terminal/settings', { method: 'PUT', cookie, body: { enabled: true } });
+  });
+});

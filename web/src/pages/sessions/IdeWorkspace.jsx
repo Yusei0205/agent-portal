@@ -1209,7 +1209,7 @@ export function IdeWorkspace({ id, project }) {
                   </button>
                 </div>
               </div>
-              <IdeTerminal workflowId={id} height={terminalH - 32} />
+              <IdeTerminal workflowId={id} engine={workflow?.engine} height={terminalH - 32} />
             </div>
           )}
 

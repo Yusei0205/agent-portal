@@ -17,9 +17,11 @@
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-bedrock-agentcore": "^3.1161.0",
     "@aws-sdk/credential-providers": "^3.1161.0",
+    "@lydell/node-pty": "1.2.0-beta.18",
     "@smithy/protocol-http": "^5.6.2",
     "@smithy/signature-v4": "^5.7.5",
     "playwright-core": "^1.52.0",
+    "ws": "8.18.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {

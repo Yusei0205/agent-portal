@@ -57,7 +57,7 @@ copyDir(path.join(root, 'agent-runner'), path.join(stage, 'agent-runner'));
 copyDir(path.join(root, 'kiro-runner'), path.join(stage, 'kiro-runner'));
 for (const f of ['agent/guard.ts', 'agent/env-scrub.ts', 'agent/tool-policy.ts', 'agent/pricing.ts', 'agent/agentcore-approvals.ts', 'real-path.ts',
   // The runners' own pure modules (files, repositories, snapshots, MCP proxies, checks).
-  'agent/runner-files.ts', 'agent/runner-inspect.ts', 'agent/runner-repos.ts', 'agent/runner-snapshot.ts', 'agent/runner-mcp.ts', 'agent/runner-checks.ts', 'agent/runner-finalize.ts', 'agent/runner-finalize-run.ts']) {
+  'agent/runner-files.ts', 'agent/runner-inspect.ts', 'agent/runner-repos.ts', 'agent/runner-snapshot.ts', 'agent/runner-terminal.ts', 'agent/runner-terminal-auth.ts', 'agent/runner-mcp.ts', 'agent/runner-checks.ts', 'agent/runner-finalize.ts', 'agent/runner-finalize-run.ts']) {
   const to = path.join(stage, 'server', f);
   fs.mkdirSync(path.dirname(to), { recursive: true });
   fs.copyFileSync(path.join(root, 'server', f), to);
@@ -75,7 +75,7 @@ const hash = crypto.createHash('sha256');
 const tag = `h-${hash.digest('hex').slice(0, 16)}`;
 console.log(`image tag ${tag}`);
 
-const cdkArgs = ['-y', CDK, 'deploy', '--require-approval', 'never', '-c', 'harness=1', '-c', `harnessImageTag=${tag}`, ...profileArgs];
+const cdkArgs = ['-y', CDK, 'deploy', '--require-approval', 'never', '-c', 'harness=1', '-c', `harnessImageTag=${tag}`, '-c', `publicUrl=${process.env.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net'}`, ...profileArgs];
 
 // ── 2. Build stack ────────────────────────────────────────────────────────────
 log('Deploying AgentPortalHarnessBuild (ECR, CodeBuild, sources)');

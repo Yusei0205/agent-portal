@@ -459,6 +459,24 @@ export function agentCoreControlSender(runtimeArn: string, sessionId: string): C
   };
 }
 
+/** Browser-safe, short-lived connection to one exact runtime session (never the Lambda URL). */
+export async function presignAgentCoreWebSocket(runtimeArn: string, sessionId: string): Promise<string> {
+  const { region } = parseRuntimeArn(runtimeArn);
+  const profile = process.env.PORTAL_AGENTCORE_AWS_PROFILE || process.env.PORTAL_KIRO_AGENTCORE_AWS_PROFILE;
+  const credentials = await resolveAwsCredentials(profile);
+  const { SignatureV4 } = await import('@smithy/signature-v4');
+  const signer = new SignatureV4({ credentials, region, service: 'bedrock-agentcore', sha256: NodeSha256 });
+  const host = `bedrock-agentcore.${region}.amazonaws.com`;
+  const signed = await signer.presign({ method: 'GET', protocol: 'https:', hostname: host,
+    path: `/runtimes/${encodeURIComponent(runtimeArn)}/ws`, headers: { host },
+    query: { 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': sessionId, qualifier: 'DEFAULT' } }, { expiresIn: 60 });
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(signed.query ?? {})) {
+    for (const v of Array.isArray(value) ? value : [value]) if (v != null) query.append(key, v);
+  }
+  return `wss://${host}${signed.path}?${query}`;
+}
+
 /** The approval settings sent to a runner: the portal's expiry (the runner adds a margin). */
 export function runnerApprovals(): { via: 'portal'; expiryMinutes: number } {
   const minutes = Number(getSettings().agents.approvalExpiryMinutes) || 60;

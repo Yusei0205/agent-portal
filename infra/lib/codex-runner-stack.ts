@@ -23,7 +23,8 @@ export class AgentPortalCodexRunnerStack extends cdk.Stack {
       agentRuntimeName: 'agentPortalCodexRunner', description: 'Codex with short-lived ChatGPT OAuth, portal approvals, durable thread snapshots, and isolated repositories',
       agentRuntimeArtifact: { containerConfiguration: { containerUri: image.imageUri } }, roleArn: role.roleArn,
       networkConfiguration: { networkMode: 'PUBLIC' }, lifecycleConfiguration: { idleRuntimeSessionTimeout: 900, maxLifetime: 7200 },
-      environmentVariables: { AWS_REGION: this.region, AWS_DEFAULT_REGION: this.region },
+      environmentVariables: { AWS_REGION: this.region, AWS_DEFAULT_REGION: this.region,
+        PORTAL_TERMINAL_ISSUER_URL: new URL(this.node.tryGetContext('publicUrl') || 'https://d1tah6dqw2fe9f.cloudfront.net').origin },
     });
     const policy = role.node.tryFindChild('DefaultPolicy')?.node.defaultChild as cdk.CfnResource | undefined;
     if (policy) runtime.addResourceDependency(policy);

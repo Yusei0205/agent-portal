@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
  && codex --version
 WORKDIR /app
 COPY --from=build /src/codex-runner/dist ./dist
+COPY --from=build /src/node_modules/ws ./node_modules/ws
+COPY --from=build /src/node_modules/@lydell ./node_modules/@lydell
 ENV NODE_ENV=production PORTAL_CODEX_BIN=/usr/local/bin/codex AGENT_RUNNER_PORT=8080
 USER node
 EXPOSE 8080

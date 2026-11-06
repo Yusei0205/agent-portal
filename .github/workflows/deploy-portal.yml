@@ -135,6 +135,7 @@ jobs:
         run: >-
           npx aws-cdk@2.1147.0 deploy AgentPortalCodexRunner
           -c codexRunner=1
+          -c "publicUrl=$PUBLIC_URL"
           --require-approval never
           --outputs-file "$RUNNER_TEMP/codex-runner-outputs.json"
 

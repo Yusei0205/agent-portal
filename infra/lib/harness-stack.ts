@@ -187,7 +187,8 @@ export class AgentPortalHarnessStack extends cdk.Stack {
           // Long enough for the portal's default 60-minute run limit plus approval waits.
           maxLifetime: 7200,
         },
-        environmentVariables: { AWS_DEFAULT_REGION: this.region, AWS_REGION: this.region },
+        environmentVariables: { AWS_DEFAULT_REGION: this.region, AWS_REGION: this.region,
+          PORTAL_TERMINAL_ISSUER_URL: new URL(this.node.tryGetContext('publicUrl') || 'https://d1tah6dqw2fe9f.cloudfront.net').origin },
       });
       // The runtime validates the image with the role, so wait for the role's policy.
       const policy = role.node.tryFindChild('DefaultPolicy')?.node.defaultChild as cdk.CfnResource | undefined;

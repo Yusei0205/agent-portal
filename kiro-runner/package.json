@@ -24,6 +24,8 @@
     "zod": "^4.6.7"
   },
   "dependencies": {
-    "playwright-core": "^1.52.0"
+    "@lydell/node-pty": "1.2.0-beta.18",
+    "playwright-core": "^1.52.0",
+    "ws": "8.18.0"
   }
 }

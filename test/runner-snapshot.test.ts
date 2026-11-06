@@ -30,6 +30,35 @@ describe('parseSnapshot', () => {
 });
 
 describe('workspace snapshots', { skip: !haveTools && 'tar, gzip and find are needed' }, () => {
+  it('serializes terminal and agent saves so their archives cannot overwrite one another', async () => {
+    const roots = ['a', 'b'].map(() => fs.mkdtempSync(path.join(os.tmpdir(), 'terminal-save-race-')));
+    for (let i = 0; i < roots.length; i++) {
+      fs.mkdirSync(path.join(roots[i], 'repos', 'fixture'), { recursive: true });
+      fs.writeFileSync(path.join(roots[i], 'repos', 'fixture', 'value.txt'), String(i));
+    }
+    let active = 0, maximum = 0;
+    const stored = new Map<string, Buffer>();
+    const server = http.createServer((req, res) => {
+      active++; maximum = Math.max(maximum, active);
+      const chunks: Buffer[] = [];
+      req.on('data', chunk => chunks.push(chunk));
+      req.on('end', () => { stored.set(req.url!, Buffer.concat(chunks)); setTimeout(() => { active--; res.writeHead(200); res.end(); }, 50); });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      await Promise.all(roots.map((root, i) => flushWorkspaceStrict({ putUrl: `${base}/${i}` }, root)));
+      assert.equal(maximum, 1);
+      for (let i = 0; i < roots.length; i++) {
+        const archive = path.join(roots[i], 'saved.tar.gz'); fs.writeFileSync(archive, stored.get(`/${i}`)!);
+        const result = spawnSync('tar', ['--force-local', '-xOf', archive, 'repos/fixture/value.txt'], { encoding: 'utf8' });
+        assert.equal(result.status, 0); assert.equal(result.stdout, String(i));
+      }
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      for (const root of roots) if (path.dirname(root) === path.resolve(os.tmpdir()) && path.basename(root).startsWith('terminal-save-race-')) fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it('rejects a failed upload when durable completion is required', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-strict-snapshot-'));
     fs.mkdirSync(path.join(root, 'repos', 'example'), { recursive: true });

@@ -49,6 +49,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 import { getMemberRow, getProjectRow } from './project-access.ts';
+import { usesCloudTerminal, cloudTerminalCapability, registerCloudTerminalRoutes } from './terminal-cloud.ts';
 // ── PTY capability ────────────────────────────────────────────────────────────
 
 interface NodePtyProcess {
@@ -705,6 +706,7 @@ async function handleTerminalSession(
 // ── HTTP routes ───────────────────────────────────────────────────────────────
 
 export function registerTerminalRoutes(): void {
+  registerCloudTerminalRoutes(isTerminalEnabled);
 
   // GET /api/terminal/capability
   router.get('/api/terminal/capability', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
@@ -713,6 +715,7 @@ export function registerTerminalRoutes(): void {
       return;
     }
     const enabled = isTerminalEnabled();
+    if (usesCloudTerminal()) { await cloudTerminalCapability(req, res, enabled); return; }
     const ptyMod = await tryLoadPty();
     sendJson(res, 200, {
       available: enabled,

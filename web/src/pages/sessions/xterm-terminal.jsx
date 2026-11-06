@@ -37,6 +37,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { LineBuffer } from '../../lib/terminal-pipe.js';
+import { api } from '../../lib/api.js';
 
 // ── Theme helpers ─────────────────────────────────────────────────────────────
 
@@ -100,7 +101,7 @@ function buildTheme(el) {
  *   onClose?: () => void,
  * }} props
  */
-export function XtermTerminal({ workflowId, onClose }) {
+export function XtermTerminal({ workflowId, onClose, transport }) {
   const containerRef   = useRef(null);
   const termRef        = useRef(null);
   const fitRef         = useRef(null);
@@ -157,19 +158,44 @@ export function XtermTerminal({ workflowId, onClose }) {
       isPty:      true,
       lineBuffer: new LineBuffer(),
       shell:      /** @type {string|null} */ (null),
+      decoder: new TextDecoder(),
     };
 
     // ── WebSocket connection ──────────────────────────────────────────────
 
-    function connect() {
+    let ready = false;
+    let started = false;
+    let retries = 0;
+    let pendingInput = '';
+    let pendingResize = null;
+    async function connect() {
       if (closed) return;
+      ready = false;
+      started = false;
+      pendingInput = '';
+      pendingResize = null;
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url   = `${proto}//${location.host}/api/terminal/ws?workflowId=${encodeURIComponent(workflowId)}`;
+      let url = `${proto}//${location.host}/api/terminal/ws?workflowId=${encodeURIComponent(workflowId)}`;
+      let ticket;
+      if (transport === 'agentcore') {
+        term.writeln('\r\nConnecting to session workspace...');
+        try {
+          const connection = await api.post('/api/terminal/connect', { workflowId });
+          if (closed) return;
+          url = connection.url;
+          ticket = connection.ticket;
+        } catch (error) {
+          if (!closed) term.writeln(`\r\nConnection failed: ${error.message}. Use Reconnect to try again.`);
+          return;
+        }
+      }
+      if (closed) return;
       const ws    = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        term.writeln('\r\n\x1b[32m● Terminal connected\x1b[0m\r\n');
+        if (ticket) ws.send(JSON.stringify({ type: 'start', ticket, cols: term.cols, rows: term.rows }));
+        started = true;
       };
 
       ws.onmessage = (e) => {
@@ -177,9 +203,13 @@ export function XtermTerminal({ workflowId, onClose }) {
           const msg = JSON.parse(e.data);
 
           if (msg.type === 'ready') {
+            ready = true;
+            retries = 0;
+            term.writeln('\r\n\x1b[32m● Terminal connected\x1b[0m\r\n');
             pipeState.isPty  = msg.pty !== false;
             pipeState.shell  = msg.shell ?? null;
             pipeState.lineBuffer.reset(); // clear stale state on (re)connect
+            pipeState.decoder = new TextDecoder();
 
             if (!pipeState.isPty) {
               // Pipe-mode: warn that interactive features are unavailable
@@ -199,15 +229,15 @@ export function XtermTerminal({ workflowId, onClose }) {
             const bytes = Uint8Array.from(atob(msg.data), (c) => c.charCodeAt(0));
             if (!pipeState.isPty && bytes.length > 0) {
               // In pipe mode, attempt to strip cmd.exe's command echo
-              const text     = new TextDecoder().decode(bytes);
+              const text     = pipeState.decoder.decode(bytes, { stream: true });
               const filtered = pipeState.lineBuffer.filterOutput(text);
-              term.write(filtered !== text
-                ? new TextEncoder().encode(filtered)
-                : bytes);
+              term.write(new TextEncoder().encode(filtered));
             } else {
               term.write(bytes);
             }
 
+          } else if (msg.type === 'status') {
+            term.writeln(`\r\n${msg.text}`);
           } else if (msg.type === 'exit') {
             term.writeln(`\r\n\x1b[90mProcess exited (${msg.code})\x1b[0m`);
             wsRef.current = null;
@@ -225,8 +255,16 @@ export function XtermTerminal({ workflowId, onClose }) {
         term.writeln('\r\n\x1b[31m● Connection error\x1b[0m');
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (closed) return;
+        ready = false;
+        started = false;
+        wsRef.current = null;
+        if ([1000, 1008, 1009, 1011, 4000].includes(event.code) || retries >= 3) {
+          term.writeln('\r\nDisconnected. Use Reconnect to open the terminal again.');
+          return;
+        }
+        retries++;
         term.writeln('\r\n\x1b[90m● Disconnected. Reconnecting in 3s…\x1b[0m');
         reconnectTimer.current = setTimeout(connect, 3000);
       };
@@ -239,6 +277,27 @@ export function XtermTerminal({ workflowId, onClose }) {
       const bytes = new TextEncoder().encode(str);
       return btoa(String.fromCharCode(...bytes));
     }
+    function sendInput(text) {
+      const ws = wsRef.current;
+      if (!ready || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (pendingInput.length + text.length > 1024 * 1024) {
+        term.writeln('\r\nPaste is too large. Paste smaller sections.');
+        return;
+      }
+      pendingInput += text;
+    }
+    // Coalesce typing and pace pasted text below AgentCore's frame-rate limit.
+    const inputTimer = setInterval(() => {
+      const ws = wsRef.current;
+      if (!ready || !ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 64 * 1024) return;
+      if (pendingResize) { ws.send(JSON.stringify(pendingResize)); pendingResize = null; }
+      if (!pendingInput) return;
+      let end = Math.min(pendingInput.length, 4096);
+      const last = pendingInput.charCodeAt(end - 1);
+      if (end < pendingInput.length && last >= 0xd800 && last <= 0xdbff) end--;
+      ws.send(JSON.stringify({ type: 'input', data: encodeInput(pendingInput.slice(0, end)) }));
+      pendingInput = pendingInput.slice(end);
+    }, 20);
 
     /** Copy the current selection to the system clipboard (best-effort). */
     function copySelection() {
@@ -250,10 +309,10 @@ export function XtermTerminal({ workflowId, onClose }) {
     function pasteFromClipboard() {
       const ws = wsRef.current;
       navigator.clipboard?.readText().then((text) => {
-        if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!text || !ready || !ws || ws.readyState !== WebSocket.OPEN) return;
         if (pipeState.isPty) {
           // PTY: send raw to the shell
-          ws.send(JSON.stringify({ type: 'input', data: encodeInput(text) }));
+          sendInput(text);
         } else {
           // Pipe: insert each printable character into the line buffer and echo
           for (const ch of text) {
@@ -281,7 +340,7 @@ export function XtermTerminal({ workflowId, onClose }) {
 
     term.onData((data) => {
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!ready || !ws || ws.readyState !== WebSocket.OPEN) return;
 
       if (!pipeState.isPty) {
         // ── Pipe mode: local echo + line buffer ──────────────────────────
@@ -294,22 +353,22 @@ export function XtermTerminal({ workflowId, onClose }) {
           return;
         }
         if (r.send !== null) {
-          ws.send(JSON.stringify({ type: 'input', data: encodeInput(r.send) }));
+          sendInput(r.send);
         }
         return;
       }
 
       // ── PTY mode: forward raw bytes straight to the shell ─────────────
       // The PTY handles echo, line-editing, tab completion, Ctrl+C, etc.
-      ws.send(JSON.stringify({ type: 'input', data: encodeInput(data) }));
+      sendInput(data);
     });
 
     // ── Resize → tell server ──────────────────────────────────────────────
 
     term.onResize(({ cols, rows }) => {
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      if (ready && ws && ws.readyState === WebSocket.OPEN) {
+        pendingResize = { type: 'resize', cols, rows };
       }
     });
 
@@ -318,7 +377,7 @@ export function XtermTerminal({ workflowId, onClose }) {
     // Heartbeat to keep the WebSocket alive through proxies / load-balancers
     const pingTimer = setInterval(() => {
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (started && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ping' }));
       }
     }, 25000);
@@ -327,6 +386,7 @@ export function XtermTerminal({ workflowId, onClose }) {
       closed = true;
       clearTimeout(reconnectTimer.current);
       clearInterval(pingTimer);
+      clearInterval(inputTimer);
       ro.disconnect();
       const ws = wsRef.current;
       if (ws) { ws.close(); wsRef.current = null; }
@@ -334,7 +394,7 @@ export function XtermTerminal({ workflowId, onClose }) {
       termRef.current = null;
       fitRef.current  = null;
     };
-  }, [workflowId]);
+  }, [workflowId, transport]);
 
   return (
     <div

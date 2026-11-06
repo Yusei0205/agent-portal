@@ -29,6 +29,9 @@ on:
       - server/agent/pricing.ts
       - server/agent/agentcore-approvals.ts
       - server/agent/agentcore-bridge.ts
+      - server/agent/runner-terminal.ts
+      - server/agent/runner-terminal-auth.ts
+      - server/agent/runner-snapshot.ts
       - server/agent/claude-agentcore.ts
       - server/agent/kiro-agentcore.ts
       - server/real-path.ts
@@ -45,6 +48,9 @@ on:
       - server/agent/pricing.ts
       - server/agent/agentcore-approvals.ts
       - server/agent/agentcore-bridge.ts
+      - server/agent/runner-terminal.ts
+      - server/agent/runner-terminal-auth.ts
+      - server/agent/runner-snapshot.ts
       - server/agent/claude-agentcore.ts
       - server/agent/kiro-agentcore.ts
       - server/real-path.ts
@@ -92,7 +98,7 @@ jobs:
         run: >-
           node --disable-warning=ExperimentalWarning --import tsx --test --test-timeout=300000
           test/agent-runner-validation.test.ts test/agentcore-harness.test.ts test/agentcore-portal.test.ts
-          test/kiro-agentcore.test.ts
+          test/kiro-agentcore.test.ts test/runner-terminal.test.ts test/runner-snapshot.test.ts
 
       - name: End to end with the real Claude Code engine
         run: npm run test:engine
@@ -111,6 +117,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: aws-prod
+    env:
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
     permissions:
       contents: read
       id-token: write # GitHub OIDC → AWS
