@@ -115,6 +115,13 @@ export default function Automations({ projectId }) {
     const node = { id, kind, label: kinds[kind], prompt: '', model: '', agent: '', checks: [], maxVisits: 3, position: { x: 100 + nodes.length * 30, y: 100 + nodes.length * 20 } };
     setNodes((list) => [...list, { id, position: node.position, type: 'step', data: { node } }]); setSelectedId(id); setDirty(true);
   };
+  // Remove the selected step and every connection to or from it.
+  const removeStep = () => {
+    if (!selectedId) return;
+    setNodes((list) => list.filter((n) => n.id !== selectedId));
+    setEdges((list) => list.filter((e) => e.source !== selectedId && e.target !== selectedId));
+    setSelectedId(null); setDirty(true);
+  };
   const check = selected?.data.node;
   const markedNodes = nodes.map((n) => ({ ...n, selected: n.id === selectedId }));
   const executionFlow = runGraph ? toFlow(runGraph, run) : null;
@@ -138,9 +145,9 @@ export default function Automations({ projectId }) {
         </div>
         <fieldset className="automation-repos"><legend>Repositories</legend>{repos.length ? repos.map((r) => <label key={r.id}><input type="checkbox" checked={graph.repoIds.includes(r.id)} onChange={(e) => updateGraph({ repoIds: e.target.checked ? [...graph.repoIds, r.id] : graph.repoIds.filter((id) => id !== r.id) })} />{r.name}</label>) : <span className="muted">Connect a repository in Workspaces to use it here.</span>}</fieldset>
         <div className="automation-builder">
-          <aside className="automation-palette"><h2>Steps</h2>{Object.entries(kinds).map(([kind, label]) => <button className="btn" key={kind} onClick={() => addNode(kind)}>+ {label}</button>)}<p className="muted">Drag steps to arrange them. Drag between handles to connect. Select a connection and press Delete to remove it.</p></aside>
+          <aside className="automation-palette"><h2>Steps</h2>{Object.entries(kinds).map(([kind, label]) => <button className="btn" key={kind} onClick={() => addNode(kind)}>+ {label}</button>)}<p className="muted">Drag steps to arrange them. Drag between handles to connect. Select a step or a connection and press Delete (or use Delete step in its settings) to remove it.</p></aside>
           <div className="automation-canvas" aria-label="Workflow canvas">
-            <ReactFlow nodes={markedNodes} edges={edges} nodeTypes={nodeTypes} fitView colorMode="dark"
+            <ReactFlow nodes={markedNodes} edges={edges} nodeTypes={nodeTypes} fitView colorMode="dark" deleteKeyCode={['Backspace', 'Delete']}
               onNodesChange={(changes) => { setNodes((list) => applyNodeChanges(changes, list)); if (changes.some((c) => c.type !== 'select' && c.type !== 'dimensions')) setDirty(true); }}
               onEdgesChange={(changes) => { setEdges((list) => applyEdgeChanges(changes, list)); if (changes.some((c) => c.type !== 'select')) setDirty(true); }}
               onNodesDelete={(removed) => { const ids = new Set(removed.map((n) => n.id)); setEdges((list) => list.filter((e) => !ids.has(e.source) && !ids.has(e.target))); setSelectedId(null); }}
@@ -150,6 +157,7 @@ export default function Automations({ projectId }) {
             </ReactFlow>
           </div>
           <aside className="automation-inspector"><h2>{check ? 'Step settings' : 'Select a step'}</h2>{check && <>
+            <button type="button" className="btn btn-danger" onClick={removeStep}>Delete step</button>
             <label>Name<input value={check.label} maxLength={100} onChange={(e) => updateNode({ label: e.target.value })} /></label>
             <label>Visit limit<input type="number" min="1" max="10" value={check.maxVisits} onChange={(e) => updateNode({ maxVisits: Number(e.target.value) })} /></label>
             {check.kind === 'agent' && <>
