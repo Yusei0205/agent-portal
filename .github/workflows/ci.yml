@@ -63,6 +63,8 @@ jobs:
         # --all so shared-core changes (db.ts, settings.ts, runner.ts …) run everything.
         # --backend-only skips the UI smoke suite that needs a live browser.
         run: npm run test:affected -- --backend-only --all
+        env:
+          TEST_CONCURRENCY: '4'
         timeout-minutes: 20
 
       - name: Validate test module map
