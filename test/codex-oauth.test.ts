@@ -19,7 +19,7 @@ describe('Codex hosted OAuth and durable renewal', () => {
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwk = { ...keys.publicKey.export({ format: 'jwk' }), kid: 'fixture', alg: 'RS256', use: 'sig' };
   const store = new SqliteCodexStore();
-  const environment = ['PORTAL_CODEX_AGENTCORE_RUNTIME_ARN', 'PORTAL_CODEX_OAUTH_CLIENT_ID', 'PORTAL_CODEX_OAUTH_REDIRECT_URI', 'STORAGE_BACKEND', 'PORTAL_CODEX_OAUTH_CLIENT_AUTH'];
+  const environment = ['PORTAL_CODEX_AGENTCORE_RUNTIME_ARN', 'PORTAL_CODEX_OAUTH_CLIENT_ID', 'PORTAL_CODEX_OAUTH_REDIRECT_URI', 'STORAGE_BACKEND', 'PORTAL_CODEX_OAUTH_CLIENT_AUTH', 'PORTAL_CODEX_AUTH_MODE'];
   const saved = new Map(environment.map(k => [k, process.env[k]]));
   let nonce = '', badIdentity = false, scope = '', refreshes = 0;
   let refreshGate: Promise<void> | null = null;
@@ -60,6 +60,7 @@ describe('Codex hosted OAuth and durable renewal', () => {
     process.env.PORTAL_CODEX_OAUTH_CLIENT_ID = 'oaiapp_fixture';
     process.env.PORTAL_CODEX_OAUTH_REDIRECT_URI = 'https://portal.example/api/codex/oauth/callback';
     process.env.PORTAL_CODEX_OAUTH_CLIENT_AUTH = 'none';
+    process.env.PORTAL_CODEX_AUTH_MODE = 'oauth';
     process.env.STORAGE_BACKEND = 's3';
     setCodexOAuthFetchForTests(fetcher);
   });

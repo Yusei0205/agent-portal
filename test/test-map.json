@@ -1424,6 +1424,9 @@
         "server/agent/codex.ts",
         "web/src/components/CodexCredentials.jsx",
         "server/codex-oauth.ts",
+          "server/codex-device.ts",
+          "server/codex-device-protocol.ts",
+          "codex-runner/src/device-auth.ts",
         "server/repositories/codex-store.ts",
         "server/agent/codex-session.ts",
         "server/agent/codex-agentcore.ts",
@@ -1435,6 +1438,7 @@
       "tests": [
         "test/codex.test.ts",
         "test/codex-oauth.test.ts",
+          "test/codex-device.test.ts",
         "test/codex-runner.test.ts",
         "test/codex-store.test.ts",
         "test/codex-setup.test.ts"

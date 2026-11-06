@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { CodexRuntimeError, resolveCodexCommand } from './codex-command.ts';
+import { validChatgptTokens, type ChatgptAuthTokens } from './codex-device-protocol.ts';
 
 export type RpcParams = Record<string, any>;
 type Pending = { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
@@ -54,7 +55,8 @@ export class CodexClient {
       'Codex app-server exited' + (code != null ? ' (exit code ' + code + ')' : signal ? ' (' + signal + ')' : '') + '. Check the installed Codex version and runtime configuration.', 502)); });
   }
 
-  static async start(home: string, env: NodeJS.ProcessEnv, cwd?: string, options: { accessToken?: string; extraEnv?: Record<string, string> } = {}): Promise<CodexClient> {
+  static async start(home: string, env: NodeJS.ProcessEnv, cwd?: string, options: { accessToken?: string; chatgptAuthTokens?: ChatgptAuthTokens; extraEnv?: Record<string, string> } = {}): Promise<CodexClient> {
+    if (options.chatgptAuthTokens && (!validChatgptTokens(options.chatgptAuthTokens) || options.accessToken)) throw new Error('Invalid Codex external authentication');
     const launch = resolveCodexCommand(env);
     const provider = options.accessToken ? [
       '-c', 'model_provider="openai_chatgpt_plan"',
@@ -64,16 +66,18 @@ export class CodexClient {
       '-c', 'model_providers.openai_chatgpt_plan.wire_api="responses"',
       '-c', 'model_providers.openai_chatgpt_plan.requires_openai_auth=false',
       '-c', 'model_providers.openai_chatgpt_plan.supports_websockets=false',
-      '-c', 'shell_environment_policy.inherit="core"',
-      '-c', 'shell_environment_policy.exclude=["ACCESS_TOKEN","PORTAL_MCP_CONNECTIONS_JSON","AWS_*","*SECRET*","*TOKEN*"]',
     ] : [];
     const child = spawn(launch.command, [...launch.args,
       'app-server', '-c', 'cli_auth_credentials_store="file"', ...provider,
+      '-c', 'shell_environment_policy.inherit="core"',
+      '-c', 'shell_environment_policy.exclude=["ACCESS_TOKEN","PORTAL_MCP_CONNECTIONS_JSON","AWS_*","*SECRET*","*TOKEN*"]',
     ], { env: { ...env, ...options.extraEnv, CODEX_HOME: home, ...(options.accessToken ? { ACCESS_TOKEN: options.accessToken } : {}) }, cwd, stdio: 'pipe', windowsHide: true, shell: false });
     const client = new CodexClient(child);
     try {
-      await client.request('initialize', { clientInfo: { name: 'agent_portal', title: 'Agent Portal', version: '0.1.0' } });
+      await client.request('initialize', { clientInfo: { name: 'agent_portal', title: 'Agent Portal', version: '0.1.0' },
+        ...(options.chatgptAuthTokens ? { capabilities: { experimentalApi: true } } : {}) });
       client.write({ method: 'initialized', params: {} });
+      if (options.chatgptAuthTokens) await client.request('account/login/start', { type: 'chatgptAuthTokens', ...options.chatgptAuthTokens });
       return client;
     } catch (e) { client.close(); throw e; }
   }

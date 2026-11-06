@@ -17,7 +17,7 @@ export function CodexCredentials({ isAdmin }) {
       const next = await api.get('/api/codex/status');
       setStatus(next);
       if (!callbackFailed.current) setError('');
-      if (next.login?.status === 'pending') setChallenge(next.login);
+      if (next.login?.status === 'pending' || next.login?.status === 'starting') setChallenge(next.login);
       else {
         setChallenge(null);
         if (next.login?.status === 'failed') setError(next.login.error || 'Codex sign-in failed.');
@@ -65,6 +65,7 @@ export function CodexCredentials({ isAdmin }) {
             <div className="cred-card-name">
               <span>{status?.signedIn ? 'Codex account' : 'Codex'}</span>
               <span className="badge">ChatGPT subscription</span>
+              {status?.experimental && <span className="badge">Experimental device sign-in</span>}
               {status?.planType && <span className="badge">{status.planType}</span>}
             </div>
             <div className="cred-card-meta">
@@ -74,10 +75,10 @@ export function CodexCredentials({ isAdmin }) {
             {challenge && (
               <div className="device-code-box" role="status">
                 <h4>Sign in to Codex</h4>
-                <p>Open the sign-in page and enter this one-time code:</p>
-                <div className="device-user-code-row"><strong className="device-user-code">{challenge.userCode}</strong></div>
-                <a className="device-code-url" href={challenge.verificationUrl} target="_blank" rel="noopener noreferrer">Sign in with ChatGPT</a>
-                <p className="device-status">Waiting for authorization. If the code expires, cancel and start again.</p>
+                <p>{challenge.userCode ? 'Open the sign-in page and enter this one-time code:' : 'Preparing your device authorization code...'}</p>
+                {challenge.userCode && <div className="device-user-code-row"><strong className="device-user-code">{challenge.userCode}</strong></div>}
+                {challenge.verificationUrl && <a className="device-code-url" href={challenge.verificationUrl} target="_blank" rel="noopener noreferrer">Sign in with ChatGPT</a>}
+                <p className="device-status">Waiting for authorization. Enable device-code login in ChatGPT Settings → Security if prompted. If the code expires, cancel and start again.</p>
                 <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => act('login/cancel')}>Cancel sign-in</button>
               </div>
             )}

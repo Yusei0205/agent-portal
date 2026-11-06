@@ -56,6 +56,9 @@ describe('Codex AgentCore runner HTTP contract', () => {
     assert.equal((await post({ ...payload(), refreshToken: 'never-deliver-to-worker' })).status, 400);
     assert.equal((await post({ ...payload(), workflowId: '../other' })).status, 400);
     assert.equal((await post({ mode: 'unknown' })).status, 400);
+    assert.equal((await post({ ...payload(), accessToken: undefined, chatgptAuthTokens: { accessToken: 'native-token' } })).status, 400);
+    assert.equal((await post({ ...payload(), chatgptAuthTokens: { accessToken: 'native-token', chatgptAccountId: 'account' } })).status, 400);
+    assert.equal((await post({ ...payload(), accessToken: undefined, chatgptAuthTokens: { accessToken: 'native-token', chatgptAccountId: 'account', refresh_token: 'must-not-reach-workspace' } })).status, 400);
   });
   it('streams a turn, reports tokens and durable state, then resumes on the same thread', async () => {
     const first = await events(await post(payload()));

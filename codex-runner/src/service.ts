@@ -16,6 +16,9 @@ import { runCheckSteps, validateCheckSteps } from '../../server/agent/runner-che
 import { parseMcpServers } from '../../server/agent/runner-mcp.ts';
 import { restoreCodexState, saveCodexState } from './state.ts';
 import { applyCodexConfig } from '../../server/agent/codex-config.ts';
+import { randomUUID } from 'node:crypto';
+import { deviceAuthHandler } from './device-auth.ts';
+import { validChatgptTokens, type ChatgptAuthTokens } from '../../server/codex-device-protocol.ts';
 
 type Event = Record<string, any>;
 type ServiceOptions = {
@@ -35,11 +38,14 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
   const environment = (): NodeJS.ProcessEnv => ({ PATH: process.env.PATH, HOME: home, USERPROFILE: home,
     SYSTEMROOT: process.env.SYSTEMROOT, LOCALAPPDATA: process.env.LOCALAPPDATA, APPDATA: process.env.APPDATA,
     TMP: os.tmpdir(), TEMP: os.tmpdir(), LANG: 'C.UTF-8', SSL_CERT_FILE: process.env.SSL_CERT_FILE });
+  const device = deviceAuthHandler(root, open, environment);
+  let sessionKind: 'auth' | 'work' | null = null;
+  const renewals = new Map<string, (tokens: ChatgptAuthTokens) => void>();
 
   return http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/ping') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ status: active ? 'HealthyBusy' : 'Healthy' })); return;
+      res.end(JSON.stringify({ status: active || device.active() ? 'HealthyBusy' : 'Healthy' })); return;
     }
     if (req.method !== 'POST' || !['/invocations', '/invocations/'].includes(req.url || '')) { res.writeHead(404); res.end(); return; }
     let body: Event;
@@ -51,6 +57,20 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
     } catch { res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid or oversized invocation' })); return; }
     const json = (status: number, value: object) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
     const reply = (value: object) => { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }); res.end('data: ' + JSON.stringify(value) + '\n\n'); };
+    if (['device-start', 'device-poll', 'device-cancel', 'device-refresh'].includes(body.mode)) {
+      if (sessionKind === 'work') { json(403, { error: 'Authorization requires a separate session' }); return; }
+      sessionKind = 'auth';
+      try { reply({ type: 'device-auth', ...await device.handle(body) }); }
+      catch { reply({ type: 'error', message: 'Codex device authorization failed or expired. Enable device-code login in ChatGPT security settings and try signing in again.' }); }
+      return;
+    }
+    if (sessionKind === 'auth') { json(403, { error: 'This session is reserved for authorization' }); return; }
+    sessionKind = 'work';
+    if (body.mode === 'auth-refresh-result') {
+      const resolve = renewals.get(body.requestId);
+      if (!resolve || !active || active.runId !== body.runId || !validChatgptTokens(body.chatgptAuthTokens)) { json(409, { error: 'Invalid or expired credential renewal' }); return; }
+      renewals.delete(body.requestId); resolve(body.chatgptAuthTokens); reply({ type: 'auth-refresh-accepted' }); return;
+    }
     if (body.mode === 'answer') {
       const answer = parseApprovalAnswer(body);
       const outcome = typeof answer === 'string' ? { ok: false, error: answer } : broker.answer(answer);
@@ -63,7 +83,9 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
     if (active) { json(409, { error: 'A run is already active in this session' }); return; }
     if (!['codex-run', 'codex-text', 'codex-models', 'prepare-repos', 'inspect', 'finalize', 'flush-workspace'].includes(body.mode)) { json(400, { error: 'Unsupported mode' }); return; }
     if ('refreshToken' in body || 'refresh_token' in body || 'clientSecret' in body) { json(400, { error: 'Renewable credentials must stay in the portal' }); return; }
-    if (['codex-run', 'codex-text', 'codex-models'].includes(body.mode) && (typeof body.accessToken !== 'string' || !body.accessToken || body.accessToken.length > 64_000 || /[\r\n\0]/.test(body.accessToken))) {
+    if (['codex-run', 'codex-text', 'codex-models'].includes(body.mode) && (body.chatgptAuthTokens
+      ? !validChatgptTokens(body.chatgptAuthTokens) || Boolean(body.accessToken)
+      : typeof body.accessToken !== 'string' || !body.accessToken || body.accessToken.length > 64_000 || /[\r\n\0]/.test(body.accessToken))) {
       json(400, { error: 'A short-lived OAuth access token is required' }); return;
     }
     if (body.mode === 'codex-text' && (typeof body.prompt !== 'string' || body.prompt.length > 250_000
@@ -82,13 +104,30 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
     const controller = new AbortController();
     active = { runId: body.runId || body.mode, controller };
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
-    const secrets = [body.accessToken, ...parseMcpServers(body.mcpServers).flatMap(s => Object.values(s.headers))].filter((s): s is string => typeof s === 'string' && s.length > 0);
+    const secrets = [body.accessToken, body.chatgptAuthTokens?.accessToken, ...parseMcpServers(body.mcpServers).flatMap(s => Object.values(s.headers))].filter((s): s is string => typeof s === 'string' && s.length > 0);
     const send = (event: Event) => {
       let text = JSON.stringify(event);
       for (const secret of secrets) text = text.split(secret).join('***');
       if (!res.writableEnded && !res.destroyed) res.write('data: ' + text + '\n\n');
     };
     const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+    const refreshAuth = async (previousAccountId?: string): Promise<ChatgptAuthTokens> => {
+      if (!body.chatgptAuthTokens || (previousAccountId && previousAccountId !== body.chatgptAuthTokens.chatgptAccountId)) throw new Error('Codex account changed');
+      const requestId = randomUUID();
+      return new Promise((resolve, reject) => {
+        const finish = () => { clearTimeout(timer); renewals.delete(requestId); controller.signal.removeEventListener('abort', abort); };
+        const abort = () => { finish(); reject(new Error('Codex authorization was cancelled')); };
+        const timer = setTimeout(() => { finish(); reject(new Error('Codex token renewal timed out; resume the session to retry')); }, 8500);
+        renewals.set(requestId, tokens => {
+          finish();
+          if (tokens.chatgptAccountId !== body.chatgptAuthTokens.chatgptAccountId) { reject(new Error('Codex account changed')); return; }
+          secrets.push(tokens.accessToken); resolve(tokens);
+        });
+        controller.signal.addEventListener('abort', abort, { once: true });
+        send({ type: 'auth-refresh-request', requestId });
+      });
+    };
+    const auth = body.chatgptAuthTokens ? { chatgptAuthTokens: body.chatgptAuthTokens } : { accessToken: body.accessToken };
     res.on('close', disconnected);
     const heartbeat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': working\n\n'); }, 15_000);
     let client: CodexClient | undefined;
@@ -118,11 +157,11 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
           run: { workDir, goal: body.prompt, model: body.model || null, engineSessionId: null, trusted: false, permissions: { rules: [] } },
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]), allowed: new Set(), emit: () => {},
           awaitInput: async () => ({ decision: 'deny', remember: false, message: 'Portal AI generation cannot approve tools.' }),
-        }, { managedAuth: false, openClient: () => open(home, environment(), workDir, { accessToken: body.accessToken }),
+        }, { managedAuth: false, openClient: () => open(home, environment(), workDir, auth), refreshAuth,
           config: { 'features.shell_tool': false, 'features.multi_agent': false } });
         send({ type: 'result', exitCode: 0, text: result.text });
       } else if (body.mode === 'codex-models') {
-        client = await open(home, environment(), workDir, { accessToken: body.accessToken });
+        client = await open(home, environment(), workDir, auth);
         const models: Event[] = []; let cursor: string | null = null;
         do { const page = await client.request('model/list', { cursor, limit: 100 }); models.push(...(page.data ?? [])); cursor = page.nextCursor ?? null; } while (cursor);
         send({ type: 'models', models });
@@ -156,7 +195,8 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         };
         const result = await driveCodexTurn(ctx, {
           managedAuth: false,
-          openClient: () => open(home, environment(), workDir, { accessToken: body.accessToken, extraEnv: { PORTAL_MCP_CONNECTIONS_JSON: JSON.stringify(connections) } }),
+          refreshAuth,
+          openClient: () => open(home, environment(), workDir, { ...auth, extraEnv: { PORTAL_MCP_CONNECTIONS_JSON: JSON.stringify(connections) } }),
           ...(() => { const setup = applyCodexConfig(home, body.codexConfig ?? [], body.leadAgent); return { config: { ...setup.config, mcp_servers: mcp }, instructions: setup.instructions }; })(),
           onUsage: async value => { usage = value; },
         });
