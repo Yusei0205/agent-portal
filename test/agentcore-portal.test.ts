@@ -15,7 +15,7 @@ import { getDb, one } from '../server/db.ts';
 import { now, generateId } from '../server/util.ts';
 import { setConfig, type Config } from '../server/config.ts';
 import { _setAgentCoreInvokerOverride, runKiroViaAgentCore } from '../server/agent/kiro-agentcore.ts';
-import { runClaudeViaAgentCore, bedrockModelFor, _setCancelGraceMs } from '../server/agent/claude-agentcore-bedrock.ts';
+import { runClaudeViaAgentCore, bedrockModelFor, RUNTIME_BEDROCK_MODELS, _setCancelGraceMs } from '../server/agent/claude-agentcore-bedrock.ts';
 import { runClaudeViaAgentCore as runUserCredential, submitRepoChanges } from '../server/agent/claude-agentcore.ts';
 import { _setSessionPrDeps } from '../server/session-pr.ts';
 import { setPullRequestSettings } from '../server/project-settings-pr.ts';
@@ -260,8 +260,40 @@ describe('Claude on AgentCore — harness parity', () => {
 
   it('maps model names to Bedrock IDs', () => {
     assert.equal(bedrockModelFor('claude-sonnet-4-5'), 'global.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    assert.equal(bedrockModelFor('claude-opus-4-5-20251101'), 'global.anthropic.claude-opus-4-5-20251101-v1:0');
+    assert.equal(bedrockModelFor('claude-sonnet-4-20250514'), 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', 'a version the role does not allow: the family\'s 4.5');
     assert.equal(bedrockModelFor('apac.anthropic.claude-3-haiku-20240307-v1:0'), 'apac.anthropic.claude-3-haiku-20240307-v1:0');
     assert.equal(bedrockModelFor(''), undefined);
+  });
+
+  it('runs the 5.5 models through their global profile, whatever the picker named them', () => {
+    // The Bedrock model ID from the model picker. Called as is, the runtime's role refused it
+    // (InvokeModelWithResponseStream on foundation-model/anthropic.claude-sonnet-5-5).
+    assert.equal(bedrockModelFor('anthropic.claude-sonnet-5-5'), 'global.anthropic.claude-sonnet-5-5');
+    assert.equal(bedrockModelFor('global.anthropic.claude-sonnet-5-5'), 'global.anthropic.claude-sonnet-5-5');
+    assert.equal(bedrockModelFor('claude-sonnet-5-5'), 'global.anthropic.claude-sonnet-5-5', 'not Sonnet 4.5');
+    assert.equal(bedrockModelFor('claude-haiku-5-5'), 'global.anthropic.claude-haiku-5-5');
+    assert.equal(bedrockModelFor('claude-opus-5-5'), 'global.anthropic.claude-opus-5-5');
+    assert.equal(bedrockModelFor('anthropic.claude-haiku-4-5-20251001-v1:0'), 'global.anthropic.claude-haiku-4-5-20251001-v1:0');
+  });
+
+  it('every model a run can be mapped to is one the runtime\'s role may call, and the other way round', () => {
+    const stack = fs.readFileSync(path.join(process.cwd(), 'infra', 'lib', 'harness-stack.ts'), 'utf8');
+    const list = /const models = \[([\s\S]*?)\];/.exec(stack);
+    assert.ok(list, 'the role\'s model list in infra/lib/harness-stack.ts');
+    const allowed = [...list[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
+    assert.deepEqual(allowed, Object.values(RUNTIME_BEDROCK_MODELS).sort());
+    for (const id of Object.values(RUNTIME_BEDROCK_MODELS)) {
+      assert.equal(bedrockModelFor(id), `global.${id}`, `${id} runs through the global profile the role allows`);
+    }
+  });
+
+  it('sends a session\'s Sonnet 5.5 to the runner as its global profile', async () => {
+    const { ctx } = makeCtx(makeRun('claude-code'), { engine: 'claude-code' });
+    ctx.run.model = 'anthropic.claude-sonnet-5-5';
+    const rt = fakeRuntime({});
+    await runClaudeViaAgentCore(ctx, ARN);
+    assert.equal(rt.calls.find((c) => c.payload.mode === 'run')?.payload.model, 'global.anthropic.claude-sonnet-5-5');
   });
 });
 

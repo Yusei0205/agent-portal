@@ -44,12 +44,36 @@ import { snapshotAccess } from './runner-snapshot-access.ts';
 import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
 import type { RepoChange } from '../session-pr.ts';
 
-/** Bedrock model ID for the runner: a Bedrock ID as given, otherwise the matching global profile. */
+/**
+ * Bedrock IDs of the models the runtime's role may call, by family and version. They must match the
+ * role's list in infra/lib/harness-stack.ts (a test checks it); runs call them through their global profile.
+ */
+export const RUNTIME_BEDROCK_MODELS: Readonly<Record<string, string>> = {
+  'haiku-4-5': 'anthropic.claude-haiku-4-5-20251001-v1:0',
+  'sonnet-4-5': 'anthropic.claude-sonnet-4-5-20250929-v1:0',
+  'opus-4-5': 'anthropic.claude-opus-4-5-20251101-v1:0',
+  'haiku-5-5': 'anthropic.claude-haiku-5-5',
+  'sonnet-5-5': 'anthropic.claude-sonnet-5-5',
+  'opus-5-5': 'anthropic.claude-opus-5-5',
+};
+
+/**
+ * Bedrock model ID for the runner.
+ * - An inference profile (global., us., apac., …) as given.
+ * - A bare model ID (anthropic.…) through its global profile: the runtime's role may call the global
+ *   profiles, and newer Claude models cannot be called on demand by their bare model ID.
+ * - A Claude name (claude-sonnet-5-5, claude-opus-4-5-20251101): that version's global profile, when the
+ *   role allows it; otherwise the family's 4.5 profile.
+ */
 export function bedrockModelFor(model: string | null | undefined): string | undefined {
   const m = (model ?? '').trim();
   if (!m) return undefined;
-  if (/^((us|eu|apac|au|jp|in|global)\.)?anthropic\./.test(m)) return m;
+  if (/^(us|eu|apac|au|jp|in|global)\.anthropic\./.test(m)) return m;
+  if (/^anthropic\./.test(m)) return `global.${m}`;
   const lower = m.toLowerCase();
+  const named = /claude-(haiku|sonnet|opus)-(\d+)-(\d)(?!\d)/.exec(lower);
+  const known = named ? RUNTIME_BEDROCK_MODELS[`${named[1]}-${named[2]}-${named[3]}`] : undefined;
+  if (known) return `global.${known}`;
   if (lower.includes('haiku')) return 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
   if (lower.includes('opus')) return 'global.anthropic.claude-opus-4-5-20251101-v1:0';
   if (lower.includes('sonnet')) return 'global.anthropic.claude-sonnet-4-5-20250929-v1:0';
