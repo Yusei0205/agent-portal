@@ -924,7 +924,7 @@
         "web/src/components/FilePreviewModal.jsx",
         "web/src/styles/file-preview.css",
         "server/session-attachments.ts",
-        "web/src/pages/sessions/SessionLive.jsx"
+        "web/src/pages/sessions/IdeWorkspace.jsx"
       ],
       "tests": [
         "test/ai-attachments.test.ts",
