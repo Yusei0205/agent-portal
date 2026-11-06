@@ -110,6 +110,28 @@ describe('POST /api/projects/:id/workflows', () => {
     assert.equal(r.status, 400);
   });
 
+  it('keeps an omitted goal, accepts an explicit clear, and allows settings on an empty session', async () => {
+    const created = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, {
+      method: 'POST', body: { goal: 'Keep this goal', engine: 'demo' }, cookie,
+    });
+    const id = (created.body as any).workflow.id;
+    const url = `/api/projects/${projectId}/workflows/${id}`;
+    for (const [body, goal] of [
+      [{ trustTools: true }, 'Keep this goal'],
+      [{ goal: 'Updated goal' }, 'Updated goal'],
+      [{ goal: '' }, ''],
+      [{ maxIterations: 12 }, ''],
+    ] as const) {
+      const patched = await fetchJson(baseUrl, url, { method: 'PATCH', body, cookie });
+      assert.equal(patched.status, 200, JSON.stringify(patched.body));
+      const current = await fetchJson(baseUrl, url, { cookie });
+      assert.equal((current.body as any).workflow.goal, goal);
+      assert.equal((current.body as any).workflow.initial_goal, 'Keep this goal');
+    }
+    const invalid = await fetchJson(baseUrl, url, { method: 'PATCH', body: { goal: 'x'.repeat(8001) }, cookie });
+    assert.equal(invalid.status, 400);
+  });
+
   it('accepts valid engine values', async () => {
     for (const engine of ['demo', 'claude-code', 'kiro']) {
       const r = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, {

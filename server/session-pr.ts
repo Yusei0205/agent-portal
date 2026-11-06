@@ -213,6 +213,9 @@ export async function handleRepoChanges(ctx: SessionPrContext, changes: RepoChan
 async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<void> {
   const w = await getSessionsRepository().getWorkflowById(ctx.workflowId);
   if (!w) return;
+  // Visual workflows choose their publication stage explicitly. Intermediate turns
+  // must not open unrelated push approvals or publish before that stage.
+  if (w.kind === 'automation') return;
   const resolved = (await resolveRepos(w)).find((r) => r.runnerName === change.repo);
   if (!resolved) {
     await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, {

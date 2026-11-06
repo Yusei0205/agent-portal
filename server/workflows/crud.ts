@@ -66,6 +66,7 @@ function workflowView(w: Row | WorkflowRecord) {
     project_id: w.project_id,
     title: (w.title as string | undefined) ?? '',
     goal: w.goal,
+    initial_goal: w.initial_goal ?? w.goal,
     status: w.status,
     stop_reason: (w.stop_reason as string | undefined) ?? '',
     engine: w.engine,
@@ -988,7 +989,8 @@ export function registerWorkflowRoutes(): void {
       patch.title = title;
     }
     if (hasGoal) {
-      patch.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
+      patch.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS, optional: true }).trim();
+      patch.initial_goal = w.initial_goal ?? w.goal;
     }
     if (hasTrustTools) {
       // A session runs with its creator's identity, budget and vault, so only the creator can take the human check away

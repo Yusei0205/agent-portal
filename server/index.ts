@@ -37,6 +37,8 @@ import { registerPresentationRoutes } from './presentations.ts';
 import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLoopSpecRoutes } from './loop-specs.ts';
+import { registerAutomationRoutes } from './automations/routes.ts';
+import { recoverLocalAutomations, stopLocalAutomationTimers } from './automations/engine.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerGoogleWorkspaceRoutes } from './google-workspace.ts';
 import { registerDashboardRoutes } from './dashboard.ts';
@@ -254,6 +256,7 @@ export async function startServer(
   registerDocTemplateRoutes();
   registerReviewRoutes();
   registerLoopSpecRoutes();
+  registerAutomationRoutes();
   registerInsightsRoutes();
   registerGoogleWorkspaceRoutes();
   registerDashboardRoutes();
@@ -367,7 +370,9 @@ export async function startServer(
   loopTriggerTimer.unref();
 
   // 10. Graceful shutdown
+  if (!onLambda) await recoverLocalAutomations();
   server.on('close', () => {
+    stopLocalAutomationTimers();
     clearInterval(sessionCleanupTimer);
     clearInterval(attachmentCleanupTimer);
     stopIdleStopTimer();

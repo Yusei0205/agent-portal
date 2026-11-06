@@ -30,7 +30,7 @@ const MAX_CONCURRENT_RUNS = 5;
  *
  * Throws an HttpError(429) if the concurrency limit is reached.
  */
-export async function startRun(workflowId: string): Promise<string> {
+export async function startRun(workflowId: string, suppliedRunId?: string): Promise<string> {
   const repo = getSessionsRepository();
   const workflow = await repo.getWorkflowById(workflowId);
   if (!workflow) throw badRequest('Workflow not found');
@@ -63,7 +63,7 @@ export async function startRun(workflowId: string): Promise<string> {
   }
 
   // Create run record in pending state
-  const runId = generateId();
+  const runId = suppliedRunId ?? generateId();
   const ts = now();
   await repo.createRun({
     id: runId,

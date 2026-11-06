@@ -45,6 +45,17 @@ describe('runCheckSteps', () => {
   fs.mkdirSync(path.join(dir, 'repos', 'app'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'repos', 'app', 'marker.txt'), 'hi');
 
+  it('interrupts a running command when the automation is cancelled', { skip: process.platform === 'win32' }, async () => {
+    const ctrl = new AbortController();
+    const started = Date.now();
+    const timer = setTimeout(() => ctrl.abort(), 100);
+    try {
+      const result = await runCheckSteps([{ step: 'long check', cmd: 'sleep 30' }], dir, ctrl.signal);
+      assert.equal(result.ok, false); assert.match(result.steps[0].output, /cancelled/);
+      assert.ok(Date.now() - started < 3000);
+    } finally { clearTimeout(timer); }
+  });
+
   it('passes when every required step passes, in the right folder', async () => {
     const r = await runCheckSteps([{ step: 'a', cmd: 'echo one' }, { step: 'b', cmd: 'cat marker.txt', workRepo: 'app' }], dir);
     assert.equal(r.ok, true);

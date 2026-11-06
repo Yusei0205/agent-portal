@@ -76,8 +76,8 @@ export async function handleScheduledEvent(
     // Work another request started and handed to this invocation (see background-jobs.ts).
     try {
       const args = payload.args && typeof payload.args === 'object' ? (payload.args as Record<string, unknown>) : {};
-      await runBackgroundJobNow(payload.job, args);
-      reply(res, 200, { ok: true, job: payload.job, ms: Date.now() - started });
+      const result = await runBackgroundJobNow(payload.job, args);
+      reply(res, 200, { ok: true, job: payload.job, ms: Date.now() - started, ...(result === undefined ? {} : { result }) });
     } catch (e) {
       console.error(`[background-job] ${payload.job} failed:`, e instanceof Error ? e.message : e);
       reply(res, 500, { ok: false, job: payload.job });

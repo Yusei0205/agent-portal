@@ -492,7 +492,7 @@ function SettingsPanel({ workflow, projectId }) {
     setSaved(false);
     try {
       await api.patch(`/api/projects/${projectId}/workflows/${wid}`, {
-        goal,
+        ...(goal !== (workflow.goal ?? '') ? { goal } : {}),
         trustTools,
         maxIterations: Number(maxIter),
       });
@@ -525,7 +525,7 @@ function SettingsPanel({ workflow, projectId }) {
           htmlFor="sess-goal"
           style={{ fontSize: '0.78rem', color: 'var(--ink-2)', display: 'block', marginBottom: 4 }}
         >
-          Goal
+          Goal (optional)
         </label>
         <textarea
           id="sess-goal"
@@ -537,7 +537,7 @@ function SettingsPanel({ workflow, projectId }) {
           aria-describedby="sess-goal-hint"
         />
         <span id="sess-goal-hint" style={{ fontSize: '0.73rem', color: 'var(--ink-3)' }}>
-          Agents re-read this before every iteration.
+          Leave unchanged to keep the current goal, or clear it to remove it. Changes apply to the next agent turn.
         </span>
       </div>
 

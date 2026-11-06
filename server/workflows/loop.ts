@@ -147,6 +147,8 @@ export async function afterRun(workflowId: string, outcome: IterationOutcome): P
   const repo = getSessionsRepository();
   const w = await repo.getWorkflowById(workflowId);
   if (!w) return null;
+  // Visual automations own their transitions. They reuse checks, never the loop's auto-resume.
+  if (w.kind === 'automation') return null;
   const state = readLoopState(w);
   if (!state) return null;
 

@@ -98,10 +98,12 @@ function runContract(label: string, makeRepo: () => Promise<SessionsRepository>)
         credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
       });
       const newTs = now();
-      await repo.updateWorkflow(id, { status: 'running', updated_at: newTs });
+      await repo.updateWorkflow(id, { status: 'running', goal: '', initial_goal: 'Update test', updated_at: newTs });
       const updated = await repo.getWorkflowById(id);
       assert.ok(updated);
       assert.equal(updated.status, 'running');
+      assert.equal(updated.goal, '');
+      assert.equal(updated.initial_goal, 'Update test');
     });
 
     test('listWorkflowsByProject -- returns workflows for a project', async () => {

@@ -22,6 +22,7 @@ import { Vault } from './pages/Vault.jsx';
 import { AdminPanel } from './pages/AdminPanel.jsx';
 import ReviewDetail from './pages/ReviewDetail.jsx';
 import LoopSpecs from './pages/LoopSpecs.jsx';
+import Automations from './pages/Automations.jsx';
 import { Workspaces } from './pages/Workspaces.jsx';
 import { ApiAccess } from './pages/ApiAccess.jsx';
 import { ConnectHub } from './pages/ConnectHub.jsx';
@@ -560,6 +561,8 @@ function Shell({ user, onSignOut }) {
             <AdminPanel user={user} />
           ) : isLoopSpecsRoute ? (
             <LoopSpecs projectId={route.projectId} />
+          ) : route.projectId && route.tab === 'automations' ? (
+            <Automations key={route.projectId} projectId={route.projectId} />
           ) : isWorkspacesRoute ? (
             <Workspaces projectId={route.projectId} tab={route.rest?.[0]} />
           ) : isApiRoute ? (
