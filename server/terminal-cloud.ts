@@ -48,11 +48,12 @@ export function registerCloudTerminalRoutes(enabled: () => boolean): void {
     if (!req.user) throw new HttpError(401, 'Sign in to continue');
     if (!usesCloudTerminal()) throw new HttpError(400, 'This portal uses its local terminal connection');
     if (!enabled()) throw new HttpError(403, 'Terminal is disabled by an administrator');
+    const origin = new URL(process.env.PORTAL_PUBLIC_URL || `${req.secure ? 'https' : 'http'}://${req.headers.host}`).origin;
+    if (req.headers.origin && req.headers.origin !== origin) throw new HttpError(403, 'Open the terminal from this portal');
     const id = (req.body as { workflowId?: unknown })?.workflowId;
     const { runtime, session } = await target(req, typeof id === 'string' ? id : '');
     const snapshot = await snapshotAccess(String(id));
     if (!snapshot) throw new HttpError(503, 'Cloud terminal workspace storage is not configured');
-    const origin = new URL(process.env.PORTAL_PUBLIC_URL || `${req.secure ? 'https' : 'http'}://${req.headers.host}`).origin;
     const grant = signTerminalGrant(config.secretKey, { workflowId: String(id), engine: runtime.kind, origin, snapshot, actor: req.user.id });
     const replies = await agentCoreControlSender(runtime.arn, session)({ mode: 'terminal-ticket', workflowId: id, origin, snapshot, grant });
     const ticket = replies.find(r => r.type === 'terminal-ticket');
