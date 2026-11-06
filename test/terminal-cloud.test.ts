@@ -9,6 +9,8 @@ import { getStorage, setStorage } from '../server/storage-instance.ts';
 import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts';
 import { agentCoreSessionId } from '../server/agent/agentcore-session.ts';
 import { verifyTerminalGrant } from '../server/agent/runner-terminal-auth.ts';
+import { encrypt } from '../server/secrets.ts';
+import { config } from '../server/config.ts';
 
 describe('cloud terminal transport and authorization', () => {
   let base: string, cookie: string, project: string, workflow: string, user: string;
@@ -23,6 +25,10 @@ describe('cloud terminal transport and authorization', () => {
     project = generateId(); workflow = generateId();
     run('INSERT INTO projects (id,slug,name,description,notes,created_at) VALUES (?,?,?,?,?,?)', project, 'terminal-project', 'Terminal', '', '', now());
     run('INSERT INTO p6_workflows (id,project_id,goal,status,engine,trust_tools,repo_ids,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', workflow, project, 'Terminal fixture', 'done', 'codex', 0, '[]', user, now(), now());
+    const connection = generateId(), repo = generateId(), unattached = generateId();
+    run('INSERT INTO git_connections_v2 (id,name,provider,credentials_enc,scope,owner_id,created_at) VALUES (?,?,?,?,?,?,?)', connection, 'Terminal fixture', 'github', encrypt(JSON.stringify({ token: 'terminal-test-token' }), config.secretKey), 'shared', null, now());
+    for (const id of [repo, unattached]) run('INSERT INTO repositories (id,project_id,name,url,provider,created_at,connection_id) VALUES (?,?,?,?,?,?,?)', id, project, id === repo ? 'attached' : 'unattached', `https://github.com/team/${id}.git`, 'github', now(), connection);
+    run('UPDATE p6_workflows SET repo_ids=? WHERE id=?', JSON.stringify([repo]), workflow);
     process.env.AWS_LAMBDA_FUNCTION_NAME = 'fixture-portal';
     process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/codex-fixture';
     process.env.AWS_ACCESS_KEY_ID = 'fixture-access-key'; process.env.AWS_SECRET_ACCESS_KEY = 'fixture-secret-key';
@@ -48,6 +54,10 @@ describe('cloud terminal transport and authorization', () => {
     assert.equal(url.searchParams.get('X-Amz-SignedHeaders'), 'host');
     assert.equal(sent[0].session, agentCoreSessionId(workflow, 'codex'));
     assert.equal(sent[0].payload.mode, 'terminal-ticket'); assert.equal(sent[0].payload.workflowId, workflow);
+    const repos = sent[0].payload.repos as Array<{ name: string; env: Record<string, string> }>;
+    assert.equal(repos.length, 1); assert.equal(repos[0].name, 'attached');
+    assert.equal(repos[0].env.GIT_CONFIG_VALUE_1, 'Authorization: Basic ' + Buffer.from('x-access-token:terminal-test-token').toString('base64'));
+    assert.equal(JSON.stringify(value).includes(repos[0].env.GIT_CONFIG_VALUE_1), false);
     const publicKey = await fetchJson(base, '/api/terminal/public-key');
     assert.equal(publicKey.status, 200);
     assert.match(verifyTerminalGrant(sent[0].payload, (publicKey.body as any).publicKey, 'codex').nonce, /^[a-f0-9]{64}$/);

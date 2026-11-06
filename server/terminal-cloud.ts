@@ -9,6 +9,7 @@ import { agentCoreControlSender, presignAgentCoreWebSocket } from './agent/kiro-
 import { snapshotAccess } from './agent/runner-snapshot-access.ts';
 import { appendAudit } from './audit.ts';
 import { signTerminalGrant, terminalPublicKey } from './agent/runner-terminal-auth.ts';
+import { buildRunnerRepos } from './agent/runner-repo-specs.ts';
 
 export const usesCloudTerminal = () => Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) || config.deployTarget === 'cloud';
 
@@ -51,11 +52,14 @@ export function registerCloudTerminalRoutes(enabled: () => boolean): void {
     const origin = new URL(process.env.PORTAL_PUBLIC_URL || `${req.secure ? 'https' : 'http'}://${req.headers.host}`).origin;
     if (req.headers.origin && req.headers.origin !== origin) throw new HttpError(403, 'Open the terminal from this portal');
     const id = (req.body as { workflowId?: unknown })?.workflowId;
-    const { runtime, session } = await target(req, typeof id === 'string' ? id : '');
+    const { workflow, runtime, session } = await target(req, typeof id === 'string' ? id : '');
     const snapshot = await snapshotAccess(String(id));
     if (!snapshot) throw new HttpError(503, 'Cloud terminal workspace storage is not configured');
-    const grant = signTerminalGrant(config.secretKey, { workflowId: String(id), engine: runtime.kind, origin, snapshot, actor: req.user.id });
-    const replies = await agentCoreControlSender(runtime.arn, session)({ mode: 'terminal-ticket', workflowId: id, origin, snapshot, grant });
+    let repoIds: string[] = [];
+    try { const ids = JSON.parse(String(workflow.repo_ids ?? '[]')); if (Array.isArray(ids)) repoIds = ids.filter((id): id is string => typeof id === 'string'); } catch { /* no attached repositories */ }
+    const repos = await buildRunnerRepos(repoIds, String(workflow.project_id), () => {});
+    const grant = signTerminalGrant(config.secretKey, { workflowId: String(id), engine: runtime.kind, origin, snapshot, repos, actor: req.user.id });
+    const replies = await agentCoreControlSender(runtime.arn, session)({ mode: 'terminal-ticket', workflowId: id, origin, snapshot, repos, grant });
     const ticket = replies.find(r => r.type === 'terminal-ticket');
     if (typeof ticket?.ticket !== 'string' || !/^[a-f0-9]{64}$/.test(ticket.ticket)) throw new HttpError(503, 'The session runner could not open a terminal. Wait for any current work to finish and reconnect.');
     const url = await presignAgentCoreWebSocket(runtime.arn, session);

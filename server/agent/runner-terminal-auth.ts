@@ -1,8 +1,9 @@
 import { createHash, createHmac, createPrivateKey, createPublicKey, randomBytes, sign, verify } from 'node:crypto';
 import { parseSnapshot, type WorkspaceSnapshot } from './runner-snapshot.ts';
 
-type GrantRequest = { workflowId: string; engine: string; origin: string; actor: string; snapshot: WorkspaceSnapshot };
+type GrantRequest = { workflowId: string; engine: string; origin: string; actor: string; snapshot: WorkspaceSnapshot; repos?: unknown[] };
 const snapshotHash = (snapshot: WorkspaceSnapshot) => createHash('sha256').update(JSON.stringify({ getUrl: snapshot.getUrl ?? null, putUrl: snapshot.putUrl })).digest('hex');
+const reposHash = (repos: unknown) => createHash('sha256').update(JSON.stringify(repos ?? [])).digest('hex');
 function signingKey(secret: string) {
   if (!/^[a-f0-9]{64}$/i.test(secret)) throw new Error('Terminal signing key is not configured');
   const seed = createHmac('sha256', Buffer.from(secret, 'hex')).update('agent-portal/terminal/ed25519/v1').digest();
@@ -10,7 +11,7 @@ function signingKey(secret: string) {
 }
 export const terminalPublicKey = (secret: string): string => createPublicKey(signingKey(secret)).export({ format: 'pem', type: 'spki' }).toString();
 export function signTerminalGrant(secret: string, request: GrantRequest): string {
-  const data = Buffer.from(JSON.stringify({ ...request, snapshot: undefined, snapshotHash: snapshotHash(request.snapshot),
+  const data = Buffer.from(JSON.stringify({ ...request, snapshot: undefined, repos: undefined, reposHash: reposHash(request.repos), snapshotHash: snapshotHash(request.snapshot),
     scope: 'terminal', nonce: randomBytes(32).toString('hex'), expires: Date.now() + 60_000 })).toString('base64url');
   return data + '.' + sign(null, Buffer.from(data), signingKey(secret)).toString('base64url');
 }
@@ -22,8 +23,10 @@ export function verifyTerminalGrant(body: Record<string, unknown>, publicKey: st
     || !verify(null, Buffer.from(data), key, Buffer.from(signature, 'base64url'))) throw new Error('Invalid terminal grant signature');
   const grant = JSON.parse(Buffer.from(data, 'base64url').toString());
   const snapshot = parseSnapshot(body.snapshot);
+  // Older portals carry no Git access. They remain compatible during rolling deployments.
+  const reposMatch = grant.reposHash === undefined ? body.repos === undefined : grant.reposHash === reposHash(body.repos);
   if (grant.scope !== 'terminal' || grant.engine !== engine || grant.workflowId !== body.workflowId || grant.origin !== body.origin
-    || !snapshot || grant.snapshotHash !== snapshotHash(snapshot) || typeof grant.actor !== 'string' || !grant.actor
+    || !reposMatch || !snapshot || grant.snapshotHash !== snapshotHash(snapshot) || typeof grant.actor !== 'string' || !grant.actor
     || !/^[a-f0-9]{64}$/.test(grant.nonce) || !Number.isSafeInteger(grant.expires)
     || grant.expires <= Date.now() || grant.expires > Date.now() + 90_000) throw new Error('Expired or mismatched terminal grant');
   return { nonce: grant.nonce, expires: grant.expires };
