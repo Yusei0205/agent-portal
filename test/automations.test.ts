@@ -93,6 +93,8 @@ describe('Workflow API and durable transitions', () => {
     const run = (a.body as any).run; assert.equal(run.version, 1); assert.equal((b.body as any).run.id, run.id);
     await tickAutomation(project, run.id); await tickAutomation(project, run.id);
     const waiting = (await state(run.id))!; assert.equal(waiting.status, 'waiting'); assert.equal(waiting.cursor, 'approve');
+    await tickAutomation(project, run.id); await tickAutomation(project, run.id);
+    assert.equal((await state(run.id))!.revision, waiting.revision, 'unchanged approval polls must preserve the revision shown to the reviewer');
     assert.equal((await api(`/${d.id}/runs/${run.id}/approve`, { revision: waiting.revision - 1, nodeId: 'approve', visit: 1 })).status, 409);
     assert.equal((await api(`/${d.id}/runs/${run.id}/approve`, { revision: waiting.revision, nodeId: 'wrong', visit: 1 })).status, 400);
     const approved = await api(`/${d.id}/runs/${run.id}/approve`, { revision: waiting.revision, nodeId: 'approve', visit: 1 }); assert.equal(approved.status, 200);

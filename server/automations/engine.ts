@@ -39,6 +39,19 @@ export async function tickAutomation(project: string, id: string): Promise<{ don
   const original = await repo.get<AutomationRun>(project, runKey(id));
   if (!original || terminal(original)) return { done: true };
   if (original.leaseUntil > Date.now()) return { done: false };
+  // Polling an unchanged approval must not invalidate the version the person is
+  // reviewing. Recheck authority and limits without claiming/writing the row.
+  if (original.status === 'waiting' && !original.cancelRequested) {
+    const [version, member] = await Promise.all([
+      repo.get<PublishedVersion>(project, versionKey(original.definition_id, original.version)),
+      getProjectRepository().getMember(project, original.created_by),
+    ]);
+    if (version && member && ['owner', 'editor'].includes(member.access)
+      && Date.now() - Date.parse(original.started_at) < version.graph.timeoutMinutes * 60_000) {
+      const available = new Set((await getGitReposRepository().listByProject(project)).map((r) => r.id));
+      if (version.graph.repoIds.every((id) => available.has(id))) return { done: false };
+    }
+  }
   const state: AutomationRun = { ...original, revision: original.revision + 1, leaseUntil: Date.now() + 90_000 };
   if (!await repo.put(project, runKey(id), state, original.revision)) return { done: false };
   const claimedRevision = state.revision;
