@@ -14,6 +14,7 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createTestDb, cleanup } from './fixtures.ts';
 import { SqliteBudgetRepository } from '../server/repositories/budget-sqlite.ts';
 import type { BudgetRepository } from '../server/repositories/budget.ts';
@@ -36,6 +37,37 @@ function runContract(label: string, makeRepo: () => Promise<BudgetRepository>): 
 
     after(() => {
       clearBudgetRepository();
+    });
+
+    test('DynamoDB shared-table indexes accept subscription usage with no run reference', async () => {
+      if (label !== 'DynamoDB') return;
+      const { getDynamoDbClient, marshalItem, getNumber } = await import('../server/repositories/dynamo-client.ts');
+      const { QueryCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb');
+      const client = getDynamoDbClient(), tableName = process.env.DYNAMODB_TABLE_PORTAL_RUNS!;
+      const projectId = `codex-usage-${sfx}`, userId = `codex-user-${sfx}`, ts = now(), date = ts.slice(0, 10);
+      const globalKey = marshalItem({ PK: 'STATS#GLOBAL', SK: `DAY#${date}` });
+      const before = await client.send(new GetItemCommand({ TableName: tableName, Key: globalKey, ConsistentRead: true }));
+      await repo.record({ user_id: userId, project_id: projectId, workflow_id: 'workflow-with-no-budget-run', run_id: null,
+        cost_usd: 0, input_tokens: 42, output_tokens: 7, provider: 'codex-subscription', model: 'fixture', created_at: ts });
+      const rows = await client.send(new QueryCommand({ TableName: tableName, ConsistentRead: true,
+        KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': { S: `BU#${projectId}#${date}` } } }));
+      assert.equal(rows.Items?.length, 1);
+      assert.equal(rows.Items![0].run_id, undefined, 'an absent sparse index key must be omitted, never stored as NULL');
+      for (const pk of [`STATS#${projectId}`, `USERSTATS#${userId}`]) {
+        const rollup = await client.send(new GetItemCommand({ TableName: tableName, Key: marshalItem({ PK: pk, SK: `DAY#${date}` }), ConsistentRead: true }));
+        assert.equal(getNumber(rollup.Item!, 'runCount'), 1);
+        assert.equal(getNumber(rollup.Item!, 'inputTokens'), 42);
+        assert.equal(getNumber(rollup.Item!, 'outputTokens'), 7);
+      }
+      const after = await client.send(new GetItemCommand({ TableName: tableName, Key: globalKey, ConsistentRead: true }));
+      assert.equal(getNumber(after.Item!, 'runCount'), getNumber(before.Item ?? {}, 'runCount') + 1);
+      assert.equal(getNumber(after.Item!, 'inputTokens'), getNumber(before.Item ?? {}, 'inputTokens') + 42);
+      // Real references must still be retained; only an absent key is omitted.
+      await repo.record({ user_id: null, project_id: projectId, workflow_id: null, run_id: 'actual-run-reference',
+        cost_usd: 0, input_tokens: 1, output_tokens: 1, provider: 'test', model: 'fixture', created_at: now() });
+      const linked = await client.send(new QueryCommand({ TableName: tableName, ConsistentRead: true,
+        KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': { S: `BU#${projectId}#${date}` } } }));
+      assert.ok(linked.Items!.some(item => item.run_id?.S === 'actual-run-reference'));
     });
 
     test('record -- stores a budget entry', async () => {
@@ -196,11 +228,20 @@ describe('DynamoDB Local suite', async () => {
   let repo: import('../server/repositories/budget-dynamodb.ts').DynamoDbBudgetRepository;
 
   before(async () => {
+    assert.ok(['localhost', '127.0.0.1'].includes(new URL(endpoint).hostname), 'Budget contract tests require a loopback DynamoDB Local endpoint');
     const { clearDynamoDbClient } = await import('../server/repositories/dynamo-client.ts');
     clearDynamoDbClient();
     process.env.DYNAMODB_TABLE_PORTAL_RUNS = `portal-runs-budget-test-${RUN_TAG}`;
     const { DynamoDbBudgetRepository } = await import('../server/repositories/budget-dynamodb.ts');
     repo = new DynamoDbBudgetRepository();
+    // Budget rows share portal-runs with sessions and inbox items. Validate against every
+    // production GSI, including GSI-InputHash where run_id must be a string when present.
+    const schema = JSON.parse(readFileSync(new URL('../infra/tables.json', import.meta.url), 'utf8'))
+      .find((item: any) => item.TableName === 'portal-runs');
+    const { Ttl: _ttl, ...definition } = schema;
+    const { CreateTableCommand } = await import('@aws-sdk/client-dynamodb');
+    const { getDynamoDbClient } = await import('../server/repositories/dynamo-client.ts');
+    await getDynamoDbClient().send(new CreateTableCommand({ ...definition, TableName: process.env.DYNAMODB_TABLE_PORTAL_RUNS }));
     await repo.ensureTables();
   });
 
