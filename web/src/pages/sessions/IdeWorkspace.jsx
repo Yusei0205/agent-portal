@@ -15,6 +15,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
+import { navigate } from '../../lib/router.js';
+import { reviewHandoffHref } from '../../lib/pullRequestCard.js';
 import { registerHandler, registerShortcuts } from '../../lib/shortcuts.js';
 import { Icon } from '../../components/Icon.jsx';
 import { SessionLive } from './SessionLive.jsx';
@@ -394,6 +396,7 @@ function ComposerBar({
     try {
       await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/resume`, {});
       if (onSent) onSent();
+      textareaRef.current?.focus();
     } catch (e) {
       setResumeError(e.message);
     } finally {
@@ -521,10 +524,15 @@ function ComposerBar({
       {resumeError && !(workflow?.resumable && !isRunning) && (
         <div className="error-note" role="alert" style={{ margin: '4px 8px' }}>{resumeError}</div>
       )}
+      {workflow?.stop_reason === 'awaiting_message' && !isRunning && (
+        <div className="ide-idle-banner" role="status">
+          <span className="ide-idle-banner-msg">Ready. Send a message to continue this conversation.</span>
+        </div>
+      )}
       {workflow?.resumable && !isRunning && (
         <div className="ide-idle-banner" role="status">
           <span className="ide-idle-banner-msg">
-            Continues the same conversation.
+            Reopen this conversation. The AI waits until you send a message.
           </span>
           {resumeError && (
             <span role="alert" style={{ fontSize: '0.78rem', color: 'var(--danger)', marginLeft: 4 }}>
@@ -539,7 +547,7 @@ function ComposerBar({
             aria-label={`Resume session${workflow.title ? ': ' + workflow.title : ''}`}
             style={{ marginLeft: 'auto', flexShrink: 0 }}
           >
-            {resuming ? 'Resuming\u2026' : 'Resume'}
+            {resuming ? 'Opening\u2026' : 'Resume'}
           </button>
         </div>
       )}
@@ -867,6 +875,8 @@ export function IdeWorkspace({ id, project }) {
   // SSE project events
   useEffect(() => {
     const unsub = subscribeProject(project.id, (event) => {
+      const reviewHref = reviewHandoffHref(event, id, project.id);
+      if (reviewHref) { navigate(reviewHref); return; }
       if (event.type === 'workflow.renamed' && event.workflowId === id) {
         setTitle(event.title);
       }
@@ -875,7 +885,7 @@ export function IdeWorkspace({ id, project }) {
         load();
       }
       if (
-        (event.type === 'workflow.updated' && event.id === id) ||
+        (event.type === 'workflow.updated' && (event.workflowId ?? event.id) === id) ||
         event.type === 'run.updated'
       ) {
         clearTimeout(timerRef.current);

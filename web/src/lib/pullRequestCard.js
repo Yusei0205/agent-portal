@@ -96,3 +96,12 @@ export function describePullRequest(event, ctx = {}) {
       return out('info', `Pull request for ${repo}`, String(ev.state ?? ''));
   }
 }
+
+/** Only project live events trigger a handoff; stored/replayed run history never does. */
+export function reviewHandoffHref(event, workflowId, projectId) {
+  if (!projectId || !workflowId || event?.type !== 'run.event' ||
+      event.workflowId !== workflowId || event.eventType !== 'pull-request') return null;
+  const pr = event.payload;
+  if (pr?.state !== 'review-started' || typeof pr.reviewId !== 'string' || !pr.reviewId.trim()) return null;
+  return href(projectId, 'reviews', 'code', pr.reviewId);
+}
