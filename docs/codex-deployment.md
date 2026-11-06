@@ -6,10 +6,16 @@ builds and fixture tests do not establish live provider authorization or AWS run
 | Deployment | Authentication | Persistence |
 | --- | --- | --- |
 | Windows or persistent Docker | Per-user native CLI device sign-in | Persist DATA_DIR; Codex handles refresh |
-| Lambda + AgentCore (default) | Native Codex device-code sign-in | Encrypted per-user credentials and pending attempts in DynamoDB; workspace/thread snapshots in S3 |
-| Lambda + AgentCore (optional OAuth mode) | Registered Sign in with ChatGPT, authorization code + PKCE | Encrypted connections and callback state in DynamoDB; workspace/thread snapshots in S3 |
+| Lambda + AgentCore (default) | Registered Sign in with ChatGPT, authorization code + PKCE | Encrypted connections and callback state in DynamoDB; workspace/thread snapshots in S3 |
+| Lambda + AgentCore (experimental device mode) | Native Codex device-code sign-in | Encrypted per-user credentials and pending attempts in DynamoDB; workspace/thread snapshots in S3 |
 
-## Device-code sign-in (default)
+## Experimental device-code sign-in
+
+OpenAI's [app-server authentication documentation](https://learn.chatgpt.com/docs/app-server#auth-endpoints)
+explicitly excludes hosted services from native authentication. This mode is experimental and is
+not a supported substitute for approved hosted OAuth. It is disabled by default. Set the GitHub
+Actions variable `CODEX_AUTH_MODE=device` or pass CDK context `-c codexAuthMode=device` to opt in;
+the deployed Lambda receives `PORTAL_CODEX_AUTH_MODE=device`. Its credential card is labeled experimental.
 
 No registered OAuth client, client secret, or callback URL is needed. Deploy the runner, then open
 Connect > Agent sign-ins > Codex > Sign in with ChatGPT. Open the displayed OpenAI URL and enter the
@@ -28,15 +34,15 @@ lease and saves rotated credentials with compare-and-swap. The bridge answers na
 requests during a turn; if renewal exceeds the native protocol's roughly ten-second window,
 resume the session to retry. No model usage is incurred by starting device sign-in.
 
-GitHub Actions deploys the Codex runner before the portal. `CODEX_AUTH_MODE` defaults to `device`;
-no `CODEX_OAUTH_CLIENT_ID` variable is required. The portal requires its existing S3 storage,
+GitHub Actions deploys the Codex runner before the portal. `CODEX_AUTH_MODE` defaults to `oauth`;
+device mode does not require `CODEX_OAUTH_CLIENT_ID`. The portal requires its existing S3 storage,
 DynamoDB users table, and stable encryption key. Keep the deployment role's existing CDK bootstrap
 permissions; the runner ARN comes from CDK's output file without adding direct DescribeStacks access.
 
-## Optional hosted OAuth authentication
+## Hosted OAuth authentication (default)
 
-Set `PORTAL_CODEX_AUTH_MODE=oauth` (or the GitHub Actions variable `CODEX_AUTH_MODE=oauth`) only when
-using a registered hosted client instead of device login.
+Use `PORTAL_CODEX_AUTH_MODE=oauth` (or the GitHub Actions variable `CODEX_AUTH_MODE=oauth`) with a
+registered hosted client.
 
 Obtain a registered OpenAI client and register the exact callback:
 `https://<portal-host>/api/codex/oauth/callback`. The registration must permit ChatGPT plan inference
@@ -92,7 +98,9 @@ values, adding:
 cdk deploy AgentPortalCloud --profile <profile> \
   -c budgetEmail=<existing-budget-email> \
   -c codexRuntimeArn=<CodexRuntimeArn> \
-  -c codexAuthMode=device
+  -c codexAuthMode=oauth \
+  -c codexOAuthClientId=<registered-client-id> \
+  -c codexOAuthRedirectUri=https://<portal-host>/api/codex/oauth/callback
 ```
 
 Preserve existing Kiro/Claude runtime ARNs, storage, public URL, and other deployment context.
@@ -107,11 +115,9 @@ Equivalent portal environment settings:
 
 ```dotenv
 PORTAL_CODEX_AGENTCORE_RUNTIME_ARN=<runtime-ARN>
-PORTAL_CODEX_AUTH_MODE=device
-# Optional hosted OAuth instead:
-# PORTAL_CODEX_AUTH_MODE=oauth
-# PORTAL_CODEX_OAUTH_CLIENT_ID=<registered-client-id>
-# PORTAL_CODEX_OAUTH_REDIRECT_URI=https://<portal-host>/api/codex/oauth/callback
+PORTAL_CODEX_AUTH_MODE=oauth
+PORTAL_CODEX_OAUTH_CLIENT_ID=<registered-client-id>
+PORTAL_CODEX_OAUTH_REDIRECT_URI=https://<portal-host>/api/codex/oauth/callback
 # Confidential registrations only:
 # PORTAL_CODEX_OAUTH_CLIENT_AUTH=client_secret_basic
 # PORTAL_CODEX_OAUTH_CLIENT_SECRET_ARN=<secret-ARN>

@@ -65,7 +65,7 @@ export async function openUserCodex(userId: string, cwd?: string): Promise<Codex
 /** Quick readiness hint only. The engine checks account/read before every run. */
 export async function hasCodexLogin(userId: string): Promise<boolean> {
   if (!codexRuntimeSupport().supported) return false;
-  if (codexUsesCloud()) { try { const device = await cloudCodexDeviceStatus(userId, false); return device ? device.signedIn : Boolean(await readCodexAccount(userId)); } catch { return false; } }
+  if (codexUsesCloud()) { try { const device = codexCloudAuthMode() === 'device' ? await cloudCodexDeviceStatus(userId, false) : null; return device ? device.signedIn : Boolean(await readCodexAccount(userId)); } catch { return false; } }
   try { await fs.access(path.join(codexHome(userId), 'auth.json')); return true; } catch { return false; }
 }
 
@@ -91,10 +91,10 @@ export function registerCodexRoutes(): void {
     if (!support.supported) { sendJson(res, 200, { ...support, installed: null, signedIn: false }); return; }
     if (codexUsesCloud()) {
       try {
-        const device = await cloudCodexDeviceStatus(req.user!.id);
-        if (device) { sendJson(res, 200, { ...support, installed: null, remote: true, authMode: 'device', ...device }); return; }
+        const device = codexCloudAuthMode() === 'device' ? await cloudCodexDeviceStatus(req.user!.id) : null;
+        if (device) { sendJson(res, 200, { ...support, installed: null, remote: true, authMode: 'device', experimental: true, ...device }); return; }
         const active = await readCodexAccount(req.user!.id);
-        sendJson(res, 200, { ...support, installed: null, remote: true, authMode: codexCloudAuthMode(), signedIn: Boolean(active), email: active?.account.email ?? null });
+        sendJson(res, 200, { ...support, installed: null, remote: true, authMode: codexCloudAuthMode(), experimental: codexCloudAuthMode() === 'device', signedIn: Boolean(active), email: active?.account.email ?? null });
       } catch {
         sendJson(res, 200, { ...support, installed: null, remote: true, authMode: codexCloudAuthMode(), signedIn: false,
           code: 'codex_reauthentication_required', error: 'Your saved Codex connection could not be opened. Sign in again.' });

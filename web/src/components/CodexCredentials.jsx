@@ -65,6 +65,7 @@ export function CodexCredentials({ isAdmin }) {
             <div className="cred-card-name">
               <span>{status?.signedIn ? 'Codex account' : 'Codex'}</span>
               <span className="badge">ChatGPT subscription</span>
+              {status?.experimental && <span className="badge">Experimental device sign-in</span>}
               {status?.planType && <span className="badge">{status.planType}</span>}
             </div>
             <div className="cred-card-meta">

@@ -211,9 +211,10 @@ If needed, set `PORTAL_CODEX_BIN` to its absolute path. Windows desktop installa
 discovered automatically; npm installations use the official JS launcher without a command shell.
 The standard Docker image now includes the pinned Codex CLI; keep its `/data` volume persistent.
 The Lambda + AgentCore path has a dedicated ARM64 Codex runner, encrypted per-user credentials,
-distributed token renewal, and durable thread snapshots. Cloud sign-in uses the native device-code
-flow by default, without an OAuth client registration or callback URL. See
-[Codex deployment](docs/codex-deployment.md) for deployment and optional hosted OAuth settings.
+distributed token renewal, and durable thread snapshots. Hosted OAuth is the default. An experimental
+native device-code mode can be enabled explicitly; OpenAI's documentation excludes hosted services
+from app-server authentication. See [Codex deployment](docs/codex-deployment.md) for the mode settings
+and provider support boundary.
 
 Open **Connect > Agent sign-ins**, then **Codex > Sign in with ChatGPT**. Open the displayed URL,
 enter the one-time code and finish authorization. Device-code sign-in must be enabled for your

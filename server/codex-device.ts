@@ -9,7 +9,7 @@ import { HttpError } from './util.ts';
 
 interface Pending { session: string; transportKey: string; expiresAt: number; verificationUrl?: string; userCode?: string }
 interface DeviceAccount { kind: 'device'; userId: string; auth?: string; pending?: Pending }
-export function codexCloudAuthMode(): 'device' | 'oauth' { return process.env.PORTAL_CODEX_AUTH_MODE === 'oauth' ? 'oauth' : 'device'; }
+export function codexCloudAuthMode(): 'device' | 'oauth' { return process.env.PORTAL_CODEX_AUTH_MODE === 'device' ? 'device' : 'oauth'; }
 async function readDevice(userId: string): Promise<{ account: DeviceAccount; version: number } | null> {
   const row = await (await getCodexStore()).get(userId);
   if (!row?.ciphertext) return null;
@@ -131,6 +131,7 @@ export async function cancelCloudCodexDevice(userId: string, logout = false): Pr
 export type CloudCodexAuth = { accessToken: string } | { chatgptAuthTokens: ChatgptAuthTokens };
 /** Only short-lived native access tokens reach model/workspace runners. Refresh tokens stay in auth-only sessions. */
 export async function cloudCodexAuth(userId: string, forceRefresh = false): Promise<CloudCodexAuth> {
+  if (codexCloudAuthMode() !== 'device') return { accessToken: await codexAccessToken(userId) };
   let current = await readDevice(userId);
   if (!current) return { accessToken: await codexAccessToken(userId) };
   if (!current.account.auth) throw new HttpError(400, 'Complete Codex device sign-in under Connect > Agent sign-ins.');

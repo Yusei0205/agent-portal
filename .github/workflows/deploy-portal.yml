@@ -94,7 +94,7 @@ jobs:
       CLAUDE_RUNTIME_ARN: ${{ vars.CLAUDE_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalClaudeHarness-BW7D1pFqIl' }}
       STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET || 'cy-ai-bucket' }}
       PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
-      CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'device' }}
+      CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'oauth' }}
       CODEX_OAUTH_CLIENT_ID: ${{ vars.CODEX_OAUTH_CLIENT_ID }}
       CODEX_OAUTH_CLIENT_SECRET_ARN: ${{ vars.CODEX_OAUTH_CLIENT_SECRET_ARN }}
     steps:

@@ -301,7 +301,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
         ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
         ...(props.codexRuntimeArn ? { PORTAL_CODEX_AGENTCORE_RUNTIME_ARN: props.codexRuntimeArn } : {}),
-        PORTAL_CODEX_AUTH_MODE: props.codexAuthMode || 'device',
+        PORTAL_CODEX_AUTH_MODE: props.codexAuthMode || 'oauth',
         ...(props.codexOAuthClientId ? { PORTAL_CODEX_OAUTH_CLIENT_ID: props.codexOAuthClientId } : {}),
         ...(props.codexOAuthRedirectUri ? { PORTAL_CODEX_OAUTH_REDIRECT_URI: props.codexOAuthRedirectUri } : {}),
         ...(props.codexOAuthSecretArn ? { PORTAL_CODEX_OAUTH_CLIENT_SECRET_ARN: props.codexOAuthSecretArn, PORTAL_CODEX_OAUTH_CLIENT_AUTH: 'client_secret_basic' } : {}),

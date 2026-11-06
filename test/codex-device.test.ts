@@ -67,7 +67,7 @@ describe('Cloud Codex device login across Lambda requests', () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'portal-codex-device-test-'));
     process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/codex_fixture';
     process.env.PORTAL_CODEX_BIN = path.resolve('test/fake-codex.mjs'); process.env.STORAGE_BACKEND = 's3';
-    delete process.env.PORTAL_CODEX_OAUTH_CLIENT_ID; delete process.env.PORTAL_CODEX_AUTH_MODE;
+    delete process.env.PORTAL_CODEX_OAUTH_CLIENT_ID; process.env.PORTAL_CODEX_AUTH_MODE = 'device';
     _setAgentCoreInvokerOverride(invoke);
   });
   beforeEach(async () => { pollGate = null; refreshGate = null; refreshes = 0; await post('logout'); });
@@ -84,6 +84,7 @@ describe('Cloud Codex device login across Lambda requests', () => {
   it('requires no registered client and stores only encrypted per-user credentials', async () => {
     const empty = (await fetchJson(base, '/api/codex/status', { cookie })).body as any;
     assert.equal(empty.supported, true); assert.equal(empty.authMode, 'device'); assert.equal(empty.signedIn, false);
+    assert.equal(empty.experimental, true);
     const status = await connect();
     assert.equal((status.body as any).email, 'codex@example.test');
     assert.equal(JSON.stringify(status.body).includes('fake-secret'), false);
@@ -100,6 +101,12 @@ describe('Cloud Codex device login across Lambda requests', () => {
     assert.ok('chatgptAuthTokens' in auth); assert.equal(JSON.stringify(auth).includes('refresh_token'), false);
     const authSession = [...runners.entries()].find(([s]) => s.startsWith('codex-device-'))!;
     assert.equal((await fetch(authSession[1].url + '/invocations', { method: 'POST', body: JSON.stringify({ mode: 'inspect', op: 'tree' }) })).status, 403);
+  });
+  it('requires explicit opt-in even when native credentials have already been saved', async () => {
+    await connect();
+    delete process.env.PORTAL_CODEX_AUTH_MODE;
+    try { await assert.rejects(cloudCodexAuth(userId), /could not be opened/); }
+    finally { process.env.PORTAL_CODEX_AUTH_MODE = 'device'; }
   });
   it('serializes renewal, persists rotated credentials, and keeps the transport encrypted', async () => {
     await connect();
