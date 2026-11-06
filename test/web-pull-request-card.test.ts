@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 // @ts-expect-error — plain JS module without type declarations
-import { latestPullRequestStates, describePullRequest, sessionPullRequestCards } from '../web/src/lib/pullRequestCard.js';
+import { latestPullRequestStates, describePullRequest, reviewHandoffHref, sessionPullRequestCards } from '../web/src/lib/pullRequestCard.js';
 
 const base = { type: 'pull-request', repo: 'shop', repoId: 'r1' };
 const d = (o: object, ctx?: object) => describePullRequest({ ...base, ...o }, ctx);
@@ -99,6 +99,22 @@ describe('describePullRequest', () => {
     const r = d({ state: 'failed', errorCode: 'failed', error: 'push rejected' });
     assert.equal(r.detail, 'push rejected');
     assert.deepEqual(r.actions, [{ kind: 'button', label: 'Try again' }]);
+  });
+});
+
+
+describe('live PR review handoff', () => {
+  const ready = { type: 'run.event', workflowId: 'w1', eventType: 'pull-request', payload: { state: 'review-started', reviewId: 'review 1' } };
+  it('opens the portal Code review after review creation for the viewed session', () => {
+    assert.equal(reviewHandoffHref(ready, 'w1', 'p1'), '#/p/p1/reviews/code/review%201');
+  });
+  it('ignores replayed history, unrelated sessions and incomplete or failed reviews', () => {
+    assert.equal(reviewHandoffHref({ type: 'pull-request', payload: ready.payload }, 'w1', 'p1'), null);
+    assert.equal(reviewHandoffHref(ready, 'other', 'p1'), null);
+    assert.equal(reviewHandoffHref(ready, 'w1', null), null);
+    for (const payload of [{ state: 'opened' }, { state: 'review-failed' }, { state: 'review-started' }, { state: 'review-started', reviewId: ' ' }]) {
+      assert.equal(reviewHandoffHref({ ...ready, payload }, 'w1', 'p1'), null);
+    }
   });
 });
 

@@ -15,6 +15,7 @@
  *   POST   /api/projects/:id/workflows/:wid/message         — send follow-up message
  */
 
+import { saveChatAttachments } from '../session-attachments.ts';
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { one, all, getDb } from '../db.ts';
@@ -121,9 +122,9 @@ async function enrichWorkflowRow(w: Row | WorkflowRecord): Promise<WorkflowRecor
   const lastRunStatus = latestRun?.status ?? null;
   const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
   const resumableRunStatuses = new Set(['failed', 'cancelled']);
-  const resumable =
+  const resumable = w.stop_reason !== 'awaiting_message' && (
     resumableStatuses.has(wfStatus) ||
-    (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus));
+    (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus)));
 
   // Build a WorkflowRecord merging enrichment with the original row
   const base: WorkflowRecord = typeof (w as WorkflowRecord).iteration_count === 'number'
@@ -797,7 +798,7 @@ export function registerWorkflowRoutes(): void {
     sendJson(res, 200, { ok: true });
   });
 
-  // POST /api/projects/:id/workflows/:wid/resume — resume a failed/paused/stopped/cancelled workflow
+  // POST /api/projects/:id/workflows/:wid/resume — reopen a session; wait for a user message
   router.post('/api/projects/:id/workflows/:wid/resume', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
     const project = await requireProjectMember(req, res, req.params.id);
@@ -826,41 +827,19 @@ export function registerWorkflowRoutes(): void {
       return;
     }
 
-    const resumeMessage = 'Continue where you left off. The previous run was interrupted.';
-    await repo.appendWorkflowEvent({
-      workflow_id: w.id,
-      kind: 'human',
-      body: resumeMessage,
-      data: JSON.stringify({ by: req.user!.id, resume: true }),
-      created_at: now(),
+    // Reopening is not a model turn. Keep the workflow paused so background
+    // scheduling cannot run it, and leave its conversation and saved files intact.
+    const changed = await repo.updateWorkflowConditional(w.id, wfStatus, {
+      status: 'paused', stop_reason: 'awaiting_message', updated_at: now(),
     });
-
-    const ts = now();
-    await repo.updateWorkflow(w.id, { last_turn_at: ts, stop_reason: '', updated_at: ts });
-
+    if (!changed) {
+      sendJson(res, 409, { error: 'Session changed while reopening. Reload and try again.' });
+      return;
+    }
     if (w.project_id) {
-      emit(w.project_id, { type: 'workflow.message', workflowId: w.id, body: resumeMessage, by: req.user!.id });
+      emit(w.project_id, { type: 'workflow.updated', workflowId: w.id, status: 'paused' });
     }
-
-    try {
-      // Re-acquire delegation slot if this is a child being resumed (idempotent).
-      if (w.parent_id && w.created_by) {
-        const dlgSettings = await getDelegationSettingsRepository().get();
-        await repo.acquireChildDelegationSlot(
-          w.id,
-          w.parent_id,
-          String(w.created_by),
-          dlgSettings.maxRunningPerParent,
-          dlgSettings.maxRunningPerUser,
-        );
-      }
-      const runId = await startRun(w.id);
-      const run = await repo.getRunById(runId);
-      sendJson(res, 201, { runId, run: run ? runView(run) : null });
-    } catch (e: unknown) {
-      const msg = (e as { message?: string })?.message ?? String(e);
-      sendJson(res, 429, { error: msg });
-    }
+    sendJson(res, 200, { ok: true, ready: true, alreadyRunning: false, runId: null, run: null });
   });
 
   // POST /api/projects/:id/workflows/:wid/message
@@ -873,7 +852,13 @@ export function registerWorkflowRoutes(): void {
     if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const message = str(body.message as string, 'message', { max: 10_000 }).trim();
+    let message = str(body.message, 'message', { max: 10_000, optional: true }).trim();
+    if (message.startsWith('/') && Array.isArray(body.attachmentIds) && body.attachmentIds.length) {
+      sendJson(res, 400, { error: 'Send attachments with a message, not a slash command' }); return;
+    }
+    const attachments = await saveChatAttachments(req.params.id, w.id, body.attachmentIds);
+    if (!message && attachments.length) message = 'Please read the attached files.';
+    if (!message) { sendJson(res, 400, { error: 'Message must not be empty' }); return; }
 
     const isCommand = message.startsWith('/');
     const kind = isCommand ? 'command' : 'human';
@@ -904,7 +889,7 @@ export function registerWorkflowRoutes(): void {
       workflow_id: w.id,
       kind,
       body: message,
-      data: JSON.stringify({ by: req.user!.id }),
+      data: JSON.stringify({ by: req.user!.id, ...(attachments.length ? { attachments } : {}) }),
       created_at: ts,
     });
 

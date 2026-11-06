@@ -288,6 +288,32 @@ describe('Claude on AgentCore — harness parity', () => {
     }
   });
 
+  it('a run whose model call Bedrock refused fails with a plain message, from new and older runners', async () => {
+    const refused = 'API Error: 403 anthropic.claude-sonnet-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.';
+    const result = { type: 'result', stop_reason: 'stop_sequence', subtype: 'success', costUsd: 0, model: 'global.anthropic.claude-sonnet-5-5', metrics: { inputTokens: 0, outputTokens: 0 } };
+    for (const [what, events] of [
+      ['a runner that sends apiError', [{ type: 'assistant-text', text: refused }, { ...result, apiError: refused }]],
+      ['an older runner (the answer alone)', [{ type: 'assistant-text', text: refused }, result]],
+    ] as const) {
+      const ids = makeRun('claude-code');
+      const { ctx } = makeCtx(ids, { engine: 'claude-code' });
+      ctx.run.model = 'global.anthropic.claude-sonnet-5-5';
+      _setAgentCoreInvokerOverride(async function* () { for (const ev of events) yield ev as never; });
+      await assert.rejects(runClaudeViaAgentCore(ctx, ARN), (e: Error) => {
+        assert.match(e.message, /^Claude Sonnet 5\.5 is not available to this AWS account on Amazon Bedrock/, what);
+        assert.match(e.message, /\/model/, `${what}: says what to do`);
+        return true;
+      }, `${what}: the run fails instead of completing with the error as its answer`);
+    }
+    // A real reply is still an answer.
+    const { ctx } = makeCtx(makeRun('claude-code'), { engine: 'claude-code' });
+    _setAgentCoreInvokerOverride(async function* () {
+      yield { type: 'assistant-text', text: 'All done.' } as never;
+      yield { ...result, metrics: { inputTokens: 900, outputTokens: 30 } } as never;
+    });
+    assert.equal(await runClaudeViaAgentCore(ctx, ARN), 'All done.');
+  });
+
   it('sends a session\'s Sonnet 5.5 to the runner as its global profile', async () => {
     const { ctx } = makeCtx(makeRun('claude-code'), { engine: 'claude-code' });
     ctx.run.model = 'anthropic.claude-sonnet-5-5';

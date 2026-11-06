@@ -17,7 +17,7 @@
  *     - 404 when refine script no longer exists
  *
  *   Session resume:
- *     - human message queued, run started → 201
+ *     - reopens without a message or run → 200
  *     - 200 with alreadyRunning:true when a run is already active
  *     - 409 when not resumable
  *     - workflowView includes resumable + lastRunStatus
@@ -587,7 +587,7 @@ describe('Workflow session resume', () => {
     assert.equal(r.status, 409, `Expected 409 for pending workflow, got ${r.status}`);
   });
 
-  it('resume a failed workflow: message queued and run started (201)', async () => {
+  it('reopens without a prompt or run, then runs only on a user message', async () => {
     const wid = await createWorkflow('Fail then resume');
 
     // Start a run so it fails
@@ -608,21 +608,32 @@ describe('Workflow session resume', () => {
     const resumeR = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wid}/resume`, {
       method: 'POST', cookie,
     });
-    assert.equal(resumeR.status, 201, `resume: ${JSON.stringify(resumeR.body)}`);
-    const newRunId = (resumeR.body as { runId: string }).runId;
-    assert.ok(newRunId, 'Should return runId');
-    assert.notEqual(newRunId, runId, 'Should be a new run');
+    assert.equal(resumeR.status, 200, JSON.stringify(resumeR.body));
+    assert.equal((resumeR.body as any).ready, true);
+    assert.equal((resumeR.body as any).runId, null);
+    const url = '/api/projects/' + projectId + '/workflows/' + wid;
+    const runCount = () => getDb().prepare('SELECT COUNT(*) AS n FROM p6_runs WHERE workflow_id = ?').get(wid)!.n;
+    assert.equal(runCount(), 1);
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'human'").get(wid)!.n, 0);
+    const reopened = await fetchJson(baseUrl, url, { cookie });
+    assert.equal((reopened.body as any).workflow.status, 'paused');
+    assert.equal((reopened.body as any).workflow.stop_reason, 'awaiting_message');
+    assert.equal((reopened.body as any).workflow.resumable, false);
+    assert.equal((await fetchJson(baseUrl, url + '/resume', { method: 'POST', cookie })).status, 200);
+    const empty = await fetchJson(baseUrl, url + '/message', { method: 'POST', cookie, body: { message: '   ' } });
+    assert.equal(empty.status, 400);
+    assert.equal(runCount(), 1);
+    const sent = await fetchJson(baseUrl, url + '/message', {
+      method: 'POST', cookie, body: { message: 'Please continue with the next step' },
+    });
+    assert.equal(sent.status, 200);
+    assert.equal((sent.body as any).resumed, true);
+    await waitForWorkflowStatus(wid, 'done');
+    assert.equal(runCount(), 2);
+    const events = getDb().prepare("SELECT body FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'human'").all(wid);
+    assert.deepEqual(events.map(e => e.body), ['Please continue with the next step']);
+    assert.ok(runId);
 
-    // Verify human message was queued in p6_workflow_events
-    const events = getDb().prepare(
-      "SELECT body FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'human' ORDER BY id DESC LIMIT 1",
-    ).get(wid) as Record<string, unknown> | undefined;
-    assert.ok(events, 'Should have a workflow event');
-    assert.ok(
-      String(events.body).includes('Continue where you left off'),
-      `Message should contain resume text: ${events.body}`,
-    );
-    _ = runId;
   });
 
   it('resume returns 200 with alreadyRunning:true when a run is active', async () => {
@@ -642,8 +653,8 @@ describe('Workflow session resume', () => {
     const resumeR = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wid}/resume`, {
       method: 'POST', cookie,
     });
-    // Either 200 alreadyRunning or 201 if run finished instantly
-    assert.ok([200, 201].includes(resumeR.status), `Expected 200 or 201, got ${resumeR.status}`);
+    // The active run is returned without creating another turn
+    assert.equal(resumeR.status, 200);
     if (resumeR.status === 200) {
       assert.equal((resumeR.body as { alreadyRunning: boolean }).alreadyRunning, true);
     }

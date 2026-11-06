@@ -57,7 +57,9 @@ jobs:
         run: npm run typecheck
 
       - name: Install the headless browser (browser-live tests)
-        run: npx playwright install --with-deps --only-shell chromium
+        # ubuntu-24.04 hosted runners already have Chrome's native libraries.
+        # --with-deps only added extra font packs and could stall on the apt mirror.
+        run: npx playwright install --only-shell chromium
 
       - name: Backend tests (affected modules)
         # --all so shared-core changes (db.ts, settings.ts, runner.ts …) run everything.

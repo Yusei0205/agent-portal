@@ -213,7 +213,10 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         };
         if (repos.length) {
           prTool = await openCodexPrTool(ctx, repos.map(r => r.name), request => send({ type: 'pull-request-request', ...request }));
-          Object.assign(mcp, { portal_pr: { url: prTool.url, tool_timeout_sec: 900 } });
+          // This loopback tool enforces portal policy and exact-call approvals itself.
+          // A second native MCP prompt cannot be answered by the portal's shell approval handler.
+          Object.assign(mcp, { portal_pr: { url: prTool.url, tool_timeout_sec: 900,
+            tools: { create_pull_request: { approval_mode: 'approve' } } } });
         }
         const result = await driveCodexTurn(ctx, {
           managedAuth: false,

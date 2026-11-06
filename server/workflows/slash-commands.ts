@@ -14,7 +14,7 @@ export const PORTAL_COMMANDS: Array<{ name: string; usage: string; description: 
   { name: 'help',    usage: '/help',                  description: 'Show the available commands' },
   { name: 'clear',   usage: '/clear',                 description: 'Start fresh: earlier messages are no longer sent to the agent' },
   { name: 'compact', usage: '/compact',               description: 'Start a new engine session with a short recap of this conversation' },
-  { name: 'model',   usage: '/model [name]',          description: 'Show the available models, or switch the model for the next message' },
+  { name: 'model',   usage: '/model [name|default]',  description: 'Show the available models, or switch the model for the next message' },
   { name: 'agent',   usage: '/agent [name|default]',  description: 'Show the available agents, or switch the lead agent' },
   { name: 'tools',   usage: '/tools [trust|ask]',     description: 'Show or change whether tools run without asking' },
   { name: 'cost',    usage: '/cost',                  description: 'Show the cost of the last turn and of the whole session' },
@@ -54,15 +54,23 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
       const current = w.model || models.find((m) => m.default)?.id || '(default)';
       if (!arg) {
         if (!models.length) return `No models were found${res.error ? `: ${res.error}` : ''}. Current: ${current}`;
+        const offered = models.some((m) => m.id === current);
         return [
           `Current model: ${current}`,
+          ...(w.model && !offered ? ['  (not in this list: it is not available here, so pick one of these)'] : []),
           '',
           ...models.map((m) => `  ${m.id === current ? '●' : ' '} ${m.id}${m.label && m.label !== m.id ? `  (${m.label})` : ''}`),
           '',
-          'Switch with: /model <name>',
+          'Switch with: /model <name>   (or /model default)',
         ].join('\n');
       }
       const q = arg.toLowerCase();
+      if (q === 'default' || q === 'none') {
+        // '' is "no model of its own" (the column is NOT NULL DEFAULT ''); runs then use the engine's default.
+        await repo.updateWorkflow(w.id, { model: '', updated_at: now() });
+        const fallback = models.find((m) => m.default);
+        return `Model switched to the engine default${fallback ? ` (${fallback.label || fallback.id})` : ''}. It applies from your next message.`;
+      }
       const exact = models.filter((m) => m.id.toLowerCase() === q || (m.label ?? '').toLowerCase() === q);
       const matches = exact.length
         ? exact

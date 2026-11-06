@@ -97,6 +97,15 @@ export function describePullRequest(event, ctx = {}) {
   }
 }
 
+/** Only project live events trigger a handoff; stored/replayed run history never does. */
+export function reviewHandoffHref(event, workflowId, projectId) {
+  if (!projectId || !workflowId || event?.type !== 'run.event' ||
+      event.workflowId !== workflowId || event.eventType !== 'pull-request') return null;
+  const pr = event.payload;
+  if (pr?.state !== 'review-started' || typeof pr.reviewId !== 'string' || !pr.reviewId.trim()) return null;
+  return href(projectId, 'reviews', 'code', pr.reviewId);
+}
+
 /** Approval questions live in Inbox; the session shows PR progress and results. */
 export function sessionPullRequestCards(events) {
   return latestPullRequestStates(events).filter(event => event.state !== 'asked');

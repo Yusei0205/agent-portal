@@ -8,7 +8,11 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-export type MockStep = { tool: string; input?: Record<string, unknown> } | { text: string; tool?: undefined; input?: undefined };
+export type MockStep =
+  | { tool: string; input?: Record<string, unknown> }
+  | { text: string; tool?: undefined; input?: undefined }
+  /** The API refuses the request with this HTTP status, as Bedrock does for a model the account may not use. */
+  | { refuse: number; message: string; tool?: undefined; input?: undefined };
 /** A script step: fixed, or worked out from the request it answers (e.g. a tool name the engine offers). */
 export type MockScriptStep = MockStep | ((req: MockRequest) => MockStep);
 export interface MockRequest {
@@ -44,6 +48,11 @@ export async function startMockAnthropic({ script = [{ text: 'done' }] as MockSc
       const offersTools = Array.isArray(body.tools) && body.tools.length > 0;
       const next: MockScriptStep = offersTools ? steps[Math.min(step++, steps.length - 1)] : { text: 'ok' };
       const s: MockStep = typeof next === 'function' ? next(request) : next;
+      if ('refuse' in s && s.refuse) {
+        res.writeHead(s.refuse, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ type: 'error', error: { type: s.refuse === 403 ? 'permission_error' : 'api_error', message: s.message } }));
+        return;
+      }
       type Block = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> } | { type: 'text'; text: string };
       const blocks: Block[] = s.tool
         ? [{ type: 'tool_use', id: `toolu_${Math.random().toString(36).slice(2, 12)}`, name: s.tool, input: s.input ?? {} }]

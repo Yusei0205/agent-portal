@@ -148,6 +148,22 @@ describe('session pull requests', () => {
     assert.equal(prEvents(s)[0].inboxId, item.id);
   });
 
+  it('can open a fresh main_v3 PR after the previous GitHub PR has merged', async () => {
+    const s = makeSession({ jiraKey: 'RLP-12' });
+    await handleRepoChanges(ctxOf(s), [change]);
+    const previousBranch = String(finalizeCalls[0].branch);
+    let checked = 0;
+    _setPullRequestClients({ credentials: async () => ({ kind: 'github' as const, token: 'fixture-token' }), fetch: (async (_url: any, init: any) => {
+      if (!init?.method || init.method === 'GET') { checked++; return new Response(JSON.stringify({ state: 'closed', merged: true })); }
+      return new Response(JSON.stringify({ number: 43, html_url: 'https://github.com/acme/shop/pull/43' }), { status: 201 });
+    }) as typeof fetch });
+    _setSessionPrDeps({ listBranches: async () => ['main', 'main_v3', previousBranch] });
+    await createRequestedSessionPullRequest({ ...ctxOf(s), engine: 'codex' }, { repo: 'shop', base: 'main_v3' });
+    assert.equal(checked, 1); assert.equal(finalizeCalls.length, 2);
+    assert.equal(finalizeCalls[1].base, 'main_v3'); assert.notEqual(finalizeCalls[1].branch, previousBranch);
+    assert.equal(prEvents(s).filter(e => e.state === 'opened').at(-1)?.number, 43);
+  });
+
   it('a Codex handoff uses the explicit base instead of an earlier default-branch card', async () => {
     const s = makeSession();
     await handleRepoChanges(ctxOf(s), [change]);

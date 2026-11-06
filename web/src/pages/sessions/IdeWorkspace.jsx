@@ -15,8 +15,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
+import { navigate } from '../../lib/router.js';
+import { reviewHandoffHref } from '../../lib/pullRequestCard.js';
 import { registerHandler, registerShortcuts } from '../../lib/shortcuts.js';
 import { Icon } from '../../components/Icon.jsx';
+import { AttachmentPicker } from '../../components/AttachmentPicker.jsx';
 import { SessionLive } from './SessionLive.jsx';
 import { IdeHeader } from './IdeHeader.jsx';
 import { IdeExplorer } from './IdeExplorer.jsx';
@@ -192,7 +195,7 @@ function saveComposerH(h) {
 
 // ── Composer bar ──────────────────────────────────────────────────────────────
 
-function ComposerBar({
+export function ComposerBar({
   workflow,
   projectId,
   onSent,
@@ -204,6 +207,11 @@ function ComposerBar({
   onCommandDone,
 }) {
   const [message, setMessage] = useState('');
+  const [attachmentIds, setAttachmentIds] = useState([]);
+  const [attachmentsBusy, setAttachmentsBusy] = useState(false);
+  const [attachmentReset, setAttachmentReset] = useState(0);
+  const attachmentInputRef = useRef(null);
+  const attachmentsChanged = useCallback((ids, uploading) => { setAttachmentIds(ids); setAttachmentsBusy(uploading); }, []);
   const [commands, setCommands] = useState(null);
   const [menuIdx, setMenuIdx]   = useState(0);
   const [busy, setBusy]       = useState(false);
@@ -394,6 +402,7 @@ function ComposerBar({
     try {
       await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/resume`, {});
       if (onSent) onSent();
+      textareaRef.current?.focus();
     } catch (e) {
       setResumeError(e.message);
     } finally {
@@ -402,13 +411,18 @@ function ComposerBar({
   };
 
   const send = async () => {
-    const text = message.trim();
-    if (!text || busy) return;
+    const text = message.trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
+    if (!text || busy || attachmentsBusy) return;
+    const sentAttachments = [...attachmentIds];
+    if (text.startsWith('/') && sentAttachments.length) {
+      setResumeError('Send attachments with a message, not a slash command.');
+      return;
+    }
     const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const isSlash = text.startsWith('/');
 
     // Optimistic: show bubble immediately + clear composer (commands show their answer instead)
-    if (!isSlash && onOptimisticSend) onOptimisticSend(clientId, text);
+    if (!isSlash && onOptimisticSend) onOptimisticSend(clientId, text, sentAttachments);
     setMessage('');
     // Reset textarea to one line after send
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -419,8 +433,10 @@ function ComposerBar({
     try {
       const res = await api.post(
         `/api/projects/${projectId}/workflows/${workflow.id}/message`,
-        { message: text },
+        { message: text, attachmentIds: sentAttachments },
       );
+      setAttachmentIds([]);
+      setAttachmentReset(n => n + 1);
       if (res?.handled) {
         // The portal answered a command itself: show the answer, nothing runs.
         if (onCommandDone) onCommandDone();
@@ -521,10 +537,15 @@ function ComposerBar({
       {resumeError && !(workflow?.resumable && !isRunning) && (
         <div className="error-note" role="alert" style={{ margin: '4px 8px' }}>{resumeError}</div>
       )}
+      {workflow?.stop_reason === 'awaiting_message' && !isRunning && (
+        <div className="ide-idle-banner" role="status">
+          <span className="ide-idle-banner-msg">Ready. Send a message to continue this conversation.</span>
+        </div>
+      )}
       {workflow?.resumable && !isRunning && (
         <div className="ide-idle-banner" role="status">
           <span className="ide-idle-banner-msg">
-            Continues the same conversation.
+            Reopen this conversation. The AI waits until you send a message.
           </span>
           {resumeError && (
             <span role="alert" style={{ fontSize: '0.78rem', color: 'var(--danger)', marginLeft: 4 }}>
@@ -539,7 +560,7 @@ function ComposerBar({
             aria-label={`Resume session${workflow.title ? ': ' + workflow.title : ''}`}
             style={{ marginLeft: 'auto', flexShrink: 0 }}
           >
-            {resuming ? 'Resuming\u2026' : 'Resume'}
+            {resuming ? 'Opening\u2026' : 'Resume'}
           </button>
         </div>
       )}
@@ -604,13 +625,18 @@ function ComposerBar({
           {cloning && <div className="muted" style={{ fontSize: '0.74rem', paddingTop: 2 }}>You can type once the repositories are ready. Git only reports the file total near the end (checking out files); before that the count is of objects.</div>}
         </div>
       )}
+      <AttachmentPicker key={workflow?.id + '-' + attachmentReset} projectId={projectId}
+        fileInputRef={attachmentInputRef} hideTrigger onAttachmentsChange={attachmentsChanged}
+        disabled={busy || !workflow || cloning} maxFileBytes={2 * 1024 * 1024} maxTotalBytes={8 * 1024 * 1024} />
+      {attachmentIds.length > 0 && <span className="field-hint">Up to 5 files · 2 MB each · 8 MB total</span>}
       <div className="ws-composer-row">
         <button
           type="button"
           className="btn-icon"
-          title="Attach file (coming soon)"
+          title="Attach images or documents (up to 2 MB each)"
           aria-label="Attach file"
-          disabled
+          onClick={() => attachmentInputRef.current?.click()}
+          disabled={busy || !workflow || cloning || attachmentIds.length >= 5}
         >
           <Icon name="attach" size={16} />
         </button>
@@ -631,7 +657,7 @@ function ComposerBar({
             type="button"
             className="btn btn-sm btn-primary"
             onClick={send}
-            disabled={busy || !message.trim() || !workflow || cloning}
+            disabled={busy || attachmentsBusy || (!message.trim() && !attachmentIds.length) || !workflow || cloning}
             aria-label="Send (Enter)"
             title="Send (Enter)"
           >
@@ -772,10 +798,10 @@ export function IdeWorkspace({ id, project }) {
   }, [id]);
 
   // Optimistic-send handlers
-  const handleOptimisticSend = useCallback((clientId, text) => {
+  const handleOptimisticSend = useCallback((clientId, text, attachmentIds = []) => {
     setPendingMessages((prev) => [
       ...prev,
-      { clientId, text, status: 'sending', sentAt: Date.now() },
+      { clientId, text, attachmentIds, status: 'sending', sentAt: Date.now() },
     ]);
   }, []);
 
@@ -813,7 +839,7 @@ export function IdeWorkspace({ id, project }) {
     try {
       const res = await api.post(
         `/api/projects/${project.id}/workflows/${wf.id}/message`,
-        { message: msg.text },
+        { message: msg.text, attachmentIds: msg.attachmentIds ?? [] },
       );
       if (!res?.resumed) {
         await api.post(`/api/projects/${project.id}/workflows/${wf.id}/start`).catch(() => {});
@@ -867,6 +893,8 @@ export function IdeWorkspace({ id, project }) {
   // SSE project events
   useEffect(() => {
     const unsub = subscribeProject(project.id, (event) => {
+      const reviewHref = reviewHandoffHref(event, id, project.id);
+      if (reviewHref) { navigate(reviewHref); return; }
       if (event.type === 'workflow.renamed' && event.workflowId === id) {
         setTitle(event.title);
       }
@@ -875,7 +903,7 @@ export function IdeWorkspace({ id, project }) {
         load();
       }
       if (
-        (event.type === 'workflow.updated' && event.id === id) ||
+        (event.type === 'workflow.updated' && (event.workflowId ?? event.id) === id) ||
         event.type === 'run.updated'
       ) {
         clearTimeout(timerRef.current);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
+import { href } from '../lib/router.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
@@ -60,6 +61,7 @@ function approvalContext(item) {
 // ── Item renderers ─────────────────────────────────────────────────────────────
 
 function ApprovalItem({ item, onResolved }) {
+  const isPush = item.type === 'push';
   const [busy, setBusy] = useState(false);
   const [resolved, setResolved] = useState(false);
   const [resolutionLabel, setResolutionLabel] = useState('');
@@ -71,7 +73,7 @@ function ApprovalItem({ item, onResolved }) {
       const inputHash = item.payload?.inputHash ?? null;
       await api.post(`/api/inbox/${item.id}/resolve`, { response, inputHash });
       setResolved(true);
-      setResolutionLabel(response === 'approve' ? 'Approved' : 'Denied');
+      setResolutionLabel(response === 'approve' ? (isPush ? 'Pull request creation requested' : 'Approved') : (isPush ? 'Declined' : 'Denied'));
       if (onResolved) onResolved();
     } catch (e) {
       toast(e.message, 'error');
@@ -80,7 +82,9 @@ function ApprovalItem({ item, onResolved }) {
     }
   };
 
-  const ctx = approvalContext(item);
+  const ctx = isPush
+    ? { tool: item.payload?.title || 'Open a pull request?', detail: '', text: item.payload?.body || 'Approve to push the session changes and create a pull request.' }
+    : approvalContext(item);
 
   return (
     <div className={`inbox-item${resolved ? ' inbox-item-resolved' : ''}`}>
@@ -89,7 +93,9 @@ function ApprovalItem({ item, onResolved }) {
         {item.project_name && (
           <span className="badge">{item.project_name}</span>
         )}
-        {item.workflow_goal ? (
+        {isPush && item.project_id && item.workflow_id ? (
+          <a className="inbox-item-session" href={href(item.project_id, 'sessions', item.workflow_id)}>Open session</a>
+        ) : item.workflow_goal ? (
           <span className="inbox-item-session" title={item.workflow_goal}>
             {item.workflow_goal.length > 50 ? item.workflow_goal.slice(0, 49) + '…' : item.workflow_goal}
           </span>
@@ -100,7 +106,7 @@ function ApprovalItem({ item, onResolved }) {
           {formatRelative(item.created_at)}
         </span>
       </div>
-      <p className="inbox-item-body"><strong>{ctx.tool}</strong> wants to run{ctx.detail ? ` — ${ctx.detail}` : ''}</p>
+      <p className="inbox-item-body"><strong>{ctx.tool}</strong>{isPush ? '' : ' wants to run'}{ctx.detail ? ` — ${ctx.detail}` : ''}</p>
       {ctx.text && (
         <pre className="inbox-item-code" style={{ margin: '6px 0 10px', padding: '8px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.25)', fontSize: '0.78rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto' }}>{ctx.text}</pre>
       )}
@@ -117,15 +123,15 @@ function ApprovalItem({ item, onResolved }) {
             onClick={() => resolve('approve')}
             disabled={busy}
           >
-            Approve
+            {isPush ? 'Approve and create pull request' : 'Approve'}
           </button>
           <button
             type="button"
             className="btn btn-sm btn-danger"
-            onClick={() => resolve('deny')}
+            onClick={() => resolve(isPush ? 'decline' : 'deny')}
             disabled={busy}
           >
-            Deny
+            {isPush ? 'Decline' : 'Deny'}
           </button>
         </div>
       )}
@@ -258,8 +264,8 @@ function GenericItem({ item, onResolved }) {
   );
 }
 
-function InboxItem({ item, onResolved }) {
-  if (item.type === 'approval') return <ApprovalItem item={item} onResolved={onResolved} />;
+export function InboxItem({ item, onResolved }) {
+  if (item.type === 'approval' || item.type === 'push') return <ApprovalItem item={item} onResolved={onResolved} />;
   if (item.type === 'question') return <QuestionItem item={item} onResolved={onResolved} />;
   return <GenericItem item={item} onResolved={onResolved} />;
 }
