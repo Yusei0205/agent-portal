@@ -96,3 +96,8 @@ export function describePullRequest(event, ctx = {}) {
       return out('info', `Pull request for ${repo}`, String(ev.state ?? ''));
   }
 }
+
+/** Approval questions live in Inbox; the session shows PR progress and results. */
+export function sessionPullRequestCards(events) {
+  return latestPullRequestStates(events).filter(event => event.state !== 'asked');
+}
