@@ -265,6 +265,7 @@
       ],
       "tests": [
         "test/browser-live.test.ts",
+        "test/chat-attachments-ui.test.ts",
         "test/terminal.test.ts",
           "test/terminal-cloud.test.ts",
           "test/runner-terminal.test.ts",
@@ -470,7 +471,8 @@
         "web/src/pages/Inbox.jsx"
       ],
       "tests": [
-        "test/inbox-repo.test.ts"
+        "test/inbox-repo.test.ts",
+        "test/inbox-ui.test.ts"
       ],
       "smokeIds": [
         "inbox"
@@ -647,6 +649,7 @@
         "server/agent/kiro-agentcore.ts",
         "server/agent/agentcore-bridge.ts",
         "server/agent/claude-agentcore.ts",
+        "server/agent/runtime-models.ts",
         "server/agent/agent-defs.ts",
         "server/agent/run-agents.ts",
         "server/agent/kiro-config-files.ts",
@@ -668,7 +671,8 @@
         "test/agentcore-login-repo.test.ts",
         "test/agent-defs.test.ts",
         "test/agent-pack.test.ts",
-        "test/agentcore-multi-agent.test.ts"
+        "test/agentcore-multi-agent.test.ts",
+        "test/runtime-models.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
@@ -687,14 +691,16 @@
         "web/src/pages/Review.jsx",
         "web/src/pages/ReviewDashboard.jsx",
         "web/src/pages/ReviewDetail.jsx",
-        "web/src/pages/ReviewsPage.jsx"
+        "web/src/pages/ReviewsPage.jsx",
+        "web/src/components/BranchSelect.jsx"
       ],
       "tests": [
         "test/review.test.ts",
         "test/reviews-repo.test.ts",
         "test/pull-requests.test.ts",
         "test/session-pr.test.ts",
-        "test/review-create.test.ts"
+        "test/review-create.test.ts",
+        "test/branch-select-ui.test.ts"
       ],
       "smokeIds": [
         "reviews"
@@ -914,6 +920,7 @@
       "description": "AI attachments — file upload, preview, and picker for session context",
       "sources": [
         "server/ai-attachments.ts",
+        "server/session-attachments.ts",
         "server/repositories/ai-attachments.ts",
         "server/repositories/ai-attachments-sqlite.ts",
         "server/repositories/ai-attachments-dynamodb.ts",
@@ -923,7 +930,8 @@
       ],
       "tests": [
         "test/ai-attachments.test.ts",
-        "test/ai-attachments-repo.test.ts"
+        "test/ai-attachments-repo.test.ts",
+        "test/chat-attachments.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for attachments yet."

@@ -435,6 +435,9 @@ export async function runInvocation(
   let stopReason = 'end_turn';
   let resultSubtype = '';
   let gotResult = false;
+  // The engine's error text when the last turn ended on an API error (a model the account may not use, a refused
+  // sign-in): it then reports a "success" result with is_error. Sent on, so the portal fails the run.
+  let apiError = '';
   let sdkSessionId: string | null = null;
 
   // Pending tool-use tracking (for tool-end correlation)
@@ -729,6 +732,10 @@ export async function runInvocation(
         resultSubtype = String((msg as Record<string, unknown>).subtype ?? '');
         const sdkStopReason = String((msg as Record<string, unknown>).stop_reason ?? '');
         stopReason = stopReasonOf(resultSubtype, sdkStopReason || stopReason);
+        // Only a "success" turn with is_error is an API error; error subtypes (spend cap, turn limit) say why the run
+        // stopped and are reported through stop_reason as before.
+        const isApiError = (msg as Record<string, unknown>).is_error === true && resultSubtype === 'success';
+        apiError = isApiError ? String((msg as Record<string, unknown>).result ?? 'The model call failed.').slice(0, 2000) : '';
         const sid = (msg as Record<string, unknown>).session_id;
         if (typeof sid === 'string' && sid) sdkSessionId = sid;
       }
@@ -825,5 +832,6 @@ export async function runInvocation(
     sessionId: sdkSessionId,
     model,
     metrics,
+    ...(apiError ? { apiError } : {}),
   });
 }

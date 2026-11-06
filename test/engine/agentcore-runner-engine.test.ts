@@ -410,6 +410,21 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
     }
   });
 
+  it('a model the account may not use: the engine\'s API error reaches the portal, and the run fails saying so', { timeout: 200_000 }, async () => {
+    // What Bedrock answers for a Claude model this AWS account is not entitled to (seen live for Sonnet 5.5).
+    const message = 'anthropic.claude-sonnet-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.';
+    api.setScript([{ refuse: 403, message }]);
+    const t = setup({ trusted: true });
+    t.ctx.run.model = 'global.anthropic.claude-sonnet-5-5';
+    await assert.rejects(runClaudeViaAgentCore(t.ctx, ARN), (e: Error) => {
+      assert.match(e.message, /^Claude Sonnet 5\.5 is not available to this AWS account on Amazon Bedrock/, `${e.message}\n${logs()}`);
+      assert.match(e.message, /Pick another model with \/model/);
+      assert.match(e.message, /is not available for this account/, 'with Bedrock\'s own words');
+      return true;
+    }, 'the run fails instead of completing with the error as its answer');
+    assert.equal(await ping(), 'Healthy', 'the runner is idle again');
+  });
+
   it('stopping the run in the portal stops it in the runner', { timeout: 200_000 }, async () => {
     api.setScript([
       // Claude Code refuses long `sleep` commands, so wait with node instead.
