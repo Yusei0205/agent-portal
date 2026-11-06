@@ -130,6 +130,11 @@ describe('POST /api/projects/:id/workflows', () => {
     }
     const invalid = await fetchJson(baseUrl, url, { method: 'PATCH', body: { goal: 'x'.repeat(8001) }, cookie });
     assert.equal(invalid.status, 400);
+    const { getSessionsRepository } = await import('../server/repositories/sessions.ts');
+    const pending = await getSessionsRepository().listUnconsumedWorkflowEvents(id);
+    assert.equal(pending.length, 2, 'only actual goal changes queue an instruction for the next turn');
+    assert.match(pending[0].body, /Session goal updated:\nUpdated goal/);
+    assert.match(pending[1].body, /Session goal cleared/);
   });
 
   it('accepts valid engine values', async () => {

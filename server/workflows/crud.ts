@@ -1039,6 +1039,14 @@ export function registerWorkflowRoutes(): void {
 
     await repo.updateWorkflow(w.id, patch);
 
+    if (hasGoal && patch.goal !== w.goal) {
+      // Keep an explicit instruction in the pending transcript as well: a resumed
+      // session otherwise uses its pending messages instead of workflow.goal.
+      const body = patch.goal ? `Session goal updated:\n${patch.goal}` : 'Session goal cleared. Follow the current request without the previous overarching goal.';
+      await repo.appendWorkflowEvent({ workflow_id: w.id, kind: 'human', body, data: JSON.stringify({ by: req.user!.id, setting: 'goal' }), created_at: ts });
+      if (w.project_id) emit(w.project_id, { type: 'workflow.message', workflowId: w.id, body, by: req.user!.id });
+    }
+
     if (title !== undefined) {
       appendAudit(
         getDb(),
