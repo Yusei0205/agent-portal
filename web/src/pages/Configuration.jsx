@@ -18,6 +18,7 @@ import { ConfigStatus } from './config/ConfigStatus.jsx';
 import { ConfigFileTree } from './config/ConfigFileTree.jsx';
 import { ConfigEditor } from './config/ConfigEditor.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
 
 const TABS = [
   { id: 'codex', label: 'Codex (~/.codex)', description: 'AGENTS.md, reasoning settings, custom agents and skills used by local and cloud Codex sessions. Sign-ins and MCP connections are managed in Connect.' },
@@ -153,6 +154,8 @@ function ConfigTab({ folder, user, treeRefreshBump }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [treeKey, setTreeKey] = useState(0);
   const [newFileRequested, setNewFileRequested] = useState(false);
+  // Messages from the file tree that must outlive it: a change remounts the tree (treeKey).
+  const { toast: notify, toasts, removeToast } = useToast();
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -212,6 +215,7 @@ function ConfigTab({ folder, user, treeRefreshBump }) {
             following={isFollowing}
             requestNewFile={newFileRequested}
             onNewFileRequestHandled={() => setNewFileRequested(false)}
+            notify={notify}
           />
         </div>
 
@@ -225,6 +229,7 @@ function ConfigTab({ folder, user, treeRefreshBump }) {
           />
         </div>
       </div>
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

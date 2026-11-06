@@ -15,13 +15,15 @@
  * (mcp__portal__delegate_session) and streams each call as a `delegate-request`. DelegationRelay
  *   1. checks the request's fingerprint against the call it describes,
  *   2. re-checks the block rules for mcp__portal__delegate_session with the portal's own copy,
- *   3. starts the child session (createChildSession: its own run, so its own microVM),
+ *   3. starts the child session (createChildSession: its own run, so its own microVM), run by the
+ *      agent the call names (one of the run's agents) or else by the parent's lead agent,
  *   4. answers the microVM like an approval: the child's ID and title, or why none was started.
  * The child runs on its own; when it finishes, its result is posted to the parent session
  * (deliverChildResult in delegation.ts).
  */
 
 import { decideToolCall, inputFingerprint, type PolicyRule } from './tool-policy.ts';
+import { AGENT_NAME } from './agent-defs.ts';
 import type { RunContext } from './types.ts';
 
 export interface ApprovalRequestEvent {
@@ -135,7 +137,7 @@ export const DELEGATE_TOOL_FULL_NAME = 'mcp__portal__delegate_session';
 export interface DelegateRequestEvent {
   type: 'delegate-request';
   requestId: string;
-  input: { task: string; title?: string };
+  input: { task: string; title?: string; agent?: string };
   inputHash: string;
 }
 
@@ -148,8 +150,11 @@ export function isDelegateRequest(ev: Record<string, unknown>): ev is DelegateRe
     && typeof input.task === 'string';
 }
 
-/** Starts a child session of this run's session. Throws with a message the agent can read. */
-export type StartChildSession = (task: string, title: string | undefined) => Promise<{ id: string; title: string }>;
+/**
+ * Starts a child session of this run's session, run by `agent` when given (one of the run's agents).
+ * Throws with a message the agent can read.
+ */
+export type StartChildSession = (task: string, title: string | undefined, agent: string | undefined) => Promise<{ id: string; title: string }>;
 
 /** Longest answer the runner accepts (agentcore-approvals.ts parseApprovalAnswer). */
 const MAX_ANSWER = 4000;
@@ -173,8 +178,9 @@ export class DelegationRelay {
   async decide(ev: DelegateRequestEvent): Promise<{ decision: 'allow' | 'deny'; message: string }> {
     const input = ev.input as Record<string, unknown>;
     const fields = Object.keys(input);
-    const exact = fields.every((k) => k === 'task' || k === 'title')
+    const exact = fields.every((k) => k === 'task' || k === 'title' || k === 'agent')
       && (input.title === undefined || typeof input.title === 'string')
+      && (input.agent === undefined || (typeof input.agent === 'string' && AGENT_NAME.test(input.agent)))
       && inputFingerprint(DELEGATE_TOOL, input) === ev.inputHash;
     if (!exact) return { decision: 'deny', message: 'The request did not match the call it describes, so no session was started.' };
     if (!this.start) return { decision: 'deny', message: 'Child sessions are turned off for this run.' };
@@ -185,9 +191,10 @@ export class DelegationRelay {
 
     const task = String(input.task).trim();
     if (!task) return { decision: 'deny', message: 'The task is empty.' };
+    const agent = typeof input.agent === 'string' ? input.agent : undefined;
     try {
-      const child = await this.start(task, typeof input.title === 'string' && input.title.trim() ? input.title.trim() : undefined);
-      this.ctx.emit('status', { text: `Started child session "${child.title}"` });
+      const child = await this.start(task, typeof input.title === 'string' && input.title.trim() ? input.title.trim() : undefined, agent);
+      this.ctx.emit('status', { text: `Started child session "${child.title}"${agent ? ` (lead agent: ${agent})` : ''}` });
       const message = JSON.stringify({
         childWorkflowId: child.id,
         title: child.title,

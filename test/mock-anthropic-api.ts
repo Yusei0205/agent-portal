@@ -4,6 +4,7 @@
 //   { text: 'done' }                              the model ends its turn
 //   (req) => ({ tool: ..., input: ... })          a step worked out from the request it answers
 // Requests without tools (titles, summaries) get a short text reply. Every request is kept in `requests`.
+// Streamed text arrives in small pieces that split words, as the real API sends it.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -72,7 +73,9 @@ export async function startMockAnthropic({ script = [{ text: 'done' }] as MockSc
           send('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(b.input) } });
         } else {
           send('content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
-          send('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: b.text } });
+          for (const piece of b.text.match(/[\s\S]{1,7}/g) ?? ['']) {
+            send('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: piece } });
+          }
         }
         send('content_block_stop', { type: 'content_block_stop', index });
       });

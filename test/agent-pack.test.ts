@@ -9,8 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 // @ts-expect-error — plain JS module without type declarations
-import { PACK_AGENTS, PACK_SKILLS, kiroPackFiles, claudePackFiles, agentPackFiles } from '../web/src/lib/agent-pack/index.js';
-import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, AGENT_NAME, SKILL_NAME } from '../server/agent/agent-defs.ts';
+import { PACK_AGENTS, PACK_SKILLS, kiroPackFiles, claudePackFiles, agentPackFiles, packUpdatePlan, packFileLabel } from '../web/src/lib/agent-pack/index.js';
+import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, AGENT_NAME, SKILL_NAME, AGENT_LIMITS } from '../server/agent/agent-defs.ts';
 import { leadAgentFor, anthropicAgentModel } from '../server/agent/run-agents.ts';
 import { collectKiroConfig, hasKiroAgent, KIRO_CONFIG_PATH } from '../server/agent/kiro-config-files.ts';
 import { parseKiroConfig, writeKiroConfig } from '../kiro-runner/src/kiro-config.ts';
@@ -72,6 +72,27 @@ describe('agent pack content', () => {
     }
     assert.match(text('statement-of-work'), /Out of scope/);
     assert.match(text('slide-design'), /python-pptx/);
+    for (const w of ['Express', 'Fastify', 'NestJS', 'zod', 'tsc --noEmit']) assert.ok(text('backend-node-typescript').includes(w), `node skill: ${w}`);
+    for (const w of ['ECS Fargate', 'Lambda', 'DynamoDB', 'OIDC', 'CodePipeline']) assert.ok(text('aws-compute-cicd').includes(w), `compute/CI-CD skill: ${w}`);
+    for (const w of ['Prompt injection', 'Excessive agency', 'Improper output handling', 'Unbounded consumption']) assert.ok(owasp.includes(w), `LLM risk: ${w}`);
+    assert.ok(agents.find((a) => a.name === 'backend-engineer')!.skills.includes('backend-node-typescript'));
+    assert.ok(agents.find((a) => a.name === 'infra-engineer')!.skills.includes('aws-compute-cicd'));
+  });
+
+  it('every agent knows what its machine has, and the lead knows how to hand work off', () => {
+    const prompts = agents.map((a) => (a as PackAgent & { prompt: string }).prompt);
+    for (const [i, p] of prompts.entries()) {
+      assert.match(p, /Your machine:/, `${agents[i].name}: machine notes`);
+      assert.match(p, /uvx /, `${agents[i].name}: Python tools without pip`);
+      assert.match(p, /no Java, Maven, Gradle, Terraform or AWS CLI/, `${agents[i].name}: what the cloud runner lacks`);
+      assert.match(p, /Do not push or open pull requests/, `${agents[i].name}: the portal publishes changes`);
+    }
+    const lead = (agents.find((a) => a.lead) as PackAgent & { prompt: string }).prompt;
+    assert.match(lead, /never hand work to lead-orchestrator/);
+    const delegation = skills.find((s) => s.name === 'task-delegation')!.body;
+    for (const w of ['subagent_type', 'run_in_background: false', 'delegate_session', 'Set `agent`', 'Never guess']) assert.ok(delegation.includes(w), `task-delegation: ${w}`);
+    // Commands an agent copies must work without pip (the cloud runners have Python and uv, no pip).
+    for (const t of [...skills.map((s) => s.body), ...prompts]) assert.doesNotMatch(t, /(^|[^v] )pip install/m);
   });
 });
 
@@ -121,6 +142,8 @@ describe('agent pack for Claude Code', () => {
       for (const a of agents) {
         for (const s of a.skills) assert.ok(defs[a.name].prompt.includes(`# Skill: ${s}`), `${a.name} preloads ${s}`);
         assert.equal(defs[a.name].model, 'inherit');
+        // With room to spare: a skill that would pass the limit is left out without a word.
+        assert.ok(defs[a.name].prompt.length < AGENT_LIMITS.maxPrompt / 2, `${a.name}: ${defs[a.name].prompt.length} characters with its skills`);
       }
       assert.equal(defs['lead-orchestrator'].tools, undefined, 'the lead keeps every tool, including Agent');
       assert.ok(!defs['security-reviewer'].tools!.includes('Agent'));
@@ -141,6 +164,72 @@ describe('agent pack for Claude Code', () => {
     assert.equal(agentPackFiles('kiro').length, agents.length + skills.length);
     assert.equal(agentPackFiles('claude').length, agents.length + skills.length);
     assert.equal(agentPackFiles('aws'), null);
+  });
+});
+
+describe('updating a pack that is already there (Agent setup › Agent pack)', () => {
+  type Plan = { add: PackFile[]; change: PackFile[]; same: PackFile[]; kept: PackFile[] };
+  const paths = (fs: PackFile[]) => fs.map((f) => f.path).sort();
+
+  it('adds everything to a folder without the pack, and nothing to one that is up to date', () => {
+    for (const folder of ['claude', 'kiro']) {
+      const files = agentPackFiles(folder) as PackFile[];
+      const none = packUpdatePlan(folder, {}) as Plan;
+      assert.deepEqual(paths(none.add), paths(files));
+      assert.equal(none.change.length + none.same.length, 0);
+
+      // The same files, saved by an editor with Windows line endings and a trailing newline, count as up to date.
+      const saved = Object.fromEntries(files.map((f) => [f.path, f.content.replace(/\n/g, '\r\n') + '\r\n']));
+      const current = packUpdatePlan(folder, saved) as Plan;
+      assert.equal(current.add.length + current.change.length, 0, `${folder}: up to date`);
+      assert.equal(current.same.length, files.length);
+    }
+  });
+
+  it('replaces pack files that differ, adds missing ones, and looks at no other file', () => {
+    const files = claudePackFiles() as PackFile[];
+    const existing: Record<string, string> = Object.fromEntries(files.map((f) => [f.path, f.content]));
+    existing['agents/backend-engineer.md'] = existing['agents/backend-engineer.md'].replace('Node.js / TypeScript', 'Go');   // an older version
+    delete existing['skills/backend-node-typescript/SKILL.md'];                                                               // a skill added since
+    existing['agents/my-own-agent.md'] = '---\nname: my-own-agent\ndescription: mine\n---\nMine.\n';                          // the person's own
+    existing['CLAUDE.md'] = '# Mine\n';
+    const plan = packUpdatePlan('claude', existing) as Plan;
+    assert.deepEqual(paths(plan.change), ['agents/backend-engineer.md']);
+    assert.deepEqual(paths(plan.add), ['skills/backend-node-typescript/SKILL.md']);
+    assert.equal(plan.same.length, files.length - 2);
+    const touched = [...plan.add, ...plan.change, ...plan.same].map((f) => f.path);
+    assert.ok(!touched.includes('agents/my-own-agent.md') && !touched.includes('CLAUDE.md'), 'other files are never part of an update');
+    assert.equal(packUpdatePlan('aws', {}), null);
+  });
+
+  it('Codex: your own config.toml and AGENTS.md are kept; the pack\'s agents and skills are updated', () => {
+    const files = agentPackFiles('codex') as PackFile[];
+    const none = packUpdatePlan('codex', {}) as Plan;
+    assert.deepEqual(paths(none.add), paths(files), 'a folder without the pack gets all of it');
+    assert.equal(none.kept.length, 0);
+
+    const existing: Record<string, string> = Object.fromEntries(files.map((f) => [f.path, f.content]));
+    existing['config.toml'] = 'model_reasoning_effort = "medium"\n';   // the person's own settings (the Codex starter writes this)
+    existing['AGENTS.md'] = '# My team\n';
+    const older = existing['agents/backend-engineer.toml'].replace('Node.js / TypeScript', 'Go');
+    assert.notEqual(older, existing['agents/backend-engineer.toml'], 'the older version differs');
+    existing['agents/backend-engineer.toml'] = older;
+    const plan = packUpdatePlan('codex', existing) as Plan;
+    assert.deepEqual(paths(plan.kept), ['AGENTS.md', 'config.toml'], 'never replaced');
+    assert.deepEqual(paths(plan.change), ['agents/backend-engineer.toml']);
+    assert.equal(plan.add.length, 0);
+
+    // The pack's own config.toml, as written by an earlier add, is up to date: nothing to do.
+    const current = packUpdatePlan('codex', Object.fromEntries(files.map((f) => [f.path, f.content]))) as Plan;
+    assert.equal(current.add.length + current.change.length + current.kept.length, 0);
+  });
+
+  it('names pack files the way people know them', () => {
+    assert.equal(packFileLabel('agents/lead-orchestrator.md'), 'lead-orchestrator');
+    assert.equal(packFileLabel('agents/tech-writer.json'), 'tech-writer');
+    assert.equal(packFileLabel('agents/tech-writer.toml'), 'tech-writer');
+    assert.equal(packFileLabel('skills/task-delegation/SKILL.md'), 'skill task-delegation');
+    assert.equal(packFileLabel('config.toml'), 'config.toml');
   });
 });
 

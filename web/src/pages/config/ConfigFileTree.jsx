@@ -15,7 +15,7 @@ import { api, ApiError } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
-import { agentPackFiles, PACK_AGENTS, PACK_SKILLS } from '../../lib/agent-pack/index.js';
+import { agentPackFiles, packUpdatePlan, packFileLabel, PACK_AGENTS, PACK_SKILLS } from '../../lib/agent-pack/index.js';
 
 // ── Starter file definitions ───────────────────────────────────────────────────
 
@@ -127,7 +127,11 @@ const CLAUDE_STARTER = [
  *   following: boolean,
  *   requestNewFile?: boolean,
  *   onNewFileRequestHandled?: () => void,
+ *   notify?: (message: string, kind?: string, duration?: number) => void,
  * }} props
+ *
+ * `notify` shows a message outside the tree. onTreeChange() remounts the tree, which drops the tree's own
+ * messages, so messages about a change that ends in onTreeChange() go through it.
  */
 export function ConfigFileTree({
   folder,
@@ -137,6 +141,7 @@ export function ConfigFileTree({
   following,
   requestNewFile,
   onNewFileRequestHandled,
+  notify,
 }) {
   const [entries, setEntries] = useState([]);
   const [expandedDirs, setExpandedDirs] = useState(new Set());
@@ -308,37 +313,102 @@ export function ConfigFileTree({
 
   // ── Agent pack: a lead agent, specialists and their skills ─────────────────
 
+  // The first time it adds the pack; when the folder already has it, it updates the pack's own files (new ones
+  // added, ones that differ from this version replaced) after the person confirms the list. Other files are kept.
   const handleAddPack = async () => {
     const files = agentPackFiles(folder);
     if (!files) return;
-    const ok = await requestConfirm(
-      `Add the agent pack to .${folder}? It adds ${PACK_AGENTS.length} agents (${PACK_AGENTS.map((a) => a.name).join(', ')}) `
-      + `and ${PACK_SKILLS.length} skills. Files you already have are kept as they are.`,
-      'Add agent pack',
-    );
+    const say = notify ?? toast;
+
+    setAddingPack(true);
+    let plan;
+    try {
+      // Which pack files the folder has: list the folders the pack writes to, then read only those files.
+      // Paths are built from the entry names: the server's own paths use the host's separator (\ on Windows).
+      // The Codex pack also writes files at the top (config.toml, AGENTS.md), so the top is listed for it.
+      const list = async (dir) => ((await api.get(`/api/user-config/${folder}/tree?path=${dir}`)).entries ?? [])
+        .map((e) => (dir ? `${dir}/${e.name}` : e.name));
+      const atTop = files.some(({ path }) => !path.includes('/'));
+      const present = new Set([...await list('agents'), ...await list('skills'), ...(atTop ? await list('') : [])]);
+      const there = files.filter(({ path }) => present.has(path) || present.has(path.split('/').slice(0, 2).join('/')));
+      const existing = {};
+      await Promise.all(there.map(async ({ path }) => {
+        try {
+          const { content } = await api.get(`/api/user-config/${folder}/file?path=${encodeURIComponent(path)}`);
+          existing[path] = content ?? '';
+        } catch (e) {
+          if (!(e instanceof ApiError && e.status === 404)) throw e; // a skill folder without its SKILL.md
+        }
+      }));
+      plan = packUpdatePlan(folder, existing);
+    } catch (e) {
+      say(`Could not read your .${folder} files: ${e.message}`, 'error');
+      return;
+    } finally {
+      setAddingPack(false);
+    }
+
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const names = (fs) => {
+      const list = fs.map((f) => packFileLabel(f.path));
+      return list.length > 6 ? `${list.slice(0, 6).join(', ')} and ${list.length - 6} more` : list.join(', ');
+    };
+    const fresh = plan.same.length === 0 && plan.change.length === 0;
+    if (!plan.add.length && !plan.change.length) {
+      say(`The agent pack in .${folder} is up to date.`, 'ok');
+      return;
+    }
+    const message = fresh
+      ? `Add the agent pack to .${folder}? It adds ${PACK_AGENTS.length} agents (${PACK_AGENTS.map((a) => a.name).join(', ')}) `
+        + `and ${PACK_SKILLS.length} skills.`
+      : `Update the agent pack in .${folder} to the current version?`
+        + (plan.add.length ? ` It adds ${plural(plan.add.length, 'new file')}: ${names(plan.add)}.` : '')
+        + (plan.change.length
+          ? ` It replaces ${plural(plan.change.length, 'file')} that ${plan.change.length === 1 ? 'differs' : 'differ'} from the current pack: ${names(plan.change)}. `
+            + 'Any edits you made to those files are lost.'
+          : '')
+        + ` Your other files in .${folder} are not touched.`;
+    // Codex's config.toml and AGENTS.md: yours are kept as they are; the pack only adds them when missing.
+    const keptNote = plan.kept.length
+      ? ` Your own ${names(plan.kept)} ${plan.kept.length === 1 ? 'is' : 'are'} kept as ${plan.kept.length === 1 ? 'it is' : 'they are'}.`
+      : '';
+    const ok = await requestConfirm(message + keptNote, fresh ? 'Add agent pack' : 'Update agent pack', plan.change.length ? 'danger' : 'primary');
     if (!ok) return;
+
     setAddingPack(true);
     let added = 0;
-    let kept = 0;
+    let updated = 0;
     let failed = 0;
-    for (const { path, content } of files) {
+    for (const { path, content } of plan.add) {
       try {
         await api.post(`/api/user-config/${folder}/file`, { path, content });
         added++;
       } catch (e) {
-        if (e instanceof ApiError && e.status === 409) kept++;
-        else { failed++; toast(`Could not create ${path}: ${e.message}`, 'error'); }
+        failed++;
+        say(`Could not create ${path}: ${e.message}`, 'error', 8000);
+      }
+    }
+    for (const { path, content } of plan.change) {
+      try {
+        await api.put(`/api/user-config/${folder}/file`, { path, content });
+        updated++;
+      } catch (e) {
+        failed++;
+        say(`Could not update ${path}: ${e.message}`, 'error', 8000);
       }
     }
     await loadRoot();
     onTreeChange();
-    if (added) onSelectFile(folder === 'kiro' ? 'agents/lead-orchestrator.json' : folder === 'codex' ? 'agents/lead-orchestrator.toml' : 'agents/lead-orchestrator.md');
+    if (fresh && added) onSelectFile(folder === 'kiro' ? 'agents/lead-orchestrator.json' : folder === 'codex' ? 'agents/lead-orchestrator.toml' : 'agents/lead-orchestrator.md');
     setAddingPack(false);
-    toast(
-      `Agent pack: ${added} file${added === 1 ? '' : 's'} added`
-      + (kept ? `, ${kept} you already had kept` : '')
-      + (failed ? `, ${failed} failed` : '')
-      + '. Pick an agent under Lead agent when you start a session.',
+    say(
+      fresh
+        ? `Agent pack: ${plural(added, 'file')} added`
+          + (failed ? `, ${failed} failed` : '')
+          + '. Pick an agent under Lead agent when you start a session.'
+        : `Agent pack updated: ${added} added, ${updated} replaced`
+          + (failed ? `, ${failed} failed` : '')
+          + '. Sessions started or resumed from now on use it.',
       failed ? 'error' : 'ok',
       8000,
     );
@@ -547,8 +617,8 @@ export function ConfigFileTree({
                 className="btn btn-xs"
                 onClick={handleAddPack}
                 disabled={addingPack}
-                aria-label="Add agent pack"
-                title="Add a lead agent, backend, frontend, infra, security, slide and documentation agents, with their skills"
+                aria-label="Add or update the agent pack"
+                title="Add a lead agent, backend, frontend, infra, security, slide and documentation agents, with their skills, or update the ones you added before"
               >
                 {addingPack
                   ? <span className="spinner" style={{ width: 11, height: 11 }} aria-hidden="true" />

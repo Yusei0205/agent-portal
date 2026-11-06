@@ -207,8 +207,12 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   const send = agentCoreControlSender(runtimeArn, sessionId);
   const relay = new ApprovalRelay(ctx, send, run.permissions.rules);
   const delegations = new DelegationRelay(ctx, send, run.permissions.rules, canDelegate
-    ? async (task, title) => {
-      const child = await createChildSession(run.workflowId, run.credentialOwnerId!, task, { title });
+    ? async (task, title, agent) => {
+      // The child's lead agent: one this run has (the child loads the same owner and project agents).
+      if (agent && !Object.prototype.hasOwnProperty.call(agents, agent)) {
+        throw new Error(`there is no agent "${agent}" in this session (available: ${Object.keys(agents).join(', ') || 'none'})`);
+      }
+      const child = await createChildSession(run.workflowId, run.credentialOwnerId!, task, { title, ...(agent ? { leadAgent: agent } : {}) });
       return { id: String(child.id), title: String(child.title || task.slice(0, 60)) };
     }
     : null);
@@ -227,6 +231,10 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   emit('status', { text: 'Running in an AgentCore microVM…' });
 
   const textParts: string[] = [];
+  // The runner streams the main agent's replies as it writes them: pieces marked `stream`, often mid-word.
+  // The pieces of one reply join into one part of the answer, until any other event (the reply's end, a
+  // tool call, an agent's progress) closes it. The viewer joins the pieces the same way.
+  let replyOpen = false;
   let result: RunnerResult | null = null;
   try {
     for await (const raw of invokeAgentCore(runtimeArn, sessionId, payload, stream.signal)) {
@@ -239,6 +247,8 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
         }
         continue;
       }
+      const piece = ev.type === 'assistant-text' && ev.stream === true && !agentLabel(ev.agent);
+      if (!piece) replyOpen = false;
       switch (ev.type) {
         case 'assistant-text': {
           const text = String(ev.text ?? '');
@@ -246,6 +256,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
           if (text && agent) {
             // A subagent's text: shown under its name; the run's answer is the main agent's.
             emit('assistant-text', { text, agent });
+          } else if (text && piece) {
+            if (replyOpen) textParts[textParts.length - 1] += text;
+            else textParts.push(text);
+            replyOpen = true;
+            emit('assistant-text', { text, stream: true });
           } else if (text) {
             textParts.push(text);
             emit('assistant-text', { text });

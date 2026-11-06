@@ -48,12 +48,20 @@ Done when: <tests pass / command output / file exists / checklist>
 Report back: <summary, files changed, how verified, open questions>
 \`\`\`
 
-## 5. Check and combine
-- Read each result critically: does it meet "done when"? Run the tests or commands yourself when you can.
+## 5. Hand it off
+- **A specialist in this session** (the usual way). Claude Code: the Agent tool with \`subagent_type\` set to the agent's name. Kiro: the subagent tool. It works in your files and reports back to you.
+  - Agents run in the background by default: start the independent ones together, then wait for each completion notice. Never guess or describe a result before it arrives.
+  - Use \`run_in_background: false\` only when your very next step needs that result.
+- **A child session** (\`delegate_session\`, when the tool is offered): for a large, independent piece that can run on its own for a long time. Set \`agent\` to the specialist that should run it. It gets its own machine and copy of the repositories, does not see your files or conversation, and its result is posted back to this session later, so do not wait for it in this turn.
+- Never hand work to lead-orchestrator; you are the lead.
+- Size the team to the job: a small, single-discipline request needs one specialist or none. Every specialist starts from scratch, so each hand-off costs a full context.
+
+## 6. Check and combine
+- Read each result critically: does it meet "done when"? Check that the files exist and run the tests or commands yourself when you can. A specialist's summary says what it meant to do, not necessarily what it did.
 - Resolve conflicts between agents (naming, contracts, versions) before moving on.
 - If a result is wrong, send it back with the specific gap, not a vague "fix it".
 
-## 6. Report
+## 7. Report
 Finish with: what was done (by whom), how it was verified, what is left or risky, and next steps. Be honest about anything not verified.
 `),
 
@@ -81,14 +89,15 @@ Finish with: what was done (by whom), how it was verified, what is left or risky
 - Raise domain exceptions in services; map them to HTTP errors in one handler. Never return stack traces to clients.
 - Structured logging (\`logging\` with JSON formatter or structlog); no secrets or personal data in logs.
 - Validate all input at the edge (Pydantic / serializers); check authorisation on every object access, not only on the route.
-- Pin dependencies; run \`pip-audit\` when adding packages.
+- Pin dependencies; run \`pip-audit\` (or \`uvx pip-audit -r requirements.txt\`) when adding packages.
 
 ## Tests
 - Unit tests for services (no network); API tests with \`TestClient\` / Django test client; fixtures for DB with transactions rolled back.
 - Run: \`pytest -q\` (add \`--cov\` when coverage is tracked). New behaviour needs a test that fails without the change.
+- No pytest or pip on the machine: \`uv venv .venv && . .venv/bin/activate && uv pip install -r requirements.txt pytest\` (or \`uv pip install -e ".[dev]"\` for a pyproject), then \`pytest -q\`.
 
 ## Done checklist
-- [ ] Lint and format clean (\`ruff check . && ruff format --check .\`)
+- [ ] Lint and format clean (\`ruff check . && ruff format --check .\`, or the same with \`uvx ruff\`)
 - [ ] Tests pass and cover the change
 - [ ] No secrets, no debug prints, migrations included
 `),
@@ -99,6 +108,7 @@ Finish with: what was done (by whom), how it was verified, what is left or risky
 ## Before writing code
 - Read the build: pom.xml or build.gradle(.kts) for Java version, Spring Boot version, plugins and code style (Checkstyle, Spotless).
 - Follow the existing package layout and conventions.
+- Check for a JDK (\`java -version\`). Without one (the portal's cloud runner has none), write the code and tests, say plainly that they were not compiled or run, and give the exact build and test commands to run.
 
 ## Defaults for new code
 - Java 21 (LTS), Spring Boot 3.x, Maven or Gradle wrapper (\`./mvnw\`, \`./gradlew\`).
@@ -125,9 +135,45 @@ Finish with: what was done (by whom), how it was verified, what is left or risky
 - Run: \`./mvnw -q verify\` or \`./gradlew test\`.
 
 ## Done checklist
-- [ ] Builds and all tests pass
+- [ ] Builds and all tests pass (or: not compiled here, with the commands to run)
 - [ ] New endpoints validated, documented (OpenAPI via springdoc) and tested
 - [ ] Migrations included; no secrets committed
+`),
+
+  skill('backend-node-typescript', 'Build and change Node.js back ends in TypeScript: Express, Fastify or NestJS services, input validation, data access with Prisma, Drizzle or SQL clients, background jobs and tests with Vitest, Jest or node:test. Use for any Node.js or TypeScript server-side work.', `
+# Node.js + TypeScript back end
+
+## Before writing code
+- Read package.json (Node version in \`engines\`, framework, ORM, test runner, scripts), tsconfig (\`strict\` on?), the lint setup and the lockfile's package manager (npm, pnpm, yarn). Follow them.
+- Use the repository's own scripts (\`npm run build\`, \`npm test\`, \`npm run typecheck\`) rather than inventing commands.
+
+## Defaults for new code
+- Current LTS Node; TypeScript \`strict\`; ES modules unless the project uses CommonJS.
+- Framework: the one in use (Express, Fastify, NestJS, Hono). For a new service: Fastify (schemas, speed) for small services, NestJS when a larger team needs modules and dependency injection.
+- Layers: routes / controllers (HTTP only) → services (business rules) → repositories (data access). No business logic in route handlers.
+- Validate every request body, query and parameter at the edge with a schema (zod, TypeBox, class-validator in NestJS); derive the TypeScript types from the schema.
+- Configuration from environment variables, validated once at start-up; never hard-code secrets or endpoints.
+- \`async\`/\`await\` throughout; never leave a promise unhandled; set timeouts on outgoing HTTP and database calls.
+
+## Data access
+- Prisma, Drizzle, Kysely or the driver's parameterised queries; never build SQL from strings.
+- Transactions around multi-step writes; migrations committed with the code (\`prisma migrate\`, drizzle-kit, knex).
+- Watch for N+1 queries (\`include\` / joins / batching).
+
+## Errors, logging, security
+- One error handler maps domain errors to HTTP status and RFC 9457 problem details; no stack traces to clients.
+- Structured logs (pino) with a request id; no secrets or personal data in logs.
+- Check authorisation on every object, not only the route; rate-limit auth and expensive endpoints; set security headers (helmet for Express).
+- \`npm audit\` (or \`pnpm audit\`) when adding packages; pin with the lockfile.
+
+## Tests
+- The project's runner (Vitest, Jest or \`node --test\`); HTTP tests with supertest or the framework's inject (\`fastify.inject\`); a test database or transaction rollback for repositories.
+- Run: \`npm test\`, and the type check (\`npm run typecheck\` or \`npx tsc --noEmit\`). New behaviour needs a test that fails without the change.
+
+## Done checklist
+- [ ] Type check, lint, tests and build pass
+- [ ] Inputs validated; errors mapped; no secrets committed
+- [ ] Migrations included when the schema changed
 `),
 
   skill('api-design', 'Design HTTP/REST APIs and contracts: resource naming, status codes, errors, pagination, versioning, OpenAPI specs and backward compatibility. Use when adding or changing an API, or agreeing a contract between back end and front end.', `
@@ -192,6 +238,7 @@ Finish with: what was done (by whom), how it was verified, what is left or risky
 ## Tests
 - Testing Library: test behaviour the user sees (roles, text), not implementation details.
 - Run the project's commands: \`npm test\`, \`npm run lint\`, \`npm run typecheck\` / \`tsc --noEmit\`, \`npm run build\`.
+- End-to-end: when the project has Playwright, add or update a test for the changed flow (\`npx playwright test\`). It needs a browser (\`npx playwright install chromium\`); if none can run here, say the flow was not checked in a browser.
 
 ## Done checklist
 - [ ] Type check, lint, tests and build pass
@@ -298,10 +345,50 @@ Finish with: what was done (by whom), how it was verified, what is left or risky
 - Always show the plan before applying: \`cdk diff\` / \`terraform plan\` / change sets. Call out any **replacement or deletion** of stateful resources.
 - Do not run \`cdk deploy\` / \`terraform apply\` against shared or production accounts unless the user explicitly asks; prefer the pipeline.
 - Validate: \`cdk synth\`, \`terraform validate\` and \`terraform fmt -check\`, \`cfn-lint\`.
+
+## Where you can run what
+- \`cdk synth\` needs no AWS account: \`npm ci\` in the CDK app, then \`npx cdk synth\` (or \`npx -y aws-cdk synth\`). \`cfn-lint\` runs as \`uvx cfn-lint template.yaml\`; \`checkov\` as \`uvx checkov -d .\`.
+- \`cdk diff\`, \`terraform plan\` and anything that reads the account need AWS access, and Terraform needs its binary: in the portal's cloud runner neither is available. Write the code, run synth and the linters, and hand the plan step to the pipeline or the user with the exact commands.
+`),
+
+  skill('aws-compute-cicd', 'Run workloads on AWS and ship them: ECS Fargate, Lambda and EC2, container images in ECR, RDS / Aurora and DynamoDB, load balancing and autoscaling, and CI/CD pipelines (GitHub Actions with OIDC, CodePipeline / CodeBuild). Use when deploying or changing compute, databases or delivery pipelines.', `
+# AWS compute, data and delivery
+
+## Pick the compute
+- **Lambda**: event-driven or spiky work under 15 minutes; API Gateway or a function URL in front; one function per job, not a monolith.
+- **ECS Fargate**: long-running containers and HTTP services; behind an ALB in private app subnets; no servers to patch.
+- **EC2**: only for special needs (GPUs, licensing, OS control); in an Auto Scaling group from a launch template, patched with SSM.
+- Prefer arm64 (Graviton) when the code and images support it.
+
+## Containers
+- Small, pinned base images; multi-stage builds; run as a non-root user; health check endpoint.
+- Images in ECR with scan on push and immutable tags (git SHA, not \`latest\`); lifecycle rules for old images.
+- ECS: one task role per service (least privilege) and a separate execution role; secrets from Secrets Manager / SSM in the task definition, never baked into the image.
+- Rolling or blue/green deploys with the deployment circuit breaker and rollback on; autoscaling on CPU or request count.
+
+## Lambda
+- Reserved concurrency where a downstream system must be protected; timeouts and memory set on purpose; dead-letter queue or on-failure destination for async calls.
+- Environment from SSM / Secrets Manager (cached); structured logs; X-Ray or OpenTelemetry tracing for multi-service flows.
+
+## Databases
+- **RDS / Aurora** (relational): private data subnets, Multi-AZ for production, encryption, automated backups and PITR, deletion protection, IAM or Secrets Manager credentials with rotation, RDS Proxy for Lambda.
+- **DynamoDB** (key-value): design keys from access patterns first; on-demand capacity unless the load is steady; PITR on; TTL for expiring items; no scans in request paths.
+- Schema changes through migrations in the pipeline, backward compatible (expand, then contract).
+
+## CI/CD
+- Stages: build → unit tests → lint and security scans (SAST, dependencies, IaC) → package (image / artefact) → deploy to dev → integration tests → manual approval → production.
+- GitHub Actions: deploy with **OIDC** to an IAM role scoped to the repository and branch (no stored AWS keys); pin third-party actions by commit SHA; least-privilege \`permissions:\`; environments with required reviewers for production.
+- CodePipeline / CodeBuild when the team is AWS-native; same stages and approvals.
+- Every deploy is repeatable from the pipeline; rollback is one step (previous image or version); no manual console changes.
+
+## Checks
+- [ ] Health checks, alarms (errors, latency, saturation) and log retention for each service
+- [ ] Roles least-privilege; secrets from a secrets store; images scanned
+- [ ] Pipeline runs tests and scans before any deploy; production needs approval
 `),
 
   // ── Security ────────────────────────────────────────────────────────────────
-  skill('owasp-top-10', 'Review code and designs against the OWASP Top 10:2025 (access control, misconfiguration, supply chain, crypto, injection, insecure design, authentication, integrity, logging, exceptional conditions). Use for security reviews, threat checks and secure-coding guidance.', `
+  skill('owasp-top-10', 'Review code and designs against the OWASP Top 10:2025 (access control, misconfiguration, supply chain, crypto, injection, insecure design, authentication, integrity, logging, exceptional conditions) and, for AI and agent features, the OWASP Top 10 for LLM Applications (prompt injection, excessive agency, data leakage). Use for security reviews, threat checks and secure-coding guidance.', `
 # OWASP Top 10:2025 review
 
 Check each category against the code and configuration in scope. For every finding give: category, file:line, what an attacker can do, severity, and a concrete fix.
@@ -341,6 +428,17 @@ Check each category against the code and configuration in scope. For every findi
 ## A10 Mishandling of Exceptional Conditions
 - Fail closed (errors deny, never grant); handle every error path; no stack traces or internal details to users; resources released on error; timeouts and limits on external calls.
 
+## AI and agent features (OWASP Top 10 for LLM Applications 2025)
+Review these whenever the code calls a model, runs an agent or builds prompts:
+- **Prompt injection**: text from users, documents, web pages, tool output or retrieved chunks is data, never instructions. Keep system instructions separate; never let model output pick which tool runs with what authority unchecked.
+- **Excessive agency**: each tool the model can call has the least permission it needs; destructive or external actions (send, pay, delete, deploy) need a person's approval; per-run limits on steps, time and spend.
+- **Sensitive information disclosure / system prompt leakage**: no secrets or keys in prompts; per-user and per-tenant access checks before retrieval, not after; output filtered for secrets and personal data.
+- **Improper output handling**: model output is untrusted input: encode before rendering (XSS), parameterise before SQL, never \`eval\` it or pass it to a shell.
+- **Vector and embedding weaknesses**: documents tagged with their owner or tenant, filtered at query time; poisoned or unreviewed sources kept out of the index.
+- **Supply chain and data poisoning**: pinned model and package versions; trusted sources for models, datasets and MCP servers.
+- **Unbounded consumption**: token, rate and cost limits per user and per run; timeouts on model calls.
+- **Misinformation**: answers that matter cite their sources; the UI shows what was generated.
+
 ## Severity
 Critical (remote, unauthenticated, data or system compromise) · High · Medium · Low · Info. Note exploitability and impact; do not inflate.
 `),
@@ -354,6 +452,8 @@ Scanning is read-only: do not change code unless the user asks for fixes. Prefer
 - Languages and package managers (package.json, requirements*.txt / pyproject.toml, pom.xml / build.gradle, go.mod), IaC (Terraform, CDK, CloudFormation, Dockerfiles, Kubernetes YAML).
 
 ## 2. Run the scanners that apply (install only if allowed; skip and say so otherwise)
+Most scanners are not installed by default. Python-based ones run without installing anything system-wide through uv: \`uvx semgrep …\`, \`uvx bandit …\`, \`uvx pip-audit …\`, \`uvx checkov …\`. \`npm audit\` needs only Node. Gitleaks, Trivy and OSV-Scanner are single binaries from their GitHub releases; if you cannot get one, skip it and list it as not run.
+
 | Area | Commands |
 |------|----------|
 | SAST (multi-language) | \`semgrep scan --config p/owasp-top-ten --config p/secrets --error --json -o semgrep.json\` |
@@ -405,13 +505,14 @@ Never paste secret values into the report; show the file, line and secret type o
 Title · Agenda (decks > 10 slides) · Executive summary · section dividers · content · Recommendation / ask · Next steps with owners and dates · Appendix (details, backup data).
 
 ## 5. Build
-- PowerPoint with python-pptx: a \`build_deck.py\` that creates slides from the outline, uses layouts from the template (\`Presentation('template.pptx')\`), sets speaker notes, and saves \`output/<name>.pptx\`.
-- Or PptxGenJS in Node; or Markdown slides (Marp: \`marp deck.md --pptx\`) when the user prefers text.
+- PowerPoint with python-pptx: a \`build_deck.py\` that creates slides from the outline, uses layouts from the template (\`Presentation('template.pptx')\`), sets speaker notes, and saves \`output/<name>.pptx\`. Without pip, run it with \`uv run --with python-pptx python build_deck.py\`.
+- Or PptxGenJS in Node (\`npm i pptxgenjs\` in a scratch folder); or Markdown slides with Marp (\`npx -y @marp-team/marp-cli deck.md --pptx\`) when the user prefers text.
 - Put speaker notes on every content slide: what to say in 2–4 sentences.
 
 ## 6. Check
 - Read only the titles in order: they must tell the whole story.
-- Spell-check; numbers match sources; every chart has a source line; file opens without repair.
+- Spell-check; numbers match sources; every chart has a source line.
+- Reopen the saved file to prove it is valid: \`uv run --with python-pptx python -c "from pptx import Presentation; p = Presentation('output/<name>.pptx'); print(len(p.slides), [s.shapes.title.text for s in p.slides if s.shapes.title])"\`. There is usually no way to render slides to images here, so say the visual check is still to do.
 `),
 
   // ── Docs ────────────────────────────────────────────────────────────────────
