@@ -105,3 +105,8 @@ export function reviewHandoffHref(event, workflowId, projectId) {
   if (pr?.state !== 'review-started' || typeof pr.reviewId !== 'string' || !pr.reviewId.trim()) return null;
   return href(projectId, 'reviews', 'code', pr.reviewId);
 }
+
+/** Approval questions live in Inbox; the session shows PR progress and results. */
+export function sessionPullRequestCards(events) {
+  return latestPullRequestStates(events).filter(event => event.state !== 'asked');
+}
