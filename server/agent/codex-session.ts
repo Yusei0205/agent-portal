@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { CodexClient, RpcParams } from '../codex-client.ts';
-import { decideToolCall, type PolicyRule } from './tool-policy.ts';
+import { decideToolCall, rememberKey, type PolicyRule } from './tool-policy.ts';
 import type { ChatgptAuthTokens } from '../codex-device-protocol.ts';
 
 export interface CodexSessionContext {
@@ -36,6 +36,7 @@ export async function approveCodexRequest(
     ])
     : [{ command, cwd: params.cwd ?? item.cwd, reason: params.reason,
         networkApprovalContext: params.networkApprovalContext, additionalPermissions: params.additionalPermissions }];
+  let policyAllows = true;
   for (const input of inputs) {
     if (fileChange && !input.file_path) return { decision: 'decline' };
     const decision = decideToolCall({ toolName, input, workDir: ctx.run.workDir,
@@ -44,14 +45,23 @@ export async function approveCodexRequest(
       ctx.emit('status', { text: decision.reason });
       return { decision: 'decline' };
     }
+    if (decision.action !== 'allow') policyAllows = false;
   }
-  // Native requests can grant access beyond the sandbox. They always need a person.
+  // Keep native interception so portal block/ask rules are checked. Trust covers
+  // ordinary requests only, never sandbox/network expansion or an explained retry.
+  const ordinary = params.reason == null && params.networkApprovalContext == null
+    && params.additionalPermissions == null && params.grantRoot == null;
+  if (ordinary && policyAllows && (ctx.run.trusted
+    || inputs.every(input => ctx.allowed.has(rememberKey(toolName, input).key)))) return { decision: 'accept' };
   // Bind the exact JSON input that is stored/transported. Native optional fields can be
   // undefined; hashing those as null before JSON drops them creates a different call.
   const input = JSON.parse(JSON.stringify(fileChange
     ? { file_path: changes.map(c => c.path).join(', '), changes, reason: params.reason }
     : inputs[0]));
   const answer = await ctx.awaitInput(toolName, input);
+  if (answer.decision === 'allow' && answer.remember && ordinary) {
+    for (const item of inputs) ctx.allowed.add(rememberKey(toolName, item).key);
+  }
   return { decision: answer.decision === 'allow' && !ctx.signal?.aborted ? 'accept' : 'decline' };
 }
 

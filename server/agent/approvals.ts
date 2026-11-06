@@ -40,7 +40,8 @@ export function resolveApproval(
   if (!pending) return false;
   clearTimeout(pending.timer);
   runMap!.delete(inputId);
-  if (runMap!.size === 0) pendingApprovals.delete(runId);
+  // The runner reuses this map for later approvals in the same run. Its finally
+  // block owns removal; deleting it here strands the next sequential request.
   pending.resolve({ decision, remember: Boolean(opts?.remember), message: opts?.message ?? '' });
   return true;
 }
