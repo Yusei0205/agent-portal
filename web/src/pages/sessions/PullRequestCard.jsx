@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import { Icon } from '../../components/Icon.jsx';
 import { api } from '../../lib/api.js';
-import { latestPullRequestStates, describePullRequest } from '../../lib/pullRequestCard.js';
+import { sessionPullRequestCards, describePullRequest } from '../../lib/pullRequestCard.js';
 
 function Card({ event, workflowId, projectId }) {
   const [busy, setBusy] = useState(false);
@@ -59,7 +59,7 @@ function Card({ event, workflowId, projectId }) {
 }
 
 export function PullRequestCards({ events, workflowId, projectId }) {
-  const states = latestPullRequestStates(events);
+  const states = sessionPullRequestCards(events);
   if (!states.length) return null;
   return states.map((ev) => (
     <Card key={ev.repo ?? ev.repoId} event={ev} workflowId={workflowId} projectId={projectId} />

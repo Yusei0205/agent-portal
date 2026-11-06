@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { api } from '../lib/api.js';
 import { navigate, href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
+import { BranchSelect } from '../components/BranchSelect.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
@@ -158,16 +159,18 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
   const [error, setError] = useState(null);
   const trapRef = useFocusTrap();
 
-  // The chosen repository's branches, asked from its host. Typing still works: a ref or a branch not in the
-  // list (a brand-new one, a PR ref) is accepted as written.
+  // Load branches for visible selectors; custom refs are an explicit alternative.
   const [branchInfo, setBranchInfo] = useState({ state: 'idle', branches: [], defaultBranch: null, error: null });
   const baseTouched = useRef(false);
+  const branchRequest = useRef(0);
 
   const loadBranches = useCallback(async (repoId, refresh = false) => {
+    const request = ++branchRequest.current;
     if (!repoId) { setBranchInfo({ state: 'idle', branches: [], defaultBranch: null, error: null }); return; }
-    setBranchInfo((b) => ({ ...b, state: 'loading', error: null }));
+    setBranchInfo({ state: 'loading', branches: [], defaultBranch: null, error: null });
     try {
       const r = await api.get(`/api/projects/${projectId}/repos/${repoId}/branches${refresh ? '?refresh=1' : ''}`);
+      if (request !== branchRequest.current) return;
       setBranchInfo({
         state: r.source === 'none' ? 'failed' : 'ready',
         branches: r.branches ?? [],
@@ -178,11 +181,15 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
       // Base follows the repository's default branch until the person types their own.
       if (r.defaultBranch && !baseTouched.current) setForm((f) => ({ ...f, baseRef: r.defaultBranch }));
     } catch (e) {
+      if (request !== branchRequest.current) return;
       setBranchInfo({ state: 'failed', branches: [], defaultBranch: null, error: e.message });
     }
   }, [projectId]);
 
-  useEffect(() => { loadBranches(form.repoId); }, [form.repoId, loadBranches]);
+  useEffect(() => {
+    loadBranches(form.repoId);
+    return () => { branchRequest.current++; };
+  }, [form.repoId, loadBranches]);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !loading) onClose(); };
@@ -243,7 +250,13 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
                 <select
                   id="nr-repo"
                   value={form.repoId}
-                  onChange={(e) => { baseTouched.current = false; setForm((f) => ({ ...f, repoId: e.target.value })); }}
+                  onChange={(e) => {
+                    baseTouched.current = false;
+                    const repoId = e.target.value;
+                    branchRequest.current++;
+                    setBranchInfo({ state: 'loading', branches: [], defaultBranch: null, error: null });
+                    setForm((f) => ({ ...f, repoId, baseRef: repos.find((r) => r.id === repoId)?.default_branch || '', headRef: '' }));
+                  }}
                 >
                   <option value="">None</option>
                   {repos.map((r) => (
@@ -253,36 +266,18 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
               </div>
             )}
 
-            <datalist id="nr-branches">
-              {branchInfo.branches.map((b) => <option key={b} value={b} />)}
-            </datalist>
-
             <div className="field">
               <label htmlFor="nr-base">Base branch / ref</label>
-              <input
-                id="nr-base"
-                type="text"
-                list="nr-branches"
-                value={form.baseRef}
-                onChange={(e) => { baseTouched.current = true; setForm((f) => ({ ...f, baseRef: e.target.value })); }}
-                placeholder="main"
-                autoComplete="off"
-                required
-              />
+              <BranchSelect key={form.repoId + '-base'} id="nr-base" value={form.baseRef}
+                branches={branchInfo.branches} loading={branchInfo.state === 'loading'} required
+                onChange={(value) => { baseTouched.current = true; setForm((f) => ({ ...f, baseRef: value })); }} />
             </div>
 
             <div className="field">
               <label htmlFor="nr-head">Head branch / ref</label>
-              <input
-                id="nr-head"
-                type="text"
-                list="nr-branches"
-                value={form.headRef}
-                onChange={(e) => setForm((f) => ({ ...f, headRef: e.target.value }))}
-                placeholder={branchInfo.branches.length ? 'Pick or type a branch' : 'feature/my-branch'}
-                autoComplete="off"
-                aria-describedby="nr-branches-hint"
-              />
+              <BranchSelect key={form.repoId + '-head'} id="nr-head" value={form.headRef}
+                branches={branchInfo.branches} loading={branchInfo.state === 'loading'} describedBy="nr-branches-hint"
+                onChange={(value) => setForm((f) => ({ ...f, headRef: value }))} />
               <span id="nr-branches-hint" className="field-hint" role="status">
                 {!form.repoId && 'Choose a repository to pick from its branches.'}
                 {form.repoId && branchInfo.state === 'loading' && 'Loading branches…'}
@@ -296,7 +291,7 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
                 )}
                 {form.repoId && branchInfo.state === 'failed' && (
                   <>
-                    Could not list branches{branchInfo.error ? `: ${branchInfo.error}` : ''}. Type the name instead.
+                    Could not list branches{branchInfo.error ? `: ${branchInfo.error}` : ''}. Choose “Enter a ref instead” to enter it manually.
                     {' '}
                     <button type="button" className="btn-link" onClick={() => loadBranches(form.repoId, true)}>Try again</button>
                   </>
