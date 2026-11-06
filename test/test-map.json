@@ -234,6 +234,9 @@
       "description": "In-browser IDE workspace — editor, explorer, terminal, source control, live browser",
       "sources": [
         "server/terminal.ts",
+          "server/terminal-cloud.ts",
+          "server/agent/runner-terminal.ts",
+          "server/agent/runner-terminal-auth.ts",
         "server/browser-live.ts",
         "web/src/pages/sessions/IdeAgents.jsx",
         "web/src/pages/sessions/IdeBrowser.jsx",
@@ -257,6 +260,8 @@
       "tests": [
         "test/browser-live.test.ts",
         "test/terminal.test.ts",
+          "test/terminal-cloud.test.ts",
+          "test/runner-terminal.test.ts",
         "test/terminal-pipe.test.ts"
       ],
       "smokeIds": [

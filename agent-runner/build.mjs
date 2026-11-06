@@ -28,6 +28,8 @@ const SHARED = [
   ['agent/runner-repos.ts', 'runner-repos.ts'],
   ['agent/runner-inspect.ts', 'runner-inspect.ts'],
   ['agent/runner-snapshot.ts', 'runner-snapshot.ts'],
+  ['agent/runner-terminal.ts', 'runner-terminal.ts'],
+  ['agent/runner-terminal-auth.ts', 'runner-terminal-auth.ts'],
   ['agent/runner-mcp.ts', 'runner-mcp.ts'],
   ['agent/runner-checks.ts', 'runner-checks.ts'],
   ['agent/runner-finalize.ts', 'runner-finalize.ts'],
@@ -56,7 +58,7 @@ await esbuild.build({
   target: 'node22',
   outfile: path.join(distDir, 'index.mjs'),
   // Keep the SDK external — install it in the container via npm ci
-  external: ['@anthropic-ai/claude-agent-sdk', 'playwright-core', 'zod'],
+  external: ['@anthropic-ai/claude-agent-sdk', 'playwright-core', 'zod', 'ws'],
   // node: built-ins stay external automatically with platform: 'node'
   // The AWS SDK (bundled for the browser tools) is CommonJS and calls require() on node: built-ins.
   banner: { js: "import{createRequire as __cr}from'module';const require=__cr(import.meta.url);" },

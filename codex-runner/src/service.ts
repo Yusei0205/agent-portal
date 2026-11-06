@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto';
 import { deviceAuthHandler } from './device-auth.ts';
 import { validChatgptTokens, type ChatgptAuthTokens } from '../../server/codex-device-protocol.ts';
 import { openCodexPrTool, CODEX_PR_INSTRUCTIONS } from '../../server/agent/codex-pr-tool.ts';
+import { createRunnerTerminal } from '../../server/agent/runner-terminal.ts';
 
 type Event = Record<string, any>;
 type ServiceOptions = {
@@ -42,11 +43,20 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
   const device = deviceAuthHandler(root, open, environment);
   let sessionKind: 'auth' | 'work' | null = null;
   const renewals = new Map<string, (tokens: ChatgptAuthTokens) => void>();
+  const terminal = createRunnerTerminal({
+    engine: 'codex',
+    prepare: async (snapshot, status) => {
+      await fs.mkdir(workDir, { recursive: true });
+      if (!active) await restoreWorkspace(snapshot, workDir, event => { if (event.type === 'status') status(String(event.text)); });
+      return workDir;
+    },
+    save: snapshot => flushWorkspace(snapshot, workDir),
+  });
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/ping') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ status: active || device.active() ? 'HealthyBusy' : 'Healthy' })); return;
+      res.end(JSON.stringify({ status: active || device.active() || terminal.busy() ? 'HealthyBusy' : 'Healthy' })); return;
     }
     if (req.method !== 'POST' || !['/invocations', '/invocations/'].includes(req.url || '')) { res.writeHead(404); res.end(); return; }
     let body: Event;
@@ -67,6 +77,12 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
     }
     if (sessionKind === 'auth') { json(403, { error: 'This session is reserved for authorization' }); return; }
     sessionKind = 'work';
+    if (body.mode === 'terminal-ticket') {
+      if (boundWorkflow && body.workflowId !== boundWorkflow) { json(403, { error: 'This runner belongs to another workflow' }); return; }
+      try { const result = await terminal.issue(body); boundWorkflow = body.workflowId; reply(result); }
+      catch (e) { json(400, { error: (e as Error).message }); }
+      return;
+    }
     if (body.mode === 'auth-refresh-result') {
       const resolve = renewals.get(body.requestId);
       if (!resolve || !active || active.runId !== body.runId || !validChatgptTokens(body.chatgptAuthTokens)) { json(409, { error: 'Invalid or expired credential renewal' }); return; }
@@ -81,7 +97,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
       if (!active || active.runId !== body.runId) { json(409, { error: 'Run is not active' }); return; }
       active.controller.abort(); reply({ type: 'cancelled' }); return;
     }
-    if (active) { json(409, { error: 'A run is already active in this session' }); return; }
+    if (active || terminal.preparing()) { json(409, { error: 'The session is busy preparing or running work' }); return; }
     if (!['codex-run', 'codex-text', 'codex-models', 'prepare-repos', 'inspect', 'finalize', 'flush-workspace'].includes(body.mode)) { json(400, { error: 'Unsupported mode' }); return; }
     if ('refreshToken' in body || 'refresh_token' in body || 'clientSecret' in body) { json(400, { error: 'Renewable credentials must stay in the portal' }); return; }
     if (['codex-run', 'codex-text', 'codex-models'].includes(body.mode) && (body.chatgptAuthTokens
@@ -227,4 +243,6 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
       active = null; res.off('close', disconnected); res.end();
     }
   });
+  terminal.attach(server);
+  return server;
 }

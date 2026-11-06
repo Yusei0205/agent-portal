@@ -26,6 +26,8 @@ const SHARED = [
   ['agent/runner-repos.ts', 'runner-repos.ts'],
   ['agent/runner-inspect.ts', 'runner-inspect.ts'],
   ['agent/runner-snapshot.ts', 'runner-snapshot.ts'],
+  ['agent/runner-terminal.ts', 'runner-terminal.ts'],
+  ['agent/runner-terminal-auth.ts', 'runner-terminal-auth.ts'],
   ['agent/runner-mcp.ts', 'runner-mcp.ts'],
   ['agent/runner-checks.ts', 'runner-checks.ts'],
   ['agent/runner-finalize.ts', 'runner-finalize.ts'],
@@ -58,6 +60,7 @@ await esbuild.build({
   format: 'esm',
   platform: 'node',
   target: 'node22',
+  external: ['ws'],
   outfile: path.join(distDir, 'index.mjs'),
   // node: built-ins (node:sqlite, node:fs, etc.) stay external automatically with platform:'node'
   sourcemap: false,

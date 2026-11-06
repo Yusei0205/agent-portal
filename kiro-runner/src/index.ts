@@ -16,6 +16,7 @@
  */
 
 import http from 'node:http';
+import { createRunnerTerminal } from '../shared/runner-terminal.js';
 import { validatePayload } from './validate.js';
 import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
 import { runKiroRun, kiroWorkspaceRoot } from './run.js';
@@ -40,6 +41,16 @@ let activeRun: { runId: string; stop: AbortController } | null = null;
 /** Approval requests of the run in progress, settled by "answer" invocations. */
 const broker = new ApprovalBroker();
 let lastStatusChange = Math.floor(Date.now() / 1000);
+const terminal = createRunnerTerminal({
+  engine: 'kiro',
+  prepare: async (snapshot, status) => {
+    const root = kiroWorkspaceRoot() ?? usablePersistRoot(PERSIST_ROOT);
+    if (!root) throw new Error('Workspace is unavailable');
+    if (!runActive && !snapshotBusy()) await restoreWorkspace(snapshot, root, event => { if (event.type === 'status') status(String(event.text)); });
+    return root;
+  },
+  save: snapshot => flushWorkspace(snapshot, kiroWorkspaceRoot() ?? usablePersistRoot(PERSIST_ROOT)),
+});
 
 function setRunActive(active: boolean): void {
   if (runActive !== active) {
@@ -62,7 +73,7 @@ const server = http.createServer(async (req, res) => {
   const url = req.url ?? '/';
 
   if (method === 'GET' && url === '/ping') {
-    const status = runActive || snapshotBusy() ? 'HealthyBusy' : 'Healthy';
+    const status = runActive || snapshotBusy() || terminal.busy() ? 'HealthyBusy' : 'Healthy';
     const body: Record<string, unknown> = { status };
     if (lastStatusChange > 0) {
       body.time_of_last_update = lastStatusChange;
@@ -96,6 +107,12 @@ const server = http.createServer(async (req, res) => {
     // They arrive on the same session (AgentCore routes them to this microVM) while the
     // run's own invocation is still streaming, so they skip the busy check.
     const body = parsed as Record<string, unknown> | null;
+    if (body && body.mode === 'terminal-ticket') {
+      try { const ticket = await terminal.issue(body); res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end(`data: ${JSON.stringify(ticket)}\n\n`); }
+      catch { res.writeHead(400); res.end('Could not issue terminal ticket'); }
+      return;
+    }
+    if (terminal.preparing() && !['answer', 'cancel'].includes(String(body?.mode))) { res.writeHead(409); res.end('Workspace restoration is in progress'); return; }
 
     // ── Save the workspace now and wait for it (the session is being switched to another engine) ──
     // The portal asks before the other engine's first run, so that engine restores the latest files.
@@ -279,6 +296,7 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
+terminal.attach(server);
 server.listen(PORT, '0.0.0.0', () => {
   process.stdout.write(
     JSON.stringify({

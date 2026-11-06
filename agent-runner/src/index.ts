@@ -28,6 +28,7 @@ import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground,
 import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
+import { createRunnerTerminal } from '../shared/runner-terminal.js';
 
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
@@ -40,6 +41,16 @@ let activeRun: { runId: string; stop: AbortController } | null = null;
 /** Approval requests of the run in progress, settled by "answer" invocations. */
 const broker = new ApprovalBroker();
 let lastStatusChange = Math.floor(Date.now() / 1000); // Unix seconds
+const terminal = createRunnerTerminal({
+  engine: 'claude-code',
+  prepare: async (snapshot, status) => {
+    const root = usablePersistRoot(PERSIST_ROOT);
+    if (!root) throw new Error('Workspace is unavailable');
+    if (!runActive && !snapshotBusy()) await restoreWorkspace(snapshot, root, event => { if (event.type === 'status') status(String(event.text)); });
+    return root;
+  },
+  save: snapshot => flushWorkspace(snapshot, usablePersistRoot(PERSIST_ROOT)),
+});
 
 function setRunActive(active: boolean): void {
   if (runActive !== active) {
@@ -67,7 +78,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /ping ────────────────────────────────────────────────────────────────
   if (method === 'GET' && url === '/ping') {
-    const status = runActive || snapshotBusy() ? 'HealthyBusy' : 'Healthy';
+    const status = runActive || snapshotBusy() || terminal.busy() ? 'HealthyBusy' : 'Healthy';
     // Only include time_of_last_update on an actual state change (per contract warning).
     const body: Record<string, unknown> = { status };
     if (lastStatusChange > 0) {
@@ -109,6 +120,12 @@ const server = http.createServer(async (req, res) => {
     // They arrive on the same session (AgentCore routes them to this microVM) while the
     // run's own invocation is still streaming, so they skip the busy check.
     const body = parsed as Record<string, unknown> | null;
+    if (body && body.mode === 'terminal-ticket') {
+      try { const ticket = await terminal.issue(body); res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end(`data: ${JSON.stringify(ticket)}\n\n`); }
+      catch { res.writeHead(400); res.end('Could not issue terminal ticket'); }
+      return;
+    }
+    if (terminal.preparing() && !['answer', 'cancel'].includes(String(body?.mode))) { res.writeHead(409); res.end('Workspace restoration is in progress'); return; }
 
     // ── Save the workspace now and wait for it (the session is being switched to another engine) ──
     // The portal asks before the other engine's first run, so that engine restores the latest files.
@@ -263,6 +280,7 @@ const server = http.createServer(async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
+terminal.attach(server);
 server.listen(PORT, '0.0.0.0', () => {
   process.stdout.write(
     JSON.stringify({

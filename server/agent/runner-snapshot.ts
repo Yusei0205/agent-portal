@@ -225,7 +225,16 @@ async function changedSinceSave(root: string, signal: AbortSignal): Promise<bool
   return changed;
 }
 
+// Terminal close and agent completion may share the same temporary archive path.
+let saves: Promise<void> = Promise.resolve();
 async function saveWorkspace(snap: WorkspaceSnapshot, root: string, signal: AbortSignal, strict = false): Promise<void> {
+  const save = saves.then(() => saveWorkspaceNow(snap, root, signal, strict));
+  saves = save.catch(() => {});
+  return save;
+}
+
+async function saveWorkspaceNow(snap: WorkspaceSnapshot, root: string, signal: AbortSignal, strict = false): Promise<void> {
+  if (signal.aborted) return;
   if (!hasRepos(root)) return;
   if (!(await changedSinceSave(root, signal))) { log('workspace_save_skipped', { reason: 'unchanged' }); return; }
 
