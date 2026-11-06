@@ -128,5 +128,7 @@ it('authenticates each attached repository separately without writing credential
   assert.equal(config('https://github.com/team/second.git'), 'Authorization: Basic second-secret');
   for (const url of ['https://github.com/team/unattached.git', 'https://other.example/team/first.git', 'http://github.com/team/first.git', 'https://github.com/team/first-extra.git']) assert.equal(config(url), '');
   assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+  const foreign = terminalGitEnv([{ ...repo('first', 'must-not-leak'), url: 'https://foreign.example/team/first.git' }]);
+  assert.equal(Object.values(foreign).some(v => v.includes('must-not-leak')), false);
   assert.throws(() => terminalGitEnv([{ ...repo('first', 'fixture'), url: 'https://user:password@github.com/team/first.git' }]), /Invalid/);
 });

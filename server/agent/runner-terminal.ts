@@ -39,7 +39,16 @@ export function terminalGitEnv(repos: RunnerRepo[]): Record<string, string> {
     const headers: string[] = [];
     for (const [key, value] of Object.entries(repo.env ?? {})) {
       const index = /^GIT_CONFIG_KEY_(\d{1,2})$/.exec(key)?.[1];
-      if (index === undefined || !/^http(?:\..+)?\.extraheader$/i.test(value)) continue;
+      if (index === undefined) continue;
+      const sourceScope = /^http\.(https:\/\/.+)\.extraheader$/i.exec(value)?.[1];
+      if (!sourceScope) continue;
+      // Preserve the connection's original host/path restriction before narrowing it.
+      // A GitHub connection attached to a foreign URL must never authorize that host.
+      let source: URL;
+      try { source = new URL(sourceScope); } catch { continue; }
+      if (source.origin !== url.origin || source.username || source.password || source.search || source.hash) continue;
+      const prefix = source.pathname.replace(/\/$/, '');
+      if (url.pathname !== prefix && !url.pathname.startsWith(prefix + '/')) continue;
       const header = repo.env?.[`GIT_CONFIG_VALUE_${index}`];
       if (header && /^Authorization: (?:Basic|Bearer) [^\r\n]+$/i.test(header)) headers.push(header);
     }
