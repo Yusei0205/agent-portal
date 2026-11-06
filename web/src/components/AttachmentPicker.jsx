@@ -79,6 +79,10 @@ export function AttachmentPicker({
   initialAttachments = [],
   onAttachmentsChange,
   disabled = false,
+  fileInputRef = null,
+  hideTrigger = false,
+  maxFileBytes = null,
+  maxTotalBytes = null,
 }) {
   const [items, setItems] = useState(() =>
     initialAttachments.map((att) => ({
@@ -98,7 +102,8 @@ export function AttachmentPicker({
   const [dragOver, setDragOver] = useState(false);
   const [valError, setValError] = useState(null);
 
-  const inputRef    = useRef(null);
+  const localInputRef = useRef(null);
+  const inputRef = fileInputRef ?? localInputRef;
   const liveRef     = useRef(null);
   /** Keep a stable reference to processFiles so the paste listener can use it */
   const processRef  = useRef(null);
@@ -168,10 +173,14 @@ export function AttachmentPicker({
         errors.push(`${f.name}: file type not allowed`);
         continue;
       }
-      const maxBytes = IMAGE_EXTS.has(ext) ? IMAGE_MAX_BYTES : DOC_MAX_BYTES;
-      const maxMb    = IMAGE_EXTS.has(ext) ? IMAGE_MAX_MB    : DOC_MAX_MB;
+      const maxBytes = maxFileBytes ?? (IMAGE_EXTS.has(ext) ? IMAGE_MAX_BYTES : DOC_MAX_BYTES);
+      const maxMb = maxBytes / 1024 / 1024;
       if (f.size > maxBytes) {
         errors.push(`${f.name}: exceeds ${maxMb} MB limit`);
+        continue;
+      }
+      if (maxTotalBytes && items.filter(a => a.state !== 'error').reduce((n, a) => n + a.size, 0) + valid.reduce((n, a) => n + a.size, 0) + f.size > maxTotalBytes) {
+        errors.push('Attachments exceed the total size limit');
         continue;
       }
       valid.push(f);
@@ -272,7 +281,7 @@ export function AttachmentPicker({
       />
 
       {/* Drop zone — only shown when more files can be added */}
-      {canAdd && (
+      {canAdd && !hideTrigger && (
         <div
           className={`attachment-dropzone${dragOver ? ' is-drag-over' : ''}`}
           role="button"
@@ -308,6 +317,7 @@ export function AttachmentPicker({
       <input
         ref={inputRef}
         type="file"
+        disabled={disabled}
         multiple
         accept={ALLOWED_EXTS.join(',')}
         style={{ display: 'none' }}

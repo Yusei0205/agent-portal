@@ -23,6 +23,8 @@ Bedrock) or through Kiro CLI or OpenAI Codex, and has a simulated Demo mode. The
   call with its cost, changes and diffs, follow-up messages, an optional plan-first approval,
   delegation to child sessions, slash commands, and push to a new branch or a pull request.
   Resume reopens an interrupted conversation without sending a message or starting the AI; send a message when ready to continue.
+  The chat attachment button accepts images and documents (up to 5 files, 2 MB each, 8 MB total).
+  Uploads are kept with the message and delivered to the runner when you send; attaching a file alone does not start the AI.
 - **Pull requests from sessions.** When a session changes a project repository, the portal pushes a new
   `portal/<TICKET>-<title>` branch, opens a pull request on GitHub or CodeCommit and starts a draft code review with
   the branch, PR number and Jira key filled in. Sessions with a Jira ticket do it by themselves; sessions without one

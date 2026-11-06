@@ -199,7 +199,7 @@ export const INPUT_DIRS = ['attachments', 'docs/md'] as const;
 
 export const INPUT_FILE_EXTS = new Set([
   '.md', '.txt', '.csv', '.json', '.yaml', '.yml', '.html', '.pdf', '.docx', '.xlsx', '.pptx',
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.drawio',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.drawio', '.mmd',
 ]);
 
 export const INPUT_FILE_LIMITS = { files: 30, fileBytes: 2 * 1024 * 1024, totalBytes: 8 * 1024 * 1024 };
@@ -212,7 +212,7 @@ export interface InputFile {
 }
 
 /** Portal side: the files staged for a run (attachments, chosen project documents), within the limits. */
-export function collectInputFiles(workDir: string): InputFile[] {
+export function collectInputFiles(workDir: string, preferredPaths: string[] = []): InputFile[] {
   const out: InputFile[] = [];
   let total = 0;
   const walk = (abs: string, rel: string, depth: number): void => {
@@ -224,7 +224,7 @@ export function collectInputFiles(workDir: string): InputFile[] {
       const a = path.join(abs, e.name);
       const r = `${rel}/${e.name}`;
       if (e.isDirectory()) { walk(a, r, depth + 1); continue; }
-      if (!e.isFile() || !INPUT_FILE_EXTS.has(path.extname(e.name).toLowerCase())) continue;
+      if (!e.isFile() || out.some(f => f.path === r) || !INPUT_FILE_EXTS.has(path.extname(e.name).toLowerCase())) continue;
       let st: fs.Stats;
       try { st = fs.statSync(a); } catch { continue; }
       if (st.size === 0 || st.size > INPUT_FILE_LIMITS.fileBytes) continue;
@@ -232,6 +232,16 @@ export function collectInputFiles(workDir: string): InputFile[] {
       try { out.push({ path: r, data: fs.readFileSync(a).toString('base64') }); total += st.size; } catch { /* skip */ }
     }
   };
+  // Current message files take precedence over older files in the working copy.
+  for (const rel of preferredPaths) {
+    if (!rel.startsWith('attachments/') || path.posix.basename(rel) !== rel.slice('attachments/'.length)) continue;
+    const abs = path.join(workDir, rel);
+    const stat = fs.lstatSync(abs);
+    if (!stat.isFile() || !INPUT_FILE_EXTS.has(path.extname(rel).toLowerCase()) || stat.size > INPUT_FILE_LIMITS.fileBytes || total + stat.size > INPUT_FILE_LIMITS.totalBytes) throw new Error('Chat attachments exceed runner file limits');
+    if (out.some(f => f.path === rel)) continue;
+    out.push({ path: rel, data: fs.readFileSync(abs).toString('base64') });
+    total += stat.size;
+  }
   for (const d of INPUT_DIRS) walk(path.join(workDir, ...d.split('/')), d, 0);
   return out;
 }

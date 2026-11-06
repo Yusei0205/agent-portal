@@ -15,6 +15,7 @@
  *   POST   /api/projects/:id/workflows/:wid/message         — send follow-up message
  */
 
+import { saveChatAttachments } from '../session-attachments.ts';
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { one, all, getDb } from '../db.ts';
@@ -851,7 +852,12 @@ export function registerWorkflowRoutes(): void {
     if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const message = str(body.message as string, 'message', { max: 10_000 }).trim();
+    let message = str(body.message, 'message', { max: 10_000, optional: true }).trim();
+    if (message.startsWith('/') && Array.isArray(body.attachmentIds) && body.attachmentIds.length) {
+      sendJson(res, 400, { error: 'Send attachments with a message, not a slash command' }); return;
+    }
+    const attachments = await saveChatAttachments(req.params.id, w.id, body.attachmentIds);
+    if (!message && attachments.length) message = 'Please read the attached files.';
     if (!message) { sendJson(res, 400, { error: 'Message must not be empty' }); return; }
 
     const isCommand = message.startsWith('/');
@@ -883,7 +889,7 @@ export function registerWorkflowRoutes(): void {
       workflow_id: w.id,
       kind,
       body: message,
-      data: JSON.stringify({ by: req.user!.id }),
+      data: JSON.stringify({ by: req.user!.id, ...(attachments.length ? { attachments } : {}) }),
       created_at: ts,
     });
 
