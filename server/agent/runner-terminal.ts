@@ -116,7 +116,7 @@ export function createRunnerTerminal(options: RunnerTerminalOptions) {
           : !candidate ? 'Terminal ticket not found'
           : candidate.expires <= Date.now() ? 'Terminal ticket expired'
           : sockets.size >= 3 ? 'Too many open terminals' : null;
-        if (denied) { ws.close(1008, denied); return; }
+        if (denied || !candidate) { ws.close(1008, denied ?? 'Terminal ticket not found'); return; }
         tickets.delete(msg.ticket); ticket = candidate; clearTimeout(handshake); sockets.add(ws); resetIdle();
         cols = Math.min(500, Math.max(20, Math.trunc(Number(msg.cols) || 80)));
         rows = Math.min(200, Math.max(5, Math.trunc(Number(msg.rows) || 24)));
