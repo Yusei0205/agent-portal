@@ -6,6 +6,7 @@ import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { parseSnapshot, type WorkspaceSnapshot } from './runner-snapshot.ts';
 import { terminalGrantVerifier } from './runner-terminal-auth.ts';
+import { parseRunnerRepos, type RunnerRepo } from './runner-repos.ts';
 
 interface PtyProcess {
   write(data: string): void; resize(cols: number, rows: number): void; kill(): void;
@@ -13,7 +14,7 @@ interface PtyProcess {
   onExit(callback: (event: { exitCode: number }) => void): void;
 }
 interface Pty { spawn(file: string, args: string[], options: { cwd: string; env: Record<string, string>; name: string; cols: number; rows: number }): PtyProcess }
-type Ticket = { expires: number; origin: string; snapshot: WorkspaceSnapshot; workflowId: string };
+type Ticket = { expires: number; origin: string; snapshot: WorkspaceSnapshot; workflowId: string; gitEnv: Record<string, string> };
 export interface RunnerTerminalOptions {
   engine: 'codex' | 'kiro' | 'claude-code';
   prepare(snapshot: WorkspaceSnapshot, status: (text: string) => void): Promise<string>;
@@ -27,6 +28,33 @@ const safeEnv = (home: string): Record<string, string> => ({
   ...(process.env.SYSTEMROOT ? { SYSTEMROOT: process.env.SYSTEMROOT } : {}),
   TEMP: os.tmpdir(), TMP: os.tmpdir(), TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'C.UTF-8',
 });
+
+/** Terminal-only Git settings. Each connection is narrowed from host scope to its attached repository. */
+export function terminalGitEnv(repos: RunnerRepo[]): Record<string, string> {
+  const entries: Array<[string, string]> = [['credential.helper', '']];
+  const seen = new Set<string>();
+  for (const repo of repos) {
+    const url = new URL(repo.url);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !url.pathname.replace(/\//g, '')) throw new Error('Invalid terminal repository URL');
+    const headers: string[] = [];
+    for (const [key, value] of Object.entries(repo.env ?? {})) {
+      const index = /^GIT_CONFIG_KEY_(\d{1,2})$/.exec(key)?.[1];
+      if (index === undefined || !/^http(?:\..+)?\.extraheader$/i.test(value)) continue;
+      const header = repo.env?.[`GIT_CONFIG_VALUE_${index}`];
+      if (header && /^Authorization: (?:Basic|Bearer) [^\r\n]+$/i.test(header)) headers.push(header);
+    }
+    const base = url.origin + url.pathname.replace(/\/$/, '').replace(/\.git$/, '');
+    for (const scope of [base, base + '.git']) {
+      if (seen.has(scope)) continue;
+      seen.add(scope);
+      // Clear saved headers, then apply this repository's current connection only.
+      entries.push([`http.${scope}.extraHeader`, '']);
+      for (const header of headers) entries.push([`http.${scope}.extraHeader`, header]);
+    }
+  }
+  return Object.fromEntries([['GIT_TERMINAL_PROMPT', '0'], ['GIT_CONFIG_COUNT', String(entries.length)],
+    ...entries.flatMap(([key, value], i) => [[`GIT_CONFIG_KEY_${i}`, key], [`GIT_CONFIG_VALUE_${i}`, value]])]);
+}
 async function shellDirectory(root: string): Promise<string> {
   try {
     const repos = (await fs.readdir(path.join(root, 'repos'), { withFileTypes: true })).filter(entry => entry.isDirectory());
@@ -56,11 +84,13 @@ export function createRunnerTerminal(options: RunnerTerminalOptions) {
 
   async function issue(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const snapshot = parseSnapshot(body.snapshot);
+    const repos = parseRunnerRepos(body.repos);
     if (typeof body.workflowId !== 'string' || !/^[a-zA-Z0-9_-]{1,256}$/.test(body.workflowId)
-      || !snapshot || typeof body.origin !== 'string' || !/^https?:\/\/[^/]+$/.test(body.origin)) throw new Error('Invalid terminal ticket request');
+      || !snapshot || !repos.ok || typeof body.origin !== 'string' || !/^https?:\/\/[^/]+$/.test(body.origin)) throw new Error('Invalid terminal ticket request');
     if (workflow && workflow !== body.workflowId) throw new Error('This terminal belongs to another session');
     const grant = await verifyGrant(body);
     if (workflow && workflow !== body.workflowId) throw new Error('This terminal belongs to another session');
+    const gitEnv = terminalGitEnv(repos.repos);
     workflow = body.workflowId;
     for (const [key, ticket] of tickets) if (ticket.expires <= Date.now()) tickets.delete(key);
     for (const [key, expiry] of issued) if (expiry <= Date.now()) issued.delete(key);
@@ -69,7 +99,7 @@ export function createRunnerTerminal(options: RunnerTerminalOptions) {
     const ticket = grant.nonce;
     if (issued.has(ticket)) throw new Error('Terminal grant has already been used');
     issued.set(ticket, grant.expires);
-    tickets.set(ticket, { snapshot, workflowId: body.workflowId, origin: body.origin, expires: grant.expires });
+    tickets.set(ticket, { snapshot, workflowId: body.workflowId, origin: body.origin, expires: grant.expires, gitEnv });
     return { type: 'terminal-ticket', ticket };
   }
 
@@ -129,18 +159,19 @@ export function createRunnerTerminal(options: RunnerTerminalOptions) {
           const cwd = await shellDirectory(root);
           if (closed) return;
           const home = path.join(os.tmpdir(), 'portal-terminal-home'); await fs.mkdir(home, { recursive: true, mode: 0o700 });
+          const env = { ...safeEnv(home), ...ticket.gitEnv };
           let pty = await loadPty();
           if (closed) return;
           const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
           processClosed = new Promise(resolve => { finishProcess = resolve; });
           if (pty) {
             try {
-              const p = pty.spawn(shell, process.platform === 'win32' ? ['-NoLogo', '-NoProfile'] : ['--noprofile', '--norc', '-i'], { cwd, env: safeEnv(home), name: 'xterm-256color', cols, rows });
+              const p = pty.spawn(shell, process.platform === 'win32' ? ['-NoLogo', '-NoProfile'] : ['--noprofile', '--norc', '-i'], { cwd, env, name: 'xterm-256color', cols, rows });
               proc = p; p.onData(data => output(Buffer.from(data))); p.onExit(({ exitCode }) => shellExit(exitCode));
             } catch { pty = null; }
           }
           if (!proc) {
-            const child = spawn(shell, process.platform === 'win32' ? ['-NoLogo', '-NoProfile', '-Command', '-'] : ['--noprofile', '--norc'], { cwd, env: safeEnv(home), stdio: 'pipe', windowsHide: true, detached: process.platform !== 'win32' });
+            const child = spawn(shell, process.platform === 'win32' ? ['-NoLogo', '-NoProfile', '-Command', '-'] : ['--noprofile', '--norc'], { cwd, env, stdio: 'pipe', windowsHide: true, detached: process.platform !== 'win32' });
             proc = { write: data => { child.stdin.write(data); }, resize: () => {}, kill: () => {
               if (process.platform !== 'win32' && child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ } }
               else child.kill('SIGKILL');

@@ -6,13 +6,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import WebSocket from 'ws';
-import { createRunnerTerminal } from '../server/agent/runner-terminal.ts';
+import { createRunnerTerminal, terminalGitEnv } from '../server/agent/runner-terminal.ts';
 import { signTerminalGrant, verifyTerminalGrant, terminalPublicKey } from '../server/agent/runner-terminal-auth.ts';
 
 const payload = { workflowId: 'workflow-fixture', origin: 'https://portal.example', snapshot: { putUrl: 'https://fixture.s3.amazonaws.com/workspace' } };
 const secret = randomBytes(32).toString('hex');
-const signed = () => ({ ...payload, grant: signTerminalGrant(secret, { ...payload, actor: 'fixture-user', engine: 'codex' }) });
+const repo = (name: string, token: string) => ({ name, url: `https://github.com/team/${name}.git`, env: {
+  GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '',
+  GIT_CONFIG_KEY_1: 'http.https://github.com/.extraHeader', GIT_CONFIG_VALUE_1: `Authorization: Basic ${token}`,
+} });
+const signed = (repos?: ReturnType<typeof repo>[]) => ({ ...payload, ...(repos ? { repos } : {}), grant: signTerminalGrant(secret, { ...payload, repos, actor: 'fixture-user', engine: 'codex' }) });
 const verifyGrant = async (body: Record<string, unknown>) => verifyTerminalGrant(body, terminalPublicKey(secret), 'codex');
 async function until(check: () => boolean, ms = 10_000) {
   const end = Date.now() + ms;
@@ -37,6 +42,7 @@ it('binds one-use terminal tickets, tolerates proxy origins, and carries input, 
     spawn: (_file, _args, options) => {
       spawned++; assert.equal(options.cols, 120); assert.equal(options.env.AWS_SECRET_ACCESS_KEY, undefined);
       assert.equal(options.env.PORTAL_SECRET_KEY, undefined);
+      assert.equal(options.env.GIT_CONFIG_VALUE_2, 'Authorization: Basic shell-fixture');
       return { write: s => data('output:' + s), resize: (cols, rows) => sizes.push([cols, rows]),
         kill: () => exit({ exitCode: 0 }), onData: cb => { data = cb; }, onExit: cb => { exit = cb; } };
     },
@@ -44,7 +50,7 @@ it('binds one-use terminal tickets, tolerates proxy origins, and carries input, 
   const server = http.createServer(); terminal.attach(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const url = `ws://127.0.0.1:${(server.address() as { port: number }).port}/ws`;
   try {
-    const authorization = signed();
+    const authorization = signed([repo('first', 'shell-fixture')]);
     const issued = await terminal.issue(authorization);
     await assert.rejects(terminal.issue(authorization), /already been used/);
     const bad = await client(url, 'not-a-terminal-ticket', 'https://other.example');
@@ -99,9 +105,28 @@ it('requires a portal signature and binds the grant to engine, workspace, origin
   assert.throws(() => verifyTerminalGrant(body, key, 'kiro'), /mismatched/);
   assert.throws(() => verifyTerminalGrant({ ...body, origin: 'https://other.example' }, key, 'codex'), /mismatched/);
   assert.throws(() => verifyTerminalGrant({ ...body, snapshot: { putUrl: 'https://other.s3.amazonaws.com/object' } }, key, 'codex'), /mismatched/);
+  const repos = [repo('first', 'fixture-secret')];
+  const withGit = { ...payload, repos, grant: signTerminalGrant(secret, { ...payload, repos, actor: 'fixture-user', engine: 'codex' }) };
+  assert.doesNotThrow(() => verifyTerminalGrant(withGit, key, 'codex'));
+  assert.equal(Buffer.from(withGit.grant.split('.')[0], 'base64url').toString().includes('fixture-secret'), false);
+  assert.throws(() => verifyTerminalGrant({ ...withGit, repos: [repo('first', 'changed-secret')] }, key, 'codex'), /mismatched/);
+  assert.throws(() => verifyTerminalGrant({ ...body, repos }, key, 'codex'), /mismatched/);
   const realNow = Date.now;
   try { Date.now = () => realNow() + 61_000; assert.throws(() => verifyTerminalGrant(body, key, 'codex'), /Expired/); }
   finally { Date.now = realNow; }
   const terminal = createRunnerTerminal({ engine: 'codex', prepare: async () => { throw new Error('Must not start'); }, save: async () => {} });
   await assert.rejects(terminal.issue(payload), /Signed terminal grant required/);
+});
+
+it('authenticates each attached repository separately without writing credentials to Git config', async () => {
+  const env = terminalGitEnv([repo('first', 'first-secret'), repo('second', 'second-secret')]);
+  const config = (url: string) => spawnSync('git', ['config', '--get-urlmatch', 'http.extraHeader', url], {
+    encoding: 'utf8', env: { ...process.env, ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull }, windowsHide: true,
+  }).stdout.trim();
+  assert.equal(config('https://github.com/team/first.git'), 'Authorization: Basic first-secret');
+  assert.equal(config('https://github.com/team/first'), 'Authorization: Basic first-secret');
+  assert.equal(config('https://github.com/team/second.git'), 'Authorization: Basic second-secret');
+  for (const url of ['https://github.com/team/unattached.git', 'https://other.example/team/first.git', 'http://github.com/team/first.git', 'https://github.com/team/first-extra.git']) assert.equal(config(url), '');
+  assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+  assert.throws(() => terminalGitEnv([{ ...repo('first', 'fixture'), url: 'https://user:password@github.com/team/first.git' }]), /Invalid/);
 });

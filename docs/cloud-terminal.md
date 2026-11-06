@@ -23,6 +23,15 @@ one repository is attached. Repository changes are saved when the terminal close
 serialized with agent snapshots. The shell has a separate home directory and a filtered environment.
 PTY support includes input, resizing, Ctrl+C, and interactive programs; a pipe fallback is available.
 
+Git fetch, pull, and push reuse the connections of repositories attached to the session. Each
+terminal opening resolves fresh connection credentials on the portal and sends them directly to
+the runner in the signed request. The browser receives only the one-use connection nonce. Git
+authorization headers are narrowed to each attached repository URL (including its `.git` variant),
+so different repositories on one host can use different connections. Credentials stay in the shell
+environment and are not written to Git config or workspace snapshots. Reconnect the terminal after
+updating a connection or when a short-lived credential expires. The connection's existing repository
+permissions determine whether pushes are allowed.
+
 An inactive terminal closes after ten minutes; a connection lasts at most one hour. Protocol
 heartbeats do not count as user activity. Reconnect opens a new authorized connection. The UI stops
 automatic reconnect attempts after three failures and reports authentication/restoration errors.
