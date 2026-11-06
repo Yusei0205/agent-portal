@@ -43,23 +43,19 @@ import type { RunContext, AgentRun } from './types.ts';
 import { snapshotAccess } from './runner-snapshot-access.ts';
 import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
 import type { RepoChange } from '../session-pr.ts';
+import { RUNTIME_BEDROCK_MODELS, runApiError, explainModelError } from './runtime-models.ts';
 
 /**
- * Bedrock IDs of the models the runtime's role may call, by family and version. They must match the
- * role's list in infra/lib/harness-stack.ts (a test checks it); runs call them through their global profile.
+ * Bedrock IDs of the models the runtime's role may call (runtime-models.ts). They must match the role's list in
+ * infra/lib/harness-stack.ts (a test checks it); runs call them through their global profile.
  */
-export const RUNTIME_BEDROCK_MODELS: Readonly<Record<string, string>> = {
-  'haiku-4-5': 'anthropic.claude-haiku-4-5-20251001-v1:0',
-  'sonnet-4-5': 'anthropic.claude-sonnet-4-5-20250929-v1:0',
-  'opus-4-5': 'anthropic.claude-opus-4-5-20251101-v1:0',
-  'haiku-5-5': 'anthropic.claude-haiku-5-5',
-  'sonnet-5-5': 'anthropic.claude-sonnet-5-5',
-  'opus-5-5': 'anthropic.claude-opus-5-5',
-};
+export { RUNTIME_BEDROCK_MODELS };
 
 /**
  * Bedrock model ID for the runner.
- * - An inference profile (global., us., apac., …) as given.
+ * - A regional profile (us., apac., …) of a model the runtime's role may call: that model's global profile, which
+ *   is the one the role allows (the portal's model lists used to offer the regional ones).
+ * - Any other inference profile (global., or a model outside the role's list) as given.
  * - A bare model ID (anthropic.…) through its global profile: the runtime's role may call the global
  *   profiles, and newer Claude models cannot be called on demand by their bare model ID.
  * - A Claude name (claude-sonnet-5-5, claude-opus-4-5-20251101): that version's global profile, when the
@@ -68,6 +64,8 @@ export const RUNTIME_BEDROCK_MODELS: Readonly<Record<string, string>> = {
 export function bedrockModelFor(model: string | null | undefined): string | undefined {
   const m = (model ?? '').trim();
   if (!m) return undefined;
+  const regional = /^(?:us|eu|apac|au|jp|in)\.(anthropic\..+)$/.exec(m);
+  if (regional && Object.values(RUNTIME_BEDROCK_MODELS).includes(regional[1])) return `global.${regional[1]}`;
   if (/^(us|eu|apac|au|jp|in|global)\.anthropic\./.test(m)) return m;
   if (/^anthropic\./.test(m)) return `global.${m}`;
   const lower = m.toLowerCase();
@@ -103,6 +101,8 @@ interface RunnerResult {
   sessionId?: string | null;
   model?: string;
   metrics?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+  /** The error text when the turn ended on an API error (e.g. a model the account may not use), not a reply. */
+  apiError?: string;
 }
 
 /**
@@ -363,6 +363,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
   }
 
   const cost = await recordSpend(r);
+
+  // A turn that ended on an API error (Bedrock refused the model, say) is not an answer: fail the run and say why,
+  // instead of completing it with Claude Code's "API Error: 403 …" text as the reply.
+  const apiError = runApiError(r, textParts.join('\n'));
+  if (apiError) throw new HttpError(502, explainModelError(apiError, r.model ?? model));
 
   const summary = textParts.join('\n').trim() || 'Run complete.';
   emit('run-complete', { result: summary, cost_usd: cost, ...(r.costEstimated ? { cost_estimated: true } : {}) });

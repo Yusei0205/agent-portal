@@ -148,11 +148,14 @@ export class AgentPortalHarnessStack extends cdk.Stack {
         resources: ['*'],
       }));
       if (bedrock) {
-        // Keep in step with RUNTIME_BEDROCK_MODELS in server/agent/claude-agentcore-bedrock.ts (a test checks it).
+        // Keep in step with RUNTIME_BEDROCK_MODELS in server/agent/runtime-models.ts (a test checks it). The portal
+        // offers only those of them this account may use (GetFoundationModelAvailability).
         const models = [
           'anthropic.claude-haiku-4-5-20251001-v1:0',
           'anthropic.claude-sonnet-4-5-20250929-v1:0',
           'anthropic.claude-opus-4-5-20251101-v1:0',
+          'anthropic.claude-sonnet-4-6',
+          'anthropic.claude-opus-4-6-v1',
           'anthropic.claude-haiku-5-5',
           'anthropic.claude-sonnet-5-5',
           'anthropic.claude-opus-5-5',

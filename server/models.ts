@@ -644,6 +644,20 @@ export async function getEngineModels(
     const s = getSettings();
     const mode = s.provider.mode;
 
+    // Cloud portal: without a sign-in of their own (and no portal Anthropic key), Claude sessions run on the
+    // AgentCore runtime with Bedrock (claude-code.ts), whatever the portal provider is set to. Offer the runtime's
+    // models that this AWS account may use; Bedrock lists newer models before an account may call them.
+    if (process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN && mode !== 'anthropic') {
+      const { runtimeClaudeModels } = await import('./agent/runtime-models.ts');
+      const { models } = await runtimeClaudeModels();
+      return toCache(engine, cacheId, {
+        models,
+        source: 'bedrock',
+        runsAs: { kind: 'portal', label: 'AgentCore runtime (Amazon Bedrock)' },
+        ...(models.length ? {} : { error: 'None of the runtime\'s Claude models is available to this AWS account on Amazon Bedrock.' }),
+      });
+    }
+
     if (mode === 'anthropic') {
       const r = await listModelsForProvider('anthropic', getDb(), refresh);
       const models = r.groups.flatMap((g) => g.models);

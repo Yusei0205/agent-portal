@@ -647,6 +647,7 @@
         "server/agent/kiro-agentcore.ts",
         "server/agent/agentcore-bridge.ts",
         "server/agent/claude-agentcore.ts",
+        "server/agent/runtime-models.ts",
         "server/agent/agent-defs.ts",
         "server/agent/run-agents.ts",
         "server/agent/kiro-config-files.ts",
@@ -668,7 +669,8 @@
         "test/agentcore-login-repo.test.ts",
         "test/agent-defs.test.ts",
         "test/agent-pack.test.ts",
-        "test/agentcore-multi-agent.test.ts"
+        "test/agentcore-multi-agent.test.ts",
+        "test/runtime-models.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
