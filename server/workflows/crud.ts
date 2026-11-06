@@ -66,6 +66,7 @@ function workflowView(w: Row | WorkflowRecord) {
     project_id: w.project_id,
     title: (w.title as string | undefined) ?? '',
     goal: w.goal,
+    initial_goal: w.initial_goal ?? w.goal,
     status: w.status,
     stop_reason: (w.stop_reason as string | undefined) ?? '',
     engine: w.engine,
@@ -988,7 +989,8 @@ export function registerWorkflowRoutes(): void {
       patch.title = title;
     }
     if (hasGoal) {
-      patch.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS }).trim();
+      patch.goal = str(body.goal as string, 'goal', { max: GOAL_MAX_CHARS, optional: true }).trim();
+      patch.initial_goal = w.initial_goal ?? w.goal;
     }
     if (hasTrustTools) {
       // A session runs with its creator's identity, budget and vault, so only the creator can take the human check away
@@ -1036,6 +1038,14 @@ export function registerWorkflowRoutes(): void {
     patch.updated_at = ts;
 
     await repo.updateWorkflow(w.id, patch);
+
+    if (hasGoal && patch.goal !== w.goal) {
+      // Keep an explicit instruction in the pending transcript as well: a resumed
+      // session otherwise uses its pending messages instead of workflow.goal.
+      const body = patch.goal ? `Session goal updated:\n${patch.goal}` : 'Session goal cleared. Follow the current request without the previous overarching goal.';
+      await repo.appendWorkflowEvent({ workflow_id: w.id, kind: 'human', body, data: JSON.stringify({ by: req.user!.id, setting: 'goal' }), created_at: ts });
+      if (w.project_id) emit(w.project_id, { type: 'workflow.message', workflowId: w.id, body, by: req.user!.id });
+    }
 
     if (title !== undefined) {
       appendAudit(

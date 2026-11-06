@@ -41,6 +41,7 @@ function toWorkflow(row: Row): WorkflowRecord {
     project_id: row.project_id != null ? String(row.project_id) : null,
     title: String(row.title ?? ''),
     goal: String(row.goal ?? ''),
+    initial_goal: String(row.initial_goal ?? row.goal ?? ''),
     status: String(row.status ?? ''),
     stop_reason: String(row.stop_reason ?? ''),
     engine: String(row.engine ?? ''),
@@ -247,6 +248,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
       project_id: input.project_id,
       title: input.title ?? '',
       goal: input.goal,
+      initial_goal: input.goal,
       status: input.status,
       stop_reason: input.stop_reason ?? '',
       engine: input.engine,
@@ -286,7 +288,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     _opts?: { hintParentId?: string | null },
   ): Promise<boolean> {
     const allowed: (keyof WorkflowRecord)[] = [
-      'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
+      'title', 'goal', 'initial_goal', 'status', 'stop_reason', 'engine', 'trust_tools',
       'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
@@ -310,7 +312,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
 
   async updateWorkflow(id: string, patch: Partial<WorkflowRecord>): Promise<void> {
     const allowed: (keyof WorkflowRecord)[] = [
-      'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
+      'title', 'goal', 'initial_goal', 'status', 'stop_reason', 'engine', 'trust_tools',
       'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',

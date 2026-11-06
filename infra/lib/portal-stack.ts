@@ -28,6 +28,7 @@ import * as appsync from 'aws-cdk-lib/aws-appsync';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { Construct } from 'constructs';
 import tablesJson from '../tables.json';
 
@@ -311,6 +312,36 @@ export class AgentPortalCloudStack extends cdk.Stack {
       },
     });
     tables.forEach((t) => t.grantReadWriteData(fn));
+    // Durable visual workflow coordination. Agent turns remain on the existing runner path;
+    // each tick only dispatches/polls a turn and persists one transition.
+    const workflowBridge = new lambda.Function(this, 'AutomationBridge', {
+      runtime: lambda.Runtime.NODEJS_22_X, handler: 'index.handler', timeout: cdk.Duration.seconds(60),
+      code: lambda.Code.fromInline(fs.readFileSync(path.join(props.repoRoot, 'infra/lib/automation-bridge.js'), 'utf8')),
+      environment: { PORTAL_FUNCTION_NAME, SECRET_ARN: originSecret.secretArn },
+    });
+    originSecret.grantRead(workflowBridge);
+    workflowBridge.addToRolePolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [`arn:aws:lambda:${this.region}:${this.account}:function:${PORTAL_FUNCTION_NAME}`] }));
+    const orchestrationRole = new iam.Role(this, 'AutomationRole', { assumedBy: new iam.ServicePrincipal('states.amazonaws.com') });
+    workflowBridge.grantInvoke(orchestrationRole);
+    const automationMachine = new sfn.StateMachine(this, 'AutomationStateMachine', {
+      stateMachineName: 'agent-portal-workflows', stateMachineType: sfn.StateMachineType.STANDARD,
+      role: orchestrationRole,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify({
+        StartAt: 'Tick', TimeoutSeconds: 90_000,
+        States: {
+          Tick: { Type: 'Task', Resource: workflowBridge.functionArn, TimeoutSeconds: 65,
+            Retry: [{ ErrorEquals: ['States.ALL'], IntervalSeconds: 5, BackoffRate: 2, MaxAttempts: 5 }],
+            Catch: [{ ErrorEquals: ['States.ALL'], ResultPath: '$.failure', Next: 'RecordFailure' }], Next: 'Finished' },
+          Finished: { Type: 'Choice', Choices: [{ Variable: '$.done', BooleanEquals: true, Next: 'Done' }], Default: 'Wait' },
+          Wait: { Type: 'Wait', Seconds: 15, Next: 'Tick' },
+          RecordFailure: { Type: 'Task', Resource: workflowBridge.functionArn, Parameters: { 'projectId.$': '$.projectId', 'runId.$': '$.runId', fail: true },
+            Retry: [{ ErrorEquals: ['States.ALL'], IntervalSeconds: 10, MaxAttempts: 3 }], End: true },
+          Done: { Type: 'Succeed' },
+        },
+      })),
+    });
+    fn.addEnvironment('PORTAL_AUTOMATION_STATE_MACHINE_ARN', automationMachine.stateMachineArn);
+    automationMachine.grantStartExecution(fn);
     if (props.codexOAuthSecretArn) fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [props.codexOAuthSecretArn] }));
     masterKey.grantRead(fn);
     googleSecret.grantRead(fn);

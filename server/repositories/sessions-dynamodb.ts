@@ -108,6 +108,7 @@ function itemToWorkflow(item: Record<string, AttributeValue>): WorkflowRecord {
     project_id: getString(item, 'project_id'),
     title: getString(item, 'title') ?? '',
     goal: getString(item, 'goal') ?? '',
+    initial_goal: getString(item, 'initial_goal') ?? getString(item, 'goal') ?? '',
     status: getString(item, 'status') ?? '',
     stop_reason: getString(item, 'stop_reason') ?? '',
     engine: getString(item, 'engine') ?? '',
@@ -540,6 +541,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         project_id: input.project_id,
         title: input.title ?? '',
         goal: input.goal,
+        initial_goal: input.goal,
         status: input.status,
         stop_reason: input.stop_reason ?? '',
         engine: input.engine,
@@ -637,7 +639,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     opts?: { hintParentId?: string | null },
   ): Promise<boolean> {
     const allowed: (keyof WorkflowRecord)[] = [
-      'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
+      'title', 'goal', 'initial_goal', 'status', 'stop_reason', 'engine', 'trust_tools',
       'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
@@ -694,7 +696,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
 
   async updateWorkflow(id: string, patch: Partial<WorkflowRecord>): Promise<void> {
     const allowed: (keyof WorkflowRecord)[] = [
-      'title', 'goal', 'status', 'stop_reason', 'engine', 'trust_tools',
+      'title', 'goal', 'initial_goal', 'status', 'stop_reason', 'engine', 'trust_tools',
       'lead_agent', 'workspace_id', 'output_files_enabled', 'repo_ids', 'integrations',
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',

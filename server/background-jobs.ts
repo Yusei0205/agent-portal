@@ -10,7 +10,7 @@
  *   await runInBackground('scan-run', { id })                    from a request handler
  */
 
-type Handler = (args: Record<string, unknown>) => Promise<void>;
+type Handler = (args: Record<string, unknown>) => Promise<unknown>;
 
 const handlers = new Map<string, Handler>();
 
@@ -23,10 +23,10 @@ export function hasBackgroundJob(name: unknown): name is string {
 }
 
 /** Run a registered job in this process and wait for it. */
-export async function runBackgroundJobNow(name: string, args: Record<string, unknown>): Promise<void> {
+export async function runBackgroundJobNow(name: string, args: Record<string, unknown>): Promise<unknown> {
   const h = handlers.get(name);
   if (!h) throw new Error(`Unknown background job: ${name}`);
-  await h(args);
+  return await h(args);
 }
 
 /** True when this process should hand background work to a separate Lambda invocation. */

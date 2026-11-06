@@ -10,6 +10,7 @@
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 
 // ── What a check command may not be ──────────────────────────────────────────
 
@@ -114,11 +115,16 @@ function checkEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function runOne(cmd: string, cwd: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> {
+function runOne(cmd: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
+  if (signal?.aborted) return Promise.resolve({ ok: false, output: '[check cancelled]' });
   return new Promise((resolve) => {
     let out = '';
     let done = false;
-    const child = spawn('bash', ['-c', cmd], { cwd, env: checkEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+    // Windows' system bash.exe may be a WSL launcher with no Linux distribution.
+    // Prefer Git Bash when it is installed with the Git used by the portal.
+    const gitBash = path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', 'bash.exe');
+    const bash = process.platform === 'win32' && existsSync(gitBash) ? gitBash : 'bash';
+    const child = spawn(bash, ['-c', cmd], { cwd, env: checkEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     const add = (d: Buffer): void => { out = (out + d.toString('utf8')).slice(-OUTPUT_TAIL * 4); };
     child.stdout.on('data', add);
     child.stderr.on('data', add);
@@ -126,12 +132,19 @@ function runOne(cmd: string, cwd: string, timeoutMs: number): Promise<{ ok: bool
       if (done) return;
       done = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       resolve({ ok, output: (out + extra).slice(-OUTPUT_TAIL) });
     };
     const timer = setTimeout(() => {
       try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch { /* gone */ }
       finish(false, `\n[stopped after ${Math.round(timeoutMs / 1000)} s]`);
     }, timeoutMs);
+    const abort = (): void => {
+      try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch { /* gone */ }
+      finish(false, '\n[check cancelled]');
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
     child.on('error', (e) => finish(false, `\n[could not start: ${e.message}]`));
     child.on('close', (code) => finish(code === 0));
   });
@@ -141,14 +154,14 @@ function runOne(cmd: string, cwd: string, timeoutMs: number): Promise<{ ok: bool
  * Run the steps in order inside `workDir` (or `workDir/repos/<workRepo>`). A failing required step stops the rest.
  * The steps are checked again here, because what runs must never be more than what the portal allows.
  */
-export async function runCheckSteps(steps: CheckStep[], workDir: string): Promise<CheckResult> {
+export async function runCheckSteps(steps: CheckStep[], workDir: string, signal?: AbortSignal): Promise<CheckResult> {
   const results: CheckStepResult[] = [];
   let ok = true;
   const ranAt = new Date().toISOString();
   for (const s of validateCheckSteps(steps)) {
     const cwd = s.workRepo ? path.join(workDir, 'repos', s.workRepo) : workDir;
     const started = Date.now();
-    const r = await runOne(s.cmd, cwd, (s.timeout ?? 300) * 1000);
+    const r = await runOne(s.cmd, cwd, (s.timeout ?? 300) * 1000, signal);
     const required = s.required !== false;
     results.push({ step: s.step, ok: r.ok, output: r.output, durationMs: Date.now() - started, required });
     if (!r.ok && required) { ok = false; break; }

@@ -53,6 +53,7 @@ import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
 import { buildRunnerMcpServers, parseSessionIntegrations } from './runner-integrations.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
+import { runCheckSteps } from './runner-checks.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
 
@@ -389,6 +390,16 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
   // Register abort controller
   const ctrl = registerRun(runId);
+  // Visual automations can be cancelled by a different Lambda invocation.
+  let checkingAutomationStop = false;
+  const automationStopTimer = workflow.kind === 'automation' ? setInterval(() => {
+    if (checkingAutomationStop || ctrl.signal.aborted) return;
+    checkingAutomationStop = true;
+    void repo.getWorkflowById(workflowId).then((current) => {
+      if (!current || current.stop_reason === 'automation_stopped') ctrl.abort();
+    }).catch(() => { /* retry the durable flag on the next poll */ }).finally(() => { checkingAutomationStop = false; });
+  }, 2000) : null;
+  automationStopTimer?.unref();
   // Set when a limit (not a person) aborts the run; read on both the success and abort paths.
   let _stopReason: string | null = null;
 
@@ -528,6 +539,11 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         // Unknown engine: fail with a clear error (requirement D-12 — no silent fallback)
         throw new Error(`Unknown engine "${agentRun.engine}". Set the workflow engine to claude-code, kiro, codex, or demo.`);
       }
+      if (!runsOnAgentCore && agentRun.runnerChecks?.length) {
+        const check = await runCheckSteps(agentRun.runnerChecks, workDir, ctrl.signal);
+        runContext.emit('check-result', check);
+        if (ctrl.signal.aborted) throw new DOMException('Run cancelled', 'AbortError');
+      }
     } finally {
       if (timeLimitTimer) clearTimeout(timeLimitTimer);
     }
@@ -658,6 +674,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     }
   } finally {
     // Clean up pending approvals
+    if (automationStopTimer) clearInterval(automationStopTimer);
     const runApprovals = pendingApprovals.get(runId);
     if (runApprovals) {
       for (const p of runApprovals.values()) {

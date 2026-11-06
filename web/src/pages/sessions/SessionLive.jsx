@@ -1006,7 +1006,8 @@ export function SessionLive({
   );
   const displayEarlierEventsAll = mergeConsecutiveAssistantText(pairedEarlierEvents, workflow?.engine);
 
-  const goalText = typeof workflow?.goal === 'string' ? workflow.goal.trim() : '';
+  const openingGoal = workflow?.initial_goal ?? workflow?.goal;
+  const goalText = typeof openingGoal === 'string' ? openingGoal.trim() : '';
   // Show the goal bubble only once we know there is no earlier history (i.e.
   // the oldest page has been loaded).  This prevents the bubble from
   // disappearing or flickering when a session has more than one page of events.

@@ -1,6 +1,24 @@
 {
   "version": "1",
   "modules": {
+    "automations": {
+      "description": "Versioned visual workflows and durable orchestration",
+      "sources": [
+        "server/automations/**",
+        "server/repositories/automations.ts",
+        "server/repositories/automations-dynamodb.ts",
+        "web/src/pages/Automations.jsx",
+        "web/src/styles/automations.css",
+        "infra/lib/automation-bridge.js"
+      ],
+      "tests": [
+        "test/automations.test.ts",
+        "test/automations-repo.test.ts",
+        "test/web-automations.test.ts",
+        "test/automation-bridge.test.ts"
+      ],
+      "smokeIds": []
+    },
     "ci-runner": {
       "description": "Bounded, deduplicated backend test execution",
       "sources": ["scripts/test-affected.mjs", "scripts/test-pool.mjs", ".github/workflows/ci.yml"],

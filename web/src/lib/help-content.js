@@ -26,6 +26,26 @@ export const HELP_GROUPS = [
 ];
 
 export const HELP_TOPICS = [
+  {
+    id: 'automations', group: 'work', title: 'Visual workflows', icon: 'projects',
+    page: { tab: 'automations', project: true },
+    summary: 'Build repeatable agent workflows with verification checks, branches, retry limits, human approvals and published versions.',
+    sections: [
+      { heading: 'Build and publish', steps: true, items: [
+        'Choose a project and open **Workflows**. Create an SDLC workflow, select your engine and connected repositories, and edit each task’s agent, model and instructions.',
+        'Configure the **Run tests** verification command and its repository working directory. Conditions follow **Yes** when the previous agent turn and its required checks pass; failures follow **No**.',
+        'Drag steps to arrange them and connect the handles. Each task needs one Next path; conditions need Yes and No paths. Visit, step and time limits bound retries.',
+        'Save the draft, then **Publish version**. Runs keep their published version even when you edit the draft. Version history can copy an older version into the draft.',
+      ] },
+      { heading: 'Run and review', items: [
+        'Enter a run request and choose **Run published workflow**. Tasks share one working copy and conversation. The workflow uses the starting user’s default agent sign-in and portal tool permissions.',
+        'Use `{{input}}` in instructions for the run request, or `{{steps.design.output}}` for a completed step’s summary. Use files in the shared working copy for larger artifacts.',
+        'The execution graph and timeline show the pinned version. Open the linked session for full live logs, tool approvals, files, terminal and PR links.',
+        'A human approval stage waits for the run owner or a portal admin. The SDLC template asks for review before PR creation against `main_v3`; it never merges or deploys.',
+        'Cloud runs continue when the page closes through durable orchestration. Each agent task has a 12 minute cap. Cancel stops further stages and requests cancellation of the active task.',
+      ] },
+    ],
+  },
   // ── Getting started ─────────────────────────────────────────────────────────
   {
     id: 'getting-started',
@@ -76,7 +96,7 @@ export const HELP_TOPICS = [
         heading: 'Rail sections',
         rows: [
           ['Dashboard', 'Portal-wide overview.'],
-          ['Work', 'Sessions, Workspaces, Reviews, Tests, Tickets (needs a project).'],
+          ['Work', 'Sessions, Workflows, Workspaces, Reviews, Tests, Tickets (needs a project).'],
           ['Knowledge', 'Knowledge, Create, Vault (needs a project).'],
           ['Connect', 'Connections: Git hosts, agent sign-ins, tools & services.'],
           ['Agents', 'Agent setup: your `.kiro`, `.claude` and `.aws` folders.'],
@@ -135,7 +155,7 @@ export const HELP_TOPICS = [
       {
         heading: 'Start a session (Alt+N)',
         rows: [
-          ['Goal', 'What you want done. Required.'],
+          ['Goal', 'Optional. Start with a goal or send your first message later. Settings can update or clear the goal for the next turn without changing the opening prompt.'],
           ['Engine', '**Demo** (simulated, free), **Claude Code** or **Kiro**. An engine without a sign-in shows **Not set up yet**.'],
           ['Workspace', 'A named workspace, or **Playground** to run without a Git checkout.'],
           ['Lead agent / Model', 'An agent from **Agent setup** and a model from your sign-in, or the engine defaults. **Runs as** shows which sign-in pays for it.'],

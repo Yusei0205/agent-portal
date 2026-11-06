@@ -46,6 +46,7 @@ const NAV_SECTIONS = [
     projectScoped: true,
     items: [
       { tab: 'sessions',   label: 'Sessions',   icon: 'terminal'  },
+      { tab: 'automations', label: 'Workflows', icon: 'projects' },
       // repositories are a tab of Workspaces; project setup (team, permissions) is reached from there
       { tab: 'workspaces', label: 'Workspaces', icon: 'projects', activeFor: ['setup'] },
       // defaults to /p/:pid/reviews/code; also highlights for the legacy 'review' and 'branchscans' tabs

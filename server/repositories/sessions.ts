@@ -42,6 +42,8 @@ export interface WorkflowRecord {
   project_id: string | null;
   title: string;
   goal: string;
+  /** Original opening prompt, kept when the editable session goal changes. */
+  initial_goal?: string;
   status: string;
   stop_reason: string;
   engine: string;
