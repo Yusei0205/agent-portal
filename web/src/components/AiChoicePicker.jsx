@@ -29,6 +29,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
           const entry = (cs.summary || []).find((e) => e.engine === engine);
           for (const c of entry?.credentials || []) list.push({ ...c, engine });
         }
+        if ((cs.summary || []).some(e => e.engine === 'codex' && e.configured)) list.push({ id: 'codex-account', name: 'My ChatGPT account', engine: 'codex' });
         setCreds(list);
         const def = list.find((c) => c.engine === 'claude-code' && c.isDefault) || list[0];
         if (def) setCredentialId(def.id);
@@ -44,8 +45,8 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
     setModelsLoading(true);
     setModelError(null);
     try {
-      const qs = credentialId ? `?credentialId=${encodeURIComponent(credentialId)}` : '';
-      const data = await api.get(`/api/engines/${isKiro ? 'kiro' : 'claude-code'}/models${qs}`);
+      const qs = credentialId && chosen.engine !== 'codex' ? `?credentialId=${encodeURIComponent(credentialId)}` : '';
+      const data = await api.get(`/api/engines/${chosen.engine}/models${qs}`);
       setModels(data.models || []);
       if (data.error) setModelError(data.error);
     } catch (e) {
@@ -81,7 +82,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
             disabled={disabled}
           >
             {creds.map((c) => (
-              <option key={c.id} value={c.id}>{c.name} ({c.engine === 'kiro' ? 'Kiro' : 'Claude'}){c.isDefault ? ' (default)' : ''}</option>
+              <option key={c.id} value={c.id}>{c.name} ({c.engine === 'kiro' ? 'Kiro' : c.engine === 'codex' ? 'Codex' : 'Claude'}){c.isDefault ? ' (default)' : ''}</option>
             ))}
           </select>
         )}
@@ -97,7 +98,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
             onChange={(e) => setModel(e.target.value)}
             disabled={disabled}
           >
-            <option value="">{isKiro ? 'Kiro default' : 'Portal default'}</option>
+            <option value="">{isKiro ? 'Kiro default' : chosen?.engine === 'codex' ? 'Codex default' : 'Portal default'}</option>
             {models.map((m) => (
               <option key={m.id} value={m.id}>{m.label || m.id}</option>
             ))}

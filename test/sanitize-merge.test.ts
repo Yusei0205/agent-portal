@@ -66,6 +66,15 @@ describe('mergeConsecutiveAssistantText — basic merging', () => {
   it('returns an empty array unchanged', () => {
     assert.deepEqual(mergeConsecutiveAssistantText([]), []);
   });
+  it('joins legacy Codex token chunks exactly while preserving real paragraph breaks', () => {
+    const chunks = ['Why', ' do', ' program', 'mers', ' prefer', ' dark', ' mode', '?', '\n\n', 'Because', ' light', ' attracts', ' bugs', '.'];
+    const events = chunks.map(text => makeTextEvent(text));
+    assert.equal(mergeConsecutiveAssistantText(events, 'codex')[0].payload.text,
+      'Why do programmers prefer dark mode?\n\nBecause light attracts bugs.');
+    assert.equal(mergeConsecutiveAssistantText(events, 'kiro')[0].payload.text.includes('Why\n do'), true);
+    const full = [makeTextEvent('First message'), makeTextEvent('Second message')].map(e => ({ ...e, payload: { ...e.payload, stream: false } }));
+    assert.equal(mergeConsecutiveAssistantText(full, 'codex')[0].payload.text, 'First message\nSecond message');
+  });
 
   it('returns a single event unchanged', () => {
     const ev = makeTextEvent('hello\n');

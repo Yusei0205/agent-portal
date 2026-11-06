@@ -18,12 +18,14 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
+import { CodexCredentials } from '../../components/CodexCredentials.jsx';
 import { DeviceCodeBox } from '../../components/DeviceCodeBox.jsx';
 import { AwsRegionSelect } from '../../components/AwsRegionSelect.jsx';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const PROVIDERS = [
+  { id: 'codex', label: 'OpenAI Codex', icon: 'terminal', description: 'Use your ChatGPT sign-in for AI generation and Codex sessions.' },
   {
     id: 'demo',
     label: 'Demo',
@@ -867,6 +869,7 @@ export default function Providers({ settings, isAdmin, onSaved }) {
             )}
 
             {/* ── Kiro CLI ─────────────────────────────────────────────── */}
+            {mode === 'codex' && <div><CodexCredentials isAdmin={isAdmin} /><p className="field-hint">Each user connects their own ChatGPT account. The portal never shares the administrator's sign-in. Test connection checks sign-in and the model catalog; a run verifies inference access.</p></div>}
             {mode === 'kiro' && (
               <KiroCliSection
                 uid={uid}

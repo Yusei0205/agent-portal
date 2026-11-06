@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   parseSnapshot, restoreWorkspace, saveWorkspaceInBackground, settleSnapshot, cancelSnapshot, snapshotBusy,
-  flushWorkspace, moveSnapshotMarks,
+  flushWorkspace, flushWorkspaceStrict, moveSnapshotMarks,
 } from '../server/agent/runner-snapshot.ts';
 
 const haveTools = ['tar', 'gzip', 'find'].every((c) => spawnSync(c, ['--version'], { stdio: 'ignore' }).status === 0);
@@ -30,6 +30,21 @@ describe('parseSnapshot', () => {
 });
 
 describe('workspace snapshots', { skip: !haveTools && 'tar, gzip and find are needed' }, () => {
+  it('rejects a failed upload when durable completion is required', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-strict-snapshot-'));
+    fs.mkdirSync(path.join(root, 'repos', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'repos', 'example', 'changed.txt'), 'unsaved');
+    const server = http.createServer((req, res) => { req.resume(); req.on('end', () => { res.writeHead(503); res.end(); }); });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const putUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/snapshot`;
+    try {
+      await assert.rejects(flushWorkspaceStrict({ putUrl }, root), /persist the session workspace/);
+      assert.equal(fs.existsSync(path.join(root, '.snapshot-stamp')), false);
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      if (path.dirname(root) === path.resolve(os.tmpdir()) && path.basename(root).startsWith('codex-strict-snapshot-')) fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it('saves a changed workspace, skips an unchanged one, and restores it on an empty machine', async () => {
     let stored: Buffer | null = null;
     let puts = 0;

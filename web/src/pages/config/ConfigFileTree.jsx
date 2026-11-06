@@ -19,6 +19,12 @@ import { agentPackFiles, packUpdatePlan, packFileLabel, PACK_AGENTS, PACK_SKILLS
 
 // ── Starter file definitions ───────────────────────────────────────────────────
 
+const CODEX_STARTER = [
+  { path: 'AGENTS.md', content: '# Codex instructions\n\nDescribe your team conventions and project guidance here.\n' },
+  { path: 'config.toml', content: '# Reasoning and response preferences\nmodel_reasoning_effort = "medium"\n' },
+  { path: 'agents/example-agent.toml', content: 'name = "example-agent"\ndescription = "A focused assistant for your project."\ndeveloper_instructions = "Read the project instructions and complete the assigned task within the workspace."\n' },
+  { path: 'skills/example/SKILL.md', content: '---\nname: example\ndescription: A reusable workflow for your project tasks.\n---\n\nWrite the workflow instructions here.\n' },
+];
 const KIRO_STARTER = [
   {
     path: 'agents/example-agent.json',
@@ -283,7 +289,7 @@ export function ConfigFileTree({
   // ── Starter structure ──────────────────────────────────────────────────────
 
   const handleAddStarter = async () => {
-    const starterFiles = folder === 'kiro' ? KIRO_STARTER : folder === 'claude' ? CLAUDE_STARTER : null;
+    const starterFiles = folder === 'kiro' ? KIRO_STARTER : folder === 'claude' ? CLAUDE_STARTER : folder === 'codex' ? CODEX_STARTER : null;
     if (!starterFiles) return;
 
     setAddingStarter(true);
@@ -317,11 +323,13 @@ export function ConfigFileTree({
     setAddingPack(true);
     let plan;
     try {
-      // Which pack files the folder has: list the two folders the pack writes to, then read only those files.
+      // Which pack files the folder has: list the folders the pack writes to, then read only those files.
       // Paths are built from the entry names: the server's own paths use the host's separator (\ on Windows).
+      // The Codex pack also writes files at the top (config.toml, AGENTS.md), so the top is listed for it.
       const list = async (dir) => ((await api.get(`/api/user-config/${folder}/tree?path=${dir}`)).entries ?? [])
-        .map((e) => `${dir}/${e.name}`);
-      const present = new Set([...await list('agents'), ...await list('skills')]);
+        .map((e) => (dir ? `${dir}/${e.name}` : e.name));
+      const atTop = files.some(({ path }) => !path.includes('/'));
+      const present = new Set([...await list('agents'), ...await list('skills'), ...(atTop ? await list('') : [])]);
       const there = files.filter(({ path }) => present.has(path) || present.has(path.split('/').slice(0, 2).join('/')));
       const existing = {};
       await Promise.all(there.map(async ({ path }) => {
@@ -360,7 +368,11 @@ export function ConfigFileTree({
             + 'Any edits you made to those files are lost.'
           : '')
         + ` Your other files in .${folder} are not touched.`;
-    const ok = await requestConfirm(message, fresh ? 'Add agent pack' : 'Update agent pack', plan.change.length ? 'danger' : 'primary');
+    // Codex's config.toml and AGENTS.md: yours are kept as they are; the pack only adds them when missing.
+    const keptNote = plan.kept.length
+      ? ` Your own ${names(plan.kept)} ${plan.kept.length === 1 ? 'is' : 'are'} kept as ${plan.kept.length === 1 ? 'it is' : 'they are'}.`
+      : '';
+    const ok = await requestConfirm(message + keptNote, fresh ? 'Add agent pack' : 'Update agent pack', plan.change.length ? 'danger' : 'primary');
     if (!ok) return;
 
     setAddingPack(true);
@@ -387,7 +399,7 @@ export function ConfigFileTree({
     }
     await loadRoot();
     onTreeChange();
-    if (fresh && added) onSelectFile(folder === 'kiro' ? 'agents/lead-orchestrator.json' : 'agents/lead-orchestrator.md');
+    if (fresh && added) onSelectFile(folder === 'kiro' ? 'agents/lead-orchestrator.json' : folder === 'codex' ? 'agents/lead-orchestrator.toml' : 'agents/lead-orchestrator.md');
     setAddingPack(false);
     say(
       fresh
@@ -566,7 +578,7 @@ export function ConfigFileTree({
     );
   }
 
-  const hasStarter = folder === 'kiro' || folder === 'claude';
+  const hasStarter = folder === 'kiro' || folder === 'claude' || folder === 'codex';
   const isEmpty = entries.length === 0;
 
   return (

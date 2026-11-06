@@ -28,6 +28,7 @@ const GOAL_MAX = 8000;
 // ── Engine definitions ─────────────────────────────────────────────────────────
 
 export const ENGINES = [
+  { id: 'codex', label: 'Codex', hint: 'OpenAI Codex with your ChatGPT sign-in', providerModes: [] },
   {
     id: 'demo',
     label: 'Demo',
@@ -281,6 +282,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
 
   // Credentials summary + settings (loaded once)
   const [credSummary, setCredSummary] = useState(null);
+  const [codexReady, setCodexReady] = useState(false);
   const [portalMode, setPortalMode] = useState('demo');
   const [initLoaded, setInitLoaded] = useState(false);
 
@@ -303,6 +305,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
         map[entry.engine] = entry.credentials || [];
       }
       setCredSummary(map);
+      setCodexReady((cs.summary || []).some(e => e.engine === 'codex' && e.configured));
       setPortalMode(s.provider?.mode || 'demo');
 
       // Auto-select first credential for the current engine
@@ -376,6 +379,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
 
   // Check if engine is available
   const isEngineAvailable = (eng) => {
+    if (eng === 'codex') return codexReady;
     if (eng === 'demo') return true;
     if (!initLoaded) return true; // optimistic until loaded
     const hasCreds = (credSummary?.[eng] || []).length > 0;

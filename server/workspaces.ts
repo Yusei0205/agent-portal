@@ -31,7 +31,7 @@ export interface Workspace {
 
 // ── Validation constants ───────────────────────────────────────────────────────
 
-const VALID_ENGINES = ['claude-code', 'kiro', 'demo'] as const;
+const VALID_ENGINES = ['claude-code', 'kiro', 'codex', 'demo'] as const;
 const MODEL_RE = /^[A-Za-z0-9._:/@-]{0,200}$/;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

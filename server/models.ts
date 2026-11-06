@@ -25,6 +25,7 @@ import { getDb } from './db.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { decrypt } from './secrets.ts';
 import { config } from './config.ts';
+import { openUserCodex, codexUsesCloud } from './codex-auth.ts';
 import { getSettings, listModelsForProvider, setBedrockListingMock } from './settings.ts';
 import type { BedrockListingMock } from './settings.ts';
 import { getSetting } from './settings.ts';
@@ -49,7 +50,7 @@ export interface EngineModelEntry {
   default?: true;
 }
 
-export type EngineModelSource = 'kiro-cli' | 'bedrock' | 'anthropic' | 'static' | 'none';
+export type EngineModelSource = 'codex' | 'kiro-cli' | 'bedrock' | 'anthropic' | 'static' | 'none';
 
 /**
  * Credential isolation status for identity_center credentials.
@@ -385,11 +386,36 @@ const SUBSCRIPTION_MODELS: EngineModelEntry[] = [
  * `userId` is the authenticated user's ID; `requestedCredentialId` may be null.
  */
 export async function getEngineModels(
-  engine: 'kiro' | 'claude-code',
+  engine: 'kiro' | 'claude-code' | 'codex',
   userId: string,
   requestedCredentialId: string | null,
   refresh: boolean,
 ): Promise<EngineModelsResponse> {
+  if (engine === 'codex') {
+    const runsAs = { kind: 'credential' as const, label: 'Your Codex ChatGPT sign-in' };
+    if (requestedCredentialId) return { models: [], source: 'none', runsAs, error: 'Codex uses your own Codex sign-in, not a Kiro or Claude credential.' };
+    let client: Awaited<ReturnType<typeof openUserCodex>> | undefined;
+    try {
+      if (codexUsesCloud()) {
+        const { listCodexModelsViaAgentCore } = await import('./agent/codex-agentcore.ts');
+        return { models: await listCodexModelsViaAgentCore(userId), source: 'codex', runsAs };
+      }
+      client = await openUserCodex(userId);
+      const account = await client.request('account/read', { refreshToken: false });
+      if (account.account?.type !== 'chatgpt') return { models: [], source: 'codex', runsAs, error: 'Sign in to Codex in Connect > Agent sign-ins.' };
+      const models: EngineModelEntry[] = [];
+      let cursor: string | null = null;
+      do {
+        const page = await client.request('model/list', { cursor, limit: 100 });
+        for (const m of page.data ?? []) models.push({ id: m.model, label: m.displayName ?? m.model, ...(m.isDefault ? { default: true as const } : {}) });
+        cursor = page.nextCursor ?? null;
+      } while (cursor);
+      return { models, source: 'codex', runsAs };
+    } catch {
+      return { models: [], source: 'codex', runsAs, error: 'Could not list Codex models. Check Codex installation and sign-in in Connect > Agent sign-ins.' };
+    } finally { client?.close(); }
+  }
+
   // ── 1. Resolve which credential to use ──────────────────────────────────
   let cred: CredentialRow | null = null;
   let runsAs: EngineModelsResponse['runsAs'];
@@ -754,8 +780,8 @@ async function listBedrockModelsForRole(
 export function registerEngineModelRoutes(): void {
   router.get('/api/engines/:engine/models', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const engine = req.params.engine;
-    if (engine !== 'kiro' && engine !== 'claude-code') {
-      sendJson(res, 400, { error: 'engine must be kiro or claude-code' });
+    if (engine !== 'kiro' && engine !== 'claude-code' && engine !== 'codex') {
+      sendJson(res, 400, { error: 'engine must be kiro, claude-code, or codex' });
       return;
     }
 
@@ -764,7 +790,7 @@ export function registerEngineModelRoutes(): void {
     const refresh = qs.get('refresh') === '1';
 
     const result = await getEngineModels(
-      engine as 'kiro' | 'claude-code',
+      engine as 'kiro' | 'claude-code' | 'codex',
       req.user!.id,
       credentialId,
       refresh,

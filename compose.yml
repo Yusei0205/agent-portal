@@ -12,6 +12,8 @@ services:
       - path: .env
         required: false
     environment:
+      # Always use the CLI packaged in the Linux image, even when the host .env has a Windows path.
+      PORTAL_CODEX_BIN: /usr/local/bin/codex
       # Default to 0; set TRUST_PROXY=1 in .env when running behind a reverse proxy.
       TRUST_PROXY: "${TRUST_PROXY:-0}"
       # When the browser profile is active, point the portal at the browser container.

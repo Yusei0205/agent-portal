@@ -444,7 +444,7 @@ export function registerWorkflowRoutes(): void {
     const projectDefaultModel = typeof project.default_model === 'string' && project.default_model
       ? project.default_model
       : null;
-    const model: string = requestModel ?? (wsEngineMatches ? wsDefaultModel : null) ?? projectDefaultModel ?? '';
+    const model: string = requestModel ?? (wsEngineMatches ? wsDefaultModel : null) ?? (engine === 'codex' ? null : projectDefaultModel) ?? '';
 
     // A loop session's rules and checks are validated before anything is created (a check may not be allowed).
     let loopState: string | null = null;
@@ -1250,8 +1250,8 @@ export function registerWorkflowRoutes(): void {
 
 // ── Validation helpers ─────────────────────────────────────────────────────────
 
-type Engine = 'claude-code' | 'kiro' | 'demo';
-const VALID_ENGINES: Engine[] = ['claude-code', 'kiro', 'demo'];
+type Engine = 'claude-code' | 'kiro' | 'codex' | 'demo';
+const VALID_ENGINES: Engine[] = ['claude-code', 'kiro', 'codex', 'demo'];
 
 function validateEngine(v: unknown): Engine {
   if (!v) return 'demo'; // default to demo in greenfield

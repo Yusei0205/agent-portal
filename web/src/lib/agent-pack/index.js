@@ -207,11 +207,23 @@ export function claudePackFiles() {
   ];
 }
 
-/** The pack's files for a config folder ('kiro' | 'claude'), or null. */
+/** The pack's files for a config folder ('kiro' | 'claude' | 'codex'), or null. */
 export function agentPackFiles(folder) {
+  if (folder === 'codex') return codexPackFiles();
   if (folder === 'kiro') return kiroPackFiles();
   if (folder === 'claude') return claudePackFiles();
   return null;
+}
+
+/** Codex native TOML agent definitions and Agent Skills. */
+export function codexPackFiles() {
+  return [
+    { path: 'config.toml', content: '[features]\nmulti_agent = true\n' },
+    { path: 'AGENTS.md', content: '# Agent Portal team\n\nUse the configured lead agent for coordination. Delegate focused work to the specialists when useful. Read the relevant skills before acting. Respect portal approvals and workspace boundaries.\n' },
+    ...PACK_AGENTS.map(a => ({ path: 'agents/' + a.name + '.toml', content:
+      'name = ' + JSON.stringify(a.name) + '\ndescription = ' + JSON.stringify(a.description) + '\ndeveloper_instructions = ' + JSON.stringify(a.prompt.trim() + '\n\nUse these skills when relevant: ' + a.skills.map(s => '$' + s).join(', ')) + '\n' })),
+    ...PACK_SKILLS.map(s => ({ path: 'skills/' + s.name + '/SKILL.md', content: skillFile(s) })),
+  ];
 }
 
 // ── Updating a pack that is already there ─────────────────────────────────────
@@ -223,19 +235,28 @@ function sameText(a, b) {
 }
 
 /**
+ * Pack files that are the person's own as well, so the pack adds them when missing and never
+ * replaces them: Codex's config.toml (their Codex settings) and AGENTS.md (their instructions).
+ */
+const ADD_ONLY = { codex: new Set(['config.toml', 'AGENTS.md']) };
+
+/**
  * What adding the pack would do to a config folder that may already have some of it.
  * `existing` maps a pack file's path to its current content; a path that is not in it is missing.
- * Returns { add, change, same } (lists of pack files), or null for a folder without a pack.
+ * Returns { add, change, same, kept } (lists of pack files), or null for a folder without a pack.
+ * `kept`: files the person has their own version of, which the pack only adds when missing (ADD_ONLY).
  * Only the pack's own paths are looked at: other files are never part of an update.
  */
 export function packUpdatePlan(folder, existing) {
   const files = agentPackFiles(folder);
   if (!files) return null;
-  const plan = { add: [], change: [], same: [] };
+  const addOnly = ADD_ONLY[folder] ?? new Set();
+  const plan = { add: [], change: [], same: [], kept: [] };
   for (const f of files) {
     const now = Object.prototype.hasOwnProperty.call(existing, f.path) ? existing[f.path] : undefined;
     if (now === undefined || now === null) plan.add.push(f);
     else if (sameText(now, f.content)) plan.same.push(f);
+    else if (addOnly.has(f.path)) plan.kept.push(f);
     else plan.change.push(f);
   }
   return plan;
@@ -243,7 +264,7 @@ export function packUpdatePlan(folder, existing) {
 
 /** A pack file's short name for people: the agent's name, or "skill <name>". */
 export function packFileLabel(path) {
-  const agent = /^agents\/([^/]+)\.(md|json)$/.exec(path);
+  const agent = /^agents\/([^/]+)\.(md|json|toml)$/.exec(path);
   if (agent) return agent[1];
   const skill = /^skills\/([^/]+)\/SKILL\.md$/.exec(path);
   return skill ? `skill ${skill[1]}` : path;

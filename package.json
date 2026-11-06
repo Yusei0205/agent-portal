@@ -37,8 +37,8 @@
     "@aws-sdk/client-secrets-manager": "^3.1161.0",
     "@aws-sdk/client-sso": "3.1152.0",
     "@aws-sdk/client-sso-oidc": "3.1152.0",
-    "@aws-sdk/credential-provider-node": "^3.972.92",
     "@aws-sdk/client-sts": "3.1152.0",
+    "@aws-sdk/credential-provider-node": "^3.972.92",
     "@aws-sdk/credential-providers": "3.1152.0",
     "@codemirror/lang-css": "^6.2.1",
     "@codemirror/lang-html": "^6.4.12",
@@ -74,6 +74,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "recharts": "3.10.1",
+    "smol-toml": "1.9.1",
     "ws": "8.18.0"
   },
   "devDependencies": {

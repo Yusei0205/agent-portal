@@ -168,7 +168,7 @@ describe('agent pack for Claude Code', () => {
 });
 
 describe('updating a pack that is already there (Agent setup › Agent pack)', () => {
-  type Plan = { add: PackFile[]; change: PackFile[]; same: PackFile[] };
+  type Plan = { add: PackFile[]; change: PackFile[]; same: PackFile[]; kept: PackFile[] };
   const paths = (fs: PackFile[]) => fs.map((f) => f.path).sort();
 
   it('adds everything to a folder without the pack, and nothing to one that is up to date', () => {
@@ -202,10 +202,34 @@ describe('updating a pack that is already there (Agent setup › Agent pack)', (
     assert.equal(packUpdatePlan('aws', {}), null);
   });
 
+  it('Codex: your own config.toml and AGENTS.md are kept; the pack\'s agents and skills are updated', () => {
+    const files = agentPackFiles('codex') as PackFile[];
+    const none = packUpdatePlan('codex', {}) as Plan;
+    assert.deepEqual(paths(none.add), paths(files), 'a folder without the pack gets all of it');
+    assert.equal(none.kept.length, 0);
+
+    const existing: Record<string, string> = Object.fromEntries(files.map((f) => [f.path, f.content]));
+    existing['config.toml'] = 'model_reasoning_effort = "medium"\n';   // the person's own settings (the Codex starter writes this)
+    existing['AGENTS.md'] = '# My team\n';
+    const older = existing['agents/backend-engineer.toml'].replace('Node.js / TypeScript', 'Go');
+    assert.notEqual(older, existing['agents/backend-engineer.toml'], 'the older version differs');
+    existing['agents/backend-engineer.toml'] = older;
+    const plan = packUpdatePlan('codex', existing) as Plan;
+    assert.deepEqual(paths(plan.kept), ['AGENTS.md', 'config.toml'], 'never replaced');
+    assert.deepEqual(paths(plan.change), ['agents/backend-engineer.toml']);
+    assert.equal(plan.add.length, 0);
+
+    // The pack's own config.toml, as written by an earlier add, is up to date: nothing to do.
+    const current = packUpdatePlan('codex', Object.fromEntries(files.map((f) => [f.path, f.content]))) as Plan;
+    assert.equal(current.add.length + current.change.length + current.kept.length, 0);
+  });
+
   it('names pack files the way people know them', () => {
     assert.equal(packFileLabel('agents/lead-orchestrator.md'), 'lead-orchestrator');
     assert.equal(packFileLabel('agents/tech-writer.json'), 'tech-writer');
+    assert.equal(packFileLabel('agents/tech-writer.toml'), 'tech-writer');
     assert.equal(packFileLabel('skills/task-delegation/SKILL.md'), 'skill task-delegation');
+    assert.equal(packFileLabel('config.toml'), 'config.toml');
   });
 });
 

@@ -1,3 +1,4 @@
+import { CodexCredentials } from '../components/CodexCredentials.jsx';
 /**
  * Credentials page (F4) — per-user engine sign-ins.
  *
@@ -780,12 +781,14 @@ export function Credentials({ user }) {
       <PageHeader
         title="Credentials"
         description={<>
-          Your own sign-ins for Kiro and Claude Code. Your sessions use these first; without one
+          Your own sign-ins for Codex, Kiro and Claude Code. Your sessions use these first; without one
           they fall back to the{' '}
           {isAdmin ? <a href="#/settings">portal AI provider</a> : 'portal AI provider'}.{' '}
           Secrets are write-only and never appear in logs or transcripts.
         </>}
       />
+
+      <CodexCredentials isAdmin={isAdmin} />
 
       <EngineSection
         engine="kiro"
