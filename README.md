@@ -210,10 +210,10 @@ portal (tested with `codex-cli 0.166.0`). The server launches the native `codex`
 If needed, set `PORTAL_CODEX_BIN` to its absolute path. Windows desktop installation locations are
 discovered automatically; npm installations use the official JS launcher without a command shell.
 The standard Docker image now includes the pinned Codex CLI; keep its `/data` volume persistent.
-The Lambda + AgentCore path has a dedicated ARM64 Codex runner, encrypted OAuth connections,
-distributed token renewal, and durable thread snapshots. Cloud sign-in requires a registered
-OpenAI client with ChatGPT plan inference access. See [Codex deployment](docs/codex-deployment.md)
-for image builds, CDK deployment, registration settings, and remaining live verification.
+The Lambda + AgentCore path has a dedicated ARM64 Codex runner, encrypted per-user credentials,
+distributed token renewal, and durable thread snapshots. Cloud sign-in uses the native device-code
+flow by default, without an OAuth client registration or callback URL. See
+[Codex deployment](docs/codex-deployment.md) for deployment and optional hosted OAuth settings.
 
 Open **Connect > Agent sign-ins**, then **Codex > Sign in with ChatGPT**. Open the displayed URL,
 enter the one-time code and finish authorization. Device-code sign-in must be enabled for your

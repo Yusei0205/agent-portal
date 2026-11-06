@@ -21,6 +21,7 @@ on:
     branches: [main_v3]
     paths:
       - server/**
+      - codex-runner/**
       - web/**
       - scripts/**
       - infra/**
@@ -30,6 +31,7 @@ on:
   pull_request:
     paths:
       - server/**
+      - codex-runner/**
       - web/**
       - infra/**
       - .github/workflows/deploy-portal.yml
@@ -92,6 +94,7 @@ jobs:
       CLAUDE_RUNTIME_ARN: ${{ vars.CLAUDE_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalClaudeHarness-BW7D1pFqIl' }}
       STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET || 'cy-ai-bucket' }}
       PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
+      CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'device' }}
       CODEX_OAUTH_CLIENT_ID: ${{ vars.CODEX_OAUTH_CLIENT_ID }}
       CODEX_OAUTH_CLIENT_SECRET_ARN: ${{ vars.CODEX_OAUTH_CLIENT_SECRET_ARN }}
     steps:
@@ -160,6 +163,7 @@ jobs:
             -c agentcoreBrowser=true
             -c "publicUrl=$PUBLIC_URL"
             -c "codexRuntimeArn=$CODEX_RUNTIME_ARN"
+            -c "codexAuthMode=$CODEX_AUTH_MODE"
             -c "codexOAuthClientId=$CODEX_OAUTH_CLIENT_ID"
             -c "codexOAuthRedirectUri=$CODEX_OAUTH_REDIRECT_URI"
           )

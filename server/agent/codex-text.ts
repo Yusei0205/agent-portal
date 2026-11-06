@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { codexUsesCloud, openUserCodex, hasCodexLogin } from '../codex-auth.ts';
-import { codexAccessToken } from '../codex-oauth.ts';
-import { invokeAgentCore } from './kiro-agentcore.ts';
+import { cloudCodexAuth } from '../codex-device.ts';
+import { invokeAgentCore, agentCoreControlSender } from './kiro-agentcore.ts';
 import { driveCodexTurn } from './codex-session.ts';
 
 /** Short, isolated generation request using only the requesting person's Codex connection. */
@@ -14,9 +14,15 @@ export async function callCodexText(prompt: string, userId: string, model?: stri
   if (codexUsesCloud()) {
     const arn = process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN;
     if (!arn) throw new Error('The Codex AgentCore runner is not configured.');
-    const accessToken = await codexAccessToken(userId);
-    for await (const raw of invokeAgentCore(arn, 'codex-text-' + randomUUID(), { mode: 'codex-text', prompt, accessToken, model }, signal)) {
+    const auth = await cloudCodexAuth(userId), runId = randomUUID(), session = 'codex-text-' + runId;
+    const control = agentCoreControlSender(arn, session);
+    for await (const raw of invokeAgentCore(arn, session, { mode: 'codex-text', runId, prompt, ...auth, model }, signal)) {
       const event = raw as unknown as Record<string, any>;
+      if (event.type === 'auth-refresh-request' && 'chatgptAuthTokens' in auth) {
+        const renewed = await cloudCodexAuth(userId, true);
+        if (!('chatgptAuthTokens' in renewed)) throw new Error('Codex account changed. Reconnect your account.');
+        await control({ mode: 'auth-refresh-result', runId, requestId: event.requestId, ...renewed }); continue;
+      }
       if (event.type === 'error') throw new Error('Codex could not complete this AI request. Check your connection and account limits.');
       if (event.type === 'result' && event.exitCode === 0 && typeof event.text === 'string') return event.text;
     }

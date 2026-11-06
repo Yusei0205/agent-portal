@@ -10,9 +10,20 @@ let initialized = false;
 let thread = 'thread-fixture';
 let approvalReply;
 let threadSetup;
+let externalAuth;
+let refreshReply;
+const fixtureJwt = claims => 'fixture.' + Buffer.from(JSON.stringify(claims)).toString('base64url') + '.fixture';
+const fixtureAuth = () => ({ auth_mode: 'chatgpt', tokens: {
+  access_token: fixtureJwt({ exp: Math.floor(Date.now() / 1000) + 3600, 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } }),
+  refresh_token: 'fake-secret-never-display', account_id: 'fixture-chatgpt-account', id_token: fixtureJwt({ email: 'codex@example.test' }),
+} });
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const msg = JSON.parse(line);
-  if (!msg.method) { if (msg.id === 900 && approvalReply) { const reply = approvalReply; approvalReply = null; reply(msg.result); } return; }
+  if (!msg.method) {
+    if (msg.id === 900 && approvalReply) { const reply = approvalReply; approvalReply = null; reply(msg.result); }
+    if (msg.id === 901 && refreshReply) { const reply = refreshReply; refreshReply = null; reply(msg.result); }
+    return;
+  }
   const { method, id, params = {} } = msg;
   if (method === 'thread/start' || method === 'thread/resume') threadSetup = params;
   const reply = result => send({ id, result });
@@ -20,11 +31,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'initialized') return;
   if (!initialized) { send({ id, error: { code: -1, message: 'Not initialized' } }); return; }
   if (method === 'account/read') {
-    reply({ account: fs.existsSync(authFile) ? { type: 'chatgpt', email: 'codex@example.test', planType: 'plus' } : null });
+    if (params.refreshToken && fs.existsSync(authFile)) {
+      const auth = fixtureAuth(); auth.tokens.refresh_token += '-rotated'; fs.writeFileSync(authFile, JSON.stringify(auth));
+    }
+    reply({ account: fs.existsSync(authFile) || externalAuth ? { type: 'chatgpt', email: 'codex@example.test', planType: 'plus' } : null });
   } else if (method === 'account/login/start') {
+    if (params.type === 'chatgptAuthTokens') { externalAuth = params; reply({ type: 'chatgptAuthTokens' }); return; }
     reply({ type: 'chatgptDeviceCode', loginId: 'login-fixture', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'TEST-1234' });
     setTimeout(() => {
-      fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { refresh_token: 'fake-secret-never-display' } }));
+      fs.writeFileSync(authFile, JSON.stringify(fixtureAuth()));
       notify('account/login/completed', { loginId: 'login-fixture', success: true });
     }, 50);
   } else if (method === 'account/logout') {
@@ -40,6 +55,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     reply({ turn: { id: scope.turnId, status: 'inProgress' } });
     notify('turn/started', { threadId: thread, turn: { id: scope.turnId } });
     const prompt = params.input?.[0]?.text || '';
+    if (prompt.includes('REQUEST_AUTH_REFRESH')) {
+      refreshReply = tokens => {
+        notify('item/agentMessage/delta', { ...scope, itemId: 'answer', delta: tokens?.chatgptAccountId === externalAuth?.chatgptAccountId ? 'Renewed account' : 'Renewal failed' });
+        notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } });
+      };
+      send({ id: 901, method: 'account/chatgptAuthTokens/refresh', params: { reason: 'unauthorized', previousAccountId: externalAuth?.chatgptAccountId } }); return;
+    }
+    if (prompt.includes('EXTERNAL_AUTH')) {
+      notify('item/agentMessage/delta', { ...scope, itemId: 'answer', delta: JSON.stringify({ external: Boolean(externalAuth), account: externalAuth?.chatgptAccountId, authOnDisk: fs.existsSync(authFile) }) });
+      notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } }); return;
+    }
     if (prompt.includes('EXIT_PROCESS')) { process.exit(7); }
     if (prompt.includes('HANG_FOREVER')) return;
     if (prompt.includes('ASK_PERMISSION')) {

@@ -59,6 +59,7 @@ if (budgetEmail) {
     storageBucket: app.node.tryGetContext('storageBucket'),
     claudeRuntimeArn: app.node.tryGetContext('claudeRuntimeArn'),
     codexRuntimeArn: app.node.tryGetContext('codexRuntimeArn'),
+    codexAuthMode: app.node.tryGetContext('codexAuthMode'),
     codexOAuthClientId: app.node.tryGetContext('codexOAuthClientId'),
     codexOAuthRedirectUri: app.node.tryGetContext('codexOAuthRedirectUri'),
     codexOAuthSecretArn: app.node.tryGetContext('codexOAuthSecretArn'),

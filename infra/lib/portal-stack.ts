@@ -105,6 +105,7 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   /** AgentCore runtime that runs Claude (the agent-runner image); enables Claude sessions on the cloud portal. */
   claudeRuntimeArn?: string;
   codexRuntimeArn?: string;
+  codexAuthMode?: 'device' | 'oauth';
   codexOAuthClientId?: string;
   codexOAuthRedirectUri?: string;
   codexOAuthSecretArn?: string;
@@ -118,6 +119,7 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
 export class AgentPortalCloudStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: AgentPortalCloudProps) {
     super(scope, id, props);
+    if (props.codexAuthMode && !['device', 'oauth'].includes(props.codexAuthMode)) throw new Error('codexAuthMode must be device or oauth');
 
     // ── DynamoDB ──────────────────────────────────────────────────────────────
     const tables: dynamodb.Table[] = [];
@@ -299,6 +301,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
         ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
         ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
         ...(props.codexRuntimeArn ? { PORTAL_CODEX_AGENTCORE_RUNTIME_ARN: props.codexRuntimeArn } : {}),
+        PORTAL_CODEX_AUTH_MODE: props.codexAuthMode || 'device',
         ...(props.codexOAuthClientId ? { PORTAL_CODEX_OAUTH_CLIENT_ID: props.codexOAuthClientId } : {}),
         ...(props.codexOAuthRedirectUri ? { PORTAL_CODEX_OAUTH_REDIRECT_URI: props.codexOAuthRedirectUri } : {}),
         ...(props.codexOAuthSecretArn ? { PORTAL_CODEX_OAUTH_CLIENT_SECRET_ARN: props.codexOAuthSecretArn, PORTAL_CODEX_OAUTH_CLIENT_AUTH: 'client_secret_basic' } : {}),

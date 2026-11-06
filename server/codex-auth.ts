@@ -8,6 +8,7 @@ import { router, sendJson, requireCookieAuth } from './http.ts';
 import { HttpError } from './util.ts';
 import { CodexRuntimeError } from './codex-command.ts';
 import { codexOAuthConfiguration, startCodexOAuth, completeCodexOAuth, readCodexAccount, disconnectCodexOAuth } from './codex-oauth.ts';
+import { codexCloudAuthMode, startCloudCodexDevice, cloudCodexDeviceStatus, cancelCloudCodexDevice } from './codex-device.ts';
 
 export function codexUsesCloud(): boolean {
   return Boolean(process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN || process.env.AWS_LAMBDA_FUNCTION_NAME
@@ -17,9 +18,9 @@ export function codexUsesCloud(): boolean {
 export function codexRuntimeSupport(): { supported: boolean; canImportHostLogin: boolean; code?: string; error?: string } {
   if (codexUsesCloud() && !process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN) {
     return { supported: false, canImportHostLogin: false, code: 'codex_worker_required',
-      error: 'Codex is not connected to a cloud runner yet. This Lambda deployment cannot keep Codex sign-in and agent processes alive across requests. Configure a durable Codex worker and hosted sign-in integration before enabling it.' };
+      error: 'Configure the dedicated Codex AgentCore runner before using Codex device sign-in on this Lambda deployment.' };
   }
-  if (codexUsesCloud() && !codexOAuthConfiguration()) return { supported: false, canImportHostLogin: false,
+  if (codexUsesCloud() && codexCloudAuthMode() === 'oauth' && !codexOAuthConfiguration()) return { supported: false, canImportHostLogin: false,
     code: 'codex_oauth_configuration_required', error: 'Configure the registered OpenAI OAuth client ID and callback URL to enable cloud Codex sign-in.' };
   if (codexUsesCloud() && process.env.STORAGE_BACKEND !== 's3') return { supported: false, canImportHostLogin: false,
     code: 'codex_storage_required', error: 'Configure S3 file storage so cloud Codex can restore conversations and workspaces.' };
@@ -64,7 +65,7 @@ export async function openUserCodex(userId: string, cwd?: string): Promise<Codex
 /** Quick readiness hint only. The engine checks account/read before every run. */
 export async function hasCodexLogin(userId: string): Promise<boolean> {
   if (!codexRuntimeSupport().supported) return false;
-  if (codexUsesCloud()) { try { return Boolean(await readCodexAccount(userId)); } catch { return false; } }
+  if (codexUsesCloud()) { try { const device = await cloudCodexDeviceStatus(userId, false); return device ? device.signedIn : Boolean(await readCodexAccount(userId)); } catch { return false; } }
   try { await fs.access(path.join(codexHome(userId), 'auth.json')); return true; } catch { return false; }
 }
 
@@ -90,10 +91,12 @@ export function registerCodexRoutes(): void {
     if (!support.supported) { sendJson(res, 200, { ...support, installed: null, signedIn: false }); return; }
     if (codexUsesCloud()) {
       try {
+        const device = await cloudCodexDeviceStatus(req.user!.id);
+        if (device) { sendJson(res, 200, { ...support, installed: null, remote: true, authMode: 'device', ...device }); return; }
         const active = await readCodexAccount(req.user!.id);
-        sendJson(res, 200, { ...support, installed: null, remote: true, authMode: 'oauth', signedIn: Boolean(active), email: active?.account.email ?? null });
+        sendJson(res, 200, { ...support, installed: null, remote: true, authMode: codexCloudAuthMode(), signedIn: Boolean(active), email: active?.account.email ?? null });
       } catch {
-        sendJson(res, 200, { ...support, installed: null, remote: true, authMode: 'oauth', signedIn: false,
+        sendJson(res, 200, { ...support, installed: null, remote: true, authMode: codexCloudAuthMode(), signedIn: false,
           code: 'codex_reauthentication_required', error: 'Your saved Codex connection could not be opened. Sign in again.' });
       }
       return;
@@ -126,7 +129,8 @@ export function registerCodexRoutes(): void {
     if (codexUsesCloud()) {
       const support = codexRuntimeSupport();
       if (!support.supported) throw new CodexRuntimeError(support.code!, support.error!);
-      sendJson(res, 200, { status: 'redirect', authorizationUrl: await startCodexOAuth(userId) });
+      if (codexCloudAuthMode() === 'device') sendJson(res, 200, await startCloudCodexDevice(userId));
+      else sendJson(res, 200, { status: 'redirect', authorizationUrl: await startCodexOAuth(userId) });
       return;
     }
     if (openingLogins.has(userId) || logins.get(userId)?.status === 'starting') throw new HttpError(409, 'Codex sign-in is already starting.');
@@ -177,11 +181,13 @@ export function registerCodexRoutes(): void {
   }));
 
   router.post('/api/codex/login/cancel', requireCookieAuth(async (req, res) => {
+    if (codexUsesCloud()) { await cancelCloudCodexDevice(req.user!.id); sendJson(res, 200, { ok: true }); return; }
     cancelLogin(req.user!.id);
     sendJson(res, 200, { ok: true });
   }));
   router.post('/api/codex/logout', requireCookieAuth(async (req, res) => {
     if (codexUsesCloud()) {
+      if (await cancelCloudCodexDevice(req.user!.id, true)) { sendJson(res, 200, { ok: true }); return; }
       const revoked = await disconnectCodexOAuth(req.user!.id);
       sendJson(res, 200, { ok: true, remoteRevocationConfirmed: revoked });
       return;

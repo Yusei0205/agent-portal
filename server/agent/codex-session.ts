@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CodexClient, RpcParams } from '../codex-client.ts';
 import { decideToolCall, type PolicyRule } from './tool-policy.ts';
+import type { ChatgptAuthTokens } from '../codex-device-protocol.ts';
 
 export interface CodexSessionContext {
   run: { workDir: string; goal: string; trusted: boolean; model: string | null; engineSessionId: string | null; permissions: { rules: readonly PolicyRule[] } };
@@ -60,6 +61,7 @@ export interface CodexTurnOptions {
   onUsage?: (usage: Omit<CodexTurnResult, 'text'>) => Promise<void>;
   config?: Record<string, unknown>;
   instructions?: string;
+  refreshAuth?: (previousAccountId?: string) => Promise<ChatgptAuthTokens>;
 }
 
 /** Shared native Codex protocol driver. No portal database, HTTP, credentials, or AWS dependencies. */
@@ -97,6 +99,7 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
     if (signal?.aborted) throw abortError();
     client.onClose = error => rejectTurn?.(signal?.aborted ? abortError() : error);
     client.onRequest = async (method, params) => {
+      if (method === 'account/chatgptAuthTokens/refresh' && options.refreshAuth) return options.refreshAuth(params.previousAccountId);
       if (params.threadId !== threadId || (turnId && params.turnId !== turnId)) throw new Error('Mismatched Codex approval');
       return approveCodexRequest(ctx, method, params, items);
     };
