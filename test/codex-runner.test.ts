@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -97,6 +97,21 @@ describe('Codex AgentCore runner HTTP contract', () => {
     assert.equal(output.find(e => e.type === 'result').text, 'Declined action');
     assert.equal(output.some(e => e.type === 'approval-request'), false);
     assert.equal((await post({ mode: 'codex-text', prompt: 123, accessToken: 'short-lived' })).status, 400);
+  });
+  it('provides the portal PR tool on resumed turns and queues the exact base before confirming saved state', async () => {
+    const repo = path.join(root, 'work', 'repos', 'shop');
+    await fs.mkdir(repo, { recursive: true });
+    execFileSync('git', ['init'], { cwd: repo, windowsHide: true, stdio: 'ignore' });
+    await fs.writeFile(path.join(repo, 'change.txt'), 'session changes');
+    const output = await events(await post({ ...payload('REQUEST_PORTAL_PR'), trusted: true,
+      threadId: 'existing-thread', repos: [{ name: 'shop', url: 'https://github.com/example/shop', branch: 'main' }] }));
+    const request = output.find(e => e.type === 'pull-request-request');
+    assert.deepEqual(request, { type: 'pull-request-request', repo: 'shop', base: 'main_v3' });
+    const completed = output.find(e => e.type === 'result');
+    assert.equal(completed.stateSaved, true);
+    assert.equal(completed.exitCode, 0);
+    assert.match(completed.text, /publication queued/);
+    assert.ok(output.indexOf(request) < output.indexOf(completed));
   });
   it('binds approvals to the exact command and accepts only the matching answer', async () => {
     let asked = false;

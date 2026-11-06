@@ -9,6 +9,17 @@ builds and fixture tests do not establish live provider authorization or AWS run
 | Lambda + AgentCore (default) | Registered Sign in with ChatGPT, authorization code + PKCE | Encrypted connections and callback state in DynamoDB; workspace/thread snapshots in S3 |
 | Lambda + AgentCore (experimental device mode) | Native Codex device-code sign-in | Encrypted per-user credentials and pending attempts in DynamoDB; workspace/thread snapshots in S3 |
 
+## GitHub pull requests from Codex
+
+Attach the repository through the project's repository settings and select its Git connection.
+Cloud Codex uses the `portal_pr.create_pull_request` tool to queue publication through that
+connection; `gh auth status` in the agent shell does not describe the portal's GitHub access.
+The tool requires the attached repository name and the intended base branch (for example,
+`main_v3`). The portal validates that base against the remote, waits for the completed turn and
+saved snapshots, then pushes a new branch and opens the PR. The session's PR card shows the
+result, including any real repository permission error. No GitHub token is installed in the
+Codex shell. Tool approvals and project guardrails still apply.
+
 ## Experimental device-code sign-in
 
 OpenAI's [app-server authentication documentation](https://learn.chatgpt.com/docs/app-server#auth-endpoints)

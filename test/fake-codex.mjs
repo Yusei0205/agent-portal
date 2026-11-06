@@ -68,6 +68,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }
     if (prompt.includes('EXIT_PROCESS')) { process.exit(7); }
     if (prompt.includes('HANG_FOREVER')) return;
+    if (prompt.includes('REQUEST_PORTAL_PR')) {
+      void (async () => {
+        const url = threadSetup.config.mcp_servers.portal_pr.url;
+        const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_pull_request', arguments: { repo: 'shop', base: 'main_v3' } } }) });
+        const result = await response.json();
+        notify('item/agentMessage/delta', { ...scope, itemId: 'answer', delta: result.result.content[0].text });
+        notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } });
+      })().catch(() => process.exit(8));
+      return;
+    }
     if (prompt.includes('ASK_PERMISSION')) {
       notify('item/started', { ...scope, item: { id: 'approval-command', type: 'commandExecution', command: 'echo changed', cwd: process.cwd() } });
       approvalReply = result => {
