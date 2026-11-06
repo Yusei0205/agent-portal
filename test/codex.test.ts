@@ -270,6 +270,21 @@ describe('Codex integration', () => {
     assert.equal(asked, false);
   });
 
+  it('binds native approvals to JSON-safe input without changing commands, paths, or explicit nulls', async () => {
+    const ctx = await makeContext();
+    const approvals: Array<{ tool: string; input: any }> = [];
+    ctx.awaitInput = async (tool, input) => { approvals.push({ tool, input }); return { decision: 'allow', remember: false, message: '' }; };
+    assert.deepEqual(await approveCodexRequest(ctx, 'item/commandExecution/requestApproval', {
+      command: 'echo safe', cwd: ctx.run.workDir, reason: undefined, networkApprovalContext: undefined, additionalPermissions: undefined,
+    }, new Map()), { decision: 'accept' });
+    assert.deepEqual(approvals[0], { tool: 'Bash', input: { command: 'echo safe', cwd: ctx.run.workDir } });
+    const changes = [{ path: 'notes.txt', diff: '+safe', kind: { type: 'update', move_path: undefined } }];
+    assert.deepEqual(await approveCodexRequest(ctx, 'item/fileChange/requestApproval', { itemId: 'patch', reason: null },
+      new Map([['patch', { changes }]])), { decision: 'accept' });
+    assert.deepEqual(approvals[1], { tool: 'Write', input: { file_path: 'notes.txt', changes: [{ path: 'notes.txt', diff: '+safe', kind: { type: 'update' } }], reason: null } });
+    for (const { input } of approvals) assert.deepEqual(input, JSON.parse(JSON.stringify(input)));
+  });
+
   it('logs out only the signed-in user', async () => {
     assert.equal((await fetchJson(baseUrl, '/api/codex/logout', { method: 'POST', cookie, body: {} })).status, 200);
     assert.equal(((await fetchJson(baseUrl, '/api/codex/status', { cookie })).body as any).signedIn, false);

@@ -46,8 +46,11 @@ export async function approveCodexRequest(
     }
   }
   // Native requests can grant access beyond the sandbox. They always need a person.
-  const input = fileChange ? { file_path: changes.map(c => c.path).join(', '), changes, reason: params.reason }
-    : inputs[0];
+  // Bind the exact JSON input that is stored/transported. Native optional fields can be
+  // undefined; hashing those as null before JSON drops them creates a different call.
+  const input = JSON.parse(JSON.stringify(fileChange
+    ? { file_path: changes.map(c => c.path).join(', '), changes, reason: params.reason }
+    : inputs[0]));
   const answer = await ctx.awaitInput(toolName, input);
   return { decision: answer.decision === 'allow' && !ctx.signal?.aborted ? 'accept' : 'decline' };
 }

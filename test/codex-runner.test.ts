@@ -8,6 +8,8 @@ import type http from 'node:http';
 import { CodexClient } from '../server/codex-client.ts';
 import { createCodexRunnerServer } from '../codex-runner/src/service.ts';
 import { restoreCodexState, saveCodexState } from '../codex-runner/src/state.ts';
+import { inputFingerprint } from '../server/agent/tool-policy.ts';
+import { decideApprovalRequest } from '../server/agent/agentcore-bridge.ts';
 
 async function events(response: Response, visit?: (event: any) => Promise<void>): Promise<any[]> {
   assert.equal(response.status, 200);
@@ -101,6 +103,12 @@ describe('Codex AgentCore runner HTTP contract', () => {
     const output = await events(await post(payload('ASK_PERMISSION')), async event => {
       if (event.type !== 'approval-request') return;
       asked = true;
+      assert.equal(inputFingerprint(event.toolName, event.input), event.inputHash, 'the portal must be able to verify the request after JSON transport');
+      let prompts = 0;
+      const portal = { run: { trusted: false }, emit: () => {}, awaitInput: async () => { prompts++; return { decision: 'allow', remember: false, message: '' }; } };
+      assert.equal((await decideApprovalRequest(portal as any, event, [])).decision, 'allow');
+      assert.equal((await decideApprovalRequest(portal as any, { ...event, input: { ...event.input, command: 'echo a different command' } }, [])).decision, 'deny');
+      assert.equal(prompts, 1, 'a changed command must be rejected before asking for permission');
       const answer = { mode: 'answer', runId: 'run-fixture', requestId: event.requestId, decision: 'allow', inputHash: event.inputHash };
       const wrong = (await events(await post({ ...answer, inputHash: '0'.repeat(64) })))[0];
       assert.equal(wrong.type, 'answer-rejected');
