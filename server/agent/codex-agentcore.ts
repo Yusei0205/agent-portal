@@ -12,6 +12,7 @@ import { HttpError } from '../util.ts';
 import type { RunContext } from './types.ts';
 import type { CodexTurnResult } from './codex-session.ts';
 import { getCodexConfigFiles } from '../user-config.ts';
+import { parseCodexPrRequest, type CodexPrRequest } from './codex-pr-tool.ts';
 
 const allowedEvents = new Set(['assistant-text', 'tool-start', 'tool-end', 'tool-blocked', 'status', 'context-usage']);
 const finiteTokenCount = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
@@ -34,6 +35,7 @@ export async function runCodexViaAgentCore(
   const approvals = new ApprovalRelay(ctx, control, ctx.run.permissions.rules);
   const files = createFileReceiver(ctx.run.workDir, persistFile);
   const changes: Array<{ repo: string; base: string; commits: number; files: number }> = [];
+  const requestedPrs = new Map<string, CodexPrRequest>();
   let finalizeCheck = false;
   if (ctx.run.projectId && ctx.run.runnerRepos?.length) {
     const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
@@ -64,6 +66,12 @@ export async function runCodexViaAgentCore(
         await control({ mode: 'auth-refresh-result', runId: ctx.run.runId, requestId: event.requestId, ...renewed }); continue;
       }
       if (isApprovalRequest(event)) { approvals.handle(event); continue; }
+      if (event.type === 'pull-request-request') {
+        const request = parseCodexPrRequest({ repo: event.repo, base: event.base }, (ctx.run.runnerRepos ?? []).map(r => r.name));
+        requestedPrs.set(request.repo, request);
+        ctx.emit('status', { text: `PR publication queued for ${request.repo} against ${request.base}.` });
+        continue;
+      }
       if (event.type === 'portal-event' && allowedEvents.has(event.eventType) && event.payload && typeof event.payload === 'object') ctx.emit(event.eventType, event.payload);
       else if (event.type === 'status' && typeof event.text === 'string') ctx.emit('status', { text: event.text });
       else if (event.type === 'file') await files.handle(event);
@@ -85,7 +93,14 @@ export async function runCodexViaAgentCore(
     if (changes.length && ctx.run.projectId) {
       const { handleRepoChanges } = await import('../session-pr.ts');
       await handleRepoChanges({ workflowId: ctx.run.workflowId, runId: ctx.run.runId, projectId: ctx.run.projectId,
-        userId: ctx.run.credentialOwnerId, engine: 'codex' }, changes).catch(() => {});
+        userId: ctx.run.credentialOwnerId, engine: 'codex' }, changes.filter(c => !requestedPrs.has(c.repo))).catch(() => {});
+    }
+    if (ctx.run.projectId && requestedPrs.size) {
+      const { createRequestedSessionPullRequest } = await import('../session-pr.ts');
+      for (const request of requestedPrs.values()) {
+        await createRequestedSessionPullRequest({ workflowId: ctx.run.workflowId, runId: ctx.run.runId,
+          projectId: ctx.run.projectId, userId: ctx.run.credentialOwnerId, engine: 'codex' }, request);
+      }
     }
     return result;
   } finally {

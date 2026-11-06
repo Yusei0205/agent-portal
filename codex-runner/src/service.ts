@@ -19,6 +19,7 @@ import { applyCodexConfig } from '../../server/agent/codex-config.ts';
 import { randomUUID } from 'node:crypto';
 import { deviceAuthHandler } from './device-auth.ts';
 import { validChatgptTokens, type ChatgptAuthTokens } from '../../server/codex-device-protocol.ts';
+import { openCodexPrTool, CODEX_PR_INSTRUCTIONS } from '../../server/agent/codex-pr-tool.ts';
 
 type Event = Record<string, any>;
 type ServiceOptions = {
@@ -132,6 +133,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
     const heartbeat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': working\n\n'); }, 15_000);
     let client: CodexClient | undefined;
     let usage: Event | undefined;
+    let prTool: Awaited<ReturnType<typeof openCodexPrTool>> | undefined;
     try {
       await fs.mkdir(workDir, { recursive: true, mode: 0o700 });
       await fs.mkdir(home, { recursive: true, mode: 0o700 });
@@ -193,11 +195,15 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
             return waiting.outcome;
           },
         };
+        if (repos.length) {
+          prTool = await openCodexPrTool(ctx, repos.map(r => r.name), request => send({ type: 'pull-request-request', ...request }));
+          Object.assign(mcp, { portal_pr: { url: prTool.url, tool_timeout_sec: 900 } });
+        }
         const result = await driveCodexTurn(ctx, {
           managedAuth: false,
           refreshAuth,
           openClient: () => open(home, environment(), workDir, { ...auth, extraEnv: { PORTAL_MCP_CONNECTIONS_JSON: JSON.stringify(connections) } }),
-          ...(() => { const setup = applyCodexConfig(home, body.codexConfig ?? [], body.leadAgent); return { config: { ...setup.config, mcp_servers: mcp }, instructions: setup.instructions }; })(),
+          ...(() => { const setup = applyCodexConfig(home, body.codexConfig ?? [], body.leadAgent); return { config: { ...setup.config, mcp_servers: mcp }, instructions: [setup.instructions, ...(prTool ? [CODEX_PR_INSTRUCTIONS] : [])].filter(Boolean).join('\n\n') }; })(),
           onUsage: async value => { usage = value; },
         });
         if (controller.signal.aborted) throw new DOMException('Run cancelled', 'AbortError');
@@ -217,6 +223,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
       clearInterval(heartbeat);
       broker.closeRun(active?.runId || '', 'The run ended');
       client?.close(); await client?.waitClosed();
+      prTool?.close();
       active = null; res.off('close', disconnected); res.end();
     }
   });

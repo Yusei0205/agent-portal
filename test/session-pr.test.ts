@@ -11,7 +11,7 @@ import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts'
 import { _setPullRequestClients } from '../server/pull-requests.ts';
 import { setPullRequestSettings } from '../server/project-settings-pr.ts';
 import {
-  handleRepoChanges, createPullRequestForSession, finalizeRunPayloadFlag, _setSessionPrDeps,
+  handleRepoChanges, createPullRequestForSession, createRequestedSessionPullRequest, finalizeRunPayloadFlag, _setSessionPrDeps,
 } from '../server/session-pr.ts';
 
 const ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/test-runtime';
@@ -146,6 +146,28 @@ describe('session pull requests', () => {
     assert.equal(pl.title, 'Open a pull request for shop?');
     assert.equal(pl.body, '5 files changed in 2 commit(s) in shop. Approve to push a new branch and open a pull request.');
     assert.equal(prEvents(s)[0].inboxId, item.id);
+  });
+
+  it('a Codex handoff uses the explicit base instead of an earlier default-branch card', async () => {
+    const s = makeSession();
+    await handleRepoChanges(ctxOf(s), [change]);
+    _setSessionPrDeps({ listBranches: async () => ['main', 'main_v3'] });
+    await createRequestedSessionPullRequest({ ...ctxOf(s), engine: 'codex' }, { repo: 'shop', base: 'main_v3' });
+    assert.equal(finalizeCalls.length, 1);
+    assert.equal(finalizeCalls[0].base, 'main_v3');
+    assert.equal(ghCalls.find(c => c.method === 'POST')?.body.base, 'main_v3');
+    await assert.rejects(createRequestedSessionPullRequest(ctxOf(s), { repo: 'other', base: 'main_v3' }), /not attached/);
+  });
+
+  it('does not push for an unknown target branch or while a newer turn is active', async () => {
+    const s = makeSession();
+    await createRequestedSessionPullRequest(ctxOf(s), { repo: 'shop', base: 'does-not-exist' });
+    assert.equal(finalizeCalls.length, 0);
+    assert.match(prEvents(s).at(-1)!.error, /base branch does not exist/);
+    run(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?,?,'running',?)`, generateId(), s.workflowId, new Date(Date.now() + 1000).toISOString());
+    await createRequestedSessionPullRequest(ctxOf(s), { repo: 'shop', base: 'main' });
+    assert.equal(finalizeCalls.length, 0);
+    assert.match(prEvents(s).at(-1)!.error, /current turn to finish/);
   });
 
   it('approving the Inbox question opens the pull request from the first line of the goal', async () => {

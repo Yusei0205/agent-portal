@@ -257,6 +257,7 @@ export async function declinePullRequestForSession(workflowId: string, repoId: s
   const w = await getSessionsRepository().getWorkflowById(workflowId);
   if (!w || !w.project_id) return;
   const prior = (await latestByRepo(workflowId)).get(repoId);
+  if (prior && OPENED_STATES.includes(prior.state)) return;
   const runId = prior?.runId ?? (await getSessionsRepository().getLatestRun(workflowId))?.id;
   if (!runId) return;
   await writeEvent(runId, String(w.project_id), workflowId, {
@@ -269,7 +270,7 @@ export async function declinePullRequestForSession(workflowId: string, repoId: s
  * to retry after a failure. Does nothing when a pull request is already open. Never throws.
  */
 export async function createPullRequestForSession(
-  workflowId: string, repoId: string, opts: { approvedBy?: string } = {},
+  workflowId: string, repoId: string, opts: { approvedBy?: string; base?: string; runId?: string } = {},
 ): Promise<void> {
   try {
     const w = await getSessionsRepository().getWorkflowById(workflowId);
@@ -282,17 +283,34 @@ export async function createPullRequestForSession(
       if (prior && OPENED_STATES.includes(prior.state)) return;
       const base: PrEvent = {
         repo: resolved.runnerName, repoId, provider: String(resolved.record.provider ?? '') || undefined, state: 'available',
-        base: prior?.base || resolved.record.default_branch || 'main',
-        commits: prior?.commits ?? 0, files: prior?.files ?? 0,
+        base: opts.base || prior?.base || resolved.record.default_branch || 'main',
+        commits: opts.base && opts.base !== prior?.base ? 0 : prior?.commits ?? 0,
+        files: opts.base && opts.base !== prior?.base ? 0 : prior?.files ?? 0,
         ...(prior?.branch && (prior.state === 'pushed' || prior.state === 'failed') ? { branch: prior.branch } : {}),
       };
-      const runId = prior?.runId ?? (await getSessionsRepository().getLatestRun(workflowId))?.id;
+      const runId = opts.runId ?? prior?.runId ?? (await getSessionsRepository().getLatestRun(workflowId))?.id;
       if (!runId) return;
+      if (opts.base && !(await deps.listBranches(resolved.record)).includes(opts.base)) {
+        await writeEvent(runId, String(w.project_id), workflowId, { ...base, state: 'failed',
+          error: 'The requested PR base branch does not exist on the repository remote.', errorCode: 'failed' });
+        return;
+      }
       await runPullRequest(runId, w, resolved, base, { userId: opts.approvedBy ?? null });
     });
   } catch (e) {
     console.error('[session-pr] createPullRequestForSession failed:', errText(e));
   }
+}
+
+/** A Codex tool request can name only a repository already attached to this session. */
+export async function createRequestedSessionPullRequest(ctx: SessionPrContext, request: { repo: string; base: string }): Promise<void> {
+  const w = await getSessionsRepository().getWorkflowById(ctx.workflowId);
+  if (!w || String(w.project_id) !== ctx.projectId) throw new Error('Session project does not match');
+  const resolved = (await resolveRepos(w)).find(r => r.runnerName === request.repo);
+  if (!resolved) throw new Error('Repository is not attached to this session');
+  await createPullRequestForSession(ctx.workflowId, String(resolved.record.id), {
+    approvedBy: ctx.userId ?? undefined, base: request.base, runId: ctx.runId,
+  });
 }
 
 // ── The work ──────────────────────────────────────────────────────────────────
@@ -309,6 +327,13 @@ async function runPullRequest(
   const settings = getPullRequestSettings(projectId);
   const baseBranch = start.base || repo.default_branch || 'main';
   const engine = (String(w.engine) === 'kiro' ? 'kiro' : String(w.engine) === 'codex' ? 'codex' : 'claude-code') as 'kiro' | 'claude-code' | 'codex';
+
+  // An older Inbox approval must not push while a newer turn is changing the same files.
+  const latest = await getSessionsRepository().getLatestRun(workflowId);
+  if (latest && ['pending', 'running'].includes(String(latest.status)) && String(latest.id) !== runId) {
+    await emitEv({ state: 'failed', error: 'The session is still working. Wait for its current turn to finish, then retry creating the PR.', errorCode: 'failed' });
+    return;
+  }
 
   let branch = start.branch ?? '';
   if (!branch) {
