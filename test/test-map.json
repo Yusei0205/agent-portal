@@ -1430,6 +1430,7 @@
         "server/repositories/codex-store.ts",
         "server/agent/codex-session.ts",
         "server/agent/codex-agentcore.ts",
+        "server/agent/codex-pr-tool.ts",
         "codex-runner/src/service.ts",
         "codex-runner/src/state.ts",
         "server/agent/codex-config.ts",
@@ -1440,6 +1441,7 @@
         "test/codex-oauth.test.ts",
           "test/codex-device.test.ts",
         "test/codex-runner.test.ts",
+        "test/codex-pr-tool.test.ts",
         "test/codex-store.test.ts",
         "test/codex-setup.test.ts"
       ],
