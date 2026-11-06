@@ -26,6 +26,7 @@ import { insert } from '../server/db.ts';
 import { inputFingerprint, rememberKey, MAX_REVIEWABLE_COMMAND } from '../server/agent/runner.ts';
 import { setConfig } from '../server/config.ts';
 import type { Config } from '../server/config.ts';
+import { pendingApprovals, resolveApproval, type PendingApproval } from '../server/agent/approvals.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_SDK = path.resolve(__dirname, 'fake-sdk.mjs');
@@ -123,6 +124,19 @@ async function waitForRunStatus(
 // ── Unit tests (no server needed) ─────────────────────────────────────────────
 
 describe('Approval utility functions', () => {
+  it('resolves sequential approvals through the same run registry, including database-polled answers', async () => {
+    const id = generateId();
+    const waiting = new Map<string, PendingApproval>();
+    pendingApprovals.set(id, waiting);
+    try {
+      for (const inputId of ['first', 'second', 'third']) {
+        const answer = new Promise(resolve => waiting.set(inputId, { resolve, reject: () => {} }));
+        assert.equal(resolveApproval(id, inputId, 'allow', { remember: true }), true);
+        assert.deepEqual(await answer, { decision: 'allow', remember: true, message: '' });
+        assert.equal(resolveApproval(id, inputId, 'allow'), false);
+      }
+    } finally { pendingApprovals.delete(id); }
+  });
   it('inputFingerprint is deterministic and hex', () => {
     const h1 = inputFingerprint('Bash', { command: 'ls -la' });
     const h2 = inputFingerprint('Bash', { command: 'ls -la' });

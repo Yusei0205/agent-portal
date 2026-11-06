@@ -285,6 +285,37 @@ describe('Codex integration', () => {
     for (const { input } of approvals) assert.deepEqual(input, JSON.parse(JSON.stringify(input)));
   });
 
+  it('honors trusted tools and exact remembered commands while still prompting for extra access and policy asks', async () => {
+    const ctx = await makeContext();
+    ctx.run.trusted = true;
+    let asked = 0;
+    ctx.awaitInput = async () => { asked++; return { decision: 'allow', remember: true, message: '' }; };
+    const approve = (params: any) => approveCodexRequest(ctx, 'item/commandExecution/requestApproval', { command: 'pwd', ...params }, new Map());
+    assert.deepEqual(await approve({}), { decision: 'accept' });
+    assert.equal(asked, 0);
+    for (const params of [{ reason: 'Retry outside sandbox' }, { additionalPermissions: {} }, { networkApprovalContext: { host: 'example.test' } }]) {
+      assert.deepEqual(await approve(params), { decision: 'accept' });
+    }
+    assert.equal(asked, 3);
+    ctx.run.permissions.rules = [{ id: 'ask', group_id: 'test', name: 'Review', sort_order: 0,
+      created_at: now(), updated_at: now(), pattern: 'pwd', category: null, action: 'ask', scope: 'always', reason: 'Review' }];
+    await approve({});
+    assert.equal(asked, 4);
+    ctx.run.permissions.rules[0].action = 'block';
+    assert.deepEqual(await approve({}), { decision: 'decline' });
+    assert.equal(asked, 4, 'trust does not bypass a block rule');
+    ctx.run.permissions.rules = [];
+    ctx.run.trusted = false;
+    ctx.allowed.clear();
+    await approve({});
+    await approve({});
+    assert.equal(asked, 5, 'an ordinary exact command is remembered');
+    await approve({ command: 'pwd -P' });
+    assert.equal(asked, 6, 'a changed command still asks');
+    await approve({ reason: 'Escalation' });
+    assert.equal(asked, 7, 'remembering a command does not grant sandbox expansion');
+  });
+
   it('logs out only the signed-in user', async () => {
     assert.equal((await fetchJson(baseUrl, '/api/codex/logout', { method: 'POST', cookie, body: {} })).status, 200);
     assert.equal(((await fetchJson(baseUrl, '/api/codex/status', { cookie })).body as any).signedIn, false);
