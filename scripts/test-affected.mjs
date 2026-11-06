@@ -38,6 +38,7 @@
  *   TEST_FILE_TIMEOUT_MS  Per-file hard kill timeout in ms (default 180 000 = 3 min).
  *                         Override to tune for slower machines or speed up simulations:
  *                           TEST_FILE_TIMEOUT_MS=5000 npm run test:affected
+ *   TEST_CONCURRENCY      Concurrent isolated backend files (default 1, CI uses 4).
  *
  * npm hook: npm run test:affected [-- <options>]
  */
@@ -46,7 +47,8 @@ import fs          from 'node:fs';
 import path        from 'node:path';
 import os          from 'node:os';
 import { createHash } from 'node:crypto';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { runTestPool } from './test-pool.mjs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -67,6 +69,7 @@ const RECORD_PATH = process.env.TEST_RECORD_FILE
 // TEST_FILE_TIMEOUT_MS: per-file hard kill timeout.  Default 180 s (3 min).
 // Healthy test files run in 5–17 s; hanging files are killed after this limit.
 const FILE_TIMEOUT_MS = parseInt(process.env.TEST_FILE_TIMEOUT_MS ?? '', 10) || 180_000;
+const TEST_CONCURRENCY = Number(process.env.TEST_CONCURRENCY ?? 1);
 
 // ── Args ─────────────────────────────────────────────────────────────────────
 
@@ -673,15 +676,15 @@ function checkUIKnownFailures(modId, failingSections, knownEntries) {
  *
  * Returns { ok: boolean, failures: TapFailure[] }
  */
-function runBackendTests(testFiles) {
-  const allFailures = [];
-  let anyFailed  = false;
-
-  for (const file of testFiles) {
+function runBackendFile(file) {
+  return new Promise((resolve, reject) => {
     const tapFile = path.join(os.tmpdir(),
       `portal-tap-${Date.now()}-${Math.random().toString(36).slice(2)}.tap`);
 
-    const result = spawnSync(NODE, [
+    const logFile = tapFile + '.log';
+    const logFd = fs.openSync(logFile, 'w');
+    const started = Date.now();
+    const child = spawn(NODE, [
       ...NODE_FLAGS,
       '--import', 'tsx',
       '--test',
@@ -694,34 +697,29 @@ function runBackendTests(testFiles) {
       file,
     ], {
       cwd:     ROOT,
-      stdio:   'inherit',
+      stdio:   ['ignore', logFd, logFd],
       env:     process.env,
       timeout: FILE_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
-
-    const killed = !!(result.killed || (result.signal != null && result.signal !== ''));
-
-    const failures = parseTapFile(tapFile);
-    try { fs.unlinkSync(tapFile); } catch { /* best effort */ }
-
-    if (killed) {
-      // Process timeout for this specific file
-      const relFile = path.relative(ROOT, file).replace(/\\/g, '/');
-      failures.push({
-        testName:    '__process_timeout__',
-        file:        relFile,
-        failureType: 'processTimeout',
-      });
-    }
-
-    allFailures.push(...failures);
-
-    if (result.status !== 0 || killed) {
-      anyFailed = true;
-    }
-  }
-
-  return { ok: !anyFailed, failures: allFailures };
+    let spawnError;
+    child.once('error', error => { spawnError = error; });
+    child.once('close', (code, signal) => {
+      try {
+        fs.closeSync(logFd);
+        const relFile = path.relative(ROOT, file).replace(/\\/g, '/');
+        console.log(`${process.env.CI ? '::group::' : '\n'}${relFile} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+        try { process.stdout.write(fs.readFileSync(logFile)); } finally { fs.unlinkSync(logFile); }
+        if (process.env.CI) console.log('::endgroup::');
+        const killed = signal != null;
+        const failures = parseTapFile(tapFile);
+        try { fs.unlinkSync(tapFile); } catch { /* best effort */ }
+        if (killed) failures.push({ testName: '__process_timeout__', file: relFile, failureType: 'processTimeout' });
+        if (spawnError) failures.push({ testName: '__process_error__', file: relFile, failureType: 'processError' });
+        resolve({ ok: code === 0 && !killed && !spawnError, failures });
+      } catch (error) { reject(error); }
+    });
+  });
 }
 
 function runBuild() {
@@ -1032,6 +1030,9 @@ async function main() {
   // ── Backend tests ──────────────────────────────────────────────────────────
 
   if (runBackend) {
+    const filesToRun = backendItems.flatMap(({ mod }) => (mod.tests ?? []).map(t => path.join(ROOT, t.split('/').join(path.sep))));
+    console.log(`\nRunning ${new Set(filesToRun).size} unique backend files with ${TEST_CONCURRENCY} worker(s).`);
+    const fileResults = await runTestPool(filesToRun, runBackendFile, TEST_CONCURRENCY);
     console.log('\n── Backend tests ─────────────────────────────────────────────────────────────');
 
     for (const { id, mod, backendHash } of backendItems) {
@@ -1040,7 +1041,9 @@ async function main() {
       );
       console.log(`\n  [${id}] ${(mod.tests ?? []).join(', ')}`);
 
-      const { ok, failures } = runBackendTests(files);
+      const results = files.map(file => fileResults.get(file));
+      const ok = results.every(result => result.ok);
+      const failures = results.flatMap(result => result.failures);
       if (!record[id]) record[id] = {};
 
       if (ok) {

@@ -1,6 +1,12 @@
 {
   "version": "1",
   "modules": {
+    "ci-runner": {
+      "description": "Bounded, deduplicated backend test execution",
+      "sources": ["scripts/test-affected.mjs", "scripts/test-pool.mjs", ".github/workflows/ci.yml"],
+      "tests": ["test/test-pool.test.ts"],
+      "smokeIds": []
+    },
     "auth": {
       "description": "Authentication, login, session cookies",
       "sources": [

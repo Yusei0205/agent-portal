@@ -24,6 +24,7 @@ on:
       - codex-runner/**
       - web/**
       - scripts/**
+      - '!scripts/test-*.mjs'
       - infra/**
       - package.json
       - package-lock.json
