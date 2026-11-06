@@ -44,15 +44,15 @@ export function CostPanel({ period, projectId, user, refreshKey }) {
 
   if (error) {
     return (
-      <section className="panel db-cost" aria-label="Cost" style={{ marginBottom: 16 }}>
-        <h2 className="db-panel-title"><Icon name="chart" size={16} aria-hidden="true" />Cost</h2>
+      <section className="panel db-cost" aria-label="Cost and usage" style={{ marginBottom: 16 }}>
+        <h2 className="db-panel-title"><Icon name="chart" size={16} aria-hidden="true" />Cost and usage</h2>
         <p className="error-note" role="alert">{error}</p>
       </section>
     );
   }
   if (!data) {
     return (
-      <section className="panel db-cost" aria-label="Cost" style={{ marginBottom: 16 }}>
+      <section className="panel db-cost" aria-label="Cost and usage" style={{ marginBottom: 16 }}>
         <div className="skeleton" style={{ height: 180 }} />
       </section>
     );
@@ -62,17 +62,19 @@ export function CostPanel({ period, projectId, user, refreshKey }) {
   const showByUser = user?.is_admin && data.costByUser?.length > 0;
 
   return (
-    <section className="panel db-cost" aria-label="Cost" style={{ marginBottom: 16 }}>
+    <section className="panel db-cost" aria-label="Cost and usage" style={{ marginBottom: 16 }}>
       <h2 className="db-panel-title">
         <Icon name="chart" size={16} aria-hidden="true" />
-        Cost
+        Cost and usage
         <span className="muted" style={{ fontWeight: 400, marginLeft: 8, fontSize: '0.8rem' }}>
-          {fmtCost(data.totalCost)} total · {fmtTokens(data.totalTokens)} tokens · {data.totalRuns} runs
+          {fmtCost(data.totalCost)} total · {Number(data.totalCredits ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} credits · {fmtTokens(data.totalTokens)} tokens · {data.totalRuns} runs
         </span>
       </h2>
 
-      {data.totalRuns === 0 && data.totalCost === 0 ? (
-        <p className="muted" style={{ padding: '12px 0' }}>No cost in this period yet.</p>
+      <p className="muted" style={{ fontSize: '0.8rem' }}>Credits are reported separately from USD. Codex subscription runs report tokens; dollar cost is not provided by Codex.</p>
+
+      {data.totalRuns === 0 && data.totalCost === 0 && !data.totalCredits && !data.totalTokens ? (
+        <p className="muted" style={{ padding: '12px 0' }}>No usage in this period yet.</p>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
           {data.dailyCosts?.length > 0 && (

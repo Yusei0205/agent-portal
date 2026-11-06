@@ -62,6 +62,7 @@ async function requireMember(
 
 interface InsightsShape {
   totalCost: number;
+  totalCredits: number;
   totalRuns: number;
   totalTokens: number;
   failureRate: number;
@@ -103,6 +104,7 @@ async function computeInsights(
 
   return {
     totalCost: totals.totalCost,
+    totalCredits: totals.totalCredits,
     totalRuns,
     totalTokens: totals.totalTokens,
     failureRate,

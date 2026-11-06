@@ -49,12 +49,26 @@ describe('GET /api/insights', () => {
     assert.ok('runsByStatus' in body, 'should have runsByStatus');
 
     assert.equal(body.totalCost, 0);
+    assert.equal(body.totalCredits, 0);
     assert.equal(body.totalRuns, 0);
     assert.equal(body.totalTokens, 0);
     assert.equal(body.failureRate, 0);
     assert.equal(body.avgRunDuration, 0);
     assert.ok(Array.isArray(body.dailyCosts));
     assert.equal((body.dailyCosts as unknown[]).length, 30, 'should have 30 daily buckets');
+  });
+
+  test('counts fractional credits separately from dollars and respects the project filter', async () => {
+    const projectId = 'credit-insights-project';
+    getDb().prepare("INSERT INTO projects (id, name, slug, created_at) VALUES (?, 'Credits', ?, ?)").run(projectId, projectId, now());
+    getDb().prepare('INSERT INTO budget_usage (project_id, cost_usd, credits, input_tokens, output_tokens, created_at) VALUES (?, 0, 1.2345, 10, 5, ?)').run(projectId, now());
+    const r = await fetchJson(baseUrl, '/api/insights?period=today&projectId=' + projectId, { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    assert.equal((r.body as any).totalCredits, 1.2345);
+    assert.equal((r.body as any).totalCost, 0);
+    assert.equal((r.body as any).totalTokens, 15);
+    getDb().prepare('DELETE FROM budget_usage WHERE project_id = ?').run(projectId);
+    getDb().prepare('DELETE FROM projects WHERE id = ?').run(projectId);
   });
 
   test('GET /api/insights?period=7d returns correct shape', async () => {

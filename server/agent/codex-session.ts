@@ -89,6 +89,28 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
   let usageBaseline: RpcParams | null = null;
   const initialUsage = new Map<string, RpcParams>();
   let turnRequested = false;
+  const pendingUsage: RpcParams[] = [];
+  const recordUsage = (params: RpcParams) => {
+    const usage = params.tokenUsage?.last;
+    const total = params.tokenUsage?.total;
+    if (!turnRequested) { usageBaseline = total ?? null; return; }
+    // Previous-thread usage may arrive while turn/start is still pending.
+    // Wait for the authoritative turn ID before assigning usage to this run.
+    if (!turnId) { pendingUsage.push(params); return; }
+    if (params.turnId !== turnId) {
+      if (!inputTokens && !outputTokens) usageBaseline = total ?? usageBaseline;
+      return;
+    }
+    if (total) {
+      usageBaseline ??= usage
+        ? Object.fromEntries(['inputTokens', 'outputTokens', 'cachedInputTokens'].map(k => [k, (total[k] ?? 0) - (usage[k] ?? 0)]))
+        : {};
+      inputTokens = Math.max(0, (total.inputTokens ?? 0) - (usageBaseline.inputTokens ?? 0));
+      outputTokens = Math.max(0, (total.outputTokens ?? 0) - (usageBaseline.outputTokens ?? 0));
+      cacheTokens = Math.max(0, (total.cachedInputTokens ?? 0) - (usageBaseline.cachedInputTokens ?? 0));
+    }
+  };
+  const flushUsage = () => { for (const params of pendingUsage.splice(0)) recordUsage(params); };
   const items = new Map<string, RpcParams>();
   const text = new Map<string, string>();
   let resolveTurn: (() => void) | undefined;
@@ -123,7 +145,7 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
         return;
       }
       if (params.threadId !== threadId) return;
-      if (method === 'turn/started') turnId = params.turn?.id ?? turnId;
+      if (method === 'turn/started') { turnId = params.turn?.id ?? turnId; if (turnId) flushUsage(); }
       if (method === 'item/agentMessage/delta') {
         const id = String(params.itemId);
         const delta = String(params.delta ?? '');
@@ -146,15 +168,7 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
             output: item.aggregatedOutput ?? JSON.stringify(item.changes ?? item.result ?? '') });
         }
       } else if (method === 'thread/tokenUsage/updated') {
-        const usage = params.tokenUsage?.last;
-        const total = params.tokenUsage?.total;
-        if (!turnRequested || params.turnId !== turnId) { usageBaseline = total ?? null; return; }
-        if (usage && total) {
-          usageBaseline ??= Object.fromEntries(['inputTokens', 'outputTokens', 'cachedInputTokens'].map(k => [k, (total[k] ?? 0) - (usage[k] ?? 0)]));
-          inputTokens = Math.max(0, (total.inputTokens ?? 0) - (usageBaseline.inputTokens ?? 0));
-          outputTokens = Math.max(0, (total.outputTokens ?? 0) - (usageBaseline.outputTokens ?? 0));
-          cacheTokens = Math.max(0, (total.cachedInputTokens ?? 0) - (usageBaseline.cachedInputTokens ?? 0));
-        }
+        recordUsage(params);
       } else if (method === 'turn/completed') {
         const turn = params.turn ?? {};
         if (turn.status === 'completed') resolveTurn?.();
@@ -183,7 +197,9 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
     await options.onThread?.(threadId);
     emit('status', { text: 'Codex is running with your ChatGPT sign-in. Dollar cost is not reported by Codex.' });
     turnRequested = true;
-    await client.request('turn/start', { threadId, input: [{ type: 'text', text: options.prompt ?? run.goal }] });
+    const started = await client.request('turn/start', { threadId, input: [{ type: 'text', text: options.prompt ?? run.goal }] });
+    turnId ||= started.turn?.id ?? '';
+    if (turnId) flushUsage();
     await completed;
     if (signal?.aborted) throw abortError();
     const summary = [...text.values()].join('\n').trim() || 'Run complete.';

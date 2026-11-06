@@ -172,6 +172,7 @@ export class DynamoDbStatsRepository implements StatsRepository {
     const endDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 
     let totalCost = 0;
+    let totalCredits = 0;
     let totalTokens = 0;
 
     if (projectIds === null) {
@@ -187,6 +188,7 @@ export class DynamoDbStatsRepository implements StatsRepository {
       });
       for (const item of items) {
         totalCost += getNumber(item, 'costUsd');
+        totalCredits += getNumber(item, 'credits');
         totalTokens += getNumber(item, 'inputTokens') + getNumber(item, 'outputTokens');
       }
     } else {
@@ -194,11 +196,12 @@ export class DynamoDbStatsRepository implements StatsRepository {
       const items = await queryRollupRange(this.client, 'STATS#', projectIds, startDate, endDate);
       for (const item of items) {
         totalCost += getNumber(item, 'costUsd');
+        totalCredits += getNumber(item, 'credits');
         totalTokens += getNumber(item, 'inputTokens') + getNumber(item, 'outputTokens');
       }
     }
 
-    return { totalCost, totalTokens };
+    return { totalCost, totalCredits, totalTokens };
   }
 
   // ── H2: run counts by status ────────────────────────────────────────────────
