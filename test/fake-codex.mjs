@@ -68,8 +68,16 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }
     if (prompt.includes('EXIT_PROCESS')) { process.exit(7); }
     if (prompt.includes('HANG_FOREVER')) return;
+    if (prompt.includes('MCP_FAILURE')) {
+      notify('item/completed', { ...scope, item: { id: 'mcp-failure', type: 'mcpToolCall', tool: 'create_pull_request', status: 'failed', error: { message: 'user rejected MCP tool call' } } });
+      notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } }); return;
+    }
     if (prompt.includes('REQUEST_PORTAL_PR')) {
       void (async () => {
+        if (threadSetup.config.mcp_servers.portal_pr.tools?.create_pull_request?.approval_mode !== 'approve') {
+          notify('item/completed', { ...scope, item: { id: 'pr-denied', type: 'mcpToolCall', tool: 'create_pull_request', status: 'failed', error: { message: 'user rejected MCP tool call' } } });
+          notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } }); return;
+        }
         const url = threadSetup.config.mcp_servers.portal_pr.url;
         const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_pull_request', arguments: { repo: 'shop', base: 'main_v3' } } }) });

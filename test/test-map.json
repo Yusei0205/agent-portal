@@ -926,7 +926,9 @@
         "server/repositories/ai-attachments-dynamodb.ts",
         "web/src/components/AttachmentPicker.jsx",
         "web/src/components/FilePreviewModal.jsx",
-        "web/src/styles/file-preview.css"
+        "web/src/styles/file-preview.css",
+        "server/session-attachments.ts",
+        "web/src/pages/sessions/IdeWorkspace.jsx"
       ],
       "tests": [
         "test/ai-attachments.test.ts",

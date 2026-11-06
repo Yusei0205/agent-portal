@@ -173,6 +173,23 @@ async function resolveCredentials(repo: Repository, kind: 'github' | 'codecommit
 
 // ── GitHub ────────────────────────────────────────────────────────────────────
 
+/** Unknown state keeps duplicate protection in place; only confirmed closed PRs can be replaced. */
+export async function githubPullRequestState(repo: Repository, number: number): Promise<'open' | 'closed' | null> {
+  if (hostKind(repo) !== 'github' || !Number.isSafeInteger(number) || number < 1) return null;
+  const slug = parseGitHubOwnerRepo(repo.url);
+  if (!slug) return null;
+  try {
+    const creds = await clients.credentials(repo, 'github');
+    if (creds?.kind !== 'github') return null;
+    const response = await clients.fetch(`https://api.github.com/repos/${encodeURIComponent(slug.owner)}/${encodeURIComponent(slug.repo)}/pulls/${number}`, {
+      headers: { Authorization: `Bearer ${creds.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) return null;
+    const value = await response.json();
+    return value?.state === 'open' || value?.state === 'closed' ? value.state : null;
+  } catch { return null; }
+}
+
 async function createOnGitHub(input: CreatePrInput, title: string, body: string): Promise<CreatedPr> {
   const { repo, base, head } = input;
   const slug = parseGitHubOwnerRepo(repo.url);
