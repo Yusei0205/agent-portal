@@ -230,6 +230,23 @@ describe('Codex integration', () => {
     assert.equal(await runCodex(await makeContext('Continue', workflow.engine_session_id)), 'Hello from Codex');
   });
 
+  it('records cumulative-only usage before turn/started and avoids counting resumed history', async () => {
+    for (const session of [null, 'thread-fixture']) {
+      const ctx = await makeContext('TOTAL_ONLY EARLY_USAGE', session);
+      await runCodex(ctx);
+      const run = one<any>('SELECT * FROM p6_runs WHERE id = ?', ctx.run.runId);
+      assert.equal(run.input_tokens, 100);
+      assert.equal(run.output_tokens, 20);
+      assert.equal(run.cache_read_tokens, 5);
+      const budget = one<any>('SELECT * FROM budget_usage WHERE workflow_id = ?', ctx.run.workflowId);
+      assert.equal(budget.input_tokens + budget.output_tokens, 120);
+      assert.equal(budget.cost_usd, 0);
+      const insights = await fetchJson(baseUrl, '/api/insights?projectId=' + projectId, { cookie });
+      assert.equal(insights.status, 200);
+      assert.ok((insights.body as any).totalTokens >= 120);
+    }
+  });
+
   it('propagates failed turns and process exits', async () => {
     await assert.rejects(runCodex(await makeContext('FAIL_TURN')), /Usage limit exceeded/);
     await assert.rejects(runCodex(await makeContext('EXIT_PROCESS')), /app-server exited/);

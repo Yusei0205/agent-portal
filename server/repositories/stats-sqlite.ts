@@ -75,15 +75,16 @@ export class SqliteStatsRepository implements StatsRepository {
   ): Promise<InsightTotals> {
     const projectFilter = projectId ? 'AND bu.project_id = ?' : '';
     const args: (string | null)[] = projectId ? [since, projectId] : [since];
-    const row = one<{ cost: number; tokens: number }>(
+    const row = one<{ cost: number; credits: number; tokens: number }>(
       `SELECT
          COALESCE(SUM(bu.cost_usd), 0) AS cost,
+         COALESCE(SUM(bu.credits), 0) AS credits,
          COALESCE(SUM(bu.input_tokens + bu.output_tokens), 0) AS tokens
        FROM budget_usage bu
        WHERE bu.created_at >= ? ${projectFilter}`,
       ...args,
     );
-    return { totalCost: Number(row?.cost ?? 0), totalTokens: Number(row?.tokens ?? 0) };
+    return { totalCredits: Number(row?.credits ?? 0), totalCost: Number(row?.cost ?? 0), totalTokens: Number(row?.tokens ?? 0) };
   }
 
   // ── H2: run counts by status ────────────────────────────────────────────────

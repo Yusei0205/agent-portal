@@ -37,6 +37,7 @@ import { usesDynamoDb } from './backend.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface InsightTotals {
+  totalCredits: number;
   totalCost: number;
   totalTokens: number;
 }

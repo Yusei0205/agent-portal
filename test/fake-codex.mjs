@@ -53,7 +53,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   } else if (method === 'turn/start') {
     const scope = { threadId: thread, turnId: 'turn-fixture' };
     reply({ turn: { id: scope.turnId, status: 'inProgress' } });
-    notify('turn/started', { threadId: thread, turn: { id: scope.turnId } });
+    if (!params.input?.[0]?.text?.includes('EARLY_USAGE')) notify('turn/started', { threadId: thread, turn: { id: scope.turnId } });
     const prompt = params.input?.[0]?.text || '';
     if (prompt.includes('REQUEST_AUTH_REFRESH')) {
       refreshReply = tokens => {
@@ -95,7 +95,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     notify('item/agentMessage/delta', { ...scope, itemId: 'answer', delta: 'Hello ' });
     notify('item/agentMessage/delta', { ...scope, itemId: 'answer', delta: 'from Codex' });
     notify('item/completed', { ...scope, item: { id: 'answer', type: 'agentMessage', text: 'Hello from Codex' } });
-    notify('thread/tokenUsage/updated', { ...scope, tokenUsage: { last: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 5 }, total: { inputTokens: 140, outputTokens: 28, cachedInputTokens: 5 } } });
+    notify('thread/tokenUsage/updated', { ...scope, tokenUsage: { ...(prompt.includes('TOTAL_ONLY') ? {} : { last: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 5 } }), total: { inputTokens: 140, outputTokens: 28, cachedInputTokens: 5 } } });
     notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } });
   } else send({ id, error: { code: -32601, message: 'Unknown method ' + method } });
 });
