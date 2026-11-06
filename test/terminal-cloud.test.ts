@@ -58,6 +58,7 @@ describe('cloud terminal transport and authorization', () => {
   it('refuses unauthenticated users, unknown sessions, and non-owner project editors before invoking the runner', async () => {
     const count = sent.length;
     assert.equal((await fetchJson(base, '/api/terminal/connect', { method: 'POST', body: { workflowId: workflow } })).status, 401);
+    assert.equal((await fetchJson(base, '/api/terminal/connect', { method: 'POST', cookie, headers: { Origin: 'https://other.example' }, body: { workflowId: workflow } })).status, 403);
     assert.equal((await fetchJson(base, '/api/terminal/connect', { method: 'POST', cookie, body: { workflowId: 'missing' } })).status, 404);
     const created = await fetchJson(base, '/api/api-tokens', { cookie, body: { name: 'Terminal denial fixture', scope: 'write' } });
     assert.equal(created.status, 201);

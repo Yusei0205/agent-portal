@@ -73,7 +73,7 @@ export function createRunnerTerminal(options: RunnerTerminalOptions) {
     return { type: 'terminal-ticket', ticket };
   }
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', ws => {
     let ticket: Ticket | undefined;
     let proc: { write(data: string): void; resize(cols: number, rows: number): void; kill(): void } | undefined;
     let closed = false;
@@ -109,8 +109,14 @@ export function createRunnerTerminal(options: RunnerTerminalOptions) {
       try { msg = JSON.parse(raw.toString()); } catch { ws.close(1008, 'Invalid terminal message'); return; }
       if (!ticket) {
         const candidate = typeof msg?.ticket === 'string' ? tickets.get(msg.ticket) : undefined;
-        if (msg?.type !== 'start' || !candidate || candidate.expires <= Date.now()
-          || sockets.size >= 3 || (req.headers.origin && req.headers.origin !== candidate.origin)) { ws.close(1008, 'Invalid or expired terminal ticket'); return; }
+        // AgentCore terminates the browser handshake and opens its own upstream socket.
+        // Its Origin is not the browser's Origin. Browser origin/CSRF checks belong at
+        // the portal ticket endpoint; the upstream socket authenticates with this nonce.
+        const denied = msg?.type !== 'start' ? 'Terminal start message required'
+          : !candidate ? 'Terminal ticket not found'
+          : candidate.expires <= Date.now() ? 'Terminal ticket expired'
+          : sockets.size >= 3 ? 'Too many open terminals' : null;
+        if (denied || !candidate) { ws.close(1008, denied ?? 'Terminal ticket not found'); return; }
         tickets.delete(msg.ticket); ticket = candidate; clearTimeout(handshake); sockets.add(ws); resetIdle();
         cols = Math.min(500, Math.max(20, Math.trunc(Number(msg.cols) || 80)));
         rows = Math.min(200, Math.max(5, Math.trunc(Number(msg.rows) || 24)));

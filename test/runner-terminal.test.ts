@@ -27,7 +27,7 @@ async function client(url: string, ticket: string, origin = payload.origin) {
   return { ws, messages };
 }
 
-it('binds one-use terminal tickets, enforces origin/workflow, and carries input, resize and bounded UTF-8 output', async () => {
+it('binds one-use terminal tickets, tolerates proxy origins, and carries input, resize and bounded UTF-8 output', async () => {
   let spawned = 0, saved = 0;
   let data: (s: string) => void = () => {};
   let exit: (e: { exitCode: number }) => void = () => {};
@@ -47,10 +47,10 @@ it('binds one-use terminal tickets, enforces origin/workflow, and carries input,
     const authorization = signed();
     const issued = await terminal.issue(authorization);
     await assert.rejects(terminal.issue(authorization), /already been used/);
-    const bad = await client(url, String(issued.ticket), 'https://other.example');
+    const bad = await client(url, 'not-a-terminal-ticket', 'https://other.example');
     clients.push(bad.ws);
     const [badCode] = await once(bad.ws, 'close'); assert.equal(badCode, 1008); assert.equal(spawned, 0);
-    const good = await client(url, String(issued.ticket));
+    const good = await client(url, String(issued.ticket), 'http://proxy.internal');
     clients.push(good.ws);
     await until(() => good.messages.some(m => m.type === 'ready'));
     assert.equal(terminal.busy(), true);
