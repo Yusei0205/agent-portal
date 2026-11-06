@@ -53,6 +53,14 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('.automation-inspector').getByLabel('Name', { exact: true }).waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2), 'mobile page should not overflow horizontally');
+    // A step can be removed with the button in its settings, together with its connections.
+    const nodesBefore = await page.locator('.automation-canvas .react-flow__node').count();
+    const edgesBefore = await page.locator('.automation-canvas .react-flow__edge').count();
+    await page.getByText('Run tests', { exact: true }).click();
+    await page.getByRole('button', { name: 'Delete step' }).click();
+    assert.equal(await page.locator('.automation-canvas .react-flow__node').count(), nodesBefore - 1);
+    assert.ok((await page.locator('.automation-canvas .react-flow__edge').count()) < edgesBefore, 'its connections go too');
+    assert.equal(await page.getByRole('button', { name: 'Delete step' }).count(), 0, 'nothing is selected afterwards');
     assert.deepEqual(errors, []);
     await context.close();
   } finally { await browser.close(); stopLocalAutomationTimers(); await cleanup(); }
