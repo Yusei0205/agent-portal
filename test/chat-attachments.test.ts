@@ -76,7 +76,7 @@ describe('chat attachment delivery', () => {
     assert.equal(await fs.readFile(protectedFile, 'utf8'), 'keep this content');
     const symlinkDir = path.join(config.dataDir, 'chat-symlink-test');
     await fs.mkdir(symlinkDir, { recursive: true });
-    await fs.symlink(dir, path.join(symlinkDir, 'attachments'), 'dir');
+    await fs.symlink(dir, path.join(symlinkDir, 'attachments'), process.platform === 'win32' ? 'junction' : 'dir');
     await assert.rejects(stageChatAttachments(projectId, workflowId, [event], symlinkDir), /Invalid attachment directory/);
     await assert.rejects(stageChatAttachments(projectId, workflowId, [{ data: JSON.stringify({ attachments: [{ path: '../outside.txt', name: 'outside', size: 1 }] }) }], dir), /Invalid attachment path/);
   });
