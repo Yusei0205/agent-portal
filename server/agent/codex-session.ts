@@ -165,7 +165,7 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
             : item.type === 'fileChange' ? { changes: item.changes } : item.arguments;
           if (method === 'item/started') emit('tool-start', { toolCallId: item.id, toolName, toolInput: JSON.stringify(toolInput ?? {}) });
           else emit('tool-end', { toolCallId: item.id, toolName, status: item.status,
-            output: item.aggregatedOutput ?? JSON.stringify(item.changes ?? item.result ?? '') });
+            output: item.aggregatedOutput ?? item.error?.message ?? JSON.stringify(item.changes ?? item.result ?? '') });
         }
       } else if (method === 'thread/tokenUsage/updated') {
         recordUsage(params);

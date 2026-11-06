@@ -19,7 +19,7 @@ import type { WorkflowRecord } from './repositories/sessions.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getMembership } from './project-access.ts';
 import { getPullRequestSettings } from './project-settings-pr.ts';
-import { createPullRequest, PullRequestError, scrubSecrets } from './pull-requests.ts';
+import { createPullRequest, githubPullRequestState, PullRequestError, scrubSecrets } from './pull-requests.ts';
 import { createReview, ReviewCreateError } from './review.ts';
 import { createInboxItem } from './inbox.ts';
 import { listRemoteBranches, _getCloneEnv } from './repos.ts';
@@ -54,6 +54,9 @@ interface PrEvent {
 const BUSY_STATES: PrState[] = ['asked', 'pushing', 'pushed', 'opened', 'review-started', 'review-failed'];
 /** A pull request exists for the branch. */
 const OPENED_STATES: PrState[] = ['opened', 'review-started', 'review-failed'];
+async function stillOpen(prior: PrEvent, repo: Repository): Promise<boolean> {
+  return !prior.number || await githubPullRequestState(repo, prior.number) !== 'closed';
+}
 
 const IDENTITY = { name: 'Agent Portal', email: 'agent-portal@users.noreply.invalid' };
 const BODY_FINAL_MESSAGE_MAX = 3000;
@@ -222,7 +225,8 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
 
   await serialized(`${ctx.workflowId}:${repoId}`, async () => {
     const prior = (await latestByRepo(ctx.workflowId)).get(repoId);
-    if (prior && BUSY_STATES.includes(prior.state)) return; // idempotent: already asked, pushed or opened
+    if (prior && BUSY_STATES.includes(prior.state)
+      && (!OPENED_STATES.includes(prior.state) || await stillOpen(prior, resolved.record))) return;
 
     const base: PrEvent = {
       repo: change.repo, repoId, provider: String(resolved.record.provider ?? '') || undefined, state: 'available', base: change.base, commits: change.commits, files: change.files,
@@ -280,7 +284,7 @@ export async function createPullRequestForSession(
 
     await serialized(`${workflowId}:${repoId}`, async () => {
       const prior = (await latestByRepo(workflowId)).get(repoId);
-      if (prior && OPENED_STATES.includes(prior.state)) return;
+      if (prior && OPENED_STATES.includes(prior.state) && await stillOpen(prior, resolved.record)) return;
       const base: PrEvent = {
         repo: resolved.runnerName, repoId, provider: String(resolved.record.provider ?? '') || undefined, state: 'available',
         base: opts.base || prior?.base || resolved.record.default_branch || 'main',
@@ -462,7 +466,7 @@ export function registerSessionPullRequestRoutes(): void {
     if (!rec || String(rec.project_id) !== String(w.project_id)) { sendJson(res, 404, { error: 'Repository not found in this session' }); return; }
 
     const prior = await sessionPullRequestStatus(workflowId, repoId);
-    if (prior && OPENED_STATES.includes(prior.state)) {
+    if (prior && OPENED_STATES.includes(prior.state) && await stillOpen(prior, rec as unknown as Repository)) {
       sendJson(res, 409, { error: 'A pull request is already open for this repository in this session.' });
       return;
     }

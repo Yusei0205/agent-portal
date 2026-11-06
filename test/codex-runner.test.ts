@@ -92,6 +92,10 @@ describe('Codex AgentCore runner HTTP contract', () => {
     assert.ok(setup.config.agents.backend.config_file.endsWith('backend.toml'));
     assert.equal(setup.config['sandbox_workspace_write.network_access'], false);
   });
+  it('shows native MCP failure reasons instead of an empty tool result', async () => {
+    const output = await events(await post(payload('MCP_FAILURE')));
+    assert.equal(output.find(e => e.type === 'portal-event' && e.eventType === 'tool-end')?.payload.output, 'user rejected MCP tool call');
+  });
   it('supports isolated portal AI generation and denies its tool approvals', async () => {
     const output = await events(await post({ mode: 'codex-text', prompt: 'ASK_PERMISSION', accessToken: 'short-lived' }));
     assert.equal(output.find(e => e.type === 'result').text, 'Declined action');
