@@ -121,7 +121,9 @@ export class DynamoDbBudgetRepository implements BudgetRepository {
         user_id: input.user_id,
         project_id: input.project_id,
         workflow_id: input.workflow_id,
-        run_id: input.run_id,
+        // run_id is a sparse GSI-InputHash key on the shared production table.
+        // DynamoDB rejects NULL index keys even when the other index key is absent.
+        run_id: input.run_id ?? undefined,
       }),
     };
 
