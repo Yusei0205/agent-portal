@@ -233,7 +233,8 @@
         "test/web-pull-request-card.test.ts",
         "test/sessions-repo.test.ts",
         "test/engine-switch.test.ts",
-        "test/approval-state.test.ts"
+        "test/approval-state.test.ts",
+        "test/session-composer-layout.test.ts"
       ],
       "smokeIds": [
         "sessions"
