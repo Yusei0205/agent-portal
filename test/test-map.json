@@ -729,6 +729,7 @@
       "description": "Code review creation, lifecycle, verdict, exports, and CI control plane",
       "sources": [
         "server/review.ts",
+        "server/review-result.ts",
         "server/review-lifecycle.ts",
         "server/pull-requests.ts",
         "server/session-pr.ts",
@@ -744,6 +745,8 @@
       ],
       "tests": [
         "test/review.test.ts",
+        "test/review-result.test.ts",
+        "test/web-review-findings.test.ts",
         "test/reviews-repo.test.ts",
         "test/pull-requests.test.ts",
         "test/session-pr.test.ts",

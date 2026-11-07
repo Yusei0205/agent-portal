@@ -318,6 +318,23 @@ describe('processReviewReport: a reply with no report is not a clean review', ()
     assert.deepEqual(await processReviewReport(newReview('```json\n{"summary": "cut off", "findings": [\n```')), { count: 0, reported: false });
   });
 
+  it('unrelated JSON and malformed findings never count as a clean report', async () => {
+    for (const report of [{}, { summary: 'No report' }, { findings: null }, { findings: [null] }, { findings: [{ file: 'a.ts', body: '', severity: 'high' }] }]) {
+      assert.deepEqual(await processReviewReport(newReview('```json\n' + JSON.stringify(report) + '\n```')), { count: 0, reported: false });
+    }
+  });
+
+  it('keeps full details and fixes, including distinct findings with the same long prefix', async () => {
+    const prefix = 'Shared context '.repeat(250);
+    const findings = [1, 2].map(n => ({ file: 'a.ts', line: 4, severity: 'high', message: prefix + n, suggestion: 'Fix '.repeat(600) }));
+    const rid = newReview('```json\n' + JSON.stringify({ findings }) + '\n```');
+    assert.deepEqual(await processReviewReport(rid), { count: 2, reported: true });
+    const saved = all('SELECT body FROM p10_findings WHERE review_id = ?', rid);
+    assert.equal(saved.length, 2);
+    assert.ok(saved.every(f => String(f.body).includes(findings[0].suggestion)));
+    assert.equal((await processReviewReport(rid)).count, 0, 'a repeated report still deduplicates');
+  });
+
   it('a report with findings counts them', async () => {
     const got = await processReviewReport(newReview('```json\n[{"file":"a.ts","line":2,"severity":"high","title":"T","body":"B"}]\n```'));
     assert.deepEqual(got, { count: 1, reported: true });

@@ -39,6 +39,7 @@ import { appendAudit } from './audit.ts';
 import { buildXlsx, buildDocx } from './docgen.ts';
 import { decrypt } from './secrets.ts';
 import { config } from './config.ts';
+import { normalizeReviewFindings } from './review-result.ts';
 
 import { getMemberRow, getProjectRow, getRepoInfo } from './project-access.ts';
 import { getProjectRepository } from './repositories/projects.ts';
@@ -907,40 +908,26 @@ function readFindingsReport(text: string): { found: boolean; findings: Array<Par
   if (jsonBlockMatch) {
     try {
       const parsed = JSON.parse(jsonBlockMatch[1]);
-      const arr = Array.isArray(parsed) ? parsed : (parsed.findings ?? parsed.results ?? []);
-      if (Array.isArray(arr)) return { found: true, findings: normalizeParsedFindings(arr) };
+      const arr = Array.isArray(parsed) ? parsed : (parsed?.findings ?? parsed?.results);
+      if (Array.isArray(arr)) return { found: true, findings: normalizeReviewFindings(arr) };
     } catch { /* fall through */ }
   }
   const jsonObjMatch = text.match(/\{[\s\S]*"findings"\s*:\s*\[[\s\S]*?\][\s\S]*\}/);
   if (jsonObjMatch) {
     try {
       const parsed = JSON.parse(jsonObjMatch[0]);
-      if (Array.isArray(parsed.findings)) return { found: true, findings: normalizeParsedFindings(parsed.findings) };
+      if (Array.isArray(parsed.findings)) return { found: true, findings: normalizeReviewFindings(parsed.findings) };
     } catch { /* fall through */ }
   }
   const jsonArrMatch = text.match(/\[\s*\{[\s\S]*?\}\s*\]/);
   if (jsonArrMatch) {
     try {
       const arr = JSON.parse(jsonArrMatch[0]);
-      if (Array.isArray(arr)) return { found: true, findings: normalizeParsedFindings(arr) };
+      if (Array.isArray(arr)) return { found: true, findings: normalizeReviewFindings(arr) };
     } catch { /* fall through */ }
   }
   const findings = parseFindingsFromMarkdown(text);
   return { found: findings.length > 0, findings };
-}
-
-function normalizeParsedFindings(arr: unknown[]): Array<Partial<Finding>> {
-  return arr.map((item: unknown) => {
-    const f = item as Record<string, unknown>;
-    return {
-      file_path: String(f.file ?? f.file_path ?? f.path ?? '').trim(),
-      line_number: f.line != null ? (Number.isFinite(Number(f.line)) ? Number(f.line) : null) : null,
-      severity: parseSeverity(f.severity),
-      title: String(f.title ?? f.message ?? f.category ?? 'Finding').slice(0, 200),
-      body: String(f.body ?? f.description ?? f.message ?? '').slice(0, 2000),
-      confidence: f.confidence != null ? Math.min(1, Math.max(0, Number(f.confidence))) : null,
-    };
-  }).filter((f) => f.file_path || f.body);
 }
 
 function parseFindingsFromMarkdown(text: string): Array<Partial<Finding>> {
@@ -966,7 +953,7 @@ function parseFindingsFromMarkdown(text: string): Array<Partial<Finding>> {
       line_number: f.line != null && Number.isFinite(Number(f.line)) ? Number(f.line) : null,
       severity: parseSeverity(f.severity),
       title: (f.title ?? f.category ?? f.rule ?? 'Finding').slice(0, 200),
-      body: body.slice(0, 2000),
+      body,
       confidence: null,
     });
   }
@@ -976,7 +963,7 @@ function parseFindingsFromMarkdown(text: string): Array<Partial<Finding>> {
 function deduplicateFindings(incoming: Array<Partial<Finding>>, existingKey: Set<string>): Array<Partial<Finding>> {
   const result: Array<Partial<Finding>> = [];
   for (const f of incoming) {
-    const key = `${f.file_path ?? ''}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim().slice(0, 100)}`;
+    const key = `${f.file_path ?? ''}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim()}`;
     if (existingKey.has(key)) continue;
     existingKey.add(key);
     result.push(f);
@@ -1030,7 +1017,7 @@ export async function processReviewReport(reviewId: string, workDir?: string): P
 
   const existing = await reviewsRepo.listFindings(reviewId);
   const existingKeys = new Set(
-    existing.map((f) => `${f.file_path}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim().slice(0, 100)}`),
+    existing.map((f) => `${f.file_path}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim()}`),
   );
 
   const toInsert = deduplicateFindings(parsed, existingKeys);
