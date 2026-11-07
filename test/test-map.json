@@ -10,7 +10,8 @@
         "web/src/pages/Automations.jsx",
         "web/src/styles/automations.css",
         "infra/lib/automation-bridge.js",
-        "server/automations/templates.ts"
+        "server/automations/templates.ts",
+        "server/automations/generate.ts"
       ],
       "tests": [
         "test/automations.test.ts",
@@ -19,7 +20,8 @@
         "test/automation-bridge.test.ts",
         "test/automation-templates.test.ts",
         "test/automation-list.test.ts",
-        "test/automation-run-options.test.ts"
+        "test/automation-run-options.test.ts",
+        "test/automation-generate.test.ts"
       ],
       "smokeIds": []
     },

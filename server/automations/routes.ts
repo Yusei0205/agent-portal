@@ -5,6 +5,8 @@ import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getAutomationsRepository } from '../repositories/automations.ts';
 import { parseGraph, sdlcTemplate } from './schema.ts';
 import { automationTemplates } from './templates.ts';
+import { generateWorkflow, DESCRIPTION_MAX } from './generate.ts';
+import { jiraConnected } from '../jira.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { integrationIsPersonal } from '../agent/runner-integrations.ts';
 import { definitionKey, versionKey, runKey, scheduleAutomation, type Definition, type PublishedVersion, type AutomationRun, type RunOptions } from './engine.ts';
@@ -88,6 +90,23 @@ export function registerAutomationRoutes(): void {
     const d: Definition = { id: generateId(), project_id: project, revision: 1, name: wanted, graph, published_version: null, created_by: req.user!.id, updated_at: now() };
     await (await getAutomationsRepository()).put(project, definitionKey(d.id), d, null);
     sendJson(res, 201, { definition: d });
+  });
+  // Draft a workflow from a plain-language description with AI. Nothing is saved: the page shows the draft, and
+  // creating it goes through POST above like any other workflow. `previous` + `changes` refine an earlier draft.
+  router.post(`${prefix}/generate`, async (req, res) => {
+    const project = await access(req, true); const body = req.body as Record<string, unknown>;
+    const description = str(body.description, 'Description', { max: DESCRIPTION_MAX }).trim();
+    const changes = str(body.changes as string, 'Changes', { max: 2000, optional: true }).trim();
+    const previous = body.previous ? parseGraph(body.previous) : null;
+    const engine = ['codex', 'claude-code', 'kiro', 'demo'].includes(String(body.engine)) ? body.engine as 'codex' | 'claude-code' | 'kiro' | 'demo' : undefined;
+    const repos = await getGitReposRepository().listByProject(project);
+    const integrations = (await getIntegrationsRepository().listByProject(project)).filter((i) => i.type === 'http' && i.enabled === 1);
+    const draft = await generateWorkflow({
+      description, previous, changes, engine,
+      repoNames: repos.map((r) => r.name), integrationNames: integrations.map((i) => i.name), jiraConnected: await jiraConnected(project),
+      userId: req.user!.id,
+    });
+    sendJson(res, 200, { draft });
   });
   router.get(`${prefix}/:aid`, async (req, res) => {
     const project = await access(req); sendJson(res, 200, { definition: await definition(project, req.params.aid) });

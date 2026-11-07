@@ -90,6 +90,11 @@ async function loadApp(projectId: string): Promise<JiraApp | null> {
     : null;
 }
 
+/** Whether the project has a Jira connection (sign-in done). Used to tell a generated workflow whether {{jira.ticket}} works. */
+export async function jiraConnected(projectId: string): Promise<boolean> {
+  try { return Boolean(await loadConn(projectId)); } catch { return false; }
+}
+
 async function loadConn(projectId: string): Promise<Conn | null> {
   const raw = await getSecret(projectSecretKey(projectId));
   return raw ? parseJson<Conn | null>(raw, null) : null;
