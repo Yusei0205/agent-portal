@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { parseGraph } from '../server/automations/schema.ts';
 import { automationTemplates } from '../server/automations/templates.ts';
-import { renderInstructions, stopLocalAutomationTimers } from '../server/automations/engine.ts';
+import { renderInstructions, jiraTicketText, stopLocalAutomationTimers } from '../server/automations/engine.ts';
 
 describe('workflow templates', () => {
   const templates = automationTemplates();
@@ -85,5 +85,32 @@ describe('workflow templates through the API', () => {
   it('refuses an unknown template', async () => {
     const r = await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie, body: { name: 'x', templateId: 'nope' } });
     assert.equal(r.status, 400);
+  });
+});
+
+describe('Jira ticket read with the project connection', () => {
+  it('{{jira.ticket}} is replaced by the ticket text, and left readable when none was loaded', () => {
+    assert.equal(renderInstructions('Do it.\n\n{{jira.ticket}}', 'ABC-1', [], 'TICKET TEXT'), 'Do it.\n\nTICKET TEXT');
+    assert.match(renderInstructions('{{jira.ticket}}', 'ABC-1', []), /not loaded/);
+  });
+
+  it('the reading steps of the Jira templates ask for it at the end, after their instructions', () => {
+    for (const id of ['development', 'testing']) {
+      const g = automationTemplates().find((t) => t.id === id)!.graph;
+      const read = g.nodes.find((n) => n.id === 'ticket')!;
+      assert.ok(read.prompt.endsWith('{{jira.ticket}}'), `${id}: the ticket text comes last, so a long ticket cannot cut the instructions`);
+    }
+  });
+
+  it('never throws: no key in the request, or no Jira connection on the project', async () => {
+    const { baseUrl } = await createTestServer();
+    try {
+      const setup = await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'jt@example.com', name: 'Admin', password: 'password1234', provider: 'demo' } });
+      const project = ((await fetchJson(baseUrl, '/api/projects', { cookie: setup.cookie!, body: { name: 'No Jira' } })).body as { project: { id: string } }).project.id;
+      assert.match(await jiraTicketText(project, 'please look at the login bug'), /No Jira ticket key/);
+      const noConnection = await jiraTicketText(project, 'see https://x.atlassian.net/browse/ABC-123 please');
+      assert.match(noConnection, /could not read ABC-123/);
+      assert.match(noConnection, /Jira tools/);
+    } finally { stopLocalAutomationTimers(); await cleanup(); }
   });
 });

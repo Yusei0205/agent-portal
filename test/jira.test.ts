@@ -782,6 +782,33 @@ describe('Jira integration', () => {
     assert.equal(ticket.attachments[0].filename, 'trace.png');
   });
 
+  test('attachment route: an image of the ticket opens inline through the portal; other ids and anonymous callers are refused', async () => {
+    const get = (p: string, cookie?: string) => fetch(`${baseUrl}${p}`, { headers: { 'x-requested-with': 'agent-portal', ...(cookie ? { cookie } : {}) } });
+    const ok = await get(`/api/projects/${pid}/jira/issues/RLP-1/attachments/10001`, adminCookie);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get('content-type'), 'image/png');
+    assert.match(String(ok.headers.get('content-disposition')), /^inline;/);
+    assert.equal(ok.headers.get('x-content-type-options'), 'nosniff');
+    assert.match(String(ok.headers.get('content-security-policy')), /sandbox/);
+    assert.equal(Buffer.from(await ok.arrayBuffer()).toString(), 'fake-png-data');
+
+    assert.equal((await get(`/api/projects/${pid}/jira/issues/RLP-1/attachments/99999`, adminCookie)).status, 404, 'not an attachment of this ticket');
+    assert.equal((await get(`/api/projects/${pid}/jira/issues/RLP-1/attachments/abc`, adminCookie)).status, 404);
+    assert.equal((await get(`/api/projects/${pid}/jira/issues/RLP-1/attachments/10001`)).status, 401);
+  });
+
+  test('workflow ticket: the text is fenced and the ticket image is saved as a session attachment the agent will find', async () => {
+    const { jiraTicket } = await import('../server/automations/engine.ts');
+    const r = await jiraTicket(pid, 'wf-attachment-test', 'please check RLP-1');
+    assert.match(r.text, /<<<TICKET[\s\S]*TICKET>>>/);
+    assert.equal(r.attachments.length, 1);
+    assert.equal(r.attachments[0].name, 'trace.png');
+    assert.match(r.attachments[0].path, /^[A-Za-z0-9_-]+\.png$/);
+    assert.ok(r.text.includes(`attachments/${r.attachments[0].path} = trace.png`), 'the text says which file is which');
+    const none = await jiraTicket(pid, null, 'please check RLP-1');
+    assert.equal(none.attachments.length, 0, 'without a session nothing is saved');
+  });
+
   test('issue key validation: wrong project or bad format rejected', async () => {
     const bad = await fetchJson(baseUrl, `/api/projects/${pid}/jira/issues/OTHER-9`, { cookie: adminCookie });
     assert.equal(bad.status, 400);
