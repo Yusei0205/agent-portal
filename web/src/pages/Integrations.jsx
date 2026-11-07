@@ -128,7 +128,7 @@ function ConnectedServices({ projectId }) {
   return (
     <section className="integration-group" aria-labelledby="int-services">
       <h2 id="int-services">Connected services</h2>
-      <p className="muted small">Services agents can use. Git connections and agent sign-ins are in the other tabs of Connect.</p>
+      <p className="muted small">Services agents can use. Git connections are in the other tab of Connect; agent sign-ins are under Agent setup.</p>
       <div className="integration-services">
         <ServiceRow
           icon="ticket"

@@ -133,7 +133,7 @@ export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched })
                       {opt.id === current && <span className="muted"> (now)</span>}
                       <br />
                       <span className="muted small">
-                        {available ? opt.hint : <a href="#/connect/sign-ins">Not set up yet</a>}
+                        {available ? opt.hint : <a href="#/config/sign-ins">Not set up yet</a>}
                       </span>
                     </span>
                   </label>

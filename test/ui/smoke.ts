@@ -1624,14 +1624,14 @@ async function main() {
       await p.route(statusPattern, route => route.fulfill({ json: { supported: true, installed: null,
         signedIn: false, remote: true, canImportHostLogin: false } }));
       await p.route(loginPattern, route => route.fulfill({ json: { status: 'redirect',
-        authorizationUrl: BASE + '/#/connect/sign-ins?oauth_fixture=1' } }));
+        authorizationUrl: BASE + '/#/config/sign-ins?oauth_fixture=1' } }));
       try {
-        await goto(p, '/connect/sign-ins', 500);
+        await goto(p, '/config/sign-ins', 500);
         await p.reload({ waitUntil: 'domcontentloaded' });
         const section = p.locator('section[aria-labelledby="codex-credentials-title"]');
         await section.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
         await p.waitForURL('**oauth_fixture=1');
-        await goto(p, '/connect/sign-ins?codex_error=authorization_failed', 500);
+        await goto(p, '/config/sign-ins?codex_error=authorization_failed', 500);
         await p.reload({ waitUntil: 'domcontentloaded' });
         await section.getByRole('alert').filter({ hasText: 'OpenAI authorization could not be completed' }).waitFor();
         await section.getByRole('button', { name: 'Refresh status', exact: true }).click();
@@ -2311,8 +2311,8 @@ async function main() {
       await p.keyboard.press('y');
       await p.waitForTimeout(600);
       const url = p.url();
-      if (!url.includes('#/connect/sign-ins')) {
-        throw new Error(`g+y should navigate to #/connect/sign-ins, got: ${url}`);
+      if (!url.includes('#/config/sign-ins')) {
+        throw new Error(`g+y should navigate to #/config/sign-ins, got: ${url}`);
       }
     }, page);
     } // end §33 shell/credentials/config

@@ -117,7 +117,7 @@ export default function Settings({ user }) {
             <p className="muted" style={{ fontSize: '0.84rem', marginBottom: 16 }}>
               This is the portal's own AI account, used by code reviews, branch scans, Knowledge
               Ask and test generation. It is also the fallback for sessions when a user has no
-              sign-in under <a href="#/connect/sign-ins">Connect › Agent sign-ins</a>.
+              sign-in under <a href="#/config/sign-ins">Agent setup › Sign-ins</a>.
             </p>
             <Providers
               settings={settings}

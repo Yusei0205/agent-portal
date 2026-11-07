@@ -7,7 +7,6 @@
 import { HubContext, PageHeader } from '../components/PageHeader.jsx';
 import { navigate } from '../lib/router.js';
 import { ConnectionsPage } from './ConnectionsPage.jsx';
-import { Credentials } from './Credentials.jsx';
 import { Integrations } from './Integrations.jsx';
 
 export const CONNECT_TABS = [
@@ -17,11 +16,6 @@ export const CONNECT_TABS = [
     render: ({ user, projectId }) => <ConnectionsPage user={user} projectId={projectId} />,
   },
   {
-    id: 'sign-ins',
-    label: 'Agent sign-ins',
-    render: ({ user }) => <Credentials user={user} />,
-  },
-  {
     id: 'tools',
     label: 'Tools & services',
     render: ({ projectId }) => <Integrations projectId={projectId} />,
@@ -29,7 +23,7 @@ export const CONNECT_TABS = [
 ];
 
 // Addresses from before the tabs were renamed.
-const TAB_ALIASES = { 'code-hosts': 'git', models: 'sign-ins' };
+const TAB_ALIASES = { 'code-hosts': 'git' };
 
 export function ConnectHub({ tab, user, projectId }) {
   const wanted = TAB_ALIASES[tab] ?? tab;
@@ -38,7 +32,7 @@ export function ConnectHub({ tab, user, projectId }) {
     <div className="page connect-hub">
       <PageHeader
         title="Connect"
-        description="What the portal signs in to: Git hosts, the Codex, Kiro and Claude accounts that run agents, and the tools agents can use."
+        description="What the portal signs in to: Git hosts and the tools agents can use. Agent sign-ins are under Agent setup."
       />
       <div className="tab-bar" role="tablist" aria-label="Connect sections">
         {CONNECT_TABS.map((t) => (

@@ -72,7 +72,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
         {creds.length === 0 ? (
           <p className="field-hint" id={`${idPrefix}-cred`}>
             You have no credential of your own, so the portal&rsquo;s AI provider is used. Add one under{' '}
-            <a href="#/connect/sign-ins">Connect › Agent sign-ins</a> to choose here.
+            <a href="#/config/sign-ins">Agent setup › Sign-ins</a> to choose here.
           </p>
         ) : (
           <select

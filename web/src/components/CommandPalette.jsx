@@ -44,7 +44,7 @@ function buildNavItems(route, user) {
 
   // Always-available extra pages
   items.push(
-    { id: 'goto_credentials', label: 'Agent sign-ins', description: 'Your Kiro and Claude accounts',   keys: 'g y', href: '#/connect/sign-ins' },
+    { id: 'goto_credentials', label: 'Agent sign-ins', description: 'Your Kiro and Claude accounts',   keys: 'g y', href: '#/config/sign-ins' },
     { id: 'goto_config',      label: 'Agent setup',   description: 'Edit ~/.codex, ~/.kiro and ~/.claude config', keys: 'g x', href: '#/config'      },
     { id: 'goto_help',        label: 'Help',          description: 'User guide to every feature of the portal', href: '#/help' },
     // One entry per guide topic, so "help reviews" jumps straight to it
