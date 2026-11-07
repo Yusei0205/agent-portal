@@ -42,6 +42,7 @@ export default function Automations({ projectId }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [available, setAvailable] = useState(false); const [dirty, setDirty] = useState(false);
   const [input, setInput] = useState(''); const [newName, setNewName] = useState('SDLC automation');
+  const [templates, setTemplates] = useState([]); const [templateId, setTemplateId] = useState('sdlc');
   const [loading, setLoading] = useState(true);
   const requestId = useRef(null);
   const selected = nodes.find((n) => n.id === selectedId);
@@ -54,7 +55,7 @@ export default function Automations({ projectId }) {
     let live = true; setLoading(true); setDefinition(null);
     Promise.all([api.get(base), api.get(`/api/projects/${projectId}/repos`)]).then(([result, repositories]) => {
       if (!live) return;
-      setDefinitions(result.definitions); setAvailable(result.executionAvailable); setRepos(repositories.repos || []);
+      setDefinitions(result.definitions); setTemplates(result.templates || []); setAvailable(result.executionAvailable); setRepos(repositories.repos || []);
       if (result.definitions.length) open(result.definitions[0]);
     }).catch((e) => { if (live) setError(e.message); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
@@ -99,7 +100,7 @@ export default function Automations({ projectId }) {
     setNotice(`Published version ${result.definition.published_version}. Runs keep this version even when you edit the draft.`);
   });
   const create = () => task(async () => {
-    const r = await api.post(base, { name: newName }); setDefinitions((list) => [...list, r.definition]); open(r.definition);
+    const r = await api.post(base, { name: newName, templateId }); setDefinitions((list) => [...list, r.definition]); open(r.definition);
   });
   const start = () => task(async () => {
     requestId.current ||= crypto.randomUUID();
@@ -127,14 +128,14 @@ export default function Automations({ projectId }) {
   const executionFlow = runGraph ? toFlow(runGraph, run) : null;
   return <div className="page automations-page">
     <header className="automation-heading"><div><h1>Workflows</h1><p className="muted">Build repeatable agent tasks with checks, branches, and human approvals.</p></div>
-      <div className="automation-actions"><input aria-label="New workflow name" value={newName} maxLength={120} onChange={(e) => setNewName(e.target.value)} /><button className="btn" disabled={busy || !newName.trim() || dirty} onClick={create}>New SDLC workflow</button></div></header>
+      <div className="automation-actions">{templates.length > 1 && <select aria-label="Template" title={templates.find((t) => t.id === templateId)?.description} value={templateId} onChange={(e) => { const t = templates.find((v) => v.id === e.target.value); setTemplateId(e.target.value); if (t) setNewName(t.name.replace(/ \(.*$/, '')); }}>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>}<input aria-label="New workflow name" value={newName} maxLength={120} onChange={(e) => setNewName(e.target.value)} /><button className="btn" disabled={busy || !newName.trim() || dirty} onClick={create}>New workflow</button></div></header>
     {error && <div className="alert alert-error" role="alert">{error}</div>}
     {notice && <p role="status">{notice}</p>}
     {loading ? <p role="status">Loading workflows…</p> : <>
       <div className="automation-actions"><label>Workflow <select aria-label="Workflow" value={definition?.id || ''} disabled={dirty || busy} onChange={(e) => open(definitions.find((d) => d.id === e.target.value))}><option value="" disabled>Select a workflow</option>{definitions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
         {definition && <><button className="btn" disabled={busy || !dirty} onClick={() => task(async () => { await save(); setNotice('Draft saved.'); })}>Save draft</button><button className="btn" disabled={busy} onClick={publish}>Publish version</button><button className="btn" disabled={busy} onClick={() => task(async () => { const r = await api.get(`${base}/${definition.id}/versions`); setVersions(r.versions); })}>Version history</button>{dirty && <><span className="muted">Unsaved changes</span><button className="btn" onClick={() => open(definitions.find((d) => d.id === definition.id))}>Discard changes</button></>}</>}
       </div>
-      {!definition ? <p>Create an SDLC workflow to begin. You can change every stage before publishing.</p> : <>
+      {!definition ? <p>Create a workflow from a template to begin. You can change every step before publishing.</p> : <>
         {versions && <section className="automation-versions"><h2>Published versions</h2><button className="btn" onClick={() => setVersions(null)}>Close history</button>{versions.length ? versions.map((v) => <div key={v.version}><strong>Version {v.version}</strong> · {new Date(v.created_at).toLocaleString()} <button className="btn" disabled={dirty} onClick={() => { const f = toFlow(v.graph); setGraph(v.graph); setNodes(f.nodes); setEdges(f.edges); setDirty(true); setVersions(null); }}>Copy to draft</button></div>) : <p>No published versions yet.</p>}</section>}
         <div className="automation-settings">
           <label>Name<input value={definition.name} maxLength={120} onChange={(e) => { setDefinition((d) => ({ ...d, name: e.target.value })); setDirty(true); }} /></label>

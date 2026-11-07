@@ -4,6 +4,7 @@ import { getProjectRow, getMemberRow } from '../project-access.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getAutomationsRepository } from '../repositories/automations.ts';
 import { parseGraph, sdlcTemplate } from './schema.ts';
+import { automationTemplates } from './templates.ts';
 import { definitionKey, versionKey, runKey, scheduleAutomation, type Definition, type PublishedVersion, type AutomationRun } from './engine.ts';
 
 async function access(req: PortalRequest, write = false): Promise<string> {
@@ -38,11 +39,13 @@ export function registerAutomationRoutes(): void {
   router.get(prefix, async (req, res) => {
     const project = await access(req);
     const definitions = await (await getAutomationsRepository()).list<Definition>(project, 'DEF#');
-    sendJson(res, 200, { definitions, template: sdlcTemplate(), executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
+    sendJson(res, 200, { definitions, template: sdlcTemplate(), templates: automationTemplates().map(({ id, name, description }) => ({ id, name, description })), executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
   });
   router.post(prefix, async (req, res) => {
     const project = await access(req, true); const body = req.body as Record<string, unknown>;
-    const graph = parseGraph(body.graph ?? sdlcTemplate()); await checkRepos(project, graph.repoIds);
+    const chosen = body.templateId === undefined ? null : automationTemplates().find((t) => t.id === body.templateId);
+    if (body.templateId !== undefined && !chosen) throw badRequest('Choose one of the listed templates');
+    const graph = parseGraph(body.graph ?? chosen?.graph ?? sdlcTemplate()); await checkRepos(project, graph.repoIds);
     const d: Definition = { id: generateId(), project_id: project, revision: 1, name: name(body.name), graph, published_version: null, created_by: req.user!.id, updated_at: now() };
     await (await getAutomationsRepository()).put(project, definitionKey(d.id), d, null);
     sendJson(res, 201, { definition: d });
