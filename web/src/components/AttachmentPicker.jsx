@@ -120,11 +120,16 @@ export function AttachmentPicker({
     if (disabled) return;
     const onPaste = (e) => {
       // Let the browser handle paste events that target text-entry elements normally
+      // A message box that opts in (data-paste-files) also takes pasted files, but only when the clipboard holds
+      // no text: a screenshot or a copied image. Pasting text, including from Word or a web page that also puts
+      // an image on the clipboard, stays an ordinary paste.
       const target = e.target;
+      const optedIn = target instanceof HTMLElement && target.dataset.pasteFiles === 'true' && !e.clipboardData?.getData('text/plain');
       if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        (target instanceof HTMLElement && target.isContentEditable)
+        !optedIn && (
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          (target instanceof HTMLElement && target.isContentEditable))
       ) {
         return;
       }

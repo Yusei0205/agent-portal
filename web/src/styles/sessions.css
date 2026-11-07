@@ -504,12 +504,9 @@
   background: var(--panel);
   position: relative; /* anchor for the absolutely-positioned handle */
 }
-/* Manual-height mode: flex column so the row can fill remaining space */
-.ws-composer--manual {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+/* Manual-height mode: the input row (not the whole box) has the height the person dragged, so the notices above it
+   (ready, stopped, repositories) and the hints below keep their own room and never sit on top of the row. */
+.ws-composer--manual { overflow: visible; }
 /* Drag handle — sits over the top edge of the composer */
 .ws-composer-handle {
   position: absolute;
@@ -537,9 +534,8 @@
   align-items: flex-end;
   gap: 6px;
 }
-/* In manual mode the row fills the remaining height */
+/* In manual mode the row has an explicit height and the textarea fills it */
 .ws-composer--manual .ws-composer-row {
-  flex: 1;
   min-height: 0;
   align-items: stretch;
 }
@@ -548,6 +544,14 @@
 .ws-composer--manual .ws-composer-actions {
   align-self: flex-end;
 }
+/* A message box dragged down to about one line: a single centred line, with the buttons centred on it. (Taller boxes keep
+   the buttons at the bottom, like any chat box.) */
+.ws-composer--manual .ws-composer-row--compact { align-items: center; }
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .btn-icon,
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-prompt,
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-input,
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-actions { align-self: center; }
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-input { height: 32px; min-height: 32px; max-height: 32px; }
 .ws-composer-input {
   flex: 1;
   font-size: 0.84rem;
@@ -572,6 +576,12 @@
   gap: 4px;
   flex-shrink: 0;
 }
+/* The attach button, the > prompt and the send button are as tall as one line of the textarea (32px) and stay at the
+   bottom of the row, so with one line their centres line up with the text; with more lines they stay at the bottom. */
+.ws-composer-row > .btn-icon,
+.ws-composer-actions .btn { height: 32px; min-height: 32px; box-sizing: border-box; }
+.ws-composer-row > .btn-icon { width: 32px; }
+.ws-composer-actions .btn { padding-top: 0; padding-bottom: 0; justify-content: center; }
 
 /* ── Inbox page ──────────────────────────────────────────────── */
 .inbox-item {
@@ -1101,7 +1111,7 @@
 /* Message box: prompt glyph and key hints */
 .ws-composer-prompt {
   align-self: flex-start; flex: none;
-  padding-top: 6px;
+  height: 32px; display: inline-flex; align-items: center;
   font-family: var(--mono); font-weight: 700; color: var(--accent);
 }
 .ws-composer-input { font-family: var(--mono); font-size: 0.82rem; }
