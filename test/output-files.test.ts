@@ -4,7 +4,7 @@
  * Covers:
  *   - collectOutputFiles: non-repo file detection by mtime
  *   - collectOutputFiles: extension allow-list filter
- *   - collectOutputFiles: excluded directories (home/, .browser/, .claude/)
+ *   - collectOutputFiles: excluded directories (home/, .browser/, .claude/, .agent-notes/)
  *   - collectOutputFiles: repo-copy changes via git status --porcelain
  *   - collectOutputFiles: hash-based dedup (skip when content unchanged)
  *   - collectOutputFiles: version bump when content changes
@@ -249,7 +249,7 @@ describe('collectOutputFiles — excluded directories', () => {
     await cleanup();
   });
 
-  it('skips home/, .browser/, .claude/, node_modules/', async () => {
+  it('skips home/, .browser/, .claude/, node_modules/ and the agent notes folder (.agent-notes/)', async () => {
     const workflowId = await createWorkflow(baseUrl, adminCookie, projectId, 'excluded dirs');
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
@@ -261,6 +261,7 @@ describe('collectOutputFiles — excluded directories', () => {
       '.browser/session.png',
       '.claude/skills/guide.md',
       'node_modules/lib/readme.md',
+      '.agent-notes/lead-orchestrator.md',
     ];
     for (const rel of excluded) writeFile(workDir, rel, 'secret');
     writeFile(workDir, 'excl-results.md', '# Results');

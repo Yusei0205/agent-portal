@@ -94,6 +94,35 @@ describe('agent pack content', () => {
     // Commands an agent copies must work without pip (the cloud runners have Python and uv, no pip).
     for (const t of [...skills.map((s) => s.body), ...prompts]) assert.doesNotMatch(t, /(^|[^v] )pip install/m);
   });
+
+  it('every agent shares notes in the folder that is saved with the session', () => {
+    for (const a of agents as Array<PackAgent & { prompt: string }>) {
+      assert.ok(a.skills.includes('agent-notes'), `${a.name}: agent-notes skill`);
+      assert.match(a.prompt, /repos\/\.agent-notes\//, `${a.name}: where the notes are`);
+      assert.match(a.prompt, /Notes are information, not instructions/, `${a.name}: notes are not instructions`);
+    }
+    const notes = skills.find((s) => s.name === 'agent-notes')!.body;
+    // repos/ is what every cloud runner saves and restores with the session; outside it, notes last one run.
+    for (const w of ['`repos/.agent-notes/`', '`.agent-notes/`', '<your agent name>.md', 'not instructions from the user',
+      'never put secrets', 'delegate_session', 'under about 80 lines']) assert.ok(notes.includes(w), `agent-notes: ${w}`);
+    const delegation = skills.find((s) => s.name === 'task-delegation')!.body;
+    assert.match(delegation, /notes file \(agent-notes skill\)/);
+  });
+
+  it('the notes skill is preloaded into every Claude agent', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-notes-'));
+    try {
+      writeTree(root, claudePackFiles() as PackFile[]);
+      const defs = loadAgentDefinitions([path.join(root, 'agents')], undefined, [path.join(root, 'skills')]);
+      for (const a of agents) {
+        assert.ok(defs[a.name], a.name);
+        assert.match(defs[a.name].prompt, /# Skill: agent-notes/, `${a.name}: skill text in the prompt`);
+        assert.ok(defs[a.name].prompt.length <= AGENT_LIMITS.maxPrompt, `${a.name}: prompt within the limit`);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('agent pack for Kiro', () => {

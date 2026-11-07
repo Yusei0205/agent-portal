@@ -268,7 +268,7 @@
       "note": "No dedicated smoke section. Session creation (section 31) exercises workflow engine; use sessions smoke ID."
     },
     "ide": {
-      "description": "In-browser IDE workspace \u2014 editor, explorer, terminal, source control, live browser",
+      "description": "In-browser IDE workspace — editor, explorer, terminal, source control, live browser",
       "sources": [
         "server/terminal.ts",
         "server/terminal-cloud.ts",
@@ -361,7 +361,7 @@
       ]
     },
     "diagrams": {
-      "description": "Diagram creation and rendering \u2014 draw.io, mermaid, and icon packs",
+      "description": "Diagram creation and rendering — draw.io, mermaid, and icon packs",
       "sources": [
         "server/diagrams.ts",
         "server/repositories/diagrams-data.ts",
@@ -388,7 +388,7 @@
       "note": "Section 5 (Create) covers the Diagrams tab. No standalone diagrams smoke section."
     },
     "generated-docs": {
-      "description": "AI-generated documents \u2014 Word/PDF/HTML generation pipeline",
+      "description": "AI-generated documents — Word/PDF/HTML generation pipeline",
       "sources": [
         "server/generated-docs.ts",
         "server/repositories/generated-docs-data.ts",
@@ -418,7 +418,7 @@
       "note": "Section 5 (Create) covers the Documents tab. No standalone generated-docs smoke section."
     },
     "presentations": {
-      "description": "AI-generated presentations \u2014 PPTX creation and preview",
+      "description": "AI-generated presentations — PPTX creation and preview",
       "sources": [
         "server/presentations.ts",
         "server/repositories/presentations-data.ts",
@@ -439,7 +439,7 @@
       "note": "Section 5 (Create) covers the Decks tab. No standalone presentations smoke section."
     },
     "vault": {
-      "description": "Secret vault \u2014 project, personal, and portal secrets",
+      "description": "Secret vault — project, personal, and portal secrets",
       "sources": [
         "server/vault.ts",
         "server/vault-generated.ts",
@@ -493,7 +493,7 @@
       "smokeIds": []
     },
     "inbox": {
-      "description": "Agent inbox \u2014 approval requests, notifications, and the p6_inbox repository layer",
+      "description": "Agent inbox — approval requests, notifications, and the p6_inbox repository layer",
       "sources": [
         "server/inbox.ts",
         "server/repositories/inbox.ts",
@@ -638,7 +638,7 @@
       "note": "No dedicated smoke section for Bedrock SSO device-code flow. Settings section 32 covers providers UI only."
     },
     "settings": {
-      "description": "Portal settings \u2014 AI provider, tools, permissions, code review, appearance",
+      "description": "Portal settings — AI provider, tools, permissions, code review, appearance",
       "sources": [
         "server/settings.ts",
         "server/secrets.ts",
@@ -661,7 +661,7 @@
       ]
     },
     "config": {
-      "description": "Portal configuration \u2014 deploy target, cloud config, config file editor",
+      "description": "Portal configuration — deploy target, cloud config, config file editor",
       "sources": [
         "server/config.ts",
         "web/src/pages/Configuration.jsx",
@@ -678,7 +678,7 @@
       ]
     },
     "kiro": {
-      "description": "Kiro CLI integration \u2014 command runner, settings parser, MCP server",
+      "description": "Kiro CLI integration — command runner, settings parser, MCP server",
       "sources": [
         "server/kiro-cmd.ts",
         "server/kiro-settings.ts",
@@ -762,7 +762,7 @@
       ]
     },
     "testing-module": {
-      "description": "Tests module \u2014 test project management, script generation, and MCP tools",
+      "description": "Tests module — test project management, script generation, and MCP tools",
       "sources": [
         "server/testing/index.ts",
         "server/testing/generate.ts",
@@ -809,7 +809,7 @@
       ]
     },
     "api-access": {
-      "description": "API access page \u2014 scope checkboxes and MCP section (UI; backend covered by api-tokens)",
+      "description": "API access page — scope checkboxes and MCP section (UI; backend covered by api-tokens)",
       "sources": [
         "web/src/pages/ApiAccess.jsx",
         "web/src/styles/tokens.css"
@@ -864,7 +864,7 @@
       ]
     },
     "shell": {
-      "description": "App shell \u2014 rail navigation, command palette, shortcuts, header, breadcrumb, dialogs",
+      "description": "App shell — rail navigation, command palette, shortcuts, header, breadcrumb, dialogs",
       "sources": [
         "web/src/components/Rail.jsx",
         "web/src/components/CommandPalette.jsx",
@@ -889,7 +889,7 @@
       ]
     },
     "theme": {
-      "description": "Theme system \u2014 theme cycling, persistence, and custom CSS templates",
+      "description": "Theme system — theme cycling, persistence, and custom CSS templates",
       "sources": [
         "server/themes.ts",
         "server/repositories/themes.ts",
@@ -954,7 +954,7 @@
       "smokeIds": []
     },
     "attachments": {
-      "description": "AI attachments \u2014 file upload, preview, and picker for session context",
+      "description": "AI attachments — file upload, preview, and picker for session context",
       "sources": [
         "server/ai-attachments.ts",
         "server/session-attachments.ts",
@@ -976,7 +976,7 @@
       "note": "No dedicated smoke section for attachments yet."
     },
     "security": {
-      "description": "Security regression tests \u2014 SSRF guard, token scope enforcement, child-session cap, approval fingerprinting, run limits, config/hook guard (C), credential scrubbing (D)",
+      "description": "Security regression tests — SSRF guard, token scope enforcement, child-session cap, approval fingerprinting, run limits, config/hook guard (C), credential scrubbing (D)",
       "sources": [
         "server/agent/runner.ts",
         "server/agent/approvals.ts",
@@ -1003,10 +1003,10 @@
         "test/agent-env-scrub.test.ts"
       ],
       "smokeIds": [],
-      "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* \u2014 all in the shared section. Changes to those shared files already mark this module affected."
+      "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* — all in the shared section. Changes to those shared files already mark this module affected."
     },
     "storage": {
-      "description": "File storage abstraction \u2014 local filesystem and S3 backends",
+      "description": "File storage abstraction — local filesystem and S3 backends",
       "sources": [
         "server/storage/index.ts",
         "server/storage/local.ts",
@@ -1050,7 +1050,7 @@
       "smokeIds": []
     },
     "output-files": {
-      "description": "Session output file management \u2014 collection, versioning, Vault copy, and routes",
+      "description": "Session output file management — collection, versioning, Vault copy, and routes",
       "sources": [
         "server/output-files.ts",
         "server/repositories/output-files.ts",
@@ -1082,7 +1082,7 @@
       "smokeIds": []
     },
     "tickets": {
-      "description": "Jira ticket integration \u2014 connect, browse, and start sessions from tickets",
+      "description": "Jira ticket integration — connect, browse, and start sessions from tickets",
       "sources": [
         "web/src/pages/Tickets.jsx",
         "web/src/components/JiraTicketPicker.jsx",
@@ -1120,7 +1120,7 @@
       "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."
     },
     "kiro-runner": {
-      "description": "Kiro CLI AgentCore Runtime container \u2014 payload validation (backend-only; no smoke section)",
+      "description": "Kiro CLI AgentCore Runtime container — payload validation (backend-only; no smoke section)",
       "sources": [
         "kiro-runner/src/validate.ts",
         "kiro-runner/src/run.ts",
@@ -1129,10 +1129,10 @@
       ],
       "tests": [],
       "smokeIds": [],
-      "note": "Spike B container. No unit tests yet \u2014 the container is tested end-to-end via infra/scripts/spike-b-run.mjs. Add kiro-runner-validation.test.ts if validate.ts logic grows."
+      "note": "Spike B container. No unit tests yet — the container is tested end-to-end via infra/scripts/spike-b-run.mjs. Add kiro-runner-validation.test.ts if validate.ts logic grows."
     },
     "tool-packs": {
-      "description": "Tool-pack installer logic \u2014 uv, kiro-cli, and draw.io install, detection, and verification",
+      "description": "Tool-pack installer logic — uv, kiro-cli, and draw.io install, detection, and verification",
       "sources": [
         "server/tool-packs.ts",
         "server/drawio-pack.ts"
@@ -1517,22 +1517,11 @@
         "credentials",
         "codex-setup"
       ]
-    },
-    "agent-notes": {
-      "description": "Cross-run agent coordination notes \u2014 load .agent-notes/*.md from previous runs and stage them as input files.",
-      "sources": [
-        "server/agent/agent-notes.ts",
-        "server/agent/runner.ts"
-      ],
-      "tests": [
-        "test/agent-notes.test.ts"
-      ],
-      "smokeIds": []
     }
   },
   "shared": [
     {
-      "description": "Core server infrastructure \u2014 database, HTTP routing, utilities, entry point, event bus",
+      "description": "Core server infrastructure — database, HTTP routing, utilities, entry point, event bus",
       "sources": [
         "server/db.ts",
         "server/http.ts",
@@ -1553,7 +1542,7 @@
         "scripts/preflight.mjs"
       ],
       "affects": "*",
-      "rationale": "Dependency or build-config changes can break any module silently \u2014 both compiled server code and the web bundle. Affects both backend and UI."
+      "rationale": "Dependency or build-config changes can break any module silently — both compiled server code and the web bundle. Affects both backend and UI."
     },
     {
       "description": "Shared backend test infrastructure",
@@ -1564,7 +1553,7 @@
       ],
       "affects": "*",
       "part": "backend",
-      "rationale": "Every backend test imports from fixtures.ts. fake-sdk and fake-kiro are used across multiple test suites. These are test helpers only \u2014 they don't affect the built server or the smoke suite."
+      "rationale": "Every backend test imports from fixtures.ts. fake-sdk and fake-kiro are used across multiple test suites. These are test helpers only — they don't affect the built server or the smoke suite."
     },
     {
       "description": "Smoke test runner",
@@ -1600,10 +1589,10 @@
         "engines",
         "ide"
       ],
-      "rationale": "The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. browser-headless.ts rewrites Playwright MCP entries; browser-manager.ts provides the per-session live browser. Server code \u2014 affects both backend tests and smoke (via running server behaviour). No part restriction."
+      "rationale": "The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. browser-headless.ts rewrites Playwright MCP entries; browser-manager.ts provides the per-session live browser. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction."
     },
     {
-      "description": "Core web app infrastructure \u2014 routing, API client, event system, global styles",
+      "description": "Core web app infrastructure — routing, API client, event system, global styles",
       "sources": [
         "web/src/App.jsx",
         "web/src/main.jsx",
@@ -1617,10 +1606,10 @@
       ],
       "affects": "*",
       "part": "ui",
-      "rationale": "Every page is rendered through App.jsx and uses api.js, events, and the global stylesheet. Web-only files \u2014 they don't affect backend unit tests. Affects only UI parts."
+      "rationale": "Every page is rendered through App.jsx and uses api.js, events, and the global stylesheet. Web-only files — they don't affect backend unit tests. Affects only UI parts."
     },
     {
-      "description": "Universal UI primitives \u2014 icons, skeleton loading, toast notifications",
+      "description": "Universal UI primitives — icons, skeleton loading, toast notifications",
       "sources": [
         "web/src/components/Icon.jsx",
         "web/src/components/Skeleton.jsx",
@@ -1628,7 +1617,7 @@
       ],
       "affects": "*",
       "part": "ui",
-      "rationale": "Used on virtually every page; a breakage is visible across the entire UI. Web-only files \u2014 affects only UI parts."
+      "rationale": "Used on virtually every page; a breakage is visible across the entire UI. Web-only files — affects only UI parts."
     },
     {
       "description": "Live run-stream hook",
@@ -1641,10 +1630,10 @@
         "testing-module"
       ],
       "part": "ui",
-      "rationale": "Only features that display real-time agent output use this hook. Web-only file \u2014 affects only UI parts."
+      "rationale": "Only features that display real-time agent output use this hook. Web-only file — affects only UI parts."
     },
     {
-      "description": "Overlay dismiss hook \u2014 drag-safe backdrop close for all dialogs and modals",
+      "description": "Overlay dismiss hook — drag-safe backdrop close for all dialogs and modals",
       "sources": [
         "web/src/lib/useOverlayDismiss.js"
       ],
@@ -1667,7 +1656,7 @@
         "attachments"
       ],
       "part": "ui",
-      "rationale": "Used by every dialog and modal overlay in the app. Web-only file \u2014 affects only UI parts."
+      "rationale": "Used by every dialog and modal overlay in the app. Web-only file — affects only UI parts."
     },
     {
       "description": "Markdown sanitizer (DOMPurify wrapper)",
@@ -1680,7 +1669,7 @@
         "knowledge"
       ],
       "part": "ui",
-      "rationale": "Used in SessionLive.jsx (sessions) and FilePreviewModal.jsx (attachments, knowledge) to sanitize marked output. Web-only \u2014 affects only UI parts."
+      "rationale": "Used in SessionLive.jsx (sessions) and FilePreviewModal.jsx (attachments, knowledge) to sanitize marked output. Web-only — affects only UI parts."
     },
     {
       "description": "File preview modal",
@@ -1693,7 +1682,7 @@
         "knowledge"
       ],
       "part": "ui",
-      "rationale": "Used for previewing uploaded files in sessions, knowledge base documents, and the attachments picker. Web-only file \u2014 affects only UI parts."
+      "rationale": "Used for previewing uploaded files in sessions, knowledge base documents, and the attachments picker. Web-only file — affects only UI parts."
     },
     {
       "description": "AWS credential and region utilities",
@@ -1708,7 +1697,7 @@
         "bedrock-sso"
       ],
       "part": "ui",
-      "rationale": "Specific to AWS credential entry, account management, and Bedrock SSO flows. Web-only files \u2014 affects only UI parts."
+      "rationale": "Specific to AWS credential entry, account management, and Bedrock SSO flows. Web-only files — affects only UI parts."
     },
     {
       "description": "Device code OAuth box",
@@ -1721,7 +1710,7 @@
         "credentials"
       ],
       "part": "ui",
-      "rationale": "Used in Bedrock SSO device-code flow, auth provider setup, and the Kiro IAM Identity Center re-authentication flow in the Credentials page. Web-only file \u2014 affects only UI parts."
+      "rationale": "Used in Bedrock SSO device-code flow, auth provider setup, and the Kiro IAM Identity Center re-authentication flow in the Credentials page. Web-only file — affects only UI parts."
     },
     {
       "description": "Workspace / session header component",
@@ -1734,7 +1723,7 @@
         "ide"
       ],
       "part": "ui",
-      "rationale": "Rendered in workspace and session views. Web-only file \u2014 affects only UI parts."
+      "rationale": "Rendered in workspace and session views. Web-only file — affects only UI parts."
     },
     {
       "description": "Shared router and navigation",
@@ -1748,7 +1737,7 @@
         "setup"
       ],
       "part": "ui",
-      "rationale": "Route changes affect navigation in shell, project listing, post-login redirect, and setup wizard steps. Web-only file \u2014 affects only UI parts."
+      "rationale": "Route changes affect navigation in shell, project listing, post-login redirect, and setup wizard steps. Web-only file — affects only UI parts."
     },
     {
       "description": "Template library",
@@ -1761,7 +1750,7 @@
         "presentations"
       ],
       "part": "ui",
-      "rationale": "Document and presentation templates used across knowledge base, generated docs, and presentations. Web-only file \u2014 affects only UI parts."
+      "rationale": "Document and presentation templates used across knowledge base, generated docs, and presentations. Web-only file — affects only UI parts."
     },
     {
       "description": "Shared theme CSS variables",
@@ -1772,10 +1761,10 @@
         "theme"
       ],
       "part": "ui",
-      "rationale": "Theme palette CSS definitions \u2014 web-only. Changes affect only the theme module's UI part."
+      "rationale": "Theme palette CSS definitions — web-only. Changes affect only the theme module's UI part."
     },
     {
-      "description": "DynamoDB repository infrastructure \u2014 shared client, region config, and attribute helpers",
+      "description": "DynamoDB repository infrastructure — shared client, region config, and attribute helpers",
       "sources": [
         "server/repositories/backend.ts",
         "server/repositories/dynamo-client.ts"
@@ -1788,7 +1777,7 @@
         "delegation"
       ],
       "part": "backend",
-      "rationale": "Shared backend selector (usesDynamoDb), DynamoDB client singleton, and attribute-marshaling helpers used by all DynamoDB repository implementations. Backend only \u2014 not compiled into the web bundle."
+      "rationale": "Shared backend selector (usesDynamoDb), DynamoDB client singleton, and attribute-marshaling helpers used by all DynamoDB repository implementations. Backend only — not compiled into the web bundle."
     }
   ]
 }
