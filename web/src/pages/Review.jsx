@@ -459,7 +459,7 @@ export function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
 
       <section aria-label="Findings filters" className="row wrap" style={{ gap: 12, marginBottom: 12 }}>
         <label>Search findings<input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="File, description or fix" /></label>
-        <label>Severity<select className="input" value={severity} onChange={e => setSeverity(e.target.value)}><option value="all">All severities</option>{['critical', 'high', 'medium', 'low', 'info'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label>Severity<select aria-label="Severity" className="input" value={severity} onChange={e => setSeverity(e.target.value)}><option value="all">All severities</option>{['critical', 'high', 'medium', 'low', 'info'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
         <label><input type="checkbox" checked={showDismissed} onChange={e => setShowDismissed(e.target.checked)} /> Show dismissed</label>
       </section>
       <p className="muted">Showing {visible.length} of {findings.length} findings</p>
