@@ -30,7 +30,7 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
       } else await route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><link rel="stylesheet" href="/workflow-fixture.css"></head><body><div id="root"></div><script src="/workflow-fixture.js"></script></body></html>' });
     });
     await page.goto(`${baseUrl}/workflow-fixture`);
-    await page.getByRole('button', { name: 'New SDLC workflow' }).click();
+    await page.getByRole('button', { name: 'New workflow' }).click();
     await page.locator('.automation-canvas .react-flow__node').first().waitFor();
     assert.equal(await page.locator('.automation-canvas .react-flow__node').count(), 10);
     await page.getByText('Generate code', { exact: true }).click();

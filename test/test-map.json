@@ -9,20 +9,28 @@
         "server/repositories/automations-dynamodb.ts",
         "web/src/pages/Automations.jsx",
         "web/src/styles/automations.css",
-        "infra/lib/automation-bridge.js"
+        "infra/lib/automation-bridge.js",
+        "server/automations/templates.ts"
       ],
       "tests": [
         "test/automations.test.ts",
         "test/automations-repo.test.ts",
         "test/web-automations.test.ts",
-        "test/automation-bridge.test.ts"
+        "test/automation-bridge.test.ts",
+        "test/automation-templates.test.ts"
       ],
       "smokeIds": []
     },
     "ci-runner": {
       "description": "Bounded, deduplicated backend test execution",
-      "sources": ["scripts/test-affected.mjs", "scripts/test-pool.mjs", ".github/workflows/ci.yml"],
-      "tests": ["test/test-pool.test.ts"],
+      "sources": [
+        "scripts/test-affected.mjs",
+        "scripts/test-pool.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "tests": [
+        "test/test-pool.test.ts"
+      ],
       "smokeIds": []
     },
     "auth": {
@@ -258,9 +266,9 @@
       "description": "In-browser IDE workspace — editor, explorer, terminal, source control, live browser",
       "sources": [
         "server/terminal.ts",
-          "server/terminal-cloud.ts",
-          "server/agent/runner-terminal.ts",
-          "server/agent/runner-terminal-auth.ts",
+        "server/terminal-cloud.ts",
+        "server/agent/runner-terminal.ts",
+        "server/agent/runner-terminal-auth.ts",
         "server/browser-live.ts",
         "web/src/pages/sessions/IdeAgents.jsx",
         "web/src/pages/sessions/IdeBrowser.jsx",
@@ -285,8 +293,8 @@
         "test/browser-live.test.ts",
         "test/chat-attachments-ui.test.ts",
         "test/terminal.test.ts",
-          "test/terminal-cloud.test.ts",
-          "test/runner-terminal.test.ts",
+        "test/terminal-cloud.test.ts",
+        "test/runner-terminal.test.ts",
         "test/terminal-pipe.test.ts"
       ],
       "smokeIds": [
@@ -1463,9 +1471,9 @@
         "server/agent/codex.ts",
         "web/src/components/CodexCredentials.jsx",
         "server/codex-oauth.ts",
-          "server/codex-device.ts",
-          "server/codex-device-protocol.ts",
-          "codex-runner/src/device-auth.ts",
+        "server/codex-device.ts",
+        "server/codex-device-protocol.ts",
+        "codex-runner/src/device-auth.ts",
         "server/repositories/codex-store.ts",
         "server/agent/codex-session.ts",
         "server/agent/codex-agentcore.ts",
@@ -1478,7 +1486,7 @@
       "tests": [
         "test/codex.test.ts",
         "test/codex-oauth.test.ts",
-          "test/codex-device.test.ts",
+        "test/codex-device.test.ts",
         "test/codex-runner.test.ts",
         "test/codex-pr-tool.test.ts",
         "test/codex-store.test.ts",
