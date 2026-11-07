@@ -13,7 +13,16 @@ exports.handler = async (event) => {
     Payload: Buffer.from(JSON.stringify({ job: event.fail ? 'automation-fail' : 'automation-tick', secret, args: { projectId: event.projectId, runId: event.runId } })),
   }));
   if (response.FunctionError) throw new Error('Workflow coordinator invocation failed');
-  let payload = JSON.parse(Buffer.from(response.Payload).toString('utf8'));
+  const raw = Buffer.from(response.Payload);
+  const boundary = raw.indexOf(Buffer.alloc(8));
+  let payload;
+  if (boundary >= 0) {
+    // RESPONSE_STREAM Web Adapter invocations return HTTP metadata, eight NUL
+    // bytes, then the dechunked body, even through the buffered Invoke API.
+    const metadata = JSON.parse(raw.subarray(0, boundary).toString('utf8'));
+    if (metadata.statusCode < 200 || metadata.statusCode >= 300) throw new Error('Workflow coordinator returned an error');
+    payload = JSON.parse(raw.subarray(boundary + 8).toString('utf8'));
+  } else payload = JSON.parse(raw.toString('utf8'));
   if (payload.statusCode) {
     if (payload.statusCode >= 400) throw new Error('Workflow coordinator returned an error');
     payload = typeof payload.body === 'string' ? JSON.parse(payload.body) : payload.body;
