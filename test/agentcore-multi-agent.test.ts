@@ -154,6 +154,19 @@ describe('Claude on AgentCore — several agents and several sessions', () => {
     assert.equal(listed[0].description, 'Review the change');
   });
 
+  it('sends the person\'s own AWS access for the model calls when there is one, and nothing otherwise', async () => {
+    const keys = { AWS_ACCESS_KEY_ID: 'ASIAEXAMPLE1234567', AWS_SECRET_ACCESS_KEY: 'secretsecretsecretsecret', AWS_SESSION_TOKEN: 'tok', AWS_REGION: 'ap-southeast-1' };
+    const s = await newSession();
+    const rt = fakeRuntime(async function* () { yield { type: 'assistant-text', text: 'ok' }; yield RESULT; });
+    await runClaudeViaAgentCore(makeCtx(s).ctx, ARN, keys);
+    assert.deepEqual(rt.calls.find((c) => c.mode === 'run')!.bedrockEnv, keys);
+
+    const s2 = await newSession();
+    const rt2 = fakeRuntime(async function* () { yield { type: 'assistant-text', text: 'ok' }; yield RESULT; });
+    await runClaudeViaAgentCore(makeCtx(s2).ctx, ARN);
+    assert.equal('bedrockEnv' in rt2.calls.find((c) => c.mode === 'run')!, false, 'the runtime\'s own role is used');
+  });
+
   it('delegate_session starts a child session; the agent gets its ID; the child\'s result reaches the parent', async () => {
     const s = await newSession('Ship the release');
     let answer: Record<string, unknown> = {};

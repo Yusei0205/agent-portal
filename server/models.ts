@@ -29,7 +29,7 @@ import { openUserCodex, codexUsesCloud } from './codex-auth.ts';
 import { getSettings, listModelsForProvider, setBedrockListingMock } from './settings.ts';
 import type { BedrockListingMock } from './settings.ts';
 import { getSetting } from './settings.ts';
-import { IDC_TOKEN_KEY, IDC_REGION_KEY, IDC_EXPIRY_KEY, IDC_START_URL_KEY, IDC_REFRESH_TOKEN_KEY, IDC_CLIENT_ID_KEY, IDC_CLIENT_SECRET_KEY, IDC_CLIENT_SECRET_EXPIRES_AT_KEY, IDC_PROFILE_ARN_KEY, IDC_PROFILE_NAME_KEY, refreshIdcCredentialToken, autoRefreshIdcIfNeeded, ensureKiroProfileFetched, isBedrockRuntimeChoice } from './credentials.ts';
+import { IDC_TOKEN_KEY, IDC_REGION_KEY, IDC_EXPIRY_KEY, IDC_START_URL_KEY, IDC_REFRESH_TOKEN_KEY, IDC_CLIENT_ID_KEY, IDC_CLIENT_SECRET_KEY, IDC_CLIENT_SECRET_EXPIRES_AT_KEY, IDC_PROFILE_ARN_KEY, IDC_PROFILE_NAME_KEY, refreshIdcCredentialToken, autoRefreshIdcIfNeeded, ensureKiroProfileFetched, isBedrockRuntimeChoice, readAwsKeys } from './credentials.ts';
 import { materialiseKiroAuthDb, cleanupKiroAuthDb, KIRO_TEST_DB_ENV, readKiroAuthDbToken } from './kiro-idc.ts';
 import { spawnKiroListModels, parseKiroModelsStdout } from './kiro-list-models.ts';
 import { listKiroModelsViaAgentCore } from './agent/kiro-agentcore.ts';
@@ -631,6 +631,19 @@ export async function getEngineModels(
         return toCache(engine, cacheId, { ...r, runsAs });
       }
 
+      if (mode === 'aws_keys') {
+        const extra = safeJson(cred.extra_config);
+        let keys;
+        try { keys = readAwsKeys(cred as CredentialRow); }
+        catch (e) { return toCache(engine, cacheId, { models: [], source: 'none', runsAs, error: (e as Error).message }); }
+        const r = await listBedrockModelsForRole('', String(extra.region ?? 'us-east-1'), undefined, keys);
+        // Temporary keys expire within hours: say so instead of an AWS error code.
+        if (r.error && /expired|ExpiredToken|security token/i.test(r.error)) {
+          return toCache(engine, cacheId, { ...r, runsAs, error: 'These AWS keys have expired. Paste new ones (Replace keys).' });
+        }
+        return toCache(engine, cacheId, { ...r, runsAs });
+      }
+
       if (mode === 'bedrock_role') {
         const extra = safeJson(cred.extra_config);
         const roleArn = String(extra.roleArn ?? '');
@@ -733,6 +746,7 @@ async function listBedrockModelsForRole(
   roleArn: string,
   region: string,
   externalId?: string,
+  staticKeys?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string },
 ): Promise<{ models: EngineModelEntry[]; source: 'bedrock'; error?: string }> {
   try {
     type CredProvidersModule = {
@@ -741,16 +755,21 @@ async function listBedrockModelsForRole(
         clientConfig?: { region: string };
       }) => () => Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken?: string }>;
     };
-    const credMod = await (Function('m', 'return import(m)')('@aws-sdk/credential-providers') as Promise<CredProvidersModule>);
-    const provider = credMod.fromTemporaryCredentials({
-      params: {
-        RoleArn: roleArn,
-        RoleSessionName: `portal-model-list-${Date.now()}`,
-        ...(externalId ? { ExternalId: externalId } : {}),
-      },
-      clientConfig: { region },
-    });
-    const creds = await provider();
+    let creds: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+    if (staticKeys) {
+      creds = staticKeys;
+    } else {
+      const credMod = await (Function('m', 'return import(m)')('@aws-sdk/credential-providers') as Promise<CredProvidersModule>);
+      const provider = credMod.fromTemporaryCredentials({
+        params: {
+          RoleArn: roleArn,
+          RoleSessionName: `portal-model-list-${Date.now()}`,
+          ...(externalId ? { ExternalId: externalId } : {}),
+        },
+        clientConfig: { region },
+      });
+      creds = await provider();
+    }
 
     type BM = {
       BedrockClient: new (opts: object) => { send(cmd: object): Promise<unknown> };

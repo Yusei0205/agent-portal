@@ -1,3 +1,4 @@
+import { AwsKeysFields } from '../components/AwsKeysFields.jsx';
 import { CodexCredentials } from '../components/CodexCredentials.jsx';
 /**
  * Credentials page (F4) — per-user engine sign-ins.
@@ -30,6 +31,7 @@ function modeLabel(engine, mode) {
   if (mode === 'api_key') return 'API key';
   if (mode === 'subscription_token') return 'Subscription token';
   if (mode === 'bedrock_role') return 'Amazon Bedrock (role)';
+  if (mode === 'aws_keys') return 'Amazon Bedrock (AWS access keys)';
   return mode;
 }
 
@@ -140,6 +142,8 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const [roleArn, setRoleArn] = useState('');
   const [bedrockRegion, setBedrockRegion] = useState('us-east-1');
   const [externalId, setExternalId] = useState('');
+  // AWS access keys (pasted from the AWS access portal)
+  const [awsKeys, setAwsKeys] = useState({});
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -153,6 +157,7 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const CLAUDE_MODES = [
     { id: 'api_key',           label: 'Anthropic API key',    desc: 'You have a key from console.anthropic.com. Usage is billed to it.' },
     { id: 'subscription_token', label: 'Claude plan (Pro / Max)', desc: 'Run `claude setup-token` on your computer and paste the token.' },
+    { id: 'aws_keys',          label: 'Amazon Bedrock (AWS access keys)', desc: 'Your company signs in to AWS with SSO. Paste the keys the AWS access portal copies for you; they expire after a few hours.' },
     { id: 'bedrock_role',      label: 'Amazon Bedrock (IAM role)', desc: 'Your company runs Claude on AWS Bedrock and gave you a role ARN. No secret is stored.' },
   ];
   const modes = engine === 'kiro' ? KIRO_MODES : CLAUDE_MODES;
@@ -201,6 +206,9 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
       const body = { engine, mode, name: name.trim() || undefined, isDefault };
       if (mode === 'identity_center') {
         body.config = { startUrl: startUrl.trim(), region: region.trim() };
+      } else if (mode === 'aws_keys') {
+        body.config = { region: (awsKeys.region || bedrockRegion).trim() };
+        body.awsKeys = { accessKeyId: awsKeys.accessKeyId, secretAccessKey: awsKeys.secretAccessKey, sessionToken: awsKeys.sessionToken };
       } else if (mode === 'bedrock_role') {
         body.config = { roleArn: roleArn.trim(), region: bedrockRegion.trim() };
         if (externalId.trim()) body.config.externalId = externalId.trim();
@@ -334,6 +342,20 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
                   id="cred-sso-region"
                   value={region}
                   onChange={(e) => setRegion(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {mode === 'aws_keys' && (
+            <>
+              <AwsKeysFields value={awsKeys} onChange={setAwsKeys} idPrefix="cred-aws" />
+              <div className="field">
+                <label htmlFor="cred-aws-region">Bedrock region</label>
+                <AwsRegionSelect
+                  id="cred-aws-region"
+                  value={awsKeys.region || bedrockRegion}
+                  onChange={(e) => { setBedrockRegion(e.target.value); setAwsKeys({ ...awsKeys, region: e.target.value }); }}
                 />
               </div>
             </>
@@ -507,6 +529,27 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
     }
   };
 
+  // Replace keys (AWS access keys expire): paste new ones, same sign-in.
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [newKeys, setNewKeys] = useState({});
+  const [keysBusy, setKeysBusy] = useState(false);
+  const [keysError, setKeysError] = useState(null);
+  const saveKeys = async () => {
+    setKeysBusy(true);
+    setKeysError(null);
+    try {
+      await api.put(`/api/credentials/${cred.id}`, { awsKeys: { accessKeyId: newKeys.accessKeyId, secretAccessKey: newKeys.secretAccessKey, sessionToken: newKeys.sessionToken } });
+      setKeysOpen(false);
+      setNewKeys({});
+      setTestResult(null);
+      onRefresh();
+    } catch (e) {
+      setKeysError(e.message);
+    } finally {
+      setKeysBusy(false);
+    }
+  };
+
   const handleSetDefault = async () => {
     setSettingDefault(true);
     try {
@@ -612,6 +655,17 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
           )}
         </div>
 
+        {keysOpen && (
+          <div className="stack" style={{ margin: '8px 0' }}>
+            <AwsKeysFields value={newKeys} onChange={setNewKeys} idPrefix={`aws-new-${cred.id}`} />
+            {keysError && <p className="error-note" role="alert">{keysError}</p>}
+            <div className="row" style={{ gap: 8 }}>
+              <button type="button" className="btn btn-sm btn-primary" onClick={saveKeys} disabled={keysBusy}>{keysBusy ? 'Saving…' : 'Save keys'}</button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setKeysOpen(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+
         {testResult && (
           <p role="status" className={testResult.ok ? 'muted small' : 'error-note'} style={{ margin: '4px 0 0' }}>
             {testResult.ok ? '✓ ' : ''}{testResult.message}
@@ -676,6 +730,11 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
           </>
         )}
 
+        {cred.mode === 'aws_keys' && (
+          <button type="button" className={`btn btn-sm${testResult && !testResult.ok ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setKeysOpen((o) => !o)} aria-expanded={keysOpen}>
+            Replace keys
+          </button>
+        )}
         {!isKiroIdC && (
           <button type="button" className="btn btn-sm btn-ghost" onClick={handleTest} disabled={testBusy} aria-label={`Test "${cred.name}"`}>
             {testBusy ? 'Testing…' : 'Test'}

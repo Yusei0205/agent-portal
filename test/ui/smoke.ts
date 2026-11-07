@@ -1758,7 +1758,7 @@ async function main() {
         } finally { await p.unroute('**/api/settings/models?provider=codex*'); await p.unroute('**/api/codex/status'); }
       }, page);
       await test('Codex pack installs and opens its native lead agent file', async (p) => {
-        await goto(p, '/config', 800);
+        await goto(p, '/config/kiro', 800);
         await p.getByRole('tab', { name: 'Codex (~/.codex)', exact: true }).click();
         await p.getByRole('button', { name: 'Add agent pack', exact: true }).click();
         await p.getByRole('dialog').getByRole('button', { name: 'Add agent pack', exact: true }).click();
@@ -1784,14 +1784,14 @@ async function main() {
     currentSectionId = '30';
 
     await test('Configuration page renders with Kiro/Claude/AWS tabs', async (p) => {
-      await goto(p, '/config', 1200);
+      await goto(p, '/config/kiro', 1200);
       await assertHeading(p, 'Configuration');
       await p.waitForSelector('.tabs, [role="tablist"]', { timeout: 8000 });
       await assertTabsExist(p, ['~/.kiro', '~/.claude', '~/.aws']);
     }, page);
 
     await test('AWS tab shows credential warning', async (p) => {
-      await goto(p, '/config', 1200);
+      await goto(p, '/config/kiro', 1200);
       await p.waitForSelector('#cfg-tab-aws', { timeout: 8000 });
       await p.click('#cfg-tab-aws');
       await p.waitForTimeout(500);
@@ -1803,7 +1803,7 @@ async function main() {
     await test('Create a JSON file and verify invalid-JSON error path', async (p) => {
       // Navigate away first so Configuration remounts with the kiro tab (default).
       await goto(p, '/projects', 200);
-      await goto(p, '/config', 1400);
+      await goto(p, '/config/kiro', 1400);
       // Stay on kiro tab (default)
       await p.waitForSelector('.config-tree-pane, .config-layout', { timeout: 8000 });
 
@@ -3575,7 +3575,7 @@ async function main() {
     currentSectionId = '41';
 
     await test('Config file tree has role=tree and treeitem nodes', async (p) => {
-      await goto(p, '/config', 1400);
+      await goto(p, '/config/kiro', 1400);
       await p.waitForSelector('.config-tree-body[role="tree"]', { timeout: 8000 });
       // After the tree loads there should be treeitem nodes (if no files, tree is still accessible)
       const treeEl = p.locator('.config-tree-body[role="tree"]').first();
@@ -3584,7 +3584,7 @@ async function main() {
     }, page);
 
     await test('Config tree items have role=treeitem with tabIndex and aria-level', async (p) => {
-      await goto(p, '/config', 1400);
+      await goto(p, '/config/kiro', 1400);
       await p.waitForSelector('.config-tree-body[role="tree"]', { timeout: 8000 });
       // Create a file so there is at least one treeitem
       const newFileBtn = p.locator('[aria-label="New file"]').first();
@@ -3603,7 +3603,7 @@ async function main() {
     }, page);
 
     await test('Arrow keys navigate config tree items', async (p) => {
-      await goto(p, '/config', 1400);
+      await goto(p, '/config/kiro', 1400);
       await p.waitForSelector('.config-tree-body[role="tree"]', { timeout: 8000 });
       const treeitems = p.locator('[role="treeitem"]');
       const count = await treeitems.count();

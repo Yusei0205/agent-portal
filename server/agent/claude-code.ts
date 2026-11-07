@@ -228,7 +228,10 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     } catch { /* no usable credential: Bedrock below */ }
     if (cloudAuth) return runClaudeViaAgentCoreAdapter(ctx, claudeRuntimeArn, cloudAuth);
     const { runClaudeViaAgentCore: runClaudeOnBedrock } = await import('./claude-agentcore-bedrock.ts');
-    return runClaudeOnBedrock(ctx, claudeRuntimeArn);
+    // The person's own AWS access (pasted keys or an assumed role) is used for this run; otherwise the runtime's role.
+    const { resolveBedrockEnvForRunner } = await import('../credentials.ts');
+    const bedrockEnv = await resolveBedrockEnvForRunner(run.credentialOwnerId, run.credentialId);
+    return runClaudeOnBedrock(ctx, claudeRuntimeArn, bedrockEnv);
   }
 
   // ── Pre-flight: credentials check ─────────────────────────────────────────
