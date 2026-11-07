@@ -296,6 +296,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
 
   // Reset model when credential changes manually (engine changes already handled below)
   const handleCredentialChange = useCallback((newCredId) => {
+    setPreflight(null);
     setCredentialId(newCredId);
     setModel('');
   }, []);
@@ -420,11 +421,21 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   // A goal is optional: without one the session just opens (and checks out its repositories) and waits for the first message.
   const canSubmit = !busy;
 
+  // Before a real engine starts, check its sign-in. A failure is shown once with the reason; Start again goes ahead.
+  const [preflight, setPreflight] = useState(null);
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
     try {
+      if ((engine === 'kiro' || engine === 'claude-code') && !preflight) {
+        const check = await api.post('/api/credentials/check', { engine, credentialId: credentialId || undefined }).catch(() => null);
+        if (check && !check.ok) {
+          setPreflight(check);
+          setBusy(false);
+          return;
+        }
+      }
       const payload = {
         goal: goal.trim(),
         engine,
@@ -535,6 +546,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                       onChange={() => {
                         if (available) {
                           setEngine(opt.id);
+                          setPreflight(null);
                           setLeadAgent('');
                           setModel('');
                         }
@@ -712,6 +724,14 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                   Ticket context will be sent with the session goal.
                 </p>
               )}
+            </div>
+          )}
+
+          {preflight && !error && (
+            <div className="error-note" role="alert">
+              <strong>This sign-in did not pass a check ({preflight.runsAs || 'sign-in'}).</strong> {preflight.message}{' '}
+              Pick another sign-in or fix it under <a href="#/config/sign-ins" onClick={() => onClose()}>Agent setup › Sign-ins</a>,
+              or press Start session again to go ahead anyway.
             </div>
           )}
 

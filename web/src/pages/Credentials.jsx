@@ -492,6 +492,21 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
     }
   };
 
+  // Test: a real call with this sign-in (the models it can list), with the answer shown on the card.
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const handleTest = async () => {
+    setTestBusy(true);
+    setTestResult(null);
+    try {
+      setTestResult(await api.post('/api/credentials/check', { engine: cred.engine, credentialId: cred.id }));
+    } catch (e) {
+      setTestResult({ ok: false, message: e.message || 'The check could not run' });
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
   const handleSetDefault = async () => {
     setSettingDefault(true);
     try {
@@ -597,6 +612,12 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
           )}
         </div>
 
+        {testResult && (
+          <p role="status" className={testResult.ok ? 'muted small' : 'error-note'} style={{ margin: '4px 0 0' }}>
+            {testResult.ok ? '✓ ' : ''}{testResult.message}
+          </p>
+        )}
+
         {/* Refresh error (shown above the "Sign in again" highlight) */}
         {refreshError && (
           <p className="error-note" role="alert" style={{ marginTop: 6, marginBottom: 0, fontSize: '0.82rem' }}>
@@ -655,6 +676,16 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
           </>
         )}
 
+        {!isKiroIdC && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={handleTest} disabled={testBusy} aria-label={`Test "${cred.name}"`}>
+            {testBusy ? 'Testing…' : 'Test'}
+          </button>
+        )}
+        {isKiroIdC && !reauthChallenge && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={handleTest} disabled={testBusy} aria-label={`Test "${cred.name}"`}>
+            {testBusy ? 'Testing…' : 'Test'}
+          </button>
+        )}
         {!cred.isDefault && (
           <button
             type="button"
@@ -741,6 +772,13 @@ export function Credentials({ user }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // #/config/sign-ins?engine=kiro (from the Get started card) scrolls to that engine's section.
+  useEffect(() => {
+    if (loading) return;
+    const wanted = new URLSearchParams(window.location.hash.split('?')[1] || '').get('engine');
+    if (wanted) document.getElementById(`cred-engine-${wanted}`)?.scrollIntoView({ block: 'start' });
+  }, [loading]);
+
   const load = useCallback(async () => {
     try {
       const { credentials: creds } = await api.get('/api/credentials');
@@ -788,7 +826,7 @@ export function Credentials({ user }) {
         </>}
       />
 
-      <CodexCredentials isAdmin={isAdmin} />
+      <div id="cred-engine-codex"><CodexCredentials isAdmin={isAdmin} /></div>
 
       <EngineSection
         engine="kiro"

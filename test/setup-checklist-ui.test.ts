@@ -33,7 +33,9 @@ describe('Get started checklist', () => {
     const order = ['Sign in to an AI engine', 'Create a project', 'Connect your Git host', 'Add a repository', 'Start your first session'].map((t) => html.indexOf(t));
     assert.ok(order.every((i) => i >= 0) && [...order].sort((a, b) => a - b).join() === order.join(), 'all five, in order');
     assert.match(html, /0 of 5 done/);
-    assert.match(html, /<a class="btn btn-sm btn-primary" href="#\/config\/sign-ins">Add sign-in<\/a>/);
+    for (const [engine, label] of [['claude-code', 'Claude Code'], ['kiro', 'Kiro'], ['codex', 'Codex']]) {
+      assert.match(html, new RegExp(`<a class="btn btn-sm btn-primary" href="#/config/sign-ins\\?engine=${engine}">${label}</a>`), `${label} can be chosen`);
+    }
     assert.match(html, /Create a project first/, 'repository and session steps need a project');
   });
 

@@ -34,10 +34,17 @@ export async function loadSetupState(project) {
   };
 }
 
+/** The engines a person can sign in to; each opens the Sign-ins page at that engine. */
+export const ENGINE_CHOICES = [
+  { id: 'claude-code', label: 'Claude Code', href: '#/config/sign-ins?engine=claude-code' },
+  { id: 'kiro', label: 'Kiro', href: '#/config/sign-ins?engine=kiro' },
+  { id: 'codex', label: 'Codex', href: '#/config/sign-ins?engine=codex' },
+];
+
 export function setupSteps(project) {
   const p = project ? `#/p/${project.id}` : null;
   return [
-    { id: 'ai', title: 'Sign in to an AI engine', hint: 'Add your Claude Code or Kiro sign-in, or ask an admin to set the portal AI provider for everyone.', href: '#/config/sign-ins', action: 'Add sign-in' },
+    { id: 'ai', title: 'Sign in to an AI engine', hint: 'Choose the engine you will use, or ask an admin to set the portal AI provider for everyone.', href: null, action: '', engines: ENGINE_CHOICES },
     { id: 'project', title: 'Create a project', hint: 'A project keeps its repositories, sessions and knowledge together.', href: null, action: 'New project' },
     { id: 'git', title: 'Connect your Git host', hint: 'So the portal can clone your repositories and open pull requests.', href: '#/connect/git', action: 'Connect' },
     { id: 'repo', title: 'Add a repository', hint: 'Pick the repository the agent works on.', href: p ? `${p}/workspaces/repositories` : null, action: 'Add repository' },
@@ -85,7 +92,14 @@ export function SetupChecklistView({ project, state, onNewProject, onHide }) {
                 <div style={{ fontWeight: 600 }}>{s.title}{ok ? ' (done)' : ''}</div>
                 {!ok && <div className="muted small">{s.hint}</div>}
               </div>
-              {!ok && (s.id === 'project'
+              {!ok && s.engines && (
+                <span className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }} role="group" aria-label="Choose an AI engine">
+                  {s.engines.map((e) => (
+                    <a key={e.id} className={`btn btn-sm${primary}`} href={e.href}>{e.label}</a>
+                  ))}
+                </span>
+              )}
+              {!ok && !s.engines && (s.id === 'project'
                 ? <button type="button" className={`btn btn-sm${primary}`} onClick={onNewProject}>{s.action}</button>
                 : s.href
                   ? <a className={`btn btn-sm${primary}`} href={s.href}>{s.action}</a>

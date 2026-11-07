@@ -1066,6 +1066,33 @@ export function registerCredentialRoutes(): void {
     sendJson(res, 200, { ok: true });
   });
 
+  // POST /api/credentials/check — does this sign-in work? { engine, credentialId? } (no id: the one a session would use).
+  // Lists the models with it, which is a real call for API keys, roles, Kiro and Bedrock. Browser only.
+  router.post('/api/credentials/check', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const engine = String(body.engine ?? '');
+    if (engine !== 'kiro' && engine !== 'claude-code') throw new HttpError(400, 'engine must be kiro or claude-code');
+    const credentialId = body.credentialId ? String(body.credentialId) : null;
+    if (credentialId && !isBedrockRuntimeChoice(engine, credentialId)) {
+      const own = await getCredentialsRepository().getByIdAndUser(credentialId, req.user!.id);
+      if (!own || own.engine !== engine) throw new HttpError(404, 'Sign-in not found');
+      // A Claude plan token cannot be checked without starting a run.
+      if (own.mode === 'subscription_token') {
+        sendJson(res, 200, { ok: true, checked: false, message: 'Saved. A Claude plan token can only be confirmed by a run, so the first session will tell.' });
+        return;
+      }
+    }
+    const { getEngineModels } = await import('./models.ts');
+    const r = await getEngineModels(engine, req.user!.id, credentialId, true);
+    const n = r.models.length;
+    if (r.error || n === 0) {
+      sendJson(res, 200, { ok: false, checked: true, runsAs: r.runsAs.label, message: r.error || 'The sign-in answered, but no models are available to it.' });
+      return;
+    }
+    sendJson(res, 200, { ok: true, checked: true, runsAs: r.runsAs.label, message: `Works. ${n} model${n === 1 ? '' : 's'} available (${r.runsAs.label}).` });
+  });
+
   // POST /api/credentials/:id/set-default (browser only)
   router.post('/api/credentials/:id/set-default', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;

@@ -45,6 +45,17 @@ describe('Amazon Bedrock sign-in choice', () => {
     assert.ok(!list.find((e) => e.engine === 'kiro')!.credentials.some((c) => c.virtual));
   });
 
+  it('the sign-in check refuses a bad request, and says a Claude plan token can only be confirmed by a run', async () => {
+    const check = (body: unknown) => fetchJson(base, '/api/credentials/check', { cookie, method: 'POST', body });
+    assert.equal((await check({ engine: 'codex' })).status, 400);
+    assert.equal((await check({ engine: 'claude-code', credentialId: 'nope' })).status, 404);
+    const made = (await fetchJson(base, '/api/credentials', { cookie, method: 'POST', body: { engine: 'claude-code', mode: 'subscription_token', name: 'Plan', secret: 'oauth-token-abcd' } })).body as { credential: { id: string } };
+    const r = await check({ engine: 'claude-code', credentialId: made.credential.id });
+    assert.equal(r.status, 200);
+    assert.deepEqual({ ok: (r.body as any).ok, checked: (r.body as any).checked }, { ok: true, checked: false });
+    assert.match(String((r.body as any).message), /first session will tell/);
+  });
+
   it('choosing it selects Bedrock with the runtime role, so a run does not use an Anthropic key', async () => {
     const env = await resolveCredentialEnv('claude-code', null, BEDROCK_RUNTIME_SIGN_IN);
     assert.equal(env.CLAUDE_CODE_USE_BEDROCK, '1');
