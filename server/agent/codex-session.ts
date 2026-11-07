@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { CodexClient, RpcParams } from '../codex-client.ts';
 import { decideToolCall, rememberKey, type PolicyRule } from './tool-policy.ts';
 import type { ChatgptAuthTokens } from '../codex-device-protocol.ts';
+import { createCodexAgentTracker } from './codex-agents.ts';
 
 export interface CodexSessionContext {
   run: { workDir: string; goal: string; trusted: boolean; model: string | null; engineSessionId: string | null; permissions: { rules: readonly PolicyRule[] } };
@@ -112,6 +113,7 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
   };
   const flushUsage = () => { for (const params of pendingUsage.splice(0)) recordUsage(params); };
   const items = new Map<string, RpcParams>();
+  const agents = createCodexAgentTracker(emit);
   const text = new Map<string, string>();
   let resolveTurn: (() => void) | undefined;
   let rejectTurn: ((error: Error) => void) | undefined;
@@ -144,7 +146,10 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
         initialUsage.set(String(params.threadId), params.tokenUsage?.total ?? {});
         return;
       }
-      if (params.threadId !== threadId) return;
+      if (params.threadId !== threadId) {
+        if (agents.has(params.threadId) && (method === 'item/started' || method === 'item/completed')) agents.accept(params.item ?? {});
+        return;
+      }
       if (method === 'turn/started') { turnId = params.turn?.id ?? turnId; if (turnId) flushUsage(); }
       if (method === 'item/agentMessage/delta') {
         const id = String(params.itemId);
@@ -153,6 +158,7 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
         emit('assistant-text', { text: delta, stream: true });
       } else if (method === 'item/started' || method === 'item/completed') {
         const item = params.item ?? {};
+        agents.accept(item);
         items.set(String(item.id), item);
         if (item.type === 'agentMessage' && method === 'item/completed' && !text.has(String(item.id))) {
           text.set(String(item.id), String(item.text ?? ''));

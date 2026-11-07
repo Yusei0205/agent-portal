@@ -422,3 +422,15 @@ A live check showed that the Kiro runner started its CLI but returned no verific
 New Kiro Identity Center sign-ins and reauthentication now use the existing direct AWS OIDC path in cloud deployments too. They register the Kiro scopes and request a device code without invoking an AgentCore runtime. Each startup OIDC call has a 15-second application deadline, and transient failures return a retryable error. The form says Requesting sign-in code while it waits. The user still authorizes the code in their browser.
 
 Pending client secrets are encrypted, including new reauthentication challenges. Polling remains compatible with old pending plaintext fields and AgentCore-based challenges during rollout. Agent execution continues on AgentCore with the stored credential. A failed reauthentication leaves the previous credential and selected profile intact.
+
+## Conversation file links return S3 AccessDenied
+
+A link such as `/server/feedback.ts:376` names a file in the session working copy. It is not a website asset. Opening that URL directly sends it to CloudFront's private static S3 origin, which returns AccessDenied for the missing object.
+
+The conversation now opens matching deliverables in the output preview and source links in the session editor through authenticated IDE reads. Repository-relative paths are checked against the working copy and its repositories; ambiguous paths ask the user to choose a repository in Explorer. External web links keep their normal behavior. Do not make the bucket public to address workspace links.
+
+## Codex sub-agents are missing from Agents activity
+
+Native Codex collaboration items now produce portal sub-agent lifecycle events, including nested parent relationships. The Codex runner and portal must both be deployed. Open Agents activity in the session sidebar and select **Expand agent graph** to see the connected nodes. The panel refreshes every five seconds as a fallback to realtime updates.
+
+Older runs that did not record native collaboration events cannot display that missing history. New collaboration activity is recorded after deployment. The graph visualizes actual delegated sessions and native sub-agents; it does not turn sequential automation steps into concurrent steps.

@@ -920,6 +920,23 @@ describe('GET /api/workflows/:wid/agents', () => {
     assert.equal(body.agents.length, 0);
   });
 
+  it('keeps native agent identity, nested parents and stopped status across resumed runs', async () => {
+    for (const runId of ['agents-run-1', 'agents-run-2']) insert('p6_runs', {
+      id: runId, workflow_id: workflowId, status: 'done', created_at: now(),
+    });
+    const event = (run_id: string, type: string, payload: object) => insert('p6_events', { run_id, type, payload: JSON.stringify(payload), created_at: now() });
+    event('agents-run-1', 'subagent-started', { id: 'native-api', engine: 'codex', parentId: 'lead', name: 'API reviewer' });
+    event('agents-run-1', 'subagent-started', { id: 'native-tests', engine: 'codex', parentId: 'native-api', name: 'Test reviewer' });
+    event('agents-run-2', 'subagent-finished', { id: 'native-api', engine: 'codex', name: 'API reviewer' });
+    event('agents-run-2', 'subagent-failed', { id: 'native-tests', engine: 'codex', name: 'Test reviewer', status: 'stopped' });
+    const response = await fetchJson(baseUrl, `/api/workflows/${workflowId}/agents`, { cookie: adminCookie });
+    const agents = (response.body as any).agents;
+    assert.equal(agents.length, 2);
+    assert.equal(agents.find((a: any) => a.id === 'native-api').status, 'done');
+    assert.equal(agents.find((a: any) => a.id === 'native-tests').parentId, 'native-api');
+    assert.equal(agents.find((a: any) => a.id === 'native-tests').status, 'stopped');
+  });
+
   it('returns 401 for unauthenticated', async () => {
     const r = await fetchJson(baseUrl, `/api/workflows/${workflowId}/agents`);
     assert.equal(r.status, 401);

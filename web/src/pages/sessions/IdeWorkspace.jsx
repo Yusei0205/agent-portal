@@ -28,6 +28,7 @@ import { IdeSourceControl } from './IdeSourceControl.jsx';
 import { IdeTerminal } from './IdeTerminal.jsx';
 import { IdeBrowser } from './IdeBrowser.jsx';
 import { IdeAgents } from './IdeAgents.jsx';
+import { resolveConversationPath } from '../../lib/conversationFiles.js';
 import { IdeSessionPanel } from './IdeSessionPanel.jsx';
 import { IdeStatusBar } from './IdeStatusBar.jsx';
 import { IdeOutputs } from './IdeOutputs.jsx';
@@ -1189,6 +1190,10 @@ export function IdeWorkspace({ id, project }) {
               aria-label="Agent conversation"
             >
               <SessionLive
+                onOpenWorkspaceFile={async (path, line) => {
+                  const resolved = await resolveConversationPath(api, id, path);
+                  setOpenFile({ scope: 'work', path: resolved, name: resolved.split('/').pop(), ext: '.' + resolved.split('.').pop(), line, key: `work:${resolved}` });
+                }}
                 runId={latestRunId}
                 workflowId={id}
                 projectId={project.id}

@@ -7,6 +7,7 @@ import { Icon } from '../../components/Icon.jsx';
 import { sanitizeMarkdown } from '../../lib/sanitize.js';
 import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventLists } from '../../lib/mergeEvents.js';
 import { findOutputFileMentions } from '../../lib/outputFileMatch.js';
+import { linkConversationFiles } from '../../lib/conversationFiles.js';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
 import { RunOutputsCard } from './RunOutputsCard.jsx';
 import { PullRequestCards } from './PullRequestCard.jsx';
@@ -14,6 +15,7 @@ import { PullRequestCards } from './PullRequestCard.jsx';
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
 let _markedLib = null;
+const WorkspaceFileContext = createContext(null);
 let _markedLoadPromise = null;
 
 function loadMarked() {
@@ -30,7 +32,8 @@ function renderMarkdownToHtml(text) {
   const raw = typeof _markedLib === 'function'
     ? _markedLib(text, { gfm: true, breaks: true })
     : _markedLib.parse(text, { gfm: true, breaks: true });
-  return sanitizeMarkdown(String(raw));
+  // Preserve native artifact links before the sanitizer removes the sandbox scheme.
+  return sanitizeMarkdown(String(raw).replace(/href="sandbox:(\/[^\"]*)"/gi, 'href="$1"'));
 }
 
 function _escapeHtml(s) {
@@ -57,7 +60,7 @@ function linkifyDomOutputFiles(container, outputFiles) {
    */
   function walk(node) {
     // Skip <pre> (code block) subtrees entirely
-    if (node.nodeType === 1 && node.nodeName === 'PRE') return;
+    if (node.nodeType === 1 && ['PRE', 'A', 'BUTTON'].includes(node.nodeName)) return;
 
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === 3) {
@@ -166,6 +169,8 @@ function useSmoothText(text) {
  * }} props
  */
 function MarkdownMessage({ text: fullText, outputFiles = [], projectId, vaultFolder }) {
+  const openWorkspaceFile = useContext(WorkspaceFileContext);
+  const [fileError, setFileError] = useState(null);
   const text = useSmoothText(fullText);
   const [html, setHtml] = useState(() => renderMarkdownToHtml(fullText));
   const containerRef = useRef(null);
@@ -186,20 +191,29 @@ function MarkdownMessage({ text: fullText, outputFiles = [], projectId, vaultFol
   // We run this inside a layout effect (useEffect) so the DOM is already updated.
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !outputFiles.length) return;
+    if (!container) return;
+    linkConversationFiles(container, outputFiles);
     linkifyDomOutputFiles(container, outputFiles);
   // Re-run whenever HTML or outputFiles list changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html, outputFiles]);
 
   const handleClick = useCallback((e) => {
+    const workspace = e.target.closest('[data-workspace-file-path]');
+    if (workspace) {
+      e.preventDefault();
+      setFileError(null);
+      if (openWorkspaceFile) Promise.resolve(openWorkspaceFile(workspace.dataset.workspaceFilePath, Number(workspace.dataset.fileLine) || null)).catch(error => setFileError(error.message));
+      else setFileError('Open this file from the session Explorer.');
+      return;
+    }
     const btn = e.target.closest('[data-output-file-id]');
     if (!btn) return;
     e.preventDefault();
     const fileId = btn.dataset.outputFileId;
     const file = outputFiles.find((f) => f.id === fileId);
     if (file) setPreviewFile(file);
-  }, [outputFiles]);
+  }, [outputFiles, openWorkspaceFile]);
 
   return (
     <>
@@ -211,10 +225,11 @@ function MarkdownMessage({ text: fullText, outputFiles = [], projectId, vaultFol
             className="live-markdown-body"
             // eslint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{ __html: html }}
-            onClick={outputFiles.length ? handleClick : undefined}
+            onClick={handleClick}
           />
         )
       }
+      {fileError && <div className="error-note" role="alert">{fileError}</div>}
       {previewFile && (
         <OutputFilePreview
           file={previewFile}
@@ -959,6 +974,7 @@ export function SessionLive({
   onBrowserEvent,
   outputFiles = [],
   vaultFolder = null,
+  onOpenWorkspaceFile,
 }) {
   const { events, connected, error } = useRunStream(runId);
 
@@ -1361,6 +1377,7 @@ export function SessionLive({
   }
 
   return (
+    <WorkspaceFileContext.Provider value={onOpenWorkspaceFile}>
     <ApprovalStateContext.Provider value={approvalState}>
     <div
       className="live-panel"
@@ -1579,5 +1596,6 @@ export function SessionLive({
       )}
     </div>
     </ApprovalStateContext.Provider>
+    </WorkspaceFileContext.Provider>
   );
 }
