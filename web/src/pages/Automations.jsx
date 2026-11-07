@@ -40,6 +40,7 @@ function uniqueName(base, taken) {
   return name;
 }
 const templateBaseName = (t) => t.name.replace(/ \(.*$/, '');
+const AI = 'ai';
 
 function Crumbs({ items }) {
   return <nav aria-label="Breadcrumb" className="automation-crumbs">{items.map((item, i) => <span key={i}>
@@ -143,6 +144,8 @@ export default function Automations({ projectId }) {
   const [available, setAvailable] = useState(false); const [dirty, setDirty] = useState(false);
   const [input, setInput] = useState(''); const [runOpts, setRunOpts] = useState(defaultRunOptions);
   const [templates, setTemplates] = useState([]); const [newTemplateId, setNewTemplateId] = useState(null); const [newName, setNewName] = useState('');
+  // "Describe it": the AI-drafted workflow, its description, and the changes asked for
+  const [aiText, setAiText] = useState(''); const [aiChanges, setAiChanges] = useState(''); const [draft, setDraft] = useState(null); const [generating, setGenerating] = useState(false);
   const [loading, setLoading] = useState(true);
   const requestId = useRef(null);
   const selected = nodes.find((n) => n.id === selectedId);
@@ -217,13 +220,23 @@ export default function Automations({ projectId }) {
   const startNew = () => {
     const first = templates[0];
     setNewTemplateId(first?.id ?? null); setNewName(uniqueName(first ? templateBaseName(first) : 'Workflow', definitions.map((d) => d.name)));
+    setAiText(''); setAiChanges(''); setDraft(null);
     setError(''); setNotice(''); setView('new');
   };
   const pickTemplate = (t) => { setNewTemplateId(t.id); setNewName(uniqueName(templateBaseName(t), definitions.map((d) => d.name))); };
   const create = () => task(async () => {
-    const r = await api.post(base, { name: newName.trim(), templateId: newTemplateId });
+    const r = await api.post(base, newTemplateId === AI ? { name: newName.trim(), graph: draft.graph } : { name: newName.trim(), templateId: newTemplateId });
     setDefinitions((list) => [...list, r.definition]); openWorkflow(r.definition);
   });
+  // Draft (or refine) a workflow from the description. Nothing is saved until Create.
+  const generate = async (refine) => {
+    setGenerating(true); setError('');
+    try {
+      const r = await api.post(`${base}/generate`, { description: aiText.trim(), ...(refine && draft ? { previous: draft.graph, changes: aiChanges.trim() } : {}) });
+      setDraft(r.draft); setAiChanges('');
+      if (!refine) setNewName(uniqueName(r.draft.name, definitions.map((d) => d.name)));
+    } catch (e) { setError(e.message || 'Could not generate the workflow'); } finally { setGenerating(false); }
+  };
   const remove = async (d) => {
     if (!(await requestConfirm(`Delete the workflow "${d.name}"? Its published versions and past runs are kept as history, but it will no longer be listed.`, 'Delete', 'danger'))) return;
     await task(async () => { await api.delete(`${base}/${d.id}`); await refresh(); setNotice(`Deleted "${d.name}".`); });
@@ -301,13 +314,32 @@ export default function Automations({ projectId }) {
       <div role="radiogroup" aria-label="Template" className="automation-cards">{templates.map((t) => <button key={t.id} type="button" role="radio" aria-checked={t.id === newTemplateId}
         className={`automation-card${t.id === newTemplateId ? ' is-selected' : ''}`} onClick={() => pickTemplate(t)}>
         <strong>{t.name}</strong><span className="muted small">{t.description}</span><span className="small">{t.graph.nodes.length} steps</span>
-      </button>)}</div>
+      </button>)}
+        <button type="button" role="radio" aria-checked={newTemplateId === AI} className={`automation-card${newTemplateId === AI ? ' is-selected' : ''}`} onClick={() => setNewTemplateId(AI)}>
+          <strong>Describe it (generate with AI)</strong><span className="muted small">Write what you want in plain words. The AI drafts the steps and adds the usual ones you did not mention (analysis, checks, review, approvals), and lists what it assumed.</span><span className="small">Draft, then edit</span>
+        </button>
+      </div>
+      {newTemplateId === AI && <section className="automation-ai" aria-label="Generate with AI">
+        <label>Describe the workflow<textarea rows={5} value={aiText} maxLength={4000} onChange={(e) => setAiText(e.target.value)}
+          placeholder="For example: when I give a Jira bug, find the cause, fix it with a test, get my approval, then open a pull request and put the QA steps on the ticket." /></label>
+        <p className="muted small">A few lines are enough: you do not have to cover every detail. The AI fills in what is usual for this kind of process and tells you below what it assumed and what to confirm.</p>
+        <div className="automation-actions"><button className="btn btn-primary" disabled={generating || !aiText.trim()} onClick={() => generate(false)}>{generating && !draft ? 'Generating… this can take up to a minute' : draft ? 'Generate again' : 'Generate workflow'}</button></div>
+        {draft && <>
+          <div className="automation-ai-notes">
+            {draft.summary && <p><strong>{draft.name}.</strong> {draft.summary}</p>}
+            {draft.assumptions.length > 0 && <div><h3>What the AI assumed</h3><ul>{draft.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul></div>}
+            {draft.questions.length > 0 && <div><h3>Please confirm</h3><ul>{draft.questions.map((q, i) => <li key={i}>{q}</li>)}</ul></div>}
+          </div>
+          <label>Change it<textarea rows={2} value={aiChanges} maxLength={2000} onChange={(e) => setAiChanges(e.target.value)} placeholder="For example: add a security review step, and ask me before the pull request." /></label>
+          <div><button className="btn" disabled={generating || !aiChanges.trim()} onClick={() => generate(true)}>{generating ? 'Updating…' : 'Update the draft'}</button></div>
+        </>}
+      </section>}
       <div className="automation-actions automation-toolbar">
         <label>Name<input aria-label="New workflow name" value={newName} maxLength={120} onChange={(e) => setNewName(e.target.value)} /></label>
-        <button className="btn btn-primary" disabled={busy || !newName.trim() || !newTemplate} onClick={create}>Create workflow</button>
+        <button className="btn btn-primary" disabled={busy || generating || !newName.trim() || (newTemplateId === AI ? !draft : !newTemplate)} onClick={create}>Create workflow</button>
         <button className="btn" onClick={() => { setError(''); setView('list'); }}>Cancel</button>
       </div>
-      {newTemplate && <TemplateCanvas template={newTemplate} />}
+      {newTemplateId === AI ? (draft && <TemplateCanvas template={{ id: `draft-${draft.name}-${draft.graph.nodes.length}`, name: draft.name, description: draft.summary, graph: draft.graph }} />) : newTemplate && <TemplateCanvas template={newTemplate} />}
       <ConfirmDialog state={confirmState} />
     </div>;
   }

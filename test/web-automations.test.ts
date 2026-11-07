@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { build } from 'esbuild';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { stopLocalAutomationTimers } from '../server/automations/engine.ts';
+import { setCallTextModelOverride } from '../server/testing/model-provider.ts';
 
 test('visual workflow editor saves, publishes, keeps published content, and fits mobile', async () => {
   const { baseUrl } = await createTestServer();
@@ -131,6 +132,37 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
     await page.getByRole('button', { name: 'Delete Testing' }).waitFor({ state: 'detached' });
     assert.equal(await definitionsCount(), 1);
+
+    // Describe it: the AI drafts a workflow with its assumptions and questions, it can be refined, and Create saves it.
+    const drafts = [
+      { name: 'Bug triage', summary: 'Triage a bug.', assumptions: ['Tests run with npm test'], questions: ['Which branch should the fix target?'],
+        steps: [{ id: 'analyze', kind: 'agent', label: 'Analyze the bug', instructions: 'Find the cause of {{input}}.' }, { id: 'fix', kind: 'agent', label: 'Fix it', instructions: 'Fix it and add a test.', checks: [{ step: 'Tests', cmd: 'npm test', timeout: 300 }] }] },
+      { name: 'Bug triage', summary: 'Triage a bug, with approval.', assumptions: [], questions: [],
+        steps: [{ id: 'analyze', kind: 'agent', label: 'Analyze the bug', instructions: 'Find the cause of {{input}}.' }, { id: 'approve', kind: 'approval', label: 'Approve the plan', instructions: 'Check the analysis.' }, { id: 'fix', kind: 'agent', label: 'Fix it', instructions: 'Fix it and add a test.' }] },
+    ];
+    const prompts: string[] = [];
+    setCallTextModelOverride(async (_system, user) => { prompts.push(user); return JSON.stringify(drafts[prompts.length - 1]); });
+    const countBefore = await definitionsCount();
+    await page.getByRole('button', { name: 'New workflow' }).click();
+    await page.getByRole('radio', { name: /Describe it/ }).click();
+    assert.equal(await page.getByRole('button', { name: 'Create workflow' }).isDisabled(), true, 'nothing to create before a draft exists');
+    await page.getByLabel('Describe the workflow').fill('When I give a bug, find the cause and fix it.');
+    await page.getByRole('button', { name: 'Generate workflow' }).click();
+    await page.getByRole('heading', { name: 'What the AI assumed' }).waitFor();
+    await page.getByText('Which branch should the fix target?').waitFor();
+    assert.equal(await page.locator(preview).count(), 4, 'Start, two steps, End');
+    assert.equal(await page.getByLabel('New workflow name').inputValue(), 'Bug triage');
+    assert.equal(await definitionsCount(), countBefore, 'a draft is not saved');
+    await page.getByLabel('Change it').fill('Ask me before the fix.');
+    await page.getByRole('button', { name: 'Update the draft' }).click();
+    await page.locator(preview).nth(4).waitFor();
+    assert.equal(await page.locator(preview).count(), 5, 'the refined draft has the approval step');
+    assert.match(prompts[1], /Ask me before the fix\./);
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await page.locator(canvas).first().waitFor();
+    assert.equal(await page.locator(canvas).count(), 5, 'the generated workflow opens in the editor');
+    assert.equal(await definitionsCount(), countBefore + 1);
+    setCallTextModelOverride(null);
     assert.deepEqual(errors, []);
     await context.close();
   } finally { await browser.close(); stopLocalAutomationTimers(); await cleanup(); }
