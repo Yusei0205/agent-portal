@@ -21,10 +21,7 @@ import { generateId, now, str, badRequest, HttpError } from './util.ts';
 import { appendAudit } from './audit.ts';
 import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
 import type { FetchProfilesResult } from './kiro-idc.ts';
-import {
-  startAgentCoreLogin,
-  pollAgentCoreLoginShared,
-} from './agent/kiro-agentcore.ts';
+import { pollAgentCoreLoginShared } from './agent/kiro-agentcore.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 import type { CredentialRecord } from './repositories/credentials.ts';
 
@@ -98,12 +95,10 @@ class OIDCTimeoutError extends Error {
 }
 
 /**
- * Races the given promise against an optional injected timeout.
- * When _oidcCallTimeoutMs is null the promise is returned as-is; the SDK's
- * own requestTimeout handles the production bound.
+ * Bound a call by an explicit deadline or the injected test deadline.
+ * Refresh calls without a deadline use the SDK's own request timeout.
  */
-function withOIDCTimeout<T>(promise: Promise<T>): Promise<T> {
-  const ms = _oidcCallTimeoutMs;
+function withOIDCTimeout<T>(promise: Promise<T>, ms: number | null = _oidcCallTimeoutMs): Promise<T> {
   if (ms === null) return promise;
   let timer: ReturnType<typeof setTimeout>;
   const timeoutP = new Promise<never>((_, reject) => {
@@ -246,13 +241,14 @@ function credView(row: CredentialRow) {
     pendingDeviceCode: _3, pendingExpireAt: _4,
     pendingClientSecretExpiresAt: _5,
     refreshTokenEnc: _6, clientSecretEnc: _7,
+    pendingClientSecretEnc: _8,
     availableProfiles: _av,
     selectedProfileArn: _spa,
     selectedProfileName: _spn,
     profileFetchError: _pfe,
     ...publicConfig
   } = rawConfig;
-  void _1; void _2; void _3; void _4; void _5; void _6; void _7;
+  void _1; void _2; void _3; void _4; void _5; void _6; void _7; void _8;
 
   const { status, canRefresh } = computeIdcStatus(row);
 
@@ -487,6 +483,7 @@ async function attemptTokenRefresh(cred: CredentialRow): Promise<RefreshResult> 
     // Clear any stale pending fields
     delete newExtra.pendingClientId;
     delete newExtra.pendingClientSecret;
+    delete newExtra.pendingClientSecretEnc;
     delete newExtra.pendingDeviceCode;
     delete newExtra.pendingExpireAt;
     delete newExtra.pendingClientSecretExpiresAt;
@@ -903,6 +900,7 @@ export async function refreshIdcCredentialToken(
     }
     delete newExtra.pendingClientId;
     delete newExtra.pendingClientSecret;
+    delete newExtra.pendingClientSecretEnc;
     delete newExtra.pendingDeviceCode;
     delete newExtra.pendingExpireAt;
     delete newExtra.pendingClientSecretExpiresAt;
@@ -960,63 +958,32 @@ export function registerCredentialRoutes(): void {
       let deviceChallenge: Record<string, unknown>;
       let extraForStore: Record<string, unknown>;
 
-      // ── AgentCore login path ──────────────────────────────────────────────
-      // When configured, kiro-login runs inside the AgentCore runtime.
-      // We start it as a background process, wait for the verification URL,
-      // then return the same deviceChallenge shape to the frontend.
-      const acRuntimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
-      if (acRuntimeArn) {
-        try {
-          const challenge = await startAgentCoreLogin(acRuntimeArn, id, startUrl, region);
-          extraForStore = {
-            startUrl,
-            region,
-            pendingDeviceCode: 'agentcore',
-            pendingExpireAt: Date.now() + challenge.expiresIn * 1000,
-          };
-          deviceChallenge = {
-            verificationUri: challenge.verificationUri,
-            verificationUriComplete: challenge.verificationUriComplete,
-            userCode: challenge.userCode,
-            expiresIn: challenge.expiresIn,
-            interval: challenge.interval,
-          };
-        } catch (e) {
-          throw new HttpError(502, `Failed to start AgentCore login: ${(e as Error)?.message ?? e}`);
-        }
-      } else {
-        // ── Local OIDC flow (unchanged) ─────────────────────────────────────
-        try {
-          const oidc = await makeOIDCClient(region);
-          const reg = await oidc.registerClient({
-            clientName: 'agent-portal',
-            clientType: 'public',
-            scopes: [...KIRO_IDC_SCOPES],
-            grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
-          });
-          const da = await oidc.startDeviceAuthorization({
-            clientId: reg.clientId,
-            clientSecret: reg.clientSecret,
-            startUrl,
-          });
-          extraForStore = {
-            startUrl,
-            region,
-            pendingClientId: reg.clientId,
-            pendingClientSecret: reg.clientSecret,
-            pendingClientSecretExpiresAt: reg.clientSecretExpiresAt ?? 0,
-            pendingDeviceCode: da.deviceCode,
-            pendingExpireAt: Date.now() + da.expiresIn * 1000,
-          };
-          deviceChallenge = {
-            verificationUri: da.verificationUriComplete ?? da.verificationUri,
-            userCode: da.userCode,
-            expiresIn: da.expiresIn,
-            interval: da.interval,
-          };
-        } catch (e) {
-          throw new HttpError(502, `Failed to start device authorization: ${(e as Error)?.message ?? e}`);
-        }
+      // Device authorization is a short AWS OIDC exchange, even when agents run
+      // on AgentCore. Do not launch an interactive CLI or cold runner from this request.
+      try {
+        const oidc = await makeOIDCClient(region);
+        const reg = await withOIDCTimeout(oidc.registerClient({
+          clientName: 'agent-portal', clientType: 'public',
+          scopes: [...KIRO_IDC_SCOPES],
+          grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
+        }), _oidcCallTimeoutMs ?? 15_000);
+        const da = await withOIDCTimeout(oidc.startDeviceAuthorization({
+          clientId: reg.clientId, clientSecret: reg.clientSecret, startUrl,
+        }), _oidcCallTimeoutMs ?? 15_000);
+        extraForStore = {
+          startUrl, region, pendingClientId: reg.clientId,
+          pendingClientSecretEnc: encrypt(reg.clientSecret, config.secretKey),
+          pendingClientSecretExpiresAt: reg.clientSecretExpiresAt ?? 0,
+          pendingDeviceCode: da.deviceCode,
+          pendingExpireAt: Date.now() + da.expiresIn * 1000,
+        };
+        deviceChallenge = {
+          verificationUri: da.verificationUriComplete ?? da.verificationUri,
+          userCode: da.userCode, expiresIn: da.expiresIn, interval: da.interval,
+        };
+      } catch (e) {
+        if (classifyOidcError(e) === 'transient') throw new HttpError(504, 'AWS sign-in is taking too long or is temporarily unavailable. Please try again.');
+        throw new HttpError(502, `Failed to start device authorization: ${(e as Error)?.message ?? e}`);
       }
 
       if (isDefault) {
@@ -1264,7 +1231,9 @@ export function registerCredentialRoutes(): void {
 
     // ── Standard local OIDC polling (unchanged) ────────────────────────────
     const clientId = String(extra.pendingClientId ?? '');
-    const clientSecret = String(extra.pendingClientSecret ?? '');
+    const clientSecret = extra.pendingClientSecretEnc
+      ? decrypt(String(extra.pendingClientSecretEnc), config.secretKey) ?? ''
+      : String(extra.pendingClientSecret ?? ''); // compatibility with existing pending logins
     const region = String(extra.region ?? 'us-east-1');
     const pendingExpireAt = Number(extra.pendingExpireAt ?? 0);
 
@@ -1398,50 +1367,6 @@ export function registerCredentialRoutes(): void {
       return;
     }
 
-    // ── AgentCore login path for reauth ───────────────────────────────────
-    const acRuntimeArnReauth = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
-    if (acRuntimeArnReauth) {
-      try {
-        const challenge = await startAgentCoreLogin(acRuntimeArnReauth, String(cred.id), startUrl, region);
-        // Preserve existing completed-auth fields; overwrite pending with agentcore sentinel
-        const extraForStore: Record<string, unknown> = {
-          startUrl,
-          region,
-          ...(extra.tokenExpiry ? { tokenExpiry: String(extra.tokenExpiry) } : {}),
-          ...(extra.signedInAt ? { signedInAt: String(extra.signedInAt) } : {}),
-          ...(extra.clientId ? { clientId: String(extra.clientId) } : {}),
-          ...(extra.clientSecretEnc ? { clientSecretEnc: String(extra.clientSecretEnc) } : {}),
-          ...(extra.clientSecretExpiresAt ? { clientSecretExpiresAt: Number(extra.clientSecretExpiresAt) } : {}),
-          ...(extra.refreshTokenEnc ? { refreshTokenEnc: String(extra.refreshTokenEnc) } : {}),
-          ...(extra.selectedProfileArn ? { selectedProfileArn: String(extra.selectedProfileArn) } : {}),
-          ...(extra.selectedProfileName ? { selectedProfileName: String(extra.selectedProfileName) } : {}),
-          pendingDeviceCode: 'agentcore',
-          pendingExpireAt: Date.now() + challenge.expiresIn * 1000,
-        };
-        await getCredentialsRepository().updateExtraConfig(
-          String(cred.id),
-          JSON.stringify(extraForStore),
-          now(),
-        );
-        appendAudit(getDb(), req.user!.id, 'credential.reauth', `credential:${String(cred.id)}`,
-          { name: String(cred.name) }, req.ip);
-        const reauthAcUpdated = await getCredentialsRepository().getById(String(cred.id));
-        sendJson(res, 200, {
-          credential: reauthAcUpdated ? credView(reauthAcUpdated) : null,
-          deviceChallenge: {
-            verificationUri: challenge.verificationUri,
-            verificationUriComplete: challenge.verificationUriComplete,
-            userCode: challenge.userCode,
-            expiresIn: challenge.expiresIn,
-            interval: challenge.interval,
-          },
-        });
-      } catch (e) {
-        throw new HttpError(502, `Failed to start AgentCore re-authentication: ${(e as Error)?.message ?? e}`);
-      }
-      return;
-    }
-
     try {
       const oidc = await makeOIDCClient(region);
 
@@ -1472,12 +1397,12 @@ export function registerCredentialRoutes(): void {
           clientSecretExpiresAt = storedClientSecretExpiresAt;
         } else {
           // Decryption failed — re-register
-          const reg = await oidc.registerClient({
+          const reg = await withOIDCTimeout(oidc.registerClient({
             clientName: 'agent-portal',
             clientType: 'public',
             scopes: [...KIRO_IDC_SCOPES],
             grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
-          });
+          }), _oidcCallTimeoutMs ?? 15_000);
           clientId = reg.clientId;
           clientSecret = reg.clientSecret;
           clientSecretExpiresAt = reg.clientSecretExpiresAt ?? 0;
@@ -1486,12 +1411,12 @@ export function registerCredentialRoutes(): void {
           newClientSecretExpiresAt = clientSecretExpiresAt;
         }
       } else {
-        const reg = await oidc.registerClient({
+        const reg = await withOIDCTimeout(oidc.registerClient({
           clientName: 'agent-portal',
           clientType: 'public',
           scopes: [...KIRO_IDC_SCOPES],
           grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
-        });
+        }), _oidcCallTimeoutMs ?? 15_000);
         clientId = reg.clientId;
         clientSecret = reg.clientSecret;
         clientSecretExpiresAt = reg.clientSecretExpiresAt ?? 0;
@@ -1500,7 +1425,7 @@ export function registerCredentialRoutes(): void {
         newClientSecretExpiresAt = clientSecretExpiresAt;
       }
 
-      const da = await oidc.startDeviceAuthorization({ clientId, clientSecret, startUrl });
+      const da = await withOIDCTimeout(oidc.startDeviceAuthorization({ clientId, clientSecret, startUrl }), _oidcCallTimeoutMs ?? 15_000);
 
       // Preserve existing completed-auth fields so the credential stays usable while
       // the re-auth flow is pending. Overwrite pending fields with the new flow.
@@ -1517,9 +1442,11 @@ export function registerCredentialRoutes(): void {
         ...(newClientId ? { clientId: newClientId } : {}),
         ...(newClientSecretEnc ? { clientSecretEnc: newClientSecretEnc } : {}),
         ...(newClientSecretExpiresAt !== null ? { clientSecretExpiresAt: newClientSecretExpiresAt } : {}),
+        ...(extra.selectedProfileArn ? { selectedProfileArn: String(extra.selectedProfileArn) } : {}),
+        ...(extra.selectedProfileName ? { selectedProfileName: String(extra.selectedProfileName) } : {}),
         // New pending device-code fields
         pendingClientId: clientId,
-        pendingClientSecret: clientSecret,
+        pendingClientSecretEnc: encrypt(clientSecret, config.secretKey),
         pendingClientSecretExpiresAt: clientSecretExpiresAt,
         pendingDeviceCode: da.deviceCode,
         pendingExpireAt: Date.now() + da.expiresIn * 1000,
@@ -1545,6 +1472,7 @@ export function registerCredentialRoutes(): void {
         },
       });
     } catch (e) {
+      if (classifyOidcError(e) === 'transient') throw new HttpError(504, 'AWS sign-in is taking too long or is temporarily unavailable. Please try again.');
       throw new HttpError(502, `Failed to start re-authentication flow: ${(e as Error)?.message ?? e}`);
     }
   });

@@ -459,7 +459,7 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
               onClick={submit}
             >
               {busy ? (
-                <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> Saving…</>
+                <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> {mode === 'identity_center' ? 'Requesting sign-in code…' : 'Saving…'}</>
               ) : (
                 'Add credential'
               )}

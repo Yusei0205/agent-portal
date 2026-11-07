@@ -413,3 +413,12 @@ The runner clones with `--progress` while preparing a session's repositories and
 **Fix:** the `/api/*` origin now waits 60 seconds (`readTimeout` in `infra/lib/portal-stack.ts`, the most CloudFront allows without a quota increase). Needs a CDK deploy. Until then, try again right away: the runtime is warm and answers in seconds. Delete the half-made entry if one appeared.
 
 **Not fixed:** a start slower than 60 seconds would still 504. The lasting fix is to return at once and let the page poll for the code.
+
+
+### Company sign-in stays on Saving after the gateway timeout fix
+
+A live check showed that the Kiro runner started its CLI but returned no verification challenge within 45 seconds. The interactive CLI was waiting at a Start URL prompt, despite receiving the URL as a flag. Starting a fresh machine and automating CLI prompts is unnecessary for device authorization: AWS returned a challenge for the same Start URL and region in about one second through SSO OIDC.
+
+New Kiro Identity Center sign-ins and reauthentication now use the existing direct AWS OIDC path in cloud deployments too. They register the Kiro scopes and request a device code without invoking an AgentCore runtime. Each startup OIDC call has a 15-second application deadline, and transient failures return a retryable error. The form says Requesting sign-in code while it waits. The user still authorizes the code in their browser.
+
+Pending client secrets are encrypted, including new reauthentication challenges. Polling remains compatible with old pending plaintext fields and AgentCore-based challenges during rollout. Agent execution continues on AgentCore with the stored credential. A failed reauthentication leaves the previous credential and selected profile intact.
