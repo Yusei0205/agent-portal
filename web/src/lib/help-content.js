@@ -27,7 +27,7 @@ export const HELP_GROUPS = [
 
 export const HELP_TOPICS = [
   {
-    id: 'automations', group: 'work', title: 'Workflows', icon: 'projects',
+    id: 'automations', group: 'work', title: 'Workflows', icon: 'workflow',
     page: { tab: 'automations', project: true },
     summary: 'Chain agent tasks, checks, branches and human approvals into a repeatable process, and run it on demand: from a Jira ticket to a reviewed pull request, or to test a ticket.',
     sections: [
