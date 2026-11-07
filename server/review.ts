@@ -1247,6 +1247,30 @@ export interface CreateReviewParams {
 }
 
 /** Validate, resolve context, and create a review (and its workflow). Shared by the route and automatic pull requests. */
+/**
+ * What the reviewer is asked to hand back. The portal reads the findings from the JSON block (see processReviewReport):
+ * a reply without one is treated as a failed review, so the request has to ask for it.
+ */
+export const REVIEW_REPORT_INSTRUCTIONS = [
+  'Review the change between these branches in the attached repository: read the diff and the files it touches, check correctness, security, error handling and tests, and report only real problems.',
+  'End your reply with one JSON block in this form (an empty "findings" list when you found nothing):',
+  '```json',
+  '{"summary": "<one or two sentences>", "findings": [{"file": "<path>", "line": <number or null>, "severity": "critical|high|medium|low|info", "title": "<short>", "body": "<what is wrong and how to fix it>"}]}',
+  '```',
+].join('\n');
+
+/** Start the review's session. A start that fails marks the review failed, so it never sits "pending" with nothing running. */
+async function startReviewRun(workflowId: string | null, reviewId: string): Promise<void> {
+  if (!workflowId) return;
+  try {
+    const { startRun } = await import('./workflows/driver.ts');
+    await startRun(workflowId);
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    await getReviewsRepository().update(reviewId, { status: 'failed', summary: `The review could not be started: ${why}`.slice(0, 500) }).catch(() => undefined);
+  }
+}
+
 export async function createReview(input: CreateReviewParams): Promise<ReviewRecord> {
   const { projectId, userId, baseRef, headRef } = input;
   const repoId = input.repoId ?? null;
@@ -1306,6 +1330,7 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
     goal += `\n\nJira ticket: ${jiraCtx.key} — ${jiraCtx.summary}`;
     if (jiraCtx.description) goal += `\n\nBackground: ${jiraCtx.description.slice(0, 1000)}`;
   }
+  goal += `\n\n${REVIEW_REPORT_INSTRUCTIONS}`;
 
   let workflowId: string | null = null;
   try {
@@ -1363,7 +1388,8 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
     merged_at: null, merged_by: null,
   });
 
-  return review;
+  await startReviewRun(workflowId, id);
+  return (await getReviewsRepository().getById(id)) ?? review;
 }
 
 export function registerReviewRoutes(): void {
@@ -2092,22 +2118,27 @@ export function registerReviewRoutes(): void {
         rerunGoal += `\n\nJira ticket: ${jiraCtx.key} — ${jiraCtx.summary}`;
         if (jiraCtx.description) rerunGoal += `\n\nBackground: ${jiraCtx.description.slice(0, 1000)}`;
       }
+      rerunGoal += `\n\n${REVIEW_REPORT_INSTRUCTIONS}`;
       const wid = generateId();
+      // Re-run with the same engine, sign-in and model as the review being repeated.
+      const parentWf = parent.workflow_id
+        ? await getSessionsRepository().getWorkflowById(parent.workflow_id).catch(() => null)
+        : null;
       await getSessionsRepository().createWorkflow({
         id: wid,
         project_id: req.params.id,
         goal: rerunGoal,
         status: 'pending',
-        engine: 'demo',
+        engine: parentWf?.engine || 'demo',
         trust_tools: 0,
-        lead_agent: null,
+        lead_agent: parentWf?.lead_agent ?? null,
         workspace_id: null,
         output_files_enabled: 0,
         repo_ids: parent.repo_id ? JSON.stringify([parent.repo_id]) : '[]',
         iteration_count: 0,
         max_iterations: 1,
-        credential_id: null,
-        model: '',
+        credential_id: parentWf?.credential_id ?? null,
+        model: parentWf?.model ?? '',
         kind: 'review',
         created_by: req.user!.id,
         created_at: ts,
@@ -2184,7 +2215,9 @@ export function registerReviewRoutes(): void {
     });
 
     const review = ((await getReviewsRepository().getById(id)) as unknown as Review | undefined ?? undefined);
-    sendJson(res, 201, { review, parentReviewId: parent.id });
+    await startReviewRun(workflowId, id);
+    const started = ((await getReviewsRepository().getById(id)) as unknown as Review | undefined) ?? review;
+    sendJson(res, 201, { review: started, parentReviewId: parent.id });
   });
 
   // ── GET /api/projects/:id/reviews/:rid/export/xlsx (R4) ───────────────────
