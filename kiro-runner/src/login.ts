@@ -249,7 +249,7 @@ export async function runKiroLogin(
     // If kiro-cli prints no sign-in code soon after it starts, it is stuck (a prompt it is waiting on, a changed output
     // format, an unreachable start URL). Say so with what it printed, instead of leaving the page waiting until the
     // request times out and the runtime holds the machine for 15 minutes.
-    const CHALLENGE_WAIT_MS = 45_000;
+    const CHALLENGE_WAIT_MS = 15_000;
     let stuck = false;
     const challengeTimer = setTimeout(() => {
       if (challengeEmitted) return;

@@ -412,6 +412,6 @@ The runner clones with `--progress` while preparing a session's repositories and
 
 **First guess, wrong:** that the Kiro runtime's cold start was slower than CloudFront's 30 seconds. The cold start is about 10 seconds, so raising the timeout would not help.
 
-**Fix (this change):** the runner (`kiro-runner/src/login.ts`) now waits 45 seconds for the code; if none appears it stops `kiro-cli` and returns an error that includes what `kiro-cli` printed (ANSI stripped, last 600 characters), also logged as `login_no_challenge`. The page then shows the cause instead of a 504. Needs the harness redeployed (`node infra/scripts/deploy-harness.mjs`).
+**Fix (this change):** the runner (`kiro-runner/src/login.ts`) now waits 15 seconds for the code (so the answer returns before CloudFront gives up at 30 seconds, counting about 10 seconds for the machine to start); if none appears it stops `kiro-cli` and returns an error that includes what `kiro-cli` printed (ANSI stripped, last 600 characters), also logged as `login_no_challenge`. The page then shows the cause instead of a 504. Needs the harness redeployed (`node infra/scripts/deploy-harness.mjs`).
 
 **Still open:** why `kiro-cli` prints no code. The image installs the latest `kiro-cli` when it is built, so a newer version may print a different prompt or format; the message above will say.
