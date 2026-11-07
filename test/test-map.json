@@ -220,6 +220,9 @@
         "web/src/lib/outputFileMatch.js",
         "web/src/lib/outputFileUtils.js",
         "web/src/lib/pullRequestCard.js",
+        "web/src/lib/model-groups.js",
+        "web/src/components/ModelOptions.jsx",
+        "web/src/components/AiChoicePicker.jsx",
         "web/src/pages/sessions/PullRequestCard.jsx",
         "web/src/styles/sessions.css"
       ],
@@ -237,7 +240,8 @@
         "test/sessions-repo.test.ts",
         "test/engine-switch.test.ts",
         "test/approval-state.test.ts",
-        "test/session-composer-layout.test.ts"
+        "test/session-composer-layout.test.ts",
+        "test/model-groups.test.ts"
       ],
       "smokeIds": [
         "sessions"

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
+import ModelOptions from './ModelOptions.jsx';
 
 /**
  * Which credential and model an AI feature (for example test generation) should use, like the New session dialog.
@@ -99,9 +100,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
             disabled={disabled}
           >
             <option value="">{isKiro ? 'Kiro default' : chosen?.engine === 'codex' ? 'Codex default' : 'Portal default'}</option>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>{m.label || m.id}</option>
-            ))}
+            <ModelOptions models={models} />
           </select>
         )}
         {modelError && <p className="field-hint" style={{ color: 'var(--danger)' }}>{modelError}</p>}
