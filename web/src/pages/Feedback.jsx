@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
-import { useApp } from '../lib/context.js';
-import { go, href, previousPage } from '../lib/router.js';
-import { useAction, useLoad } from '../lib/useAsync.js';
-import { timeAgo } from '../lib/util.js';
-import { Badge, Button, Empty, ErrorNote, Field, Modal, Note, PageHeader, Segmented, Spinner, Tabs, useUi } from '../components/ui.jsx';
+import { href, navigate } from '../lib/router.js';
+import { formatRelative } from '../lib/util.js';
+import { Icon } from '../components/Icon.jsx';
+import { PageHeader } from '../components/PageHeader.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
 const KINDS = [
   { value: 'bug', label: 'Something is broken' },
@@ -14,72 +14,122 @@ const KINDS = [
 ];
 const KIND_LABEL = { bug: 'Bug', idea: 'Idea', question: 'Question', other: 'Other' };
 const STATUSES = [
-  { value: 'new', label: 'New', tone: 'accent' },
+  { value: 'new', label: 'New', tone: 'info' },
   { value: 'accepted', label: 'Accepted', tone: 'ok' },
-  { value: 'in_progress', label: 'In progress', tone: 'accent' },
+  { value: 'in_progress', label: 'In progress', tone: 'info' },
   { value: 'in_review', label: 'In review', tone: 'warn' },
   { value: 'approved', label: 'Approved', tone: 'ok' },
   { value: 'fixed', label: 'Fixed', tone: 'ok' },
-  { value: 'declined', label: 'Declined', tone: 'muted' },
+  { value: 'declined', label: 'Declined', tone: 'neutral' },
 ];
 const STATUS = Object.fromEntries(STATUSES.map((s) => [s.value, s]));
 
-function StatusBadge({ status }) {
-  const s = STATUS[status] || { label: status, tone: 'muted' };
-  return <Badge tone={s.tone}>{s.label}</Badge>;
+// The page the person was on before opening Feedback, so the feedback can say where it came from.
+let lastPage = typeof window !== 'undefined' && !window.location.hash.startsWith('#/feedback') ? window.location.hash : '';
+if (typeof window !== 'undefined') {
+  window.addEventListener('hashchange', () => {
+    if (!window.location.hash.startsWith('#/feedback')) lastPage = window.location.hash;
+  });
 }
 
-export function Feedback({ route }) {
-  const { user } = useApp();
-  const tab = route.rest[0] || 'send';
+function StatusBadge({ status }) {
+  const s = STATUS[status] || { label: status, tone: 'neutral' };
+  return <span className={`badge badge-${s.tone}`}>{s.label}</span>;
+}
+
+/** Load a GET endpoint and keep it in state. */
+function useLoad(path, deps) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    try {
+      setData(await api.get(path));
+      setError(null);
+    } catch (e) {
+      setError(e.message || 'Could not load');
+    } finally {
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  useEffect(() => { setLoading(true); load(); }, [load]);
+  return { data, error, loading, reload: load };
+}
+
+/**
+ * Feedback: anyone sends it and follows it; admins sort it and hand it to a session on the portal's own code.
+ * @param {{ user: { is_admin?: boolean }, route: { rest?: string[] } }} props
+ */
+export function Feedback({ user, route }) {
+  const tab = route.rest?.[0] || 'send';
   const tabs = [
-    { value: 'send', label: 'Send feedback', href: href(null, 'feedback') },
-    { value: 'mine', label: 'Your feedback', href: href(null, 'feedback', 'mine') },
+    { value: 'send', label: 'Send feedback' },
+    { value: 'mine', label: 'Your feedback' },
   ];
-  if (user.is_admin) tabs.push({ value: 'inbox', label: 'Inbox', href: href(null, 'feedback', 'inbox') });
+  if (user.is_admin) tabs.push({ value: 'inbox', label: 'Inbox' });
   return (
     <div className="page">
-      <PageHeader title="Feedback" sub="Tell the portal admins what is broken, confusing or missing, and follow what happens to it here." />
-      <Tabs tabs={tabs} value={tab} />
-      {tab === 'inbox' && user.is_admin ? <Inbox /> : tab === 'mine' ? <Mine /> : <SendForm />}
+      <PageHeader title="Feedback" description="Tell the portal admins what is broken, confusing or missing, and follow what happens to it here." />
+      <div className="tab-bar" role="tablist">
+        {tabs.map((t) => (
+          <a
+            key={t.value}
+            role="tab"
+            aria-selected={tab === t.value}
+            className={`tab-btn${tab === t.value ? ' is-active' : ''}`}
+            href={t.value === 'send' ? '#/feedback' : `#/feedback/${t.value}`}
+            style={{ textDecoration: 'none' }}
+          >
+            {t.label}
+          </a>
+        ))}
+      </div>
+      {tab === 'inbox' && user.is_admin ? <AdminInbox /> : tab === 'mine' ? <Mine /> : <SendForm />}
     </div>
   );
 }
 
 function SendForm() {
-  const { toast } = useUi();
-  const [form, setForm] = useState({ kind: 'bug', title: '', body: '', page: previousPage() });
-  const act = useAction();
-  const submit = (e) => {
+  const [form, setForm] = useState({ kind: 'bug', title: '', body: '', page: lastPage });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const submit = async (e) => {
     e.preventDefault();
-    act
-      .run(async () => {
-        await api.post('/api/feedback', form);
-        toast('Thanks, your feedback was sent');
-        go(null, 'feedback', 'mine');
-      })
-      .catch(() => {});
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post('/api/feedback', form);
+      navigate('/feedback/mine');
+    } catch (err) {
+      setError(err.message || 'Could not send');
+      setBusy(false);
+    }
   };
   return (
-    <section className="panel narrow-panel">
+    <section className="panel stack" style={{ maxWidth: 720 }}>
       <form className="stack" onSubmit={submit}>
-        <Field label="What kind of feedback?">
-          <Segmented label="Kind" value={form.kind} onChange={(kind) => setForm({ ...form, kind })} options={KINDS} />
-        </Field>
-        <Field label="Summary" hint="One line. Optional; the first line of your message is used if you leave it empty.">
-          {(id) => <input id={id} className="input" maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Run tree does not scroll on a phone" />}
-        </Field>
-        <Field label="Details" hint="What did you do, what did you expect, and what happened instead?">
-          {(id) => <textarea id={id} className="input" rows={7} required value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />}
-        </Field>
-        <Field label="Page it is about" hint="Filled in with the page you came from. Clear it if it is not about a page.">
-          {(id) => <input id={id} className="input mono" maxLength={500} value={form.page} onChange={(e) => setForm({ ...form, page: e.target.value })} placeholder="#/p/…/runs" />}
-        </Field>
-        <ErrorNote error={act.error} />
-        <div className="row">
-          <Button type="submit" variant="primary" busy={act.busy} disabled={!form.body.trim()}>
-            Send feedback
-          </Button>
+        <div className="field">
+          <label htmlFor="fb-kind">What kind of feedback?</label>
+          <select id="fb-kind" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+            {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="fb-title">Summary <span className="muted small">(optional; the first line of your message is used if empty)</span></label>
+          <input id="fb-title" maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="The session list does not scroll on a phone" />
+        </div>
+        <div className="field">
+          <label htmlFor="fb-body">Details <span className="muted small">(what did you do, what did you expect, what happened?)</span></label>
+          <textarea id="fb-body" rows={7} required value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+        </div>
+        <div className="field">
+          <label htmlFor="fb-page">Page it is about <span className="muted small">(filled in from where you came from; clear it if it is not about a page)</span></label>
+          <input id="fb-page" className="mono" maxLength={500} value={form.page} onChange={(e) => setForm({ ...form, page: e.target.value })} placeholder="#/p/…/sessions" />
+        </div>
+        {error && <div className="error-note" role="alert">{error}</div>}
+        <div>
+          <button type="submit" className="btn btn-primary" disabled={busy || !form.body.trim()}>{busy ? 'Sending…' : 'Send feedback'}</button>
         </div>
       </form>
     </section>
@@ -87,44 +137,33 @@ function SendForm() {
 }
 
 function Mine() {
-  const list = useLoad(() => api.get('/api/feedback/mine'), []);
-  if (list.loading && !list.data) return <div className="pad"><Spinner /></div>;
-  if (list.error) return <ErrorNote error={list.error} />;
+  const list = useLoad('/api/feedback/mine', []);
+  if (list.loading && !list.data) return <div className="spinner" aria-label="Loading…" />;
+  if (list.error) return <div className="error-note" role="alert">{list.error}</div>;
   const items = list.data.feedback;
   if (!items.length) {
     return (
-      <Empty icon="inbox" title="No feedback yet" action={<a className="btn btn-default" href={href(null, 'feedback')}>Send feedback</a>}>
-        Anything you send shows up here with its status.
-      </Empty>
+      <div className="ws-placeholder" style={{ padding: '40px 0' }}>
+        <Icon name="inbox" size={36} />
+        <p>No feedback yet</p>
+        <p className="small muted">Anything you send shows up here with its status.</p>
+      </div>
     );
   }
   return (
-    <div className="table-scroll">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Feedback</th>
-            <th>Type</th>
-            <th>Status</th>
-            <th>Sent</th>
-          </tr>
-        </thead>
+    <div style={{ overflowX: 'auto' }}>
+      <table className="table" style={{ minWidth: 520 }}>
+        <thead><tr><th>Feedback</th><th>Type</th><th>Status</th><th>Sent</th></tr></thead>
         <tbody>
           {items.map((f) => (
             <tr key={f.id}>
               <td>
                 <strong>{f.title}</strong>
-                {f.pr_url ? (
-                  <div className="small">
-                    <a href={f.pr_url} target="_blank" rel="noreferrer">See the change</a>
-                  </div>
-                ) : null}
+                {f.pr_url ? <div className="small"><a href={f.pr_url} target="_blank" rel="noreferrer">See the change</a></div> : null}
               </td>
               <td>{KIND_LABEL[f.kind]}</td>
-              <td>
-                <StatusBadge status={f.status} />
-              </td>
-              <td className="muted small">{timeAgo(f.created_at)}</td>
+              <td><StatusBadge status={f.status} /></td>
+              <td className="muted small">{formatRelative(f.created_at)}</td>
             </tr>
           ))}
         </tbody>
@@ -133,402 +172,244 @@ function Mine() {
   );
 }
 
-function Inbox() {
+function AdminInbox() {
   const [status, setStatus] = useState('new');
-  // Land on what needs a decision when there is something waiting.
   const [picked, setPicked] = useState(false);
   const [openId, setOpenId] = useState(null);
-  const list = useLoad(() => api.get(`/api/feedback${status === 'all' ? '' : `?status=${status}`}`), [status]);
+  const list = useLoad(`/api/feedback${status === 'all' ? '' : `?status=${status}`}`, [status]);
   const counts = list.data?.counts || {};
   const items = list.data?.feedback || [];
   const open = items.find((f) => f.id === openId);
+
+  // Land on what needs a decision when something is waiting.
   useEffect(() => {
     if (picked || !list.data) return;
     setPicked(true);
     if (list.data.counts.in_review && status === 'new') setStatus('in_review');
   }, [list.data, picked, status]);
-  const choose = (v) => {
-    setPicked(true);
-    setStatus(v);
-  };
+
+  const choose = (v) => { setPicked(true); setStatus(v); };
+  const options = [...STATUSES.map((s) => ({ value: s.value, label: s.label, count: counts[s.value] })), { value: 'all', label: 'All' }];
+
   return (
     <div className="stack">
-      <div className="row wrap">
-        <Segmented
-          label="Status"
-          value={status}
-          onChange={choose}
-          options={[...STATUSES.map((s) => ({ value: s.value, label: s.label, count: counts[s.value] })), { value: 'all', label: 'All' }]}
-        />
+      <div className="actions-row" role="group" aria-label="Status">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className={`btn btn-sm ${status === o.value ? 'btn-primary' : 'btn-outline'}`}
+            aria-pressed={status === o.value}
+            onClick={() => choose(o.value)}
+          >
+            {o.label}{o.count ? ` ${o.count}` : ''}
+          </button>
+        ))}
       </div>
-      {!list.data?.target ? (
-        <Note tone="info">
-          <span>
-          To let agents work on feedback, create a project for the portal itself, connect the portal's own repository under its <em>Repositories</em>, then
-          use <em>Send to agent</em> on any item. The repository you pick is remembered.
-          </span>
-        </Note>
+      {list.data && !list.data.target ? (
+        <p className="muted small">
+          To let an agent work on feedback, add the portal's own repository to a project (Workspaces → Repositories), then use <em>Send to agent</em> on any
+          item and pick that repository. It is remembered for next time.
+        </p>
       ) : null}
       {list.loading && !list.data ? (
-        <Spinner />
+        <div className="spinner" aria-label="Loading…" />
       ) : list.error ? (
-        <ErrorNote error={list.error} />
+        <div className="error-note" role="alert">{list.error}</div>
       ) : !items.length ? (
-        <Empty icon="inbox" title="Nothing here">No feedback with this status.</Empty>
+        <div className="ws-placeholder" style={{ padding: '32px 0' }}><p>Nothing here</p><p className="small muted">No feedback with this status.</p></div>
       ) : (
-        <div className="table-scroll">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Feedback</th>
-                <th>From</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Agent</th>
-                <th>Sent</th>
-              </tr>
-            </thead>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table" style={{ minWidth: 640 }}>
+            <thead><tr><th>Feedback</th><th>From</th><th>Type</th><th>Status</th><th>Change</th><th>Sent</th></tr></thead>
             <tbody>
               {items.map((f) => (
                 <tr key={f.id}>
-                  <td>
-                    <button className="linkish" onClick={() => setOpenId(f.id)}>
-                      {f.title}
-                    </button>
-                  </td>
+                  <td><button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpenId(f.id)}>{f.title}</button></td>
                   <td>{f.user_name || 'Deleted user'}</td>
                   <td>{KIND_LABEL[f.kind]}</td>
-                  <td>
-                    <StatusBadge status={f.status} />
-                  </td>
-                  <td>{f.run ? <Badge status={f.run.status} /> : <span className="muted small">None</span>}</td>
-                  <td className="muted small">{timeAgo(f.created_at)}</td>
+                  <td><StatusBadge status={f.status} /></td>
+                  <td>{f.pr_url ? <a href={f.pr_url} target="_blank" rel="noreferrer">Pull request</a> : f.workflow_id ? <span className="muted small">Session running</span> : <span className="muted small">None</span>}</td>
+                  <td className="muted small">{formatRelative(f.created_at)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {open ? <Detail item={open} target={list.data.target} onClose={() => setOpenId(null)} onChanged={() => list.reload(true)} /> : null}
+      {open ? <Detail item={open} target={list.data.target} onClose={() => setOpenId(null)} onChanged={list.reload} /> : null}
     </div>
   );
 }
 
 function Detail({ item, target, onClose, onChanged }) {
-  const { toast } = useUi();
+  const { confirmState, requestConfirm } = useConfirm();
   const [form, setForm] = useState({ status: item.status, admin_note: item.admin_note || '', pr_url: item.pr_url || '' });
-  const save = useAction();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [reason, setReason] = useState('');
   const dirty = form.status !== item.status || form.admin_note !== (item.admin_note || '') || form.pr_url !== (item.pr_url || '');
-  const doSave = () =>
-    save
-      .run(async () => {
-        await api.patch(`/api/feedback/${item.id}`, form);
-        toast('Saved');
-        onChanged();
-      })
-      .catch(() => {});
-  return (
-    <Modal
-      wide
-      title={item.title}
-      onClose={onClose}
-      footer={
-        <>
-          <Button onClick={onClose}>Close</Button>
-          <Button variant="primary" busy={save.busy} disabled={!dirty} onClick={doSave}>
-            Save
-          </Button>
-        </>
-      }
-    >
-      <div className="stack-lg">
-        <section className="stack">
-          <p className="muted small">
-            {KIND_LABEL[item.kind]} from {item.user_name || 'a deleted user'}, {timeAgo(item.created_at)}
-            {item.page ? (
-              <>
-                {' '}· about {/^#\//.test(item.page) ? <a href={item.page}>{item.page}</a> : <code>{item.page}</code>}
-              </>
-            ) : null}
-          </p>
-          <div className="feedback-body">{item.body}</div>
-        </section>
-        <section className="stack">
-          <Field label="Status">
-            {(id) => (
-              <select id={id} className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                {STATUSES.filter((s) => s.value === item.status || !['in_review', 'approved'].includes(s.value)).map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-          <Field label="Your note" hint="Not shown to the person who sent it. When you send this to an agent, the note is added to its instructions.">
-            {(id) => <textarea id={id} className="input" rows={3} value={form.admin_note} onChange={(e) => setForm({ ...form, admin_note: e.target.value })} />}
-          </Field>
-          <Field label="Pull request" hint="Filled in automatically when the agent's changes are pushed with a pull request. The sender sees this link.">
-            {(id) => <input id={id} className="input mono" value={form.pr_url} onChange={(e) => setForm({ ...form, pr_url: e.target.value })} placeholder="https://github.com/…/pull/12" />}
-          </Field>
-          <ErrorNote error={save.error} />
-        </section>
-        {item.status === 'in_review' ? <ReviewChanges item={item} onDone={onChanged} /> : null}
-        {item.decided_at && item.status !== 'in_review' ? (
-          <p className="muted small">
-            {STATUS[item.status]?.label || item.status} by {item.decided_by_name || 'an admin'}, {timeAgo(item.decided_at)}
-            {item.decision_note ? `: “${item.decision_note}”` : ''}
-          </p>
-        ) : null}
-        {item.handin_error ? <HandInProblem item={item} onDone={onChanged} /> : null}
-        {item.status !== 'in_review' ? <SendToAgent item={item} note={form.admin_note} target={target} onStarted={onChanged} /> : null}
-      </div>
-    </Modal>
-  );
-}
 
-function SendToAgent({ item, note, target, onStarted }) {
-  const { projects, meta } = useApp();
-  const { toast } = useUi();
-  const [projectId, setProjectId] = useState(target?.projectId || item.project_id || '');
-  const [repoId, setRepoId] = useState(target?.repoId || '');
-  const [branch, setBranch] = useState(target?.branch || '');
-  const [model, setModel] = useState('sonnet');
-  const [mode, setMode] = useState('default');
-  const repos = useLoad(() => (projectId ? api.get(`/api/projects/${projectId}/repos`) : Promise.resolve({ repos: [] })), [projectId]);
-  const readyRepos = (repos.data?.repos || []).filter((r) => r.status === 'ready');
-  useEffect(() => {
-    if (repos.data && !readyRepos.some((r) => r.id === repoId)) setRepoId(readyRepos[0]?.id || '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repos.data]);
-  const act = useAction();
-  const running = item.run?.active;
-  const start = () =>
-    act
-      .run(async () => {
-        const r = await api.post(`/api/feedback/${item.id}/agent`, { repoId, branch: branch.trim() || undefined, model, permissionMode: mode, note });
-        toast('Agent run started');
-        onStarted();
-        go(r.run.project_id, 'runs', r.run.id);
-      })
-      .catch(() => {});
+  const run = async (fn) => {
+    setBusy(true);
+    setError(null);
+    try { await fn(); await onChanged(); } catch (e) { setError(e.message || 'Something went wrong'); } finally { setBusy(false); }
+  };
+  const save = () => run(() => api.patch(`/api/feedback/${item.id}`, form));
+  const approve = () => run(() => api.post(`/api/feedback/${item.id}/approve`, {}));
+  const reject = async () => {
+    const ok = await requestConfirm('Reject these changes? The feedback is marked declined. Close the pull request on the git host yourself.', 'Reject', 'danger');
+    if (ok) run(() => api.post(`/api/feedback/${item.id}/reject`, { reason }));
+  };
+  const pr = item.pr;
 
   return (
-    <section className="panel stack">
-      <h3>Send to agent</h3>
-      {item.run ? (
-        <p className="row tight wrap">
-          <span>Latest run:</span>
-          <Badge status={item.run.status} />
-          <a href={href(item.run.project_id, 'runs', item.run.id)}>Open the run</a>
-        </p>
-      ) : null}
-      <p className="muted small">
-        The agent works in its own copy of the repository and asks before every change. When it finishes, the portal pushes its changes to a
-        branch, opens a pull request and runs a code review. Nothing is merged until you approve it here.
-      </p>
-      <div className="two-col">
-        <Field label="Project">
-          {(id) => (
-            <select id={id} className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              <option value="">Choose…</option>
-              {(projects || []).filter((p) => !p.archived).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
-        <Field label="Repository with the portal's code" hint={projectId && repos.data && !readyRepos.length ? 'This project has no ready repository yet.' : undefined}>
-          {(id) => (
-            <select id={id} className="input" value={repoId} onChange={(e) => setRepoId(e.target.value)} disabled={!readyRepos.length}>
-              {readyRepos.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
-        <Field label="Start from branch" hint="Leave empty for the repository's default branch.">
-          {(id) => <input id={id} className="input mono" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />}
-        </Field>
-        <Field label="Model">
-          {(id) => (
-            <select id={id} className="input" value={model} onChange={(e) => setModel(e.target.value)}>
-              {(meta.models?.length ? meta.models : ['haiku', 'sonnet', 'opus']).map((m) => (
-                <option key={m} value={m}>
-                  {m[0].toUpperCase() + m.slice(1)}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
-      </div>
-      <Field label="How it works">
-        <Segmented
-          label="Permission mode"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: 'default', label: 'Ask before changes' },
-            { value: 'plan', label: 'Plan first' },
-          ]}
-        />
-      </Field>
-      <ErrorNote error={act.error} />
-      <div className="row">
-        <Button variant="primary" icon="play" busy={act.busy} disabled={!repoId || running} onClick={start}>
-          {item.run ? 'Start a new run' : 'Start agent run'}
-        </Button>
-        {running ? <span className="muted small">An agent is already working on this.</span> : null}
-      </div>
-    </section>
-  );
-}
-
-function HandInProblem({ item, onDone }) {
-  const { toast } = useUi();
-  const act = useAction();
-  const retry = () =>
-    act
-      .run(async () => {
-        await api.post(`/api/feedback/${item.id}/submit`);
-        toast('Sent for review');
-        onDone();
-      })
-      .catch(() => {});
-  return (
-    <div className="stack">
-      <Note tone="warn">
-        <span>{item.handin_error}</span>
-      </Note>
-      {item.run && !item.run.active ? (
-        <div className="row">
-          <Button icon="refresh" busy={act.busy} onClick={retry}>
-            Submit for review again
-          </Button>
+    <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal modal-wide" role="dialog" aria-modal="true" aria-label={item.title}>
+        <div className="modal-header">
+          <h2>{item.title}</h2>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close"><Icon name="x" size={16} /></button>
         </div>
-      ) : null}
-      <ErrorNote error={act.error} />
+        <div className="stack-lg">
+          <section className="stack">
+            <p className="muted small">
+              {KIND_LABEL[item.kind]} from {item.user_name || 'a deleted user'}, {formatRelative(item.created_at)}
+              {item.page ? <>{' '}· about {/^#\//.test(item.page) ? <a href={item.page}>{item.page}</a> : <code>{item.page}</code>}</> : null}
+            </p>
+            <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: '12px 14px', maxHeight: 280, overflowY: 'auto' }}>{item.body}</div>
+          </section>
+
+          <section className="stack">
+            <div className="field">
+              <label htmlFor="fb-status">Status</label>
+              <select id="fb-status" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="fb-note">Your note <span className="muted small">(not shown to the sender; added to the agent's instructions when you send it to one)</span></label>
+              <textarea id="fb-note" rows={3} value={form.admin_note} onChange={(e) => setForm({ ...form, admin_note: e.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor="fb-pr">Pull request <span className="muted small">(filled in when the session opens one; the sender sees this link)</span></label>
+              <input id="fb-pr" className="mono" value={form.pr_url} onChange={(e) => setForm({ ...form, pr_url: e.target.value })} placeholder="https://github.com/…/pull/12" />
+            </div>
+            <div><button type="button" className="btn btn-primary" onClick={save} disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save'}</button></div>
+          </section>
+
+          {item.workflow_id ? (
+            <section className="panel stack">
+              <h3>The agent's session</h3>
+              <p className="small">
+                <a href={href(item.project_id, 'sessions', item.workflow_id)}>Open the session</a>
+                {pr ? <span className="muted"> · pull request {pr.state.replace('-', ' ')}{pr.error ? `: ${pr.error}` : ''}</span> : <span className="muted"> · no pull request yet. Open the session, and use its pull request button when the agent is done.</span>}
+              </p>
+              {item.status === 'in_review' ? (
+                <>
+                  <p className="muted small">
+                    Check the change{item.pr_url ? <> on <a href={item.pr_url} target="_blank" rel="noreferrer">the pull request</a></> : null}. Approving records your decision here;
+                    merge the pull request on the git host. To ask for changes, write to the agent in its session.
+                  </p>
+                  <div className="actions-row"><button type="button" className="btn btn-primary" onClick={approve} disabled={busy}>Approve</button></div>
+                  <div className="field">
+                    <label htmlFor="fb-reason">Reject <span className="muted small">(optional reason, kept with the feedback)</span></label>
+                    <input id="fb-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Not something we want to change" />
+                  </div>
+                  <div><button type="button" className="btn btn-danger" onClick={reject} disabled={busy}>Reject changes</button></div>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {item.decided_at && item.status !== 'in_review' ? (
+            <p className="muted small">
+              {STATUS[item.status]?.label || item.status} by {item.decided_by_name || 'an admin'}, {formatRelative(item.decided_at)}
+              {item.decision_note ? `: “${item.decision_note}”` : ''}
+            </p>
+          ) : null}
+
+          <SendToAgent item={item} note={form.admin_note} target={target} onStarted={onChanged} />
+          {error && <div className="error-note" role="alert">{error}</div>}
+        </div>
+      </div>
+      <ConfirmDialog state={confirmState} />
     </div>
   );
 }
 
-function ReviewChanges({ item, onDone }) {
-  const { toast, confirm } = useUi();
-  const [comment, setComment] = useState('');
-  const [reason, setReason] = useState('');
-  const act = useAction();
-  const review = item.review;
-  const pid = item.run?.project_id;
-  const merges = Boolean(item.pr_number);
+function SendToAgent({ item, note, target, onStarted }) {
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState(target?.projectId || item.project_id || '');
+  const [repoId, setRepoId] = useState(target?.repoId || item.repo_id || '');
+  const [repos, setRepos] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
-  const approve = async () => {
-    let force = false;
-    if (review?.status === 'running' || review?.serious) {
-      const ok = await confirm({
-        title: 'Approve anyway?',
-        message: review.status === 'running' ? 'The code review has not finished yet.' : `The code review found ${review.serious} serious issue${review.serious === 1 ? '' : 's'}.`,
-        confirmLabel: merges ? 'Approve and merge' : 'Approve',
-        danger: true,
-      });
-      if (!ok) return;
-      force = true;
+  useEffect(() => {
+    api.get('/api/projects').then((r) => setProjects(r.projects || [])).catch(() => setProjects([]));
+  }, []);
+  useEffect(() => {
+    let live = true;
+    setRepos(null);
+    if (!projectId) { setRepos([]); return undefined; }
+    api.get(`/api/projects/${projectId}/repos`)
+      .then((r) => { if (live) setRepos(r.repos || []); })
+      .catch(() => { if (live) setRepos([]); });
+    return () => { live = false; };
+  }, [projectId]);
+  useEffect(() => {
+    if (repos && !repos.some((r) => r.id === repoId)) setRepoId(repos[0]?.id || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repos]);
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { prompt } = await api.post(`/api/feedback/${item.id}/prompt`, { note });
+      // An ordinary session on that repository. It asks before changes (trustTools stays off).
+      const { workflow } = await api.post(`/api/projects/${projectId}/workflows`, { goal: prompt, repoIds: [repoId] });
+      await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/start`);
+      await api.patch(`/api/feedback/${item.id}`, { workflow_id: workflow.id, project_id: projectId, repo_id: repoId });
+      await api.put('/api/feedback/target', { repoId });
+      await onStarted();
+      navigate(href(projectId, 'sessions', workflow.id));
+    } catch (e) {
+      setError(e.message || 'Could not start the session');
+      setBusy(false);
     }
-    await act
-      .run(async () => {
-        const r = await api.post(`/api/feedback/${item.id}/approve`, { force });
-        toast(r.feedback.status === 'fixed' ? 'Approved and merged' : `Approved. Merge branch ${item.branch} to release it.`);
-        onDone();
-      })
-      .catch(() => {});
-  };
-  const sendBack = () =>
-    act
-      .run(async () => {
-        const r = await api.post(`/api/feedback/${item.id}/request-changes`, { comment });
-        toast('Sent back to the agent');
-        onDone();
-        go(r.run.project_id, 'runs', r.run.id);
-      })
-      .catch(() => {});
-  const reject = async () => {
-    const ok = await confirm({
-      title: 'Reject these changes?',
-      message: merges ? 'The pull request is closed and the feedback is marked declined.' : 'The feedback is marked declined. The branch is kept.',
-      confirmLabel: 'Reject',
-      danger: true,
-    });
-    if (!ok) return;
-    await act
-      .run(async () => {
-        await api.post(`/api/feedback/${item.id}/reject`, { reason });
-        toast('Rejected');
-        onDone();
-      })
-      .catch(() => {});
   };
 
   return (
-    <section className="panel stack review-panel">
-      <h3>Review the changes</h3>
-      <p className="muted small">The agent has finished. Check what it changed, then approve it, send it back with comments, or reject it.</p>
-      <ul className="review-links small">
-        {item.pr_url ? (
-          <li>
-            Pull request:{' '}
-            <a href={item.pr_url} target="_blank" rel="noreferrer">
-              #{item.pr_number || ''} on GitHub
-            </a>
-          </li>
-        ) : null}
-        {item.branch ? (
-          <li>
-            Branch: <code>{item.branch}</code>
-          </li>
-        ) : null}
-        {item.run ? (
-          <li>
-            <a href={href(pid, 'runs', item.run.id)}>The agent's run</a>, with its summary and <em>Files and changes</em>
-          </li>
-        ) : null}
-        {review ? (
-          <li>
-            <a href={href(review.project_id, 'review', review.id)}>Code review</a>{' '}
-            <Badge status={review.status} />{' '}
-            {review.status === 'done' ? (
-              <span className={review.serious ? 'danger' : 'muted'}>
-                {review.open_findings ? `${review.open_findings} finding${review.open_findings === 1 ? '' : 's'}${review.serious ? `, ${review.serious} serious` : ''}` : 'No findings'}
-              </span>
-            ) : null}
-          </li>
-        ) : null}
-      </ul>
-      {review?.summary ? <p className="small">{review.summary}</p> : null}
-      <div className="row wrap">
-        <Button variant="primary" icon="check" busy={act.busy} onClick={approve}>
-          {merges ? 'Approve and merge' : 'Approve'}
-        </Button>
+    <section className="panel stack">
+      <h3>Send to agent</h3>
+      <p className="muted small">
+        Starts a session on the repository below with the feedback and your note. It asks before every change. When the agent finishes, open the session's
+        pull request there; the pull request and its code review then show up here for you to approve.
+      </p>
+      <div className="two-col">
+        <div className="field">
+          <label htmlFor="fb-proj">Project</label>
+          <select id="fb-proj" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <option value="">Choose…</option>
+            {projects.filter((p) => !p.archived).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="fb-repo">Repository with the portal's code</label>
+          <select id="fb-repo" value={repoId} onChange={(e) => setRepoId(e.target.value)} disabled={!repos?.length}>
+            {(repos || []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+          {projectId && repos && !repos.length ? <span className="muted small">This project has no repository yet.</span> : null}
+        </div>
       </div>
-      <Field label="Request changes" hint="The agent continues in the same working copy with your comments and the open review findings, then it comes back here.">
-        {(id) => <textarea id={id} className="input" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Also handle tablets, and add a test." />}
-      </Field>
-      <div className="row wrap">
-        <Button icon="edit" busy={act.busy} disabled={!comment.trim()} onClick={sendBack}>
-          Send back to the agent
-        </Button>
+      {error && <div className="error-note" role="alert">{error}</div>}
+      <div className="actions-row">
+        <button type="button" className="btn btn-primary" disabled={busy || !repoId || !projectId} onClick={start}>
+          {busy ? 'Starting…' : item.workflow_id ? 'Start a new session' : 'Start agent session'}
+        </button>
+        {item.workflow_id ? <span className="muted small">This replaces the session linked above.</span> : null}
       </div>
-      <Field label="Reject" hint={merges ? 'Closes the pull request. Your reason is posted on it.' : 'Optional reason, kept with the feedback.'}>
-        {(id) => <input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Not something we want to change" />}
-      </Field>
-      <div className="row wrap">
-        <Button variant="danger" icon="x" busy={act.busy} onClick={reject}>
-          Reject changes
-        </Button>
-      </div>
-      <ErrorNote error={act.error} />
     </section>
   );
 }

@@ -1,0 +1,25 @@
+{
+  "name": "agent-portal-infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CDK infrastructure for Spike A — AgentCore Runtime deployment",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy": "cdk deploy --profile agentcore --require-approval never",
+    "diff": "cdk diff --profile agentcore",
+    "destroy": "cdk destroy --profile agentcore"
+  },
+  "devDependencies": {
+    "@types/node": "22.9.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.6.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1161.0",
+    "@aws-sdk/credential-providers": "^3.1161.0",
+    "aws-cdk-lib": "2.275.0",
+    "constructs": "10.5.0"
+  }
+}

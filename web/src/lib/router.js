@@ -1,39 +1,86 @@
 import { useEffect, useState } from 'react';
 
-/** Hash routes: #/projects, #/p/<projectId>/<tab>/<rest…> */
-export function parseHash(hash = window.location.hash) {
-  const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
-  if (parts[0] === 'p' && parts[1]) return { projectId: parts[1], tab: parts[2] || 'knowledge', rest: parts.slice(3) };
-  if (parts[0] === 'settings') return { projectId: null, tab: 'settings', rest: parts.slice(1) };
-  if (parts[0] === 'account') return { projectId: null, tab: 'account', rest: [] };
-  if (parts[0] === 'feedback') return { projectId: null, tab: 'feedback', rest: parts.slice(1) };
-  return { projectId: null, tab: 'projects', rest: parts.slice(1) };
+/**
+ * Parse a hash into a route object.
+ * Supports:
+ *   #/p/<projectId>/<tab>/<rest...>  — project routes
+ *   #/<tab>                          — global routes
+ *   #/                               — home (tab: 'projects')
+ *
+ * @param {string} [hash]
+ * @returns {{ tab: string, projectId: string | null, rest: string[] }}
+ */
+export function parseRoute(hash = window.location.hash) {
+  // Strip the hash query string (e.g. ?status=done) so filter state in
+  // hash-scoped pages doesn't break route matching.
+  const raw = hash.replace(/^#\/?/, '').split('?')[0];
+  const parts = raw.split('/').filter(Boolean).map(decodeURIComponent);
+
+  if (parts[0] === 'p' && parts[1]) {
+    return {
+      projectId: parts[1],
+      tab: parts[2] || 'sessions',
+      rest: parts.slice(3),
+    };
+  }
+
+  if (parts.length > 0) {
+    return { projectId: null, tab: parts[0], rest: parts.slice(1) };
+  }
+
+  return { projectId: null, tab: 'dashboard', rest: [] };
 }
 
-// The last page the user was on before opening Feedback, so feedback can say where it came from.
-let lastPage = typeof window !== 'undefined' && !window.location.hash.startsWith('#/feedback') ? window.location.hash : '';
-if (typeof window !== 'undefined') {
-  window.addEventListener('hashchange', () => {
-    if (!window.location.hash.startsWith('#/feedback')) lastPage = window.location.hash;
-  });
-}
-export const previousPage = () => lastPage;
-
-export function useRoute() {
-  const [route, setRoute] = useState(() => parseHash());
-  useEffect(() => {
-    const on = () => setRoute(parseHash());
-    window.addEventListener('hashchange', on);
-    return () => window.removeEventListener('hashchange', on);
-  }, []);
-  return route;
+/**
+ * Navigate to a hash path (pushes a new history entry).
+ * @param {string} path — e.g. '/p/my-project/sessions' or '/settings'
+ */
+export function navigate(path) {
+  window.location.hash = path.startsWith('#') ? path : '#' + path;
 }
 
+/**
+ * Navigate to a hash path, *replacing* the current history entry.
+ * Use this for redirects so the Back button skips the old URL and returns to
+ * the page the user was on before (no back-button trap).
+ * @param {string} path — e.g. '/p/my-project/sessions' or '/settings'
+ */
+export function navigateReplace(path) {
+  const hash = path.startsWith('#') ? path : '#' + path;
+  window.location.replace(
+    window.location.pathname + window.location.search + hash,
+  );
+}
+
+/**
+ * Build a href for a project route.
+ * @param {string | null} projectId
+ * @param {string} tab
+ * @param {...string} rest
+ * @returns {string}
+ */
 export function href(projectId, tab, ...rest) {
-  if (!projectId) return tab === 'settings' || tab === 'account' || tab === 'feedback' ? `#/${tab}${rest.filter(Boolean).map((x) => '/' + encodeURIComponent(x)).join('')}` : '#/projects';
-  return `#/p/${encodeURIComponent(projectId)}/${tab}${rest.filter((x) => x !== undefined && x !== null && x !== '').map((x) => '/' + encodeURIComponent(x)).join('')}`;
+  if (!projectId) return `#/${tab}`;
+  const parts = [projectId, tab, ...rest]
+    .filter((p) => p !== undefined && p !== null && p !== '')
+    .map(encodeURIComponent);
+  return `#/p/${parts.join('/')}`;
 }
 
-export function go(projectId, tab, ...rest) {
-  window.location.hash = href(projectId, tab, ...rest);
+/**
+ * React hook — returns the current route and re-renders on hash change.
+ * @returns {{ tab: string, projectId: string | null, rest: string[] }}
+ */
+export function useRoute() {
+  const [route, setRoute] = useState(() => parseRoute());
+
+  useEffect(() => {
+    const onHashChange = () => setRoute(parseRoute());
+    window.addEventListener('hashchange', onHashChange);
+    // Sync immediately in case hash changed before effect ran
+    onHashChange();
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  return route;
 }

@@ -1,236 +1,312 @@
+/**
+ * Run detail routes.
+ *
+ * Routes:
+ *   GET /api/runs/:id           — run details
+ *   GET /api/runs/:id/events    — SSE stream of run events (replay past + live new)
+ *   GET /api/runs/:id/files     — list files changed in this run's work dir
+ *   GET /api/runs/:id/file/preview — preview a file from the work dir
+ */
+
 import fs from 'node:fs';
 import path from 'node:path';
-import { all, one, run as exec, type Row } from './db.ts';
-import { del, get, post, openSse, HANDLED } from './http.ts';
-import { getProject, projectDir, requireProject } from './projects.ts';
-import { getRepo, githubApi, githubSlug, pushWorktree, removeWorktree, checkBranch } from './repos.ts';
-import { HttpError, badRequest, notFound, parseJson, safeJoin, str } from './util.ts';
-import { runChannel, subscribe } from './events.ts';
-import { git } from './git.ts';
-import { answerInput, getRun, inputView, isActive, oneshot, runSummary, startRun, stopRun } from './agent/runner.ts';
-import { PRICES } from './agent/pricing.ts';
-import { providerMode } from './settings.ts';
-import { recordFeedbackPr } from './feedback.ts';
+import { router, sendJson } from './http.ts';
+import type { PortalRequest, PortalResponse } from './http.ts';
+import { getMembership, getProjectSlug } from './project-access.ts';
+import type { Row } from './db.ts';
+import { config } from './config.ts';
+import { subscribeRun } from './events.ts';
+import type { RunEventRow } from './events.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
+import type { EventRecord, RunRecord } from './repositories/sessions.ts';
 
-const MODEL_CHOICES = ['haiku', 'sonnet', 'opus'];
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-function runAccess(ctx: any, runId: string, min: 'viewer' | 'editor' = 'viewer'): Row {
-  const r = getRun(runId);
-  requireProject(ctx, r.project_id, min);
-  return r;
+function runView(r: Row | RunRecord) {
+  return {
+    id: r.id,
+    workflow_id: r.workflow_id,
+    status: r.status,
+    started_at: r.started_at ?? null,
+    finished_at: r.finished_at ?? null,
+    cost_usd: r.cost_usd ?? 0,
+    input_tokens: r.input_tokens ?? 0,
+    output_tokens: r.output_tokens ?? 0,
+    stop_reason: (r as RunRecord).stop_reason ?? null,
+    time_limit_at: (r as RunRecord).time_limit_at ?? null,
+    created_at: r.created_at,
+  };
 }
 
-function events(runId: string, after = 0) {
-  return all<Row>('SELECT seq, ts, type, parent_tool_use_id AS parent, data FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq', runId, after).map((e) => ({
-    ...e,
-    data: parseJson(e.data, {}),
-  }));
+function eventView(e: EventRecord | Row) {
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(typeof e.payload === 'string' ? e.payload : String(e.payload ?? '{}'));
+  } catch {
+    // keep empty object
+  }
+  return {
+    id: typeof e.id === 'number' ? e.id : Number(e.id),
+    run_id: typeof e.run_id === 'string' ? e.run_id : String(e.run_id),
+    type: typeof e.type === 'string' ? e.type : String(e.type ?? ''),
+    payload,
+    created_at: typeof e.created_at === 'string' ? e.created_at : String(e.created_at),
+  };
 }
+
+/**
+ * Check that the authenticated user has access to the run (via its workflow's project).
+ * Returns the workflow record or null if access is denied (response already sent).
+ */
+async function requireRunAccess(req: PortalRequest, res: PortalResponse, runId: string): Promise<import('./repositories/sessions.ts').WorkflowRecord | null> {
+  if (!req.user) {
+    sendJson(res, 401, { error: 'Sign in to continue' });
+    return null;
+  }
+  const repo = getSessionsRepository();
+  const run = await repo.getRunById(runId);
+  if (!run) {
+    sendJson(res, 404, { error: 'Run not found' });
+    return null;
+  }
+  const workflow = await repo.getWorkflowById(run.workflow_id);
+  if (!workflow) {
+    sendJson(res, 404, { error: 'Workflow not found' });
+    return null;
+  }
+  if (req.user.is_admin) return workflow;
+  if (!workflow.project_id) return workflow;
+  const member = await getMembership(workflow.project_id as string, req.user.id as string);
+  if (!member) {
+    sendJson(res, 403, { error: 'Not a project member' });
+    return null;
+  }
+  return workflow;
+}
+
+// ── File helpers ───────────────────────────────────────────────────────────────
+
+async function resolveWorkDir(workflow: import('./repositories/sessions.ts').WorkflowRecord, runId: string): Promise<string | null> {
+  if (!workflow.project_id) return null;
+  const slug = await getProjectSlug(workflow.project_id);
+  if (!slug) return null;
+  return path.join(config.dataDir, 'projects', slug, 'work', runId);
+}
+
+function listWorkDirFiles(workDir: string, base = ''): string[] {
+  const results: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(workDir, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      // Skip repos and .git
+      if (entry.name === 'repos' || entry.name === '.git' || entry.name === 'node_modules') continue;
+      results.push(...listWorkDirFiles(path.join(workDir, entry.name), rel));
+    } else {
+      results.push(rel);
+    }
+  }
+  return results;
+}
+
+const TEXT_EXTS = new Set(['.md', '.txt', '.ts', '.js', '.mjs', '.json', '.yaml', '.yml', '.sh', '.py', '.rb', '.go', '.rs', '.html', '.css', '.xml', '.csv', '.env', '.toml']);
+
+function filePreviewType(ext: string): 'text' | 'binary' | 'image' {
+  if (TEXT_EXTS.has(ext)) return 'text';
+  if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'].includes(ext)) return 'image';
+  return 'binary';
+}
+
+// ── Route registration ────────────────────────────────────────────────────────
 
 export function registerRunRoutes(): void {
-  get('/api/meta', () => ({ provider: providerMode(), prices: PRICES, models: MODEL_CHOICES }));
 
-  get('/api/projects/:pid/runs', (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid);
-    const kinds = (ctx.query.get('kind') || 'chat,test,review').split(',').filter(Boolean);
-    const rows = all<Row>(
-      `SELECT r.*, u.name AS created_by_name FROM runs r LEFT JOIN users u ON u.id = r.created_by
-        WHERE r.project_id = ? AND r.kind IN (${kinds.map(() => '?').join(',')})
-        ORDER BY r.created_at DESC LIMIT ?`,
-      project.id,
-      ...kinds,
-      Math.min(Number(ctx.query.get('limit') || 50), 200),
-    );
-    return { runs: rows.map((r) => ({ ...runSummary(r), created_by_name: r.created_by_name, repo_id: r.repo_id, branch: r.branch })) };
+  // GET /api/runs/:id
+  router.get('/api/runs/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const workflow = await requireRunAccess(req, res, req.params.id);
+    if (!workflow) return;
+    const repo = getSessionsRepository();
+    const r = await repo.getRunById(req.params.id);
+    if (!r) { sendJson(res, 404, { error: 'Run not found' }); return; }
+    sendJson(res, 200, { run: runView(r) });
   });
 
-  post('/api/projects/:pid/runs', async (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'editor');
-    const body = await ctx.json();
-    const prompt = str(body.prompt, 'Prompt', { max: 50_000 }).trim();
-    if (!prompt) throw badRequest('Describe what the agent should do');
-    const model = body.model && MODEL_CHOICES.includes(body.model) ? body.model : 'sonnet';
-    const mode = ['default', 'acceptEdits', 'plan'].includes(body.permissionMode) ? body.permissionMode : undefined;
-    let repoId: string | null = null;
-    let branch: string | null = null;
-    if (body.repoId) {
-      const repo = getRepo(String(body.repoId));
-      if (repo.project_id !== project.id) throw badRequest('That repository belongs to another project');
-      repoId = repo.id;
-      branch = body.branch ? checkBranch(body.branch) : repo.default_branch;
+  // GET /api/inputs/:id — poll input status (used by AgentCore containers and tests)
+  router.get('/api/inputs/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+    const repo = getSessionsRepository();
+    const row = await repo.getInputById(req.params.id);
+    if (!row) { sendJson(res, 404, { error: 'Input not found' }); return; }
+    // Access check: must be a member of the input's project (or admin)
+    if (!req.user.is_admin && row.project_id) {
+      const member = await getMembership(row.project_id, req.user.id as string);
+      if (!member) { sendJson(res, 403, { error: 'Not a project member' }); return; }
     }
-    const { run } = await startRun({
-      projectId: project.id,
-      userId: ctx.user!.id,
-      kind: 'chat',
-      title: str(body.title, 'Title', { max: 200, optional: true }).trim() || prompt.split('\n')[0].slice(0, 100),
-      prompt,
-      repoId,
-      branch,
-      permissionMode: mode,
-      model,
+    let payload: unknown = {};
+    let response: unknown = null;
+    try { payload = JSON.parse(row.payload); } catch { /* keep empty */ }
+    try { if (row.response) response = JSON.parse(row.response); } catch { /* keep null */ }
+    sendJson(res, 200, {
+      input: {
+        id: row.id,
+        run_id: row.run_id,
+        type: row.type ?? 'approval',
+        status: row.status ?? 'pending',
+        tool_name: row.tool_name,
+        payload,
+        response,
+        expires_at: row.expires_at ?? null,
+        answered_at: row.answered_at ?? null,
+        created_at: row.created_at,
+      },
     });
-    return { run: runSummary(run) };
   });
 
-  get('/api/runs/:id', (ctx) => {
-    const r = runAccess(ctx, ctx.params.id);
-    return {
-      run: { ...runSummary(r), prompt: r.prompt, result: r.result, error: r.error, worktree: r.worktree, branch: r.branch, repo_id: r.repo_id, permission_mode: r.permission_mode, session_id: r.session_id, resume_of: r.resume_of, started_at: r.started_at },
-      events: events(r.id),
-      inputs: all('SELECT * FROM inputs WHERE run_id = ? ORDER BY created_at', r.id).map(inputView),
-      active: isActive(r.id),
-      continuations: all('SELECT id, title, status, created_at FROM runs WHERE resume_of = ? ORDER BY created_at', r.id),
-    };
+  // GET /api/runs/:id/events/history: the stored events as JSON (used with AppSync live updates in the cloud portal)
+  router.get('/api/runs/:id/events/history', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const workflow = await requireRunAccess(req, res, req.params.id);
+    if (!workflow) return;
+    const past = await getSessionsRepository().listRunEvents(req.params.id);
+    sendJson(res, 200, { events: past.map(eventView) });
   });
 
-  get('/api/runs/:id/stream', (ctx) => {
-    const r = runAccess(ctx, ctx.params.id);
-    const after = Number(ctx.query.get('after') || 0);
-    const sse = openSse(ctx);
-    // Subscribe first, then replay, so nothing falls in the gap; the client ignores duplicate seq numbers.
-    sse.onClose(subscribe(runChannel(r.id), (event, data) => sse.send(event, data)));
-    for (const e of events(r.id, after)) sse.send('event', e);
-    sse.send('run', runSummary(getRun(r.id)));
-    return HANDLED;
-  });
+  // GET /api/runs/:id/events (SSE stream)
+  router.sse('/api/runs/:id/events', (req: PortalRequest, res: PortalResponse): void => {
+    const runId = req.params.id;
 
-  post('/api/runs/:id/stop', (ctx) => {
-    const r = runAccess(ctx, ctx.params.id, 'editor');
-    if (!stopRun(r.id)) {
-      if (['queued', 'running', 'waiting'].includes(r.status)) {
-        exec("UPDATE runs SET status = 'stopped', error = 'Stopped by a user' WHERE id = ?", r.id);
-      }
-    }
-    return { ok: true };
-  });
+    // Async access check
+    requireRunAccess(req, res, runId).then((workflow) => {
+      if (!workflow) return;
 
-  post('/api/runs/:id/continue', async (ctx) => {
-    const prev = runAccess(ctx, ctx.params.id, 'editor');
-    if (isActive(prev.id)) throw badRequest('Wait for this run to finish before continuing it');
-    if (!['chat', 'test'].includes(prev.kind)) throw badRequest('Only agent runs can be continued');
-    const body = await ctx.json();
-    const prompt = str(body.prompt, 'Follow-up', { max: 50_000 }).trim();
-    const { run } = await startRun({
-      projectId: prev.project_id,
-      userId: ctx.user!.id,
-      kind: prev.kind,
-      title: `${prev.title.replace(/^Follow-up: /, '')} (follow-up)`.slice(0, 200),
-      prompt,
-      resumeOf: prev.id,
-      permissionMode: body.permissionMode ?? prev.permission_mode,
-      model: prev.model,
-    });
-    return { run: runSummary(run) };
-  });
-
-  get('/api/runs/:id/changes', async (ctx) => {
-    const r = runAccess(ctx, ctx.params.id);
-    const p = getProject(r.project_id);
-    const meta = parseJson<any>(r.meta, {});
-    const files: { path: string; size: number }[] = [];
-    const workRel = r.worktree ? null : meta.workDir;
-    if (workRel) {
-      const base = path.join(projectDir(p), workRel);
-      const walk = (d: string, rel: string, depth: number) => {
-        if (depth > 4 || !fs.existsSync(d)) return;
-        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-          if (e.name === '.git' || e.name === 'node_modules') continue;
-          const rp = rel ? `${rel}/${e.name}` : e.name;
-          if (e.isDirectory()) walk(path.join(d, e.name), rp, depth + 1);
-          else if (files.length < 200) files.push({ path: rp, size: fs.statSync(path.join(d, e.name)).size });
-        }
+      // Listen before reading history so an event stored in between isn't lost.
+      // Events seen in the replay are skipped by id.
+      const queued: RunEventRow[] = [];
+      let replayed = false;
+      let lastId = 0;
+      const send = (ev: { id: unknown }): void => {
+        if (res.writableEnded) return;
+        res.write(`data: ${JSON.stringify({ type: 'event', event: ev })}\n\n`);
       };
-      walk(base, '', 0);
-    }
-    let diff = '';
-    if (r.worktree) {
-      const wt = path.join(projectDir(p), r.worktree);
-      if (fs.existsSync(wt)) {
-        await git(['add', '-A', '--intent-to-add'], { cwd: wt }).catch(() => undefined);
-        diff = (await git(['diff', '--no-color', 'HEAD'], { cwd: wt, maxBuffer: 16 * 1024 * 1024 }).catch(() => ({ stdout: '' }))).stdout;
+      const unsubscribeRun = subscribeRun(runId, (ev) => {
+        if (!replayed) { queued.push(ev); return; }
+        if (ev.id <= lastId) return;
+        lastId = ev.id;
+        send(ev);
+      });
+
+      // Write SSE headers first
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(': connected\n\n');
+
+    // Replay historical events from repository (async, but headers already sent)
+    const repo = getSessionsRepository();
+    repo.listRunEvents(runId).then((past) => {
+      for (const e of past) {
+        lastId = Math.max(lastId, e.id);
+        if (!res.writableEnded) send(eventView(e));
       }
-    }
-    return { worktree: r.worktree, workDir: meta.workDir, files, diff: diff.slice(0, 500_000) };
-  });
+      replayed = true;
+      for (const ev of queued) {
+        if (ev.id > lastId) { lastId = ev.id; send(ev); }
+      }
+    }).catch(() => {
+      // If replay fails, at least the live stream continues
+      replayed = true;
+      for (const ev of queued) {
+        if (ev.id > lastId) { lastId = ev.id; send(ev); }
+      }
+    });
 
-  get('/api/runs/:id/file', (ctx) => {
-    const r = runAccess(ctx, ctx.params.id);
-    const p = getProject(r.project_id);
-    const meta = parseJson<any>(r.meta, {});
-    const base = path.join(projectDir(p), r.worktree || meta.workDir);
-    const rel = str(ctx.query.get('path'), 'Path', { max: 500 });
-    const file = safeJoin(base, rel);
-    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw notFound('File not found');
-    if (fs.statSync(file).size > 1_000_000) throw badRequest('File is too large to show here');
-    return { path: rel, content: fs.readFileSync(file, 'utf8') };
-  });
-
-  post('/api/runs/:id/push', async (ctx) => {
-    const r = runAccess(ctx, ctx.params.id, 'editor');
-    if (isActive(r.id)) throw badRequest('Wait for the run to finish before pushing');
-    if (!r.repo_id || !r.worktree) throw badRequest('This run has no repository working copy');
-    const repo = getRepo(r.repo_id);
-    const body = await ctx.json();
-    const branch = checkBranch(body.branch || `agent/${r.id.slice(2, 12).toLowerCase()}`);
-    if (branch === repo.default_branch) throw badRequest('Push to a new branch, not the default branch');
-    const message = str(body.message, 'Commit message', { max: 2000, optional: true }) || `Agent Portal: ${r.title}`;
-    const wt = path.join(projectDir(getProject(r.project_id)), r.worktree);
-    const out = await pushWorktree(repo, wt, branch, message);
-    let pr: { number: number; url: string } | null = null;
-    if (body.createPr && repo.provider === 'github' && githubSlug(repo.url)) {
-      const created = await githubApi(repo, 'POST', '/pulls', {
-        title: str(body.prTitle, 'Pull request title', { max: 200, optional: true }) || r.title,
-        head: branch,
-        base: repo.default_branch,
-        body: `Created from Agent Portal run “${r.title}”.\n\n${(r.result || '').slice(0, 3000)}`,
-        draft: true,
+      const heartbeat = setInterval(() => {
+        if (!res.writableEnded) res.write(': ping\n\n');
+      }, 25_000);
+      heartbeat.unref();
+      res.on('close', () => {
+        clearInterval(heartbeat);
+        unsubscribeRun();
       });
-      pr = { number: created.number, url: created.html_url };
-      recordFeedbackPr(r.id, created.html_url, created.number);
+    }).catch((e) => {
+      if (!res.writableEnded) sendJson(res, 500, { error: 'Internal error' });
+      console.error('[SSE /runs/events] access check error:', e);
+    });
+  });
+
+  // GET /api/runs/:id/files
+  router.get('/api/runs/:id/files', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const workflow = await requireRunAccess(req, res, req.params.id);
+    if (!workflow) return;
+    const workDir = await resolveWorkDir(workflow, req.params.id);
+    if (!workDir || !fs.existsSync(workDir)) {
+      sendJson(res, 200, { files: [] });
+      return;
     }
-    return { ...out, branch, pr };
+    const files = listWorkDirFiles(workDir);
+    sendJson(res, 200, { files, workDir });
   });
 
-  del('/api/runs/:id/worktree', async (ctx) => {
-    const r = runAccess(ctx, ctx.params.id, 'editor');
-    if (isActive(r.id)) throw badRequest('Stop the run first');
-    if (!r.worktree || !r.repo_id) throw badRequest('This run has no working copy');
-    const repo = getRepo(r.repo_id);
-    await removeWorktree(repo, path.join(projectDir(getProject(r.project_id)), r.worktree));
-    exec('UPDATE runs SET worktree = NULL WHERE id = ?', r.id);
-    return { ok: true };
-  });
+  // GET /api/runs/:id/file/preview
+  router.get('/api/runs/:id/file/preview', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const workflow = await requireRunAccess(req, res, req.params.id);
+    if (!workflow) return;
 
-  // ---- Answer a question or approval ----
-  post('/api/inputs/:id/answer', async (ctx) => {
-    const row = one<Row>('SELECT * FROM inputs WHERE id = ?', ctx.params.id);
-    if (!row) throw notFound('Question not found');
-    requireProject(ctx, row.project_id, row.type === 'approval' ? 'editor' : 'viewer');
-    const body = await ctx.json();
-    const updated = await answerInput(row.id, { id: ctx.user!.id, name: ctx.user!.name }, body);
-    return { input: inputView(updated) };
-  });
+    const filePath = req.query.get('path') ?? '';
+    if (!filePath) {
+      sendJson(res, 400, { error: 'path query parameter required' });
+      return;
+    }
 
-  // ---- Check the model connection ----
-  post('/api/settings/test', async (ctx) => {
-    const p = one<Row>('SELECT id FROM projects ORDER BY created_at LIMIT 1');
-    if (!p) throw badRequest('Create a project first; the test run is recorded in it');
-    const started = Date.now();
-    try {
-      const { text } = await oneshot({
-        projectId: p.id,
-        userId: ctx.user!.id,
-        kind: 'connection',
-        title: 'Connection test',
-        system: 'You are a connection test. Reply with exactly: OK',
-        prompt: 'Reply with exactly: OK',
-        model: 'haiku',
-        demoOutput: () => 'OK',
+    const workDir = await resolveWorkDir(workflow, req.params.id);
+    if (!workDir) {
+      sendJson(res, 404, { error: 'Work directory not found' });
+      return;
+    }
+
+    // Resolve and verify the path is inside workDir (path traversal guard)
+    const resolved = path.resolve(workDir, filePath);
+    if (!resolved.startsWith(path.resolve(workDir))) {
+      sendJson(res, 403, { error: 'Path is outside the run work directory' });
+      return;
+    }
+
+    if (!fs.existsSync(resolved)) {
+      sendJson(res, 404, { error: 'File not found' });
+      return;
+    }
+
+    const ext = path.extname(resolved).toLowerCase();
+    const previewType = filePreviewType(ext);
+
+    if (previewType === 'text') {
+      const content = fs.readFileSync(resolved, 'utf8');
+      sendJson(res, 200, { type: 'text', content, ext });
+    } else if (previewType === 'image') {
+      const buffer = fs.readFileSync(resolved);
+      const base64 = buffer.toString('base64');
+      const mimeMap: Record<string, string> = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.webp': 'image/webp',
+      };
+      sendJson(res, 200, {
+        type: 'image',
+        url: `data:${mimeMap[ext] ?? 'image/octet-stream'};base64,${base64}`,
+        ext,
       });
-      return { ok: /\bOK\b/.test(text), reply: text.slice(0, 200), provider: providerMode(), ms: Date.now() - started };
-    } catch (e: any) {
-      throw new HttpError(502, `Connection failed: ${e?.message ?? e}`);
+    } else {
+      sendJson(res, 200, { type: 'binary', ext, size: fs.statSync(resolved).size });
     }
-  }, { auth: 'admin' });
+  });
 }

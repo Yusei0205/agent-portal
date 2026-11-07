@@ -1,0 +1,83 @@
+{
+  "id": "classic-teal",
+  "name": "Classic Teal",
+  "version": 1,
+  "description": "The original quiet workbench — teal accent, clean surfaces, system fonts, no effects.",
+  "brand": {
+    "productName": "Agent Portal"
+  },
+  "modes": {
+    "light": {
+      "canvas": "#f3f5f8",
+      "panel": "#ffffff",
+      "panel-2": "#f7f9fb",
+      "raised": "#ffffff",
+      "rail": "#e9edf2",
+      "line": "#d8dee7",
+      "line-2": "#e8ecf1",
+      "ink": "#1b2333",
+      "ink-2": "#48536a",
+      "ink-3": "#737e93",
+      "accent": "#0e7a7e",
+      "accent-2": "#0a5c60",
+      "accent-3": "#1a9ea4",
+      "accent-ink": "#ffffff",
+      "link": "#0b6b6f",
+      "accent-wash": "#e1f1f1",
+      "ok": "#2c7a4e",
+      "ok-wash": "#e4f3ea",
+      "warn": "#9a6512",
+      "warn-wash": "#fbf0dc",
+      "danger": "#b0281c",
+      "danger-wash": "#fbe9e7",
+      "info": "#2563eb",
+      "info-wash": "#eff6ff",
+      "focus": "#2f6fde",
+      "glow": "none",
+      "code-bg": "#f1f3f7",
+      "shadow": "0 1px 2px rgba(20,30,50,.06), 0 4px 16px rgba(20,30,50,.06)"
+    },
+    "dark": {
+      "canvas": "#12161e",
+      "panel": "#1a202b",
+      "panel-2": "#161b24",
+      "raised": "#202a3a",
+      "rail": "#161b24",
+      "line": "#2c3442",
+      "line-2": "#242b37",
+      "ink": "#e4e8ef",
+      "ink-2": "#b1bacb",
+      "ink-3": "#8691a6",
+      "accent": "#3fb3b0",
+      "accent-2": "#22d6d2",
+      "accent-3": "#5fd0cd",
+      "accent-ink": "#08201f",
+      "link": "#7fd6d2",
+      "accent-wash": "#173236",
+      "ok": "#57c08a",
+      "ok-wash": "#18301f",
+      "warn": "#e0a64a",
+      "warn-wash": "#33291a",
+      "danger": "#ef7468",
+      "danger-wash": "#3a1f1d",
+      "info": "#60a5fa",
+      "info-wash": "#1e3a5f",
+      "focus": "#7aa7ff",
+      "glow": "none",
+      "code-bg": "#141922",
+      "shadow": "0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25)"
+    }
+  },
+  "fonts": {
+    "display": "system-ui",
+    "body": "system-ui",
+    "mono": "ui-monospace"
+  },
+  "effects": {
+    "glow": false,
+    "gridBackground": false,
+    "gradientAccents": false,
+    "motion": "full"
+  },
+  "radius": { "sm": 4, "md": 6, "lg": 10 }
+}

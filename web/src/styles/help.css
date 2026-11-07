@@ -1,0 +1,118 @@
+/* Help page (pages/Help.jsx): topic list on the left, the guide on the right. */
+.help-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+}
+.help-search input { width: min(280px, 60vw); }
+
+.help-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+/* Topic list — stays in view while the guide scrolls inside .main */
+.help-toc {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  display: grid;
+  gap: 14px;
+  padding-right: 4px;
+}
+.help-toc-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 4px 8px;
+}
+.help-toc ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.help-toc a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 0.88rem;
+}
+.help-toc a:hover { background: var(--panel-2); color: var(--ink); }
+.help-toc a.active { background: var(--accent-wash); color: var(--accent); font-weight: 600; }
+
+.help-content { display: grid; gap: 18px; min-width: 0; }
+.help-group { display: grid; gap: 14px; }
+.help-group-label {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.help-topic { scroll-margin-top: 12px; gap: 14px; }
+.help-topic-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.help-topic-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.help-topic-title { flex: 1; min-width: 220px; display: grid; gap: 4px; }
+.help-topic-title h2 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
+.help-topic-title p { margin: 0; max-width: 80ch; }
+.help-badge { font-size: 0.7rem; }
+.help-open { align-self: center; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+.help-section h3 { margin: 0 0 6px; font-size: 0.92rem; }
+.help-list { margin: 0; padding-left: 1.4em; list-style: disc; display: grid; gap: 4px; max-width: 90ch; }
+.help-list li { line-height: 1.5; }
+ol.help-list { list-style: decimal; }
+.help-list li::marker { color: var(--ink-3); }
+
+.help-rows { margin: 0; display: grid; border: 1px solid var(--line-2); border-radius: var(--radius-md); overflow: hidden; }
+.help-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 220px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 12px;
+}
+.help-row + .help-row { border-top: 1px solid var(--line-2); }
+.help-row dt { font-weight: 600; color: var(--ink); }
+.help-row dd { margin: 0; color: var(--ink-2); line-height: 1.5; }
+
+.help-tips {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--info-wash);
+  color: var(--ink-2);
+}
+.help-tips > svg { color: var(--info); flex: none; margin-top: 3px; }
+.help-tips ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+
+.help-empty { display: grid; justify-items: center; gap: 12px; }
+
+@media (max-width: 900px) {
+  .help-layout { grid-template-columns: minmax(0, 1fr); }
+  .help-toc { position: static; max-height: none; }
+  .help-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}

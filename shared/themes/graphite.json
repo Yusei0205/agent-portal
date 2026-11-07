@@ -1,0 +1,89 @@
+{
+  "id": "graphite",
+  "name": "Graphite",
+  "version": 1,
+  "description": "Developer workbench. Graphite greys, a single amber accent, Geist for text and JetBrains Mono for ids, paths and code. Small corners, flat surfaces, compact rows. Dark and warm-paper light variants.",
+  "brand": {
+    "productName": "Agent Portal",
+    "tagline": "Multiple agents. One ecosystem.",
+    "logoSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\" fill=\"none\"><rect x=\"3\" y=\"3\" width=\"26\" height=\"26\" rx=\"6\" fill=\"#171b20\" stroke=\"#f2b138\" stroke-width=\"1.6\"/><path d=\"M11 12l-4 4 4 4\" stroke=\"#f2b138\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M21 12l4 4-4 4\" stroke=\"#7d8794\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M17.5 10l-3 12\" stroke=\"#e8ebef\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg>"
+  },
+  "modes": {
+    "dark": {
+      "canvas": "#0d0f12",
+      "rail": "#0a0c0e",
+      "panel": "#13161a",
+      "panel-2": "#171b20",
+      "raised": "#1c2127",
+      "line": "#272d35",
+      "line-2": "rgba(255,255,255,0.05)",
+      "ink": "#e8ebef",
+      "ink-2": "#aab3be",
+      "ink-3": "#7d8794",
+      "accent": "#f2b138",
+      "accent-2": "#6ea8fe",
+      "accent-3": "#3ecf8e",
+      "accent-ink": "#1a1203",
+      "accent-wash": "rgba(242,177,56,0.10)",
+      "link": "#f5c062",
+      "ok": "#3ecf8e",
+      "ok-wash": "rgba(62,207,142,0.12)",
+      "warn": "#fb923c",
+      "warn-wash": "rgba(251,146,60,0.12)",
+      "danger": "#f2545b",
+      "danger-wash": "rgba(242,84,91,0.12)",
+      "info": "#6ea8fe",
+      "info-wash": "rgba(110,168,254,0.12)",
+      "focus": "#f2b138",
+      "glow": "0 0 0 1px rgba(242,177,56,0.25)",
+      "code-bg": "#0a0c0f",
+      "shadow": "0 1px 0 rgba(255,255,255,0.03), 0 8px 24px rgba(0,0,0,0.45)"
+    },
+    "light": {
+      "canvas": "#f5f4f1",
+      "rail": "#ecebe7",
+      "panel": "#ffffff",
+      "panel-2": "#faf9f7",
+      "raised": "#ffffff",
+      "line": "#dedbd4",
+      "line-2": "rgba(0,0,0,0.05)",
+      "ink": "#1b1e23",
+      "ink-2": "#4a525d",
+      "ink-3": "#656e7a",
+      "accent": "#b45309",
+      "accent-2": "#2563eb",
+      "accent-3": "#0f766e",
+      "accent-ink": "#ffffff",
+      "accent-wash": "rgba(180,83,9,0.09)",
+      "link": "#9a4507",
+      "ok": "#15803d",
+      "ok-wash": "rgba(21,128,61,0.10)",
+      "warn": "#c2410c",
+      "warn-wash": "rgba(194,65,12,0.10)",
+      "danger": "#b91c1c",
+      "danger-wash": "rgba(185,28,28,0.09)",
+      "info": "#1d4ed8",
+      "info-wash": "rgba(29,78,216,0.09)",
+      "focus": "#b45309",
+      "glow": "none",
+      "code-bg": "#efede8",
+      "shadow": "0 1px 2px rgba(0,0,0,0.06), 0 6px 20px rgba(0,0,0,0.08)"
+    }
+  },
+  "fonts": {
+    "display": "Geist Sans",
+    "body": "Geist Sans",
+    "mono": "JetBrains Mono"
+  },
+  "effects": {
+    "glow": false,
+    "gridBackground": false,
+    "gradientAccents": false,
+    "motion": "full"
+  },
+  "radius": {
+    "sm": 3,
+    "md": 5,
+    "lg": 8
+  }
+}

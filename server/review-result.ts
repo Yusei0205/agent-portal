@@ -1,26 +1,27 @@
-import { extractJson } from './util.ts';
-import type { Finding, Severity } from './agent/heuristics.ts';
+import type { Finding } from './review.ts';
 
-const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
+const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
 
-/** Reject incomplete reports instead of turning parsing failures into clean reviews. */
-export function parseReviewResult(text: string, files: Set<string>): { summary: string; findings: Finding[] } {
-  const parsed = extractJson<{ summary?: unknown; findings?: unknown }>(text);
-  if (!parsed || typeof parsed.summary !== 'string' || !Array.isArray(parsed.findings)) {
-    throw new Error('The reviewer returned an invalid report. Open the reviewer run for its full output and start a new review.');
-  }
-  const findings = parsed.findings.map((raw: unknown, index: number): Finding => {
-    const f = raw as Record<string, unknown> | null;
-    const file = typeof f?.file === 'string' ? f.file.replace(/^[ab]\//, '') : '';
-    if (!f || !files.has(file) || !SEVERITIES.includes(f.severity as Severity) ||
-        typeof f.message !== 'string' || !f.message.trim() ||
-        typeof f.category !== 'string' || !f.category.trim() ||
-        (f.suggestion != null && typeof f.suggestion !== 'string') ||
-        (f.line != null && (!Number.isInteger(f.line) || Number(f.line) <= 0))) {
-      throw new Error(`The reviewer returned an invalid finding (${index + 1}). Open the reviewer run for its full output and start a new review.`);
-    }
-    return { file, line: f.line == null ? null : Number(f.line), severity: f.severity as Severity,
-      category: f.category, message: f.message, suggestion: typeof f.suggestion === 'string' ? f.suggestion : undefined };
+/** Preserve complete reports. Reject malformed entries rather than silently dropping findings. */
+export function normalizeReviewFindings(raw: unknown[]): Array<Partial<Finding>> {
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`Invalid finding ${index + 1}`);
+    const f = item as Record<string, unknown>;
+    const body = f.body ?? f.description ?? f.message;
+    const file = f.file ?? f.file_path ?? f.path ?? '';
+    const severity = f.severity == null ? 'medium' : String(f.severity).toLowerCase().trim();
+    const line = f.line ?? f.line_number;
+    if (typeof body !== 'string' || !body.trim() || typeof file !== 'string'
+      || !SEVERITIES.includes(severity)
+      || (line != null && (!Number.isInteger(Number(line)) || Number(line) <= 0))
+      || (f.suggestion != null && typeof f.suggestion !== 'string')) throw new Error(`Invalid finding ${index + 1}`);
+    return {
+      file_path: file.trim().replace(/^[ab]\//, ''),
+      line_number: line == null ? null : Number(line),
+      severity: severity as Finding['severity'],
+      title: String(f.title ?? f.message ?? f.category ?? 'Finding').slice(0, 200),
+      body: body + (f.suggestion ? `\n\nSuggested fix:\n${f.suggestion}` : ''),
+      confidence: f.confidence != null && Number.isFinite(Number(f.confidence)) ? Math.min(1, Math.max(0, Number(f.confidence))) : null,
+    };
   });
-  return { summary: parsed.summary, findings };
 }

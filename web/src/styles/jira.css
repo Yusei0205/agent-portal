@@ -1,0 +1,229 @@
+/* ── Jira / Tickets page ─────────────────────────── */
+
+/* Two-column layout for the ticket browser + detail panel */
+.tickets-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.tickets-layout.has-detail {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+}
+@media (max-width: 1000px) {
+  .tickets-layout.has-detail {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Clickable table rows */
+.ticket-row {
+  cursor: pointer;
+}
+.ticket-row.is-selected td {
+  background: var(--accent-wash);
+}
+.ticket-row:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* Scrollable ticket description */
+.ticket-body {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Comment bubble */
+.ticket-comment {
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+
+/* Sticky detail panel */
+.ticket-detail {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+
+/* ── Markdown body (used inside ticket descriptions / comments) ─── */
+.markdown-body {
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.markdown-body p  { margin: 0 0 0.6em; }
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 { margin: 0.8em 0 0.3em; }
+.markdown-body ul,
+.markdown-body ol { margin: 0 0 0.6em; padding-left: 1.4em; }
+.markdown-body li { margin-bottom: 0.25em; }
+.markdown-body code {
+  background: var(--code-bg);
+  padding: 0.05em 0.35em;
+  border-radius: var(--radius-sm);
+  font-size: 0.9em;
+}
+.markdown-body pre {
+  background: var(--code-bg);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--line);
+  padding-left: 12px;
+  color: var(--ink-2);
+  margin: 0 0 0.6em;
+}
+.markdown-body a {
+  color: var(--link);
+}
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.84rem;
+  margin-bottom: 0.6em;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+}
+.markdown-body th {
+  background: var(--canvas);
+  font-weight: 640;
+}
+
+/* ── Jira picker (New Session dialog) ────────────────── */
+.jira-picker {
+  position: relative;
+  width: 100%;
+}
+
+.jira-picker-dropdown {
+  position: absolute;
+  z-index: 200;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.jira-picker-option {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line-2);
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.jira-picker-option:last-of-type { border-bottom: 0; }
+.jira-picker-option:hover,
+.jira-picker-option:focus {
+  background: var(--accent-wash);
+  outline: none;
+}
+.jira-picker-option-key {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.jira-picker-option-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.jira-picker-option-date {
+  white-space: nowrap;
+  font-size: 12px;
+}
+.jira-picker-state {
+  padding: 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.jira-picker-more {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  text-align: center;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.jira-picker-more:hover:not(:disabled) {
+  background: var(--accent-wash);
+}
+
+/* Compact selected ticket card (in New Session dialog) */
+.jira-ticket-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-wash, var(--line));
+  border-radius: var(--radius);
+  background: var(--accent-wash);
+  flex-wrap: wrap;
+}
+.jira-ticket-card-key {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.jira-ticket-card-summary {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Jira ticket info strip in session Settings panel */
+.session-jira-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--accent-wash);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  flex-wrap: wrap;
+}
+.session-jira-strip-key {
+  font-weight: 700;
+  font-family: var(--mono);
+  color: var(--accent);
+  white-space: nowrap;
+}
