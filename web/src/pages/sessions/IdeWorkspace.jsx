@@ -222,6 +222,7 @@ export function ComposerBar({
   const [composerH, setComposerH] = useState(() => loadComposerH());
   const textareaRef = useRef(null);
   const composerRef = useRef(null);
+  const rowRef      = useRef(null); // the input row: the height the person drags is this row's, not the whole box
   const isDragging  = useRef(false);
   const dragStartY  = useRef(0);
   const dragStartH  = useRef(0);
@@ -333,7 +334,7 @@ export function ComposerBar({
     // Start from measured height when still in auto-grow mode
     dragStartH.current = composerH !== null
       ? composerH
-      : (composerRef.current?.offsetHeight ?? 80);
+      : (rowRef.current?.offsetHeight ?? 48);
   };
 
   const onHandlePointerMove = (e) => {
@@ -372,7 +373,7 @@ export function ComposerBar({
     let handled = true;
     if (e.key === 'ArrowUp') {
       const step    = e.shiftKey ? LARGE : SMALL;
-      const current = composerH ?? (composerRef.current?.offsetHeight ?? 80);
+      const current = composerH ?? (rowRef.current?.offsetHeight ?? 48);
       const newH    = clampComposerH(current + step);
       setComposerH(newH);
       saveComposerH(newH);
@@ -491,13 +492,12 @@ export function ComposerBar({
   };
 
   const maxH         = Math.floor(window.innerHeight * 0.7);
-  const ariaValueNow = composerH ?? (composerRef.current?.offsetHeight ?? 80);
+  const ariaValueNow = composerH ?? (rowRef.current?.offsetHeight ?? 48);
 
   return (
     <div
       ref={composerRef}
       className={`ws-composer${composerH !== null ? ' ws-composer--manual' : ''}`}
-      style={composerH !== null ? { height: composerH } : undefined}
     >
       {/* Drag handle — top edge. Drag up to grow, drag down to shrink.
           Double-click resets to auto-grow. */}
@@ -629,7 +629,7 @@ export function ComposerBar({
         fileInputRef={attachmentInputRef} hideTrigger onAttachmentsChange={attachmentsChanged}
         disabled={busy || !workflow || cloning} maxFileBytes={2 * 1024 * 1024} maxTotalBytes={8 * 1024 * 1024} />
       {attachmentIds.length > 0 && <span className="field-hint">Up to 5 files · 2 MB each · 8 MB total</span>}
-      <div className="ws-composer-row">
+      <div className={`ws-composer-row${composerH !== null && composerH <= 56 ? ' ws-composer-row--compact' : ''}`} ref={rowRef} style={composerH !== null ? { height: composerH } : undefined}>
         <button
           type="button"
           className="btn-icon"
@@ -650,6 +650,7 @@ export function ComposerBar({
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={!workflow || cloning}
+          data-paste-files="true"
           aria-label="Message"
         />
         <div className="ws-composer-actions">
