@@ -53,6 +53,35 @@ export async function saveChatAttachments(projectId: string, workflowId: string,
   return saved;
 }
 
+/**
+ * Save files that did not come from an upload (for example a Jira ticket's attachments) as chat attachments of a
+ * session, so the next run gets them under attachments/. The same type and size limits as uploads apply; files that do
+ * not fit are returned in `skipped` with the reason. The stored name is random, `name` keeps the original.
+ */
+export async function saveBufferAttachments(
+  projectId: string, workflowId: string, files: Array<{ name: string; data: Buffer }>,
+): Promise<{ saved: ChatAttachment[]; skipped: Array<{ name: string; reason: string }> }> {
+  const saved: ChatAttachment[] = [];
+  const skipped: Array<{ name: string; reason: string }> = [];
+  let total = 0;
+  const dir = await storageDir(projectId, workflowId);
+  for (const f of files) {
+    const ext = path.extname(f.name).toLowerCase();
+    if (!INPUT_FILE_EXTS.has(ext)) { skipped.push({ name: f.name, reason: `${ext || 'this'} files are not delivered to the agent` }); continue; }
+    if (!f.data.length || f.data.length > INPUT_FILE_LIMITS.fileBytes) { skipped.push({ name: f.name, reason: `over ${INPUT_FILE_LIMITS.fileBytes / 1048576} MB` }); continue; }
+    if (saved.length >= INPUT_FILE_LIMITS.files || total + f.data.length > INPUT_FILE_LIMITS.totalBytes) { skipped.push({ name: f.name, reason: `the files together are over ${INPUT_FILE_LIMITS.totalBytes / 1048576} MB` }); continue; }
+    await fs.mkdir(dir, { recursive: true });
+    if ((await fs.lstat(dir)).isSymbolicLink()) throw badRequest('Invalid attachment storage');
+    const stored = generateId() + ext;
+    const dest = path.join(dir, stored);
+    await fs.writeFile(dest, f.data, { flag: 'wx' });
+    await persistFile(dest);
+    total += f.data.length;
+    saved.push({ path: stored, name: f.name, size: f.data.length });
+  }
+  return { saved, skipped };
+}
+
 /** Stage only the files referenced by pending messages, before invoking any runner. */
 export async function stageChatAttachments(projectId: string, workflowId: string, events: Array<{ data: string | null }>, workDir: string): Promise<ChatAttachment[]> {
   const attachments: ChatAttachment[] = [];
