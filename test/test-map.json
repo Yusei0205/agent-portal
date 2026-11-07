@@ -302,6 +302,8 @@
       "tests": [
         "test/browser-live.test.ts",
         "test/chat-attachments-ui.test.ts",
+        "test/web-session-agents.test.ts",
+        "test/conversation-files.test.ts",
         "test/terminal.test.ts",
         "test/terminal-cloud.test.ts",
         "test/runner-terminal.test.ts",
