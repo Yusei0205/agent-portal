@@ -5,12 +5,19 @@
  * text stays plain text.
  */
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { getDb } from '../server/db.ts';
 
 test('composer layout and paste', async () => {
+  // This test opens the real page, so it needs the built web app. CI runs the tests before its Build step.
+  if (!fs.existsSync(path.join(process.cwd(), 'dist', 'web', 'index.html'))) {
+    execFileSync(process.execPath, ['scripts/build.mjs', '--web-only'], { stdio: 'inherit', timeout: 180_000 });
+  }
   const { baseUrl } = await createTestServer();
   const browser = await chromium.launch({ headless: true });
   try {
