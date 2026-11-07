@@ -53,7 +53,7 @@ describe('createReview', () => {
     const runs = await getSessionsRepository().listRunsByWorkflow(workflowId);
     assert.equal(runs.length, 1, 'a run was started, so the session is not left pending with nothing running');
     // The run reports back and the review moves on from "pending".
-    let seen = review.status;
+    let seen: string = review.status;
     for (let i = 0; i < 100 && (seen === 'pending' || seen === 'running'); i++) {
       await new Promise((r) => setTimeout(r, 50));
       seen = String((await getReviewsRepository().getById(review.id))?.status);
