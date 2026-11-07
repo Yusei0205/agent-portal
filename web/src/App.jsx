@@ -296,7 +296,7 @@ function Shell({ user, onSignOut }) {
           case 'e': navigate('/api');                                              break;
           case 'm': if (u?.is_admin) navigate('/users');                          break;
           case 't': navigate('/settings');                                         break;
-          case 'y': navigate('/connect/sign-ins');                                  break;
+          case 'y': navigate('/config/sign-ins');                                  break;
           case 'x': navigate('/config');                                           break;
           case 'd': navigate('/dashboard');                                        break;
           default:  break;
@@ -363,7 +363,13 @@ function Shell({ user, onSignOut }) {
       return;
     }
     if (!projectId && tab === 'credentials') {
-      navigateReplace('/connect/sign-ins');
+      navigateReplace('/config/sign-ins');
+      return;
+    }
+    // Agent sign-ins moved from Connect to Agent setup (keep the query: the Codex sign-in returns here with one).
+    if (!projectId && tab === 'connect' && (rest?.[0] === 'sign-ins' || rest?.[0] === 'models')) {
+      const q = window.location.hash.split('?')[1];
+      navigateReplace(`/config/sign-ins${q ? `?${q}` : ''}`);
       return;
     }
     if (tab === 'integrations') {
@@ -570,7 +576,7 @@ function Shell({ user, onSignOut }) {
           ) : isConnectRoute ? (
             <ConnectHub tab={route.rest?.[0]} user={user} projectId={navProjectId} />
           ) : isConfigRoute ? (
-            <Configuration user={user} />
+            <Configuration user={user} tab={route.rest?.[0]} />
           ) : isTestsRoute ? (
             <TestsPage projectId={route.projectId} route={route} />
           ) : isReviewsRoute ? (

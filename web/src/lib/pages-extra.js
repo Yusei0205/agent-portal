@@ -12,7 +12,7 @@ export const EXTRA_NAV_ITEMS = [
     label: 'Agent sign-ins',
     description: 'Your Codex, Kiro and Claude accounts',
     keys: 'g y',
-    href: '#/connect/sign-ins',
+    href: '#/config/sign-ins',
   },
   {
     id: 'goto_config',

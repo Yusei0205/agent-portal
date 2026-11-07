@@ -17,10 +17,19 @@ import { Icon } from '../components/Icon.jsx';
 import { ConfigStatus } from './config/ConfigStatus.jsx';
 import { ConfigFileTree } from './config/ConfigFileTree.jsx';
 import { ConfigEditor } from './config/ConfigEditor.jsx';
-import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { HubContext, PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { Credentials } from './Credentials.jsx';
+import { navigate } from '../lib/router.js';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 
+const SIGN_INS = {
+  id: 'sign-ins',
+  label: 'Sign-ins',
+  description: 'Your own Codex, Kiro and Claude Code accounts. Your sessions use these first; without one they fall back to the portal AI provider.',
+};
+
 const TABS = [
+  SIGN_INS,
   { id: 'codex', label: 'Codex (~/.codex)', description: 'AGENTS.md, reasoning settings, custom agents and skills used by local and cloud Codex sessions. Sign-ins and MCP connections are managed in Connect.' },
   {
     id: 'kiro',
@@ -234,8 +243,9 @@ function ConfigTab({ folder, user, treeRefreshBump }) {
   );
 }
 
-export function Configuration({ user }) {
-  const [tab, setTab] = useState('kiro');
+export function Configuration({ user, tab: wantedTab }) {
+  const tab = TABS.some((t) => t.id === wantedTab) ? wantedTab : 'kiro';
+  const isSignIns = tab === SIGN_INS.id;
   const [treeRefreshBump, setTreeRefreshBump] = useState(0);
 
   const activeTabDef = TABS.find((t) => t.id === tab);
@@ -249,9 +259,9 @@ export function Configuration({ user }) {
       {/* Page header: title + subtitle on left, zip buttons on right */}
       <PageHeader
         title="Agent setup"
-        description="How your agents behave: your own .codex, .kiro and .claude folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
+        description="How your agents behave: your sign-ins and your own .codex, .kiro and .claude folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
       >
-        <button
+        {!isSignIns && <button
           type="button"
           className="btn"
           onClick={handleImported}
@@ -260,9 +270,9 @@ export function Configuration({ user }) {
         >
           <Icon name="refresh" size={14} />
           Refresh
-        </button>
-        <ImportZipButton folder={tab} onImported={handleImported} />
-        <ExportZipButton folder={tab} />
+        </button>}
+        {!isSignIns && <ImportZipButton folder={tab} onImported={handleImported} />}
+        {!isSignIns && <ExportZipButton folder={tab} />}
       </PageHeader>
 
       {/* Tab row with inline description */}
@@ -277,7 +287,7 @@ export function Configuration({ user }) {
               aria-selected={tab === t.id}
               aria-controls={`cfg-panel-${t.id}`}
               id={`cfg-tab-${t.id}`}
-              onClick={() => setTab(t.id)}
+              onClick={() => navigate(`/config/${t.id}`)}
             >
               {t.label}
             </button>
@@ -296,12 +306,16 @@ export function Configuration({ user }) {
         aria-labelledby={`cfg-tab-${tab}`}
         className="tab-panel"
       >
-        <ConfigTab
-          key={tab}
-          folder={tab}
-          user={user}
-          treeRefreshBump={treeRefreshBump}
-        />
+        {isSignIns ? (
+          <HubContext.Provider value><Credentials user={user} /></HubContext.Provider>
+        ) : (
+          <ConfigTab
+            key={tab}
+            folder={tab}
+            user={user}
+            treeRefreshBump={treeRefreshBump}
+          />
+        )}
       </div>
     </div>
   );

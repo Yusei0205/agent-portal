@@ -1306,7 +1306,7 @@ function KiroCliSection({
           <Icon name="info" size={14} style={{ flexShrink: 0 }} />
           <span>
             Kiro runs in the cloud runner (AgentCore), not on this server, so there is nothing to install or sign in to here.
-            Each person signs in under <strong>Agent setup › Agent sign-ins</strong>; a Kiro session uses that person's sign-in.
+            Each person signs in under <strong>Agent setup › Sign-ins</strong>; a Kiro session uses that person's sign-in.
           </span>
         </div>
       </div>

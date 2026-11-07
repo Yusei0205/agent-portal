@@ -38,7 +38,7 @@ export const HELP_TOPICS = [
       ] },
       { heading: 'Before the first run', steps: true, items: [
         'Connect the repository the agent should work in (**Workspaces › Repositories**).',
-        'Sign in for the engine the workflow uses (Codex, Claude Code or Kiro) under **Connections › Agent sign-ins**. A run uses the sign-in of the person who starts it.',
+        'Sign in for the engine the workflow uses (Codex, Claude Code or Kiro) under **Agent setup › Sign-ins**. A run uses the sign-in of the person who starts it.',
         'For Jira workflows, connect Jira for this project (**Connections › Tools & services**, or the **Tickets** page). The portal then reads the ticket, and its images and files up to 2 MB, itself. To let steps **write** to Jira (comments, test results), also add a Jira (Atlassian) integration with writes allowed under **Connections › Tools & services**. Jira is set up per project, so each project reads its own Jira.',
         'For workflows that deploy, give the project an AWS account (**Workspaces › AWS**) for the dev environment.',
       ] },
@@ -94,7 +94,7 @@ export const HELP_TOPICS = [
         steps: true,
         items: [
           'Sign in with the email and password your admin gave you, or follow your invite link.',
-          'Open **Connections › Agent sign-ins** and add a Claude Code or Kiro sign-in, unless your admin has set up a portal AI provider for everyone.',
+          'Open **Agent setup › Sign-ins** and add a Claude Code or Kiro sign-in, unless your admin has set up a portal AI provider for everyone.',
           'Pick or create a project with the project picker at the top of the rail.',
           'Add a repository under **Workspaces › Repositories** (the Git host must be connected under **Connections › Git connections**).',
           'Go to **Sessions**, press **Alt+N** and describe your goal. The agent starts working and you can follow it live.',
@@ -132,8 +132,8 @@ export const HELP_TOPICS = [
           ['Dashboard', 'Portal-wide overview.'],
           ['Work', 'Sessions, Workflows, Workspaces, Reviews, Tests, Tickets (needs a project).'],
           ['Knowledge', 'Knowledge, Create, Vault (needs a project).'],
-          ['Connect', 'Connections: Git hosts, agent sign-ins, tools & services.'],
-          ['Agents', 'Agent setup: your `.kiro`, `.claude` and `.aws` folders.'],
+          ['Connect', 'Connections: Git hosts, tools & services.'],
+          ['Agents', 'Agent setup: your Codex, Kiro and Claude Code sign-ins (with none, sessions fall back to the portal AI provider if the admin set one up) and your `.codex`, `.kiro` and `.claude` folders.'],
           ['Portal', 'Settings, Users (admins), API access, Feedback, Help.'],
         ],
       },
@@ -467,7 +467,6 @@ export const HELP_TOPICS = [
         heading: 'Tabs',
         rows: [
           ['Git connections', 'Saved Git credentials (GitHub, CodeCommit and others) shared across projects, used to clone and push repositories.'],
-          ['Agent sign-ins', 'Your Claude Code and Kiro accounts. With none, sessions fall back to the portal AI provider if the admin set one up.'],
           ['Tools & services', 'Jira and Confluence, Google Workspace, and any MCP server the agent can use in a session.'],
         ],
       },
@@ -700,7 +699,7 @@ export const HELP_TOPICS = [
       {
         heading: 'Problems and fixes',
         rows: [
-          ['Engine "Not set up yet"', 'Add a sign-in under **Connections › Agent sign-ins**, or ask an admin to set the portal AI provider.'],
+          ['Engine "Not set up yet"', 'Add a sign-in under **Agent setup › Sign-ins**, or ask an admin to set the portal AI provider.'],
           ['Delegation limit reached', 'Wait for a child session to finish, or ask an admin to raise the limit in **Settings › Sessions**.'],
           ['Scan not allowed', 'Branch scans need an admin to add you to the full-scan allowlist. PR reviews still work.'],
           ['Browser not available for tests', 'The server has no browser for end-to-end tests; ask your admin.'],

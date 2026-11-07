@@ -173,7 +173,7 @@ export function registerCodexRoutes(): void {
 
   router.get('/api/codex/oauth/callback', requireCookieAuth(async (req, res) => {
     // Never log the callback URL: it contains an authorization code.
-    let location = '/#/connect/sign-ins';
+    let location = '/#/config/sign-ins';
     try { await completeCodexOAuth(req.user!.id, req.query); }
     catch { location += '?codex_error=authorization_failed'; }
     res.writeHead(302, { Location: location, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
