@@ -105,6 +105,22 @@ interface RunnerResult {
   apiError?: string;
 }
 
+/** A run whose stream ended before the runner's final result (the machine stopped answering, or the connection broke). */
+export const LOST_RUN_MESSAGE = 'The connection to the cloud machine was lost before the run finished, so it has no final answer. '
+  + 'The steps above and the spend so far are kept. Send a follow-up message to pick up where it stopped.';
+
+/** The runner's spend-so-far event, read as a result that carries only the spend (an estimate, priced per reply). */
+function spendOf(ev: Record<string, unknown>): RunnerResult {
+  const m = (ev.metrics ?? {}) as Record<string, unknown>;
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+  return {
+    costUsd: n(ev.costUsd),
+    costEstimated: true,
+    ...(typeof ev.model === 'string' && ev.model ? { model: ev.model } : {}),
+    metrics: { inputTokens: n(m.inputTokens), outputTokens: n(m.outputTokens), cacheReadTokens: n(m.cacheReadTokens), cacheWriteTokens: n(m.cacheWriteTokens) },
+  };
+}
+
 /**
  * After a cancel, how long the portal keeps reading the runner's stream for its final result,
  * which carries the spend up to the stop. The runner answers a cancel within a second or two
@@ -262,6 +278,14 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
   // tool call, an agent's progress) closes it. The viewer joins the pieces the same way.
   let replyOpen = false;
   let result: RunnerResult | null = null;
+  // The runner's spend so far (sent after every model reply): recorded when the run ends without its final result.
+  let spendSoFar: RunnerResult | null = null;
+  const recordSpendSoFar = async (): Promise<void> => {
+    if (!spendSoFar) return;
+    await recordSpend(spendSoFar).catch((err: unknown) => {
+      console.warn(`[claude-agentcore] Could not record the spend of run ${run.runId}, which ended without a result:`, err);
+    });
+  };
   try {
     for await (const raw of invokeAgentCore(runtimeArn, sessionId, payload, stream.signal)) {
       const ev = raw as unknown as Record<string, unknown>;
@@ -271,6 +295,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
           result = ev as RunnerResult;
           break;
         }
+        if (ev.type === 'spend') spendSoFar = spendOf(ev);
         continue;
       }
       const piece = ev.type === 'assistant-text' && ev.stream === true && !agentLabel(ev.agent);
@@ -326,6 +351,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
           break;
         case 'error':
           throw new HttpError(502, `AgentCore run error: ${String(ev.message ?? 'unknown')}`);
+        case 'spend':
+          spendSoFar = spendOf(ev);
+          break;
         case 'result':
           result = ev as RunnerResult;
           break;
@@ -335,7 +363,10 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
     }
   } catch (e: unknown) {
     // After a cancel, a stream closed by the grace timer (or failing) just means no result came.
-    if (!signal?.aborted) throw e;
+    if (!signal?.aborted) {
+      if (!result) await recordSpendSoFar();
+      throw e;
+    }
   } finally {
     signal?.removeEventListener('abort', onCancel);
     clearTimeout(graceTimer);
@@ -347,10 +378,15 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
       await recordSpend(result).catch((err: unknown) => {
         console.warn(`[claude-agentcore] Could not record the spend of cancelled run ${run.runId}:`, err);
       });
+    } else {
+      await recordSpendSoFar();
     }
     throw new DOMException('Run cancelled', 'AbortError');
   }
-  if (!result) throw new HttpError(502, 'The AgentCore run ended without a result.');
+  if (!result) {
+    await recordSpendSoFar();
+    throw new HttpError(502, LOST_RUN_MESSAGE);
+  }
 
   // ── Stop reasons (FR-GUARD-10) ─────────────────────────────────────────────
   const r = result as RunnerResult;

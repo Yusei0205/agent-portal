@@ -27,6 +27,7 @@ import { validateFinalizeRequest, runFinalize } from '../shared/runner-finalize-
 import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace, flushWorkspace } from '../shared/runner-snapshot.js';
 import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
+import { startRunnerMemoryGuard, describeStop } from '../shared/runner-memory.js';
 
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
@@ -50,6 +51,16 @@ const terminal = createRunnerTerminal({
     return root;
   },
   save: snapshot => flushWorkspace(snapshot, kiroWorkspaceRoot() ?? usablePersistRoot(PERSIST_ROOT)),
+});
+
+/** Sends an event to the run in progress (a status line in its session); null between runs. */
+let runEmit: ((event: Record<string, unknown>) => void) | null = null;
+// A command that would use up the machine's memory is stopped instead of the run being lost (shared/runner-memory.ts).
+// kiro-cli holds the run, so it is never marked or stopped; the commands it starts are.
+startRunnerMemoryGuard({
+  protect: (p) => /(^|\/)kiro-cli[^/]*$/.test(p.exe),
+  onStop: (stop) => runEmit?.({ type: 'status', text: describeStop(stop) }),
+  log: (event) => process.stdout.write(JSON.stringify(event) + '\n'),
 });
 
 function setRunActive(active: boolean): void {
@@ -253,6 +264,7 @@ const server = http.createServer(async (req, res) => {
     activeRun = { runId: validation.payload.runId, stop };
     // The caller hung up before the run finished: stop the run rather than carry on unseen.
     res.on('close', () => { if (!res.writableFinished) stop.abort(); });
+    runEmit = emit;
     try {
       const { payload } = validation;
       if (payload.mode === 'kiro-run') {
@@ -280,6 +292,7 @@ const server = http.createServer(async (req, res) => {
       emit({ type: 'error', message: msg.slice(0, 500) });
       process.stderr.write(JSON.stringify({ event: 'invocation_error', error: msg.slice(0, 500) }) + '\n');
     } finally {
+      runEmit = null;
       activeRun = null;
       setRunActive(false);
       if (!res.writableEnded) res.end();

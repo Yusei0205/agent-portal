@@ -1410,6 +1410,16 @@
       ],
       "smokeIds": []
     },
+    "runner-memory": {
+      "description": "The runners' memory guard: commands marked kill-first, the biggest stopped when memory is nearly gone",
+      "sources": [
+        "server/agent/runner-memory.ts"
+      ],
+      "tests": [
+        "test/runner-memory.test.ts"
+      ],
+      "smokeIds": []
+    },
     "runner-snapshot": {
       "description": "Tests in runner-snapshot.test.ts",
       "sources": [

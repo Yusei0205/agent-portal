@@ -8,6 +8,9 @@
  *
  * Costs a few cents of Bedrock (Claude Haiku 4.5) per run.
  *
+ * One test fills the microVM's memory on purpose: the runner's memory guard must stop the command, and the run must
+ * still finish.
+ *
  * The last tests check several agents and several sessions: a run hands work to a project
  * agent inside its microVM, a run starts a child session that runs in a microVM of its own, and
  * the Agent pack's lead agent gets a task done through its specialists
@@ -144,6 +147,19 @@ describe('LIVE: Claude runs in AgentCore with the harness', { skip: ARN ? false 
     assert.ok(t.events.some((e) => e.type === 'tool-start'), 'the long command had started before the stop');
     const row = one<{ cost_usd: number; input_tokens: number }>('SELECT cost_usd, input_tokens FROM p6_runs WHERE id = ?', t.runId)!;
     assert.ok(row.cost_usd > 0 && row.input_tokens > 0, 'the spend up to the stop is recorded');
+  });
+
+  it('a command that uses up the machine\'s memory is stopped, and the run still finishes', async () => {
+    // Before the memory guard (server/agent/runner-memory.ts) this lost the run ("ended without a result"): the kernel
+    // stopped AgentCore's own service instead of the command. The command writes 256 MB every 150 ms until stopped.
+    const hog = `node -e "const a=[]; setInterval(()=>{a.push(Buffer.alloc(256*1024*1024,1))},150)"`;
+    const t = setup({ trusted: true, goal: `Use the Bash tool to run exactly this command once, in the foreground (a memory test; the machine stops it within a minute): ${hog}; echo "exit=$?" Then reply DONE.` });
+    const summary = await runClaudeViaAgentCore(t.ctx, ARN);
+    report('memory', t);
+    const outputs = t.events.filter((e) => e.type === 'tool-end').map((e) => String(e.payload.output));
+    assert.ok(outputs.some((o) => /Killed|exit=137/.test(o)), `the command was stopped: ${JSON.stringify(outputs).slice(0, 500)}`);
+    assert.ok(t.events.some((e) => e.type === 'status' && /out of memory/.test(String(e.payload.text))), 'the session says why');
+    assert.match(summary, /DONE/);
   });
 
   it('an answer for a different call is refused by the runner', async () => {
