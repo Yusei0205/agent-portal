@@ -29,6 +29,7 @@ import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.
 import { usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
 import { createRunnerTerminal } from '../shared/runner-terminal.js';
+import { startRunnerMemoryGuard, describeStop, memoryNotes } from '../shared/runner-memory.js';
 
 const PORT = Number(process.env.AGENT_RUNNER_PORT ?? 8080);
 const processStartMs = Date.now();
@@ -50,6 +51,16 @@ const terminal = createRunnerTerminal({
     return root;
   },
   save: snapshot => flushWorkspace(snapshot, usablePersistRoot(PERSIST_ROOT)),
+});
+
+/** Sends an event to the run in progress (a status line in its session); null between runs. */
+let runEmit: ((event: Record<string, unknown>) => void) | null = null;
+// A command that would use up the machine's memory is stopped instead of the run being lost (shared/runner-memory.ts).
+// Claude Code holds the run, so it is never marked or stopped; the commands it starts are.
+const memoryGuard = startRunnerMemoryGuard({
+  protect: (p) => p.exe.includes('claude-agent-sdk'),
+  onStop: (stop) => runEmit?.({ type: 'status', text: describeStop(stop) }),
+  log: (event) => process.stdout.write(JSON.stringify(event) + '\n'),
 });
 
 function setRunActive(active: boolean): void {
@@ -256,14 +267,16 @@ const server = http.createServer(async (req, res) => {
     activeRun = { runId: validation.payload.runId, stop };
     // The caller hung up before the run finished: stop the run rather than carry on unseen.
     res.on('close', () => { if (!res.writableFinished) stop.abort(); });
+    runEmit = emit;
     try {
-      await runInvocation(validation.payload, sessionId, emit, processStartMs, broker, stop.signal);
+      await runInvocation(validation.payload, sessionId, emit, processStartMs, broker, stop.signal, memoryGuard ? memoryNotes(memoryGuard) : undefined);
     } catch (e: unknown) {
       const msg = (e as Error)?.message ?? String(e);
       emit({ type: 'error', message: msg.slice(0, 500) });
       // Log error (no sensitive data, just the error message)
       process.stderr.write(JSON.stringify({ event: 'run_error', error: msg.slice(0, 500) }) + '\n');
     } finally {
+      runEmit = null;
       activeRun = null;
       setRunActive(false);
       if (!res.writableEnded) res.end();

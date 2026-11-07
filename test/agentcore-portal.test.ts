@@ -15,7 +15,7 @@ import { getDb, one } from '../server/db.ts';
 import { now, generateId } from '../server/util.ts';
 import { setConfig, type Config } from '../server/config.ts';
 import { _setAgentCoreInvokerOverride, runKiroViaAgentCore } from '../server/agent/kiro-agentcore.ts';
-import { runClaudeViaAgentCore, bedrockModelFor, RUNTIME_BEDROCK_MODELS, _setCancelGraceMs } from '../server/agent/claude-agentcore-bedrock.ts';
+import { runClaudeViaAgentCore, bedrockModelFor, RUNTIME_BEDROCK_MODELS, _setCancelGraceMs, LOST_RUN_MESSAGE } from '../server/agent/claude-agentcore-bedrock.ts';
 import { runClaudeViaAgentCore as runUserCredential, submitRepoChanges } from '../server/agent/claude-agentcore.ts';
 import { _setSessionPrDeps } from '../server/session-pr.ts';
 import { setPullRequestSettings } from '../server/project-settings-pr.ts';
@@ -256,6 +256,70 @@ describe('Claude on AgentCore — harness parity', () => {
     } finally {
       _setCancelGraceMs(null);
     }
+  });
+
+  /** A runner that reports its spend as it goes, then its stream ends with no final result (the machine stopped). */
+  function lostRunner(opts: { holdOpen?: boolean } = {}) {
+    const spend = (costUsd: number, inputTokens: number) => ({
+      type: 'spend', costUsd, model: 'global.anthropic.claude-sonnet-4-6',
+      metrics: { inputTokens, outputTokens: inputTokens / 10, cacheReadTokens: inputTokens * 5, cacheWriteTokens: 50 },
+    });
+    _setAgentCoreInvokerOverride(async function* (_arn, _sessionId, payload, signal) {
+      if (payload.mode === 'cancel') { yield { type: 'cancel-ack', runId: payload.runId } as never; return; }
+      yield { type: 'assistant-text', text: 'Type-checking the repository.' } as never;
+      yield spend(0.25, 1000) as never;
+      yield { type: 'tool-start', toolName: 'Bash', toolInput: '{"command":"npx tsc --noEmit"}' } as never;
+      yield spend(0.75, 3000) as never;
+      if (opts.holdOpen) {
+        await new Promise<void>((_resolve, reject) => {
+          if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        });
+      }
+    });
+  }
+
+  it('a run whose stream ends without a result fails with a plain message and keeps the spend so far', async () => {
+    const ids = makeRun('claude-code');
+    const { ctx, events } = makeCtx(ids, { engine: 'claude-code' });
+    lostRunner();
+    await assert.rejects(runClaudeViaAgentCore(ctx, ARN), (e: Error) => e.message === LOST_RUN_MESSAGE);
+    assert.match(LOST_RUN_MESSAGE, /follow-up/);
+    assert.ok(!events.some((e) => e.type === 'spend'), 'spend reports are not shown in the session');
+    const row = one<{ cost_usd: number; input_tokens: number; cache_read_tokens: number; model: string }>('SELECT cost_usd, input_tokens, cache_read_tokens, model FROM p6_runs WHERE id = ?', ids.runId)!;
+    assert.deepEqual([row.cost_usd, row.input_tokens, row.cache_read_tokens, row.model], [0.75, 3000, 15000, 'global.anthropic.claude-sonnet-4-6'], 'the latest spend report is on the run');
+    const spend = one<{ n: number; usd: number }>('SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM budget_usage WHERE workflow_id = ?', ids.workflowId)!;
+    assert.deepEqual([spend.n, spend.usd], [1, 0.75], 'and counts toward the budget once');
+  });
+
+  it('a cancelled run whose runner sends no final result keeps the spend so far', async () => {
+    _setCancelGraceMs(50);
+    try {
+      const ids = makeRun('claude-code');
+      const { ctx, ctrl } = makeCtx(ids, { engine: 'claude-code' });
+      lostRunner({ holdOpen: true });
+      const p = runClaudeViaAgentCore(ctx, ARN);
+      await new Promise((r) => setTimeout(r, 50));
+      ctrl.abort();
+      await assert.rejects(p, (e: Error) => e.name === 'AbortError');
+      const row = one<{ cost_usd: number }>('SELECT cost_usd FROM p6_runs WHERE id = ?', ids.runId)!;
+      assert.equal(row.cost_usd, 0.75);
+    } finally {
+      _setCancelGraceMs(null);
+    }
+  });
+
+  it('a run that finishes records its final result, not a spend report on top of it', async () => {
+    const ids = makeRun('claude-code');
+    const { ctx } = makeCtx(ids, { engine: 'claude-code' });
+    _setAgentCoreInvokerOverride(async function* (_arn, _sessionId, payload) {
+      yield { type: 'assistant-text', text: 'Done.' } as never;
+      yield { type: 'spend', costUsd: 0.01, model: 'm', metrics: { inputTokens: 100 } } as never;
+      yield { type: 'result', runId: payload.runId, stop_reason: 'end_turn', subtype: 'success', costUsd: 0.02, costEstimated: false, metrics: { inputTokens: 150, outputTokens: 20 } } as never;
+    });
+    await runClaudeViaAgentCore(ctx, ARN);
+    const spend = one<{ n: number; usd: number }>('SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM budget_usage WHERE workflow_id = ?', ids.workflowId)!;
+    assert.deepEqual([spend.n, spend.usd], [1, 0.02]);
   });
 
   it('maps model names to Bedrock IDs', () => {

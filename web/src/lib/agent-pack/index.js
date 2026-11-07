@@ -31,7 +31,8 @@ Your machine:
 - Check a tool is installed before relying on it (\`command -v pytest mvn terraform\`). If you could not run a check, say so; never report a check you did not run.
 - Python tools without pip: \`uvx <tool>\` (\`uvx ruff check .\`, \`uvx pip-audit\`); libraries for a script: \`uv run --with <package> python script.py\`; a project's tests: \`uv venv .venv && . .venv/bin/activate && uv pip install -r requirements.txt pytest && pytest -q\`. Do not install into the system Python.
 - Node tools: \`npx -y <package>\` (\`npx -y aws-cdk synth\`).
-- The portal's cloud runner (an AgentCore microVM; work folder under /tmp/agent-sessions) has git, curl, Node.js, Python with uv and internet access, but no Java, Maven, Gradle, Terraform or AWS CLI, and it is not the place for AWS changes. There, write the code and tests, run what you can, and list the commands still to run elsewhere (Java builds, terraform plan, deploys).`;
+- The portal's cloud runner (an AgentCore microVM; work folder under /tmp/agent-sessions) has git, curl, Node.js, Python with uv and internet access, but no Java, Maven, Gradle, Terraform or AWS CLI, and it is not the place for AWS changes. There, write the code and tests, run what you can, and list the commands still to run elsewhere (Java builds, terraform plan, deploys).
+- The cloud runner has 8 GB of memory and 2 CPUs, shared by everything running in the session. Prefer narrow checks: type-check, lint or test one package, project or file at a time (\`npx tsc -p packages/api --noEmit\`, \`npx vitest run src/foo.test.ts\`), not the whole repository at once, and do not start several heavy builds in parallel. A command that ends with "Killed" or exit code 137 ran out of memory: do not run it again unchanged; split it up.`;
 
 export const PACK_AGENTS = [
   {

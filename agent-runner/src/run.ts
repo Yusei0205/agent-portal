@@ -62,6 +62,7 @@ import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
 import { parseMcpServers } from '../shared/runner-mcp.js';
+import { claudeCodeMemoryHooks } from '../shared/runner-memory.js';
 import { reportRepoChanges } from './finalize.js';
 import { fileURLToPath } from 'node:url';
 import {
@@ -233,6 +234,7 @@ async function loadSdk(): Promise<SdkModule> {
  * @param processStartMs  Date.now() at process start (for cold-start metric).
  * @param broker    Open approval requests; the server settles them from "answer" invocations.
  * @param stop      Aborts when the caller cancels the run or disconnects.
+ * @param memoryNote What the memory guard stopped since the last tool call, as a note for the agent.
  */
 export async function runInvocation(
   payload: InvocationPayload,
@@ -241,6 +243,7 @@ export async function runInvocation(
   processStartMs: number,
   broker?: ApprovalBroker,
   stop?: AbortSignal,
+  memoryNote?: () => string | null,
 ): Promise<void> {
   const coldStartMs = Date.now() - processStartMs;
   const invokeStart = Date.now();
@@ -546,6 +549,9 @@ export async function runInvocation(
         ...(payload.agent ? { agent: payload.agent } : {}),
         // Browser tools, project integrations and (when the portal allows child sessions) delegate_session.
         ...(browser || integrations.length || mcpServers ? { mcpServers: { ...(browser ? { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser) } : {}), ...integrationServers, ...(mcpServers ?? {}) } } : {}),
+        // After a tool call during which the memory guard (or the kernel) stopped a command, tell the agent why it
+        // ended, so it uses less memory instead of running the same command again.
+        ...(memoryNote ? { hooks: claudeCodeMemoryHooks(memoryNote) } : {}),
       },
     }) as AsyncIterable<Record<string, unknown>>;
 
@@ -610,6 +616,13 @@ export async function runInvocation(
         // A subagent may use another model than the run's: price its replies at their own model.
         const replyModel = agent && typeof message.model === 'string' && message.model ? message.model : model;
         estimatedCostUsd += estimateCost(replyModel, usage);
+        // The spend so far, after every model reply: if the run is lost before its result, the portal still records it.
+        if (usage) {
+          emit({
+            type: 'spend', costUsd: estimatedCostUsd, model,
+            metrics: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheReadTokens: totalCacheReadTokens, cacheWriteTokens: totalCacheWriteTokens },
+          });
+        }
 
         // What the model read for this message is what fills its context window (200k tokens; an estimate for
         // models with a larger window).
