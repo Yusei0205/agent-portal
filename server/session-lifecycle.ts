@@ -449,6 +449,8 @@ export function registerSessionLifecycleRoutes(): void {
       const wid = String(wf.id);
 
       const agents: Array<{
+        id: string;
+        parentId?: string;
         name: string;
         status: string;
         startedAt: string | null;
@@ -466,6 +468,8 @@ export function registerSessionLifecycleRoutes(): void {
             ? child.updated_at
             : null;
         agents.push({
+          id: child.id,
+          parentId: wid,
           name: child.title || child.goal.slice(0, 60),
           status: child.status,
           startedAt: child.created_at,
@@ -483,7 +487,8 @@ export function registerSessionLifecycleRoutes(): void {
 
       const eventMap = new Map<string, (typeof agents)[number]>();
       // The repository returns newest first; replay oldest first so a finish follows its start.
-      const oldestFirst = [...agentEvents].sort((a, b) => Number(a.id) - Number(b.id));
+      // DynamoDB sequences restart for each run; timestamps order resumed turns.
+      const oldestFirst = [...agentEvents].sort((a, b) => a.created_at.localeCompare(b.created_at) || Number(a.id) - Number(b.id));
       for (const ev of oldestFirst) {
         let payload: Record<string, unknown> = {};
         try {
@@ -493,12 +498,16 @@ export function registerSessionLifecycleRoutes(): void {
         }
         const name = String(payload.name ?? payload.agentName ?? 'subagent');
         // Engines that report a task id (the AgentCore runner) get one row per subagent run.
-        const key = typeof payload.id === 'string' && payload.id ? `${ev.run_id ?? ''}:${payload.id}` : name;
+        const key = typeof payload.id === 'string' && payload.id
+          ? payload.engine === 'codex' ? payload.id : `${ev.run_id ?? ''}:${payload.id}` : name;
+        const identity = { id: key, ...(typeof payload.parentId === 'string' ? { parentId: payload.parentId } : {}) };
 
         if (ev.type === 'subagent-started') {
           eventMap.set(key, {
+            ...eventMap.get(key),
+            ...identity,
             name,
-            status: 'running',
+            status: payload.status === 'pending' ? 'pending' : 'running',
             startedAt: String(ev.created_at),
             finishedAt: null,
             source: 'event',
@@ -511,6 +520,7 @@ export function registerSessionLifecycleRoutes(): void {
             existing.finishedAt = String(ev.created_at);
           } else {
             eventMap.set(key, {
+              ...identity,
               name,
               status: 'done',
               startedAt: null,
@@ -521,12 +531,13 @@ export function registerSessionLifecycleRoutes(): void {
         } else if (ev.type === 'subagent-failed') {
           const existing = eventMap.get(key);
           if (existing) {
-            existing.status = 'failed';
+            existing.status = payload.status === 'stopped' ? 'stopped' : 'failed';
             existing.finishedAt = String(ev.created_at);
           } else {
             eventMap.set(key, {
+              ...identity,
               name,
-              status: 'failed',
+              status: payload.status === 'stopped' ? 'stopped' : 'failed',
               startedAt: null,
               finishedAt: String(ev.created_at),
               source: 'event',

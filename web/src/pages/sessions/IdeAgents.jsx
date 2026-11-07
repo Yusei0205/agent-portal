@@ -1,7 +1,9 @@
 /**
  * Agents activity panel — shows running and completed sub-agents and delegated child sessions.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AgentGraph } from './AgentGraph.jsx';
 import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
 import { href } from '../../lib/router.js';
@@ -31,6 +33,11 @@ export function IdeAgents({ workflowId, projectId }) {
   const [agents, setAgents] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    if (expanded) dialogRef.current?.showModal();
+  }, [expanded]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -48,7 +55,11 @@ export function IdeAgents({ workflowId, projectId }) {
     }
   }, [workflowId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const timer = setInterval(() => { if (!document.hidden) load(); }, 5000);
+    return () => clearInterval(timer);
+  }, [load]);
 
   // Live updates via project SSE — child-started/finished events
   useEffect(() => {
@@ -94,6 +105,12 @@ export function IdeAgents({ workflowId, projectId }) {
 
   return (
     <div style={{ flex: 1, overflow: 'auto' }}>
+      <div style={{ height: 280 }}><AgentGraph agents={agents} workflowId={workflowId} /></div>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setExpanded(true)}>Expand agent graph</button>
+      {expanded && createPortal(<dialog ref={dialogRef} aria-label="Agent collaboration" onCancel={() => setExpanded(false)} onClose={() => setExpanded(false)} style={{ width: 'min(1100px, 92vw)', maxWidth: '92vw', height: '80vh', background: 'var(--panel, #101820)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><strong>Agent collaboration</strong><button type="button" className="btn btn-sm" onClick={() => setExpanded(false)}>Close</button></div>
+        <div style={{ height: 'calc(100% - 40px)' }}><AgentGraph agents={agents} workflowId={workflowId} /></div>
+      </dialog>, document.body)}
       <div style={{ padding: '4px 8px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={{ flex: 1, fontSize: '0.75rem', color: 'var(--ink-3)' }}>
           {agents.length} agent{agents.length !== 1 ? 's' : ''}
@@ -103,7 +120,7 @@ export function IdeAgents({ workflowId, projectId }) {
         </button>
       </div>
       {agents.map((agent, i) => (
-        <div key={agent.sessionId ?? i} className="ide-agent-item">
+        <div key={agent.id ?? agent.sessionId ?? i} className="ide-agent-item">
           <div className="ide-agent-item-name">
             <span className={`dot ${statusDotClass(agent.status)}`} aria-label={agent.status} style={{ marginRight: 6 }} />
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

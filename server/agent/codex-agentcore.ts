@@ -14,7 +14,7 @@ import type { CodexTurnResult } from './codex-session.ts';
 import { getCodexConfigFiles } from '../user-config.ts';
 import { parseCodexPrRequest, type CodexPrRequest } from './codex-pr-tool.ts';
 
-const allowedEvents = new Set(['assistant-text', 'tool-start', 'tool-end', 'tool-blocked', 'status', 'context-usage']);
+const allowedEvents = new Set(['assistant-text', 'tool-start', 'tool-end', 'tool-blocked', 'status', 'context-usage', 'subagent-started', 'subagent-finished', 'subagent-failed']);
 const finiteTokenCount = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
 function usageFrom(raw: Record<string, any>): Omit<CodexTurnResult, 'text'> {
   return { threadId: typeof raw.threadId === 'string' ? raw.threadId : '', model: typeof raw.model === 'string' ? raw.model : '',
