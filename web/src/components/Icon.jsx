@@ -72,6 +72,12 @@ const PATHS = {
   menu:         'M4 6h16M4 12h16M4 18h16',
   logout:       'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
   file:         'M14 3H6v18h12V7l-4-4Zm0 0v4h4',
+  // Workflows: two steps joined by a path (a folder-like icon was too close to Workspaces)
+  workflow:     'M5 3h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM7 11v4a2 2 0 0 0 2 2h4M15 13h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Z',
+  // Session outputs: a tray with an arrow coming out of it (a plain page looked like the Session icon)
+  outputs:      'M12 15V4m0 0L8 8m4-4 4 4M4 15v3a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3',
+  // Session activity: a clock with a rewind arrow
+  history:      'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2',
   external:     'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
   eye:          'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
   copy:         'M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2M8 4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2M8 4h8',

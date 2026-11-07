@@ -1008,7 +1008,7 @@ export function IdeWorkspace({ id, project }) {
           />
           {/* Outputs panel — session artifacts */}
           <ActivityBtn
-            icon="file"
+            icon="outputs"
             label="Outputs"
             active={sidebarPanel === 'outputs'}
             badge={outputFiles.length}
