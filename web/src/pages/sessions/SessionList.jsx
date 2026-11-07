@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
+import { createFreshList, createSettledReload } from '../../lib/fresh-list.js';
 import { useBulkSelect } from '../../lib/useBulkSelect.js';
 import { formatRelative, formatDate } from '../../lib/util.js';
 import { navigate, href } from '../../lib/router.js';
@@ -228,13 +229,15 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
   const [deleting, setDeleting] = useState(false);
   const searchRef = useRef(null);
   const timerRef = useRef(null);
+  // Sessions created a moment ago may be missing from the server's list for a second or two: keep them on screen.
+  const freshRef = useRef(createFreshList());
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
 
   const load = useCallback(async () => {
     try {
       const data = await api.get(`/api/projects/${project.id}/workflows?limit=200`);
-      setWorkflows(data.workflows || []);
+      setWorkflows(freshRef.current.merge(data.workflows || []));
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -263,9 +266,20 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
     }
   }, [project.id]);
 
+  // A session we know exists (just created here, or announced by an event): show it now, without waiting for the list.
+  const showNow = useCallback(async (workflowId) => {
+    try {
+      const { workflow } = await api.get(`/api/projects/${project.id}/workflows/${workflowId}`);
+      if (!workflow) return;
+      freshRef.current.add(workflow);
+      setWorkflows((prev) => (prev && prev.some((w) => w.id === workflow.id) ? prev : [workflow, ...(prev || [])]));
+    } catch { /* the reload below finds it */ }
+  }, [project.id]);
+
   useEffect(() => {
     setLoading(true);
     setWorkflows(null);
+    freshRef.current = createFreshList();
     load();
     loadRepos();
     loadWorkspaces();
@@ -273,16 +287,19 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
 
   // Real-time updates via project SSE
   useEffect(() => {
+    // Read again a few times after a change: the first read can miss what was just written.
+    const settled = createSettledReload(load);
+    timerRef.current = settled;
     const unsubscribe = subscribeProject(project.id, (event) => {
+      if (event.type === 'workflow.created' && event.workflowId) showNow(event.workflowId);
+      if (event.type === 'workflow.deleted' && event.workflowId) freshRef.current.remove(event.workflowId);
       if (
         event.type === 'workflow.created' ||
         event.type === 'workflow.updated' ||
         event.type === 'workflow.deleted' ||
         event.type === 'run.updated'
       ) {
-        // Debounce rapid bursts
-        clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => load(), 400);
+        settled();
       }
       // Inline title update without full reload
       if (event.type === 'workflow.renamed' && event.workflowId) {
@@ -294,9 +311,9 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
     });
     return () => {
       unsubscribe();
-      clearTimeout(timerRef.current);
+      settled.cancel();
     };
-  }, [project.id, load]);
+  }, [project.id, load, showNow]);
 
   // Alt+N opens new session dialog; '/' focuses search
   useEffect(() => {
@@ -553,6 +570,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
           repos={repos}
           workspaces={workspaces}
           onClose={() => { setShowNewDialog(false); setDialogInitialTicket(null); }}
+          onCreated={showNow}
           initialTicket={dialogInitialTicket}
         />
       )}

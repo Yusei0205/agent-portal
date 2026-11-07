@@ -43,7 +43,7 @@ import type { RunContext, AgentRun } from './types.ts';
 import { snapshotAccess } from './runner-snapshot-access.ts';
 import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
 import type { RepoChange } from '../session-pr.ts';
-import { RUNTIME_BEDROCK_MODELS, runApiError, explainModelError } from './runtime-models.ts';
+import { RUNTIME_BEDROCK_MODELS, runApiError, explainModelError, modelRefusedForAccount } from './runtime-models.ts';
 
 /**
  * Bedrock IDs of the models the runtime's role may call (runtime-models.ts). They must match the role's list in
@@ -155,6 +155,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
   const budget = wf?.budget_usd != null ? Number(wf.budget_usd) : settings.agents.maxBudgetUsdPerRun;
   const minutes = wf?.run_timeout_minutes != null ? Number(wf.run_timeout_minutes) : settings.agents.runTimeoutMinutes;
   const model = bedrockModelFor(run.model) ?? bedrockModelFor(settings.defaultModel);
+
+  // The runtime's account refuses this model: say so now. (With the person's own AWS keys it is their account's call.)
+  if (Object.keys(bedrockEnv).length === 0 && await modelRefusedForAccount(model)) {
+    throw new HttpError(409, explainModelError('This model is not available for this account', model));
+  }
 
   // Each AgentCore run is a new engine session: give it the earlier turns as a recap.
   let prompt = run.goal;

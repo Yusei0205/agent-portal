@@ -167,6 +167,25 @@ describe('Claude on AgentCore — several agents and several sessions', () => {
     assert.equal('bedrockEnv' in rt2.calls.find((c) => c.mode === 'run')!, false, 'the runtime\'s own role is used');
   });
 
+  it('stops at once, with a plain message, when this AWS account may not call the model (no minutes of retries)', async () => {
+    const { _setAvailabilityCheck } = await import('../server/agent/runtime-models.ts');
+    _setAvailabilityCheck(async (id) => (id === 'anthropic.claude-sonnet-5-5' ? false : true));
+    try {
+      const s = await newSession();
+      const rt = fakeRuntime(async function* () { yield { type: 'assistant-text', text: 'ok' }; yield RESULT; });
+      const t = makeCtx(s);
+      t.ctx.run.model = 'global.anthropic.claude-sonnet-5-5';
+      await assert.rejects(() => runClaudeViaAgentCore(t.ctx, ARN), /Claude Sonnet 5\.5 is not available to this AWS account on Amazon Bedrock/);
+      assert.equal(rt.calls.length, 0, 'nothing was sent to the runtime');
+      // Another model, and the person's own AWS keys, are not stopped.
+      const ok = makeCtx(s); ok.ctx.run.model = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
+      await runClaudeViaAgentCore(ok.ctx, ARN);
+      const own = makeCtx(s); own.ctx.run.model = 'global.anthropic.claude-sonnet-5-5';
+      await runClaudeViaAgentCore(own.ctx, ARN, { AWS_ACCESS_KEY_ID: 'ASIAEXAMPLE1234567', AWS_SECRET_ACCESS_KEY: 'secretsecretsecretsecret' });
+      assert.equal(rt.calls.filter((c) => c.mode === 'run').length, 2);
+    } finally { _setAvailabilityCheck(null); }
+  });
+
   it('delegate_session starts a child session; the agent gets its ID; the child\'s result reaches the parent', async () => {
     const s = await newSession('Ship the release');
     let answer: Record<string, unknown> = {};

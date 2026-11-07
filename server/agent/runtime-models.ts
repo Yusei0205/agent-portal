@@ -109,6 +109,19 @@ export async function runtimeClaudeModels(check: AvailabilityCheck = availabilit
   return { models, hidden };
 }
 
+/**
+ * True when this account is known NOT to be allowed to call the model (a Bedrock ID or one of its inference profiles).
+ * Checked before a run starts: Claude Code retries a refused call for minutes before giving up, and the person would
+ * wait all that time for an error that was known in a second. A model that could not be checked, or is not on the
+ * runtime's list, is not refused here.
+ */
+export async function modelRefusedForAccount(model: string | undefined, check: AvailabilityCheck = availabilityCheck): Promise<boolean> {
+  if (!model) return false;
+  const bare = model.replace(/^(?:global|us|eu|apac|jp|au)\./, '');
+  if (!Object.values(RUNTIME_BEDROCK_MODELS).includes(bare)) return false;
+  return (await check(bare).catch((): Availability => null)) === false;
+}
+
 // ── A refused model call ──────────────────────────────────────────────────────
 
 /** Claude Code's text for a turn that ended on an API error: "API Error: 403 …". */
