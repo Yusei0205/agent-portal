@@ -97,7 +97,8 @@
         "test/delegate-token.test.ts",
         "test/delegation.test.ts",
         "test/delegation-repo.test.ts",
-        "test/delegation-session-repo.test.ts"
+        "test/delegation-session-repo.test.ts",
+        "test/agentcore-multi-agent.test.ts"
       ],
       "smokeIds": ["delegation"]
     },
@@ -570,6 +571,7 @@
         "server/agent/kiro-agentcore.ts",
         "server/agent/agentcore-bridge.ts",
         "server/agent/claude-agentcore.ts",
+        "server/agent/agent-defs.ts",
         "server/repositories/agentcore-login.ts",
         "server/repositories/agentcore-login-sqlite.ts",
         "server/repositories/agentcore-login-dynamodb.ts"
@@ -582,7 +584,9 @@
         "test/kiro-win-env.test.ts",
         "test/kiro-agentcore.test.ts",
         "test/agentcore-portal.test.ts",
-        "test/agentcore-login-repo.test.ts"
+        "test/agentcore-login-repo.test.ts",
+        "test/agent-defs.test.ts",
+        "test/agentcore-multi-agent.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
@@ -924,7 +928,8 @@
       ],
       "tests": [
         "test/agent-runner-validation.test.ts",
-        "test/agentcore-harness.test.ts"
+        "test/agentcore-harness.test.ts",
+        "test/pricing.test.ts"
       ],
       "smokeIds": [],
       "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."

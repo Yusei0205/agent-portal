@@ -493,9 +493,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     }
     notifyDashboard(agentRun.projectId);
 
-    // Deliver child-result to parent if this is a child session (F7)
+    // Deliver child-result to parent if this is a child session (F7): the agent's answer goes back.
     if (workflow.parent_id) {
-      await deliverChildResult(workflowId);
+      await deliverChildResult(workflowId, result);
     }
 
     if (agentRun.projectId) {
@@ -564,9 +564,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       fireHook(workflowId, runId, 'cancelled');
     } else {
       fireHook(workflowId, runId, 'failed');
-      // Deliver child-result to parent even on failure (F7)
+      // Deliver child-result to parent even on failure (F7), with why the run failed
       if (workflow.parent_id) {
-        await deliverChildResult(workflowId);
+        await deliverChildResult(workflowId, msg);
       }
     }
 

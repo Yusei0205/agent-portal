@@ -4,6 +4,7 @@
  * Covers:
  *   ✓ Person delegates → child created with own work dir, parent link, inherits engine/credential
  *   ✓ Two children run in parallel; both child-result events reach parent; next run prompt includes them
+ *   ✓ The child's result (its answer, or why it failed) is in the child-result event, cut at a limit
  *   ✓ Per-parent cap → 429
  *   ✓ Per-user cap → 429
  *   ✓ Nested off → child cannot delegate
@@ -24,6 +25,8 @@ import {
   checkDelegationLimits,
   deliverChildResult,
   stopAndDeleteChildren,
+  childResultText,
+  MAX_CHILD_RESULT_CHARS,
 } from '../server/delegation.ts';
 import { run as dbRun, one, all, insert } from '../server/db.ts';
 import type { Row } from '../server/db.ts';
@@ -590,8 +593,8 @@ describe('Child-result events reach parent', () => {
 
   after(async () => cleanup());
 
-  it('deliverChildResult inserts child-result event into parent', async () => {
-    await deliverChildResult(childId1);
+  it('deliverChildResult inserts child-result event into parent, with the child\'s result', async () => {
+    await deliverChildResult(childId1, '  Child A wrote the schema: 3 tables.\n');
 
     const events = all<Row>(
       "SELECT * FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'child-result'",
@@ -602,6 +605,18 @@ describe('Child-result events reach parent', () => {
     const data = JSON.parse(String(evt.data));
     assert.equal(data.childId, childId1);
     assert.equal(data.status, 'done');
+    assert.equal(data.summary, 'Child A wrote the schema: 3 tables.', 'the child\'s result goes back');
+    assert.equal(String(evt.body), 'Child session "Child A" finished with status: done.\nChild A wrote the schema: 3 tables.',
+      'the parent reads it in its next input');
+  });
+
+  it('a long child result is cut at the limit and says so', () => {
+    assert.equal(childResultText(null), '');
+    assert.equal(childResultText('x'.repeat(MAX_CHILD_RESULT_CHARS)), 'x'.repeat(MAX_CHILD_RESULT_CHARS));
+    const cut = childResultText('y'.repeat(MAX_CHILD_RESULT_CHARS + 500));
+    assert.ok(cut.startsWith('y'.repeat(MAX_CHILD_RESULT_CHARS) + '\n['), 'kept up to the limit');
+    assert.match(cut, /cut here\. The child session has all of it/);
+    assert.ok(cut.length < MAX_CHILD_RESULT_CHARS + 100);
   });
 
   it('deliverChildResult for second child adds another child-result event', async () => {
