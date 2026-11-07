@@ -94,7 +94,8 @@ export const HELP_TOPICS = [
         steps: true,
         items: [
           'Sign in with the email and password your admin gave you, or follow your invite link.',
-          'Open **Agent setup › Sign-ins** and add a Claude Code or Kiro sign-in, unless your admin has set up a portal AI provider for everyone.',
+          'The **Get started** card on the Projects page shows which of these steps are done and what comes next.',
+          'Open **Agent setup › Sign-ins** and add a Claude Code or Kiro sign-in (on the cloud portal Claude Code can also run on **Amazon Bedrock (this AWS account)**, which needs no key), unless your admin has set up a portal AI provider for everyone.',
           'Pick or create a project with the project picker at the top of the rail.',
           'Add a repository under **Workspaces › Repositories** (the Git host must be connected under **Connections › Git connections**).',
           'Go to **Sessions**, press **Alt+N** and describe your goal. The agent starts working and you can follow it live.',

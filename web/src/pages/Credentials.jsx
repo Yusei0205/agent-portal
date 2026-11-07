@@ -147,13 +147,13 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const [deviceCredId, setDeviceCredId] = useState(null);
 
   const KIRO_MODES = [
-    { id: 'api_key',          label: 'API key',              desc: 'Your Kiro API key from kiro.dev' },
-    { id: 'identity_center',  label: 'IAM Identity Center',  desc: 'Sign in with your AWS SSO portal' },
+    { id: 'api_key',          label: 'API key',              desc: 'You have a Kiro API key (from kiro.dev)' },
+    { id: 'identity_center',  label: 'Company sign-in (AWS SSO)', desc: 'Your company gives you Kiro through AWS. You approve a code in your browser.' },
   ];
   const CLAUDE_MODES = [
-    { id: 'api_key',           label: 'API key',              desc: 'Your Anthropic API key' },
-    { id: 'subscription_token', label: 'Subscription token',  desc: 'From `claude setup-token`' },
-    { id: 'bedrock_role',      label: 'Amazon Bedrock (role)', desc: 'Assumes an IAM role — no secret stored' },
+    { id: 'api_key',           label: 'Anthropic API key',    desc: 'You have a key from console.anthropic.com. Usage is billed to it.' },
+    { id: 'subscription_token', label: 'Claude plan (Pro / Max)', desc: 'Run `claude setup-token` on your computer and paste the token.' },
+    { id: 'bedrock_role',      label: 'Amazon Bedrock (IAM role)', desc: 'Your company runs Claude on AWS Bedrock and gave you a role ARN. No secret is stored.' },
   ];
   const modes = engine === 'kiro' ? KIRO_MODES : CLAUDE_MODES;
 

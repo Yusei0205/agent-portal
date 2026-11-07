@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { SetupChecklist } from '../components/SetupChecklist.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -202,6 +203,10 @@ export function Projects({ user, onProjectsChange }) {
         <p className="greeting-title">{greeting(user?.name || user?.email)}</p>
         <p className="greeting-subtitle">Here's what's happening across your projects.</p>
       </div>
+
+      {!loading && !error && projects && (
+        <SetupChecklist project={projects[0] || null} onNewProject={() => setShowModal(true)} />
+      )}
 
       {/* ── KPI row ─────────────────────────────────────── */}
       {hasList && (

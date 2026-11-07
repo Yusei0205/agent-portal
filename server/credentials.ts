@@ -616,6 +616,16 @@ function validateMode(engine: Engine, mode: string): CredentialMode {
  * Secrets NEVER enter logs, events or transcripts — they live only in the
  * returned object which is merged into the child process's env.
  */
+/**
+ * "Amazon Bedrock (this AWS account)": a sign-in choice that is not a stored credential. On the cloud portal the Claude
+ * Code engine runs on the AgentCore runtime, and this choice makes a session use Bedrock with the runtime's role
+ * even when the person has an Anthropic key or the admin set an Anthropic portal provider.
+ */
+export const BEDROCK_RUNTIME_SIGN_IN = 'bedrock';
+export const bedrockRuntimeAvailable = (): boolean => Boolean(process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN);
+export const isBedrockRuntimeChoice = (engine: string, credentialId: string | null | undefined): boolean =>
+  engine === 'claude-code' && credentialId === BEDROCK_RUNTIME_SIGN_IN && bedrockRuntimeAvailable();
+
 export async function resolveCredentialEnv(
   engine: 'kiro' | 'claude-code',
   credentialOwnerId: string | null,
@@ -623,6 +633,8 @@ export async function resolveCredentialEnv(
   _db?: unknown,
 ): Promise<Record<string, string>> {
   let cred: CredentialRecord | null | undefined;
+
+  if (isBedrockRuntimeChoice(engine, credentialId)) return { CLAUDE_CODE_USE_BEDROCK: '1' };
 
   if (credentialId && credentialOwnerId) {
     cred = await getCredentialsRepository().getByIdAndUser(credentialId, credentialOwnerId);
@@ -1504,6 +1516,14 @@ export function registerCredentialRoutes(): void {
         })),
       };
     }));
+
+    // Cloud portal: Claude Code can always run on Bedrock with this AWS account's runtime role.
+    const claude = summary.find((e) => e.engine === 'claude-code');
+    if (claude && bedrockRuntimeAvailable()) {
+      claude.credentials.push({
+        id: BEDROCK_RUNTIME_SIGN_IN, name: 'Amazon Bedrock (this AWS account)', mode: 'bedrock_runtime', last4: '', isDefault: false, virtual: true,
+      } as (typeof claude.credentials)[number]);
+    }
 
     const codexConfigured = await hasCodexLogin(req.user!.id);
     sendJson(res, 200, { summary: [...summary, { engine: 'codex', configured: codexConfigured, credentials: [] }] });

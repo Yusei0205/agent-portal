@@ -217,10 +217,18 @@ export function ModelPicker({ engine, credentialId, value, onChange }) {
 
 // ── Credential picker ──────────────────────────────────────────────────────────
 
+/** The sign-in a session starts with: the person's default, else their first own sign-in, else none (portal provider). */
+export function defaultCredential(creds) {
+  return (creds || []).find((c) => c.isDefault) || (creds || []).find((c) => !c.virtual) || null;
+}
+
 export function CredentialPicker({ engine, credentials, value, onChange }) {
-  // Only show when there's more than one credential for the engine
+  // Shown when there is a choice: more than one sign-in, or the cloud portal's own Bedrock choice.
   const filtered = (credentials || []).filter((c) => c.engine === engine);
-  if (filtered.length <= 1) return null;
+  const hasBedrockChoice = filtered.some((c) => c.virtual);
+  if (filtered.length <= 1 && !hasBedrockChoice) return null;
+  // Without a sign-in of their own the portal's AI provider is the other choice, so name it.
+  const options = filtered.some((c) => !c.virtual) ? filtered : [{ id: '', name: 'Portal AI provider (set by your admin)' }, ...filtered];
 
   return (
     <div className="field">
@@ -230,8 +238,8 @@ export function CredentialPicker({ engine, credentials, value, onChange }) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        {filtered.map((c) => (
-          <option key={c.id} value={c.id}>
+        {options.map((c) => (
+          <option key={c.id || 'portal'} value={c.id}>
             {c.name}
             {c.isDefault ? ' (default)' : ''}
           </option>
@@ -309,11 +317,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
       setPortalMode(s.provider?.mode || 'demo');
 
       // Auto-select first credential for the current engine
-      const claudeCreds = map['claude-code'] || [];
-      if (claudeCreds.length > 0) {
-        const def = claudeCreds.find((c) => c.isDefault) || claudeCreds[0];
-        if (engine === 'claude-code') setCredentialId(def.id);
-      }
+      const def = defaultCredential(map['claude-code']);
+      if (def && engine === 'claude-code') setCredentialId(def.id);
       setInitLoaded(true);
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -325,8 +330,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   useEffect(() => {
     if (!credSummary) return;
     const creds = credSummary[engine] || [];
-    const def = creds.find((c) => c.isDefault) || creds[0];
-    setCredentialId(def?.id || '');
+    setCredentialId(defaultCredential(creds)?.id || '');
   }, [engine, credSummary]);
 
   // Focus goal on open
@@ -551,8 +555,9 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                           onClick={() => onClose()}
                           style={{ color: 'var(--accent)' }}
                         >
-                          Set up a credential
+                          Add your sign-in
                         </a>
+                        {' '}or ask an admin to set the portal AI provider
                       </span>
                     )}
                   </label>

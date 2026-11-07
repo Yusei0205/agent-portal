@@ -29,7 +29,7 @@ import { openUserCodex, codexUsesCloud } from './codex-auth.ts';
 import { getSettings, listModelsForProvider, setBedrockListingMock } from './settings.ts';
 import type { BedrockListingMock } from './settings.ts';
 import { getSetting } from './settings.ts';
-import { IDC_TOKEN_KEY, IDC_REGION_KEY, IDC_EXPIRY_KEY, IDC_START_URL_KEY, IDC_REFRESH_TOKEN_KEY, IDC_CLIENT_ID_KEY, IDC_CLIENT_SECRET_KEY, IDC_CLIENT_SECRET_EXPIRES_AT_KEY, IDC_PROFILE_ARN_KEY, IDC_PROFILE_NAME_KEY, refreshIdcCredentialToken, autoRefreshIdcIfNeeded, ensureKiroProfileFetched } from './credentials.ts';
+import { IDC_TOKEN_KEY, IDC_REGION_KEY, IDC_EXPIRY_KEY, IDC_START_URL_KEY, IDC_REFRESH_TOKEN_KEY, IDC_CLIENT_ID_KEY, IDC_CLIENT_SECRET_KEY, IDC_CLIENT_SECRET_EXPIRES_AT_KEY, IDC_PROFILE_ARN_KEY, IDC_PROFILE_NAME_KEY, refreshIdcCredentialToken, autoRefreshIdcIfNeeded, ensureKiroProfileFetched, isBedrockRuntimeChoice } from './credentials.ts';
 import { materialiseKiroAuthDb, cleanupKiroAuthDb, KIRO_TEST_DB_ENV, readKiroAuthDbToken } from './kiro-idc.ts';
 import { spawnKiroListModels, parseKiroModelsStdout } from './kiro-list-models.ts';
 import { listKiroModelsViaAgentCore } from './agent/kiro-agentcore.ts';
@@ -420,7 +420,10 @@ export async function getEngineModels(
   let cred: CredentialRow | null = null;
   let runsAs: EngineModelsResponse['runsAs'];
 
-  if (requestedCredentialId) {
+  const bedrockChoice = isBedrockRuntimeChoice(engine, requestedCredentialId);
+  if (bedrockChoice) {
+    runsAs = { kind: 'portal', label: 'Amazon Bedrock (this AWS account)' };
+  } else if (requestedCredentialId) {
     const found = await getCredentialsRepository().getByIdAndUser(requestedCredentialId, userId);
     if (!found || found.engine !== engine) {
       return {
@@ -446,7 +449,7 @@ export async function getEngineModels(
     }
   }
 
-  const cacheId = cred ? String(cred.id) : 'portal';
+  const cacheId = bedrockChoice ? 'bedrock-runtime' : cred ? String(cred.id) : 'portal';
   if (!refresh) {
     const cached = fromCache(engine, cacheId);
     if (cached) return cached;
@@ -610,7 +613,7 @@ export async function getEngineModels(
 
   // ── 3. Claude Code engine ────────────────────────────────────────────────
   if (engine === 'claude-code') {
-    if (cred) {
+    if (cred && !bedrockChoice) {
       const mode = String(cred.mode);
 
       if (mode === 'subscription_token') {
@@ -647,7 +650,7 @@ export async function getEngineModels(
     // Cloud portal: without a sign-in of their own (and no portal Anthropic key), Claude sessions run on the
     // AgentCore runtime with Bedrock (claude-code.ts), whatever the portal provider is set to. Offer the runtime's
     // models that this AWS account may use; Bedrock lists newer models before an account may call them.
-    if (process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN && mode !== 'anthropic') {
+    if (process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN && (bedrockChoice || mode !== 'anthropic')) {
       const { runtimeClaudeModels } = await import('./agent/runtime-models.ts');
       const { models } = await runtimeClaudeModels();
       return toCache(engine, cacheId, {
