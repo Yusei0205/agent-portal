@@ -52,6 +52,7 @@ export const HELP_TOPICS = [
       { heading: 'Trigger a run', steps: true, items: [
         'Open the workflow and its **Runs** tab.',
         'Write the **run request** and press **Run published workflow**. For **Development** and **Testing**, write the Jira ticket key (for example `ABC-123`) or paste its link. For **SDLC**, describe what to build.',
+        'Optional: open **Run options** to change things for this run only: the **agent** and **model** used by every agent step (otherwise each step uses its own), whether tool calls **ask first** or you **trust all tools** (no approval prompts; the agent then acts as you), and which **integrations** (MCP tools such as Jira) the agent gets. Leave them alone to follow the workflow.',
         'The run starts straight away and **continues when you close the page**. The button is off until the workflow is published and saved (a run always uses the published version), and on a deployment without durable execution you will see a notice saying so.',
         'From a script or another tool you can start a run too: `POST /api/projects/<project id>/automations/<workflow id>/runs` with `{"input": "ABC-123", "requestId": "<a new uuid>"}` and an API token that has write access (**API access**). Sending the same `requestId` again returns that run instead of starting a second one.',
         'Workflows are started by hand or by that call. They have no schedule, webhook or Jira-event trigger of their own; for those, use **Loop specs** (see Delegated sessions and loop specs).',

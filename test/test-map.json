@@ -18,7 +18,8 @@
         "test/web-automations.test.ts",
         "test/automation-bridge.test.ts",
         "test/automation-templates.test.ts",
-        "test/automation-list.test.ts"
+        "test/automation-list.test.ts",
+        "test/automation-run-options.test.ts"
       ],
       "smokeIds": []
     },

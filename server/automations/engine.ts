@@ -10,6 +10,7 @@ import { cancelRun } from '../workflows/controls.ts';
 import { newLoopState, readCheckResult } from '../workflows/loop.ts';
 import { formatCheckResult } from '../agent/runner-checks.ts';
 import { checkKey, issueDetail, mustMapping, fetchTicketAttachment } from '../jira.ts';
+import { encodeSessionIntegrations } from '../agent/runner-integrations.ts';
 import { saveBufferAttachments, type ChatAttachment } from '../session-attachments.ts';
 import { ticketMarkdown } from '../jira-text.ts';
 import type { AutomationGraph, AutomationNode } from './schema.ts';
@@ -23,12 +24,24 @@ export interface Attempt {
   nodeId: string; label: string; visit: number; status: 'running' | 'passed' | 'failed' | 'waiting' | 'approved';
   startedAt: string; finishedAt?: string; runId?: string; output?: string; approvedBy?: string;
 }
+/** What the person chose when starting a run. They apply to every agent step; empty/false/null = what the workflow says. */
+export interface RunOptions {
+  /** A Kiro/Claude agent used for every agent step instead of each step's own. */
+  agent: string;
+  /** A model used for every agent step instead of each step's own. */
+  model: string;
+  /** true = no approval prompts for tool calls ("trust all tools"). */
+  trustTools: boolean;
+  /** The MCP integrations the run gets: null = whatever the project has enabled, a list = only those. */
+  integrationIds: string[] | null;
+}
 export interface AutomationRun extends AutomationRecord {
   id: string; definition_id: string; version: number; project_id: string; created_by: string;
   status: 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'; input: string;
   cursor: string; session_id: string; attempts: Attempt[]; visits: Record<string, number>;
   lastPassed: boolean; started_at: string; updated_at: string; error: string | null;
   leaseUntil: number; cancelRequested: boolean;
+  options?: RunOptions;
 }
 export const definitionKey = (id: string): string => `DEF#${id}`;
 export const versionKey = (id: string, version: number): string => `VERSION#${id}#${String(version).padStart(8, '0')}`;
@@ -174,11 +187,13 @@ async function dispatchAgent(state: AutomationRun, graph: AutomationGraph, node:
     const credential = await getCredentialsRepository().getDefaultByUserAndEngine(state.created_by, graph.engine);
     await sessions.createWorkflow({
       id: state.session_id, project_id: state.project_id, title: 'Workflow run', goal: '', engine: graph.engine,
-      status: 'pending', trust_tools: 0, lead_agent: null, workspace_id: null,
+      status: 'pending', trust_tools: state.options?.trustTools ? 1 : 0, lead_agent: null, workspace_id: null,
       output_files_enabled: 1, repo_ids: JSON.stringify(graph.repoIds), iteration_count: 0,
       max_iterations: graph.maxSteps, credential_id: credential?.id ?? null, model: '',
       created_by: state.created_by, created_at: timestamp, updated_at: timestamp, kind: 'automation',
     });
+    // The integrations (MCP tools) the person chose for this run; without a choice the session gets the project's enabled ones.
+    if (state.options?.integrationIds) await sessions.updateWorkflow(state.session_id, { integrations: encodeSessionIntegrations(state.options.integrationIds) });
   }
   const priorFailure = state.attempts.findLast((a) => a.status === 'failed');
   const failureContext = priorFailure && !state.lastPassed ? `\n\nPrevious task failed (${priorFailure.label}):\n${priorFailure.output ?? 'See the previous turn.'}` : '';
@@ -186,7 +201,7 @@ async function dispatchAgent(state: AutomationRun, graph: AutomationGraph, node:
   const goal = (renderInstructions(node.prompt, state.input, state.attempts, ticket?.text) + failureContext).slice(0, 8000);
   await sessions.appendWorkflowEvent({ workflow_id: state.session_id, kind: 'human', body: `${node.label}\n\n${goal}`, data: JSON.stringify({ automationRunId: state.id, nodeId: node.id, ...(ticket?.attachments.length ? { attachments: ticket.attachments } : {}) }), created_at: timestamp });
   await sessions.updateWorkflow(state.session_id, {
-    goal, title: `Workflow: ${node.label}`, lead_agent: node.agent || null, model: node.model,
+    goal, title: `Workflow: ${node.label}`, lead_agent: state.options?.agent || node.agent || null, model: state.options?.model || node.model,
     run_timeout_minutes: 12, last_turn_at: timestamp, stop_reason: '', updated_at: timestamp,
     budget_usd: graph.budgetUsd === null ? null : Math.max(0.001, graph.budgetUsd - (await sessions.getRunTotals(state.session_id)).total_cost),
     loop_state: node.checks.length ? newLoopState({}, { checks: node.checks, progressFile: false }) : '',
