@@ -22,7 +22,7 @@ import assert from 'node:assert/strict';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { createTestDb } from './fixtures.ts';
 import { getDb, one, all } from '../server/db.ts';
-import { encrypt } from '../server/secrets.ts';
+import { encrypt, decrypt } from '../server/secrets.ts';
 import { setConfig } from '../server/config.ts';
 import { setOIDCClientFactory, resolveCredentialEnv, setOIDCCallTimeoutMs } from '../server/credentials.ts';
 import type { OIDCClientLike } from '../server/credentials.ts';
@@ -31,6 +31,7 @@ import { now } from '../server/util.ts';
 import { randomBytes } from 'node:crypto';
 import type { Config } from '../server/config.ts';
 import { DatabaseSync } from 'node:sqlite';
+import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts';
 import { materialiseKiroAuthDb, cleanupKiroAuthDb, KIRO_IDC_SCOPES } from '../server/kiro-idc.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -2405,5 +2406,67 @@ describe('Credentials — /refresh production SDK error classification', () => {
     const body = r.body as { needsSignIn: boolean; error: string };
     assert.equal(body.needsSignIn, true, 'needsSignIn must be true for auth rejection');
     assert.ok(typeof body.error === 'string' && body.error.length > 0, 'error message must be present');
+  });
+});
+
+
+describe('Cloud Kiro sign-in uses bounded direct OIDC', () => {
+  let baseUrl: string; let cookie: string; let hanging: 'register' | 'authorize' | null = null;
+  let runtimeCalls = 0; let code = 0;
+  const previousArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+  before(async () => {
+    ({ baseUrl } = await setupServer()); cookie = await loginAdmin(baseUrl);
+    process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/kiro-test';
+    _setAgentCoreInvokerOverride(async function* () { runtimeCalls++; throw new Error('Sign-in must not wait for a runner'); });
+    setOIDCClientFactory(() => ({
+      registerClient: async () => hanging === 'register' ? new Promise(() => {}) : { clientId: 'direct-client', clientSecret: 'direct-secret', clientSecretExpiresAt: Math.floor(Date.now() / 1000) + 86400 },
+      startDeviceAuthorization: async () => hanging === 'authorize' ? new Promise(() => {}) : { deviceCode: 'direct-device-' + (++code), userCode: 'TEST-1234', verificationUri: 'https://device.sso.us-east-1.amazonaws.com', expiresIn: 600, interval: 5 },
+      createToken: async () => { throw new Error('AuthorizationPendingException'); },
+    }));
+  });
+  beforeEach(() => { hanging = null; setOIDCCallTimeoutMs(null); });
+  after(async () => {
+    if (previousArn === undefined) delete process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN; else process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = previousArn;
+    _setAgentCoreInvokerOverride(null); setOIDCClientFactory(null); setOIDCCallTimeoutMs(null); await cleanup();
+  });
+  const create = () => fetchJson(baseUrl, '/api/credentials', { cookie, body: { engine: 'kiro', mode: 'identity_center', isDefault: true, config: { startUrl: 'https://d-test.awsapps.com/start', region: 'us-east-1' } } });
+  it('returns a browser code without invoking a configured AgentCore runner and encrypts the pending secret', async () => {
+    const response = await create(); assert.equal(response.status, 201);
+    const body = response.body as any; assert.equal(body.deviceChallenge.userCode, 'TEST-1234'); assert.equal(runtimeCalls, 0);
+    assert.ok(!JSON.stringify(body).includes('direct-secret'));
+    assert.ok(!body.credential.config.pendingClientSecretEnc, 'pending secret ciphertext is not browser configuration');
+    const row = getDb().prepare('SELECT extra_config FROM engine_credentials WHERE id = ?').get(body.credential.id) as any;
+    const extra = JSON.parse(row.extra_config);
+    assert.ok(!extra.pendingClientSecret); assert.equal(decrypt(extra.pendingClientSecretEnc, (await import('../server/config.ts')).config.secretKey), 'direct-secret');
+    const poll = await fetchJson(baseUrl, '/api/credentials/' + body.credential.id + '/device-poll', { cookie, body: {} });
+    assert.equal(poll.status, 200); assert.equal((poll.body as any).status, 'pending');
+  });
+  it('reauthenticates through OIDC and preserves the working credential while waiting', async () => {
+    const created = await create(); const id = (created.body as any).credential.id;
+    const { getCredentialsRepository } = await import('../server/repositories/credentials.ts');
+    const repo = getCredentialsRepository(); const row = (await repo.getById(id))!;
+    const extra = { ...JSON.parse(row.extra_config), selectedProfileArn: 'profile-keep', selectedProfileName: 'Keep selection', tokenExpiry: new Date(Date.now()+3600000).toISOString() };
+    const token = encrypt('working-token', (await import('../server/config.ts')).config.secretKey);
+    await repo.updateToken(id, token, JSON.stringify(extra), 'oken', now());
+    const response = await fetchJson(baseUrl, '/api/credentials/' + id + '/reauth', { cookie, body: {} });
+    assert.equal(response.status, 200); assert.equal(runtimeCalls, 0);
+    const current = (await repo.getById(id))!;
+    assert.equal(current.secret_enc, token); assert.equal(JSON.parse(current.extra_config).selectedProfileArn, 'profile-keep');
+    assert.ok(JSON.parse(current.extra_config).pendingClientSecretEnc);
+  });
+  it('bounds a stalled reauthentication without replacing the saved credential', async () => {
+    const created = await create(); const id = (created.body as any).credential.id;
+    const { getCredentialsRepository } = await import('../server/repositories/credentials.ts');
+    const repo = getCredentialsRepository(); const before = (await repo.getById(id))!;
+    hanging = 'authorize'; setOIDCCallTimeoutMs(25);
+    const response = await fetchJson(baseUrl, '/api/credentials/' + id + '/reauth', { cookie, body: {} });
+    assert.equal(response.status, 504); assert.equal((await repo.getById(id))!.extra_config, before.extra_config);
+  });
+  for (const step of ['register', 'authorize'] as const) it('returns a retryable timeout for stalled ' + step + ' without replacing the default', async () => {
+    const good = await create(); const goodId = (good.body as any).credential.id;
+    hanging = step; setOIDCCallTimeoutMs(25); const started = Date.now();
+    const response = await create(); assert.equal(response.status, 504); assert.ok(Date.now() - started < 2000);
+    const { getCredentialsRepository } = await import('../server/repositories/credentials.ts');
+    assert.equal((await getCredentialsRepository().getDefaultByUserAndEngine((await getCredentialsRepository().getById(goodId))!.user_id, 'kiro'))!.id, goodId);
   });
 });
