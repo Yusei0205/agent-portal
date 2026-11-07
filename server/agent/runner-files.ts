@@ -23,9 +23,9 @@ export const RUNNER_FILE_EXTS = new Set([
 export const RUNNER_DECK_SPEC = 'deck.json';
 const allowedRunnerName = (name: string): boolean => RUNNER_FILE_EXTS.has(path.extname(name).toLowerCase()) || name === RUNNER_DECK_SPEC;
 
-/** Folders that hold tool state, clones or dependencies, not the agent's deliverables. */
+/** Folders that hold tool state, clones, dependencies or the agents' shared notes, not the agent's deliverables. */
 export const RUNNER_EXCLUDED_DIRS = new Set([
-  'repos', 'home', '.browser', '.claude', '.kiro', '.git', 'node_modules', '.local', '.cache', '.npm',
+  'repos', 'home', '.browser', '.claude', '.kiro', '.git', 'node_modules', '.local', '.cache', '.npm', '.agent-notes',
 ]);
 
 export const RUNNER_FILE_LIMITS = {
