@@ -403,3 +403,34 @@ Ran a diagram, a document and a deck through the live portal. Findings and fixes
 ## Clone progress
 
 The runner clones with `--progress` while preparing a session's repositories and reports phase, percent, object counts, size and speed per repository (up to 3 repositories in parallel), then the file count when each is ready. The composer shows them and keeps the result after finishing. A server instance that has not yet seen the status returns nothing: the page treats that as "still running".
+
+## 504 when adding a Kiro Identity Center sign-in
+
+**Symptom:** Agent setup > Sign-ins > Add Kiro sign-in (Identity Center) ended in a 504 Gateway Timeout.
+
+**Cause:** the request waits for the Kiro runtime to start the device sign-in and return the code. A runtime that has been idle needs about half a minute to start (the log shows two cold starts 36 seconds apart), and CloudFront gave up on the portal after its default 30 seconds. The portal itself kept going, so the sign-in may exist half-made in the list.
+
+**Fix:** the `/api/*` origin now waits 60 seconds (`readTimeout` in `infra/lib/portal-stack.ts`, the most CloudFront allows without a quota increase). Needs a CDK deploy. Until then, try again right away: the runtime is warm and answers in seconds. Delete the half-made entry if one appeared.
+
+**Not fixed:** a start slower than 60 seconds would still 504. The lasting fix is to return at once and let the page poll for the code.
+
+
+### Company sign-in stays on Saving after the gateway timeout fix
+
+A live check showed that the Kiro runner started its CLI but returned no verification challenge within 45 seconds. The interactive CLI was waiting at a Start URL prompt, despite receiving the URL as a flag. Starting a fresh machine and automating CLI prompts is unnecessary for device authorization: AWS returned a challenge for the same Start URL and region in about one second through SSO OIDC.
+
+New Kiro Identity Center sign-ins and reauthentication now use the existing direct AWS OIDC path in cloud deployments too. They register the Kiro scopes and request a device code without invoking an AgentCore runtime. Each startup OIDC call has a 15-second application deadline, and transient failures return a retryable error. The form says Requesting sign-in code while it waits. The user still authorizes the code in their browser.
+
+Pending client secrets are encrypted, including new reauthentication challenges. Polling remains compatible with old pending plaintext fields and AgentCore-based challenges during rollout. Agent execution continues on AgentCore with the stored credential. A failed reauthentication leaves the previous credential and selected profile intact.
+
+## Conversation file links return S3 AccessDenied
+
+A link such as `/server/feedback.ts:376` names a file in the session working copy. It is not a website asset. Opening that URL directly sends it to CloudFront's private static S3 origin, which returns AccessDenied for the missing object.
+
+The conversation now opens matching deliverables in the output preview and source links in the session editor through authenticated IDE reads. Repository-relative paths are checked against the working copy and its repositories; ambiguous paths ask the user to choose a repository in Explorer. External web links keep their normal behavior. Do not make the bucket public to address workspace links.
+
+## Codex sub-agents are missing from Agents activity
+
+Native Codex collaboration items now produce portal sub-agent lifecycle events, including nested parent relationships. The Codex runner and portal must both be deployed. Open Agents activity in the session sidebar and select **Expand agent graph** to see the connected nodes. The panel refreshes every five seconds as a fallback to realtime updates.
+
+Older runs that did not record native collaboration events cannot display that missing history. New collaboration activity is recorded after deployment. The graph visualizes actual delegated sessions and native sub-agents; it does not turn sequential automation steps into concurrent steps.

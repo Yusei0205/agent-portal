@@ -18,7 +18,7 @@ import { one, all, run as dbRun } from './db.ts';
 import type { Row } from './db.ts';
 import { now } from './util.ts';
 import { setRunLifecycleHook } from './agent/runner.ts';
-import { processReviewOutput, triggerAutoPost, getPrCommentMode } from './review.ts';
+import { processReviewReport, triggerAutoPost, getPrCommentMode } from './review.ts';
 import { config } from './config.ts';
 
 import { getLatestRunRow, getProjectRow, getWorkflowRow } from './project-access.ts';
@@ -248,13 +248,24 @@ export async function handleReviewLifecycle(
     const workDir = path.join(config.dataDir, 'projects', slug, 'work', runId);
 
     // Parse findings from whatever the agent produced.
-    const findingCount = await processReviewOutput(review.id, workDir);
+    const { count: findingCount, reported } = await processReviewReport(review.id, workDir);
 
     // If the agent produced no text output at all (not just zero findings),
     // the run cannot be considered a valid review — mark it failed so an
     // empty finding set is never mistaken for a clean review.
     if (!assistantText && findingCount === 0) {
       await reviews.update(review.id, { status: 'failed' });
+      return;
+    }
+
+    // The reply held no readable findings report (it is not a report with zero findings): it was not a clean review.
+    if (!reported) {
+      await reviews.update(review.id, {
+        status: 'failed',
+        summary: `${NO_REPORT_NOTE}
+
+${assistantText.slice(0, 3900)}`,
+      });
       return;
     }
 
@@ -266,6 +277,8 @@ export async function handleReviewLifecycle(
     }
   }
 }
+
+const NO_REPORT_NOTE = "The reviewer's reply did not contain a readable findings report, so this review is not counted as clean. Open the run for its full output and start a new review.";
 
 // Register hook when this module is imported
 setRunLifecycleHook(async (workflowId, runId, event) => {

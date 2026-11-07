@@ -64,9 +64,10 @@ export function terminalGitEnv(repos: RunnerRepo[]): Record<string, string> {
   return Object.fromEntries([['GIT_TERMINAL_PROMPT', '0'], ['GIT_CONFIG_COUNT', String(entries.length)],
     ...entries.flatMap(([key, value], i) => [[`GIT_CONFIG_KEY_${i}`, key], [`GIT_CONFIG_VALUE_${i}`, value]])]);
 }
-async function shellDirectory(root: string): Promise<string> {
+export async function shellDirectory(root: string): Promise<string> {
   try {
-    const repos = (await fs.readdir(path.join(root, 'repos'), { withFileTypes: true })).filter(entry => entry.isDirectory());
+    // Hidden folders (the agents' shared notes in repos/.agent-notes) are not repositories.
+    const repos = (await fs.readdir(path.join(root, 'repos'), { withFileTypes: true })).filter(entry => entry.isDirectory() && !entry.name.startsWith('.'));
     if (repos.length === 1) return path.join(root, 'repos', repos[0].name);
   } catch { /* a session can start with an empty workspace */ }
   return root;

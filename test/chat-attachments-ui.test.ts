@@ -33,6 +33,9 @@ before(async () => {
   tempDir = await mkdtemp(path.resolve('.chat-attachments-test-'));
   const outfile = path.join(tempDir, 'Composer.mjs');
   await build({ stdin: { contents: "export { ComposerBar } from './web/src/pages/sessions/IdeWorkspace.jsx';", resolveDir: process.cwd(), loader: 'jsx' }, outfile, bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, plugins: [{ name: 'unused-browser-viewer', setup(builder) {
+    // Package CSS is external too; the Node/jsdom harness needs no stylesheet.
+    builder.onResolve({ filter: /\.css$/ }, args => ({ path: args.path, namespace: 'test-style' }));
+    builder.onLoad({ filter: /.*/, namespace: 'test-style' }, () => ({ contents: '', loader: 'js' }));
     builder.onResolve({ filter: /^dcv(?:-ui)?$/ }, args => ({ path: args.path, namespace: 'test-viewer' }));
     builder.onLoad({ filter: /.*/, namespace: 'test-viewer' }, () => ({ contents: 'export default {}; export const DCVViewer = () => null;', loader: 'js' }));
   } }] });

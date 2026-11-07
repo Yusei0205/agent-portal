@@ -55,6 +55,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     reply({ turn: { id: scope.turnId, status: 'inProgress' } });
     if (!params.input?.[0]?.text?.includes('EARLY_USAGE')) notify('turn/started', { threadId: thread, turn: { id: scope.turnId } });
     const prompt = params.input?.[0]?.text || '';
+    if (prompt.includes('COLLAB_AGENTS')) {
+      const item = { id: 'spawn-1', type: 'collabAgentToolCall', tool: 'spawnAgent', senderThreadId: thread, receiverThreadIds: ['child-1'], prompt: 'Review API changes', status: 'completed', agentsStates: { 'child-1': { status: 'running' } } };
+      notify('item/completed', { ...scope, item });
+      notify('item/completed', { ...scope, item: { ...item, id: 'wait-1', tool: 'wait', agentsStates: { 'child-1': { status: 'completed', message: 'Reviewed API' } } } });
+      notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } }); return;
+    }
     if (prompt.includes('REQUEST_AUTH_REFRESH')) {
       refreshReply = tokens => {
         notify('item/agentMessage/delta', { ...scope, itemId: 'answer', delta: tokens?.chatgptAccountId === externalAuth?.chatgptAccountId ? 'Renewed account' : 'Renewal failed' });

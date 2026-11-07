@@ -14,7 +14,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import {
-  processReviewOutput, computeMergeVerdict, computeCost,
+  processReviewOutput, processReviewReport, computeMergeVerdict, computeCost,
   parseJiraKeyFromBranch, _providers,
 } from '../server/review.ts';
 import type { RateCard } from '../server/review.ts';
@@ -290,6 +290,37 @@ describe('processReviewOutput', () => {
       rid,
     );
     assert.ok(await processReviewOutput(rid) >= 1);
+  });
+});
+
+describe('processReviewReport: a reply with no report is not a clean review', () => {
+  before(async () => { await createTestServer(); });
+  after(async () => { await cleanup(); });
+
+  const newReview = (summary: string) => {
+    const rid = generateId();
+    run(
+      `INSERT INTO p10_reviews (id, project_id, base_ref, head_ref, status, post_mode, min_severity, created_at, jira_context, run_log, input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, llm_requests, retry_count, tool_calls, files_reviewed)
+       VALUES (?,?,'main','feat','done','draft','medium',?,'{}','[]',0,0,0,0,0,0,0,0)`,
+      rid, insertProject(`report ${rid}`), now(),
+    );
+    run(`UPDATE p10_reviews SET summary = ? WHERE id = ?`, summary, rid);
+    return rid;
+  };
+
+  it('a report with an empty findings list is a real "nothing found"', async () => {
+    const got = await processReviewReport(newReview('Looks fine.\n```json\n{"summary":"ok","findings":[]}\n```'));
+    assert.deepEqual(got, { count: 0, reported: true });
+  });
+
+  it('prose or broken JSON is not a report', async () => {
+    assert.deepEqual(await processReviewReport(newReview('I looked at the change and it seems fine.')), { count: 0, reported: false });
+    assert.deepEqual(await processReviewReport(newReview('```json\n{"summary": "cut off", "findings": [\n```')), { count: 0, reported: false });
+  });
+
+  it('a report with findings counts them', async () => {
+    const got = await processReviewReport(newReview('```json\n[{"file":"a.ts","line":2,"severity":"high","title":"T","body":"B"}]\n```'));
+    assert.deepEqual(got, { count: 1, reported: true });
   });
 });
 

@@ -897,30 +897,36 @@ function parseSeverity(raw: unknown): Severity {
   return 'medium';
 }
 
-function parseFindingsFromText(text: string): Array<Partial<Finding>> {
+/**
+ * Read the findings out of a reviewer's reply. `found` says whether the reply held a readable report at all (a JSON
+ * block, object or array, or a findings table): a reply with no report must not be mistaken for a review that found
+ * nothing.
+ */
+function readFindingsReport(text: string): { found: boolean; findings: Array<Partial<Finding>> } {
   const jsonBlockMatch = text.match(/```json\s*([\s\S]*?)```/i);
   if (jsonBlockMatch) {
     try {
       const parsed = JSON.parse(jsonBlockMatch[1]);
       const arr = Array.isArray(parsed) ? parsed : (parsed.findings ?? parsed.results ?? []);
-      if (Array.isArray(arr)) return normalizeParsedFindings(arr);
+      if (Array.isArray(arr)) return { found: true, findings: normalizeParsedFindings(arr) };
     } catch { /* fall through */ }
   }
   const jsonObjMatch = text.match(/\{[\s\S]*"findings"\s*:\s*\[[\s\S]*?\][\s\S]*\}/);
   if (jsonObjMatch) {
     try {
       const parsed = JSON.parse(jsonObjMatch[0]);
-      if (Array.isArray(parsed.findings)) return normalizeParsedFindings(parsed.findings);
+      if (Array.isArray(parsed.findings)) return { found: true, findings: normalizeParsedFindings(parsed.findings) };
     } catch { /* fall through */ }
   }
   const jsonArrMatch = text.match(/\[\s*\{[\s\S]*?\}\s*\]/);
   if (jsonArrMatch) {
     try {
       const arr = JSON.parse(jsonArrMatch[0]);
-      if (Array.isArray(arr)) return normalizeParsedFindings(arr);
+      if (Array.isArray(arr)) return { found: true, findings: normalizeParsedFindings(arr) };
     } catch { /* fall through */ }
   }
-  return parseFindingsFromMarkdown(text);
+  const findings = parseFindingsFromMarkdown(text);
+  return { found: findings.length > 0, findings };
 }
 
 function normalizeParsedFindings(arr: unknown[]): Array<Partial<Finding>> {
@@ -995,9 +1001,14 @@ async function listFindingsSorted(reviewId: string): Promise<Finding[]> {
 }
 
 export async function processReviewOutput(reviewId: string, workDir?: string): Promise<number> {
+  return (await processReviewReport(reviewId, workDir)).count;
+}
+
+/** Like processReviewOutput, and also says whether the reviewer's reply held a readable findings report. */
+export async function processReviewReport(reviewId: string, workDir?: string): Promise<{ count: number; reported: boolean }> {
   const reviewsRepo = getReviewsRepository();
   const review = await reviewsRepo.getById(reviewId);
-  if (!review) return 0;
+  if (!review) return { count: 0, reported: false };
 
   // Prefer raw_output (full untruncated transcript) over summary (bounded display text)
   // for finding extraction. raw_output is populated by review-lifecycle.ts after a run.
@@ -1015,7 +1026,7 @@ export async function processReviewOutput(reviewId: string, workDir?: string): P
     }
   }
 
-  const parsed = parseFindingsFromText(text);
+  const { found: reported, findings: parsed } = readFindingsReport(text);
 
   const existing = await reviewsRepo.listFindings(reviewId);
   const existingKeys = new Set(
@@ -1041,7 +1052,7 @@ export async function processReviewOutput(reviewId: string, workDir?: string): P
     });
   }
 
-  return toInsert.length;
+  return { count: toInsert.length, reported };
 }
 
 // ── Dashboard period helper ───────────────────────────────────────────────────

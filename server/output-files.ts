@@ -34,8 +34,9 @@ const ALLOWED_EXTS = new Set([
   '.md', '.docx', '.xlsx', '.pptx', '.csv', '.html', '.drawio',
 ]);
 
+// .agent-notes: the agents' shared working notes (Agent pack, agent-notes skill), not results of the session.
 const EXCLUDED_WORK_DIRS = new Set([
-  'repos', 'home', '.browser', '.claude', '.kiro', '.git', 'node_modules',
+  'repos', 'home', '.browser', '.claude', '.kiro', '.git', 'node_modules', '.agent-notes',
 ]);
 
 const SKELETON_FILES = new Set(['CLAUDE.md', 'docs/decisions.md']);

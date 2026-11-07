@@ -37,6 +37,7 @@ describe('collectRunnerFiles', () => {
     write('report.md', '# hi');
     write('docs/diagram.drawio', '<mxfile/>');
     write('.claude/notes.md', 'x');
+    write('.agent-notes/lead-orchestrator.md', 'x');
     write('repos/app/README.md', 'x');
     write('node_modules/p/readme.md', 'x');
     write('script.sh', 'echo');
