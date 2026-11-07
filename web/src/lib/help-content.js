@@ -102,6 +102,14 @@ export const HELP_TOPICS = [
         ],
       },
       {
+        heading: 'Skipped the Get started card?',
+        items: [
+          'Press **Skip for now** on the card to hide it. It stays hidden in this browser until you bring it back.',
+          'The button below shows it again on the Projects page, with the steps you have already done ticked off.',
+        ],
+        action: { id: 'show-setup-checklist', label: 'Show the Get started card again' },
+      },
+      {
         heading: 'First-time setup (admins)',
         rows: [
           ['Deploy', 'Choose **Local PC / laptop** (SQLite) or **Server / cloud** (adds Security and Storage steps).'],

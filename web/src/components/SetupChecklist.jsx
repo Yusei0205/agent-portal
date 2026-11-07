@@ -9,6 +9,11 @@ import { Icon } from './Icon.jsx';
 const HIDE_KEY = 'setup-checklist-hidden';
 const read = () => { try { return localStorage.getItem(HIDE_KEY) === '1'; } catch { return false; } };
 
+/** Bring the card back after it was skipped (Help › Getting started has the button). */
+export function showSetupChecklistAgain() {
+  try { localStorage.removeItem(HIDE_KEY); } catch { /* private mode */ }
+}
+
 /** Which steps are done, from what the portal already knows. `project` is the project the later steps are checked in. */
 export async function loadSetupState(project) {
   const [creds, settings, git] = await Promise.all([
@@ -77,8 +82,9 @@ export function SetupChecklistView({ project, state, onNewProject, onHide }) {
     <section className="card setup-checklist" aria-label="Get started" style={{ padding: 16, marginBottom: 16 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
         <h2 style={{ fontSize: '1rem', margin: 0 }}>Get started <span className="muted" style={{ fontWeight: 400 }}>{done} of {steps.length} done</span></h2>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={hide}>Hide</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={hide} title="Hide this card. Help › Getting started brings it back.">Skip for now</button>
       </div>
+      <p className="muted small" style={{ margin: '4px 0 0' }}>Not now? Skip it. You can bring it back from <a href="#/help/getting-started">Help › Getting started</a>.</p>
       <ol style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, display: 'grid', gap: 10 }}>
         {steps.map((s) => {
           const ok = Boolean(state[s.id]);

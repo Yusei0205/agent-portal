@@ -7,6 +7,12 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon.jsx';
 import { PageHeader } from '../components/PageHeader.jsx';
 import { navigate } from '../lib/router.js';
+import { showSetupChecklistAgain } from '../components/SetupChecklist.jsx';
+
+/** Buttons a help section can carry (section.action.id). */
+const HELP_ACTIONS = {
+  'show-setup-checklist': () => { showSetupChecklistAgain(); navigate('/projects'); },
+};
 import { HELP_GROUPS, HELP_TOPICS, pageHref, searchHelp } from '../lib/help-content.js';
 
 /** Render **bold** and `code` marks as elements (no HTML injection). */
@@ -28,6 +34,9 @@ function TopicSection({ section }) {
         <List className="help-list">
           {section.items.map((it, i) => <li key={i}><Rich text={it} /></li>)}
         </List>
+      )}
+      {section.action && HELP_ACTIONS[section.action.id] && (
+        <button type="button" className="btn btn-sm" onClick={HELP_ACTIONS[section.action.id]}>{section.action.label}</button>
       )}
       {section.rows && (
         <dl className="help-rows">

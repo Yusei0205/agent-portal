@@ -16,11 +16,12 @@ const { renderToStaticMarkup } = require('react-dom/server') as { renderToStatic
 
 let tempDir: string;
 let View: (props: object) => unknown;
+let showAgain: () => void;
 before(async () => {
   tempDir = await mkdtemp(path.resolve('.setup-checklist-test-'));
   const outfile = path.join(tempDir, 'SetupChecklist.mjs');
   await build({ entryPoints: ['web/src/components/SetupChecklist.jsx'], outfile, bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic' });
-  ({ SetupChecklistView: View } = await import(pathToFileURL(outfile).href));
+  ({ SetupChecklistView: View, showSetupChecklistAgain: showAgain } = await import(pathToFileURL(outfile).href));
 });
 after(async () => { if (tempDir) await rm(tempDir, { recursive: true, force: true }); });
 
@@ -46,6 +47,18 @@ describe('Get started checklist', () => {
     assert.match(html, /<a class="btn btn-sm btn-primary" href="#\/connect\/git">Connect<\/a>/);
     assert.match(html, /href="#\/p\/p1\/workspaces\/repositories"/);
     assert.doesNotMatch(html, /Create a project first/);
+  });
+
+  it('can be skipped, says where it comes back, and Help brings it back', () => {
+    const html = render(null, none);
+    assert.match(html, />Skip for now<\/button>/);
+    assert.match(html, /href="#\/help\/getting-started"/);
+    const store = new Map<string, string>([['setup-checklist-hidden', '1']]);
+    (globalThis as any).localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); }, removeItem: (k: string) => { store.delete(k); } };
+    try {
+      showAgain();
+      assert.equal(store.has('setup-checklist-hidden'), false, 'the card shows again');
+    } finally { delete (globalThis as any).localStorage; }
   });
 
   it('shows nothing once every step is done', () => {
