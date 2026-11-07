@@ -8,6 +8,8 @@ import { createTestServer, cleanup } from './fixtures.ts';
 import { createReview, ReviewCreateError } from '../server/review.ts';
 import { run } from '../server/db.ts';
 import { generateId, now } from '../server/util.ts';
+import { getSessionsRepository } from '../server/repositories/sessions.ts';
+import { getReviewsRepository } from '../server/repositories/reviews.ts';
 
 function insertProject(): string {
   const id = generateId();
@@ -41,6 +43,23 @@ describe('createReview', () => {
   });
 
   after(async () => { await cleanup(); });
+
+  it('starts the session of a new review, and asks the reviewer for a findings report', async () => {
+    const review = await createReview({ projectId, userId, repoId, baseRef: 'main', headRef: 'feature/starts', prNumber: 7 });
+    const workflowId = String(review.workflow_id);
+    const wf = await getSessionsRepository().getWorkflowById(workflowId);
+    assert.match(String(wf?.goal), /End your reply with one JSON block/, 'the goal asks for the report the portal reads');
+    assert.equal(wf?.kind, 'review');
+    const runs = await getSessionsRepository().listRunsByWorkflow(workflowId);
+    assert.equal(runs.length, 1, 'a run was started, so the session is not left pending with nothing running');
+    // The run reports back and the review moves on from "pending".
+    let seen = review.status;
+    for (let i = 0; i < 100 && (seen === 'pending' || seen === 'running'); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      seen = String((await getReviewsRepository().getById(review.id))?.status);
+    }
+    assert.notEqual(seen, 'pending', 'the review moved on once its run finished');
+  });
 
   it('creates a review with repository, PR number and Jira key', async () => {
     const review = await createReview({
