@@ -2120,21 +2120,25 @@ export function registerReviewRoutes(): void {
       }
       rerunGoal += `\n\n${REVIEW_REPORT_INSTRUCTIONS}`;
       const wid = generateId();
+      // Re-run with the same engine, sign-in and model as the review being repeated.
+      const parentWf = parent.workflow_id
+        ? await getSessionsRepository().getWorkflowById(parent.workflow_id).catch(() => null)
+        : null;
       await getSessionsRepository().createWorkflow({
         id: wid,
         project_id: req.params.id,
         goal: rerunGoal,
         status: 'pending',
-        engine: 'demo',
+        engine: parentWf?.engine || 'demo',
         trust_tools: 0,
-        lead_agent: null,
+        lead_agent: parentWf?.lead_agent ?? null,
         workspace_id: null,
         output_files_enabled: 0,
         repo_ids: parent.repo_id ? JSON.stringify([parent.repo_id]) : '[]',
         iteration_count: 0,
         max_iterations: 1,
-        credential_id: null,
-        model: '',
+        credential_id: parentWf?.credential_id ?? null,
+        model: parentWf?.model ?? '',
         kind: 'review',
         created_by: req.user!.id,
         created_at: ts,
