@@ -404,12 +404,14 @@ Ran a diagram, a document and a deck through the live portal. Findings and fixes
 
 The runner clones with `--progress` while preparing a session's repositories and reports phase, percent, object counts, size and speed per repository (up to 3 repositories in parallel), then the file count when each is ready. The composer shows them and keeps the result after finishing. A server instance that has not yet seen the status returns nothing: the page treats that as "still running".
 
-## 504 when adding a Kiro Identity Center sign-in
+## 504 when adding a Kiro Identity Center sign-in (2026-11-07)
 
-**Symptom:** Agent setup > Sign-ins > Add Kiro sign-in (Identity Center) ended in a 504 Gateway Timeout.
+**Symptom:** Agent setup > Sign-ins > Add Kiro sign-in (Identity Center) ended in a 504 Gateway Timeout, on every try.
 
-**Cause:** the request waits for the Kiro runtime to start the device sign-in and return the code. A runtime that has been idle needs about half a minute to start (the log shows two cold starts 36 seconds apart), and CloudFront gave up on the portal after its default 30 seconds. The portal itself kept going, so the sign-in may exist half-made in the list.
+**What the logs showed:** each try started a portal request that never finished (START with no REPORT, until the instance was shut down) and a new Kiro runtime machine about 8 seconds later. Fifteen minutes later that machine logged `login_complete ... timedOut: true`, and it never logged `login_challenge`. So the runtime did receive the request, but `kiro-cli login` never printed a sign-in code the runner recognised, and the portal waited for it until CloudFront gave up after 30 seconds.
 
-**Fix:** the `/api/*` origin now waits 60 seconds (`readTimeout` in `infra/lib/portal-stack.ts`, the most CloudFront allows without a quota increase). Needs a CDK deploy. Until then, try again right away: the runtime is warm and answers in seconds. Delete the half-made entry if one appeared.
+**First guess, wrong:** that the Kiro runtime's cold start was slower than CloudFront's 30 seconds. The cold start is about 10 seconds, so raising the timeout would not help.
 
-**Not fixed:** a start slower than 60 seconds would still 504. The lasting fix is to return at once and let the page poll for the code.
+**Fix (this change):** the runner (`kiro-runner/src/login.ts`) now waits 45 seconds for the code; if none appears it stops `kiro-cli` and returns an error that includes what `kiro-cli` printed (ANSI stripped, last 600 characters), also logged as `login_no_challenge`. The page then shows the cause instead of a 504. Needs the harness redeployed (`node infra/scripts/deploy-harness.mjs`).
+
+**Still open:** why `kiro-cli` prints no code. The image installs the latest `kiro-cli` when it is built, so a newer version may print a different prompt or format; the message above will say.

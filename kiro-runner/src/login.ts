@@ -246,6 +246,26 @@ export async function runKiroLogin(
       tryEmitChallenge();
     });
 
+    // If kiro-cli prints no sign-in code soon after it starts, it is stuck (a prompt it is waiting on, a changed output
+    // format, an unreachable start URL). Say so with what it printed, instead of leaving the page waiting until the
+    // request times out and the runtime holds the machine for 15 minutes.
+    const CHALLENGE_WAIT_MS = 45_000;
+    let stuck = false;
+    const challengeTimer = setTimeout(() => {
+      if (challengeEmitted) return;
+      stuck = true;
+      // eslint-disable-next-line no-control-regex
+      const seen = outputBuf.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r/g, '').trim().slice(-600);
+      process.stdout.write(JSON.stringify({ event: 'login_no_challenge', runId, waitedMs: CHALLENGE_WAIT_MS, seen }) + '\n');
+      emit({
+        type: 'error',
+        message: `kiro-cli did not show a sign-in code within ${CHALLENGE_WAIT_MS / 1000} seconds. ` +
+          (seen ? `It printed: ${seen}` : 'It printed nothing.'),
+      });
+      try { child.kill('SIGTERM'); } catch { /* ok */ }
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ok */ } }, 3_000).unref();
+    }, CHALLENGE_WAIT_MS);
+
     // 15-minute timeout — enough for any SSO flow approval window
     const TIMEOUT_MS = 15 * 60_000;
     let timedOut = false;
@@ -258,7 +278,7 @@ export async function runKiroLogin(
 
     const exitCode = await new Promise<number | null>((resolve) => {
       child.on('error', (e: NodeJS.ErrnoException) => {
-        clearTimeout(timeoutTimer);
+        clearTimeout(timeoutTimer); clearTimeout(challengeTimer);
         if (e.code === 'ENOENT') {
           emit({ type: 'error', message: 'kiro-cli not found on PATH. Check the container image.' });
         } else {
@@ -267,13 +287,13 @@ export async function runKiroLogin(
         resolve(null);
       });
       child.on('close', (code) => {
-        clearTimeout(timeoutTimer);
+        clearTimeout(timeoutTimer); clearTimeout(challengeTimer);
         resolve(code);
       });
     });
 
     const durationMs = Date.now() - invokeStart;
-    const success = exitCode === 0 && !timedOut;
+    const success = exitCode === 0 && !timedOut && !stuck;
 
     // Read token from DB to get size — never log or emit the token itself
     let tokenSizeBytes = 0;
