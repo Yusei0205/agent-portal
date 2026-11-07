@@ -743,16 +743,12 @@ describe('Auto-post dedupe', () => {
 
   it('skips auto-post when head moved during review (source_sha != head_commit_sha)', async () => {
     // Create review where source_sha differs from head_commit_sha (head moved mid-review)
-    const cr = await fetchJson(baseUrl, `/api/projects/${projectId}/reviews`, {
-      method: 'POST',
-      body: {
-        baseRef: 'main', headRef: 'feature/head-moved', postMode: 'auto',
-        sourceSha: 'sha_at_start', headCommitSha: 'sha_after_move',
-      },
-      cookie,
+    // This tests publication policy against a completed report. Creating a new
+    // review now launches a run whose lifecycle can overwrite our seeded status.
+    const rid = makeReview(projectId, {
+      head_ref: 'feature/head-moved', status: 'done', post_mode: 'auto',
+      source_sha: 'sha_at_start', head_commit_sha: 'sha_after_move',
     });
-    const rid = ((cr.body as Record<string, unknown>).review as Record<string, unknown>).id as string;
-    run(`UPDATE p10_reviews SET status = 'done' WHERE id = ?`, rid);
     makeFinding(rid, { severity: 'medium' });
 
     const r = await fetchJson(baseUrl, `/api/projects/${projectId}/reviews/${rid}/post`, {
