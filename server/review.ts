@@ -1,13 +1,13 @@
 import path from 'node:path';
-import { all, insert, one, run, update, type Row } from './db.ts';
+import { all, insert, one, run, tx, update, type Row } from './db.ts';
 import { del, get, patch, post } from './http.ts';
 import { getProject, notifyProject, projectDir, requireProject } from './projects.ts';
 import { checkBranch, diffRefs, ensureFresh, fetchPullRef, getRepo, githubApi, removeWorktree, type Repo } from './repos.ts';
-import { HttpError, badRequest, extractJson, int, newId, notFound, now, parseJson } from './util.ts';
-import { parseUnifiedDiff, type Finding, type Severity } from './agent/heuristics.ts';
+import { HttpError, badRequest, int, newId, notFound, now, parseJson } from './util.ts';
+import { parseUnifiedDiff, type Finding } from './agent/heuristics.ts';
 import { startRun, READ_ONLY_TOOLS, getRun } from './agent/runner.ts';
+import { parseReviewResult } from './review-result.ts';
 
-const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
 const MAX_DIFF = 400_000;
 
 function reviewPrompt(repo: Repo, base: string, head: string, diff: string, focusFiles?: string[]): string {
@@ -32,21 +32,6 @@ End your reply with a JSON block:
 <diff>
 ${diff}
 </diff>`;
-}
-
-function cleanFindings(raw: unknown, files: Set<string>): Finding[] {
-  if (!Array.isArray(raw)) return [];
-  const out: Finding[] = [];
-  for (const f of raw.slice(0, 200) as any[]) {
-    const file = String(f?.file ?? '').replace(/^[ab]\//, '');
-    if (!file || !files.has(file)) continue;
-    const severity = SEVERITIES.includes(f.severity) ? f.severity : 'medium';
-    const line = Number.isFinite(Number(f.line)) && Number(f.line) > 0 ? Math.round(Number(f.line)) : null;
-    const message = String(f.message ?? '').slice(0, 2000);
-    if (!message) continue;
-    out.push({ file, line, severity, category: String(f.category ?? 'general').slice(0, 40), message, suggestion: f.suggestion ? String(f.suggestion).slice(0, 2000) : undefined });
-  }
-  return out;
 }
 
 function trimDiff(diff: string): { diff: string; truncated: boolean } {
@@ -84,8 +69,8 @@ async function runPass(review: Row, repo: Repo, userId: string, model: 'haiku' |
     await removeWorktree(repo, path.join(projectDir(getProject(review.project_id)), final.worktree)).catch(() => undefined);
   }
   if (final.status !== 'completed') throw new HttpError(502, `The review run ${final.status}: ${final.error ?? ''}`);
-  const parsed = extractJson<any>(final.result ?? '') ?? {};
-  return { findings: cleanFindings(parsed.findings, files), summary: String(parsed.summary ?? '').slice(0, 2000), runId: r.id };
+  const parsed = parseReviewResult(final.result ?? '', files);
+  return { ...parsed, runId: r.id };
 }
 
 async function executeReview(reviewId: string, userId: string): Promise<void> {
@@ -95,34 +80,42 @@ async function executeReview(reviewId: string, userId: string): Promise<void> {
     const triage = await runPass(review, repo, userId, 'haiku');
     let findings = triage.findings.map((f) => ({ ...f, source: 'triage' }));
     let summary = triage.summary;
+    saveFindings(review.id, findings);
+    update('reviews', review.id, { summary });
+    notifyProject(review.project_id, 'review.updated', { id: review.id });
     if (review.deep) {
       const flagged = [...new Set(triage.findings.filter((f) => ['critical', 'high', 'medium'].includes(f.severity)).map((f) => f.file))].slice(0, 15);
       if (flagged.length) {
         const deep = await runPass(review, repo, userId, 'sonnet', flagged);
-        findings = [...findings.filter((f) => !flagged.includes(f.file)), ...deep.findings.map((f) => ({ ...f, source: 'deep' }))];
+        const confirmed = deep.findings.map((f) => ({ ...f, source: 'deep' }));
+        findings = [...findings.filter((f) => !confirmed.some((d) => d.file === f.file && d.line === f.line && d.message === f.message)), ...confirmed];
         summary = deep.summary || summary;
       }
     }
-    for (const f of findings) {
-      insert('findings', {
-        id: newId('f_'),
-        review_id: review.id,
-        file: f.file,
-        line: f.line,
-        end_line: null,
-        severity: f.severity,
-        category: f.category,
-        message: f.message,
-        suggestion: f.suggestion ?? null,
-        status: 'open',
-        source: f.source,
-      });
-    }
-    update('reviews', review.id, { status: 'done', summary, finished_at: now() });
+    saveFindings(review.id, findings);
+    update('reviews', review.id, { status: 'done', summary: [review.summary, summary].filter(Boolean).join('\n\n'), finished_at: now() });
   } catch (e: any) {
     update('reviews', review.id, { status: 'error', error: String(e?.message ?? e), finished_at: now() });
   }
   notifyProject(review.project_id, 'review.updated', { id: review.id });
+}
+
+function saveFindings(reviewId: string, findings: (Finding & { source: string })[]): void {
+  tx(() => {
+    const existing = all<Row>('SELECT * FROM findings WHERE review_id = ?', reviewId);
+    for (const f of findings) {
+      const saved = existing.find((x) => x.file === f.file && x.line === f.line && x.message === f.message);
+      if (saved) {
+        update('findings', saved.id, { severity: f.severity, category: f.category, suggestion: f.suggestion ?? null, source: f.source });
+        continue;
+      }
+      insert('findings', {
+        id: newId('f_'), review_id: reviewId, file: f.file, line: f.line, end_line: null,
+        severity: f.severity, category: f.category, message: f.message,
+        suggestion: f.suggestion ?? null, status: 'open', source: f.source,
+      });
+    }
+  });
 }
 
 /** Start a review of a GitHub pull request, or of `head` against `base`. Returns at once; the review runs in the background. */

@@ -215,11 +215,19 @@ function ReviewDetail({ id }) {
   const [showDismissed, setShowDismissed] = useState(false);
   const [focus, setFocus] = useState(null);
   const [posting, setPosting] = useState(false);
+  const [search, setSearch] = useState('');
+  const active = ['pending', 'queued', 'running'].includes(r.data?.review.status);
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => r.reload(true), 5000);
+    return () => clearInterval(timer);
+  }, [active, r.reload]);
 
   if (r.error) return <div className="page"><ErrorNote error={r.error} /></div>;
   if (!r.data) return <div className="page"><Spinner /></div>;
   const { review, diff, findings, run } = r.data;
-  const visible = findings.filter((f) => sevFilter.has(f.severity) && (showDismissed || f.status !== 'dismissed'));
+  const visible = findings.filter((f) => sevFilter.has(f.severity) && (showDismissed || f.status !== 'dismissed') &&
+    [f.file, f.category, f.message, f.suggestion].join(' ').toLowerCase().includes(search.toLowerCase()));
   const counts = Object.fromEntries(SEVERITIES.map((s) => [s, findings.filter((f) => f.severity === s && f.status !== 'dismissed').length]));
 
   const setStatus = async (f, status) => {
@@ -236,7 +244,7 @@ function ReviewDetail({ id }) {
       <div className="finding-head">
         <Badge status={f.severity} />
         <span className="muted small">{f.category}</span>
-        {f.source === 'deep' ? <span className="muted small">deep look</span> : null}
+        {f.source ? <span className="muted small">{f.source === 'deep' ? 'deep look' : 'first pass'}</span> : null}
         {f.line ? <span className="muted small">line {f.line}</span> : null}
         {f.status !== 'open' ? <Badge status={f.status} /> : null}
       </div>
@@ -292,7 +300,7 @@ function ReviewDetail({ id }) {
                 {review.posted_at ? 'Post again to GitHub' : 'Post to GitHub'}
               </Button>
             ) : null}
-            {canEdit && review.status !== 'running' ? (
+            {canEdit && !active ? (
               <Button
                 variant="ghost"
                 icon="trash"
@@ -308,16 +316,16 @@ function ReviewDetail({ id }) {
           </>
         }
       />
-      {review.status === 'running' ? (
+      {active ? (
         <div className="note note-info">
-          <Spinner small /> <span>Reviewing {diff.length} changed files. Findings appear here when the agent finishes.</span>
+          <Spinner small /> <span>Review in progress for {diff.length} changed files. Findings shown so far are incomplete; zero findings does not mean the change is secure.</span>
         </div>
       ) : null}
       {review.error ? <ErrorNote error={new Error(review.error)} /> : null}
       {review.summary ? <p className="lead">{review.summary}</p> : null}
 
-      {review.status !== 'running' ? (
-        <div className="sev-bar" role="group" aria-label="Filter by severity">
+      {review.status === 'error' ? <p role="status">The assessment did not finish. Any findings below are partial results; open the reviewer run for details.</p> : null}
+      <div className="sev-bar" role="group" aria-label="Filter by severity">
           {SEVERITIES.map((s) => (
             <button
               key={s}
@@ -334,8 +342,17 @@ function ReviewDetail({ id }) {
             </button>
           ))}
           <Toggle checked={showDismissed} onChange={setShowDismissed} label="Show dismissed" />
-        </div>
-      ) : null}
+      </div>
+
+      <section aria-label="Detailed findings">
+        <h2>Findings ({findings.length})</h2>
+        <Field label="Search findings (file, category, description or fix)">
+          {(inputId) => <input id={inputId} className="input" value={search} onChange={(e) => setSearch(e.target.value)} />}
+        </Field>
+        <p className="muted small">Showing {visible.length} of {findings.length}. All severities are included by default; enable Show dismissed to include dismissed findings.</p>
+        {visible.map((f) => <article key={f.id}><p><code>{f.file}</code>{f.line ? `:${f.line}` : ' (file level)'}</p>{renderFinding(f)}</article>)}
+        {!visible.length ? <p role="status">{active ? 'Waiting for findings. The review is still in progress.' : review.status === 'error' ? 'No findings available for these filters. The assessment is incomplete.' : findings.length ? 'No findings match the current filters.' : 'The reviewer reported no findings in the reviewed change. This is not a guarantee that all vulnerabilities were detected.'}</p> : null}
+      </section>
 
       <div className="review-layout">
         <nav className="review-files" aria-label="Changed files">
