@@ -1,3 +1,4 @@
+import { AwsKeysFields } from '../components/AwsKeysFields.jsx';
 import { CodexCredentials } from '../components/CodexCredentials.jsx';
 /**
  * Credentials page (F4) — per-user engine sign-ins.
@@ -30,6 +31,7 @@ function modeLabel(engine, mode) {
   if (mode === 'api_key') return 'API key';
   if (mode === 'subscription_token') return 'Subscription token';
   if (mode === 'bedrock_role') return 'Amazon Bedrock (role)';
+  if (mode === 'aws_keys') return 'Amazon Bedrock (AWS access keys)';
   return mode;
 }
 
@@ -140,6 +142,8 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const [roleArn, setRoleArn] = useState('');
   const [bedrockRegion, setBedrockRegion] = useState('us-east-1');
   const [externalId, setExternalId] = useState('');
+  // AWS access keys (pasted from the AWS access portal)
+  const [awsKeys, setAwsKeys] = useState({});
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -147,13 +151,14 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const [deviceCredId, setDeviceCredId] = useState(null);
 
   const KIRO_MODES = [
-    { id: 'api_key',          label: 'API key',              desc: 'Your Kiro API key from kiro.dev' },
-    { id: 'identity_center',  label: 'IAM Identity Center',  desc: 'Sign in with your AWS SSO portal' },
+    { id: 'api_key',          label: 'API key',              desc: 'You have a Kiro API key (from kiro.dev)' },
+    { id: 'identity_center',  label: 'Company sign-in (AWS SSO)', desc: 'Your company gives you Kiro through AWS. You approve a code in your browser.' },
   ];
   const CLAUDE_MODES = [
-    { id: 'api_key',           label: 'API key',              desc: 'Your Anthropic API key' },
-    { id: 'subscription_token', label: 'Subscription token',  desc: 'From `claude setup-token`' },
-    { id: 'bedrock_role',      label: 'Amazon Bedrock (role)', desc: 'Assumes an IAM role — no secret stored' },
+    { id: 'api_key',           label: 'Anthropic API key',    desc: 'You have a key from console.anthropic.com. Usage is billed to it.' },
+    { id: 'subscription_token', label: 'Claude plan (Pro / Max)', desc: 'Run `claude setup-token` on your computer and paste the token.' },
+    { id: 'aws_keys',          label: 'Amazon Bedrock (AWS access keys)', desc: 'Your company signs in to AWS with SSO. Paste the keys the AWS access portal copies for you; they expire after a few hours.' },
+    { id: 'bedrock_role',      label: 'Amazon Bedrock (IAM role)', desc: 'Your company runs Claude on AWS Bedrock and gave you a role ARN. No secret is stored.' },
   ];
   const modes = engine === 'kiro' ? KIRO_MODES : CLAUDE_MODES;
 
@@ -201,6 +206,9 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
       const body = { engine, mode, name: name.trim() || undefined, isDefault };
       if (mode === 'identity_center') {
         body.config = { startUrl: startUrl.trim(), region: region.trim() };
+      } else if (mode === 'aws_keys') {
+        body.config = { region: (awsKeys.region || bedrockRegion).trim() };
+        body.awsKeys = { accessKeyId: awsKeys.accessKeyId, secretAccessKey: awsKeys.secretAccessKey, sessionToken: awsKeys.sessionToken };
       } else if (mode === 'bedrock_role') {
         body.config = { roleArn: roleArn.trim(), region: bedrockRegion.trim() };
         if (externalId.trim()) body.config.externalId = externalId.trim();
@@ -334,6 +342,20 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
                   id="cred-sso-region"
                   value={region}
                   onChange={(e) => setRegion(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {mode === 'aws_keys' && (
+            <>
+              <AwsKeysFields value={awsKeys} onChange={setAwsKeys} idPrefix="cred-aws" />
+              <div className="field">
+                <label htmlFor="cred-aws-region">Bedrock region</label>
+                <AwsRegionSelect
+                  id="cred-aws-region"
+                  value={awsKeys.region || bedrockRegion}
+                  onChange={(e) => { setBedrockRegion(e.target.value); setAwsKeys({ ...awsKeys, region: e.target.value }); }}
                 />
               </div>
             </>
@@ -492,6 +514,42 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
     }
   };
 
+  // Test: a real call with this sign-in (the models it can list), with the answer shown on the card.
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const handleTest = async () => {
+    setTestBusy(true);
+    setTestResult(null);
+    try {
+      setTestResult(await api.post('/api/credentials/check', { engine: cred.engine, credentialId: cred.id }));
+    } catch (e) {
+      setTestResult({ ok: false, message: e.message || 'The check could not run' });
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  // Replace keys (AWS access keys expire): paste new ones, same sign-in.
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [newKeys, setNewKeys] = useState({});
+  const [keysBusy, setKeysBusy] = useState(false);
+  const [keysError, setKeysError] = useState(null);
+  const saveKeys = async () => {
+    setKeysBusy(true);
+    setKeysError(null);
+    try {
+      await api.put(`/api/credentials/${cred.id}`, { awsKeys: { accessKeyId: newKeys.accessKeyId, secretAccessKey: newKeys.secretAccessKey, sessionToken: newKeys.sessionToken } });
+      setKeysOpen(false);
+      setNewKeys({});
+      setTestResult(null);
+      onRefresh();
+    } catch (e) {
+      setKeysError(e.message);
+    } finally {
+      setKeysBusy(false);
+    }
+  };
+
   const handleSetDefault = async () => {
     setSettingDefault(true);
     try {
@@ -597,6 +655,23 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
           )}
         </div>
 
+        {keysOpen && (
+          <div className="stack" style={{ margin: '8px 0' }}>
+            <AwsKeysFields value={newKeys} onChange={setNewKeys} idPrefix={`aws-new-${cred.id}`} />
+            {keysError && <p className="error-note" role="alert">{keysError}</p>}
+            <div className="row" style={{ gap: 8 }}>
+              <button type="button" className="btn btn-sm btn-primary" onClick={saveKeys} disabled={keysBusy}>{keysBusy ? 'Saving…' : 'Save keys'}</button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setKeysOpen(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {testResult && (
+          <p role="status" className={testResult.ok ? 'muted small' : 'error-note'} style={{ margin: '4px 0 0' }}>
+            {testResult.ok ? '✓ ' : ''}{testResult.message}
+          </p>
+        )}
+
         {/* Refresh error (shown above the "Sign in again" highlight) */}
         {refreshError && (
           <p className="error-note" role="alert" style={{ marginTop: 6, marginBottom: 0, fontSize: '0.82rem' }}>
@@ -655,6 +730,21 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
           </>
         )}
 
+        {cred.mode === 'aws_keys' && (
+          <button type="button" className={`btn btn-sm${testResult && !testResult.ok ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setKeysOpen((o) => !o)} aria-expanded={keysOpen}>
+            Replace keys
+          </button>
+        )}
+        {!isKiroIdC && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={handleTest} disabled={testBusy} aria-label={`Test "${cred.name}"`}>
+            {testBusy ? 'Testing…' : 'Test'}
+          </button>
+        )}
+        {isKiroIdC && !reauthChallenge && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={handleTest} disabled={testBusy} aria-label={`Test "${cred.name}"`}>
+            {testBusy ? 'Testing…' : 'Test'}
+          </button>
+        )}
         {!cred.isDefault && (
           <button
             type="button"
@@ -741,6 +831,13 @@ export function Credentials({ user }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // #/config/sign-ins?engine=kiro (from the Get started card) scrolls to that engine's section.
+  useEffect(() => {
+    if (loading) return;
+    const wanted = new URLSearchParams(window.location.hash.split('?')[1] || '').get('engine');
+    if (wanted) document.getElementById(`cred-engine-${wanted}`)?.scrollIntoView({ block: 'start' });
+  }, [loading]);
+
   const load = useCallback(async () => {
     try {
       const { credentials: creds } = await api.get('/api/credentials');
@@ -788,7 +885,7 @@ export function Credentials({ user }) {
         </>}
       />
 
-      <CodexCredentials isAdmin={isAdmin} />
+      <div id="cred-engine-codex"><CodexCredentials isAdmin={isAdmin} /></div>
 
       <EngineSection
         engine="kiro"

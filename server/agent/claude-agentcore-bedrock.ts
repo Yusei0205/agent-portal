@@ -144,7 +144,7 @@ function subagentEvent(ev: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string): Promise<string> {
+export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string, bedrockEnv: Record<string, string> = {}): Promise<string> {
   const { run, emit, signal } = ctx;
   if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
   const repo = getSessionsRepository();
@@ -182,6 +182,8 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string)
     prompt,
     maxTurns: 200,
     ...(model ? { model } : {}),
+    // The person's own AWS access for the model calls (never logged or echoed).
+    ...(Object.keys(bedrockEnv).length ? { bedrockEnv } : {}),
     ...(budget != null && budget > 0 ? { maxBudgetUsd: Math.min(budget, 100) } : {}),
     ...(minutes != null && minutes > 0 ? { maxMinutes: Math.min(minutes, 480) } : {}),
     policy: { trusted: run.trusted, rules: toPolicyRules(run.permissions.rules) },

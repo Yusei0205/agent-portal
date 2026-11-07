@@ -9,7 +9,7 @@ import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
-import { ENGINES, AgentPicker, ModelPicker, CredentialPicker } from './NewSessionDialog.jsx';
+import { ENGINES, AgentPicker, ModelPicker, CredentialPicker, defaultCredential } from './NewSessionDialog.jsx';
 
 /**
  * @param {{
@@ -51,8 +51,7 @@ export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched })
   useEffect(() => {
     if (!credSummary) return;
     const creds = credSummary[engine] || [];
-    const def = creds.find((c) => c.isDefault) || creds[0];
-    setCredentialId(def?.id || '');
+    setCredentialId(defaultCredential(creds)?.id || '');
   }, [engine, credSummary]);
   useEffect(() => { setModel(''); setLeadAgent(''); }, [engine]);
 

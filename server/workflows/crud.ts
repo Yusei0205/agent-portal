@@ -40,6 +40,7 @@ import { getWorkspacesRepository } from '../repositories/workspaces.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { getCredentialsRepository } from '../repositories/credentials.ts';
+import { isBedrockRuntimeChoice } from '../credentials.ts';
 import { flushWorkspaceViaRunner } from '../agent/runner-inspect-client.ts';
 import { parseSessionIntegrations, encodeSessionIntegrations, integrationIsPersonal } from '../agent/runner-integrations.ts';
 import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
@@ -1105,9 +1106,11 @@ export function registerWorkflowRoutes(): void {
     if (body.credentialId) {
       credentialId = str(body.credentialId as string, 'credentialId', { max: 200 });
       const owner = w.created_by ? String(w.created_by) : req.user!.id;
-      const cred = await getCredentialsRepository().getByIdAndUser(credentialId, owner);
-      if (!cred) throw badRequest('Sign-in not found');
-      if (cred.engine !== engine) throw badRequest(`That sign-in is for ${cred.engine}, not ${engine}`);
+      if (!isBedrockRuntimeChoice(engine, credentialId)) {
+        const cred = await getCredentialsRepository().getByIdAndUser(credentialId, owner);
+        if (!cred) throw badRequest('Sign-in not found');
+        if (cred.engine !== engine) throw badRequest(`That sign-in is for ${cred.engine}, not ${engine}`);
+      }
     }
 
     let model = '';

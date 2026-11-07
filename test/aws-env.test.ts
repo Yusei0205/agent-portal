@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanAwsEnv as cleanKiro, validatePayload as validateKiro } from '../kiro-runner/src/validate.ts';
-import { cleanAwsEnv as cleanClaude } from '../agent-runner/src/validate.ts';
+import { cleanAwsEnv as cleanClaude, validatePayload as validateClaude } from '../agent-runner/src/validate.ts';
 
 const good = { AWS_ACCESS_KEY_ID: 'AKIAABCDEFGHIJKLMNOP', AWS_SECRET_ACCESS_KEY: 'x'.repeat(40), AWS_REGION: 'ap-southeast-1' };
 
@@ -25,6 +25,14 @@ for (const [name, clean] of [['kiro-runner', cleanKiro], ['agent-runner', cleanC
 }
 
 describe('kiro-runner payload', () => {
+  test('carries bedrockEnv through validation, cleaned like awsEnv', () => {
+    const r = validateClaude({
+      runId: 'r1', prompt: 'hi', bedrockEnv: { ...good, PATH: '/evil' },
+    });
+    assert.ok(r.ok);
+    if (r.ok) assert.deepEqual(Object.keys(r.payload.bedrockEnv ?? {}).sort(), ['AWS_ACCESS_KEY_ID', 'AWS_REGION', 'AWS_SECRET_ACCESS_KEY']);
+  });
+
   test('carries awsEnv through validation', () => {
     const r = validateKiro({
       mode: 'kiro-run', runId: 'r1', prompt: 'hi', awsEnv: { ...good, PATH: '/evil' },

@@ -35,7 +35,7 @@ export { setProfilesFetcherOverride };
 
 export type Engine = 'kiro' | 'claude-code';
 export type KiroMode = 'api_key' | 'identity_center';
-export type ClaudeCodeMode = 'api_key' | 'subscription_token' | 'bedrock_role';
+export type ClaudeCodeMode = 'api_key' | 'subscription_token' | 'bedrock_role' | 'aws_keys';
 export type CredentialMode = KiroMode | ClaudeCodeMode;
 
 // CredentialRow is an alias for CredentialRecord for internal use
@@ -592,7 +592,7 @@ async function requireOwned(
 
 const VALID_MODES: Record<Engine, CredentialMode[]> = {
   kiro: ['api_key', 'identity_center'],
-  'claude-code': ['api_key', 'subscription_token', 'bedrock_role'],
+  'claude-code': ['api_key', 'subscription_token', 'bedrock_role', 'aws_keys'],
 };
 
 function validateMode(engine: Engine, mode: string): CredentialMode {
@@ -616,6 +616,35 @@ function validateMode(engine: Engine, mode: string): CredentialMode {
  * Secrets NEVER enter logs, events or transcripts — they live only in the
  * returned object which is merged into the child process's env.
  */
+/**
+ * "Amazon Bedrock (this AWS account)": a sign-in choice that is not a stored credential. On the cloud portal the Claude
+ * Code engine runs on the AgentCore runtime, and this choice makes a session use Bedrock with the runtime's role
+ * even when the person has an Anthropic key or the admin set an Anthropic portal provider.
+ */
+export const BEDROCK_RUNTIME_SIGN_IN = 'bedrock';
+export const bedrockRuntimeAvailable = (): boolean => Boolean(process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN);
+export const isBedrockRuntimeChoice = (engine: string, credentialId: string | null | undefined): boolean =>
+  engine === 'claude-code' && credentialId === BEDROCK_RUNTIME_SIGN_IN && bedrockRuntimeAvailable();
+
+/**
+ * AWS variables for the Claude Code runner in the cloud, when the sign-in in use is the person's own AWS access
+ * (pasted keys, or a role the portal assumed). Otherwise empty: the run uses the AgentCore runtime's role.
+ */
+export async function resolveBedrockEnvForRunner(
+  credentialOwnerId: string | null,
+  credentialId: string | null,
+): Promise<Record<string, string>> {
+  if (!credentialOwnerId || !credentialId || isBedrockRuntimeChoice('claude-code', credentialId)) return {};
+  const cred = await getCredentialsRepository().getByIdAndUser(credentialId, credentialOwnerId);
+  if (!cred || cred.engine !== 'claude-code' || (cred.mode !== 'aws_keys' && cred.mode !== 'bedrock_role')) return {};
+  const env = await buildEnvFromCred(cred);
+  const out: Record<string, string> = {};
+  for (const k of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']) {
+    if (env[k]) out[k] = env[k];
+  }
+  return out;
+}
+
 export async function resolveCredentialEnv(
   engine: 'kiro' | 'claude-code',
   credentialOwnerId: string | null,
@@ -623,6 +652,8 @@ export async function resolveCredentialEnv(
   _db?: unknown,
 ): Promise<Record<string, string>> {
   let cred: CredentialRecord | null | undefined;
+
+  if (isBedrockRuntimeChoice(engine, credentialId)) return { CLAUDE_CODE_USE_BEDROCK: '1' };
 
   if (credentialId && credentialOwnerId) {
     cred = await getCredentialsRepository().getByIdAndUser(credentialId, credentialOwnerId);
@@ -668,6 +699,32 @@ export const IDC_PROFILE_NAME_KEY = '_PORTAL_IDC_PROFILE_NAME';
  * back to the portal provider when NO credential row exists for the user; once a
  * credential is found we must never silently bill the portal provider instead.
  */
+/** AWS access keys pasted from the AWS access portal ("Command line or programmatic access"), stored as one encrypted blob. */
+export interface AwsKeys { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
+
+/** Checks pasted keys and returns what to store: the encrypted blob and the last 4 characters of the key ID. */
+export function parseAwsKeys(input: unknown): { secretEnc: string; last4: string; keys: AwsKeys } {
+  const o = (input && typeof input === 'object' && !Array.isArray(input) ? input : {}) as Record<string, unknown>;
+  const accessKeyId = String(o.accessKeyId ?? '').trim();
+  const secretAccessKey = String(o.secretAccessKey ?? '').trim();
+  const sessionToken = String(o.sessionToken ?? '').trim();
+  if (!/^[A-Z0-9]{16,128}$/.test(accessKeyId)) throw badRequest('Access key ID looks wrong: it is 16 to 128 capital letters and digits, such as ASIA…');
+  if (!/^[A-Za-z0-9+/=]{20,128}$/.test(secretAccessKey)) throw badRequest('Secret access key looks wrong: paste it exactly as the AWS access portal shows it');
+  if (sessionToken.length > 4096 || /\s/.test(sessionToken)) throw badRequest('Session token looks wrong: paste it as one piece, without line breaks');
+  if (accessKeyId.startsWith('ASIA') && !sessionToken) throw badRequest('Keys that start with ASIA are temporary: paste the session token too');
+  const keys: AwsKeys = { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) };
+  return { secretEnc: encrypt(JSON.stringify(keys), config.secretKey), last4: accessKeyId.slice(-4), keys };
+}
+
+export function readAwsKeys(cred: CredentialRow, label = 'AWS keys'): AwsKeys {
+  if (!cred.secret_enc) throw new HttpError(400, `AWS keys credential ${label} has no keys stored.`);
+  try {
+    const k = JSON.parse(decrypt(String(cred.secret_enc), config.secretKey)) as AwsKeys;
+    if (!k.accessKeyId || !k.secretAccessKey) throw new Error('incomplete');
+    return k;
+  } catch { throw new HttpError(500, `Could not read the AWS keys of credential ${label}.`); }
+}
+
 async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, string>> {
   const mode = String(cred.mode);
   const extra = safeJson(cred.extra_config);
@@ -775,6 +832,19 @@ async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, str
       catch { throw new HttpError(500, `Could not decrypt Claude subscription token credential ${label}.`); }
       if (!val) throw new HttpError(400, `Claude subscription token credential ${label} decrypted to an empty value.`);
       return { CLAUDE_CODE_OAUTH_TOKEN: val };
+    }
+
+    if (mode === 'aws_keys') {
+      const keys = readAwsKeys(cred, label);
+      const region = String(extra.region ?? 'us-east-1');
+      return {
+        CLAUDE_CODE_USE_BEDROCK: '1',
+        AWS_REGION: region,
+        AWS_DEFAULT_REGION: region,
+        AWS_ACCESS_KEY_ID: keys.accessKeyId,
+        AWS_SECRET_ACCESS_KEY: keys.secretAccessKey,
+        ...(keys.sessionToken ? { AWS_SESSION_TOKEN: keys.sessionToken } : {}),
+      };
     }
 
     if (mode === 'bedrock_role') {
@@ -973,7 +1043,12 @@ export function registerCredentialRoutes(): void {
     let secretEnc: string | null = null;
     let last4 = '';
 
-    if (mode === 'bedrock_role') {
+    if (mode === 'aws_keys') {
+      str(credConfig.region as string, 'config.region'); // validate required
+      const parsed = parseAwsKeys(body.awsKeys);
+      secretEnc = parsed.secretEnc;
+      last4 = parsed.last4;
+    } else if (mode === 'bedrock_role') {
       const roleArn = str(credConfig.roleArn as string, 'config.roleArn');
       if (!roleArn.startsWith('arn:')) throw badRequest('config.roleArn must be a valid ARN');
       str(credConfig.region as string, 'config.region'); // validate required
@@ -1021,10 +1096,17 @@ export function registerCredentialRoutes(): void {
       fields.name = body.name.trim().slice(0, 100);
     }
 
+    if (String(cred.mode) === 'aws_keys' && body.awsKeys) {
+      const parsed = parseAwsKeys(body.awsKeys);
+      fields.secret_enc = parsed.secretEnc;
+      fields.last4 = parsed.last4;
+    }
+
     if (
       typeof body.secret === 'string' &&
       body.secret.trim() &&
-      String(cred.mode) !== 'bedrock_role'
+      String(cred.mode) !== 'bedrock_role' &&
+      String(cred.mode) !== 'aws_keys'
     ) {
       fields.secret_enc = encrypt(body.secret.trim(), config.secretKey);
       fields.last4 = body.secret.trim().slice(-4);
@@ -1052,6 +1134,33 @@ export function registerCredentialRoutes(): void {
     appendAudit(getDb(), req.user!.id, 'credential.delete', `credential:${String(cred.id)}`,
       { engine: String(cred.engine), name: String(cred.name) }, req.ip);
     sendJson(res, 200, { ok: true });
+  });
+
+  // POST /api/credentials/check — does this sign-in work? { engine, credentialId? } (no id: the one a session would use).
+  // Lists the models with it, which is a real call for API keys, roles, Kiro and Bedrock. Browser only.
+  router.post('/api/credentials/check', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const engine = String(body.engine ?? '');
+    if (engine !== 'kiro' && engine !== 'claude-code') throw new HttpError(400, 'engine must be kiro or claude-code');
+    const credentialId = body.credentialId ? String(body.credentialId) : null;
+    if (credentialId && !isBedrockRuntimeChoice(engine, credentialId)) {
+      const own = await getCredentialsRepository().getByIdAndUser(credentialId, req.user!.id);
+      if (!own || own.engine !== engine) throw new HttpError(404, 'Sign-in not found');
+      // A Claude plan token cannot be checked without starting a run.
+      if (own.mode === 'subscription_token') {
+        sendJson(res, 200, { ok: true, checked: false, message: 'Saved. A Claude plan token can only be confirmed by a run, so the first session will tell.' });
+        return;
+      }
+    }
+    const { getEngineModels } = await import('./models.ts');
+    const r = await getEngineModels(engine, req.user!.id, credentialId, true);
+    const n = r.models.length;
+    if (r.error || n === 0) {
+      sendJson(res, 200, { ok: false, checked: true, runsAs: r.runsAs.label, message: r.error || 'The sign-in answered, but no models are available to it.' });
+      return;
+    }
+    sendJson(res, 200, { ok: true, checked: true, runsAs: r.runsAs.label, message: `Works. ${n} model${n === 1 ? '' : 's'} available (${r.runsAs.label}).` });
   });
 
   // POST /api/credentials/:id/set-default (browser only)
@@ -1504,6 +1613,14 @@ export function registerCredentialRoutes(): void {
         })),
       };
     }));
+
+    // Cloud portal: Claude Code can always run on Bedrock with this AWS account's runtime role.
+    const claude = summary.find((e) => e.engine === 'claude-code');
+    if (claude && bedrockRuntimeAvailable()) {
+      claude.credentials.push({
+        id: BEDROCK_RUNTIME_SIGN_IN, name: 'Amazon Bedrock (this AWS account)', mode: 'bedrock_runtime', last4: '', isDefault: false, virtual: true,
+      } as (typeof claude.credentials)[number]);
+    }
 
     const codexConfigured = await hasCodexLogin(req.user!.id);
     sendJson(res, 200, { summary: [...summary, { engine: 'codex', configured: codexConfigured, credentials: [] }] });

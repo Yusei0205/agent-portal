@@ -217,10 +217,18 @@ export function ModelPicker({ engine, credentialId, value, onChange }) {
 
 // ── Credential picker ──────────────────────────────────────────────────────────
 
+/** The sign-in a session starts with: the person's default, else their first own sign-in, else none (portal provider). */
+export function defaultCredential(creds) {
+  return (creds || []).find((c) => c.isDefault) || (creds || []).find((c) => !c.virtual) || null;
+}
+
 export function CredentialPicker({ engine, credentials, value, onChange }) {
-  // Only show when there's more than one credential for the engine
+  // Shown when there is a choice: more than one sign-in, or the cloud portal's own Bedrock choice.
   const filtered = (credentials || []).filter((c) => c.engine === engine);
-  if (filtered.length <= 1) return null;
+  const hasBedrockChoice = filtered.some((c) => c.virtual);
+  if (filtered.length <= 1 && !hasBedrockChoice) return null;
+  // Without a sign-in of their own the portal's AI provider is the other choice, so name it.
+  const options = filtered.some((c) => !c.virtual) ? filtered : [{ id: '', name: 'Portal AI provider (set by your admin)' }, ...filtered];
 
   return (
     <div className="field">
@@ -230,8 +238,8 @@ export function CredentialPicker({ engine, credentials, value, onChange }) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        {filtered.map((c) => (
-          <option key={c.id} value={c.id}>
+        {options.map((c) => (
+          <option key={c.id || 'portal'} value={c.id}>
             {c.name}
             {c.isDefault ? ' (default)' : ''}
           </option>
@@ -288,6 +296,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
 
   // Reset model when credential changes manually (engine changes already handled below)
   const handleCredentialChange = useCallback((newCredId) => {
+    setPreflight(null);
     setCredentialId(newCredId);
     setModel('');
   }, []);
@@ -309,11 +318,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
       setPortalMode(s.provider?.mode || 'demo');
 
       // Auto-select first credential for the current engine
-      const claudeCreds = map['claude-code'] || [];
-      if (claudeCreds.length > 0) {
-        const def = claudeCreds.find((c) => c.isDefault) || claudeCreds[0];
-        if (engine === 'claude-code') setCredentialId(def.id);
-      }
+      const def = defaultCredential(map['claude-code']);
+      if (def && engine === 'claude-code') setCredentialId(def.id);
       setInitLoaded(true);
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -325,8 +331,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   useEffect(() => {
     if (!credSummary) return;
     const creds = credSummary[engine] || [];
-    const def = creds.find((c) => c.isDefault) || creds[0];
-    setCredentialId(def?.id || '');
+    setCredentialId(defaultCredential(creds)?.id || '');
   }, [engine, credSummary]);
 
   // Focus goal on open
@@ -416,11 +421,21 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   // A goal is optional: without one the session just opens (and checks out its repositories) and waits for the first message.
   const canSubmit = !busy;
 
+  // Before a real engine starts, check its sign-in. A failure is shown once with the reason; Start again goes ahead.
+  const [preflight, setPreflight] = useState(null);
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
     try {
+      if ((engine === 'kiro' || engine === 'claude-code') && !preflight) {
+        const check = await api.post('/api/credentials/check', { engine, credentialId: credentialId || undefined }).catch(() => null);
+        if (check && !check.ok) {
+          setPreflight(check);
+          setBusy(false);
+          return;
+        }
+      }
       const payload = {
         goal: goal.trim(),
         engine,
@@ -531,6 +546,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                       onChange={() => {
                         if (available) {
                           setEngine(opt.id);
+                          setPreflight(null);
                           setLeadAgent('');
                           setModel('');
                         }
@@ -551,8 +567,9 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                           onClick={() => onClose()}
                           style={{ color: 'var(--accent)' }}
                         >
-                          Set up a credential
+                          Add your sign-in
                         </a>
+                        {' '}or ask an admin to set the portal AI provider
                       </span>
                     )}
                   </label>
@@ -707,6 +724,14 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                   Ticket context will be sent with the session goal.
                 </p>
               )}
+            </div>
+          )}
+
+          {preflight && !error && (
+            <div className="error-note" role="alert">
+              <strong>This sign-in did not pass a check ({preflight.runsAs || 'sign-in'}).</strong> {preflight.message}{' '}
+              Pick another sign-in or fix it under <a href="#/config/sign-ins" onClick={() => onClose()}>Agent setup › Sign-ins</a>,
+              or press Start session again to go ahead anyway.
             </div>
           )}
 

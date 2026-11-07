@@ -97,6 +97,8 @@ export interface InvocationPayload {
   mcpServers?: unknown[];
   /** AWS_* variables for the agent's shell: the project's AWS account. */
   awsEnv?: Record<string, string>;
+  /** AWS_* variables for the Bedrock model calls: the person's own AWS access instead of the runtime's role. NEVER log. */
+  bedrockEnv?: Record<string, string>;
   /** Staged files to write into the work folder first (checked again by shared/runner-files.ts). */
   inputFiles?: unknown[];
   /** Presigned S3 URLs for saving / restoring the workspace (checked by shared/runner-snapshot.ts). */
@@ -139,7 +141,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'policy', 'approvals',
+  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'bedrockEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'policy', 'approvals',
   'agents', 'agent', 'delegation',
 ]);
 const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
@@ -405,6 +407,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       ...(Array.isArray(obj.repos) ? { repos: obj.repos as unknown[] } : {}),
       ...(Array.isArray(obj.mcpServers) ? { mcpServers: obj.mcpServers as unknown[] } : {}),
       ...(cleanAwsEnv(obj.awsEnv) ? { awsEnv: cleanAwsEnv(obj.awsEnv) } : {}),
+      ...(cleanAwsEnv(obj.bedrockEnv) ? { bedrockEnv: cleanAwsEnv(obj.bedrockEnv) } : {}),
       ...(Array.isArray(obj.inputFiles) && obj.inputFiles.length <= 30 ? { inputFiles: obj.inputFiles as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(obj.prepareOnly === true ? { prepareOnly: true } : {}),

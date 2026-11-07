@@ -605,11 +605,17 @@
         "server/repositories/credentials-sqlite.ts",
         "server/repositories/credentials-dynamodb.ts",
         "web/src/pages/Credentials.jsx",
+        "web/src/components/SetupChecklist.jsx",
+        "web/src/components/AwsKeysFields.jsx",
+        "web/src/lib/aws-paste.js",
         "web/src/lib/awsCredParser.js",
         "web/src/styles/credentials.css"
       ],
       "tests": [
         "test/credentials.test.ts",
+        "test/bedrock-sign-in.test.ts",
+        "test/aws-keys-sign-in.test.ts",
+        "test/setup-checklist-ui.test.ts",
         "test/aws-cred-parser.test.ts",
         "test/credentials-repo.test.ts"
       ],

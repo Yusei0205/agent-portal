@@ -373,6 +373,13 @@ export async function runInvocation(
     if (v !== undefined) sdkEnv[k] = v;
   }
 
+  // The person's own AWS access for Bedrock (pasted keys or an assumed role): the machine's role is taken out so the
+  // model calls are made, and billed, as that account.
+  if (payload.bedrockEnv && !payload.auth) {
+    for (const k of [...credVarsToRestore, ...credChainVars]) delete sdkEnv[k];
+    Object.assign(sdkEnv, payload.bedrockEnv);
+  }
+
   // The project's AWS account for the agent's shell. With an Anthropic credential the machine's own role is not
   // needed (it only serves Bedrock), so it is taken out and the agent can only act as the account it was given.
   if (payload.awsEnv && payload.auth) {

@@ -26,6 +26,7 @@ describe('help content', () => {
       assert.match(t.id, /^[a-z0-9-]+$/);
       assert.ok(t.title && t.summary && t.sections.length > 0, `${t.id}: incomplete`);
       for (const s of t.sections) assert.ok(s.heading && (s.items?.length || s.rows?.length), `${t.id}: empty section`);
+      for (const s of t.sections) if (s.action) assert.ok(s.action.id && s.action.label, `${t.id}: a section action needs an id and a label`);
     }
   });
 

@@ -94,11 +94,20 @@ export const HELP_TOPICS = [
         steps: true,
         items: [
           'Sign in with the email and password your admin gave you, or follow your invite link.',
-          'Open **Agent setup › Sign-ins** and add a Claude Code or Kiro sign-in, unless your admin has set up a portal AI provider for everyone.',
+          'The **Get started** card on the Projects page shows which of these steps are done and what comes next.',
+          'Open **Agent setup › Sign-ins** and add a Claude Code or Kiro sign-in (on the cloud portal Claude Code can also run on **Amazon Bedrock (this AWS account)**, which needs no key), unless your admin has set up a portal AI provider for everyone.',
           'Pick or create a project with the project picker at the top of the rail.',
           'Add a repository under **Workspaces › Repositories** (the Git host must be connected under **Connections › Git connections**).',
           'Go to **Sessions**, press **Alt+N** and describe your goal. The agent starts working and you can follow it live.',
         ],
+      },
+      {
+        heading: 'Skipped the Get started card?',
+        items: [
+          'Press **Skip for now** on the card to hide it. It stays hidden in this browser until you bring it back.',
+          'The button below shows it again on the Projects page, with the steps you have already done ticked off.',
+        ],
+        action: { id: 'show-setup-checklist', label: 'Show the Get started card again' },
       },
       {
         heading: 'First-time setup (admins)',
@@ -487,8 +496,24 @@ export const HELP_TOPICS = [
     title: 'Agent setup',
     icon: 'file-cog',
     page: { tab: 'config' },
-    summary: 'How your agents behave: your own `.kiro`, `.claude` and `.aws` folders, as the engines see them in every session you start.',
+    summary: 'Your sign-ins for Codex, Kiro and Claude Code, and the `.codex`, `.kiro` and `.claude` files each engine loads in every session you start.',
     sections: [
+      {
+        heading: 'Sign-ins (start here)',
+        rows: [
+          ['Kiro: API key', 'You have a Kiro API key from kiro.dev.'],
+          ['Kiro: Company sign-in (AWS SSO)', 'Your company gives you Kiro through AWS. You approve a code in your browser.'],
+          ['Claude Code: Anthropic API key', 'A key from console.anthropic.com. Usage is billed to it.'],
+          ['Claude Code: Claude plan (Pro / Max)', 'Run `claude setup-token` on your computer and paste the token.'],
+          ['Claude Code: Amazon Bedrock (AWS access keys)', 'Your company signs in to AWS with SSO. In the AWS access portal choose your account and role, then **Command line or programmatic access**, copy the block and paste it in: the fields fill themselves. The keys expire after a few hours: press **Replace keys** and paste new ones. They work on the cloud portal too.'],
+          ['Claude Code: Amazon Bedrock (IAM role)', 'Your company gave you a role ARN. No secret is stored.'],
+          ['Claude Code: Amazon Bedrock (this AWS account)', 'Cloud portal only. Needs no key: the AWS account of this portal pays.'],
+        ],
+      },
+      {
+        heading: 'Test a sign-in',
+        items: ['Press **Test** on a sign-in to make a real call with it. It says how many models it can use, or why it failed. A Claude plan token can only be confirmed by a run.'],
+      },
       {
         heading: 'Editing',
         items: [

@@ -244,7 +244,7 @@ function ConfigTab({ folder, user, treeRefreshBump }) {
 }
 
 export function Configuration({ user, tab: wantedTab }) {
-  const tab = TABS.some((t) => t.id === wantedTab) ? wantedTab : 'kiro';
+  const tab = TABS.some((t) => t.id === wantedTab) ? wantedTab : SIGN_INS.id;
   const isSignIns = tab === SIGN_INS.id;
   const [treeRefreshBump, setTreeRefreshBump] = useState(0);
 
@@ -259,7 +259,7 @@ export function Configuration({ user, tab: wantedTab }) {
       {/* Page header: title + subtitle on left, zip buttons on right */}
       <PageHeader
         title="Agent setup"
-        description="How your agents behave: your sign-ins and your own .codex, .kiro and .claude folders, as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards."
+        description="Everything that sets up your agents: your sign-ins for Codex, Kiro and Claude Code, and the .codex, .kiro and .claude files each engine loads in every session you start. New here? Start with Sign-ins. File changes apply to sessions started or resumed afterwards."
       >
         {!isSignIns && <button
           type="button"
