@@ -11,6 +11,7 @@ import { Icon } from '../components/Icon.jsx';
 import { Markdown } from '../components/Markdown.jsx';
 import { InputCard } from '../components/InputCard.jsx';
 import { DiffView } from '../components/DiffView.jsx';
+import { AgentGraph } from '../components/AgentGraph.jsx';
 import { Badge, Button, Empty, ErrorNote, Field, Modal, Note, Segmented, Spinner, Tabs, Toggle, useUi } from '../components/ui.jsx';
 
 const MODES = [
@@ -334,6 +335,7 @@ function RunView({ runId }) {
         </section>
       ) : null}
 
+      <AgentGraph root={tree.root} selected={selectedNode} onSelect={setSelectedNode} mainTask={run.prompt} />
       <div className="run-body">
         <nav className="tree" aria-label="Agents in this run">
           <TreeNode node={tree.root} selected={selectedNode} onSelect={setSelectedNode} depth={0} />
@@ -361,7 +363,7 @@ function RunView({ runId }) {
             <Changes run={run} />
           ) : (
             <div className="pad-sm">
-              <pre className="prompt-box">{run.prompt}</pre>
+              <pre className="prompt-box">{node.kind === 'main' ? run.prompt : node.prompt || node.description || 'No task details recorded.'}</pre>
               {data.continuations?.length ? (
                 <p className="small">
                   Follow-ups:{' '}

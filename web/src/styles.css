@@ -2654,3 +2654,60 @@ mark {
   display: list-item;
   margin: 4px 0;
 }
+
+/* Live delegation graph; buttons share selection with the activity timeline. */
+.agent-graph {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-block: 1rem;
+  min-width: 0;
+}
+.agent-graph h2, .agent-graph h3 { margin: 0 0 .5rem; }
+.agent-graph h2 { font-size: 1rem; }
+.agent-graph h3 { font-size: .95rem; }
+.agent-graph-help { font-size: .875rem; opacity: .8; margin: .4rem 0; }
+.agent-graph-scroll { overflow: auto; padding: 1rem .25rem; }
+.agent-graph-scroll:focus-visible, .agent-graph-node:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+.agent-graph-root, .agent-graph-children { list-style: none; padding: 0; margin: 0; }
+.agent-graph-root { display: flex; width: max-content; min-width: 100%; justify-content: center; }
+.agent-graph-branch { display: flex; flex-direction: column; align-items: center; position: relative; padding-inline: .5rem; }
+.agent-graph-children { display: flex; position: relative; padding-top: 1.5rem; }
+.agent-graph-children::before {
+  content: ""; position: absolute; top: 0; left: 50%; height: .75rem;
+  border-left: 1px solid currentColor; opacity: .35;
+}
+.agent-graph-children > .agent-graph-branch::before {
+  content: ""; position: absolute; top: -.75rem; left: 0; right: 0; height: .75rem;
+  border-top: 1px solid currentColor; opacity: .35;
+}
+.agent-graph-children > .agent-graph-branch:first-child::before { left: 50%; }
+.agent-graph-children > .agent-graph-branch:last-child::before { right: 50%; }
+.agent-graph-children > .agent-graph-branch::after {
+  content: ""; position: absolute; top: -.75rem; left: 50%; height: .75rem;
+  border-left: 1px solid currentColor; opacity: .35;
+}
+.agent-graph-node {
+  display: flex; flex-direction: column; gap: .35rem; width: 13rem; padding: .8rem;
+  border: 1px solid var(--line); border-radius: .65rem;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.agent-graph-node:hover { background: color-mix(in srgb, currentColor 5%, transparent); }
+.agent-graph-node[aria-pressed="true"] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
+.agent-graph-name { font-weight: 650; overflow-wrap: anywhere; }
+.agent-graph-status { font-size: .75rem; font-weight: 600; }
+.agent-graph-status-running::before { content: "● "; }
+.agent-graph-status-waiting::before { content: "◷ "; }
+.agent-graph-status-done::before { content: "✓ "; }
+.agent-graph-status-failed::before { content: "× "; }
+.agent-graph-summary {
+  font-size: .85rem; overflow-wrap: anywhere; display: -webkit-box;
+  -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.agent-graph-meta { font-size: .75rem; opacity: .75; }
+.agent-graph-task { border-top: 1px solid var(--line); padding-top: .8rem; }
+.agent-graph-task pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .875rem; max-height: 16rem; overflow: auto; }
+@media (max-width: 600px) {
+  .agent-graph { padding: .75rem; }
+  .agent-graph-node { width: 11rem; }
+}
