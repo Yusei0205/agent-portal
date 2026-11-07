@@ -102,6 +102,25 @@ next deploy keeps them. If you keep secrets in SSM Parameter Store, also allow
    Re-upload a source document with a change and see the document flagged as out of date.
 8. **Settings**: set a monthly budget; switch to a real provider and repeat step 5.
 
+## Generate a skill from company documentation
+
+Under **Agents and skills › Skills**, choose **Generate from document**. Select a document
+already uploaded to Knowledge, or upload a company coding guide, review process, or other
+practice document. Generation uses the configured model provider and requires project editor
+access. Documents must finish processing and contain at most 60,000 characters of extracted
+text; upload a focused excerpt for longer guides.
+
+Review the generated name, usage description, and Markdown instructions against the linked
+source sections. Edit the draft, preview it, then choose **Approve and save skill**. Generation
+does not activate a skill. Saving creates a new enabled skill in the project's existing skill
+library, commits it to project history, and makes it selectable in an agent's Skills settings.
+Existing skill names cannot be overwritten through this approval step.
+
+Drafts are held in the current page; leaving or discarding removes them. The generation run
+is recorded in run history. In Demo mode, the draft contains labeled source excerpts for
+review; a real provider extracts the documented practices into instructions. Review remains
+necessary because generated instructions may misinterpret or repeat content from the source.
+
 ## Improving the portal from user feedback
 
 The portal can work on its own code, with an admin approving every change:

@@ -110,6 +110,18 @@ async function main() {
     await page.getByRole('link', { name: 'Skills', exact: true }).click();
     await page.locator('.editor-head h2').waitFor();
     await shot(page, 'skill-editor');
+    await page.getByRole('button', { name: 'Generate from document', exact: true }).click();
+    await page.getByLabel('Source document', { exact: true }).selectOption({ label: 'Refunds FSD' });
+    await page.getByRole('button', { name: 'Generate draft', exact: true }).click();
+    await page.getByRole('heading', { name: 'Review generated skill', exact: true }).waitFor();
+    await page.getByLabel('Skill name', { exact: true }).fill('company-review-practices');
+    await page.getByLabel('Skill instructions (Markdown)', { exact: true }).fill('Require a reviewer before merging changes.');
+    await page.getByRole('button', { name: 'Preview instructions', exact: true }).click();
+    await page.locator('.md-preview').getByText('Require a reviewer before merging changes.').waitFor();
+    await shot(page, 'generated-skill-review');
+    await page.getByRole('button', { name: 'Approve and save skill', exact: true }).click();
+    await page.getByRole('heading', { name: 'company-review-practices', exact: true }).waitFor();
+    check(true, 'generated skill can be reviewed, edited, and explicitly saved');
 
     console.log('repositories');
     const bare = makeRepo(path.join(dataDir, 'fixture'));

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api.js';
+import { SkillGenerator } from '../components/SkillGenerator.jsx';
 import { useApp, useProject } from '../lib/context.js';
 import { useProjectEvents } from '../lib/events.js';
 import { go, href } from '../lib/router.js';
@@ -361,15 +362,18 @@ function TestPanel({ type, name }) {
 /* ---------------- Skills ---------------- */
 
 function Skills({ selected }) {
+  const [generating, setGenerating] = useState(false);
   const { project, canEdit } = useProject();
   const { skills, tools } = useBuilderData();
   if (!skills.data || !tools.data) return <Spinner />;
+  if (generating && canEdit) return <SkillGenerator key={project.id} onCancel={() => setGenerating(false)} onSaved={async (skill) => { await skills.reload(true); setGenerating(false); go(project.id, 'builder', 'skills', skill.name); }} />;
   const list = skills.data.skills;
   const current = selected === 'new' ? null : list.find((s) => s.name === selected) || (selected ? undefined : list[0]);
   return (
     <div className="builder-layout">
       <ItemList items={list} selected={current?.name ?? selected} kind="skills" onNew={() => go(project.id, 'builder', 'skills', 'new')} canEdit={canEdit} projectId={project.id} />
       <div className="builder-main">
+        {canEdit ? <div className="row" style={{ marginBottom: 20 }}><Button onClick={() => setGenerating(true)}>Generate from document</Button></div> : null}
         {current === undefined && selected && selected !== 'new' ? <Empty title="Skill not found" /> : <SkillEditor key={current?.name || 'new'} skill={current} tools={tools.data} />}
       </div>
     </div>

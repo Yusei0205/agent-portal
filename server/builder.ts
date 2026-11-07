@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { registerSkillGenerationRoutes } from './skill-generation.ts';
 import path from 'node:path';
 import { all, one, run } from './db.ts';
 import { del, get, post, put } from './http.ts';
@@ -6,6 +7,7 @@ import { dataPath } from './config.ts';
 import { commitProject, notifyProject, projectDir, requireProject, type Project } from './projects.ts';
 import {
   assertName,
+  HttpError,
   badRequest,
   listValue,
   notFound,
@@ -272,6 +274,7 @@ function libType(t: unknown): 'agents' | 'skills' {
 /* ------------------------------------------------------------------ */
 
 export function registerBuilderRoutes(): void {
+  registerSkillGenerationRoutes();
   get('/api/tools', () => ({ tools: KNOWN_TOOLS, models: MODELS }));
 
   // ---- Agents ----
@@ -344,6 +347,7 @@ export function registerBuilderRoutes(): void {
     const name = assertName(ctx.params.name, 'Skill name');
     const body = await ctx.json();
     const found = findSkill(project, name);
+    if (body.createOnly === true && found) throw new HttpError(409, 'A skill with this name already exists. Choose a different name.');
     const prev = found ? readSkill(found.dir, found.enabled) : null;
     const dir = found?.dir ?? path.join(claudeDir(project, true), 'skills', name);
     writeSkillFile(dir, {
