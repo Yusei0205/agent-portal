@@ -494,6 +494,29 @@ export async function downloadAttachments(projectId: string, t: TicketDetail, wo
   return { ...t, attachments: out };
 }
 
+/**
+ * One attachment of a ticket, with the project's own Jira connection. Only ids that belong to the ticket are fetched
+ * (the ticket's attachment list is read first), so this cannot be used to read other Jira content. Returns null when
+ * the ticket has no such attachment.
+ */
+export async function fetchTicketAttachment(
+  projectId: string, mapping: Mapping, key: string, attachmentId: string, maxBytes = ATTACHMENT_LIMITS.maxFileBytes,
+): Promise<{ filename: string; mimeType: string; size: number; data: Buffer } | null> {
+  if (!/^\d+$/.test(attachmentId)) return null;
+  const ticket = await issueDetail(projectId, mapping, key);
+  const meta = ticket.attachments.find((a) => a.id === attachmentId);
+  if (!meta) return null;
+  if (meta.size > maxBytes) throw new HttpError(413, `This attachment is larger than ${Math.round(maxBytes / 1048576)} MB`);
+  const c = await connection(projectId);
+  const auth = c.authType === 'api_token' ? 'Basic ' + Buffer.from(`${c.apiEmail}:${c.apiToken}`).toString('base64') : `Bearer ${c.access}`;
+  const base = c.authType === 'api_token' ? `${c.site.url}/rest/api/3/attachment/content` : `${API_BASE()}/ex/jira/${c.site.cloudId}/rest/api/3/attachment/content`;
+  const res = await fetch(`${base}/${attachmentId}`, { headers: { authorization: auth, accept: '*/*' }, redirect: 'follow', signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) throw new HttpError(502, `Jira returned ${res.status} for this attachment`);
+  const data = Buffer.from(await res.arrayBuffer());
+  if (data.length > maxBytes) throw new HttpError(413, 'This attachment is larger than allowed');
+  return { filename: meta.filename, mimeType: meta.mimeType, size: data.length, data };
+}
+
 // ── Access helpers ────────────────────────────────────────────────────────────
 
 function requireAuth(req: PortalRequest, res: PortalResponse): boolean {
@@ -1102,6 +1125,30 @@ export function registerJiraRoutes(): void {
     const projectId = String(p.id);
     const ticket = await issueDetail(projectId, mustMapping(projectId), req.params.key);
     sendJson(res, 200, { ticket });
+  });
+
+  // ---- GET /api/projects/:pid/jira/issues/:key/attachments/:id — one attachment of the ticket ----
+  // Images open inline (so the Tickets tab can show them); every other type is a download. The bytes are never
+  // interpreted by the browser as a page (nosniff, a sandboxing policy, and SVG/HTML are always downloads).
+  router.get('/api/projects/:pid/jira/issues/:key/attachments/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const p = await requireProjectAccess(req, res, req.params.pid);
+    if (!p) return;
+    const projectId = String(p.id);
+    const found = await fetchTicketAttachment(projectId, mustMapping(projectId), req.params.key, req.params.id);
+    if (!found) { sendJson(res, 404, { error: 'This ticket has no such attachment' }); return; }
+    const inlineTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+    const inline = inlineTypes.has(found.mimeType.toLowerCase());
+    const safeName = path.basename(found.filename).replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'attachment';
+    const raw = res as import('node:http').ServerResponse;
+    raw.writeHead(200, {
+      'Content-Type': inline ? found.mimeType : 'application/octet-stream',
+      'Content-Length': found.data.length,
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "sandbox; default-src 'none'",
+      'Cache-Control': 'private, max-age=300',
+    });
+    raw.end(found.data);
   });
 
   // ---- POST /api/runs/:id/jira-comment — post result back to Jira ----

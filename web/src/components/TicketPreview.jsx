@@ -22,6 +22,48 @@ function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * The ticket's attachments: images as thumbnails (click to open the full image in a new tab), everything else as a
+ * download link. The files come through the portal (the project's own Jira connection), never straight from Jira.
+ */
+function Attachments({ projectId, ticketKey, items }) {
+  const url = (a) => `/api/projects/${projectId}/jira/issues/${encodeURIComponent(ticketKey)}/attachments/${encodeURIComponent(a.id)}`;
+  const images = items.filter((a) => a.id && IMAGE_TYPES.has(String(a.mimeType).toLowerCase()));
+  const files = items.filter((a) => !images.includes(a));
+  return (
+    <section aria-label="Attachments" className="stack" style={{ gap: '0.4rem' }}>
+      <strong className="small">Attachments ({items.length})</strong>
+      {images.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {images.map((a) => (
+            <a key={a.id} href={url(a)} target="_blank" rel="noopener noreferrer" title={`${a.filename}${a.size ? ` (${formatBytes(a.size)})` : ''}`} style={{ display: 'block' }}>
+              <img
+                src={url(a)}
+                alt={a.filename}
+                loading="lazy"
+                style={{ display: 'block', maxWidth: 180, maxHeight: 130, objectFit: 'cover', border: '1px solid var(--line)', borderRadius: 'var(--radius)', background: 'var(--panel)' }}
+              />
+              <span className="muted small" style={{ display: 'block', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.filename}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+          {files.map((a, i) => (
+            <li key={a.id || i}>
+              {a.id ? <a href={url(a)} download>{a.filename}</a> : a.filename}
+              {a.size ? <span className="muted"> ({formatBytes(a.size)})</span> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function statusBadgeClass(statusCategory) {
   if (statusCategory === 'done') return 'badge badge-ok';
   if (statusCategory === 'indeterminate') return 'badge badge-info';
@@ -166,15 +208,7 @@ export function TicketPreview({ projectId, ticketKey, onStartSession }) {
 
       {/* Attachments */}
       {t.attachments && t.attachments.length > 0 && (
-        <p className="muted small">
-          Attachments:{' '}
-          {t.attachments
-            .map(
-              (a) =>
-                `${a.filename}${a.size ? ` (${formatBytes(a.size)})` : ''}`,
-            )
-            .join(', ')}
-        </p>
+        <Attachments projectId={projectId} ticketKey={t.key || ticketKey} items={t.attachments} />
       )}
 
       {/* Comments */}
