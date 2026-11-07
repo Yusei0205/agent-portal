@@ -403,3 +403,13 @@ Ran a diagram, a document and a deck through the live portal. Findings and fixes
 ## Clone progress
 
 The runner clones with `--progress` while preparing a session's repositories and reports phase, percent, object counts, size and speed per repository (up to 3 repositories in parallel), then the file count when each is ready. The composer shows them and keeps the result after finishing. A server instance that has not yet seen the status returns nothing: the page treats that as "still running".
+
+## 504 when adding a Kiro Identity Center sign-in
+
+**Symptom:** Agent setup > Sign-ins > Add Kiro sign-in (Identity Center) ended in a 504 Gateway Timeout.
+
+**Cause:** the request waits for the Kiro runtime to start the device sign-in and return the code. A runtime that has been idle needs about half a minute to start (the log shows two cold starts 36 seconds apart), and CloudFront gave up on the portal after its default 30 seconds. The portal itself kept going, so the sign-in may exist half-made in the list.
+
+**Fix:** the `/api/*` origin now waits 60 seconds (`readTimeout` in `infra/lib/portal-stack.ts`, the most CloudFront allows without a quota increase). Needs a CDK deploy. Until then, try again right away: the runtime is warm and answers in seconds. Delete the half-made entry if one appeared.
+
+**Not fixed:** a start slower than 60 seconds would still 504. The lasting fix is to return at once and let the page poll for the code.

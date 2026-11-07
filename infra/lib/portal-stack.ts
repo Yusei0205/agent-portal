@@ -445,6 +445,10 @@ export class AgentPortalCloudStack extends cdk.Stack {
         '/api/*': {
           origin: new origins.FunctionUrlOrigin(fnUrl, {
             customHeaders: { 'x-portal-origin': originSecret.secretValue.unsafeUnwrap() },
+            // Default is 30 s. Starting a Kiro Identity Center sign-in wakes the Kiro runtime (a cold start of about
+            // half a minute) before the sign-in code can be returned, so 30 s ended in a 504. 60 s is the most
+            // CloudFront allows without a quota increase.
+            readTimeout: cdk.Duration.seconds(60),
           }),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
