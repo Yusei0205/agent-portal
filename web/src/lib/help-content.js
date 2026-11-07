@@ -27,23 +27,55 @@ export const HELP_GROUPS = [
 
 export const HELP_TOPICS = [
   {
-    id: 'automations', group: 'work', title: 'Visual workflows', icon: 'projects',
+    id: 'automations', group: 'work', title: 'Workflows', icon: 'projects',
     page: { tab: 'automations', project: true },
-    summary: 'Build repeatable agent workflows with verification checks, branches, retry limits, human approvals and published versions.',
+    summary: 'Chain agent tasks, checks, branches and human approvals into a repeatable process, and run it on demand: from a Jira ticket to a reviewed pull request, or to test a ticket.',
     sections: [
-      { heading: 'Build and publish', steps: true, items: [
-        'Choose a project and open **Workflows**. Create an SDLC workflow, select your engine and connected repositories, and edit each task’s agent, model and instructions.',
-        'Configure the **Run tests** verification command and its repository working directory. Conditions follow **Yes** when the previous agent turn and its required checks pass; failures follow **No**.',
-        'Drag steps to arrange them and connect the handles. Each task needs one Next path; conditions need Yes and No paths. Visit, step and time limits bound retries.',
-        'Save the draft, then **Publish version**. Runs keep their published version even when you edit the draft. Version history can copy an older version into the draft.',
+      { heading: 'What a workflow is', items: [
+        'A workflow is a map of **steps** joined by arrows: **Agent task** (an agent does the work from your instructions), **Condition** (Yes if the previous task and its checks passed, otherwise No), **Human approval** (the run waits for a person) and **End**.',
+        'You build it once, **publish** it, and then **run** it as often as you like with a different request each time. Every run keeps the version it started with, even if you edit the workflow later.',
+        'All the tasks of a run share one working copy of your repositories and one conversation, so a later step sees what an earlier one wrote (usually in an `artifacts/` folder).',
       ] },
-      { heading: 'Run and review', items: [
-        'Enter a run request and choose **Run published workflow**. Tasks share one working copy and conversation. The workflow uses the starting user’s default agent sign-in and portal tool permissions.',
-        'Use `{{input}}` in instructions for the run request, or `{{steps.design.output}}` for a completed step’s summary. Use files in the shared working copy for larger artifacts.',
-        'The execution graph and timeline show the pinned version. Open the linked session for full live logs, tool approvals, files, terminal and PR links.',
-        'A human approval stage waits for the run owner or a portal admin. The SDLC template asks for review before PR creation against `main_v3`; it never merges or deploys.',
-        'Cloud runs continue when the page closes through durable orchestration. Each agent task has a 12 minute cap. Cancel stops further stages and requests cancellation of the active task.',
+      { heading: 'Before the first run', steps: true, items: [
+        'Connect the repository the agent should work in (**Workspaces › Repositories**).',
+        'Sign in for the engine the workflow uses (Codex, Claude Code or Kiro) under **Connections › Agent sign-ins**. A run uses the sign-in of the person who starts it.',
+        'For Jira workflows, connect Jira for this project (**Connections › Tools & services**, or the **Tickets** page). The portal then reads the ticket, and its images and files up to 2 MB, itself. To let steps **write** to Jira (comments, test results), also add a Jira (Atlassian) integration with writes allowed under **Connections › Tools & services**. Jira is set up per project, so each project reads its own Jira.',
+        'For workflows that deploy, give the project an AWS account (**Workspaces › AWS**) for the dev environment.',
       ] },
+      { heading: 'Create a workflow', steps: true, items: [
+        'Open **Workflows** in the left menu (pick a project first). The page lists the project\'s workflows; press **New workflow**.',
+        'Choose a template card: **SDLC**, **Development (Jira ticket to reviewed PR)** or **Testing (verify a ticket)**. The canvas shows its steps; click a step to read its instructions. Nothing exists yet.',
+        'Give it a name (a free name is filled in for you; names cannot repeat in a project) and press **Create workflow**.',
+        'In the editor, open **Settings** to choose the engine, the step and time limits and the repositories. Click a step on the canvas to change its name, agent, model, instructions and verification checks; **+ Agent task** and the other buttons add steps, and **Delete step** removes one. Drag to move steps and drag from one handle to another to connect them.',
+        'Press **Save draft**, then **Publish version**. A workflow cannot run until it has a published version, and publishing checks that every step is connected from Start to End.',
+      ] },
+      { heading: 'Trigger a run', steps: true, items: [
+        'Open the workflow and its **Runs** tab.',
+        'Write the **run request** and press **Run published workflow**. For **Development** and **Testing**, write the Jira ticket key (for example `ABC-123`) or paste its link. For **SDLC**, describe what to build.',
+        'The run starts straight away and **continues when you close the page**. The button is off until the workflow is published and saved (a run always uses the published version), and on a deployment without durable execution you will see a notice saying so.',
+        'From a script or another tool you can start a run too: `POST /api/projects/<project id>/automations/<workflow id>/runs` with `{"input": "ABC-123", "requestId": "<a new uuid>"}` and an API token that has write access (**API access**). Sending the same `requestId` again returns that run instead of starting a second one.',
+        'Workflows are started by hand or by that call. They have no schedule, webhook or Jira-event trigger of their own; for those, use **Loop specs** (see Delegated sessions and loop specs).',
+      ] },
+      { heading: 'Follow a run', items: [
+        'The **Runs** tab shows the run\'s status, the workflow drawn with each step\'s state, and a timeline with each task\'s summary. Pick an older run from **Run history**.',
+        '**Open session, logs & artifacts** goes to the full session: live output, tool calls, files, and the pull request link when one was made.',
+        'When a run reaches a **Human approval** step its status becomes **waiting**. Read the instructions shown, then press **Approve**. Only the person who started the run or a portal admin can approve. Tool calls inside the agent tasks still follow your normal portal permissions.',
+        '**Cancel run** stops further steps and asks the active task to stop. Each agent task is limited to 12 minutes, and the workflow\'s own step, time and visit limits stop a loop that keeps going.',
+      ] },
+      { heading: 'The templates', rows: [
+        ['SDLC', 'Input: what to build. Analyze, design, code, run tests (retry on failure), review, approve, open a pull request. Never merges or deploys.'],
+        ['Development', 'Input: a Jira key. Read the ticket and attachments > design from the repository\'s patterns (reuse shared code) > code > **you approve** > deploy to dev without the pipeline > open a pull request > code review > fix review comments and repeat until approved > comment on the ticket with step-by-step QA test steps.'],
+        ['Testing', 'Input: a Jira key. Read the ticket > test the fix > test edge scenarios (PASS, FAIL or NOT COVERED) > write the report > post it on the ticket, with failed or uncovered scenarios, screenshots and test files, and the frontend links to check by hand.'],
+      ] },
+      { heading: 'Manage workflows', items: [
+        'The list shows each workflow\'s engine, steps, status (**Draft only** or **Published vN**), latest run and when it changed. **Open** edits it; **Delete** hides it (its versions and past runs are kept as history). A workflow with a run in progress cannot be deleted.',
+        '**Version history** lists published versions; **Copy to draft** brings an old one back for editing. Leaving the editor with unsaved changes asks first.',
+        'In instructions, `{{input}}` is the run request and `{{steps.design.output}}` is the summary of an earlier step (use the step\'s ID, shown in its settings). `{{jira.ticket}}` is the ticket named in the run request, read with the project\'s Jira connection.',
+      ] },
+    ],
+    tips: [
+      'Try a template with the **Demo** engine first to see how a run moves through the steps without using an agent.',
+      'Change a template\'s instructions to match your team\'s process before the first real run: the deploy and pull request steps assume what your repository documents.',
     ],
   },
   // ── Getting started ─────────────────────────────────────────────────────────
