@@ -30,9 +30,23 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
       } else await route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><link rel="stylesheet" href="/workflow-fixture.css"></head><body><div id="root"></div><script src="/workflow-fixture.js"></script></body></html>' });
     });
     await page.goto(`${baseUrl}/workflow-fixture`);
-    await page.getByRole('button', { name: 'New workflow' }).click();
-    await page.locator('.automation-canvas .react-flow__node').first().waitFor();
-    assert.equal(await page.locator('.automation-canvas .react-flow__node').count(), 10);
+    const canvas = '.automation-canvas[aria-label="Workflow canvas"] .react-flow__node';
+    const preview = '.automation-canvas[aria-label="Template canvas"] .react-flow__node';
+    const definitionsCount = async () => ((await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie })).body as any).definitions.length;
+
+    // An empty project starts on the list with a clear way to begin.
+    await page.getByText('No workflows yet').waitFor();
+    await page.getByRole('button', { name: 'New workflow' }).first().click();
+
+    // New workflow: pick a template card, see it on a canvas, name it, create it. Nothing exists before Create.
+    await page.getByRole('radiogroup', { name: 'Template' }).waitFor();
+    await page.locator(preview).first().waitFor();
+    assert.equal(await page.locator(preview).count(), 10, 'the SDLC template is drawn');
+    assert.equal(await definitionsCount(), 0, 'looking creates nothing');
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await page.locator(canvas).first().waitFor();
+    assert.equal(await page.locator(canvas).count(), 10);
+
     await page.getByText('Generate code', { exact: true }).click();
     await page.locator('.automation-inspector').getByLabel('Name', { exact: true }).fill('Implement feature');
     await page.getByRole('button', { name: 'Save draft' }).click();
@@ -44,7 +58,9 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     const old = await fetchJson(baseUrl, `/api/projects/${projectId}/automations/${definition.id}/versions`, { cookie });
     assert.equal((old.body as any).versions[0].graph.nodes.find((n: any) => n.id === 'code').label, 'Implement feature');
     await page.locator('.automation-inspector').getByLabel('Name', { exact: true }).fill('Next draft');
-    assert.equal(await page.getByRole('button', { name: 'Run published workflow' }).isDisabled(), true);
+    await page.getByRole('tab', { name: /^Runs/ }).click();
+    assert.equal(await page.getByRole('button', { name: 'Run published workflow' }).isDisabled(), true, 'runs use the published version, so unsaved edits block it');
+    await page.getByRole('tab', { name: 'Design' }).click();
     await page.getByRole('button', { name: 'Save draft' }).click();
     await page.getByText('Draft saved.', { exact: true }).waitFor();
     const unchanged = await fetchJson(baseUrl, `/api/projects/${projectId}/automations/${definition.id}/versions`, { cookie });
@@ -53,34 +69,62 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('.automation-inspector').getByLabel('Name', { exact: true }).waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2), 'mobile page should not overflow horizontally');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
     // A step can be removed with the button in its settings, together with its connections.
-    const nodesBefore = await page.locator('.automation-canvas .react-flow__node').count();
+    const nodesBefore = await page.locator(canvas).count();
     const edgesBefore = await page.locator('.automation-canvas .react-flow__edge').count();
     await page.getByText('Run tests', { exact: true }).click();
     await page.getByRole('button', { name: 'Delete step' }).click();
-    assert.equal(await page.locator('.automation-canvas .react-flow__node').count(), nodesBefore - 1);
+    assert.equal(await page.locator(canvas).count(), nodesBefore - 1);
     assert.ok((await page.locator('.automation-canvas .react-flow__edge').count()) < edgesBefore, 'its connections go too');
     assert.equal(await page.getByRole('button', { name: 'Delete step' }).count(), 0, 'nothing is selected afterwards');
-    // Choosing a template shows it on the canvas first; nothing is created until Create.
-    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    // Leaving with unsaved changes asks first; saving lets you go to the list, which shows the workflow.
+    await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('button', { name: 'Workflows' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
     await page.getByRole('button', { name: 'Save draft' }).click();
     await page.getByText('Draft saved.', { exact: true }).waitFor();
-    const before = ((await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie })).body as any).definitions.length;
-    await page.getByLabel('Template', { exact: true }).selectOption('development');
-    await page.getByLabel('Template preview: Development (Jira ticket to reviewed PR)').waitFor();
-    await page.locator('.automation-canvas[aria-label="Template canvas"] .react-flow__node').first().waitFor();
-    assert.equal(await page.locator('.automation-canvas[aria-label="Template canvas"] .react-flow__node').count(), 12);
+    await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('button', { name: 'Workflows' }).click();
+    const row = page.getByRole('table', { name: 'Workflows' }).getByRole('row', { name: /Published v2/ });
+    await row.waitFor();
+    assert.match(await row.innerText(), /SDLC/);
+
+    // A template can be read before creating, and Cancel leaves nothing behind.
+    await page.getByRole('button', { name: 'New workflow' }).click();
+    await page.getByRole('radio', { name: /Development/ }).click();
+    await page.locator(preview).nth(11).waitFor();
+    assert.equal(await page.locator(preview).count(), 12);
     await page.locator('.automation-canvas[aria-label="Template canvas"]').getByText('Read Jira ticket', { exact: true }).click();
     await page.locator('.automation-inspector').getByText(/Jira ticket is/).waitFor();
-    assert.equal(((await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie })).body as any).definitions.length, before, 'previewing creates nothing');
-    await page.getByRole('button', { name: 'Close preview' }).click();
-    await page.getByLabel('Template preview: Development (Jira ticket to reviewed PR)').waitFor({ state: 'detached' });
-    await page.getByLabel('Template', { exact: true }).selectOption('testing');
-    await page.getByLabel('Template preview: Testing (verify a ticket)').waitFor();
-    await page.getByRole('button', { name: /^Create workflow/ }).click();
-    await page.locator('.automation-canvas[aria-label="Workflow canvas"] .react-flow__node').first().waitFor();
-    assert.equal(await page.locator('.automation-canvas[aria-label="Workflow canvas"] .react-flow__node').count(), 7, 'the testing template opened as an editable workflow');
-    assert.equal(((await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie })).body as any).definitions.length, before + 1);
+    assert.equal(await definitionsCount(), 1, 'previewing creates nothing');
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    // Create from the Testing template; the default name is the template's own.
+    await page.getByRole('button', { name: 'New workflow' }).click();
+    await page.getByRole('radio', { name: /Testing/ }).click();
+    assert.equal(await page.getByLabel('New workflow name').inputValue(), 'Testing');
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await page.locator(canvas).first().waitFor();
+    assert.equal(await page.locator(canvas).count(), 7, 'the testing template opened as an editable workflow');
+    assert.equal(await definitionsCount(), 2);
+
+    // The same template again gets a numbered name, and typing an existing name is refused instead of duplicating it.
+    await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('button', { name: 'Workflows' }).click();
+    await page.getByRole('button', { name: 'New workflow' }).click();
+    await page.getByRole('radio', { name: /Testing/ }).click();
+    assert.equal(await page.getByLabel('New workflow name').inputValue(), 'Testing 2');
+    await page.getByLabel('New workflow name').fill('testing');
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await page.getByRole('alert').getByText(/already exists/).waitFor();
+    assert.equal(await definitionsCount(), 2, 'no duplicate was created');
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    // Delete asks first, then the workflow leaves the list.
+    await page.getByRole('button', { name: 'Delete Testing' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+    await page.getByRole('button', { name: 'Delete Testing' }).waitFor({ state: 'detached' });
+    assert.equal(await definitionsCount(), 1);
     assert.deepEqual(errors, []);
     await context.close();
   } finally { await browser.close(); stopLocalAutomationTimers(); await cleanup(); }

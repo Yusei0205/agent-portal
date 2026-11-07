@@ -21,8 +21,14 @@ async function access(req: PortalRequest, write = false): Promise<string> {
 }
 async function definition(project: string, id: string): Promise<Definition> {
   const value = await (await getAutomationsRepository()).get<Definition>(project, definitionKey(id));
-  if (!value) throw notFound('Workflow not found');
+  if (!value || value.deleted_at) throw notFound('Workflow not found');
   return value;
+}
+/** Names are unique per project (ignoring case), so the list never shows two workflows that look the same. */
+async function ensureFreshName(project: string, wanted: string, exceptId: string | null): Promise<void> {
+  const all = await (await getAutomationsRepository()).list<Definition>(project, 'DEF#');
+  const taken = all.some((d) => !d.deleted_at && d.id !== exceptId && d.name.trim().toLowerCase() === wanted.trim().toLowerCase());
+  if (taken) throw new HttpError(409, `A workflow named "${wanted}" already exists in this project. Choose another name.`);
 }
 async function checkRepos(project: string, repoIds: string[]): Promise<void> {
   const allowed = new Set((await getGitReposRepository().listByProject(project)).map((r) => r.id));
@@ -38,15 +44,25 @@ const prefix = '/api/projects/:id/automations';
 export function registerAutomationRoutes(): void {
   router.get(prefix, async (req, res) => {
     const project = await access(req);
-    const definitions = await (await getAutomationsRepository()).list<Definition>(project, 'DEF#');
-    sendJson(res, 200, { definitions, template: sdlcTemplate(), templates: automationTemplates(), executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
+    const repo = await getAutomationsRepository();
+    const definitions = (await repo.list<Definition>(project, 'DEF#')).filter((d) => !d.deleted_at);
+    // What the list shows beside each workflow: how many runs, how many are going now, and the latest one.
+    const stats: Record<string, { runs: number; active: number; lastStatus: string | null; lastStartedAt: string | null }> = {};
+    for (const r of await repo.list<AutomationRun>(project, 'RUN#')) {
+      const s = stats[r.definition_id] ??= { runs: 0, active: 0, lastStatus: null, lastStartedAt: null };
+      s.runs++;
+      if (['running', 'waiting'].includes(r.status)) s.active++;
+      if (!s.lastStartedAt || r.started_at > s.lastStartedAt) { s.lastStartedAt = r.started_at; s.lastStatus = r.status; }
+    }
+    sendJson(res, 200, { definitions, stats, template: sdlcTemplate(), templates: automationTemplates(), executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
   });
   router.post(prefix, async (req, res) => {
     const project = await access(req, true); const body = req.body as Record<string, unknown>;
     const chosen = body.templateId === undefined ? null : automationTemplates().find((t) => t.id === body.templateId);
     if (body.templateId !== undefined && !chosen) throw badRequest('Choose one of the listed templates');
     const graph = parseGraph(body.graph ?? chosen?.graph ?? sdlcTemplate()); await checkRepos(project, graph.repoIds);
-    const d: Definition = { id: generateId(), project_id: project, revision: 1, name: name(body.name), graph, published_version: null, created_by: req.user!.id, updated_at: now() };
+    const wanted = name(body.name); await ensureFreshName(project, wanted, null);
+    const d: Definition = { id: generateId(), project_id: project, revision: 1, name: wanted, graph, published_version: null, created_by: req.user!.id, updated_at: now() };
     await (await getAutomationsRepository()).put(project, definitionKey(d.id), d, null);
     sendJson(res, 201, { definition: d });
   });
@@ -58,9 +74,22 @@ export function registerAutomationRoutes(): void {
     const body = req.body as Record<string, unknown>;
     if (body.revision !== current.revision) throw conflict();
     const graph = parseGraph(body.graph); await checkRepos(project, graph.repoIds);
-    const updated: Definition = { ...current, name: name(body.name), graph, revision: current.revision + 1, updated_at: now() };
+    const newName = name(body.name);
+    if (newName.toLowerCase() !== current.name.trim().toLowerCase()) await ensureFreshName(project, newName, current.id);
+    const updated: Definition = { ...current, name: newName, graph, revision: current.revision + 1, updated_at: now() };
     if (!await (await getAutomationsRepository()).put(project, definitionKey(current.id), updated, current.revision)) throw conflict();
     sendJson(res, 200, { definition: updated });
+  });
+  // Remove a workflow from the list. Its published versions and runs are kept (history); it just stops being offered.
+  // A workflow with a run that is going or waiting for approval cannot be removed.
+  router.delete(`${prefix}/:aid`, async (req, res) => {
+    const project = await access(req, true); const current = await definition(project, req.params.aid);
+    const repo = await getAutomationsRepository();
+    const busy = (await repo.list<AutomationRun>(project, 'RUN#')).some((r) => r.definition_id === current.id && ['running', 'waiting'].includes(r.status));
+    if (busy) throw new HttpError(409, 'This workflow has a run in progress. Cancel it first.');
+    const removed: Definition = { ...current, deleted_at: now(), revision: current.revision + 1, updated_at: now() };
+    if (!await repo.put(project, definitionKey(current.id), removed, current.revision)) throw conflict();
+    sendJson(res, 200, { ok: true });
   });
   router.post(`${prefix}/:aid/publish`, async (req, res) => {
     const project = await access(req, true); const current = await definition(project, req.params.aid);
