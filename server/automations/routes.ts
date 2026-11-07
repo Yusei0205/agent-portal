@@ -39,7 +39,7 @@ export function registerAutomationRoutes(): void {
   router.get(prefix, async (req, res) => {
     const project = await access(req);
     const definitions = await (await getAutomationsRepository()).list<Definition>(project, 'DEF#');
-    sendJson(res, 200, { definitions, template: sdlcTemplate(), templates: automationTemplates().map(({ id, name, description }) => ({ id, name, description })), executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
+    sendJson(res, 200, { definitions, template: sdlcTemplate(), templates: automationTemplates(), executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
   });
   router.post(prefix, async (req, res) => {
     const project = await access(req, true); const body = req.body as Record<string, unknown>;

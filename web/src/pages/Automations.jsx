@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlow, Background, Controls, Handle, Position, applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import '../styles/automations.css';
@@ -28,6 +28,36 @@ const toGraph = (graph, nodes, edges) => ({ ...graph,
   edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, branch: e.sourceHandle || 'next' })),
 });
 
+/** A template shown as it will be created: read-only canvas, and the instructions of the step you click. */
+function TemplatePreview({ template, name, busy, blocked, onCreate, onClose }) {
+  const flow = useMemo(() => toFlow(template.graph), [template]);
+  const [pickedId, setPickedId] = useState(null);
+  const picked = template.graph.nodes.find((n) => n.id === pickedId);
+  const steps = template.graph.nodes.filter((n) => n.kind === 'agent').length;
+  return <section aria-label={`Template preview: ${template.name}`} className="stack">
+    <div className="automation-actions">
+      <div style={{ flex: 1, minWidth: 220 }}><strong>Template: {template.name}</strong><p className="muted small" style={{ margin: '2px 0 0' }}>{template.description}</p></div>
+      <button className="btn btn-primary" disabled={busy || blocked || !name.trim()} title={blocked ? 'Save or discard the changes to the open workflow first' : undefined} onClick={onCreate}>Create workflow “{name.trim() || '…'}”</button>
+      <button className="btn" onClick={onClose}>Close preview</button>
+    </div>
+    <div className="automation-builder">
+      <aside className="automation-palette"><h2>Preview</h2><p className="muted">{template.graph.nodes.length} steps ({steps} agent tasks). Click a step to read its instructions. Nothing is created until you press Create; you can change every step afterwards.</p></aside>
+      <div className="automation-canvas" aria-label="Template canvas">
+        <ReactFlow nodes={flow.nodes.map((n) => ({ ...n, selected: n.id === pickedId }))} edges={flow.edges} nodeTypes={nodeTypes} fitView colorMode="dark"
+          nodesDraggable={false} nodesConnectable={false} deleteKeyCode={null}
+          onNodeClick={(_, node) => setPickedId(node.id)} onPaneClick={() => setPickedId(null)}>
+          <Background gap={20} /><Controls showInteractive={false} />
+        </ReactFlow>
+      </div>
+      <aside className="automation-inspector"><h2>{picked ? picked.label : 'Select a step'}</h2>{picked && <>
+        <p className="muted small">{kinds[picked.kind]}{picked.maxVisits ? ` · visit limit ${picked.maxVisits}` : ''}</p>
+        {picked.prompt ? <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '.78rem', margin: 0 }}>{picked.prompt}</pre> : <p className="muted small">No instructions for this step type.</p>}
+        {picked.checks?.length > 0 && <><h3>Verification checks</h3>{picked.checks.map((c, i) => <p className="small" key={i}><strong>{c.step}</strong>: <code>{c.cmd}</code></p>)}</>}
+      </>}</aside>
+    </div>
+  </section>;
+}
+
 export default function Automations({ projectId }) {
   const base = `/api/projects/${projectId}/automations`;
   const [definitions, setDefinitions] = useState([]);
@@ -42,7 +72,7 @@ export default function Automations({ projectId }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [available, setAvailable] = useState(false); const [dirty, setDirty] = useState(false);
   const [input, setInput] = useState(''); const [newName, setNewName] = useState('SDLC automation');
-  const [templates, setTemplates] = useState([]); const [templateId, setTemplateId] = useState('sdlc');
+  const [templates, setTemplates] = useState([]); const [templateId, setTemplateId] = useState('sdlc'); const [previewId, setPreviewId] = useState(null);
   const [loading, setLoading] = useState(true);
   const requestId = useRef(null);
   const selected = nodes.find((n) => n.id === selectedId);
@@ -100,7 +130,7 @@ export default function Automations({ projectId }) {
     setNotice(`Published version ${result.definition.published_version}. Runs keep this version even when you edit the draft.`);
   });
   const create = () => task(async () => {
-    const r = await api.post(base, { name: newName, templateId }); setDefinitions((list) => [...list, r.definition]); open(r.definition);
+    const r = await api.post(base, { name: newName, templateId }); setDefinitions((list) => [...list, r.definition]); setPreviewId(null); open(r.definition);
   });
   const start = () => task(async () => {
     requestId.current ||= crypto.randomUUID();
@@ -128,14 +158,14 @@ export default function Automations({ projectId }) {
   const executionFlow = runGraph ? toFlow(runGraph, run) : null;
   return <div className="page automations-page">
     <header className="automation-heading"><div><h1>Workflows</h1><p className="muted">Build repeatable agent tasks with checks, branches, and human approvals.</p></div>
-      <div className="automation-actions">{templates.length > 1 && <select aria-label="Template" title={templates.find((t) => t.id === templateId)?.description} value={templateId} onChange={(e) => { const t = templates.find((v) => v.id === e.target.value); setTemplateId(e.target.value); if (t) setNewName(t.name.replace(/ \(.*$/, '')); }}>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>}<input aria-label="New workflow name" value={newName} maxLength={120} onChange={(e) => setNewName(e.target.value)} /><button className="btn" disabled={busy || !newName.trim() || dirty} onClick={create}>New workflow</button></div></header>
+      <div className="automation-actions">{templates.length > 1 && <select aria-label="Template" title={templates.find((t) => t.id === templateId)?.description} value={templateId} onChange={(e) => { const t = templates.find((v) => v.id === e.target.value); setTemplateId(e.target.value); setPreviewId(e.target.value); if (t) setNewName(t.name.replace(/ \(.*$/, '')); }}>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>}<input aria-label="New workflow name" value={newName} maxLength={120} onChange={(e) => setNewName(e.target.value)} /><button className="btn" disabled={busy || !newName.trim() || dirty} onClick={create}>New workflow</button></div></header>
     {error && <div className="alert alert-error" role="alert">{error}</div>}
     {notice && <p role="status">{notice}</p>}
     {loading ? <p role="status">Loading workflows…</p> : <>
       <div className="automation-actions automation-toolbar"><label>Workflow <select aria-label="Workflow" value={definition?.id || ''} disabled={dirty || busy} onChange={(e) => open(definitions.find((d) => d.id === e.target.value))}><option value="" disabled>Select a workflow</option>{definitions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
         {definition && <><button className="btn" disabled={busy || !dirty} onClick={() => task(async () => { await save(); setNotice('Draft saved.'); })}>Save draft</button><button className="btn" disabled={busy} onClick={publish}>Publish version</button><button className="btn" disabled={busy} onClick={() => task(async () => { const r = await api.get(`${base}/${definition.id}/versions`); setVersions(r.versions); })}>Version history</button>{dirty && <><span className="muted automation-dirty">Unsaved changes</span><button className="btn" onClick={() => open(definitions.find((d) => d.id === definition.id))}>Discard changes</button></>}</>}
       </div>
-      {!definition ? <p>Create a workflow from a template to begin. You can change every step before publishing.</p> : <>
+      {previewId && templates.find((t) => t.id === previewId)?.graph ? <TemplatePreview template={templates.find((t) => t.id === previewId)} name={newName} busy={busy} blocked={dirty} onCreate={create} onClose={() => setPreviewId(null)} /> : !definition ? <p>Create a workflow from a template to begin. You can change every step before publishing.</p> : <>
         {versions && <section className="automation-versions"><h2>Published versions</h2><button className="btn" onClick={() => setVersions(null)}>Close history</button>{versions.length ? versions.map((v) => <div key={v.version}><strong>Version {v.version}</strong> · {new Date(v.created_at).toLocaleString()} <button className="btn" disabled={dirty} onClick={() => { const f = toFlow(v.graph); setGraph(v.graph); setNodes(f.nodes); setEdges(f.edges); setDirty(true); setVersions(null); }}>Copy to draft</button></div>) : <p>No published versions yet.</p>}</section>}
         <div className="automation-settings">
           <label>Name<input value={definition.name} maxLength={120} onChange={(e) => { setDefinition((d) => ({ ...d, name: e.target.value })); setDirty(true); }} /></label>

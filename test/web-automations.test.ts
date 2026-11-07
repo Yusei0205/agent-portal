@@ -61,6 +61,26 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     assert.equal(await page.locator('.automation-canvas .react-flow__node').count(), nodesBefore - 1);
     assert.ok((await page.locator('.automation-canvas .react-flow__edge').count()) < edgesBefore, 'its connections go too');
     assert.equal(await page.getByRole('button', { name: 'Delete step' }).count(), 0, 'nothing is selected afterwards');
+    // Choosing a template shows it on the canvas first; nothing is created until Create.
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole('button', { name: 'Save draft' }).click();
+    await page.getByText('Draft saved.', { exact: true }).waitFor();
+    const before = ((await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie })).body as any).definitions.length;
+    await page.getByLabel('Template', { exact: true }).selectOption('development');
+    await page.getByLabel('Template preview: Development (Jira ticket to reviewed PR)').waitFor();
+    await page.locator('.automation-canvas[aria-label="Template canvas"] .react-flow__node').first().waitFor();
+    assert.equal(await page.locator('.automation-canvas[aria-label="Template canvas"] .react-flow__node').count(), 12);
+    await page.locator('.automation-canvas[aria-label="Template canvas"]').getByText('Read Jira ticket', { exact: true }).click();
+    await page.locator('.automation-inspector').getByText(/Jira ticket is/).waitFor();
+    assert.equal(((await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie })).body as any).definitions.length, before, 'previewing creates nothing');
+    await page.getByRole('button', { name: 'Close preview' }).click();
+    await page.getByLabel('Template preview: Development (Jira ticket to reviewed PR)').waitFor({ state: 'detached' });
+    await page.getByLabel('Template', { exact: true }).selectOption('testing');
+    await page.getByLabel('Template preview: Testing (verify a ticket)').waitFor();
+    await page.getByRole('button', { name: /^Create workflow/ }).click();
+    await page.locator('.automation-canvas[aria-label="Workflow canvas"] .react-flow__node').first().waitFor();
+    assert.equal(await page.locator('.automation-canvas[aria-label="Workflow canvas"] .react-flow__node').count(), 7, 'the testing template opened as an editable workflow');
+    assert.equal(((await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie })).body as any).definitions.length, before + 1);
     assert.deepEqual(errors, []);
     await context.close();
   } finally { await browser.close(); stopLocalAutomationTimers(); await cleanup(); }
