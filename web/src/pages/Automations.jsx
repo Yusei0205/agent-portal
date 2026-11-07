@@ -72,6 +72,54 @@ function TemplateCanvas({ template }) {
   </div>;
 }
 
+const defaultRunOptions = { agent: '', model: '', trustTools: false, integrationIds: null };
+
+/**
+ * What to change for this run only: the agent and model for every agent step, whether tool calls ask first, and which
+ * MCP integrations the agent gets. Left alone, the run follows the workflow (each step's own agent and model, approval
+ * prompts on, the project's enabled integrations).
+ */
+function RunOptions({ projectId, engine, agents, value, onChange }) {
+  const [items, setItems] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.get(`/api/projects/${projectId}/integrations`).then((d) => { if (live) setItems((d.integrations ?? []).filter((i) => i.type === 'http')); }).catch(() => { if (live) setItems([]); });
+    return () => { live = false; };
+  }, [projectId]);
+  const custom = value.integrationIds !== null;
+  const enabled = (items ?? []).filter((i) => i.enabled);
+  const isOn = (i) => (custom ? value.integrationIds.includes(i.id) : i.enabled);
+  const toggle = (i) => {
+    const current = custom ? value.integrationIds : enabled.map((x) => x.id);
+    onChange({ ...value, integrationIds: current.includes(i.id) ? current.filter((id) => id !== i.id) : [...current, i.id] });
+  };
+  const summary = [
+    value.agent ? `agent ${value.agent}` : 'each step\'s agent',
+    value.model ? `model ${value.model}` : 'each step\'s model',
+    value.trustTools ? 'tools trusted' : 'asks before tools',
+    custom ? `${value.integrationIds.length} integration${value.integrationIds.length === 1 ? '' : 's'}` : 'project integrations',
+  ].join(' · ');
+  return <details className="automation-settingsbox" aria-label="Run options">
+    <summary>Run options <span className="muted small">· {summary}</span></summary>
+    <div className="automation-settings" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+      <label>Agent<select value={value.agent} onChange={(e) => onChange({ ...value, agent: e.target.value })}><option value="">Each step&apos;s own agent</option>{agents.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}</select></label>
+      <div><ModelPicker engine={engine} credentialId="" value={value.model} onChange={(model) => onChange({ ...value, model })} /><span className="muted small">Leave on the default to use each step&apos;s own model.</span></div>
+    </div>
+    <fieldset className="automation-repos"><legend>Tools</legend>
+      <label><input type="radio" name="run-tools" checked={!value.trustTools} onChange={() => onChange({ ...value, trustTools: false })} />Ask me before tools run (recommended)</label>
+      <label><input type="radio" name="run-tools" checked={value.trustTools} onChange={() => onChange({ ...value, trustTools: true })} />Trust all tools: no approval prompts</label>
+      {value.trustTools && <span className="muted small" style={{ flexBasis: '100%' }}>The agent can run commands and change files without asking, as you. Only for workflows you trust.</span>}
+    </fieldset>
+    <fieldset className="automation-repos"><legend>Integrations (MCP tools)</legend>
+      {items === null ? <span className="muted">Loading…</span> : items.length === 0 ? <span className="muted">This project has no MCP integrations. Add one under Connections › Tools &amp; services.</span> : <>
+        <label><input type="radio" name="run-integrations" checked={!custom} onChange={() => onChange({ ...value, integrationIds: null })} />Project default ({enabled.length} enabled)</label>
+        <label><input type="radio" name="run-integrations" checked={custom} onChange={() => onChange({ ...value, integrationIds: enabled.map((i) => i.id) })} />Choose</label>
+        {custom && <span style={{ flexBasis: '100%', display: 'flex', gap: 16, flexWrap: 'wrap' }}>{items.map((i) => <label key={i.id}><input type="checkbox" checked={isOn(i)} onChange={() => toggle(i)} />{i.name}</label>)}</span>}
+      </>}
+    </fieldset>
+  </details>;
+}
+
 /**
  * Workflows, in three views:
  *   list - every workflow of the project, its status and latest run, and New workflow
@@ -93,7 +141,7 @@ export default function Automations({ projectId }) {
   const [runGraph, setRunGraph] = useState(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [available, setAvailable] = useState(false); const [dirty, setDirty] = useState(false);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(''); const [runOpts, setRunOpts] = useState(defaultRunOptions);
   const [templates, setTemplates] = useState([]); const [newTemplateId, setNewTemplateId] = useState(null); const [newName, setNewName] = useState('');
   const [loading, setLoading] = useState(true);
   const requestId = useRef(null);
@@ -102,7 +150,7 @@ export default function Automations({ projectId }) {
 
   const open = useCallback((d) => {
     setDefinition(d); setGraph(d.graph); const flow = toFlow(d.graph); setNodes(flow.nodes); setEdges(flow.edges);
-    setSelectedId(null); setRun(null); setRuns([]); setVersions(null); setDirty(false); setError(''); setNotice(''); requestId.current = null;
+    setSelectedId(null); setRun(null); setRuns([]); setVersions(null); setDirty(false); setError(''); setNotice(''); setRunOpts(defaultRunOptions); requestId.current = null;
   }, []);
   const openWorkflow = useCallback((d) => { open(d); setTab('design'); setView('edit'); }, [open]);
 
@@ -184,7 +232,7 @@ export default function Automations({ projectId }) {
   // ── Runs ──
   const start = () => task(async () => {
     requestId.current ||= crypto.randomUUID();
-    const r = await api.post(`${base}/${definition.id}/runs`, { input, requestId: requestId.current });
+    const r = await api.post(`${base}/${definition.id}/runs`, { input, requestId: requestId.current, options: runOpts });
     setRun(r.run); setRuns((list) => [r.run, ...list.filter((v) => v.id !== r.run.id)]); requestId.current = null;
   });
   const control = (action) => task(async () => {
@@ -331,11 +379,12 @@ export default function Automations({ projectId }) {
       {!available && <p role="status">Durable execution is not configured on this deployment.</p>}
       {definition.published_version === null && <p className="muted">Publish a version first (Publish version, above). Runs use the published version, so editing the draft does not change a run in progress.</p>}
       {dirty && <p className="muted">Save or publish your changes first: runs use the published version.</p>}
+      <RunOptions projectId={projectId} engine={graph.engine} agents={agents} value={runOpts} onChange={(v) => { setRunOpts(v); requestId.current = null; }} />
       <label>Run request<textarea rows={2} value={input} maxLength={2000} onChange={(e) => { setInput(e.target.value); requestId.current = null; }} placeholder="Describe what this workflow should build, or give the Jira ticket key…" /></label>
       <div><button className="btn btn-primary" disabled={busy || !available || definition.published_version === null || dirty} onClick={start}>Run published workflow</button></div>
       <p className="muted">Runs continue when this page closes. Each agent task has a 12 minute limit. Subscription usage is bounded by time and step limits; dollar budgets apply only to priced providers.</p>
       <label>Run history<select value={run?.id || ''} onChange={(e) => setRun(runs.find((r) => r.id === e.target.value))}><option value="" disabled>No runs</option>{runs.map((r) => <option key={r.id} value={r.id}>{new Date(r.started_at).toLocaleString()} · v{r.version} · {r.status}</option>)}</select></label>
-      {run && <><div className="automation-actions"><strong>{run.status}{run.cancelRequested ? ' · cancellation requested' : ''}</strong><a href={href(projectId, 'sessions', run.session_id)}>Open session, logs & artifacts</a>{['running', 'waiting'].includes(run.status) && <button className="btn" disabled={busy || run.cancelRequested} onClick={() => control('cancel')}>Cancel run</button>}{run.status === 'waiting' && <button className="btn btn-primary" disabled={busy} onClick={() => control('approve')}>Approve {run.attempts.at(-1)?.label}</button>}</div>
+      {run && <>{run.options && (run.options.agent || run.options.model || run.options.trustTools || run.options.integrationIds) ? <p className="muted small">Run options: {[run.options.agent && `agent ${run.options.agent}`, run.options.model && `model ${run.options.model}`, run.options.trustTools && 'tools trusted', run.options.integrationIds && `${run.options.integrationIds.length} integrations`].filter(Boolean).join(' · ')}</p> : null}<div className="automation-actions"><strong>{run.status}{run.cancelRequested ? ' · cancellation requested' : ''}</strong><a href={href(projectId, 'sessions', run.session_id)}>Open session, logs & artifacts</a>{['running', 'waiting'].includes(run.status) && <button className="btn" disabled={busy || run.cancelRequested} onClick={() => control('cancel')}>Cancel run</button>}{run.status === 'waiting' && <button className="btn btn-primary" disabled={busy} onClick={() => control('approve')}>Approve {run.attempts.at(-1)?.label}</button>}</div>
         {run.status === 'waiting' && <p>{runGraph?.nodes.find((n) => n.id === run.cursor)?.prompt}</p>}
         {run.error && <p role="alert">{run.error}</p>}
         {executionFlow && <div style={{ height: 320 }} aria-label={`Execution graph version ${run.version}`}><ReactFlow key={run.id} nodes={executionFlow.nodes} edges={executionFlow.edges} nodeTypes={nodeTypes} nodesDraggable={false} nodesConnectable={false} fitView colorMode="dark"><Background /><Controls showInteractive={false} /></ReactFlow></div>}

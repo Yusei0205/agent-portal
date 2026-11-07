@@ -60,6 +60,12 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     await page.locator('.automation-inspector').getByLabel('Name', { exact: true }).fill('Next draft');
     await page.getByRole('tab', { name: /^Runs/ }).click();
     assert.equal(await page.getByRole('button', { name: 'Run published workflow' }).isDisabled(), true, 'runs use the published version, so unsaved edits block it');
+    // The person can choose the agent, model, tool trust and integrations for this run; the summary says what is set.
+    await page.locator('summary', { hasText: 'Run options' }).click();
+    await page.getByRole('combobox', { name: /^Agent/ }).waitFor();
+    assert.equal(await page.getByRole('radio', { name: /Ask me before tools run/ }).isChecked(), true, 'asking first is the default');
+    await page.getByRole('radio', { name: /Trust all tools/ }).check();
+    await page.locator('summary', { hasText: 'Run options' }).getByText(/tools trusted/).waitFor();
     await page.getByRole('tab', { name: 'Design' }).click();
     await page.getByRole('button', { name: 'Save draft' }).click();
     await page.getByText('Draft saved.', { exact: true }).waitFor();

@@ -5,7 +5,9 @@ import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getAutomationsRepository } from '../repositories/automations.ts';
 import { parseGraph, sdlcTemplate } from './schema.ts';
 import { automationTemplates } from './templates.ts';
-import { definitionKey, versionKey, runKey, scheduleAutomation, type Definition, type PublishedVersion, type AutomationRun } from './engine.ts';
+import { getIntegrationsRepository } from '../repositories/integrations.ts';
+import { integrationIsPersonal } from '../agent/runner-integrations.ts';
+import { definitionKey, versionKey, runKey, scheduleAutomation, type Definition, type PublishedVersion, type AutomationRun, type RunOptions } from './engine.ts';
 
 async function access(req: PortalRequest, write = false): Promise<string> {
   if (!req.user) throw new HttpError(401, 'Sign in to continue');
@@ -33,6 +35,27 @@ async function ensureFreshName(project: string, wanted: string, exceptId: string
 async function checkRepos(project: string, repoIds: string[]): Promise<void> {
   const allowed = new Set((await getGitReposRepository().listByProject(project)).map((r) => r.id));
   if (repoIds.some((id) => !allowed.has(id))) throw badRequest('Select repositories connected to this project');
+}
+const MODEL_RE = /^[A-Za-z0-9._:/@-]{1,200}$/;
+/** The run options a person may set when they start a run. Anything not given means "as the workflow says". */
+async function runOptions(req: PortalRequest, project: string, raw: unknown): Promise<RunOptions> {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const agent = str(o.agent as string, 'Agent', { max: 100, optional: true }).trim();
+  const model = str(o.model as string, 'Model', { max: 200, optional: true }).trim();
+  if (model && !MODEL_RE.test(model)) throw badRequest('The model is not a valid model ID');
+  const trustTools = o.trustTools === true;
+  // The run acts as the person who starts it, so only a signed-in browser can take the approval prompts away.
+  if (trustTools && req.authViaToken) throw forbidden('API tokens cannot turn on "trust all tools". Do this from a signed-in browser.');
+  let integrationIds: string[] | null = null;
+  if (o.integrationIds !== undefined && o.integrationIds !== null) {
+    if (!Array.isArray(o.integrationIds) || o.integrationIds.length > 20) throw badRequest('integrationIds must be null or a list of at most 20 integration ids');
+    const wanted = [...new Set(o.integrationIds.map(String))];
+    const mine = (await getIntegrationsRepository().listByProject(project)).filter((i) => i.type === 'http');
+    const usable = new Set(mine.filter((i) => !integrationIsPersonal(i) || i.created_by === req.user!.id).map((i) => i.id));
+    if (wanted.some((id) => !usable.has(id))) throw badRequest('Some integrations do not belong to this project');
+    integrationIds = wanted;
+  }
+  return { agent, model, trustTools, integrationIds };
 }
 const conflict = (): HttpError => new HttpError(409, 'This workflow changed. Reload it before saving again.');
 function name(value: unknown): string {
@@ -133,11 +156,12 @@ export function registerAutomationRoutes(): void {
       if (old.definition_id !== d.id || old.created_by !== req.user!.id) throw conflict();
       sendJson(res, 200, { run: old }); return;
     }
+    const options = await runOptions(req, project, body.options);
     const timestamp = now();
     const run: AutomationRun = {
       id, definition_id: d.id, version: version.version, project_id: project, created_by: req.user!.id,
       revision: 1, status: 'running', cursor: version.graph.nodes.find((n) => n.kind === 'start')!.id,
-      input: str(body.input, 'Input', { max: 2000, optional: true }), session_id: generateId(), attempts: [], visits: {}, lastPassed: true,
+      input: str(body.input, 'Input', { max: 2000, optional: true }), session_id: generateId(), attempts: [], visits: {}, lastPassed: true, options,
       started_at: timestamp, updated_at: timestamp, error: null, leaseUntil: 0, cancelRequested: false,
     };
     if (!await repo.put(project, runKey(id), run, null)) throw conflict();
