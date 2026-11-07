@@ -148,11 +148,14 @@ async function main() {
     await page.getByRole('button', { name: 'Send answer', exact: true }).click();
     await page.getByRole('button', { name: 'Allow once', exact: true }).waitFor({ timeout: 20000 });
     check((await page.locator('.tnode-child').count()) >= 2, 'tree shows subagents');
+    check((await page.locator('.agent-graph-node').count()) >= 3, 'graph shows lead and delegated agents');
     await shot(page, 'run-approval');
     await page.getByRole('button', { name: 'Allow once', exact: true }).click();
     await page.locator('.run-head .badge', { hasText: 'Completed' }).waitFor({ timeout: 20000 });
     await shot(page, 'run-done');
-    await page.locator('.tnode-child .tnode-btn').first().click();
+    await page.locator('.agent-graph-children .agent-graph-node').first().click();
+    check(await page.locator('.agent-graph-children .agent-graph-node').first().getAttribute('aria-pressed') === 'true', 'graph selects the delegated agent');
+    check(Boolean((await page.locator('.agent-graph-task pre').textContent())?.trim()), 'graph shows assigned task');
     await page.locator('.tl-brief').waitFor();
     await shot(page, 'run-subagent');
     await page.getByRole('button', { name: 'Files and changes', exact: true }).click();

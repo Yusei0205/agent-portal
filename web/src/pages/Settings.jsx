@@ -652,7 +652,7 @@ function AgentsSection({ s, reload }) {
     <section className="panel">
       <h2>Agent defaults</h2>
       <div className="row wrap">
-        <Field label="Changes, unless a run says otherwise">
+        <Field label="Changes, unless a run says otherwise" hint="Applies to new runs. Auto-accept edits still asks before commands. In an active run, use Allow [tool] for this run to remember a tool approval.">
           {(id) => (
             <select id={id} className="input" value={a.defaultPermissionMode} onChange={(e) => setA({ ...a, defaultPermissionMode: e.target.value })}>
               <option value="default">Ask before changes</option>
