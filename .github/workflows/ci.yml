@@ -13,6 +13,9 @@
 #
 # Make both jobs required checks on main_v3 (Settings › Branches) so
 # nothing merges red.
+#
+# The deploy workflows (deploy-portal.yml, deploy-agentcore.yml) wait for this
+# workflow's run on the pushed commit and deploy only when it passed.
 name: CI
 
 on:
@@ -24,9 +27,12 @@ on:
 permissions:
   contents: read
 
+# Pull requests: a newer push cancels the older run. main_v3: every commit gets its own complete run,
+# because the deploy workflows wait for CI on the commit they deploy (scripts/wait-for-ci.mjs), and a
+# cancelled run would stop that deploy.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:

@@ -37,6 +37,18 @@
       ],
       "smokeIds": []
     },
+    "deploy-gate": {
+      "description": "Deploy workflows wait for CI to pass on the commit they deploy",
+      "sources": [
+        "scripts/wait-for-ci.mjs",
+        ".github/workflows/deploy-portal.yml",
+        ".github/workflows/deploy-agentcore.yml"
+      ],
+      "tests": [
+        "test/wait-for-ci.test.ts"
+      ],
+      "smokeIds": []
+    },
     "auth": {
       "description": "Authentication, login, session cookies",
       "sources": [
