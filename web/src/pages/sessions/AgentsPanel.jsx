@@ -7,7 +7,7 @@ import { AgentOrbit } from './AgentOrbit.jsx';
 import { AgentGraph } from './AgentGraph.jsx';
 import { AgentTreeList, AgentTimeline } from './AgentViews.jsx';
 import { AgentDetail } from './AgentDetail.jsx';
-import { summarizeActivity } from '../../lib/agent-activity.js';
+import { summarizeActivity, agentLabels } from '../../lib/agent-activity.js';
 import { ORBIT_MAIN } from '../../lib/agent-orbit.js';
 
 const FINISHED = new Set(['done', 'failed', 'stopped']);
@@ -23,6 +23,7 @@ export function AgentsPanel({ agents, events = [], workflowId, projectId, workfl
   const [selectedId, setSelectedId] = useState(null);
 
   const activity = useMemo(() => summarizeActivity(events, agents), [events, agents]);
+  const labels = useMemo(() => agentLabels(agents), [agents]);
   const rootName = workflow?.title || 'Main agent';
   const rootStatus = workflow?.status || 'running';
 
@@ -33,7 +34,7 @@ export function AgentsPanel({ agents, events = [], workflowId, projectId, workfl
 
   const picked = selectedId === ORBIT_MAIN || selectedId === `session:${workflowId}`
     ? { name: rootName, status: rootStatus, description: workflow?.goal }
-    : agents.find((a) => a.id === selectedId);
+    : (() => { const a = agents.find((x) => x.id === selectedId); return a ? { ...a, name: labels.get(a.id) ?? a.name } : a; })();
   const pickedActivity = selectedId === ORBIT_MAIN || selectedId === `session:${workflowId}` ? activity.main : activity.byId.get(selectedId);
   // The box graph names the session `session:<id>`; everything else uses the orbit's main-agent id.
   const select = (id) => setSelectedId(id === `session:${workflowId}` ? ORBIT_MAIN : id);

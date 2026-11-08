@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { orbitLayout, neighbourInDirection, ORBIT_MAIN } from '../../lib/agent-orbit.js';
-import { badgeCount } from '../../lib/agent-activity.js';
+import { badgeCount, agentLabels } from '../../lib/agent-activity.js';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.5;
@@ -122,6 +122,7 @@ export function AgentOrbit({ agents, rootName = 'Main agent', rootStatus = 'runn
   };
 
   const rowOf = Object.fromEntries(agents.map((a) => [a.id, a]));
+  const labels = useMemo(() => agentLabels(agents), [agents]);
   const nodeInfo = (n) => {
     if (n.isMain) {
       const act = activity.main;
@@ -130,7 +131,7 @@ export function AgentOrbit({ agents, rootName = 'Main agent', rootStatus = 'runn
     const a = rowOf[n.id];
     const act = activity.byId.get(n.id) ?? { tools: 0, current: '' };
     const live = a.status === 'running' || a.status === 'pending';
-    return { name: a.name, status: a.status, current: live ? act.current || a.description || '' : '', tools: act.tools, r: 22 };
+    return { name: labels.get(a.id) ?? a.name, status: a.status, current: live ? act.current || a.description || '' : '', tools: act.tools, r: 22 };
   };
   const at = Object.fromEntries(layout.nodes.map((n) => [n.id, n]));
 

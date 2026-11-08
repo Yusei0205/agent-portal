@@ -153,6 +153,21 @@ createRoot(document.getElementById('root')).render(<SessionAgentsStrip workflowI
     assert.doesNotMatch(lines, /cd rhb/);
     assert.match(await page.locator('.agent-detail').innerText(), /Review api\.ts for bugs/);
 
+    // In a narrow pane the detail wraps below the orbit and stays inside the panel (it used to spill over the conversation).
+    await page.evaluate(() => { (document.getElementById('root') as HTMLElement).style.width = '520px'; });
+    await page.waitForTimeout(300);
+    const fit = await page.evaluate(() => ({
+      panelBottom: document.querySelector('.agents-panel')!.getBoundingClientRect().bottom,
+      sideTop: document.querySelector('.agents-panel-side')!.getBoundingClientRect().top,
+      sideBottom: document.querySelector('.agents-panel-side')!.getBoundingClientRect().bottom,
+      orbitBottom: document.querySelector('.orbit')!.getBoundingClientRect().bottom,
+    }));
+    assert.ok(fit.sideBottom <= fit.panelBottom + 1, `the detail ends at ${fit.sideBottom}, below the panel's ${fit.panelBottom}`);
+    assert.ok(fit.sideTop >= fit.orbitBottom - 1, 'the detail sits below the orbit, not over it');
+    const stripHeight = await page.evaluate(() => document.querySelector('.agents-strip')!.getBoundingClientRect().height);
+    assert.ok(stripHeight <= 800 * 0.6 + 2, `the panel takes ${stripHeight}px of an 800px screen; it must leave room for the conversation`);
+    await page.evaluate(() => { (document.getElementById('root') as HTMLElement).style.width = '1100px'; });
+
     // The keyboard moves between agents: from the reviewer, going back toward the centre selects the main agent.
     await page.locator('.orbit').focus();
     await page.keyboard.press('ArrowDown');

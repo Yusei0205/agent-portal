@@ -84,6 +84,26 @@ export function summarizeActivity(events, agents) {
   return { main, byId };
 }
 
+/**
+ * What to call each agent on screen. Kiro names every sub-agent after its type ("general-task-execution"), so three of them
+ * look identical; agents that share a name are numbered in the order they started. A lone agent keeps its plain name.
+ * @returns {Map<string, string>} agent id -> label
+ */
+export function agentLabels(agents) {
+  const list = agents || [];
+  const total = new Map();
+  for (const a of list) total.set(a.name, (total.get(a.name) || 0) + 1);
+  const seen = new Map();
+  const out = new Map();
+  const order = [...list].sort((x, y) => String(x.startedAt || '').localeCompare(String(y.startedAt || '')));
+  for (const a of order) {
+    const n = (seen.get(a.name) || 0) + 1;
+    seen.set(a.name, n);
+    out.set(a.id, total.get(a.name) > 1 ? `${a.name} #${n}` : a.name);
+  }
+  return out;
+}
+
 /** "99+" past 99, so a badge stays small. */
 export function badgeCount(n) {
   return n > 99 ? '99+' : String(Math.max(0, n | 0));
