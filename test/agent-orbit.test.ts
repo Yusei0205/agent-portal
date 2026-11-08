@@ -6,9 +6,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 // @ts-expect-error — plain JS module without type declarations
-import { summarizeActivity, describeTool, badgeCount, agentLabels } from '../web/src/lib/agent-activity.js';
+import { summarizeActivity, describeTool, badgeCount, agentLabels, increasedTools } from '../web/src/lib/agent-activity.js';
 // @ts-expect-error — plain JS module without type declarations
-import { orbitLayout, neighbourInDirection, ORBIT_MAIN, RING_STEP } from '../web/src/lib/agent-orbit.js';
+import { orbitLayout, neighbourInDirection, nervePath, ORBIT_MAIN, RING_STEP } from '../web/src/lib/agent-orbit.js';
 
 interface Ev { type: string; payload: Record<string, unknown> }
 const text = (t: string, extra: Record<string, unknown> = {}): Ev => ({ type: 'assistant-text', payload: { text: t, ...extra } });
@@ -81,6 +81,29 @@ describe('summarizeActivity', () => {
     assert.equal(out.main.lines[199].text, 'Read f499');
   });
 
+  it('gives agents that share a name their own transcripts when events name the agent by id', () => {
+    const triplets = [
+      { id: 'run1:s-1', name: 'general-task-execution', status: 'done' },
+      { id: 'run1:s-2', name: 'general-task-execution', status: 'done' },
+      { id: 'run1:s-3', name: 'general-task-execution', status: 'running' },
+    ];
+    const out = summarizeActivity([
+      text('first one done', { agentId: 's-1', agent: 'general-task-execution' }),
+      tool('fs_read', {}, { agentId: 's-2', agent: 'general-task-execution' }),
+      text('third is working', { agentId: 's-3', agent: 'general-task-execution' }),
+      text('and the main agent speaks'),
+    ], triplets);
+    assert.deepEqual(out.byId.get('run1:s-1').lines.map((l: { text: string }) => l.text), ['first one done']);
+    assert.deepEqual(out.byId.get('run1:s-2').lines.map((l: { text: string }) => l.text), ['fs_read']);
+    assert.equal(out.byId.get('run1:s-3').current, 'third is working');
+    assert.deepEqual(out.main.lines.map((l: { text: string }) => l.text), ['and the main agent speaks']);
+  });
+
+  it('does not put an event with an unknown agent id in the main agent\'s transcript', () => {
+    const out = summarizeActivity([text('who?', { agentId: 'nope' }), text('main')], [{ id: 'run1:s-1', name: 'x', status: 'running' }]);
+    assert.deepEqual(out.main.lines.map((l: { text: string }) => l.text), ['main']);
+  });
+
   it('copes with no events and no agents', () => {
     const out = summarizeActivity(undefined, undefined);
     assert.equal(out.main.tools, 0);
@@ -105,6 +128,41 @@ describe('agentLabels', () => {
     assert.equal(agentLabels(undefined).size, 0);
     const l = agentLabels([{ id: '1', name: 'a' }, { id: '2', name: 'a' }]);
     assert.deepEqual([l.get('1'), l.get('2')], ['a #1', 'a #2']);
+  });
+});
+
+describe('increasedTools', () => {
+  it('names the agents that made more tool calls, and nothing on the first look', () => {
+    assert.deepEqual(increasedTools(null, { a: 3, b: 0 }), []);
+    assert.deepEqual(increasedTools({ a: 3, b: 0 }, { a: 3, b: 0 }), []);
+    assert.deepEqual(increasedTools({ a: 3, b: 0 }, { a: 4, b: 0 }), ['a']);
+    assert.deepEqual(increasedTools({ a: 3 }, { a: 3, b: 2 }).sort(), ['b'], 'a new agent that already made calls fires');
+    assert.deepEqual(increasedTools({ a: 3 }, { a: 3, b: 0 }), [], 'a new agent with no calls yet does not');
+    assert.deepEqual(increasedTools({ a: 5 }, { a: 2 }), [], 'a lower count (a new run) does not fire');
+  });
+});
+
+describe('nervePath', () => {
+  const A = { x: 0, y: 0 };
+  const B = { x: 100, y: 0 };
+  it('is a curve from one agent to the other, with its length', () => {
+    const p = nervePath(A, B, 1);
+    assert.match(p.d, /^M0 0 Q[-\d.]+ [-\d.]+ 100 0$/);
+    assert.equal(p.length, 100);
+    const [, cx, cy] = /Q([-\d.]+) ([-\d.]+)/.exec(p.d)!.map(Number) as number[];
+    assert.equal(cx, 50);
+    assert.notEqual(cy, 0, 'the middle is pulled off the straight line');
+  });
+  it('bends to the other side when asked, and never by more than 60px', () => {
+    const up = Number(/Q[-\d.]+ ([-\d.]+)/.exec(nervePath(A, B, 1).d)![1]);
+    const down = Number(/Q[-\d.]+ ([-\d.]+)/.exec(nervePath(A, B, -1).d)![1]);
+    assert.equal(up, -down);
+    assert.ok(Math.abs(Number(/Q[-\d.]+ ([-\d.]+)/.exec(nervePath(A, { x: 2000, y: 0 }, 1).d)![1])) <= 60);
+  });
+  it('copes with two agents in the same place', () => {
+    const p = nervePath(A, A, 1);
+    assert.equal(p.length, 0);
+    assert.match(p.d, /^M0 0 L0 0$/);
   });
 });
 

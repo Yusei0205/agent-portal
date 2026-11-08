@@ -112,6 +112,29 @@ describe('Kiro sub-agents → portal events', () => {
     assert.deepEqual(t.onUpdate(start('s-1', 'explorer')), [], 'a repeated start frame does not add a second node');
   });
 
+  it('says which sub-agent a message or tool call belongs to, and leaves the caller\'s own alone', () => {
+    const t = createSubagentTracker();
+    t.onUpdate(start('s-1', 'explorer'));
+    t.onUpdate(start('s-2', 'explorer'));
+    // The call that started a sub-agent is the caller's own, not the sub-agent's work.
+    assert.equal(t.ownerOf(start('s-1', 'explorer')), null);
+    // The sub-agent's own message and tool calls carry its id (two agents of one type stay apart).
+    assert.deepEqual(t.ownerOf(said('s-1', 'hello')), { id: 's-1', name: 'explorer' });
+    assert.deepEqual(t.ownerOf({ sessionUpdate: 'tool_call', toolCallId: 'x', title: 'fs_read', rawInput: {}, _meta: { kiro: { agentSubtaskId: 's-2' } } }), { id: 's-2', name: 'explorer' });
+    // A frame with no tag is the main agent's.
+    assert.equal(t.ownerOf({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'main' } }), null);
+    // A tag nothing was started under is not guessed at.
+    assert.equal(t.ownerOf(said('unknown', 'stray')), null);
+  });
+
+  it('still names a sub-agent\'s late frame after it has finished', () => {
+    const t = createSubagentTracker();
+    t.onUpdate(start('s-1', 'explorer'));
+    t.onUpdate(done('call-s-1', 'completed'));
+    assert.equal(t.openCount, 0);
+    assert.deepEqual(t.ownerOf(said('s-1', 'one more thing')), { id: 's-1', name: 'explorer' });
+  });
+
   it('keeps names and text to a sensible size', () => {
     const t = createSubagentTracker();
     const [ev] = t.onUpdate(start('s-1', 'n'.repeat(500), { explanation: 'e'.repeat(2000) }));

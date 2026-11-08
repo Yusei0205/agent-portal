@@ -89,6 +89,23 @@ export function orbitLayout(agents) {
 }
 
 /**
+ * The fibre between two agents: a gentle curve (so the links look like nerves, not ruler lines), as an SVG path from `a` to
+ * `b`, with the length for timing a signal along it. `bend` flips the curve's side so neighbours do not all lean one way.
+ * @returns {{ d: string, length: number }}
+ */
+export function nervePath(a, b, bend = 1) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1) return { d: `M${a.x} ${a.y} L${b.x} ${b.y}`, length };
+  const offset = Math.min(60, length * 0.16) * (bend >= 0 ? 1 : -1);
+  const cx = (a.x + b.x) / 2 - (dy / length) * offset;
+  const cy = (a.y + b.y) / 2 + (dx / length) * offset;
+  const r = (n) => Math.round(n * 10) / 10;
+  return { d: `M${r(a.x)} ${r(a.y)} Q${r(cx)} ${r(cy)} ${r(b.x)} ${r(b.y)}`, length };
+}
+
+/**
  * The agent nearest in a direction from the selected one, for arrow-key navigation. `dir` is a unit vector.
  * With nothing selected the main agent is the starting point.
  */

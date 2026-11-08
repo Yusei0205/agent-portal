@@ -69,6 +69,13 @@ export interface KiroTokenPayload {
   profileName?: string;
 }
 
+/** Which sub-agent said or did this, from the runner's labels, bounded in size; null for the main agent's own. */
+function whoSaid(ev: { agentId?: unknown; agent?: unknown }): { agentId: string; agent: string } | null {
+  if (typeof ev.agentId !== 'string' || !ev.agentId) return null;
+  const agent = typeof ev.agent === 'string' && ev.agent.trim() ? ev.agent.trim() : 'sub-agent';
+  return { agentId: ev.agentId.slice(0, 128), agent: agent.slice(0, 64) };
+}
+
 /** The fields of a sub-agent event the portal keeps, with their sizes bounded (the runner is not trusted to be small). */
 function subagentPayload(ev: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { id: String(ev.id ?? '').slice(0, 128), name: (typeof ev.name === 'string' && ev.name.trim() ? ev.name.trim() : 'sub-agent').slice(0, 64) };
@@ -82,11 +89,11 @@ function subagentPayload(ev: Record<string, unknown>): Record<string, unknown> {
 }
 
 export type AgentCoreSSEEvent =
-  | { type: 'text'; text: string }
-  | { type: 'thought'; text: string }
+  | { type: 'text'; text: string; agentId?: string; agent?: string }
+  | { type: 'thought'; text: string; agentId?: string; agent?: string }
   | { type: 'context'; percent: number }
   | { type: 'usage'; credits: number }
-  | { type: 'tool'; name: string }
+  | { type: 'tool'; name: string; agentId?: string; agent?: string }
   | { type: 'subagent-started' | 'subagent-finished' | 'subagent-failed'; id: string; name: string; description?: string; summary?: string; status?: string; parentId?: string; durationMs?: number }
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
   | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number }
@@ -703,8 +710,12 @@ export async function runKiroViaAgentCore(
         }
 
         case 'text': {
-          const textEv = ev as { type: 'text'; text: string };
-          if (textEv.text) {
+          const textEv = ev as { type: 'text'; text: string; agentId?: string; agent?: string };
+          const who = whoSaid(textEv);
+          if (textEv.text && who) {
+            // A sub-agent's own message: shown as that agent's, and not part of the main agent's answer.
+            emit('assistant-text', { text: textEv.text, stream: true, ...who });
+          } else if (textEv.text) {
             emit('assistant-text', { text: textEv.text, stream: true });
             if (textParts.length) textParts[textParts.length - 1] += textEv.text;
             else textParts.push(textEv.text);
@@ -729,17 +740,20 @@ export async function runKiroViaAgentCore(
         }
 
         case 'thought': {
-          const thoughtEv = ev as { type: 'thought'; text: string };
-          if (thoughtEv.text) emit('agent-thought', { text: thoughtEv.text });
+          const thoughtEv = ev as { type: 'thought'; text: string; agentId?: string; agent?: string };
+          // A sub-agent's private reasoning is not the main agent's thought.
+          if (thoughtEv.text && !whoSaid(thoughtEv)) emit('agent-thought', { text: thoughtEv.text });
           break;
         }
 
         case 'tool': {
-          const toolEv = ev as { type: 'tool'; name: string };
+          const toolEv = ev as { type: 'tool'; name: string; agentId?: string; agent?: string };
           const toolName = toolEv.name || 'Tool';
-          if (textParts.length && textParts[textParts.length - 1] !== '') textParts.push('');
-          emit('tool-start', { toolCallId: '', toolName, toolInput: '{}', status: 'in_progress' });
-          emit('tool-end', { toolCallId: '', toolName, status: 'completed', output: '' });
+          const who = whoSaid(toolEv);
+          // A sub-agent's tool call must not split the main agent's answer.
+          if (!who && textParts.length && textParts[textParts.length - 1] !== '') textParts.push('');
+          emit('tool-start', { toolCallId: '', toolName, toolInput: '{}', status: 'in_progress', ...(who ?? {}) });
+          emit('tool-end', { toolCallId: '', toolName, status: 'completed', output: '', ...(who ?? {}) });
           break;
         }
 
