@@ -22,7 +22,11 @@ function FitGraph({ container }) {
   return null;
 }
 
-export function AgentGraph({ agents, workflowId }) {
+/**
+ * @param {{ agents: Array<object>, workflowId: string, selectedId?: string | null, onSelect?: (id: string) => void }} props
+ * Selecting a node (click, or Enter/Space on its name) reports its id; the session itself is `session:<workflowId>`.
+ */
+export function AgentGraph({ agents, workflowId, selectedId = null, onSelect }) {
   const container = useRef(null);
   const root = `session:${workflowId}`;
   const ids = new Set(agents.map(a => a.id));
@@ -34,14 +38,18 @@ export function AgentGraph({ agents, workflowId }) {
     return ancestor ? Math.min(8, 1 + depth(ancestor, seen)) : 1;
   };
   const colors = { running: 'var(--accent)', pending: 'var(--ink-3)', done: 'var(--ok)', failed: 'var(--danger)', stopped: 'var(--ink-3)' };
-  const nodes = [{ id: root, position: { x: 0, y: 0 }, data: { label: 'Session lead' } }, ...agents.map((a, i) => ({
+  // The name is a real button so keyboard users can select a node; clicking anywhere on the node does too.
+  const pick = (id, children, label) => (
+    <button type="button" className="agent-node-btn" aria-label={label} aria-pressed={id === selectedId} onClick={() => onSelect?.(id)}>{children}</button>
+  );
+  const nodes = [{ id: root, position: { x: 0, y: 0 }, data: { label: pick(root, <strong>Session lead</strong>, 'Session lead') } }, ...agents.map((a, i) => ({
     id: a.id, position: { x: depth(a) * 250, y: i * 100 },
     style: { borderColor: colors[a.status] || 'var(--line)' },
-    data: { label: <div><strong>{a.name}</strong><div style={{ fontSize: 12 }}>{a.status}</div></div> },
-  }))].map(n => ({ ...n, sourcePosition: 'right', targetPosition: 'left', width: 210, height: 64, style: { width: 210, color: 'var(--ink)', background: 'var(--panel, #101820)', ...n.style } }));
+    data: { label: pick(a.id, <><strong>{a.name}</strong><div style={{ fontSize: 12 }}>{a.status}</div></>, `${a.name}, ${a.status}`) },
+  }))].map(n => ({ ...n, sourcePosition: 'right', targetPosition: 'left', width: 210, height: 64, style: { width: 210, color: 'var(--ink)', background: 'var(--panel, #101820)', ...n.style, ...(n.id === selectedId ? { borderWidth: 3, borderColor: 'var(--accent)' } : {}) } }));
   const edges = agents.map(a => ({ id: `edge:${a.id}`, source: parent(a), target: a.id, animated: a.status === 'running' }));
   return <div ref={container} style={{ height: '100%', minHeight: 260 }} aria-label="Agent collaboration graph">
-    <ReactFlow key={agents.map(a => a.id).join('|')} nodes={nodes} edges={edges} nodesDraggable={false} nodesConnectable={false} minZoom={0.1}>
+    <ReactFlow key={agents.map(a => a.id).join('|')} nodes={nodes} edges={edges} nodesDraggable={false} nodesConnectable={false} minZoom={0.1} onNodeClick={(_, node) => onSelect?.(node.id)}>
       <Background /><Controls showInteractive={false} /><FitGraph container={container} />
     </ReactFlow>
   </div>;

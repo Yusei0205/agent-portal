@@ -1104,7 +1104,7 @@ export function IdeWorkspace({ id, project }) {
               </div>
             )}
             {sidebarPanel === 'agents' && (
-              <IdeAgents workflowId={id} projectId={project.id} />
+              <IdeAgents workflowId={id} projectId={project.id} workflow={workflow} />
             )}
             {sidebarPanel === 'outputs' && (
               <IdeOutputs

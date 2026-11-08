@@ -154,6 +154,33 @@ describe('Claude on AgentCore — several agents and several sessions', () => {
     assert.equal(listed[0].description, 'Review the change');
   });
 
+  it('lists who started whom, each agent\'s task and its result, for the node view', async () => {
+    const s = await newSession();
+    fakeRuntime(async function* () {
+      yield { type: 'subagent-started', id: 'a', name: 'planner', description: 'Plan the work', depth: 0 };
+      yield { type: 'subagent-started', id: 'b', name: 'coder', description: 'Write the change', parentId: 'a', depth: 1 };
+      yield { type: 'subagent-finished', id: 'b', name: 'coder', parentId: 'a', summary: 'Changed 2 files', tokens: 1200, toolUses: 5, durationMs: 4000, depth: 1 };
+      yield { type: 'subagent-failed', id: 'a', name: 'planner', summary: 'Ran out of budget' };
+      yield RESULT;
+    });
+    await runClaudeViaAgentCore(makeCtx(s).ctx, ARN);
+
+    const res = await fetchJson(baseUrl, `/api/workflows/${s.workflowId}/agents`, { cookie });
+    const rows = ((res.body as Record<string, unknown>).agents as Array<Record<string, unknown>>).filter((a) => a.source === 'event');
+    const planner = rows.find((r) => r.name === 'planner')!;
+    const coder = rows.find((r) => r.name === 'coder')!;
+    assert.equal(planner.status, 'failed');
+    assert.equal(planner.description, 'Plan the work', 'the task given at the start survives the finish');
+    assert.equal(planner.summary, 'Ran out of budget');
+    assert.equal(planner.parentId, undefined, 'the planner was started by the session itself');
+    assert.equal(coder.parentId, planner.id, 'the coder hangs under the planner: its parent is named by the planner\'s row id, run included');
+    assert.equal(coder.status, 'done');
+    assert.equal(coder.summary, 'Changed 2 files');
+    assert.equal(coder.tokens, 1200);
+    assert.equal(coder.toolUses, 5);
+    assert.equal(coder.durationMs, 4000);
+  });
+
   it('sends the person\'s own AWS access for the model calls when there is one, and nothing otherwise', async () => {
     const keys = { AWS_ACCESS_KEY_ID: 'ASIAEXAMPLE1234567', AWS_SECRET_ACCESS_KEY: 'secretsecretsecretsecret', AWS_SESSION_TOKEN: 'tok', AWS_REGION: 'ap-southeast-1' };
     const s = await newSession();
