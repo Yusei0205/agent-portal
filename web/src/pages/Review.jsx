@@ -6,6 +6,7 @@ import { BranchSelect } from '../components/BranchSelect.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
 // ── URL hash query helpers ────────────────────────────────────────────────────
 
@@ -536,7 +537,7 @@ export function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
 
 // ── Review row ─────────────────────────────────────────────────────────────────
 
-function ReviewRow({ review, projectId, isAdmin }) {
+function ReviewRow({ review, projectId, isAdmin, onDelete }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -577,6 +578,16 @@ function ReviewRow({ review, projectId, isAdmin }) {
         >
           Open
         </a>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={() => onDelete(review)}
+          disabled={review.status === 'running'}
+          title={review.status === 'running' ? 'Wait for the review to finish' : 'Delete this review'}
+          aria-label={`Delete review ${review.head_ref}`}
+        >
+          <Icon name="trash" size={14} />
+        </button>
       </div>
       {review.summary && (
         <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.84rem' }}>{review.summary}</p>
@@ -665,9 +676,27 @@ export default function Review({ projectId, user }) {
   useEffect(() => { load(); }, [load]);
 
   const isAdmin = user?.is_admin;
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
+
+  const deleteReview = async (review) => {
+    const ok = await requestConfirm(
+      `Delete the review of ${review.head_ref}${review.pr_number ? ` (PR #${review.pr_number})` : ''} and its findings? This cannot be undone.`,
+      'Delete', 'danger');
+    if (!ok) return;
+    try {
+      await api.delete(`/api/projects/${projectId}/reviews/${review.id}`);
+      setReviews((prev) => prev.filter((r) => r.id !== review.id));
+      toast('Review deleted', 'ok');
+    } catch (e) {
+      toast(e.message || 'Could not delete the review', 'error');
+    }
+  };
 
   return (
     <>
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       {/* Toolbar row — "+ New review" aligned right, matching Tests page pattern */}
       <div className="actions-row" style={{ justifyContent: 'flex-end' }}>
         <button
@@ -705,6 +734,7 @@ export default function Review({ projectId, user }) {
               review={r}
               projectId={projectId}
               isAdmin={isAdmin}
+              onDelete={deleteReview}
             />
           ))}
         </ul>
