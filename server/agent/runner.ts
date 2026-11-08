@@ -53,7 +53,7 @@ import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
 import { buildRunnerMcpServers, parseSessionIntegrations } from './runner-integrations.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
-import { eventPrompt } from '../workflows/session-commands.ts';
+import { eventPrompt, goalPrompt } from '../workflows/session-commands.ts';
 import { runCheckSteps } from './runner-checks.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
@@ -296,7 +296,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     // A command (/init, /review, the owner's own commands and skills) goes in as the prompt it stands for.
     prompt = pendingEvents.map(eventPrompt).join('\n\n');
   } else {
-    prompt = workflow.goal;
+    // A goal that is a command ("/review security") goes in as the prompt it stands for, like a chat message.
+    prompt = await goalPrompt(workflow);
   }
   // A loop session gets the full iteration prompt: goal, recent progress, new instructions and how to report back.
   const loopState = readLoopState(workflow);

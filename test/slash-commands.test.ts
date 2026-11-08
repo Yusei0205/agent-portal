@@ -190,6 +190,52 @@ describe('slash commands', () => {
     await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${claudeWf}/message`, { method: 'POST', body: { message: '/init' }, cookie });
     assert.match(lastData().prompt, /CLAUDE\.md at the root/);
   });
+
+  it('a session started with a command as its goal runs the prompt it stands for', async () => {
+    const { goalPrompt } = await import('../server/workflows/session-commands.ts');
+    const { getSessionsRepository } = await import('../server/repositories/sessions.ts');
+    // As the New session form makes it: the goal is saved, and the run starts from it.
+    const sessionWithGoal = async (goal: string) => {
+      const r = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, { method: 'POST', body: { goal, engine: 'kiro' }, cookie });
+      const id = ((r.body as Record<string, unknown>).workflow as Record<string, unknown>).id as string;
+      const w = await getSessionsRepository().getWorkflowByProjectId(projectId, id);
+      assert.ok(w);
+      return w;
+    };
+    assert.equal(await goalPrompt(await sessionWithGoal('/deploy-check production')), 'Check that production is healthy and report.');
+    assert.match(await goalPrompt(await sessionWithGoal('/review the auth code')), /Do not change any files\.\n\nFocus on: the auth code$/);
+    for (const goal of ['Fix the login page', '/src/app.ts throws on start', '/nope do it']) {
+      assert.equal(await goalPrompt(await sessionWithGoal(goal)), goal, 'goes in as typed');
+    }
+  });
+
+  it("/model in a teammate's session lists the models of the owner's sign-in, which its runs use", async () => {
+    const made = await fetchJson(baseUrl, '/api/credentials', {
+      method: 'POST', cookie, body: { engine: 'claude-code', mode: 'subscription_token', name: 'Plan', secret: 'oauth-token-abcd' },
+    });
+    const credentialId = ((made.body as Record<string, unknown>).credential as Record<string, unknown>).id as string;
+    const w = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, {
+      method: 'POST', body: { goal: 'g', engine: 'claude-code', credentialId }, cookie,
+    });
+    const ownersWf = ((w.body as Record<string, unknown>).workflow as Record<string, unknown>).id as string;
+
+    const email = `teammate-${Date.now()}@example.com`;
+    const u = await fetchJson(baseUrl, '/api/users', { method: 'POST', body: { email, name: 'Teammate', password: 'password1234', isAdmin: false }, cookie });
+    const userId = ((u.body as Record<string, unknown>).user as Record<string, unknown>).id as string;
+    const added = await fetchJson(baseUrl, `/api/projects/${projectId}/members`, { method: 'POST', body: { userId, role: 'editor' }, cookie });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+    const teammate = (await fetchJson(baseUrl, '/api/auth/login', { method: 'POST', body: { email, password: 'password1234' } })).cookie ?? '';
+
+    const r = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${ownersWf}/message`, {
+      method: 'POST', body: { message: '/model' }, cookie: teammate,
+    });
+    assert.equal((r.body as Record<string, unknown>).handled, true);
+    const { all } = await import('../server/db.ts');
+    const answer = all<{ body: string }>(
+      "SELECT body FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'command-result' ORDER BY id DESC LIMIT 1", ownersWf)[0]?.body ?? '';
+    assert.doesNotMatch(answer, /does not belong to you/);
+    assert.match(answer, /claude-sonnet-4-5 {2}\(Claude Sonnet 4\.5\)/, answer);
+  });
 });
 
 describe('slash command parsing', () => {

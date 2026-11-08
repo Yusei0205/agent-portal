@@ -213,6 +213,17 @@ export function unknownCommandText(name: string, engine: string): string {
   ].join('\n');
 }
 
+/**
+ * The text a run gives the agent when no chat message is waiting: the session's goal, or, for a goal that is a
+ * command ("/review security", started from the New session form or the API), the prompt it stands for.
+ */
+export async function goalPrompt(w: WorkflowRecord): Promise<string> {
+  const goal = String(w.goal ?? '');
+  if (w.engine === 'demo' || !parseSlashCommand(goal)) return goal;
+  const resolved = await resolveSessionCommand(w, goal).catch(() => null);
+  return resolved?.type === 'prompt' ? resolved.prompt : goal;
+}
+
 /** The text a run gives the agent for a saved chat message: a command's prompt, else what was typed. */
 export function eventPrompt(ev: { body: string; data?: string | null }): string {
   if (ev.data) {

@@ -558,3 +558,49 @@ describe('mergeEventLists — events without id', () => {
     assert.equal(merged.length, 2);
   });
 });
+
+// ── placeRunNotes ─────────────────────────────────────────────────────────────
+
+// @ts-expect-error — plain-JS module without types
+import { placeRunNotes } from '../web/src/lib/mergeEvents.js';
+
+describe('placeRunNotes — messages, /command answers and engine switches sit in time order within the current run', () => {
+  const run = [
+    makeStreamEvent(10, 'status',         '2024-01-01T00:01:00Z'),
+    makeStreamEvent(11, 'assistant-text', '2024-01-01T00:01:05Z'),
+    makeStreamEvent(12, 'run-complete',   '2024-01-01T00:01:10Z'),
+  ];
+
+  it('an answer given after the run ends comes after it, not above it', () => {
+    const earlier = [
+      makeWorkflowEvent(1, 'human', '2024-01-01T00:00:59Z'),
+      makeWorkflowEvent(12, 'command-result', '2024-01-01T00:05:00Z'),
+    ];
+    const { earlier: before, current } = placeRunNotes(earlier, run);
+    assert.deepEqual(before.map((e: { id: number }) => e.id), [1], 'the message that started the run stays above it');
+    assert.deepEqual(current.map((e: { src?: string; id: number }) => `${e.src ?? 'r'}:${e.id}`), ['r:10', 'r:11', 'r:12', 'w:12']);
+  });
+
+  it('an answer given while the run was working sits between the run events around it', () => {
+    const note = makeWorkflowEvent(5, 'command-result', '2024-01-01T00:01:07Z');
+    const engineSwitch = makeWorkflowEvent(6, 'engine-switch', '2024-01-01T00:02:00Z');
+    const { current } = placeRunNotes([note, engineSwitch], run);
+    assert.deepEqual(current.map((e: { src?: string; id: number }) => `${e.src ?? 'r'}:${e.id}`), ['r:10', 'r:11', 'w:5', 'r:12', 'w:6']);
+  });
+
+  it('a message typed while the agent works stays where it was sent', () => {
+    const { earlier, current } = placeRunNotes([makeWorkflowEvent(7, 'human', '2024-01-01T00:01:06Z')], run);
+    assert.deepEqual(earlier, []);
+    assert.deepEqual(current.map((e: { src?: string; id: number }) => `${e.src ?? 'r'}:${e.id}`), ['r:10', 'r:11', 'w:7', 'r:12']);
+  });
+
+  it('leaves older entries, run events and a session with no current run alone', () => {
+    const earlier = [
+      makeWorkflowEvent(1, 'command-result', '2024-01-01T00:00:30Z'),
+      makeWorkflowEvent(2, 'human', '2024-01-01T00:00:59Z'),
+      makeRunEvent(3, 'assistant-text', '2024-01-01T00:02:00Z', 'run-0'),
+    ];
+    assert.deepEqual(placeRunNotes(earlier, run).earlier, earlier);
+    assert.deepEqual(placeRunNotes(earlier, []), { earlier, current: [] });
+  });
+});
