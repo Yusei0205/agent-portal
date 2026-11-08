@@ -69,12 +69,25 @@ export interface KiroTokenPayload {
   profileName?: string;
 }
 
+/** The fields of a sub-agent event the portal keeps, with their sizes bounded (the runner is not trusted to be small). */
+function subagentPayload(ev: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { id: String(ev.id ?? '').slice(0, 128), name: (typeof ev.name === 'string' && ev.name.trim() ? ev.name.trim() : 'sub-agent').slice(0, 64) };
+  const text = (k: string, max: number): void => { if (typeof ev[k] === 'string' && ev[k]) out[k] = (ev[k] as string).slice(0, max); };
+  text('description', 300);
+  text('summary', 1000);
+  text('status', 32);
+  text('parentId', 128);
+  if (typeof ev.durationMs === 'number' && Number.isFinite(ev.durationMs)) out.durationMs = ev.durationMs;
+  return out;
+}
+
 export type AgentCoreSSEEvent =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string }
   | { type: 'context'; percent: number }
   | { type: 'usage'; credits: number }
   | { type: 'tool'; name: string }
+  | { type: 'subagent-started' | 'subagent-finished' | 'subagent-failed'; id: string; name: string; description?: string; summary?: string; status?: string; parentId?: string; durationMs?: number }
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
   | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number }
   | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
@@ -727,6 +740,14 @@ export async function runKiroViaAgentCore(
           if (textParts.length && textParts[textParts.length - 1] !== '') textParts.push('');
           emit('tool-start', { toolCallId: '', toolName, toolInput: '{}', status: 'in_progress' });
           emit('tool-end', { toolCallId: '', toolName, status: 'completed', output: '' });
+          break;
+        }
+
+        // Kiro handed work to a sub-agent (or one finished): the session's agents graph draws these.
+        case 'subagent-started':
+        case 'subagent-finished':
+        case 'subagent-failed': {
+          emit(ev.type, subagentPayload(ev as unknown as Record<string, unknown>));
           break;
         }
 

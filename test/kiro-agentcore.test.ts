@@ -278,6 +278,42 @@ describe('AgentCore — tool event → tool-start + tool-end', () => {
   });
 });
 
+describe('AgentCore — sub-agent events → the session\'s agents graph', () => {
+  let cfg: Config;
+
+  before(() => {
+    createTestDb();
+    cfg = makeConfig();
+    setConfig(cfg);
+  });
+
+  after(async () => {
+    _setAgentCoreInvokerOverride(null);
+    await cleanup();
+  });
+
+  it('passes Kiro\'s sub-agent events on as run events, keeping only the known fields', async () => {
+    _setAgentCoreInvokerOverride(async function* () {
+      yield { type: 'subagent-started', id: 's-1', name: 'explorer', description: 'Run the explorer' } as AgentCoreSSEEvent;
+      yield { type: 'subagent-finished', id: 's-1', name: 'explorer', summary: 'Found 3 files.', status: 'completed', durationMs: 4000, secret: 'dropped' } as unknown as AgentCoreSSEEvent;
+      yield { type: 'subagent-failed', id: 's-2', name: 'x'.repeat(200), summary: 'y'.repeat(5000) } as AgentCoreSSEEvent;
+      yield { type: 'result', runId: 'r1', exitCode: 0, durationMs: 100, coldStartMs: 50, tokenRefreshed: false } as AgentCoreSSEEvent;
+    });
+
+    const td = makeTestData(cfg);
+    const { ctx, events } = await makeCtx(td.runId, td.workflowId, td.projectId, td.workDir, cfg);
+    await runKiroViaAgentCore(ctx, { runtimeArn: FAKE_ARN, runId: td.runId, prompt: 'x', token: SAMPLE_TOKEN, credentialId: null, expectedCiphertext: null });
+
+    const started = pick(events, 'subagent-started');
+    const finished = pick(events, 'subagent-finished');
+    const failed = pick(events, 'subagent-failed');
+    assert.deepEqual(started[0].payload, { id: 's-1', name: 'explorer', description: 'Run the explorer' });
+    assert.deepEqual(finished[0].payload, { id: 's-1', name: 'explorer', summary: 'Found 3 files.', status: 'completed', durationMs: 4000 });
+    assert.equal(String(failed[0].payload.name).length, 64, 'a long name is cut');
+    assert.equal(String(failed[0].payload.summary).length, 1000, 'a long result is cut');
+  });
+});
+
 describe('AgentCore — browser events → the Browser tab', () => {
   let cfg: Config;
 

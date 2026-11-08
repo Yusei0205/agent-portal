@@ -717,6 +717,7 @@
         "test/kiro-settings.test.ts",
         "test/kiro-win-env.test.ts",
         "test/kiro-agentcore.test.ts",
+        "test/kiro-subagents.test.ts",
         "test/agentcore-portal.test.ts",
         "test/agentcore-login-repo.test.ts",
         "test/agent-defs.test.ts",
@@ -1140,10 +1141,13 @@
       "sources": [
         "kiro-runner/src/validate.ts",
         "kiro-runner/src/run.ts",
+        "kiro-runner/src/subagents.ts",
         "kiro-runner/src/login.ts",
         "kiro-runner/src/index.ts"
       ],
-      "tests": [],
+      "tests": [
+        "test/kiro-subagents.test.ts"
+      ],
       "smokeIds": [],
       "note": "Spike B container. No unit tests yet — the container is tested end-to-end via infra/scripts/spike-b-run.mjs. Add kiro-runner-validation.test.ts if validate.ts logic grows."
     },
