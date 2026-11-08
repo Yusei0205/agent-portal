@@ -34,6 +34,7 @@ import { Account } from './pages/Account.jsx';
 import { Feedback } from './pages/Feedback.jsx';
 import { Help } from './pages/Help.jsx';
 import { Tickets } from './pages/Tickets.jsx';
+import Mail from './pages/Mail.jsx';
 
 // ── Shortcut definitions (registered once at module load) ─────────────────────
 
@@ -460,6 +461,7 @@ function Shell({ user, onSignOut }) {
   const isTestsRoute       = route.projectId && route.tab === 'tests';
   const isReviewsRoute     = route.projectId && route.tab === 'reviews';
   const isTicketsRoute     = route.projectId && route.tab === 'tickets';
+  const isMailRoute        = route.projectId && route.tab === 'mail';
 
   return (
     <div
@@ -583,6 +585,8 @@ function Shell({ user, onSignOut }) {
             <ReviewsPage projectId={route.projectId} route={route} user={user} />
           ) : isTicketsRoute ? (
             <Tickets projectId={route.projectId} route={route} onNewSession={handleNewSession} />
+          ) : isMailRoute ? (
+            <Mail projectId={route.projectId} />
           ) : (
             <Placeholder tab={route.tab} />
           )}

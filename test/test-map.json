@@ -1286,6 +1286,16 @@
       ],
       "smokeIds": []
     },
+    "mail-page": {
+      "description": "Mail page day window",
+      "sources": [
+        "server/mail.ts"
+      ],
+      "tests": [
+        "test/mail.test.ts"
+      ],
+      "smokeIds": []
+    },
     "gmail": {
       "description": "Gmail connection, run token and outgoing mail helpers",
       "sources": [

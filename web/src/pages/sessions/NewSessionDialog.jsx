@@ -258,11 +258,11 @@ export function CredentialPicker({ engine, credentials, value, onChange }) {
  *   initialTicket?: { key: string, summary?: string, status?: any, priority?: string, url?: string } | null,
  * }} props
  */
-export function NewSessionDialog({ project, repos = [], workspaces = [], onClose, onCreated, initialTicket = null }) {
+export function NewSessionDialog({ project, repos = [], workspaces = [], onClose, onCreated, initialTicket = null, initialGoal = '' }) {
   const [goal, setGoal] = useState(
     initialTicket
       ? `Investigate and resolve ${initialTicket.key}: ${initialTicket.summary || initialTicket.key}`
-      : '',
+      : initialGoal,
   );
   const [engine, setEngine] = useState('demo');
   const [trustTools, setTrustTools] = useState(false);
