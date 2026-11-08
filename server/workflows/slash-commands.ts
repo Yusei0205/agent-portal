@@ -62,7 +62,9 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
 
     case 'model': {
       if (!hasEngine) return 'Models can be changed in Codex, Kiro and Claude Code sessions.';
-      const res = await getEngineModels(engine as 'kiro' | 'claude-code' | 'codex', userId, w.credential_id ?? null, false);
+      // The models of the sign-in the session's runs use: its owner's (runner.ts), whoever types the command.
+      const owner = w.created_by ? String(w.created_by) : userId;
+      const res = await getEngineModels(engine as 'kiro' | 'claude-code' | 'codex', owner, w.credential_id ?? null, false);
       const models = res.models ?? [];
       const current = w.model || models.find((m) => m.default)?.id || '(default)';
       if (!arg) {

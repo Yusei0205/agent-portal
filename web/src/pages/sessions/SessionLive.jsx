@@ -5,7 +5,7 @@ import { api } from '../../lib/api.js';
 import { formatCost, formatCredits } from '../../lib/util.js';
 import { Icon } from '../../components/Icon.jsx';
 import { sanitizeMarkdown } from '../../lib/sanitize.js';
-import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventLists } from '../../lib/mergeEvents.js';
+import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventLists, placeRunNotes } from '../../lib/mergeEvents.js';
 import { findOutputFileMentions } from '../../lib/outputFileMatch.js';
 import { linkConversationFiles } from '../../lib/conversationFiles.js';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
@@ -1084,12 +1084,11 @@ export function SessionLive({
     [earlierEvents, events, runId],
   );
 
-  // An engine switch made after the current run sits after that run, not among the earlier history above it.
-  const currentRunEndAt = dedupedAll.length ? String(dedupedAll[dedupedAll.length - 1].created_at || '') : '';
-  const isTrailingNote = (e) => e.type === 'engine-switch' && currentRunEndAt && String(e.created_at || '') > currentRunEndAt;
-  const trailingNotes = displayEarlierEventsAll.filter(isTrailingNote);
-  const displayEarlierEvents = displayEarlierEventsAll.filter((e) => dropStaleFailure(e) && !isTrailingNote(e));
-  const dedupedDisplayEvents = dedupedAll.filter(dropStaleFailure);
+  // A message typed while the agent works, a /command's answer or an engine switch made during or after the current
+  // run sits at its place in time within that run, not among the earlier history above it.
+  const placed = placeRunNotes(displayEarlierEventsAll, dedupedAll);
+  const displayEarlierEvents = placed.earlier.filter(dropStaleFailure);
+  const dedupedDisplayEvents = placed.current.filter(dropStaleFailure);
 
   // ── New-run handling: when runId changes, persist current events ─────────
 
@@ -1491,9 +1490,10 @@ export function SessionLive({
           </div>
         )}
 
-        {/* Current run events (deduped against pending messages) */}
+        {/* Current run events (deduped against pending messages), with the chat notes made during or after it */}
         {dedupedDisplayEvents.map((e, i) => {
-          const key        = e.id ?? i;
+          // A note is a workflow event: its id can equal a run event's.
+          const key        = `${e.src ?? 'r'}:${e.id ?? i}`;
           const isTerminal = e.type === 'run-complete' || e.type === 'run-failed';
           const runFiles   = isTerminal && runId
             ? outputFiles.filter((f) => f.run_id === runId)
@@ -1522,21 +1522,6 @@ export function SessionLive({
             </React.Fragment>
           );
         })}
-
-        {/* Notes made after the current run (engine switch) */}
-        {trailingNotes.map((e, i) => (
-          <RunEvent
-            key={e.id ?? `note-${i}`}
-            event={e}
-            workflowId={workflowId}
-            projectId={projectId}
-            runId={runId}
-            agentName={agentName}
-            outputFiles={outputFiles}
-            vaultFolder={vaultFolder}
-            onResolved={undefined}
-          />
-        ))}
 
         {/* Pull request cards: latest pull-request event per repository */}
         <PullRequestCards events={[...earlierEvents, ...events]} workflowId={workflowId} projectId={projectId} />
