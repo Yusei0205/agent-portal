@@ -2,8 +2,14 @@
 #
 #   verify  — on every push to main_v3 that touches the portal, and on pull requests that do:
 #             type check and the production build (no AWS access).
-#   deploy  — on pushes to main_v3 only, or by hand on main_v3: build the web files and run
-#             `cdk deploy AgentPortalCloud` with the same context values used for manual deploys.
+#   wait-for-ci — alongside verify, on the same pushes and manual runs as deploy: waits for CI
+#             (ci.yml) on this commit and fails unless it passed (scripts/wait-for-ci.mjs).
+#   deploy  — on pushes to main_v3 only, or by hand on main_v3, once verify and CI have passed: build
+#             the web files and run `cdk deploy AgentPortalCloud` with the same context values used
+#             for manual deploys.
+#
+# When CI fails on a flaky test, re-run CI's failed jobs, and once they pass, re-run this workflow's
+# failed jobs: the CI check then sees the passing run and the deploy goes ahead.
 #
 # AWS access is the same as deploy-agentcore.yml: GitHub OIDC into agent-portal-github-deploy, which
 # trusts only jobs of this repository in the "aws-prod" environment, so give that environment required
@@ -79,9 +85,28 @@ jobs:
           npm ci --no-audit --no-fund
           npx tsc --noEmit
 
+  wait-for-ci:
+    name: Wait for CI to pass
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main_v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read # list CI's runs on this commit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Wait for CI on this commit
+        run: node scripts/wait-for-ci.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
   deploy:
     name: Deploy to AWS (ap-southeast-1)
-    needs: verify
+    needs: [verify, wait-for-ci]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main_v3'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
