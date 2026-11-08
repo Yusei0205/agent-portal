@@ -149,6 +149,36 @@ export function mergeEventLists(a, b) {
   return out.sort(compareEvents);
 }
 
+// ── placeRunNotes ─────────────────────────────────────────────────────────────
+
+/** What the chat adds outside a run: your messages, an engine switch, a /command and the portal's answer to it. */
+const RUN_NOTE_TYPES = new Set(['human', 'engine-switch', 'command', 'command-result']);
+
+/**
+ * Put what was added to the chat during or after the current run (a message typed while the agent works, the answer
+ * to /help or /cost, an engine switch) in its place in time within that run, instead of above it among the earlier
+ * history. The message that started the run is older than the run, so it stays above. The run's events keep their order.
+ *
+ * @param {Array} earlier  Earlier history, oldest first (it holds every saved note)
+ * @param {Array} current  The current run's events, oldest first
+ * @returns {{ earlier: Array, current: Array }}
+ */
+export function placeRunNotes(earlier, current) {
+  const startAt = current.length ? String(current[0].created_at || '') : '';
+  if (!startAt) return { earlier, current };
+  const isNote = (e) => e.src === 'w' && RUN_NOTE_TYPES.has(e.type) && String(e.created_at || '') > startAt;
+  const notes = earlier.filter(isNote).sort(compareEvents);
+  if (!notes.length) return { earlier, current };
+  const out = [];
+  let i = 0;
+  for (const e of current) {
+    const at = String(e.created_at || '');
+    while (i < notes.length && at && String(notes[i].created_at) < at) out.push(notes[i++]);
+    out.push(e);
+  }
+  return { earlier: earlier.filter((e) => !isNote(e)), current: [...out, ...notes.slice(i)] };
+}
+
 // ── collectThoughtParagraphs ──────────────────────────────────────────────────
 
 /**

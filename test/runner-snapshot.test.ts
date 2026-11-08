@@ -264,6 +264,47 @@ describe('workspace snapshots', { skip: !haveTools && 'tar, gzip and find are ne
     });
   });
 
+  it("the agents' shared notes in repos/.agent-notes are saved with the workspace and come back on the next machine", async () => {
+    let stored: Buffer | null = null;
+    let puts = 0;
+    const server = http.createServer((req, res) => {
+      if (req.method === 'PUT') {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => { stored = Buffer.concat(chunks); puts++; res.writeHead(200); res.end(); });
+      } else if (stored) {
+        res.writeHead(200, { 'content-length': stored.length });
+        res.end(stored);
+      } else { res.writeHead(404); res.end(); }
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/notes`;
+    const snap = { putUrl: url, getUrl: url };
+    const a = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-n1-'));
+    const b = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-n2-'));
+    try {
+      fs.mkdirSync(path.join(a, 'repos', 'app'), { recursive: true });
+      fs.writeFileSync(path.join(a, 'repos', 'app', 'main.ts'), 'code');
+      saveWorkspaceInBackground(snap, a);
+      await settleSnapshot();
+      assert.equal(puts, 1);
+
+      // A run that only updates the notes (no code change) is still saved.
+      await new Promise((r) => setTimeout(r, 50));
+      fs.mkdirSync(path.join(a, 'repos', '.agent-notes'), { recursive: true });
+      fs.writeFileSync(path.join(a, 'repos', '.agent-notes', 'lead-orchestrator.md'), '# lead-orchestrator: plan');
+      saveWorkspaceInBackground(snap, a);
+      await settleSnapshot();
+      assert.equal(puts, 2, 'a change to the notes alone is saved');
+
+      assert.equal(await restoreWorkspace(snap, b, () => {}), true);
+      assert.equal(fs.readFileSync(path.join(b, 'repos', '.agent-notes', 'lead-orchestrator.md'), 'utf8'), '# lead-orchestrator: plan');
+    } finally {
+      server.close();
+      for (const d of [a, b]) fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it('does nothing when there is no saved copy to download', async () => {
     const b = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-c-'));
     assert.equal(await restoreWorkspace({ putUrl: 'http://127.0.0.1:9/x' }, b, () => {}), false);

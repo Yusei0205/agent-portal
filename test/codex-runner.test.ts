@@ -72,6 +72,13 @@ describe('Codex AgentCore runner HTTP contract', () => {
     assert.equal(second.find(e => e.type === 'result').threadId, result.threadId);
     assert.equal((await post({ ...payload(), workflowId: 'different-owner-session' })).status, 403);
   });
+  it('streams native sub-agent lifecycle through the cloud protocol', async () => {
+    const output = await events(await post(payload('COLLAB_AGENTS')));
+    const lifecycle = output.filter(e => e.type === 'portal-event' && e.eventType.startsWith('subagent-'));
+    assert.deepEqual(lifecycle.map(e => e.eventType), ['subagent-started', 'subagent-finished']);
+    assert.equal(lifecycle[0].payload.id, 'child-1');
+    assert.equal(lifecycle[1].payload.status, 'done');
+  });
   it('redacts the access token from all streamed output and keeps it out of files', async () => {
     const output = await events(await post(payload('ECHO_TOKEN')));
     assert.equal(JSON.stringify(output).includes('fake-short-lived-access-token'), false);

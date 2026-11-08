@@ -1266,10 +1266,22 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     const results: EventRecord[] = [];
     for (const run of runs) {
       if (results.length >= limit) break;
-      const events = await this.listRunEvents(run.id, limit);
-      results.push(...events.filter((e) => typeSet.has(e.type)));
+      // Filter in DynamoDB before applying the matching-event budget. A long run
+      // can emit thousands of text chunks before the first subagent is spawned.
+      const items = await paginateQuery(this.client, {
+        TableName: eventsTable(),
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        FilterExpression: `#eventType IN (${types.map((_, i) => `:type${i}`).join(', ')})`,
+        ExpressionAttributeNames: { '#eventType': 'type' },
+        ExpressionAttributeValues: {
+          ':pk': av(`RUN#${run.id}`), ':prefix': av('SEQ#'),
+          ...Object.fromEntries(types.map((type, i) => [`:type${i}`, av(type)])),
+        },
+        ScanIndexForward: false,
+      }, limit - results.length);
+      results.push(...items.map(item => itemToEvent(item, run.id)).filter(e => typeSet.has(e.type)));
     }
-    results.sort((a, b) => b.id - a.id);
+    results.sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id);
     return results.slice(0, limit);
   }
 

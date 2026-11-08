@@ -220,21 +220,28 @@
         "web/src/lib/outputFileMatch.js",
         "web/src/lib/outputFileUtils.js",
         "web/src/lib/pullRequestCard.js",
+        "web/src/lib/model-groups.js",
+        "web/src/components/ModelOptions.jsx",
+        "web/src/components/AiChoicePicker.jsx",
         "web/src/pages/sessions/PullRequestCard.jsx",
         "web/src/styles/sessions.css"
       ],
       "tests": [
         "test/session-lifecycle.test.ts",
+        "test/session-agent-events.test.ts",
         "test/session-context.test.ts",
         "test/session-files.test.ts",
         "test/sanitize-merge.test.ts",
         "test/output-files-match.test.ts",
+        "test/conversation-files.test.ts",
+        "test/web-session-agents.test.ts",
         "test/output-file-utils.test.ts",
         "test/web-pull-request-card.test.ts",
         "test/sessions-repo.test.ts",
         "test/engine-switch.test.ts",
         "test/approval-state.test.ts",
-        "test/session-composer-layout.test.ts"
+        "test/session-composer-layout.test.ts",
+        "test/model-groups.test.ts"
       ],
       "smokeIds": [
         "sessions"
@@ -275,7 +282,18 @@
         "server/agent/runner-terminal.ts",
         "server/agent/runner-terminal-auth.ts",
         "server/browser-live.ts",
+        "web/src/pages/sessions/AgentDetail.jsx",
+        "web/src/pages/sessions/AgentOrbit.jsx",
+        "web/src/pages/sessions/AgentViews.jsx",
+        "web/src/pages/sessions/AgentsPanel.jsx",
+        "web/src/lib/agent-activity.js",
+        "web/src/lib/agent-orbit.js",
+        "web/src/styles/agents-panel.css",
+        "web/src/pages/sessions/SessionAgentsStrip.jsx",
+        "web/src/pages/sessions/useSessionAgents.js",
         "web/src/pages/sessions/IdeAgents.jsx",
+        "web/src/pages/sessions/AgentGraph.jsx",
+        "web/src/lib/conversationFiles.js",
         "web/src/pages/sessions/IdeBrowser.jsx",
         "web/src/pages/sessions/IdeEditor.jsx",
         "web/src/pages/sessions/IdeExplorer.jsx",
@@ -295,8 +313,12 @@
         "web/src/styles/ide.css"
       ],
       "tests": [
+        "test/agent-orbit.test.ts",
+        "test/web-agent-detail.test.ts",
         "test/browser-live.test.ts",
         "test/chat-attachments-ui.test.ts",
+        "test/web-session-agents.test.ts",
+        "test/conversation-files.test.ts",
         "test/terminal.test.ts",
         "test/terminal-cloud.test.ts",
         "test/runner-terminal.test.ts",
@@ -600,6 +622,7 @@
       "description": "AWS credentials management and parser",
       "sources": [
         "server/credentials.ts",
+        "server/credential-default.ts",
         "server/kiro-idc.ts",
         "server/repositories/credentials.ts",
         "server/repositories/credentials-sqlite.ts",
@@ -613,6 +636,7 @@
       ],
       "tests": [
         "test/credentials.test.ts",
+        "test/kiro-credential-default.test.ts",
         "test/bedrock-sign-in.test.ts",
         "test/aws-keys-sign-in.test.ts",
         "test/setup-checklist-ui.test.ts",
@@ -704,6 +728,7 @@
         "test/kiro-settings.test.ts",
         "test/kiro-win-env.test.ts",
         "test/kiro-agentcore.test.ts",
+        "test/kiro-subagents.test.ts",
         "test/agentcore-portal.test.ts",
         "test/agentcore-login-repo.test.ts",
         "test/agent-defs.test.ts",
@@ -718,6 +743,7 @@
       "description": "Code review creation, lifecycle, verdict, exports, and CI control plane",
       "sources": [
         "server/review.ts",
+        "server/review-result.ts",
         "server/review-lifecycle.ts",
         "server/pull-requests.ts",
         "server/session-pr.ts",
@@ -733,6 +759,8 @@
       ],
       "tests": [
         "test/review.test.ts",
+        "test/review-result.test.ts",
+        "test/web-review-findings.test.ts",
         "test/reviews-repo.test.ts",
         "test/pull-requests.test.ts",
         "test/session-pr.test.ts",
@@ -1124,10 +1152,13 @@
       "sources": [
         "kiro-runner/src/validate.ts",
         "kiro-runner/src/run.ts",
+        "kiro-runner/src/subagents.ts",
         "kiro-runner/src/login.ts",
         "kiro-runner/src/index.ts"
       ],
-      "tests": [],
+      "tests": [
+        "test/kiro-subagents.test.ts"
+      ],
       "smokeIds": [],
       "note": "Spike B container. No unit tests yet — the container is tested end-to-end via infra/scripts/spike-b-run.mjs. Add kiro-runner-validation.test.ts if validate.ts logic grows."
     },
@@ -1452,8 +1483,10 @@
       "smokeIds": []
     },
     "slash-commands": {
-      "description": "Portal-handled slash commands (/tools, /rename, /cost, /status, /help) in an engine session:",
+      "description": "Slash commands in an engine session: the portal's own (/tools, /rename, /cost, /status, /help), /init and /review, and the owner's commands and skills from Agent setup.",
       "sources": [
+        "server/workflows/session-commands.ts",
+        "server/workflows/slash-commands.ts",
         "test/slash-commands.test.ts"
       ],
       "tests": [
@@ -1497,6 +1530,7 @@
         "codex-runner/src/device-auth.ts",
         "server/repositories/codex-store.ts",
         "server/agent/codex-session.ts",
+        "server/agent/codex-agents.ts",
         "server/agent/codex-agentcore.ts",
         "server/agent/codex-pr-tool.ts",
         "codex-runner/src/service.ts",
@@ -1509,6 +1543,7 @@
         "test/codex-oauth.test.ts",
         "test/codex-device.test.ts",
         "test/codex-runner.test.ts",
+        "test/codex-agents.test.ts",
         "test/codex-pr-tool.test.ts",
         "test/codex-store.test.ts",
         "test/codex-setup.test.ts"

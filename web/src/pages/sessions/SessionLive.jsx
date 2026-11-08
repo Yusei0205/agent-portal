@@ -5,15 +5,18 @@ import { api } from '../../lib/api.js';
 import { formatCost, formatCredits } from '../../lib/util.js';
 import { Icon } from '../../components/Icon.jsx';
 import { sanitizeMarkdown } from '../../lib/sanitize.js';
-import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventLists } from '../../lib/mergeEvents.js';
+import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventLists, placeRunNotes } from '../../lib/mergeEvents.js';
 import { findOutputFileMentions } from '../../lib/outputFileMatch.js';
+import { linkConversationFiles } from '../../lib/conversationFiles.js';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
 import { RunOutputsCard } from './RunOutputsCard.jsx';
 import { PullRequestCards } from './PullRequestCard.jsx';
+import { SessionAgentsStrip } from './SessionAgentsStrip.jsx';
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
 let _markedLib = null;
+const WorkspaceFileContext = createContext(null);
 let _markedLoadPromise = null;
 
 function loadMarked() {
@@ -30,7 +33,8 @@ function renderMarkdownToHtml(text) {
   const raw = typeof _markedLib === 'function'
     ? _markedLib(text, { gfm: true, breaks: true })
     : _markedLib.parse(text, { gfm: true, breaks: true });
-  return sanitizeMarkdown(String(raw));
+  // Preserve native artifact links before the sanitizer removes the sandbox scheme.
+  return sanitizeMarkdown(String(raw).replace(/href="sandbox:(\/[^\"]*)"/gi, 'href="$1"'));
 }
 
 function _escapeHtml(s) {
@@ -57,7 +61,7 @@ function linkifyDomOutputFiles(container, outputFiles) {
    */
   function walk(node) {
     // Skip <pre> (code block) subtrees entirely
-    if (node.nodeType === 1 && node.nodeName === 'PRE') return;
+    if (node.nodeType === 1 && ['PRE', 'A', 'BUTTON'].includes(node.nodeName)) return;
 
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === 3) {
@@ -166,6 +170,8 @@ function useSmoothText(text) {
  * }} props
  */
 function MarkdownMessage({ text: fullText, outputFiles = [], projectId, vaultFolder }) {
+  const openWorkspaceFile = useContext(WorkspaceFileContext);
+  const [fileError, setFileError] = useState(null);
   const text = useSmoothText(fullText);
   const [html, setHtml] = useState(() => renderMarkdownToHtml(fullText));
   const containerRef = useRef(null);
@@ -186,20 +192,29 @@ function MarkdownMessage({ text: fullText, outputFiles = [], projectId, vaultFol
   // We run this inside a layout effect (useEffect) so the DOM is already updated.
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !outputFiles.length) return;
+    if (!container) return;
+    linkConversationFiles(container, outputFiles);
     linkifyDomOutputFiles(container, outputFiles);
   // Re-run whenever HTML or outputFiles list changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html, outputFiles]);
 
   const handleClick = useCallback((e) => {
+    const workspace = e.target.closest('[data-workspace-file-path]');
+    if (workspace) {
+      e.preventDefault();
+      setFileError(null);
+      if (openWorkspaceFile) Promise.resolve(openWorkspaceFile(workspace.dataset.workspaceFilePath, Number(workspace.dataset.fileLine) || null)).catch(error => setFileError(error.message));
+      else setFileError('Open this file from the session Explorer.');
+      return;
+    }
     const btn = e.target.closest('[data-output-file-id]');
     if (!btn) return;
     e.preventDefault();
     const fileId = btn.dataset.outputFileId;
     const file = outputFiles.find((f) => f.id === fileId);
     if (file) setPreviewFile(file);
-  }, [outputFiles]);
+  }, [outputFiles, openWorkspaceFile]);
 
   return (
     <>
@@ -211,10 +226,11 @@ function MarkdownMessage({ text: fullText, outputFiles = [], projectId, vaultFol
             className="live-markdown-body"
             // eslint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{ __html: html }}
-            onClick={outputFiles.length ? handleClick : undefined}
+            onClick={handleClick}
           />
         )
       }
+      {fileError && <div className="error-note" role="alert">{fileError}</div>}
       {previewFile && (
         <OutputFilePreview
           file={previewFile}
@@ -959,6 +975,7 @@ export function SessionLive({
   onBrowserEvent,
   outputFiles = [],
   vaultFolder = null,
+  onOpenWorkspaceFile,
 }) {
   const { events, connected, error } = useRunStream(runId);
 
@@ -1060,17 +1077,18 @@ export function SessionLive({
   const lastTerminal = [...displayEarlierEventsAll, ...dedupedAll].filter(isTerminal).pop() ?? null;
   const dropStaleFailure = (e) => !(e.type === 'run-failed' && lastTerminal && e !== lastTerminal);
   // What became of each approval request (answered, expired, or its turn ended), from everything loaded so far.
+  // Everything loaded so far, oldest first: the agents view reads each agent's own messages from it.
+  const allEvents = React.useMemo(() => [...earlierEvents, ...events], [earlierEvents, events]);
   const approvalState = React.useMemo(
     () => approvalStates([...earlierEvents, ...events], runId),
     [earlierEvents, events, runId],
   );
 
-  // An engine switch made after the current run sits after that run, not among the earlier history above it.
-  const currentRunEndAt = dedupedAll.length ? String(dedupedAll[dedupedAll.length - 1].created_at || '') : '';
-  const isTrailingNote = (e) => e.type === 'engine-switch' && currentRunEndAt && String(e.created_at || '') > currentRunEndAt;
-  const trailingNotes = displayEarlierEventsAll.filter(isTrailingNote);
-  const displayEarlierEvents = displayEarlierEventsAll.filter((e) => dropStaleFailure(e) && !isTrailingNote(e));
-  const dedupedDisplayEvents = dedupedAll.filter(dropStaleFailure);
+  // A message typed while the agent works, a /command's answer or an engine switch made during or after the current
+  // run sits at its place in time within that run, not among the earlier history above it.
+  const placed = placeRunNotes(displayEarlierEventsAll, dedupedAll);
+  const displayEarlierEvents = placed.earlier.filter(dropStaleFailure);
+  const dedupedDisplayEvents = placed.current.filter(dropStaleFailure);
 
   // ── New-run handling: when runId changes, persist current events ─────────
 
@@ -1361,11 +1379,15 @@ export function SessionLive({
   }
 
   return (
+    <WorkspaceFileContext.Provider value={onOpenWorkspaceFile}>
     <ApprovalStateContext.Provider value={approvalState}>
     <div
       className="live-panel"
       style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}
     >
+      {/* Live graph of the agents working in this session (hidden until there are some) */}
+      {workflowId && <SessionAgentsStrip workflowId={workflowId} projectId={projectId} workflow={workflow} events={allEvents} />}
+
       {/* Connection indicator */}
       {runId && (
         <div
@@ -1468,9 +1490,10 @@ export function SessionLive({
           </div>
         )}
 
-        {/* Current run events (deduped against pending messages) */}
+        {/* Current run events (deduped against pending messages), with the chat notes made during or after it */}
         {dedupedDisplayEvents.map((e, i) => {
-          const key        = e.id ?? i;
+          // A note is a workflow event: its id can equal a run event's.
+          const key        = `${e.src ?? 'r'}:${e.id ?? i}`;
           const isTerminal = e.type === 'run-complete' || e.type === 'run-failed';
           const runFiles   = isTerminal && runId
             ? outputFiles.filter((f) => f.run_id === runId)
@@ -1499,21 +1522,6 @@ export function SessionLive({
             </React.Fragment>
           );
         })}
-
-        {/* Notes made after the current run (engine switch) */}
-        {trailingNotes.map((e, i) => (
-          <RunEvent
-            key={e.id ?? `note-${i}`}
-            event={e}
-            workflowId={workflowId}
-            projectId={projectId}
-            runId={runId}
-            agentName={agentName}
-            outputFiles={outputFiles}
-            vaultFolder={vaultFolder}
-            onResolved={undefined}
-          />
-        ))}
 
         {/* Pull request cards: latest pull-request event per repository */}
         <PullRequestCards events={[...earlierEvents, ...events]} workflowId={workflowId} projectId={projectId} />
@@ -1579,5 +1587,6 @@ export function SessionLive({
       )}
     </div>
     </ApprovalStateContext.Provider>
+    </WorkspaceFileContext.Provider>
   );
 }

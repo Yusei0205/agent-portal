@@ -111,11 +111,18 @@ export function IdeEditor({ workflowId, openFile, onFileOpened }) {
   useEffect(() => {
     if (!openFile) return;
     const key = `${openFile.scope}:${openFile.path}`;
+    const existingTab = tabs.findIndex(tab => tab.key === key);
+    if (existingTab >= 0) {
+      setActiveIdx(existingTab);
+      setTabs(previous => previous.map((tab, i) => i === existingTab ? { ...tab, line: openFile.line } : tab));
+      onFileOpened?.();
+      return;
+    }
     setTabs((prev) => {
       const existing = prev.findIndex((t) => t.key === key);
       if (existing >= 0) {
         setActiveIdx(existing);
-        return prev;
+        return prev.map((tab, i) => i === existing ? { ...tab, line: openFile.line } : tab);
       }
       const newTab = {
         key,
@@ -123,6 +130,7 @@ export function IdeEditor({ workflowId, openFile, onFileOpened }) {
         path:    openFile.path,
         scope:   openFile.scope,
         ext:     openFile.ext,
+        line:    openFile.line,
         content: '',
         token:   null,
         loading: true,
@@ -159,7 +167,7 @@ export function IdeEditor({ workflowId, openFile, onFileOpened }) {
 
     if (onFileOpened) onFileOpened();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openFile?.key ?? openFile?.path, workflowId]);
+  }, [openFile?.key ?? openFile?.path, openFile?.line, workflowId]);
 
   const activeTab = tabs[activeIdx] ?? null;
 
@@ -353,6 +361,7 @@ export function IdeEditor({ workflowId, openFile, onFileOpened }) {
             key={activeTab.key}
             content={activeTab.content}
             ext={activeTab.ext}
+            initialLine={activeTab.line}
             readOnly={activeTab.readOnly}
             onChange={handleChange}
             onSave={handleSave}

@@ -278,6 +278,24 @@ describe('GET /api/engines/kiro/models — IDC credential with fake CLI', () => 
     assert.ok(body.models.length >= 1);
   });
 
+  it('on the cloud portal a Kiro api_key credential says API keys are not supported, not "kiro-cli is not installed"', async () => {
+    const previous = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
+    process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/kiro-test';
+    try {
+      _clearEngineModelCache();
+      const credId = createKiroCredential(userId, 'api_key', { secret: 'fake-api-key-cloud' });
+      const r = await fetchJson(baseUrl, `/api/engines/kiro/models?credentialId=${credId}&refresh=1`, { cookie });
+      assert.equal(r.status, 200);
+      const body = r.body as { models: unknown[]; error?: string };
+      assert.deepEqual(body.models, []);
+      assert.match(body.error ?? '', /API keys are not supported on the cloud portal/);
+      assert.match(body.error ?? '', /Identity Center/);
+      assert.doesNotMatch(body.error ?? '', /not installed/);
+    } finally {
+      if (previous === undefined) delete process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN; else process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = previous;
+    }
+  });
+
   it('caches result so second call does not re-invoke fake CLI', async () => {
     process.env.PORTAL_FAKE_KIRO_SCENARIO = 'list-models-ok';
     _clearEngineModelCache();

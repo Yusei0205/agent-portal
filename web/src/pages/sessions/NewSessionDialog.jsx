@@ -18,6 +18,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { api } from '../../lib/api.js';
 import { navigate, href } from '../../lib/router.js';
 import { Icon } from '../../components/Icon.jsx';
+import ModelOptions from '../../components/ModelOptions.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
@@ -180,11 +181,7 @@ export function ModelPicker({ engine, credentialId, value, onChange }) {
           {value && !models.some((m) => m.id === value) && (
             <option key="__ws_model__" value={value}>{value} (from workspace)</option>
           )}
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label || m.id}
-            </option>
-          ))}
+          <ModelOptions models={models} />
         </select>
       )}
       {error && (

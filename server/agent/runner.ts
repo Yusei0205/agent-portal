@@ -53,6 +53,7 @@ import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
 import { buildRunnerMcpServers, parseSessionIntegrations } from './runner-integrations.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
+import { eventPrompt, goalPrompt } from '../workflows/session-commands.ts';
 import { runCheckSteps } from './runner-checks.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
@@ -131,6 +132,7 @@ export function resumableEngineSessionId(workflow: { engine?: unknown; engine_se
 
 import type { PendingApproval } from './approvals.ts';
 import { pendingApprovals, resolveApproval } from './approvals.ts';
+import { findUserCredential } from '../credential-default.ts';
 export { resolveApproval } from './approvals.ts';
 
 // ── SSE event emission ────────────────────────────────────────────────────────
@@ -291,13 +293,15 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     // Mark all fetched events consumed before the run starts (atomic intent)
     const maxId = pendingEvents[pendingEvents.length - 1].id;
     await repo.markWorkflowEventsConsumedUpTo(workflowId, maxId);
-    prompt = pendingEvents.map((m) => m.body).join('\n\n');
+    // A command (/init, /review, the owner's own commands and skills) goes in as the prompt it stands for.
+    prompt = pendingEvents.map(eventPrompt).join('\n\n');
   } else {
-    prompt = workflow.goal;
+    // A goal that is a command ("/review security") goes in as the prompt it stands for, like a chat message.
+    prompt = await goalPrompt(workflow);
   }
   // A loop session gets the full iteration prompt: goal, recent progress, new instructions and how to report back.
   const loopState = readLoopState(workflow);
-  if (loopState) prompt = loopPrompt(workflow, loopState, pendingEvents.map((m) => m.body));
+  if (loopState) prompt = loopPrompt(workflow, loopState, pendingEvents.map(eventPrompt));
 
   // ── Jira ticket context ───────────────────────────────────────────────────
   // When the workflow has a jira_key, fetch the latest ticket (including any
@@ -433,7 +437,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       integrationIds: parseSessionIntegrations(workflow.integrations),
       leadAgent: workflow.lead_agent ? String(workflow.lead_agent) : null,
       permissions,
-      credentialId: workflow.credential_id ? String(workflow.credential_id) : null,
+      // A session made without a chosen sign-in (a workflow, a review) uses the person's Kiro sign-in rather than none.
+      credentialId: workflow.credential_id ? String(workflow.credential_id)
+        : workflow.engine === 'kiro' ? ((await findUserCredential(workflow.created_by ? String(workflow.created_by) : null, 'kiro'))?.id ?? null) : null,
       credentialOwnerId: workflow.created_by ? String(workflow.created_by) : null,
       model: workflow.model && String(workflow.model).trim() ? String(workflow.model).trim() : null,
       engineSessionId: resumableEngineSessionId(workflow),

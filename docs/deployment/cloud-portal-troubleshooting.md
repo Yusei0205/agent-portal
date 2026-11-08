@@ -422,3 +422,41 @@ A live check showed that the Kiro runner started its CLI but returned no verific
 New Kiro Identity Center sign-ins and reauthentication now use the existing direct AWS OIDC path in cloud deployments too. They register the Kiro scopes and request a device code without invoking an AgentCore runtime. Each startup OIDC call has a 15-second application deadline, and transient failures return a retryable error. The form says Requesting sign-in code while it waits. The user still authorizes the code in their browser.
 
 Pending client secrets are encrypted, including new reauthentication challenges. Polling remains compatible with old pending plaintext fields and AgentCore-based challenges during rollout. Agent execution continues on AgentCore with the stored credential. A failed reauthentication leaves the previous credential and selected profile intact.
+
+## Conversation file links return S3 AccessDenied
+
+A link such as `/server/feedback.ts:376` names a file in the session working copy. It is not a website asset. Opening that URL directly sends it to CloudFront's private static S3 origin, which returns AccessDenied for the missing object.
+
+The conversation now opens matching deliverables in the output preview and source links in the session editor through authenticated IDE reads. Repository-relative paths are checked against the working copy and its repositories; ambiguous paths ask the user to choose a repository in Explorer. External web links keep their normal behavior. Do not make the bucket public to address workspace links.
+
+## Codex sub-agents are missing from Agents activity
+
+Native Codex collaboration items now produce portal sub-agent lifecycle events, including nested parent relationships. The Codex runner and portal must both be deployed. Open Agents activity in the session sidebar and select **Expand agent graph** to see the connected nodes. The panel refreshes every five seconds as a fallback to realtime updates.
+
+Older runs that did not record native collaboration events cannot display that missing history. New collaboration activity is recorded after deployment. The graph visualizes actual delegated sessions and native sub-agents; it does not turn sequential automation steps into concurrent steps.
+
+## Kiro sessions show no agents graph (2026-11-08)
+
+- **Symptom:** a Claude Code or Codex session shows the "Agents" graph above the conversation, but a Kiro session never does.
+- **Cause:** the graph draws from `subagent-started` / `subagent-finished` events. The Kiro runner used to ignore Kiro's sub-agent activity, so none were sent.
+- **Fix:** the runner now turns Kiro's `invoke_sub_agent` frames (ACP `tool_call` tagged `_meta.kiro.kind = "agent-subtask"`, with an `agentSubtaskId`) into those events (`kiro-runner/src/subagents.ts`). **The Kiro runner image must be rebuilt and the harness redeployed (`node infra/scripts/deploy-harness.mjs`) as well as the portal**, and only runs after that show agents.
+- **Limits:** Kiro does not document how a sub-agent ends, so a node finishes when its `invoke_sub_agent` tool call completes, or at the end of the turn at the latest. A sub-agent started by another sub-agent appears under the session, not under its parent, because Kiro does not say who started it. Agents that Kiro runs only inside its own process without `invoke_sub_agent` are not reported. Local (non-cloud) Kiro runs are not covered.
+
+## "kiro-cli is not installed or not on PATH" on a Kiro API key (2026-11-08)
+
+- **Symptom:** Agent setup → Sign-ins → Kiro: a credential saved as an **API key** shows "kiro-cli is not installed or not on PATH" when you press Test.
+- **Cause:** the cloud portal does not run `kiro-cli` itself. Kiro runs in the AgentCore Kiro runtime, and the portal only sends that runtime an Identity Center token (for both running sessions and listing models). An API key is never sent, so the Test button fell through to a local `kiro-cli` that the portal function does not have. The message was misleading; the real limit is that API keys are not supported on the cloud portal.
+- **Fix:** the check now says so ("Kiro API keys are not supported on the cloud portal…"). Use **Add Kiro credential → Identity Center** instead. Supporting API keys would need the runner to accept `KIRO_API_KEY` (run and list-models modes), a rebuilt runner image and a harness redeploy.
+
+## "No Kiro credentials are configured" although you signed in with AWS SSO (2026-11-08)
+
+- **Symptom:** Workflows → Run options (and other places that list Kiro models or start a Kiro run) say "No Kiro credentials are configured" even though Agent setup shows your Identity Center sign-in.
+- **Cause:** those places only used a Kiro sign-in **marked as the default**. A sign-in added without ticking "default" was invisible to them, and a workflow run was started with no sign-in at all.
+- **Fix:** when nothing is marked, the oldest usable Kiro sign-in is used (on the cloud portal an Identity Center one is preferred over an API key). This applies to the models list, workflow runs, and any run started without a chosen sign-in. A person's first Kiro sign-in is now marked as the default automatically, and deleting the default marks the next one. Claude Code is unchanged: it can still fall back to the portal's own Bedrock account.
+
+## A Kiro sub-agent shows "does not send this agent's own messages" (2026-11-08)
+
+- **Symptom:** in the agents panel a Kiro sub-agent shows its task and result but no transcript, with the note "This engine does not send this agent's own messages".
+- **Cause:** Kiro tags every frame of a sub-agent with its `agentSubtaskId`, but the runner only used that to detect the start and finish, so the sub-agent's text and tool calls arrived as the main agent's.
+- **Fix:** the runner now labels a sub-agent's own text and tool calls with its id and name (`kiro-runner/src/subagents.ts`, `ownerOf`), the portal shows them as that agent's and keeps them out of the main agent's answer, and the panel matches them by id, so three agents with the same name (Kiro calls them all `general-task-execution`) each get their own transcript. **This needs the Kiro runner image rebuilt (CI does that on merge to `main_v3`, or `node infra/scripts/deploy-harness.mjs`) as well as the portal.** Sessions started before that have no per-agent transcript.
+- **Still true for Codex:** its runner reports that a sub-agent started and finished, with a summary, but not what it said or did, so a Codex sub-agent still shows only its task and result.

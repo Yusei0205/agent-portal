@@ -318,6 +318,23 @@ describe('processReviewReport: a reply with no report is not a clean review', ()
     assert.deepEqual(await processReviewReport(newReview('```json\n{"summary": "cut off", "findings": [\n```')), { count: 0, reported: false });
   });
 
+  it('unrelated JSON and malformed findings never count as a clean report', async () => {
+    for (const report of [{}, { summary: 'No report' }, { findings: null }, { findings: [null] }, { findings: [{ file: 'a.ts', body: '', severity: 'high' }] }]) {
+      assert.deepEqual(await processReviewReport(newReview('```json\n' + JSON.stringify(report) + '\n```')), { count: 0, reported: false });
+    }
+  });
+
+  it('keeps full details and fixes, including distinct findings with the same long prefix', async () => {
+    const prefix = 'Shared context '.repeat(250);
+    const findings = [1, 2].map(n => ({ file: 'a.ts', line: 4, severity: 'high', message: prefix + n, suggestion: 'Fix '.repeat(600) }));
+    const rid = newReview('```json\n' + JSON.stringify({ findings }) + '\n```');
+    assert.deepEqual(await processReviewReport(rid), { count: 2, reported: true });
+    const saved = all('SELECT body FROM p10_findings WHERE review_id = ?', rid);
+    assert.equal(saved.length, 2);
+    assert.ok(saved.every(f => String(f.body).includes(findings[0].suggestion)));
+    assert.equal((await processReviewReport(rid)).count, 0, 'a repeated report still deduplicates');
+  });
+
   it('a report with findings counts them', async () => {
     const got = await processReviewReport(newReview('```json\n[{"file":"a.ts","line":2,"severity":"high","title":"T","body":"B"}]\n```'));
     assert.deepEqual(got, { count: 1, reported: true });
@@ -743,16 +760,12 @@ describe('Auto-post dedupe', () => {
 
   it('skips auto-post when head moved during review (source_sha != head_commit_sha)', async () => {
     // Create review where source_sha differs from head_commit_sha (head moved mid-review)
-    const cr = await fetchJson(baseUrl, `/api/projects/${projectId}/reviews`, {
-      method: 'POST',
-      body: {
-        baseRef: 'main', headRef: 'feature/head-moved', postMode: 'auto',
-        sourceSha: 'sha_at_start', headCommitSha: 'sha_after_move',
-      },
-      cookie,
+    // This tests publication policy against a completed report. Creating a new
+    // review now launches a run whose lifecycle can overwrite our seeded status.
+    const rid = makeReview(projectId, {
+      head_ref: 'feature/head-moved', status: 'done', post_mode: 'auto',
+      source_sha: 'sha_at_start', head_commit_sha: 'sha_after_move',
     });
-    const rid = ((cr.body as Record<string, unknown>).review as Record<string, unknown>).id as string;
-    run(`UPDATE p10_reviews SET status = 'done' WHERE id = ?`, rid);
     makeFinding(rid, { severity: 'medium' });
 
     const r = await fetchJson(baseUrl, `/api/projects/${projectId}/reviews/${rid}/post`, {
@@ -2286,6 +2299,23 @@ describe('Item 2: workflow kind=review set on create and rerun; rerun produces f
 
     const wf = one<{ kind: string | null }>('SELECT kind FROM p6_workflows WHERE id = ?', wfId);
     assert.equal(wf?.kind, 'review', 'rerun workflow should also have kind=review');
+  });
+
+  it('a re-run uses the same engine and model as the review it repeats', async () => {
+    const cr = await fetchJson(baseUrl, `/api/projects/${projectId}/reviews`, {
+      method: 'POST', body: { baseRef: 'main', headRef: 'feat/rerun-engine' }, cookie,
+    });
+    const parent = (cr.body as Record<string, unknown>).review as Record<string, unknown>;
+    run(`UPDATE p6_workflows SET engine = 'claude-code', model = 'sonnet-test' WHERE id = ?`, parent.workflow_id as string);
+
+    const rr = await fetchJson(baseUrl, `/api/projects/${projectId}/reviews/${parent.id}/rerun`, {
+      method: 'POST', body: {}, cookie,
+    });
+    assert.equal(rr.status, 201);
+    const child = (rr.body as Record<string, unknown>).review as Record<string, unknown>;
+    const wf = one<{ engine: string; model: string }>('SELECT engine, model FROM p6_workflows WHERE id = ?', child.workflow_id as string);
+    assert.equal(wf?.engine, 'claude-code');
+    assert.equal(wf?.model, 'sonnet-test');
   });
 
   it('rerun review with kind=review produces findings and verdict is blocked', async () => {

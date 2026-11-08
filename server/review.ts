@@ -39,6 +39,7 @@ import { appendAudit } from './audit.ts';
 import { buildXlsx, buildDocx } from './docgen.ts';
 import { decrypt } from './secrets.ts';
 import { config } from './config.ts';
+import { normalizeReviewFindings } from './review-result.ts';
 
 import { getMemberRow, getProjectRow, getRepoInfo } from './project-access.ts';
 import { getProjectRepository } from './repositories/projects.ts';
@@ -907,40 +908,26 @@ function readFindingsReport(text: string): { found: boolean; findings: Array<Par
   if (jsonBlockMatch) {
     try {
       const parsed = JSON.parse(jsonBlockMatch[1]);
-      const arr = Array.isArray(parsed) ? parsed : (parsed.findings ?? parsed.results ?? []);
-      if (Array.isArray(arr)) return { found: true, findings: normalizeParsedFindings(arr) };
+      const arr = Array.isArray(parsed) ? parsed : (parsed?.findings ?? parsed?.results);
+      if (Array.isArray(arr)) return { found: true, findings: normalizeReviewFindings(arr) };
     } catch { /* fall through */ }
   }
   const jsonObjMatch = text.match(/\{[\s\S]*"findings"\s*:\s*\[[\s\S]*?\][\s\S]*\}/);
   if (jsonObjMatch) {
     try {
       const parsed = JSON.parse(jsonObjMatch[0]);
-      if (Array.isArray(parsed.findings)) return { found: true, findings: normalizeParsedFindings(parsed.findings) };
+      if (Array.isArray(parsed.findings)) return { found: true, findings: normalizeReviewFindings(parsed.findings) };
     } catch { /* fall through */ }
   }
   const jsonArrMatch = text.match(/\[\s*\{[\s\S]*?\}\s*\]/);
   if (jsonArrMatch) {
     try {
       const arr = JSON.parse(jsonArrMatch[0]);
-      if (Array.isArray(arr)) return { found: true, findings: normalizeParsedFindings(arr) };
+      if (Array.isArray(arr)) return { found: true, findings: normalizeReviewFindings(arr) };
     } catch { /* fall through */ }
   }
   const findings = parseFindingsFromMarkdown(text);
   return { found: findings.length > 0, findings };
-}
-
-function normalizeParsedFindings(arr: unknown[]): Array<Partial<Finding>> {
-  return arr.map((item: unknown) => {
-    const f = item as Record<string, unknown>;
-    return {
-      file_path: String(f.file ?? f.file_path ?? f.path ?? '').trim(),
-      line_number: f.line != null ? (Number.isFinite(Number(f.line)) ? Number(f.line) : null) : null,
-      severity: parseSeverity(f.severity),
-      title: String(f.title ?? f.message ?? f.category ?? 'Finding').slice(0, 200),
-      body: String(f.body ?? f.description ?? f.message ?? '').slice(0, 2000),
-      confidence: f.confidence != null ? Math.min(1, Math.max(0, Number(f.confidence))) : null,
-    };
-  }).filter((f) => f.file_path || f.body);
 }
 
 function parseFindingsFromMarkdown(text: string): Array<Partial<Finding>> {
@@ -966,7 +953,7 @@ function parseFindingsFromMarkdown(text: string): Array<Partial<Finding>> {
       line_number: f.line != null && Number.isFinite(Number(f.line)) ? Number(f.line) : null,
       severity: parseSeverity(f.severity),
       title: (f.title ?? f.category ?? f.rule ?? 'Finding').slice(0, 200),
-      body: body.slice(0, 2000),
+      body,
       confidence: null,
     });
   }
@@ -976,7 +963,7 @@ function parseFindingsFromMarkdown(text: string): Array<Partial<Finding>> {
 function deduplicateFindings(incoming: Array<Partial<Finding>>, existingKey: Set<string>): Array<Partial<Finding>> {
   const result: Array<Partial<Finding>> = [];
   for (const f of incoming) {
-    const key = `${f.file_path ?? ''}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim().slice(0, 100)}`;
+    const key = `${f.file_path ?? ''}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim()}`;
     if (existingKey.has(key)) continue;
     existingKey.add(key);
     result.push(f);
@@ -1030,7 +1017,7 @@ export async function processReviewReport(reviewId: string, workDir?: string): P
 
   const existing = await reviewsRepo.listFindings(reviewId);
   const existingKeys = new Set(
-    existing.map((f) => `${f.file_path}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim().slice(0, 100)}`),
+    existing.map((f) => `${f.file_path}|${f.line_number ?? ''}|${(f.body ?? '').toLowerCase().trim()}`),
   );
 
   const toInsert = deduplicateFindings(parsed, existingKeys);
@@ -1247,6 +1234,30 @@ export interface CreateReviewParams {
 }
 
 /** Validate, resolve context, and create a review (and its workflow). Shared by the route and automatic pull requests. */
+/**
+ * What the reviewer is asked to hand back. The portal reads the findings from the JSON block (see processReviewReport):
+ * a reply without one is treated as a failed review, so the request has to ask for it.
+ */
+export const REVIEW_REPORT_INSTRUCTIONS = [
+  'Review the change between these branches in the attached repository: read the diff and the files it touches, check correctness, security, error handling and tests, and report only real problems.',
+  'End your reply with one JSON block in this form (an empty "findings" list when you found nothing):',
+  '```json',
+  '{"summary": "<one or two sentences>", "findings": [{"file": "<path>", "line": <number or null>, "severity": "critical|high|medium|low|info", "title": "<short>", "body": "<what is wrong and how to fix it>"}]}',
+  '```',
+].join('\n');
+
+/** Start the review's session. A start that fails marks the review failed, so it never sits "pending" with nothing running. */
+async function startReviewRun(workflowId: string | null, reviewId: string): Promise<void> {
+  if (!workflowId) return;
+  try {
+    const { startRun } = await import('./workflows/driver.ts');
+    await startRun(workflowId);
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    await getReviewsRepository().update(reviewId, { status: 'failed', summary: `The review could not be started: ${why}`.slice(0, 500) }).catch(() => undefined);
+  }
+}
+
 export async function createReview(input: CreateReviewParams): Promise<ReviewRecord> {
   const { projectId, userId, baseRef, headRef } = input;
   const repoId = input.repoId ?? null;
@@ -1306,6 +1317,7 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
     goal += `\n\nJira ticket: ${jiraCtx.key} — ${jiraCtx.summary}`;
     if (jiraCtx.description) goal += `\n\nBackground: ${jiraCtx.description.slice(0, 1000)}`;
   }
+  goal += `\n\n${REVIEW_REPORT_INSTRUCTIONS}`;
 
   let workflowId: string | null = null;
   try {
@@ -1363,7 +1375,8 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
     merged_at: null, merged_by: null,
   });
 
-  return review;
+  await startReviewRun(workflowId, id);
+  return (await getReviewsRepository().getById(id)) ?? review;
 }
 
 export function registerReviewRoutes(): void {
@@ -2092,22 +2105,27 @@ export function registerReviewRoutes(): void {
         rerunGoal += `\n\nJira ticket: ${jiraCtx.key} — ${jiraCtx.summary}`;
         if (jiraCtx.description) rerunGoal += `\n\nBackground: ${jiraCtx.description.slice(0, 1000)}`;
       }
+      rerunGoal += `\n\n${REVIEW_REPORT_INSTRUCTIONS}`;
       const wid = generateId();
+      // Re-run with the same engine, sign-in and model as the review being repeated.
+      const parentWf = parent.workflow_id
+        ? await getSessionsRepository().getWorkflowById(parent.workflow_id).catch(() => null)
+        : null;
       await getSessionsRepository().createWorkflow({
         id: wid,
         project_id: req.params.id,
         goal: rerunGoal,
         status: 'pending',
-        engine: 'demo',
+        engine: parentWf?.engine || 'demo',
         trust_tools: 0,
-        lead_agent: null,
+        lead_agent: parentWf?.lead_agent ?? null,
         workspace_id: null,
         output_files_enabled: 0,
         repo_ids: parent.repo_id ? JSON.stringify([parent.repo_id]) : '[]',
         iteration_count: 0,
         max_iterations: 1,
-        credential_id: null,
-        model: '',
+        credential_id: parentWf?.credential_id ?? null,
+        model: parentWf?.model ?? '',
         kind: 'review',
         created_by: req.user!.id,
         created_at: ts,
@@ -2184,7 +2202,9 @@ export function registerReviewRoutes(): void {
     });
 
     const review = ((await getReviewsRepository().getById(id)) as unknown as Review | undefined ?? undefined);
-    sendJson(res, 201, { review, parentReviewId: parent.id });
+    await startReviewRun(workflowId, id);
+    const started = ((await getReviewsRepository().getById(id)) as unknown as Review | undefined) ?? review;
+    sendJson(res, 201, { review: started, parentReviewId: parent.id });
   });
 
   // ── GET /api/projects/:id/reviews/:rid/export/xlsx (R4) ───────────────────

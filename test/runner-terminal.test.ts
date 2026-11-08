@@ -8,7 +8,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import WebSocket from 'ws';
-import { createRunnerTerminal, terminalGitEnv } from '../server/agent/runner-terminal.ts';
+import { createRunnerTerminal, terminalGitEnv, shellDirectory } from '../server/agent/runner-terminal.ts';
 import { signTerminalGrant, verifyTerminalGrant, terminalPublicKey } from '../server/agent/runner-terminal-auth.ts';
 
 const payload = { workflowId: 'workflow-fixture', origin: 'https://portal.example', snapshot: { putUrl: 'https://fixture.s3.amazonaws.com/workspace' } };
@@ -131,4 +131,18 @@ it('authenticates each attached repository separately without writing credential
   const foreign = terminalGitEnv([{ ...repo('first', 'must-not-leak'), url: 'https://foreign.example/team/first.git' }]);
   assert.equal(Object.values(foreign).some(v => v.includes('must-not-leak')), false);
   assert.throws(() => terminalGitEnv([{ ...repo('first', 'fixture'), url: 'https://user:password@github.com/team/first.git' }]), /Invalid/);
+});
+
+it('opens the shell in the only repository, not counting the agents\' shared notes folder', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'terminal-cwd-'));
+  try {
+    assert.equal(await shellDirectory(root), root, 'no repos/ yet: the work folder');
+    await fs.mkdir(path.join(root, 'repos', 'app'), { recursive: true });
+    await fs.mkdir(path.join(root, 'repos', '.agent-notes'), { recursive: true });
+    assert.equal(await shellDirectory(root), path.join(root, 'repos', 'app'));
+    await fs.mkdir(path.join(root, 'repos', 'api'), { recursive: true });
+    assert.equal(await shellDirectory(root), root, 'two repositories: the work folder');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

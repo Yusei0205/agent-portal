@@ -28,6 +28,7 @@ import { IdeSourceControl } from './IdeSourceControl.jsx';
 import { IdeTerminal } from './IdeTerminal.jsx';
 import { IdeBrowser } from './IdeBrowser.jsx';
 import { IdeAgents } from './IdeAgents.jsx';
+import { resolveConversationPath } from '../../lib/conversationFiles.js';
 import { IdeSessionPanel } from './IdeSessionPanel.jsx';
 import { IdeStatusBar } from './IdeStatusBar.jsx';
 import { IdeOutputs } from './IdeOutputs.jsx';
@@ -195,6 +196,17 @@ function saveComposerH(h) {
 
 // ── Composer bar ──────────────────────────────────────────────────────────────
 
+/**
+ * True when the text is a "/name" command, as the server reads it (server/workflows/session-commands.ts):
+ * a message that starts with a path, such as "/src/app.ts fails", is an ordinary message.
+ */
+export function isSlashCommand(text) {
+  return /^\/[A-Za-z0-9][\w.-]{0,63}(?::[A-Za-z0-9][\w.-]{0,63}){0,3}(?:\s|$)/.test(text.trim());
+}
+
+/** What the command menu shows next to a command that is not one of the portal's own. */
+const COMMAND_SOURCE_LABEL = { command: 'your command', skill: 'skill' };
+
 export function ComposerBar({
   workflow,
   projectId,
@@ -284,18 +296,27 @@ export function ComposerBar({
       ? 'Ask Claude to change something…'
       : 'Send a message…';
 
-  // Command menu: opens while a "/command" is being typed (no space yet).
+  // Command menu: opens while a "/command" is being typed (no space yet). Names that start with what was typed
+  // come first, then names that contain it.
   const typedCommand = message.startsWith('/') && !/\s/.test(message) ? message.slice(1).toLowerCase() : null;
   const menuItems = typedCommand === null || !commands
     ? []
-    : commands.filter((c) => c.name.startsWith(typedCommand));
+    : [
+      ...commands.filter((c) => c.name.startsWith(typedCommand)),
+      ...(typedCommand ? commands.filter((c) => !c.name.startsWith(typedCommand) && c.name.includes(typedCommand)) : []),
+    ];
   const showMenu = menuItems.length > 0;
-  const showSlashHint = message.startsWith('/') && !showMenu;
+  const showSlashHint = isSlashCommand(message) && !showMenu;
 
-  // Pre-fetch commands once on mount so the menu is ready before the user types "/".
+  // The session's commands: the portal's, /init and /review, and the owner's own commands and skills.
+  useEffect(() => { setCommands(null); }, [workflow?.id, workflow?.engine]);
+  // Fetched as soon as the session is known, not on the first "/" keystroke, so the menu is ready when it is typed.
   useEffect(() => {
-    api.get('/api/slash-commands').then((d) => setCommands(d.commands ?? [])).catch(() => setCommands([]));
-  }, []);
+    if (commands || !workflow?.id) return;
+    api.get(`/api/projects/${projectId}/workflows/${workflow.id}/commands`)
+      .then((d) => setCommands(d.commands ?? []))
+      .catch(() => setCommands([]));
+  }, [commands, projectId, workflow?.id]);
 
   useEffect(() => { setMenuIdx(0); }, [typedCommand]);
 
@@ -417,15 +438,16 @@ export function ComposerBar({
   };
 
   const send = async (textOverride) => {
-    const text = (textOverride !== undefined ? textOverride : message).trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
+    // send is also the Send button's click handler, so only a string is a command picked from the menu.
+    const text = (typeof textOverride === 'string' ? textOverride : message).trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
     if (!text || busy || attachmentsBusy) return;
     const sentAttachments = [...attachmentIds];
-    if (text.startsWith('/') && sentAttachments.length) {
+    const isSlash = isSlashCommand(text);
+    if (isSlash && sentAttachments.length) {
       setResumeError('Send attachments with a message, not a slash command.');
       return;
     }
     const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const isSlash = text.startsWith('/');
 
     // Optimistic: show bubble immediately + clear composer (commands show their answer instead)
     if (!isSlash && onOptimisticSend) onOptimisticSend(clientId, text, sentAttachments);
@@ -579,7 +601,10 @@ export function ComposerBar({
               style={{ display: 'flex', gap: 12, padding: '4px 12px', cursor: 'pointer', fontSize: '0.8rem',
                 background: i === menuIdx ? 'var(--bg-3, rgba(127,127,127,.15))' : 'transparent' }}>
               <code style={{ minWidth: 150 }}>{c.usage}</code>
-              <span style={{ color: 'var(--ink-3)' }}>{c.description}</span>
+              <span style={{ color: 'var(--ink-3)', flex: 1, minWidth: 0 }}>{c.description}</span>
+              {COMMAND_SOURCE_LABEL[c.source] && (
+                <span style={{ color: 'var(--ink-3)', fontSize: '0.7rem', flexShrink: 0 }}>{COMMAND_SOURCE_LABEL[c.source]}</span>
+              )}
             </li>
           ))}
         </ul>
@@ -596,7 +621,7 @@ export function ComposerBar({
             borderTop: '1px solid var(--line)',
           }}
         >
-          Type / followed by a command name. Unknown commands are sent to the agent as-is.
+          Type /help to see this session's commands, including your own commands and skills from Agent setup.
         </div>
       )}
       {showPanel && (
@@ -1112,7 +1137,7 @@ export function IdeWorkspace({ id, project }) {
               </div>
             )}
             {sidebarPanel === 'agents' && (
-              <IdeAgents workflowId={id} projectId={project.id} />
+              <IdeAgents workflowId={id} projectId={project.id} workflow={workflow} />
             )}
             {sidebarPanel === 'outputs' && (
               <IdeOutputs
@@ -1198,6 +1223,10 @@ export function IdeWorkspace({ id, project }) {
               aria-label="Agent conversation"
             >
               <SessionLive
+                onOpenWorkspaceFile={async (path, line) => {
+                  const resolved = await resolveConversationPath(api, id, path);
+                  setOpenFile({ scope: 'work', path: resolved, name: resolved.split('/').pop(), ext: '.' + resolved.split('.').pop(), line, key: `work:${resolved}` });
+                }}
                 runId={latestRunId}
                 workflowId={id}
                 projectId={project.id}

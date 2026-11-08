@@ -375,15 +375,18 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
 
 // ── Findings panel ────────────────────────────────────────────────────────────
 
-function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
+export function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
   const [findings, setFindings] = useState([]);
+  const [search, setSearch] = useState('');
+  const [severity, setSeverity] = useState('all');
+  const [showDismissed, setShowDismissed] = useState(true);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState(null);
   const { toast, toasts, removeToast } = useToast();
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
       const r = await api.get(`/api/projects/${projectId}/reviews/${review.id}/findings`);
       setFindings(r.findings || []);
@@ -394,7 +397,12 @@ function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
     }
   }, [projectId, review.id]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    if (!['pending', 'running'].includes(review.status)) return;
+    const timer = setInterval(() => load(true), 3000);
+    return () => clearInterval(timer);
+  }, [load, review.status]);
 
   const accept = async (fid, accepted) => {
     try {
@@ -422,6 +430,11 @@ function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
   if (loading) return <div style={{ padding: 12 }}><span className="spinner" aria-label="Loading findings…" /></div>;
 
   const canPost = isAdmin && review.post_mode === 'draft' && review.status === 'done';
+  const query = search.trim().toLowerCase();
+  const visible = findings.filter(f => (severity === 'all' || f.severity === severity)
+    && (showDismissed || f.accepted !== -1)
+    && (!query || [f.file_path, f.title, f.body].some(value => String(value ?? '').toLowerCase().includes(query))));
+  const active = ['pending', 'running'].includes(review.status);
 
   return (
     <>
@@ -444,11 +457,19 @@ function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
         </div>
       )}
 
-      {findings.length === 0 ? (
-        <p className="muted" style={{ fontSize: '0.88rem' }}>No findings yet.</p>
+      <section aria-label="Findings filters" className="row wrap" style={{ gap: 12, marginBottom: 12 }}>
+        <label>Search findings<input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="File, description or fix" /></label>
+        <label>Severity<select aria-label="Severity" className="input" value={severity} onChange={e => setSeverity(e.target.value)}><option value="all">All severities</option>{['critical', 'high', 'medium', 'low', 'info'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label><input type="checkbox" checked={showDismissed} onChange={e => setShowDismissed(e.target.checked)} /> Show dismissed</label>
+      </section>
+      <p className="muted">Showing {visible.length} of {findings.length} findings</p>
+      {active && <p role="status">Review in progress. Findings shown so far are partial results.</p>}
+      {review.status === 'failed' && <p role="status">The assessment did not finish. Any findings shown are partial results; open the reviewer session for details.</p>}
+      {visible.length === 0 ? (
+        <p className="muted" style={{ fontSize: '0.88rem' }}>{findings.length ? 'No findings match these filters.' : active ? 'Waiting for findings.' : review.status === 'done' ? 'The reviewer reported no findings.' : 'No findings available from this incomplete assessment.'}</p>
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {findings.map((f) => (
+          {visible.map((f) => (
             <li
               key={f.id}
               className={`finding-item finding-item-${f.severity ?? 'info'}${f.accepted === -1 ? ' is-dismissed' : ''}`}
@@ -463,7 +484,7 @@ function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
                 )}
               </div>
               <p style={{ margin: '4px 0', fontWeight: 600, fontSize: '0.9rem' }}>{f.title}</p>
-              <p style={{ margin: '4px 0', fontSize: '0.84rem', color: 'var(--ink-2)' }}>{f.body}</p>
+              <p style={{ margin: '4px 0', fontSize: '0.84rem', color: 'var(--ink-2)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{f.body}</p>
               {f.confidence != null && (
                 <p className="muted" style={{ margin: '2px 0', fontSize: '0.8rem' }}>
                   Confidence: {Math.round(f.confidence * 100)}%

@@ -54,7 +54,7 @@ function getColorScheme() {
  *   readOnly?: boolean,
  * }} props
  */
-export function CodeMirrorEditor({ content, ext, onChange, onSave, readOnly = false }) {
+export function CodeMirrorEditor({ content, ext, onChange, onSave, readOnly = false, initialLine }) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
 
@@ -112,6 +112,13 @@ export function CodeMirrorEditor({ content, ext, onChange, onSave, readOnly = fa
       });
     }
   }, [content]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !Number.isInteger(initialLine) || initialLine < 1) return;
+    const line = view.state.doc.line(Math.min(initialLine, view.state.doc.lines));
+    view.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) });
+  }, [initialLine]);
 
   return (
     <div

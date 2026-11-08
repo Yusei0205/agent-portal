@@ -660,6 +660,44 @@
   align-items: center;
 }
 
+/* ── Agents strip (top of a session) ────────────────── */
+.agents-strip { flex-shrink: 0; border-bottom: 1px solid var(--line-2); background: var(--surface-1, var(--panel)); }
+.agents-strip-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 0.8rem; }
+.agents-strip-count { color: var(--ink-3); }
+.agents-strip-chip { padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 0.7rem; font-weight: 700; }
+.agents-strip-chip.is-running { color: var(--accent); }
+.agents-strip-chip.is-failed { color: var(--danger); }
+.agents-strip-fold { margin-left: auto; }
+.agents-strip-body { display: flex; flex-wrap: wrap; height: 340px; border-top: 1px solid var(--line-2); }
+.agents-strip-graph { flex: 1 1 420px; min-width: 0; min-height: 220px; }
+.agents-strip-detail { flex: 0 0 300px; max-width: 100%; border-left: 1px solid var(--line-2); overflow: auto; }
+.agents-strip-detail .agent-detail { border-top: 0; max-height: none; }
+@media (max-width: 760px) { .agents-strip-body { height: 460px; } .agents-strip-detail { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--line-2); } }
+.agent-node-name { display: block; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-node-status { display: block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin: 1px 0 3px; }
+.agent-node-task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 0.8rem; color: var(--ink-3); line-height: 1.3; }
+
+/* ── Agent detail (selected node) ───────────────────── */
+.agent-item-pick { display: flex; align-items: center; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.agent-item-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.ide-agent-item.is-selected { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.agent-node-btn { all: unset; display: block; width: 100%; cursor: pointer; box-sizing: border-box; }
+.agent-node-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.agent-detail { padding: 10px 12px; border-top: 1px solid var(--line-2); overflow: auto; max-height: 40%; }
+.agent-detail-hint { margin: 0; padding: 8px 12px; font-size: 0.78rem; color: var(--ink-3); }
+.agent-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.agent-detail-name { font-size: 0.86rem; overflow-wrap: anywhere; }
+.agent-detail-pill { font-size: 0.7rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; flex-shrink: 0; }
+.agent-detail-pill.is-running { color: var(--accent); }
+.agent-detail-pill.is-done { color: var(--ok); }
+.agent-detail-pill.is-failed { color: var(--danger); }
+.agent-detail-label { margin: 8px 0 2px; font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
+.agent-detail-text { margin: 0; font-size: 0.82rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-detail-stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 10px 0 0; font-size: 0.78rem; }
+.agent-detail-stats dt { color: var(--ink-3); }
+.agent-detail-stats dd { margin: 0; }
+.agent-detail-open { display: inline-block; margin-top: 10px; font-size: 0.8rem; color: var(--accent); }
+
 /* ── Idle stop banner ────────────────────────────────── */
 .ide-idle-banner {
   background: var(--warn-wash);
