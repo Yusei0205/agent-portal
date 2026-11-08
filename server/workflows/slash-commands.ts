@@ -1,7 +1,8 @@
 /**
  * Slash commands the portal handles itself in a Kiro or Claude Code session (the same ones people know from
  * those tools): /help, /model, /agent, /cost, /status, /tools, /rename, /compact. /clear is handled in crud.ts
- * because the conversation recap looks for it. Any other "/something" is passed to the engine as plain text.
+ * because the conversation recap looks for it. Other commands (/init, /review, the owner's own commands and
+ * skills) become a prompt for the agent: see session-commands.ts.
  */
 
 import { getSessionsRepository } from '../repositories/sessions.ts';
@@ -40,8 +41,20 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
   const hasEngine = engine === 'kiro' || engine === 'claude-code' || engine === 'codex';
 
   switch (name) {
-    case 'help':
-      return PORTAL_COMMANDS.map((c) => `${c.usage.padEnd(24)} ${c.description}`).join('\n');
+    case 'help': {
+      // Imported here: session-commands.ts reads PORTAL_COMMANDS from this module.
+      const { sessionCommands, setupHint } = await import('./session-commands.ts');
+      const all = await sessionCommands(w);
+      const line = (c: { usage: string; description: string }) => `${c.usage.padEnd(24)} ${c.description}`;
+      const own = all.filter((c) => c.source === 'command' || c.source === 'skill');
+      return [
+        ...all.filter((c) => c.source === 'portal' || c.source === 'prompt').map(line),
+        '',
+        ...(own.length
+          ? ['Your commands and skills:', ...own.map((c) => `${line(c)}${c.source === 'skill' ? '  (skill)' : ''}`)]
+          : hasEngine ? [`Add your own commands in ${setupHint(engine)}.`] : []),
+      ].join('\n').trim();
+    }
 
     case 'compact':
       await repo.updateWorkflow(w.id, { engine_session_id: null, engine_session_engine: null, updated_at: now() });

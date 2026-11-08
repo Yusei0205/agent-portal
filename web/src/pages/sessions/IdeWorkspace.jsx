@@ -196,6 +196,17 @@ function saveComposerH(h) {
 
 // ── Composer bar ──────────────────────────────────────────────────────────────
 
+/**
+ * True when the text is a "/name" command, as the server reads it (server/workflows/session-commands.ts):
+ * a message that starts with a path, such as "/src/app.ts fails", is an ordinary message.
+ */
+export function isSlashCommand(text) {
+  return /^\/[A-Za-z0-9][\w.-]{0,63}(?::[A-Za-z0-9][\w.-]{0,63}){0,3}(?:\s|$)/.test(text.trim());
+}
+
+/** What the command menu shows next to a command that is not one of the portal's own. */
+const COMMAND_SOURCE_LABEL = { command: 'your command', skill: 'skill' };
+
 export function ComposerBar({
   workflow,
   projectId,
@@ -285,18 +296,26 @@ export function ComposerBar({
       ? 'Ask Claude to change something…'
       : 'Send a message…';
 
-  // Command menu: opens while a "/command" is being typed (no space yet).
+  // Command menu: opens while a "/command" is being typed (no space yet). Names that start with what was typed
+  // come first, then names that contain it.
   const typedCommand = message.startsWith('/') && !/\s/.test(message) ? message.slice(1).toLowerCase() : null;
   const menuItems = typedCommand === null || !commands
     ? []
-    : commands.filter((c) => c.name.startsWith(typedCommand));
+    : [
+      ...commands.filter((c) => c.name.startsWith(typedCommand)),
+      ...(typedCommand ? commands.filter((c) => !c.name.startsWith(typedCommand) && c.name.includes(typedCommand)) : []),
+    ];
   const showMenu = menuItems.length > 0;
-  const showSlashHint = message.startsWith('/') && !showMenu;
+  const showSlashHint = isSlashCommand(message) && !showMenu;
 
+  // The session's commands: the portal's, /init and /review, and the owner's own commands and skills.
+  useEffect(() => { setCommands(null); }, [workflow?.id, workflow?.engine]);
   useEffect(() => {
-    if (typedCommand === null || commands) return;
-    api.get('/api/slash-commands').then((d) => setCommands(d.commands ?? [])).catch(() => setCommands([]));
-  }, [typedCommand, commands]);
+    if (typedCommand === null || commands || !workflow?.id) return;
+    api.get(`/api/projects/${projectId}/workflows/${workflow.id}/commands`)
+      .then((d) => setCommands(d.commands ?? []))
+      .catch(() => setCommands([]));
+  }, [typedCommand, commands, projectId, workflow?.id]);
 
   useEffect(() => { setMenuIdx(0); }, [typedCommand]);
 
@@ -416,12 +435,12 @@ export function ComposerBar({
     const text = message.trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
     if (!text || busy || attachmentsBusy) return;
     const sentAttachments = [...attachmentIds];
-    if (text.startsWith('/') && sentAttachments.length) {
+    const isSlash = isSlashCommand(text);
+    if (isSlash && sentAttachments.length) {
       setResumeError('Send attachments with a message, not a slash command.');
       return;
     }
     const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const isSlash = text.startsWith('/');
 
     // Optimistic: show bubble immediately + clear composer (commands show their answer instead)
     if (!isSlash && onOptimisticSend) onOptimisticSend(clientId, text, sentAttachments);
@@ -575,7 +594,10 @@ export function ComposerBar({
               style={{ display: 'flex', gap: 12, padding: '4px 12px', cursor: 'pointer', fontSize: '0.8rem',
                 background: i === menuIdx ? 'var(--bg-3, rgba(127,127,127,.15))' : 'transparent' }}>
               <code style={{ minWidth: 150 }}>{c.usage}</code>
-              <span style={{ color: 'var(--ink-3)' }}>{c.description}</span>
+              <span style={{ color: 'var(--ink-3)', flex: 1, minWidth: 0 }}>{c.description}</span>
+              {COMMAND_SOURCE_LABEL[c.source] && (
+                <span style={{ color: 'var(--ink-3)', fontSize: '0.7rem', flexShrink: 0 }}>{COMMAND_SOURCE_LABEL[c.source]}</span>
+              )}
             </li>
           ))}
         </ul>
@@ -592,7 +614,7 @@ export function ComposerBar({
             borderTop: '1px solid var(--line)',
           }}
         >
-          Commands starting with / are passed to the engine. /clear starts the next turn fresh.
+          Type /help to see this session's commands, including your own commands and skills from Agent setup.
         </div>
       )}
       {showPanel && (

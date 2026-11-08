@@ -1483,8 +1483,10 @@
       "smokeIds": []
     },
     "slash-commands": {
-      "description": "Portal-handled slash commands (/tools, /rename, /cost, /status, /help) in an engine session:",
+      "description": "Slash commands in an engine session: the portal's own (/tools, /rename, /cost, /status, /help), /init and /review, and the owner's commands and skills from Agent setup.",
       "sources": [
+        "server/workflows/session-commands.ts",
+        "server/workflows/slash-commands.ts",
         "test/slash-commands.test.ts"
       ],
       "tests": [
