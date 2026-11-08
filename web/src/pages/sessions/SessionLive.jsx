@@ -11,6 +11,7 @@ import { linkConversationFiles } from '../../lib/conversationFiles.js';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
 import { RunOutputsCard } from './RunOutputsCard.jsx';
 import { PullRequestCards } from './PullRequestCard.jsx';
+import { SessionAgentsStrip } from './SessionAgentsStrip.jsx';
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
@@ -1383,6 +1384,9 @@ export function SessionLive({
       className="live-panel"
       style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}
     >
+      {/* Live graph of the agents working in this session (hidden until there are some) */}
+      {workflowId && <SessionAgentsStrip workflowId={workflowId} projectId={projectId} workflow={workflow} />}
+
       {/* Connection indicator */}
       {runId && (
         <div

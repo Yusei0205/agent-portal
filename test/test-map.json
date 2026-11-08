@@ -283,6 +283,8 @@
         "server/agent/runner-terminal-auth.ts",
         "server/browser-live.ts",
         "web/src/pages/sessions/AgentDetail.jsx",
+        "web/src/pages/sessions/SessionAgentsStrip.jsx",
+        "web/src/pages/sessions/useSessionAgents.js",
         "web/src/pages/sessions/IdeAgents.jsx",
         "web/src/pages/sessions/AgentGraph.jsx",
         "web/src/lib/conversationFiles.js",
