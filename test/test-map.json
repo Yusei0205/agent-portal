@@ -884,6 +884,7 @@
       "description": "AI engine and model configuration, listing, and passthrough",
       "sources": [
         "server/models.ts",
+        "server/agent/anthropic-models.ts",
         "server/kiro-list-models.ts",
         "server/user-config.ts",
         "server/repositories/credentials.ts",
@@ -896,6 +897,7 @@
       "tests": [
         "test/engines.test.ts",
         "test/engine-models.test.ts",
+        "test/anthropic-models.test.ts",
         "test/engine-model-passthrough.test.ts",
         "test/model-listing.test.ts",
         "test/kiro-acp.test.ts",

@@ -353,6 +353,13 @@ describe('GET /api/engines/claude-code/models — subscription_token credential'
     assert.ok(body.models.some((m) => m.id.includes('sonnet')), 'should include a sonnet model');
     assert.ok(body.models.some((m) => m.id.includes('opus')), 'should include an opus model');
     assert.equal(body.runsAs.kind, 'credential');
+    // The newest models a Pro plan runs come first; Fable needs usage credits on Pro, so it is not offered.
+    const ids = body.models.map((m) => m.id);
+    assert.deepEqual(ids.slice(0, 3), ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']);
+    assert.ok(ids.includes('claude-opus-4-6') && ids.includes('claude-sonnet-4-5'), ids.join(', '));
+    assert.ok(!ids.some((id) => id.includes('fable')), 'no Fable model');
+    assert.ok(ids.every((id) => /^claude-[a-z]+-\d+(-\d+)?$/.test(id)), 'Anthropic IDs only, no Bedrock names');
+    assert.equal(new Set(ids).size, ids.length, 'no model twice');
   });
 });
 

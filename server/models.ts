@@ -374,7 +374,18 @@ async function runKiroListModels(env: NodeJS.ProcessEnv): Promise<KiroListResult
 
 // ── Static subscription model list ───────────────────────────────────────────
 
+// A Claude plan token cannot list its models, so this list is kept by hand, newest first. Each model was run with a Pro
+// plan token on 2026-11-09. Fable 5.1 is left out: on Pro it needs usage credits ("Fable 5.1 requires usage credits").
+// When Anthropic releases a model, run `claude -p "Reply with OK" --model <id>` with a plan sign-in and add it here.
 const SUBSCRIPTION_MODELS: EngineModelEntry[] = [
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
+  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
+  { id: 'claude-opus-5', label: 'Claude Opus 5' },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
   { id: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
   { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },

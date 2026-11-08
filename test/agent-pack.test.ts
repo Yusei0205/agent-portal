@@ -286,6 +286,9 @@ describe('agent skills preloading', () => {
     assert.equal(anthropicAgentModel('Sonnet'), 'sonnet');
     assert.equal(anthropicAgentModel('claude-sonnet-5-5'), 'claude-sonnet-5-5');
     assert.equal(anthropicAgentModel('global.anthropic.x:0'), undefined);
+    assert.equal(anthropicAgentModel('Inherit'), 'inherit');
+    // An agent file written for Bedrock keeps its model on an Anthropic key or Claude plan.
+    assert.equal(anthropicAgentModel('global.anthropic.claude-opus-4-6-v1'), 'claude-opus-4-6');
   });
 });
 

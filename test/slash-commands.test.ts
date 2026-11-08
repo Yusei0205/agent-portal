@@ -236,6 +236,49 @@ describe('slash commands', () => {
     assert.doesNotMatch(answer, /does not belong to you/);
     assert.match(answer, /claude-sonnet-4-5 {2}\(Claude Sonnet 4\.5\)/, answer);
   });
+
+  it('/model on a Claude plan: a family name picks its newest model, a short ID its exact model', async () => {
+    const made = await fetchJson(baseUrl, '/api/credentials', {
+      method: 'POST', cookie, body: { engine: 'claude-code', mode: 'subscription_token', name: 'Plan 2', secret: 'oauth-token-efgh' },
+    });
+    const credentialId = ((made.body as Record<string, unknown>).credential as Record<string, unknown>).id as string;
+    // Made while the portal ran on Bedrock: the session names a Bedrock model.
+    const w = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, {
+      method: 'POST', body: { goal: 'g', engine: 'claude-code', credentialId, model: 'global.anthropic.claude-opus-4-6-v1' }, cookie,
+    });
+    const wfId = ((w.body as Record<string, unknown>).workflow as Record<string, unknown>).id as string;
+    const { all, one } = await import('../server/db.ts');
+    const send = async (message: string) => {
+      const r = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wfId}/message`, { method: 'POST', body: { message }, cookie });
+      assert.equal((r.body as Record<string, unknown>).handled, true, message);
+      const answer = all<{ body: string }>(
+        "SELECT body FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'command-result' ORDER BY id DESC LIMIT 1", wfId)[0]?.body ?? '';
+      return { answer, model: one<{ model: string }>('SELECT model FROM p6_workflows WHERE id = ?', wfId)?.model };
+    };
+
+    const listing = await send('/model');
+    assert.match(listing.answer, /Current model: global\.anthropic\.claude-opus-4-6-v1\n {2}\(not in this list/);
+    assert.match(listing.answer, /claude-opus-5-5 {2}\(Claude Opus 5\.5\)/);
+
+    let r = await send('/model opus');
+    assert.match(r.answer, /Model switched to claude-opus-5-5 \(the newest Opus here\)/);
+    assert.equal(r.model, 'claude-opus-5-5');
+    r = await send('/model sonnet');
+    assert.equal(r.model, 'claude-sonnet-5-5');
+    r = await send('/model haiku');
+    assert.equal(r.model, 'claude-haiku-5-5');
+    r = await send('/model opus-5');
+    assert.match(r.answer, /Model switched to claude-opus-5\. /, 'opus-5 is claude-opus-5, not every Opus 5.x');
+    r = await send('/model sonnet-4-5');
+    assert.equal(r.model, 'claude-sonnet-4-5');
+    r = await send('/model Claude Opus 4.6');
+    assert.equal(r.model, 'claude-opus-4-6');
+    r = await send('/model 4-6');
+    assert.match(r.answer, /"4-6" matches several models:\n {2}claude-opus-4-6\n {2}claude-sonnet-4-6\nBe more specific\./);
+    assert.equal(r.model, 'claude-opus-4-6', 'unchanged');
+    r = await send('/model fable');
+    assert.match(r.answer, /No model matches "fable"/, 'Fable needs usage credits on Pro');
+  });
 });
 
 describe('slash command parsing', () => {

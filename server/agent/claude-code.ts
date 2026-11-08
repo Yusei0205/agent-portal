@@ -44,6 +44,7 @@ import {
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from './claude-agentcore.ts';
 import { loadRunAgents, leadAgentFor, anthropicAgentModel } from './run-agents.ts';
+import { resolveAnthropicModel } from './anthropic-models.ts';
 import { withBrowserGuidance } from './browser-guidance.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
@@ -130,7 +131,9 @@ async function runClaudeViaAgentCoreAdapter(
 ): Promise<string> {
   const { run, emit } = ctx;
   const repo = getSessionsRepository();
-  const model = resolveModel(run.model);
+  // An Anthropic key or Claude plan cannot run a Bedrock model name: it becomes the same model's Anthropic name.
+  const { model, note: modelNote } = resolveAnthropicModel(run.model, getSettings().defaultModel);
+  if (modelNote) emit('status', { text: modelNote });
 
   const wf = await repo.getWorkflowById(run.workflowId);
   const wfRow = wf as unknown as Record<string, unknown> | null;
@@ -329,7 +332,15 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   }
 
   // ── Model ──────────────────────────────────────────────────────────────────
-  const model = resolveModel(run.model);
+  // Bedrock takes the session's model as it is; an Anthropic key or Claude plan gets a Bedrock name as its Anthropic name.
+  let model: string;
+  if (sdkEnv.CLAUDE_CODE_USE_BEDROCK) {
+    model = resolveModel(run.model);
+  } else {
+    const resolved = resolveAnthropicModel(run.model, getSettings().defaultModel);
+    model = resolved.model;
+    if (resolved.note) emit('status', { text: resolved.note });
+  }
 
   // ── Run budget limit (FR-GUARD-10) ─────────────────────────────────────────
   const repo = getSessionsRepository();
