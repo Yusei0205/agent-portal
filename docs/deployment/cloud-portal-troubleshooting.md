@@ -453,3 +453,10 @@ Older runs that did not record native collaboration events cannot display that m
 - **Symptom:** Workflows → Run options (and other places that list Kiro models or start a Kiro run) say "No Kiro credentials are configured" even though Agent setup shows your Identity Center sign-in.
 - **Cause:** those places only used a Kiro sign-in **marked as the default**. A sign-in added without ticking "default" was invisible to them, and a workflow run was started with no sign-in at all.
 - **Fix:** when nothing is marked, the oldest usable Kiro sign-in is used (on the cloud portal an Identity Center one is preferred over an API key). This applies to the models list, workflow runs, and any run started without a chosen sign-in. A person's first Kiro sign-in is now marked as the default automatically, and deleting the default marks the next one. Claude Code is unchanged: it can still fall back to the portal's own Bedrock account.
+
+## A Kiro sub-agent shows "does not send this agent's own messages" (2026-11-08)
+
+- **Symptom:** in the agents panel a Kiro sub-agent shows its task and result but no transcript, with the note "This engine does not send this agent's own messages".
+- **Cause:** Kiro tags every frame of a sub-agent with its `agentSubtaskId`, but the runner only used that to detect the start and finish, so the sub-agent's text and tool calls arrived as the main agent's.
+- **Fix:** the runner now labels a sub-agent's own text and tool calls with its id and name (`kiro-runner/src/subagents.ts`, `ownerOf`), the portal shows them as that agent's and keeps them out of the main agent's answer, and the panel matches them by id, so three agents with the same name (Kiro calls them all `general-task-execution`) each get their own transcript. **This needs the Kiro runner image rebuilt (CI does that on merge to `main_v3`, or `node infra/scripts/deploy-harness.mjs`) as well as the portal.** Sessions started before that have no per-agent transcript.
+- **Still true for Codex:** its runner reports that a sub-agent started and finished, with a summary, but not what it said or did, so a Codex sub-agent still shows only its task and result.

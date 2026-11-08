@@ -563,19 +563,22 @@ export async function runKiroRun(
         if (!update) return;
         // Sub-agents Kiro hands work to: tell the portal so the session's agents graph can show them.
         for (const ev of made.subagents.onUpdate(update as never)) made.emit({ ...ev });
+        // A sub-agent's own messages and tool calls carry its id and name, so the portal shows them as that agent's.
+        const owner = made.subagents.ownerOf(update as never);
+        const who = owner ? { agentId: owner.id, agent: owner.name } : {};
         switch (update.sessionUpdate) {
           case 'agent_message_chunk': {
             const text = extractText(update.content);
-            if (text) made.emit({ type: 'text', text });
+            if (text) made.emit({ type: 'text', text, ...who });
             break;
           }
           case 'agent_thought_chunk': {
             const text = extractText(update.content);
-            if (text) made.emit({ type: 'thought', text });
+            if (text) made.emit({ type: 'thought', text, ...who });
             break;
           }
           case 'tool_call':
-            made.emit({ type: 'tool', name: update.title ?? update.name ?? 'Tool' });
+            made.emit({ type: 'tool', name: update.title ?? update.name ?? 'Tool', ...who });
             break;
         }
       });

@@ -183,6 +183,21 @@ createRoot(document.getElementById('root')).render(<SessionAgentsStrip workflowI
     await page.keyboard.press('0');
     assert.equal(await zoom.innerText(), before, '0 fits the view again');
 
+    // The links are nerve fibres with signals travelling along them: bright ones to the agent that is working, a faint one
+    // back from a finished agent. They move, and they stop for someone who asked for less motion.
+    assert.equal(await page.locator('.orbit-signal').count(), 0, 'no signals while reduced motion is on');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.locator('.orbit-signal').first().waitFor({ state: 'attached' });
+    assert.equal(await page.locator('.orbit-nerve-line').count(), 2, 'one fibre per agent');
+    assert.equal(await page.locator('.orbit-nerve.is-live .orbit-signal:not(.is-ambient)').count(), 2, 'two bright signals on the working agent\'s fibre');
+    assert.equal(await page.locator('.orbit-nerve:not(.is-live) .orbit-signal.is-ambient').count(), 1, 'one faint signal on the finished agent\'s fibre');
+    const signalAt = await page.locator('.orbit-nerve.is-live .orbit-signal').first().evaluate((el) => { const r = el.getBoundingClientRect(); return [r.x, r.y]; });
+    await page.waitForTimeout(500);
+    const signalLater = await page.locator('.orbit-nerve.is-live .orbit-signal').first().evaluate((el) => { const r = el.getBoundingClientRect(); return [r.x, r.y]; });
+    assert.notDeepEqual(signalLater, signalAt, 'the signal moves along the fibre');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForFunction(() => document.querySelectorAll('.orbit-signal').length === 0);
+
     // Tree and Timeline show the same agents.
     await page.getByRole('tab', { name: 'Tree' }).first().click();
     assert.equal(await page.locator('.agent-tree-row').count(), 3);

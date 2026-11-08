@@ -76,6 +76,10 @@ function inputOf(raw: unknown): Record<string, unknown> {
 
 export function createSubagentTracker(now: () => number = Date.now) {
   const open = new Map<string, Open>();
+  /** Every sub-agent started this turn, kept after it finishes so a late frame still finds its name. */
+  const names = new Map<string, string>();
+  /** The tool calls that started sub-agents: those are the calling agent's own, not the sub-agent's work. */
+  const invocations = new Set<string>();
 
   function finish(o: Open, ok: boolean, summary: string, status?: string): SubagentEvent {
     open.delete(o.id);
@@ -105,6 +109,8 @@ export function createSubagentTracker(now: () => number = Date.now) {
           const name = clip(String(input.name ?? input.agent ?? 'sub-agent'), NAME_MAX) || 'sub-agent';
           const task = clip(String(input.explanation || input.prompt || input.task || ''), DESCRIPTION_MAX);
           open.set(subtaskId, { id: subtaskId, name, startedAt: now(), toolCallId: update.toolCallId ?? null, lastText: '' });
+          names.set(subtaskId, name);
+          if (update.toolCallId) invocations.add(update.toolCallId);
           out.push({ type: 'subagent-started', id: subtaskId, name, ...(task ? { description: task } : {}) });
         }
         return out;
@@ -123,6 +129,19 @@ export function createSubagentTracker(now: () => number = Date.now) {
         }
       }
       return out;
+    },
+
+    /**
+     * Which sub-agent a frame belongs to, so its messages and tool calls can be shown as that agent's own. Kiro tags a
+     * sub-agent's frames with its `agentSubtaskId`; the call that started the sub-agent is the caller's, not the sub-agent's.
+     * Returns null for the main agent's own frames and for a tag nothing was started under.
+     */
+    ownerOf(update: Frame): { id: string; name: string } | null {
+      const id = update._meta?.kiro?.agentSubtaskId;
+      if (typeof id !== 'string' || !id) return null;
+      if (update.sessionUpdate === 'tool_call' && update.toolCallId && invocations.has(update.toolCallId)) return null;
+      const name = names.get(id);
+      return name ? { id, name } : null;
     },
 
     /** The turn is over: every sub-agent still open is done (or failed when the turn did not go well). */

@@ -314,6 +314,55 @@ describe('AgentCore — sub-agent events → the session\'s agents graph', () =>
   });
 });
 
+describe('AgentCore — a sub-agent\'s own messages and tool calls', () => {
+  let cfg: Config;
+
+  before(() => {
+    createTestDb();
+    cfg = makeConfig();
+    setConfig(cfg);
+  });
+
+  after(async () => {
+    _setAgentCoreInvokerOverride(null);
+    await cleanup();
+  });
+
+  it('shows them as that agent\'s, keeps them out of the main answer, and drops a sub-agent\'s private thoughts', async () => {
+    _setAgentCoreInvokerOverride(async function* () {
+      yield { type: 'text', text: 'Looking into it. ' } as AgentCoreSSEEvent;
+      yield { type: 'text', text: 'sub-agent says hi', agentId: 's-1', agent: 'explorer' } as AgentCoreSSEEvent;
+      yield { type: 'tool', name: 'fs_read', agentId: 's-1', agent: 'explorer' } as AgentCoreSSEEvent;
+      yield { type: 'thought', text: 'private reasoning', agentId: 's-1', agent: 'explorer' } as AgentCoreSSEEvent;
+      yield { type: 'thought', text: 'main reasoning' } as AgentCoreSSEEvent;
+      yield { type: 'text', text: 'All done.' } as AgentCoreSSEEvent;
+      yield { type: 'result', runId: 'r1', exitCode: 0, durationMs: 100, coldStartMs: 50, tokenRefreshed: false } as AgentCoreSSEEvent;
+    });
+
+    const td = makeTestData(cfg);
+    const { ctx, events } = await makeCtx(td.runId, td.workflowId, td.projectId, td.workDir, cfg);
+    const { textParts } = await runKiroViaAgentCore(ctx, { runtimeArn: FAKE_ARN, runId: td.runId, prompt: 'x', token: SAMPLE_TOKEN, credentialId: null, expectedCiphertext: null });
+    const summary = textParts.join('');
+
+    const texts = pick(events, 'assistant-text');
+    const sub = texts.find((e) => e.payload.agentId === 's-1')!;
+    assert.equal(sub.payload.text, 'sub-agent says hi');
+    assert.equal(sub.payload.agent, 'explorer');
+    assert.ok(texts.filter((e) => !e.payload.agentId).every((e) => !String(e.payload.text).includes('sub-agent')), 'the main agent\'s text has none of the sub-agent\'s');
+    assert.ok(!summary.includes('sub-agent says hi'), 'the sub-agent\'s message is not part of the main answer');
+    assert.match(summary, /Looking into it\./);
+    assert.match(summary, /All done\./);
+
+    const tool = pick(events, 'tool-start').find((e) => e.payload.agentId === 's-1')!;
+    assert.equal(tool.payload.toolName, 'fs_read');
+    assert.equal(tool.payload.agent, 'explorer');
+    assert.equal(pick(events, 'tool-end').find((e) => e.payload.agentId === 's-1')!.payload.toolName, 'fs_read');
+
+    const thoughts = pick(events, 'agent-thought').map((e) => String(e.payload.text));
+    assert.deepEqual(thoughts, ['main reasoning']);
+  });
+});
+
 describe('AgentCore — browser events → the Browser tab', () => {
   let cfg: Config;
 

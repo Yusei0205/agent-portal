@@ -6,8 +6,8 @@
  * to it, and + / - / 0 on the keyboard to zoom in, out and fit.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { orbitLayout, neighbourInDirection, ORBIT_MAIN } from '../../lib/agent-orbit.js';
-import { badgeCount, agentLabels } from '../../lib/agent-activity.js';
+import { orbitLayout, neighbourInDirection, nervePath, ORBIT_MAIN } from '../../lib/agent-orbit.js';
+import { badgeCount, agentLabels, increasedTools } from '../../lib/agent-activity.js';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.5;
@@ -22,6 +22,20 @@ function statusClass(status) {
   return 'is-done';
 }
 
+/** True when the person asked their system for less motion; the signals along the links are drawn only when it is false. */
+function useReducedMotion() {
+  const query = () => (typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null);
+  const [reduced, setReduced] = useState(() => Boolean(query()?.matches));
+  useEffect(() => {
+    const m = query();
+    if (!m) return undefined;
+    const on = () => setReduced(m.matches);
+    m.addEventListener?.('change', on);
+    return () => m.removeEventListener?.('change', on);
+  }, []);
+  return reduced;
+}
+
 /**
  * @param {{ agents: Array<object>, rootName?: string, rootStatus?: string,
  *   activity: { main: object, byId: Map<string, object> }, selectedId: string | null, onSelect: (id: string) => void }} props
@@ -31,6 +45,7 @@ export function AgentOrbit({ agents, rootName = 'Main agent', rootStatus = 'runn
   const box = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
+  const reduced = useReducedMotion();
   const touched = useRef(false); // once the person pans or zooms, stop re-fitting for them
   const drag = useRef(null);
   const moved = useRef(false);
@@ -135,6 +150,23 @@ export function AgentOrbit({ agents, rootName = 'Main agent', rootStatus = 'runn
   };
   const at = Object.fromEntries(layout.nodes.map((n) => [n.id, n]));
 
+  // An agent "fires" (its node ripples) each time it makes another tool call.
+  const counts = useMemo(() => {
+    const m = { [ORBIT_MAIN]: activity.main.tools };
+    for (const [id, a] of activity.byId) m[id] = a.tools;
+    return m;
+  }, [activity]);
+  const lastCounts = useRef(null);
+  const [fired, setFired] = useState({});
+  useEffect(() => {
+    const ids = increasedTools(lastCounts.current, counts);
+    lastCounts.current = counts;
+    if (!ids.length) return;
+    const stamp = Date.now();
+    setFired((f) => ({ ...f, ...Object.fromEntries(ids.map((id) => [id, stamp])) }));
+    setTimeout(() => setFired((f) => { const n = { ...f }; for (const id of ids) if (n[id] === stamp) delete n[id]; return n; }), 1400);
+  }, [counts]);
+
   return (
     <div className="orbit" ref={box} tabIndex={0} role="application" aria-label="Agents orbit view. Arrow keys move between agents."
       onKeyDown={onKeyDown} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
@@ -149,11 +181,34 @@ export function AgentOrbit({ agents, rootName = 'Main agent', rootStatus = 'runn
         <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
           <circle className="orbit-halo" r="150" fill="url(#orbit-halo)" />
           {layout.rings.map((r) => <circle key={r} className="orbit-ring" r={r} fill="none" />)}
-          {layout.edges.map((e) => {
+          {layout.edges.map((e, i) => {
             const a = at[e.from];
             const b = at[e.to];
-            const live = rowOf[e.to] && (rowOf[e.to].status === 'running' || rowOf[e.to].status === 'pending');
-            return <line key={`${e.from}>${e.to}`} className={`orbit-edge${live ? ' is-live' : ''}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} />;
+            const status = rowOf[e.to]?.status;
+            const live = status === 'running' || status === 'pending';
+            const failed = status === 'failed' || status === 'stopped';
+            const { d, length } = nervePath(a, b, i % 2 ? 1 : -1);
+            const dur = Math.min(3.4, Math.max(1.3, length / 100));
+            return (
+              <g key={`${e.from}>${e.to}`} className={`orbit-nerve${live ? ' is-live' : ''}${failed ? ' is-failed' : ''}`}>
+                <path className="orbit-nerve-glow" d={d} fill="none" />
+                <path className="orbit-nerve-line" d={d} fill="none" />
+                {/* Bright signals run out along the fibre to an agent that is working. */}
+                {!reduced && live && [0, 1].map((k) => (
+                  <circle key={k} className="orbit-signal" r="3.2">
+                    <animateMotion path={d} dur={`${dur}s`} begin={`${(k * dur) / 2}s`} repeatCount="indefinite" />
+                    <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.8;1" dur={`${dur}s`} begin={`${(k * dur) / 2}s`} repeatCount="indefinite" />
+                  </circle>
+                ))}
+                {/* A finished agent's fibre still carries a faint, slow pulse back toward the centre, now and then. */}
+                {!reduced && !live && !failed && (
+                  <circle className="orbit-signal is-ambient" r="2.4">
+                    <animateMotion path={d} dur="9s" keyPoints="1;0;0" keyTimes="0;0.28;1" calcMode="linear" begin={`${(i * 1.7) % 6}s`} repeatCount="indefinite" />
+                    <animate attributeName="opacity" values="0;0.8;0.8;0;0" keyTimes="0;0.04;0.24;0.28;1" dur="9s" begin={`${(i * 1.7) % 6}s`} repeatCount="indefinite" />
+                  </circle>
+                )}
+              </g>
+            );
           })}
           {layout.nodes.map((n) => {
             const info = nodeInfo(n);
@@ -166,6 +221,7 @@ export function AgentOrbit({ agents, rootName = 'Main agent', rootStatus = 'runn
                 onClick={() => pick(id)} onDoubleClick={() => zoomTo(n)}>
                 {running && <circle className="orbit-pulse" r={info.r + 10} />}
                 {running && <circle className="orbit-pulse orbit-pulse-2" r={info.r + 10} />}
+                {fired[id] && <circle key={fired[id]} className="orbit-fire" r={info.r + 4} />}
                 <circle className="orbit-dash" r={info.r + 8} fill="none" />
                 <circle className="orbit-core" r={info.r} />
                 <circle className="orbit-dot" r={info.r / 3} />

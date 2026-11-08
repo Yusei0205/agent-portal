@@ -54,13 +54,18 @@ export function summarizeActivity(events, agents) {
     return named.findLast((a) => a.status === 'running' || a.status === 'pending') ?? named[named.length - 1];
   };
 
+  // Some engines (Kiro) name an agent by its id, which tells apart agents that share a name; a row id is `<run>:<id>` or just `<id>`.
+  const rowById = (agentId) => (agents || []).find((a) => a.id === agentId || String(a.id).endsWith(`:${agentId}`)) ?? null;
+
   const lastKind = new Map();
   for (const ev of events || []) {
     const p = ev?.payload ?? {};
     if (ev.type !== 'assistant-text' && ev.type !== 'tool-start') continue;
-    const row = typeof p.agent === 'string' && p.agent ? rowFor(p.agent) : null;
+    const labelled = (typeof p.agentId === 'string' && p.agentId) || (typeof p.agent === 'string' && p.agent);
+    const row = typeof p.agentId === 'string' && p.agentId ? rowById(p.agentId) ?? (typeof p.agent === 'string' && p.agent ? rowFor(p.agent) : null)
+      : typeof p.agent === 'string' && p.agent ? rowFor(p.agent) : null;
     // A label that matches no agent is still not the main agent's.
-    if (typeof p.agent === 'string' && p.agent && !row) continue;
+    if (labelled && !row) continue;
     const owner = row ? byId.get(row.id) : main;
     const key = row ? row.id : MAIN_AGENT;
 
@@ -82,6 +87,18 @@ export function summarizeActivity(events, agents) {
     if (owner.lines.length > LINES_MAX) owner.lines.splice(0, owner.lines.length - LINES_MAX);
   }
   return { main, byId };
+}
+
+/**
+ * Which agents made more tool calls since last time, so their node can flash as it "fires". Nothing fires on the first look
+ * (previous is null) or for an agent that is new with no calls yet.
+ * @param {Record<string, number> | null} previous tool-call counts by agent id
+ * @param {Record<string, number>} current
+ * @returns {string[]} ids whose count went up
+ */
+export function increasedTools(previous, current) {
+  if (!previous) return [];
+  return Object.keys(current).filter((id) => current[id] > (previous[id] ?? 0));
 }
 
 /**
