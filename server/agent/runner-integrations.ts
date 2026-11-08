@@ -12,6 +12,7 @@ import { config } from '../config.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { parseMcpServers, type McpServerSpec } from './runner-mcp.ts';
 import { workspaceMcpSpec } from '../google-workspace.ts';
+import { gmailMcpSpec } from '../gmail.ts';
 
 /** What is stored (encrypted) for a remote MCP integration. */
 export interface HttpIntegrationConfig {
@@ -89,6 +90,9 @@ export async function buildRunnerMcpServers(
   if (!selected) {
     const g = await workspaceMcpSpec(userId, process.env.PORTAL_PUBLIC_URL).catch(() => null);
     if (g && !taken.has(g.name)) specs.push(g);
+    // The person's own Gmail, the same way.
+    const m = await gmailMcpSpec(userId, process.env.PORTAL_PUBLIC_URL).catch(() => null);
+    if (m && !taken.has(m.name)) specs.push(m);
   }
   return parseMcpServers(specs);
 }

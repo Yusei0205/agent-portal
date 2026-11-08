@@ -63,3 +63,9 @@ How it stays safe: the refresh token is stored encrypted (`google-workspace:<use
 | "Not every permission was ticked" | The person unticked a permission on Google's screen; connect again and allow all four. |
 | Tool says "Google no longer accepts the saved connection" | Token revoked or expired (Testing app after 7 days). Disconnect and connect again. |
 | Edit tools missing in a session | "Let agents edit my files" is off; sessions started after turning it on get them. |
+
+## Gmail for agents
+
+Integrations → Connected services → **Gmail** lets an agent search and read the signed-in person's mail, and, only if they tick "Let agents draft and send email as me", save drafts and send. It uses the same Google client as sign-in, with its own consent (scopes `gmail.readonly` and `gmail.compose`; it never asks for full mailbox access).
+
+One-time setup in the Google Cloud project that owns the client: enable the **Gmail API**, and add the two Gmail scopes to the OAuth consent screen. While the app is in "Testing", add each person as a test user. Restricted Gmail scopes need Google verification before anyone outside your organisation can use them.

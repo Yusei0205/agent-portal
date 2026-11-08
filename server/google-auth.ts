@@ -166,6 +166,13 @@ export function registerGoogleAuthRoutes(startSession: StartSession): void {
       return;
     }
 
+    // "Connect Gmail" is the same kind of detour, with its own state prefix.
+    if ((req.query.get('state') ?? '').startsWith('gm.')) {
+      const { handleGmailCallback } = await import('./gmail.ts');
+      await handleGmailCallback(req, res, creds);
+      return;
+    }
+
     const googleError = req.query.get('error');
     if (googleError) { fail(res, secure, googleError === 'access_denied' ? 'Google sign-in was cancelled.' : 'Google sign-in failed.'); return; }
 
