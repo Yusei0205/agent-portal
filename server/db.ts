@@ -2236,6 +2236,9 @@ UPDATE p6_workflows SET initial_goal = goal;
 `);
 
 // IDs are array positions (1-based): M1_CORE=1, ..., M43_RESUME_RETRY=42, M44_APPROVAL_BINDING=43, M45_RUN_LIMITS=44.
+// A workspace can start its sessions with "Trust all tools" already ticked.
+MIGRATIONS.push(`ALTER TABLE workspaces_v2 ADD COLUMN default_trust_tools INTEGER NOT NULL DEFAULT 0;`);
+
 export const SCHEMA_VERSION = MIGRATIONS.length; // = 42
 
 // ── Database singleton ─────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ function toRecord(row: Row): WorkspaceRecord {
     default_engine: String(row.default_engine ?? ''),
     default_agent: String(row.default_agent ?? ''),
     default_model: String(row.default_model ?? ''),
+    default_trust_tools: Number(row.default_trust_tools ?? 0),
   };
 }
 
@@ -30,6 +31,7 @@ export class SqliteWorkspacesRepository implements WorkspacesRepository {
       default_engine: input.default_engine,
       default_agent: input.default_agent,
       default_model: input.default_model,
+      default_trust_tools: input.default_trust_tools ?? 0,
       created_at: input.created_at,
     });
     return toRecord(one<Row>('SELECT * FROM workspaces_v2 WHERE id = ?', input.id)!);

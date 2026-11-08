@@ -18,6 +18,8 @@ export interface WorkspaceRecord {
   default_engine: string;
   default_agent: string;
   default_model: string;
+  /** 1 when new sessions from this workspace start with "Trust all tools" ticked. */
+  default_trust_tools: number;
 }
 
 export interface CreateWorkspaceInput {
@@ -29,6 +31,7 @@ export interface CreateWorkspaceInput {
   default_engine: string;
   default_agent: string;
   default_model: string;
+  default_trust_tools?: number;
 }
 
 export interface WorkspacesRepository {
