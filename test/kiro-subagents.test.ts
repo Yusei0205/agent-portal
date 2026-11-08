@@ -153,6 +153,27 @@ describe('Kiro sub-agents → portal events', () => {
       assert.equal(t.openCount, 0);
     });
 
+    it('starts one agent per stage of the crew call, the way Kiro lists them, and finishes them with it', () => {
+      const t = createSubagentTracker();
+      const call = {
+        sessionUpdate: 'tool_call', toolCallId: 'crew-2', title: 'Spawning agent crew', _meta: { kiro: { toolName: 'subagent' } },
+        rawInput: { task: 'Review three files', mode: 'blocking', stages: [
+          { name: 'secrets-review', role: 'security-reviewer', prompt_template: 'Read server/secrets.ts and list 3 risks.' },
+          { name: 'config-review', role: 'security-reviewer', prompt_template: 'Read server/config.ts and list 3 risks.' },
+          { name: 'auth-review', prompt_template: 'Read server/auth.ts and list 3 risks.' },
+        ] },
+      };
+      const started = t.onUpdate(call);
+      assert.deepEqual(started.map((e) => e.name), ['secrets-review', 'config-review', 'auth-review']);
+      assert.equal(started[0]?.description, 'Read server/secrets.ts and list 3 risks.');
+      assert.equal(new Set(started.map((e) => e.id)).size, 3, 'each stage is its own agent');
+      assert.deepEqual(t.onUpdate(call), [], 'a repeated frame adds nothing');
+      assert.equal(t.openCount, 3);
+      const ended = t.onUpdate(done('crew-2', 'completed'));
+      assert.deepEqual(ended.map((e) => e.type), ['subagent-finished', 'subagent-finished', 'subagent-finished']);
+      assert.equal(t.openCount, 0);
+    });
+
     it('uses the name the hand-off call gives when it is tagged and named', () => {
       const t = createSubagentTracker();
       const ev = t.onUpdate({ ...crew, rawInput: { name: 'reviewer', prompt: 'Review it' }, _meta: { kiro: { agentSubtaskId: 'c-9' } } });

@@ -43,7 +43,7 @@ interface Frame {
   status?: string;
   rawInput?: unknown;
   content?: unknown;
-  _meta?: { kiro?: { kind?: string; agentSubtaskId?: string } };
+  _meta?: { kiro?: { kind?: string; agentSubtaskId?: string; toolName?: string } };
 }
 
 const INVOKE_TOOLS = new Set(['invoke_sub_agent', 'subagent', 'use_subagent']);
@@ -113,7 +113,7 @@ export function createSubagentTracker(now: () => number = Date.now) {
 
       if (update.sessionUpdate === 'tool_call') {
         const title = String(update.title ?? update.name ?? '');
-        const isInvoke = kiro?.kind === 'agent-subtask' || INVOKE_TOOLS.has(title) || HANDOFF_TITLE.test(title);
+        const isInvoke = kiro?.kind === 'agent-subtask' || INVOKE_TOOLS.has(title) || HANDOFF_TITLE.test(title) || kiro?.toolName === 'subagent';
         if (isInvoke && subtaskId && !open.has(subtaskId)) {
           const input = inputOf(update.rawInput);
           const name = clip(String(input.name ?? input.agent ?? 'sub-agent'), NAME_MAX) || 'sub-agent';
@@ -125,6 +125,16 @@ export function createSubagentTracker(now: () => number = Date.now) {
         if (isInvoke && !subtaskId && update.toolCallId) {
           invocations.add(update.toolCallId);
           groupCalls.add(update.toolCallId);
+          // Kiro's crew call lists its agents as `stages` (name, role, prompt): each one is a sub-agent.
+          const stages = inputOf(update.rawInput).stages;
+          (Array.isArray(stages) ? stages : []).forEach((raw: unknown, i: number) => {
+            const stage = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+            const id = `${update.toolCallId}#${i + 1}`;
+            if (names.has(id)) return;
+            const name = clip(String(stage.name ?? stage.role ?? 'sub-agent'), NAME_MAX) || 'sub-agent';
+            const task = clip(String(stage.prompt_template ?? stage.prompt ?? stage.task ?? stage.role ?? ''), DESCRIPTION_MAX);
+            out.push(begin(id, name, task, null));
+          });
           return out;
         }
         // A frame tagged with a sub-agent nothing announced (a crew names none): it is a sub-agent all the same.
