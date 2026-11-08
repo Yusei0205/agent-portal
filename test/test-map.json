@@ -613,6 +613,7 @@
       "description": "AWS credentials management and parser",
       "sources": [
         "server/credentials.ts",
+        "server/credential-default.ts",
         "server/kiro-idc.ts",
         "server/repositories/credentials.ts",
         "server/repositories/credentials-sqlite.ts",
@@ -626,6 +627,7 @@
       ],
       "tests": [
         "test/credentials.test.ts",
+        "test/kiro-credential-default.test.ts",
         "test/bedrock-sign-in.test.ts",
         "test/aws-keys-sign-in.test.ts",
         "test/setup-checklist-ui.test.ts",

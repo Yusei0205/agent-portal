@@ -36,6 +36,7 @@ import { listKiroModelsViaAgentCore } from './agent/kiro-agentcore.ts';
 import type { KiroTokenPayload } from './agent/kiro-agentcore.ts';
 import type { KiroModelRaw } from './kiro-list-models.ts';
 import { checkKiroIdcHookSupport } from './kiro-idc-check.ts';
+import { findUserCredential } from './credential-default.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 
 // ── Re-export test hook so tests can inject Bedrock mock here too ─────────────
@@ -437,7 +438,7 @@ export async function getEngineModels(
     runsAs = { kind: 'credential', label: String(cred.name) };
   } else {
     // Try user's default credential for this engine
-    const defaultCred = await getCredentialsRepository().getDefaultByUserAndEngine(userId, engine);
+    const defaultCred = await findUserCredential(userId, engine);
     if (defaultCred) {
       cred = defaultCred;
       runsAs = { kind: 'credential', label: String(defaultCred.name) };
