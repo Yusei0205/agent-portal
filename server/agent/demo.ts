@@ -62,6 +62,29 @@ export async function runDemo(ctx: RunContext): Promise<string> {
     }
   }
 
+  // ── Sub-agent team simulation ─────────────────────────────────────────────
+  // A goal containing "team:" plays out a small team of sub-agents, so the agents node view
+  // can be tried without a real engine: a planner starts a researcher and a coder, and the coder starts a tester.
+  if (/\bteam:/i.test(goal)) {
+    const step = Math.max(300, Number(process.env.DEMO_TEAM_STEP_MS) || 1500);
+    const start = (id: string, name: string, description: string, parentId?: string, depth = 0): void =>
+      emit('subagent-started', { id, name, description, depth, ...(parentId ? { parentId } : {}) });
+    const finish = (id: string, name: string, summary: string, stats: Record<string, number>, parentId?: string, depth = 0): void =>
+      emit('subagent-finished', { id, name, summary, depth, ...stats, ...(parentId ? { parentId } : {}) });
+    start('t1', 'planner', 'Break the goal into tasks and hand them out');
+    await pause(step);
+    start('t2', 'researcher', 'Read the code and list the files the change touches', 't1', 1);
+    start('t3', 'coder', 'Make the change in the files the researcher found', 't1', 1);
+    await pause(step);
+    finish('t2', 'researcher', 'Found 3 files to change: server/review.ts, test/review.test.ts, docs.', { tokens: 4200, toolUses: 9, durationMs: step }, 't1', 1);
+    start('t4', 'tester', 'Run the tests for the changed files', 't3', 2);
+    await pause(step);
+    finish('t4', 'tester', 'All 12 tests pass.', { tokens: 1800, toolUses: 3, durationMs: step }, 't3', 2);
+    finish('t3', 'coder', 'Changed 2 files and added a test.', { tokens: 9100, toolUses: 14, durationMs: step * 3 }, 't1', 1);
+    await pause(200);
+    finish('t1', 'planner', 'The change is made and its tests pass.', { tokens: 2500, toolUses: 2, durationMs: step * 4 });
+  }
+
   // 1. Thinking text
   emit('assistant-text', { text: `I'll start by understanding the goal: "${shortGoal}". Let me look at the project structure first.` });
   await pause(400);

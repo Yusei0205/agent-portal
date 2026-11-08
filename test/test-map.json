@@ -282,6 +282,7 @@
         "server/agent/runner-terminal.ts",
         "server/agent/runner-terminal-auth.ts",
         "server/browser-live.ts",
+        "web/src/pages/sessions/AgentDetail.jsx",
         "web/src/pages/sessions/IdeAgents.jsx",
         "web/src/pages/sessions/AgentGraph.jsx",
         "web/src/lib/conversationFiles.js",
@@ -304,6 +305,7 @@
         "web/src/styles/ide.css"
       ],
       "tests": [
+        "test/web-agent-detail.test.ts",
         "test/browser-live.test.ts",
         "test/chat-attachments-ui.test.ts",
         "test/web-session-agents.test.ts",
