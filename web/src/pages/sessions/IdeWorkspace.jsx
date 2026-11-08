@@ -292,17 +292,22 @@ export function ComposerBar({
   const showMenu = menuItems.length > 0;
   const showSlashHint = message.startsWith('/') && !showMenu;
 
+  // Pre-fetch commands once on mount so the menu is ready before the user types "/".
   useEffect(() => {
-    if (typedCommand === null || commands) return;
     api.get('/api/slash-commands').then((d) => setCommands(d.commands ?? [])).catch(() => setCommands([]));
-  }, [typedCommand, commands]);
+  }, []);
 
   useEffect(() => { setMenuIdx(0); }, [typedCommand]);
 
   const pickCommand = (c) => {
-    // Commands that take an argument keep the cursor ready for it; the rest are sent straight away.
-    setMessage(`/${c.name} `);
-    textareaRef.current?.focus();
+    // Commands whose usage has no argument placeholder (e.g. "/help") send immediately.
+    // Commands that expect an argument (e.g. "/model <name>") fill the box so the user can complete it.
+    if (c.usage === `/${c.name}`) {
+      send(`/${c.name}`);
+    } else {
+      setMessage(`/${c.name} `);
+      textareaRef.current?.focus();
+    }
   };
 
   // Auto-resize textarea height when in auto-grow mode
@@ -411,8 +416,8 @@ export function ComposerBar({
     }
   };
 
-  const send = async () => {
-    const text = message.trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
+  const send = async (textOverride) => {
+    const text = (textOverride !== undefined ? textOverride : message).trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
     if (!text || busy || attachmentsBusy) return;
     const sentAttachments = [...attachmentIds];
     if (text.startsWith('/') && sentAttachments.length) {
@@ -591,7 +596,7 @@ export function ComposerBar({
             borderTop: '1px solid var(--line)',
           }}
         >
-          Commands starting with / are passed to the engine. /clear starts the next turn fresh.
+          Type / followed by a command name. Unknown commands are sent to the agent as-is.
         </div>
       )}
       {showPanel && (
@@ -911,6 +916,10 @@ export function IdeWorkspace({ id, project }) {
         timerRef.current = setTimeout(load, 300);
         // Also refresh output files when a run completes / updates
         loadOutputFiles();
+      }
+      // Refresh transcript when a command result arrives in another tab
+      if (event.type === 'workflow.command-result' && event.workflowId === id) {
+        setCommandTick((k) => k + 1);
       }
       // Refresh output files when the backend signals new outputs for this workflow
       if (event.type === 'output-files.updated' && event.workflowId === id) {
