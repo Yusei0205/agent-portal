@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 // @ts-expect-error — plain JS module without type declarations
-import { summarizeActivity, describeTool, badgeCount } from '../web/src/lib/agent-activity.js';
+import { summarizeActivity, describeTool, badgeCount, agentLabels } from '../web/src/lib/agent-activity.js';
 // @ts-expect-error — plain JS module without type declarations
 import { orbitLayout, neighbourInDirection, ORBIT_MAIN, RING_STEP } from '../web/src/lib/agent-orbit.js';
 
@@ -85,6 +85,26 @@ describe('summarizeActivity', () => {
     const out = summarizeActivity(undefined, undefined);
     assert.equal(out.main.tools, 0);
     assert.equal(out.byId.size, 0);
+  });
+});
+
+describe('agentLabels', () => {
+  it('keeps a lone agent\'s name and numbers agents that share one, in the order they started', () => {
+    const labels = agentLabels([
+      { id: 'c', name: 'general-task-execution', startedAt: '2026-11-08T05:00:09Z' },
+      { id: 'a', name: 'general-task-execution', startedAt: '2026-11-08T05:00:01Z' },
+      { id: 'b', name: 'general-task-execution', startedAt: '2026-11-08T05:00:05Z' },
+      { id: 'x', name: 'reviewer', startedAt: '2026-11-08T05:00:02Z' },
+    ]);
+    assert.equal(labels.get('a'), 'general-task-execution #1');
+    assert.equal(labels.get('b'), 'general-task-execution #2');
+    assert.equal(labels.get('c'), 'general-task-execution #3');
+    assert.equal(labels.get('x'), 'reviewer');
+  });
+  it('copes with no agents and with agents that have no start time', () => {
+    assert.equal(agentLabels(undefined).size, 0);
+    const l = agentLabels([{ id: '1', name: 'a' }, { id: '2', name: 'a' }]);
+    assert.deepEqual([l.get('1'), l.get('2')], ['a #1', 'a #2']);
   });
 });
 

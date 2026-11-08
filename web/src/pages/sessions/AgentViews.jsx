@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { ORBIT_MAIN } from '../../lib/agent-orbit.js';
-import { badgeCount } from '../../lib/agent-activity.js';
+import { badgeCount, agentLabels } from '../../lib/agent-activity.js';
 
 const STATUS_TEXT = { running: 'Running', pending: 'Starting', done: 'Done', failed: 'Failed', stopped: 'Stopped', paused: 'Paused' };
 const live = (s) => s === 'running' || s === 'pending';
@@ -31,6 +31,7 @@ function treeRows(agents) {
 
 export function AgentTreeList({ agents, activity, rootName, rootStatus, selectedId, onSelect }) {
   const rows = useMemo(() => treeRows(agents), [agents]);
+  const labels = useMemo(() => agentLabels(agents), [agents]);
   const main = activity.main;
   return (
     <ul className="agent-tree" aria-label="Agents as a tree">
@@ -48,7 +49,7 @@ export function AgentTreeList({ agents, activity, rootName, rootStatus, selected
           <li key={agent.id} style={{ paddingLeft: depth * 18 }}>
             <button type="button" className={`agent-tree-row${selectedId === agent.id ? ' is-selected' : ''}`} aria-pressed={selectedId === agent.id} onClick={() => onSelect(agent.id)}>
               <span className={`agent-tree-dot ${dotClass(agent.status)}`} aria-hidden="true" />
-              <strong>{agent.name}</strong>
+              <strong>{labels.get(agent.id) ?? agent.name}</strong>
               <span className="agent-tree-now">{live(agent.status) ? act.current || agent.description || '' : STATUS_TEXT[agent.status] || agent.status}</span>
               {act.tools > 0 && <span className="agent-tree-count" title="Tool calls">{badgeCount(act.tools)}</span>}
             </button>
@@ -61,6 +62,7 @@ export function AgentTreeList({ agents, activity, rootName, rootStatus, selected
 
 /** One bar per agent on a shared time axis; a running agent's bar grows to now. */
 export function AgentTimeline({ agents, selectedId, onSelect }) {
+  const labels = useMemo(() => agentLabels(agents), [agents]);
   const anyLive = agents.some((a) => live(a.status));
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -88,7 +90,7 @@ export function AgentTimeline({ agents, selectedId, onSelect }) {
         const width = Math.max(1.5, ((end - start) / total) * 100);
         return (
           <button key={agent.id} type="button" className={`agent-timeline-row${selectedId === agent.id ? ' is-selected' : ''}`} aria-pressed={selectedId === agent.id} onClick={() => onSelect(agent.id)}>
-            <span className="agent-timeline-name">{agent.name}</span>
+            <span className="agent-timeline-name">{labels.get(agent.id) ?? agent.name}</span>
             <span className="agent-timeline-track">
               <span className={`agent-timeline-bar ${dotClass(agent.status)}`} style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }} />
             </span>
