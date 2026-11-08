@@ -3,6 +3,7 @@ import { getAutomationsRepository, type AutomationRecord } from '../repositories
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { getProjectRepository } from '../repositories/projects.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
+import { findUserCredential } from '../credential-default.ts';
 import { getCredentialsRepository } from '../repositories/credentials.ts';
 import { registerBackgroundJob, useLambdaInvoke } from '../background-jobs.ts';
 import { startRun } from '../workflows/driver.ts';
@@ -184,7 +185,7 @@ async function dispatchAgent(state: AutomationRun, graph: AutomationGraph, node:
   const timestamp = now();
   const existing = await sessions.getWorkflowById(state.session_id);
   if (!existing) {
-    const credential = await getCredentialsRepository().getDefaultByUserAndEngine(state.created_by, graph.engine);
+    const credential = await findUserCredential(state.created_by, graph.engine);
     await sessions.createWorkflow({
       id: state.session_id, project_id: state.project_id, title: 'Workflow run', goal: '', engine: graph.engine,
       status: 'pending', trust_tools: state.options?.trustTools ? 1 : 0, lead_agent: null, workspace_id: null,

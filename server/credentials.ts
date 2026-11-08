@@ -22,6 +22,7 @@ import { appendAudit } from './audit.ts';
 import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
 import type { FetchProfilesResult } from './kiro-idc.ts';
 import { pollAgentCoreLoginShared } from './agent/kiro-agentcore.ts';
+import { findUserCredential } from './credential-default.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 import type { CredentialRecord } from './repositories/credentials.ts';
 
@@ -658,7 +659,7 @@ export async function resolveCredentialEnv(
   }
 
   if (!cred && credentialOwnerId) {
-    cred = await getCredentialsRepository().getDefaultByUserAndEngine(credentialOwnerId, engine);
+    cred = await findUserCredential(credentialOwnerId, engine);
   }
 
   if (!cred) {
@@ -944,7 +945,10 @@ export function registerCredentialRoutes(): void {
     const modeStr = str(body.mode as string, 'mode');
     const mode = validateMode(engine, modeStr);
     const name = (str(body.name as string, 'name', { max: 100, optional: true }).trim()) || `${engine} credential`;
-    const isDefault = Boolean(body.isDefault ?? false);
+    // A person's first Kiro sign-in is their default whatever the form says (it sends isDefault: false when the box is not
+    // ticked): with none marked, every Kiro feature would report "no credentials".
+    const firstKiro = engine === 'kiro' && !(await getCredentialsRepository().getDefaultByUserAndEngine(req.user!.id, engine));
+    const isDefault = Boolean(body.isDefault ?? false) || firstKiro;
     const credConfig = ((body.config ?? {}) as Record<string, unknown>);
 
     const id = generateId();
@@ -1098,6 +1102,11 @@ export function registerCredentialRoutes(): void {
     if (!cred) return;
 
     await getCredentialsRepository().delete(String(cred.id));
+    if (cred.engine === 'kiro' && cred.is_default) {
+      // Do not leave the person with Kiro sign-ins but none marked as the default.
+      const next = await findUserCredential(req.user!.id, 'kiro');
+      if (next) await getCredentialsRepository().setDefault(String(next.id), now());
+    }
     appendAudit(getDb(), req.user!.id, 'credential.delete', `credential:${String(cred.id)}`,
       { engine: String(cred.engine), name: String(cred.name) }, req.ip);
     sendJson(res, 200, { ok: true });

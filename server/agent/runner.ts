@@ -131,6 +131,7 @@ export function resumableEngineSessionId(workflow: { engine?: unknown; engine_se
 
 import type { PendingApproval } from './approvals.ts';
 import { pendingApprovals, resolveApproval } from './approvals.ts';
+import { findUserCredential } from '../credential-default.ts';
 export { resolveApproval } from './approvals.ts';
 
 // ── SSE event emission ────────────────────────────────────────────────────────
@@ -433,7 +434,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       integrationIds: parseSessionIntegrations(workflow.integrations),
       leadAgent: workflow.lead_agent ? String(workflow.lead_agent) : null,
       permissions,
-      credentialId: workflow.credential_id ? String(workflow.credential_id) : null,
+      // A session made without a chosen sign-in (a workflow, a review) uses the person's Kiro sign-in rather than none.
+      credentialId: workflow.credential_id ? String(workflow.credential_id)
+        : workflow.engine === 'kiro' ? ((await findUserCredential(workflow.created_by ? String(workflow.created_by) : null, 'kiro'))?.id ?? null) : null,
       credentialOwnerId: workflow.created_by ? String(workflow.created_by) : null,
       model: workflow.model && String(workflow.model).trim() ? String(workflow.model).trim() : null,
       engineSessionId: resumableEngineSessionId(workflow),

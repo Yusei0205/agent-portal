@@ -447,3 +447,9 @@ Older runs that did not record native collaboration events cannot display that m
 - **Symptom:** Agent setup → Sign-ins → Kiro: a credential saved as an **API key** shows "kiro-cli is not installed or not on PATH" when you press Test.
 - **Cause:** the cloud portal does not run `kiro-cli` itself. Kiro runs in the AgentCore Kiro runtime, and the portal only sends that runtime an Identity Center token (for both running sessions and listing models). An API key is never sent, so the Test button fell through to a local `kiro-cli` that the portal function does not have. The message was misleading; the real limit is that API keys are not supported on the cloud portal.
 - **Fix:** the check now says so ("Kiro API keys are not supported on the cloud portal…"). Use **Add Kiro credential → Identity Center** instead. Supporting API keys would need the runner to accept `KIRO_API_KEY` (run and list-models modes), a rebuilt runner image and a harness redeploy.
+
+## "No Kiro credentials are configured" although you signed in with AWS SSO (2026-11-08)
+
+- **Symptom:** Workflows → Run options (and other places that list Kiro models or start a Kiro run) say "No Kiro credentials are configured" even though Agent setup shows your Identity Center sign-in.
+- **Cause:** those places only used a Kiro sign-in **marked as the default**. A sign-in added without ticking "default" was invisible to them, and a workflow run was started with no sign-in at all.
+- **Fix:** when nothing is marked, the oldest usable Kiro sign-in is used (on the cloud portal an Identity Center one is preferred over an API key). This applies to the models list, workflow runs, and any run started without a chosen sign-in. A person's first Kiro sign-in is now marked as the default automatically, and deleting the default marks the next one. Claude Code is unchanged: it can still fall back to the portal's own Bedrock account.
