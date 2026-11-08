@@ -213,8 +213,25 @@ function ConnectedServices({ projectId }) {
 
 // ── Add / edit form ───────────────────────────────────────────────────────────
 
+/** Well-known remote MCP servers: picking one fills in the address and the header; the person adds only the token. */
+export const MCP_PRESETS = [
+  {
+    id: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', header: 'Authorization',
+    hint: 'Value: "Bearer " followed by a GitHub personal access token. Use a fine-grained token with only the repositories and permissions you need. For read-only tools use https://api.githubcopilot.com/mcp/readonly.',
+  },
+  {
+    id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', header: 'Authorization',
+    hint: 'Current documentation for libraries. A key is optional but raises the rate limit: value "Bearer " followed by a key from context7.com/dashboard. You can remove the header row to use it without a key.',
+  },
+  {
+    id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', header: 'Authorization',
+    hint: 'Value: "Sentry-Bearer " followed by a Sentry User Auth Token (read scopes: org:read, project:read, event:read). Plain "Bearer" does not work on this server. Add /your-org to the URL to limit it to one organisation.',
+  },
+];
+
 function IntegrationModal({ projectId, integration, onClose, onSave }) {
   const editing = Boolean(integration);
+  const [presetHint, setPresetHint]   = useState('');
   const [name, setName]               = useState(integration?.name ?? '');
   const [url, setUrl]                 = useState(integration?.url ?? '');
   const [headers, setHeaders]         = useState(
@@ -226,6 +243,13 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
   const [allowWrites, setAllowWrites] = useState(integration?.allowWrites ?? false);
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState(null);
+
+  const usePreset = (p) => {
+    setName(p.name);
+    setUrl(p.url);
+    setHeaders([{ name: p.header, value: '', stored: false }]);
+    setPresetHint(p.hint);
+  };
 
   const setHeader = (i, patch) => setHeaders((hs) => hs.map((h, j) => (j === i ? { ...h, ...patch } : h)));
 
@@ -262,6 +286,18 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
         <form onSubmit={submit} noValidate>
           <div className="stack integration-form">
             <p className="muted small">A remote MCP server (streamable HTTP). The agent gets its tools in every session of this project.</p>
+
+            {!editing && (
+              <div className="field">
+                <span className="field-label">Start from</span>
+                <div className="row wrap" style={{ gap: 6 }}>
+                  {MCP_PRESETS.map((p) => (
+                    <button key={p.id} type="button" className="btn btn-sm" onClick={() => usePreset(p)}>{p.name}</button>
+                  ))}
+                </div>
+                {presetHint && <p className="field-hint" role="status">{presetHint}</p>}
+              </div>
+            )}
 
             <div className="field">
               <label htmlFor="int-name">Name</label>
