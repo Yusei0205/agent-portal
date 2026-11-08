@@ -711,10 +711,13 @@ export function registerRepoRoutes(): void {
 
     const body = req.body as Record<string, unknown>;
     const branch = str(body.branch, 'branch', { max: 255 }).trim();
+    if (!branch) { sendJson(res, 400, { error: 'branch must not be empty' }); return; }
 
     await getGitReposRepository().updateDefaultBranch(repo.id, branch);
+    // The branch list is cached with the default first: it must be ordered again.
+    branchListCache.delete(repo.id);
 
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, { ok: true, defaultBranch: branch });
   });
 
   // POST /api/projects/:id/repos/bulk

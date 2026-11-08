@@ -76,7 +76,7 @@ export function describePullRequest(event, ctx = {}) {
       if (code === 'no-permission') {
         return out('danger', `Could not push ${repo}`,
           `No permission to push to ${repo}. A GitHub token needs repo write access; CodeCommit needs GitPush and CreatePullRequest.`,
-          [createBtn('Try again')]);
+          [{ kind: 'link', label: ev.provider === 'github' ? 'Reconnect GitHub' : 'Open Git connections', href: '#/connect/git' }, createBtn('Try again')]);
       }
       if (code === 'unsupported') {
         return out('warn', `No pull request for ${repo}`,

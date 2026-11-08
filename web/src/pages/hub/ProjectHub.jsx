@@ -876,6 +876,19 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
     }
   };
 
+  /** The branch new sessions start from for this repository. */
+  const makeDefault = async (repo, branch) => {
+    try {
+      await api.put(`/api/projects/${projectId}/repos/${repo.id}/default-branch`, { branch });
+      setRepos((prev) => prev.map((r) => r.id === repo.id ? { ...r, default_branch: branch } : r));
+      setBranches((prev) => ({ ...prev, [repo.id]: [branch, ...(prev[repo.id] || []).filter((b) => b !== branch)] }));
+      setLiveMessage(`${branch} is now the default branch of ${repo.name}`);
+      toast(`Default branch of ${repo.name} is now ${branch}`, 'success');
+    } catch (err) {
+      toast(err.message || 'Could not change the default branch', 'error');
+    }
+  };
+
   const remove = async (repoId) => {
     const ok = await requestConfirm('Remove this repository from the project?', 'Remove', 'danger');
     if (!ok) return;
@@ -957,6 +970,11 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
               </div>
             </div>
             <p className="muted small" style={{ marginTop: '0.25em' }}>{repo.url}</p>
+            <p className="small" style={{ marginTop: '0.25em' }}>
+              <span className="muted">Default branch: </span>
+              <strong>{repo.default_branch || 'not set'}</strong>
+              <span className="muted"> — new sessions start from it. Open <em>Branches</em> to change it.</span>
+            </p>
             {repo.progress ? (
               <RepoProgressBar repoName={repo.name} progress={repo.progress} />
             ) : (
@@ -974,7 +992,22 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
                 {branches[repo.id]?.length ? (
                   <ul className="branch-list">
                     {branches[repo.id].map((b) => (
-                      <li key={b} className="branch-item muted small">{b}</li>
+                      <li key={b} className="branch-item muted small">
+                        {b}
+                        {b === repo.default_branch ? (
+                          <span className="badge" style={{ marginLeft: '0.5em' }}>default</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            style={{ marginLeft: '0.5em' }}
+                            onClick={() => makeDefault(repo, b)}
+                            aria-label={`Make ${b} the default branch of ${repo.name}`}
+                          >
+                            Make default
+                          </button>
+                        )}
+                      </li>
                     ))}
                   </ul>
                 ) : (
