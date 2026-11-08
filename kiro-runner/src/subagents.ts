@@ -47,6 +47,8 @@ interface Frame {
 }
 
 const INVOKE_TOOLS = new Set(['invoke_sub_agent', 'subagent', 'use_subagent']);
+/** A lead agent that fans work out calls a differently named tool ("Spawning agent crew"); it is a hand-off all the same. */
+const HANDOFF_TITLE = /\b(crew|sub-?agents?)\b/i;
 const DESCRIPTION_MAX = 300;
 const SUMMARY_MAX = 1000;
 const NAME_MAX = 64;
@@ -80,6 +82,14 @@ export function createSubagentTracker(now: () => number = Date.now) {
   const names = new Map<string, string>();
   /** The tool calls that started sub-agents: those are the calling agent's own, not the sub-agent's work. */
   const invocations = new Set<string>();
+  /** Tool calls that hand work to a crew without naming the agents: when one ends, the agents it started are done. */
+  const groupCalls = new Set<string>();
+
+  function begin(id: string, name: string, task: string, toolCallId: string | null): SubagentEvent {
+    open.set(id, { id, name, startedAt: now(), toolCallId, lastText: '' });
+    names.set(id, name);
+    return { type: 'subagent-started', id, name, ...(task ? { description: task } : {}) };
+  }
 
   function finish(o: Open, ok: boolean, summary: string, status?: string): SubagentEvent {
     open.delete(o.id);
@@ -103,18 +113,27 @@ export function createSubagentTracker(now: () => number = Date.now) {
 
       if (update.sessionUpdate === 'tool_call') {
         const title = String(update.title ?? update.name ?? '');
-        const isInvoke = kiro?.kind === 'agent-subtask' || INVOKE_TOOLS.has(title);
+        const isInvoke = kiro?.kind === 'agent-subtask' || INVOKE_TOOLS.has(title) || HANDOFF_TITLE.test(title);
         if (isInvoke && subtaskId && !open.has(subtaskId)) {
           const input = inputOf(update.rawInput);
           const name = clip(String(input.name ?? input.agent ?? 'sub-agent'), NAME_MAX) || 'sub-agent';
           const task = clip(String(input.explanation || input.prompt || input.task || ''), DESCRIPTION_MAX);
-          open.set(subtaskId, { id: subtaskId, name, startedAt: now(), toolCallId: update.toolCallId ?? null, lastText: '' });
-          names.set(subtaskId, name);
           if (update.toolCallId) invocations.add(update.toolCallId);
-          out.push({ type: 'subagent-started', id: subtaskId, name, ...(task ? { description: task } : {}) });
+          out.push(begin(subtaskId, name, task, update.toolCallId ?? null));
+          return out;
         }
+        if (isInvoke && !subtaskId && update.toolCallId) {
+          invocations.add(update.toolCallId);
+          groupCalls.add(update.toolCallId);
+          return out;
+        }
+        // A frame tagged with a sub-agent nothing announced (a crew names none): it is a sub-agent all the same.
+        if (subtaskId && !names.has(subtaskId)) out.push(begin(subtaskId, 'sub-agent', '', null));
         return out;
       }
+
+      // The same, for a sub-agent whose first frame is a message.
+      if (subtaskId && !names.has(subtaskId)) out.push(begin(subtaskId, 'sub-agent', '', null));
 
       if (update.sessionUpdate === 'agent_message_chunk' && subtaskId) {
         const o = open.get(subtaskId);
@@ -123,9 +142,12 @@ export function createSubagentTracker(now: () => number = Date.now) {
       }
 
       if (update.sessionUpdate === 'tool_call_update' && update.toolCallId) {
+        const final = update.status === 'completed' || update.status === 'failed';
         const o = [...open.values()].find((s) => s.toolCallId === update.toolCallId);
-        if (o && (update.status === 'completed' || update.status === 'failed')) {
-          out.push(finish(o, update.status === 'completed', textOf(update.content), update.status));
+        if (o && final) out.push(finish(o, update.status === 'completed', textOf(update.content), update.status));
+        if (final && groupCalls.has(update.toolCallId)) {
+          groupCalls.delete(update.toolCallId);
+          for (const s of [...open.values()]) out.push(finish(s, update.status === 'completed', ''));
         }
       }
       return out;
