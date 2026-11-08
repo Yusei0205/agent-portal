@@ -702,6 +702,19 @@ describe('GET /api/dashboard – exact numbers', () => {
     assert.ok(Math.abs(Number(agent.p95DurationMs) - 3800) <= 1, `p95 should be 3800ms, got ${agent.p95DurationMs}`);
   });
 
+  test('a run created at the moment of the request is counted', async () => {
+    // The range ends "now" and is exclusive: a run stamped in the same millisecond as the request used to be left out
+    // (intermittent in CI). A run a moment ahead of the server's clock stands for it deterministically.
+    const proj = seedProject('Same Millisecond Proj');
+    const wf = seedWorkflowWithStatus(proj, 'edge-agent', 'done');
+    seedRunFor(wf, 'done', { createdAt: new Date(Date.now() + 500).toISOString() });
+
+    const r = await fetchJson(baseUrl, `/api/dashboard?projectId=${proj}`, { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    const agents = (r.body as Record<string, unknown>).agents as Array<Record<string, unknown>>;
+    assert.ok(agents.find((a) => a.agent === 'edge-agent'), 'edge-agent should be present');
+  });
+
   test('exact total cost and tokens', async () => {
     const projCost = seedProject('Exact Cost Proj');
     const wf1 = seedWorkflowWithStatus(projCost, 'cost-agent', 'done');

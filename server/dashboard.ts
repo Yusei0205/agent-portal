@@ -179,8 +179,9 @@ async function computeDashboard(
   const { prevSince, prevUntil } = prevPeriodRange(period);
   const today = todayStart();
   const yesterday = yesterdayStart();
-  // The "until" for current period is now (open-ended for current-period queries)
-  const until = new Date().toISOString();
+  // The "until" for the current period is now (open-ended), with a second of margin: the range is exclusive at the
+  // end, so a run stamped in the same millisecond as this request would otherwise be left out.
+  const until = new Date(Date.now() + 1000).toISOString();
 
   const stats = getStatsRepository();
 
