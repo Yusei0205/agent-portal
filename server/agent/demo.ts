@@ -71,15 +71,29 @@ export async function runDemo(ctx: RunContext): Promise<string> {
       emit('subagent-started', { id, name, description, depth, ...(parentId ? { parentId } : {}) });
     const finish = (id: string, name: string, summary: string, stats: Record<string, number>, parentId?: string, depth = 0): void =>
       emit('subagent-finished', { id, name, summary, depth, ...stats, ...(parentId ? { parentId } : {}) });
+    // What a sub-agent does is labelled with its name, as the Claude engine does, so each agent has its own transcript.
+    const tool = (agent: string, toolName: string, input: Record<string, string>): void =>
+      emit('tool-start', { toolCallId: '', toolName, toolInput: JSON.stringify(input), agent, status: 'in_progress' });
+    const say = (agent: string, text: string): void => emit('assistant-text', { text, agent });
     start('t1', 'planner', 'Break the goal into tasks and hand them out');
+    say('planner', 'Splitting this into research, a change and a test run.');
     await pause(step);
     start('t2', 'researcher', 'Read the code and list the files the change touches', 't1', 1);
     start('t3', 'coder', 'Make the change in the files the researcher found', 't1', 1);
+    tool('researcher', 'Grep', { pattern: 'createReview', path: 'server' });
+    tool('researcher', 'Read', { file_path: 'server/review.ts' });
+    tool('coder', 'Read', { file_path: 'server/review.ts' });
     await pause(step);
+    tool('researcher', 'Read', { file_path: 'test/review.test.ts' });
+    say('researcher', 'Three files are involved: the review code, its test and the docs.');
     finish('t2', 'researcher', 'Found 3 files to change: server/review.ts, test/review.test.ts, docs.', { tokens: 4200, toolUses: 9, durationMs: step }, 't1', 1);
+    tool('coder', 'Edit', { file_path: 'server/review.ts' });
     start('t4', 'tester', 'Run the tests for the changed files', 't3', 2);
+    tool('tester', 'Bash', { command: 'npm run test:file -- test/review.test.ts' });
     await pause(step);
+    say('tester', 'All 12 tests pass.');
     finish('t4', 'tester', 'All 12 tests pass.', { tokens: 1800, toolUses: 3, durationMs: step }, 't3', 2);
+    say('coder', 'Changed the retry in the upload step and added a test for it.');
     finish('t3', 'coder', 'Changed 2 files and added a test.', { tokens: 9100, toolUses: 14, durationMs: step * 3 }, 't1', 1);
     await pause(200);
     finish('t1', 'planner', 'The change is made and its tests pass.', { tokens: 2500, toolUses: 2, durationMs: step * 4 });

@@ -11,6 +11,7 @@ import { linkConversationFiles } from '../../lib/conversationFiles.js';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
 import { RunOutputsCard } from './RunOutputsCard.jsx';
 import { PullRequestCards } from './PullRequestCard.jsx';
+import { SessionAgentsStrip } from './SessionAgentsStrip.jsx';
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
@@ -1076,6 +1077,8 @@ export function SessionLive({
   const lastTerminal = [...displayEarlierEventsAll, ...dedupedAll].filter(isTerminal).pop() ?? null;
   const dropStaleFailure = (e) => !(e.type === 'run-failed' && lastTerminal && e !== lastTerminal);
   // What became of each approval request (answered, expired, or its turn ended), from everything loaded so far.
+  // Everything loaded so far, oldest first: the agents view reads each agent's own messages from it.
+  const allEvents = React.useMemo(() => [...earlierEvents, ...events], [earlierEvents, events]);
   const approvalState = React.useMemo(
     () => approvalStates([...earlierEvents, ...events], runId),
     [earlierEvents, events, runId],
@@ -1383,6 +1386,9 @@ export function SessionLive({
       className="live-panel"
       style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}
     >
+      {/* Live graph of the agents working in this session (hidden until there are some) */}
+      {workflowId && <SessionAgentsStrip workflowId={workflowId} projectId={projectId} workflow={workflow} events={allEvents} />}
+
       {/* Connection indicator */}
       {runId && (
         <div
