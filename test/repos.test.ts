@@ -146,6 +146,36 @@ describe('Repositories API', () => {
     assert.equal(r.status, 404, 'should not be accessible via wrong project');
   });
 
+  it('PUT .../default-branch changes the branch new sessions start from', async () => {
+    const createR = await fetchJson(baseUrl, `/api/projects/${projectId}/repos`, {
+      method: 'POST',
+      body: { name: 'branchy', url: 'https://github.com/example/branchy', provider: 'github', defaultBranch: 'main' },
+      cookie: adminCookie,
+    });
+    const repoId = ((createR.body as Record<string, unknown>).repo as Record<string, unknown>)?.id as string ?? '';
+
+    const put = await fetchJson(baseUrl, `/api/projects/${projectId}/repos/${repoId}/default-branch`, {
+      method: 'PUT',
+      body: { branch: 'develop' },
+      cookie: adminCookie,
+    });
+    assert.equal(put.status, 200, JSON.stringify(put.body));
+    assert.equal((put.body as Record<string, unknown>).defaultBranch, 'develop');
+
+    const get = await fetchJson(baseUrl, `/api/projects/${projectId}/repos/${repoId}`, { cookie: adminCookie });
+    assert.equal(((get.body as Record<string, unknown>).repo as Record<string, unknown>).default_branch, 'develop');
+
+    const blank = await fetchJson(baseUrl, `/api/projects/${projectId}/repos/${repoId}/default-branch`, {
+      method: 'PUT', body: { branch: '  ' }, cookie: adminCookie,
+    });
+    assert.equal(blank.status, 400, 'an empty branch name is refused');
+
+    const other = await fetchJson(baseUrl, `/api/projects/${otherProjectId}/repos/${repoId}/default-branch`, {
+      method: 'PUT', body: { branch: 'x' }, cookie: adminCookie,
+    });
+    assert.equal(other.status, 404, 'a repository of another project cannot be changed through this one');
+  });
+
   it('requires authentication', async () => {
     const r = await fetchJson(baseUrl, `/api/projects/${projectId}/repos`);
     assert.equal(r.status, 401);

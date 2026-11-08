@@ -68,6 +68,7 @@ import {
 } from './kiro-agentcore.ts';
 import type { KiroTokenPayload } from './kiro-agentcore.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { withBrowserGuidance } from './browser-guidance.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -979,6 +980,10 @@ async function runKiroViaAgentCoreAdapter(
     emit('status', { text: 'Included a recap of earlier turns' });
   }
 
+  // The cloud browser is the browser to use (not Playwright): the agent is told so when the run has it.
+  const browserOn = process.env.PORTAL_AGENTCORE_BROWSER === '1';
+  prompt = withBrowserGuidance(prompt, browserOn);
+
   const token = kiroTokenFromEnv(childEnv);
 
   // The owner's (or team's) Kiro agents, skills and steering go with the run; the lead agent is used when it is one of them.
@@ -996,7 +1001,7 @@ async function runKiroViaAgentCoreAdapter(
     agent,
     credentialId: run.credentialId,
     expectedCiphertext,
-    browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
+    browser: browserOn,
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
     awsEnv: run.runnerAwsEnv,

@@ -77,7 +77,11 @@ describe('describePullRequest', () => {
     const r = d({ state: 'failed', errorCode: 'no-permission', error: 'denied' });
     assert.equal(r.tone, 'danger');
     assert.equal(r.detail, 'No permission to push to shop. A GitHub token needs repo write access; CodeCommit needs GitPush and CreatePullRequest.');
-    assert.deepEqual(r.actions, [{ kind: 'button', label: 'Try again' }]);
+    assert.deepEqual(r.actions, [{ kind: 'link', label: 'Open Git connections', href: '#/connect/git' }, { kind: 'button', label: 'Try again' }]);
+  });
+  it('failed: no permission on GitHub offers to reconnect GitHub', () => {
+    const r = d({ state: 'failed', errorCode: 'no-permission', provider: 'github' });
+    assert.deepEqual(r.actions, [{ kind: 'link', label: 'Reconnect GitHub', href: '#/connect/git' }, { kind: 'button', label: 'Try again' }]);
   });
   it('failed: pushed but pull request failed', () => {
     const r = d({ state: 'failed', errorCode: 'failed', branch: 'portal/x', error: 'conflict' });

@@ -460,3 +460,18 @@ Older runs that did not record native collaboration events cannot display that m
 - **Cause:** Kiro tags every frame of a sub-agent with its `agentSubtaskId`, but the runner only used that to detect the start and finish, so the sub-agent's text and tool calls arrived as the main agent's.
 - **Fix:** the runner now labels a sub-agent's own text and tool calls with its id and name (`kiro-runner/src/subagents.ts`, `ownerOf`), the portal shows them as that agent's and keeps them out of the main agent's answer, and the panel matches them by id, so three agents with the same name (Kiro calls them all `general-task-execution`) each get their own transcript. **This needs the Kiro runner image rebuilt (CI does that on merge to `main_v3`, or `node infra/scripts/deploy-harness.mjs`) as well as the portal.** Sessions started before that have no per-agent transcript.
 - **Still true for Codex:** its runner reports that a sub-agent started and finished, with a summary, but not what it said or did, so a Codex sub-agent still shows only its task and result.
+
+## "No permission to push" when a session opens a pull request (2026-11-08)
+
+- **Symptom:** the session's pull request card says "No permission to push to <repo>".
+- **Cause:** the repository's Git connection is a personal access token that can clone but not write (or has expired).
+- **Fix:** open **Connections › Git connections** (the card's **Reconnect GitHub** button goes there) and replace the connection with a token that has `repo` write access (fine-grained: Contents and Pull requests set to Read and write). To sign in with a link instead of a token, an admin creates a GitHub OAuth App with **Device Flow** enabled and saves its Client ID under **Settings › GitHub**; **Connect with GitHub** then appears on the connection form.
+
+## Agents use Playwright instead of the cloud browser (2026-11-08)
+
+- **Symptom:** an agent tries to run Playwright or install a browser, which does not work in the cloud runner, and the live browser view stays empty.
+- **Fix:** every Kiro and Claude Code run that has the AgentCore Browser (`agentcoreBrowser=true`) now gets a standing instruction to use the browser tools (goto, snapshot, get_text, screenshot, click, type) and not Playwright (`server/agent/browser-guidance.ts`). Codex is unchanged.
+
+## Choosing the default branch of a repository
+
+**Workspaces › Repositories › Branches** lists the branches; **Make default** sets the one new sessions start from.

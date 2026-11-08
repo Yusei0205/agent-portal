@@ -44,6 +44,7 @@ import {
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from './claude-agentcore.ts';
 import { loadRunAgents, leadAgentFor, anthropicAgentModel } from './run-agents.ts';
+import { withBrowserGuidance } from './browser-guidance.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -147,6 +148,10 @@ ${REVIEW_SYSTEM_APPEND}`;
     emit('status', { text: 'Included a recap of earlier turns' });
   }
 
+  // The cloud browser is the browser to use (not Playwright): the agent is told so when the run has it.
+  const browserOn = process.env.PORTAL_AGENTCORE_BROWSER === '1';
+  prompt = withBrowserGuidance(prompt, browserOn);
+
   const agents = loadRunAgents(run, anthropicAgentModel);
   const lead = leadAgentFor(run, agents);
   if (lead) emit('status', { text: `Lead agent: ${lead}` });
@@ -163,7 +168,7 @@ ${REVIEW_SYSTEM_APPEND}`;
     maxBudgetUsd,
     effort: getSettings().agents.effort || null,
     // The browser bills while a session is open, so it is opt-in per deployment (see infra context agentcoreBrowser).
-    browser: process.env.PORTAL_AGENTCORE_BROWSER === '1',
+    browser: browserOn,
     repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers,
     awsEnv: run.runnerAwsEnv,
