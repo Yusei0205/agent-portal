@@ -53,6 +53,7 @@ import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
 import { buildRunnerMcpServers, parseSessionIntegrations } from './runner-integrations.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
+import { eventPrompt } from '../workflows/session-commands.ts';
 import { runCheckSteps } from './runner-checks.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
@@ -292,13 +293,14 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     // Mark all fetched events consumed before the run starts (atomic intent)
     const maxId = pendingEvents[pendingEvents.length - 1].id;
     await repo.markWorkflowEventsConsumedUpTo(workflowId, maxId);
-    prompt = pendingEvents.map((m) => m.body).join('\n\n');
+    // A command (/init, /review, the owner's own commands and skills) goes in as the prompt it stands for.
+    prompt = pendingEvents.map(eventPrompt).join('\n\n');
   } else {
     prompt = workflow.goal;
   }
   // A loop session gets the full iteration prompt: goal, recent progress, new instructions and how to report back.
   const loopState = readLoopState(workflow);
-  if (loopState) prompt = loopPrompt(workflow, loopState, pendingEvents.map((m) => m.body));
+  if (loopState) prompt = loopPrompt(workflow, loopState, pendingEvents.map(eventPrompt));
 
   // ── Jira ticket context ───────────────────────────────────────────────────
   // When the workflow has a jira_key, fetch the latest ticket (including any

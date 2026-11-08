@@ -27,6 +27,7 @@ import { shutdownSessionBrowser } from '../agent/browser-manager.ts';
 import { cancelRun } from './controls.ts';
 import { startRun } from './driver.ts';
 import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
+import { parseSlashCommand, resolveSessionCommand, sessionCommands, unknownCommandText } from './session-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
 import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint, emitRunEvent } from '../agent/runner.ts';
@@ -855,21 +856,33 @@ export function registerWorkflowRoutes(): void {
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     let message = str(body.message, 'message', { max: 10_000, optional: true }).trim();
-    if (message.startsWith('/') && Array.isArray(body.attachmentIds) && body.attachmentIds.length) {
+    // A demo session answers any "/..." itself. Elsewhere only "/name" is a command: "/src/app.ts fails" is a message.
+    const looksLikeCommand = (text: string): boolean => (w.engine === 'demo' ? text.startsWith('/') : parseSlashCommand(text) !== null);
+    if (looksLikeCommand(message) && Array.isArray(body.attachmentIds) && body.attachmentIds.length) {
       sendJson(res, 400, { error: 'Send attachments with a message, not a slash command' }); return;
     }
     const attachments = await saveChatAttachments(req.params.id, w.id, body.attachmentIds);
     if (!message && attachments.length) message = 'Please read the attached files.';
     if (!message) { sendJson(res, 400, { error: 'Message must not be empty' }); return; }
 
-    const isCommand = message.startsWith('/');
-    const kind = isCommand ? 'command' : 'human';
+    let isCommand = looksLikeCommand(message);
+    // The prompt a command becomes (/init, /review, the owner's commands and skills). The chat keeps what was typed.
+    let commandPrompt: { name: string; source: string; prompt: string } | null = null;
     const ts = now();
 
-    // Commands the portal answers itself (/model, /agent, /cost, ...). The command and its answer are saved as
-    // one event and nothing is sent to the engine.
+    // Commands the portal answers itself (/model, /agent, /cost, ...) and commands this session does not have.
+    // The command and its answer are saved as one event and nothing is sent to the engine.
     if (isCommand && w.engine !== 'demo' && message.toLowerCase().trim() !== '/clear') {
-      const answer = await runPortalCommand(w, message, req.user!.id);
+      let answer = await runPortalCommand(w, message, req.user!.id);
+      if (answer === null) {
+        const resolved = await resolveSessionCommand(w, message);
+        if (resolved?.type === 'unknown') answer = unknownCommandText(resolved.name, String(w.engine));
+        else if (resolved?.type === 'prompt') {
+          // A request to the agent like any message: shown as typed, it resumes a paused session and is in recaps.
+          isCommand = false;
+          commandPrompt = { name: resolved.name, source: resolved.source, prompt: resolved.prompt };
+        }
+      }
       if (answer !== null) {
         await repo.appendWorkflowEvent({
           workflow_id: w.id,
@@ -887,11 +900,17 @@ export function registerWorkflowRoutes(): void {
       }
     }
 
+    const kind = isCommand ? 'command' : 'human';
     await repo.appendWorkflowEvent({
       workflow_id: w.id,
       kind,
       body: message,
-      data: JSON.stringify({ by: req.user!.id, ...(attachments.length ? { attachments } : {}) }),
+      data: JSON.stringify({
+        by: req.user!.id,
+        ...(attachments.length ? { attachments } : {}),
+        // What the run gives the agent for this message (runner.ts, eventPrompt).
+        ...(commandPrompt ? { command: commandPrompt.name, commandSource: commandPrompt.source, prompt: commandPrompt.prompt } : {}),
+      }),
       created_at: ts,
     });
 
@@ -954,9 +973,19 @@ export function registerWorkflowRoutes(): void {
     sendJson(res, 200, { ok: true, kind, resumed });
   });
 
-  // GET /api/slash-commands — the commands the chat box offers
+  // GET /api/slash-commands — the commands the portal answers itself
   router.get('/api/slash-commands', async (_req: PortalRequest, res: PortalResponse): Promise<void> => {
     sendJson(res, 200, { commands: PORTAL_COMMANDS });
+  });
+
+  // GET /api/projects/:id/workflows/:wid/commands — the chat box's menu: the portal's commands, /init and /review,
+  // and the session owner's own commands and skills for its engine
+  router.get('/api/projects/:id/workflows/:wid/commands', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const w = await getSessionsRepository().getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    sendJson(res, 200, { commands: await sessionCommands(w) });
   });
 
   // PATCH /api/projects/:id/workflows/:wid — update session settings

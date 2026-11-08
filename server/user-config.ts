@@ -1000,6 +1000,50 @@ export async function getCodexConfigFiles(userId: string): Promise<CodexConfigFi
   return parseCodexFiles(files);
 }
 
+/**
+ * The files under `topDirs` of one setup folder that a run of this person gets in its home: their own, or the
+ * team's when they follow the team setup. Paths are relative to the folder, with forward slashes.
+ */
+export async function readOwnerConfigFiles(
+  userId: string,
+  folder: 'claude' | 'kiro' | 'codex',
+  topDirs: string[],
+  include: (relPath: string) => boolean,
+  maxFiles = 300,
+): Promise<Array<{ path: string; content: string }>> {
+  const out: Array<{ path: string; content: string }> = [];
+  const inDirs = (rel: string): boolean => topDirs.some((d) => rel.startsWith(`${d}/`));
+  const state = await getState(userId, folder);
+  if (state.following) {
+    const tv = await getLatestTeamVersion(folder);
+    if (!tv) return out;
+    for (const f of parseTeamFiles(tv)) {
+      if (out.length >= maxFiles) break;
+      if (f.isDir || f.content === null || !inDirs(f.path) || isCacheExcluded(f.path) || !include(f.path)) continue;
+      out.push({ path: f.path, content: f.content });
+    }
+    return out;
+  }
+  const root = userConfigRoot(userId, folder);
+  await syncDown(userId, folder);
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= maxFiles) return;
+      const abs = path.join(dir, e.name);
+      const rel = path.relative(root, abs).replace(/\\/g, '/');
+      if (isCacheExcluded(rel)) continue;
+      if (e.isDirectory()) walk(abs);
+      else if (e.isFile() && include(rel)) {
+        try { out.push({ path: rel, content: readConfigFileSync(abs, folder) }); } catch { /* unreadable: skipped */ }
+      }
+    }
+  };
+  for (const d of topDirs) walk(path.join(root, d));
+  return out;
+}
+
 export async function listAgentsForEngine(userId: string, engine: string): Promise<AgentEntry[]> {
   if (engine === 'codex') return codexAgents(await getCodexConfigFiles(userId));
   const agents: AgentEntry[] = [];

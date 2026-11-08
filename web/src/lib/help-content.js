@@ -210,6 +210,7 @@ export const HELP_TOPICS = [
         heading: 'The session workspace',
         rows: [
           ['Conversation', 'Live agent output, tool calls and results. Send messages with **Ctrl+Enter**; `/` starts a slash command and `/clear` drops pending messages.'],
+          ['Slash commands', 'Type `/` for the menu, or `/help` for the list. The portal answers `/model`, `/agent`, `/tools`, `/cost`, `/status` and `/rename` itself; `/init` and `/review` ask the agent. Your own commands and skills from **Agent setup** run too (Claude: `commands/<name>.md` and `skills/<name>/SKILL.md`; Kiro: `prompts/<name>.md` and skills; Codex: skills), with any text after the name as their input.'],
           ['Explorer (Ctrl+Shift+E)', 'Files of each repository, **Uploads**, and read-only **My vault** and **Team vault**. Click a file to edit; save with **Ctrl+S**.'],
           ['Source Control (Ctrl+Shift+G)', 'Diff of uncommitted changes; commit and push.'],
           ['Terminal (Ctrl+`)', 'A shell in the session workspace.'],
