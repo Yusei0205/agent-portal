@@ -48,6 +48,71 @@ function ServiceRow({ icon, title, detail, status, tone, to, action }) {
   );
 }
 
+function GmailRow() {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(() => {
+    const h = window.location.hash;
+    if (!h.includes('?')) return null;
+    const q = new URLSearchParams(h.slice(h.indexOf('?') + 1));
+    return q.get('gmail') ? { ok: q.get('gmail') === 'connected', text: q.get('msg') || '' } : null;
+  });
+  const load = useCallback(() => {
+    api.get('/api/gmail/status').then(setSt).catch(() => setSt({ available: false }));
+  }, []);
+  useEffect(() => {
+    load();
+    if (msg && window.location.hash.includes('?')) history.replaceState(null, '', window.location.hash.split('?')[0]);
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setSend = async (allowSend) => {
+    setBusy(true);
+    try { await api.put('/api/gmail/settings', { allowSend }); load(); } finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    setBusy(true);
+    try { await api.delete('/api/gmail/connection'); setMsg({ ok: true, text: 'Gmail disconnected.' }); load(); } finally { setBusy(false); }
+  };
+
+  const status = st === null ? 'Checking…' : !st.available ? 'Not set up' : st.connected ? 'Connected' : 'Not connected';
+  const tone = st?.connected ? 'badge-ok' : st && !st.available ? 'badge-neutral' : 'badge-warn';
+  const detail = st?.connected
+    ? `Search and read mail${st.email ? ` · ${st.email}` : ''}`
+    : st && !st.available
+      ? 'Ask an admin to set up the Google client first (docs/deployment/google-sign-in.md).'
+      : 'Let agents search and read your Gmail, and draft replies.';
+
+  return (
+    <>
+      <div className="integration-service">
+        <span className="integration-service-icon" aria-hidden="true"><Icon name="inbox" size={16} /></span>
+        <div className="integration-service-body">
+          <strong>Gmail</strong>
+          <span className="muted small">{detail}</span>
+        </div>
+        <span className={`badge ${tone}`}>{status}</span>
+        {st?.connected ? (
+          <button type="button" className="btn btn-sm" onClick={disconnect} disabled={busy}>Disconnect</button>
+        ) : (
+          <a className={`btn btn-sm${st?.available ? ' btn-primary' : ''}`} href={st?.available ? '/api/gmail/connect' : undefined} aria-disabled={!st?.available}>
+            Connect Gmail
+          </a>
+        )}
+      </div>
+      {st?.connected && (
+        <label className="integration-service-sub">
+          <input type="checkbox" checked={st.allowSend} disabled={busy} onChange={(e) => setSend(e.target.checked)} />
+          <span>
+            Let agents draft and send email as me
+            <span className="muted small"> — save drafts and send messages. Off by default; agents can always read.</span>
+          </span>
+        </label>
+      )}
+      {msg && <p className={msg.ok ? 'success-note' : 'error-note'} role="status">{msg.text}</p>}
+    </>
+  );
+}
+
 function GoogleWorkspaceRow() {
   const [st, setSt] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -140,6 +205,7 @@ function ConnectedServices({ projectId }) {
           action="Manage"
         />
         <GoogleWorkspaceRow />
+        <GmailRow />
       </div>
     </section>
   );

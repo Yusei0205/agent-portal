@@ -41,6 +41,7 @@ import { registerAutomationRoutes } from './automations/routes.ts';
 import { recoverLocalAutomations, stopLocalAutomationTimers } from './automations/engine.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerGoogleWorkspaceRoutes } from './google-workspace.ts';
+import { registerGmailRoutes } from './gmail.ts';
 import { registerDashboardRoutes } from './dashboard.ts';
 import { registerApiTokenRoutes } from './api-tokens.ts';
 import { registerStorageTestRoutes } from './storage-test.ts';
@@ -259,6 +260,7 @@ export async function startServer(
   registerAutomationRoutes();
   registerInsightsRoutes();
   registerGoogleWorkspaceRoutes();
+  registerGmailRoutes();
   registerDashboardRoutes();
   registerApiTokenRoutes();
   registerStorageTestRoutes();

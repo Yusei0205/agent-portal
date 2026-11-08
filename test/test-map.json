@@ -1286,6 +1286,16 @@
       ],
       "smokeIds": []
     },
+    "gmail": {
+      "description": "Gmail connection, run token and outgoing mail helpers",
+      "sources": [
+        "server/gmail.ts"
+      ],
+      "tests": [
+        "test/gmail.test.ts"
+      ],
+      "smokeIds": []
+    },
     "google-workspace": {
       "description": "Tests in google-workspace.test.ts",
       "sources": [
