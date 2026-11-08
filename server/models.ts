@@ -462,6 +462,14 @@ export async function getEngineModels(
       const env: Record<string, string> = {};
 
       if (mode === 'api_key') {
+        // The cloud portal runs Kiro in its AgentCore runtime, which signs in with Kiro IAM Identity Center only and
+        // does not take an API key. There is no kiro-cli on the portal itself, so trying one would report "not installed".
+        if (process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN) {
+          return toCache(engine, cacheId, {
+            models: [], source: 'none', runsAs,
+            error: 'Kiro API keys are not supported on the cloud portal: Kiro runs in the cloud runtime, which signs in with Kiro IAM Identity Center. Remove this API key and add a Kiro sign-in with Identity Center instead.',
+          });
+        }
         if (!cred.secret_enc) {
           return toCache(engine, cacheId, { models: [], source: 'none', runsAs, error: 'Kiro API key credential has no secret stored. Update it in Credentials.' });
         }
