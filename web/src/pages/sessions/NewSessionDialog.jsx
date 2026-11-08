@@ -122,8 +122,12 @@ export function ModelPicker({ engine, credentialId, value, onChange }) {
   const [runsAs, setRunsAs] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // Only the newest request may fill the list. The form asks once before the person's sign-in is picked (the portal
+  // provider's models) and again with it; the first answer can arrive last, and offered Bedrock models for a Claude plan.
+  const latestCall = useRef(0);
 
   const load = useCallback(async (forceRefresh = false) => {
+    const call = ++latestCall.current;
     setLoading(true);
     setError(null);
     try {
@@ -134,15 +138,17 @@ export function ModelPicker({ engine, credentialId, value, onChange }) {
       const data = await api.get(
         `/api/engines/${encodeURIComponent(engine)}/models${qs ? `?${qs}` : ''}`,
       );
+      if (call !== latestCall.current) return;
       setModels(data.models || []);
       setRunsAs(data.runsAs || null);
       // Server may return partial success with a warning in `error`
       if (data.error) setError(data.error);
     } catch (e) {
+      if (call !== latestCall.current) return;
       setModels([]);
       setError(e.message || 'Failed to load models');
     } finally {
-      setLoading(false);
+      if (call === latestCall.current) setLoading(false);
     }
   }, [engine, credentialId]);
 

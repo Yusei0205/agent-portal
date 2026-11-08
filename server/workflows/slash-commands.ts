@@ -8,8 +8,11 @@
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 import { getEngineModels } from '../models.ts';
+import { parseModel } from '../agent/pricing.ts';
 import { listAgentsForEngine } from '../user-config.ts';
 import { now } from '../util.ts';
+
+const MODEL_FAMILIES = new Set(['opus', 'sonnet', 'haiku', 'fable']);
 
 export const PORTAL_COMMANDS: Array<{ name: string; usage: string; description: string }> = [
   { name: 'help',    usage: '/help',                  description: 'Show the available commands' },
@@ -86,14 +89,18 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
         const fallback = models.find((m) => m.default);
         return `Model switched to the engine default${fallback ? ` (${fallback.label || fallback.id})` : ''}. It applies from your next message.`;
       }
-      const exact = models.filter((m) => m.id.toLowerCase() === q || (m.label ?? '').toLowerCase() === q);
-      const matches = exact.length
+      // "opus-5" names claude-opus-5 exactly, not every model whose ID contains it.
+      const exact = models.filter((m) => [q, `claude-${q}`].includes(m.id.toLowerCase()) || (m.label ?? '').toLowerCase() === q);
+      let matches = exact.length
         ? exact
         : models.filter((m) => m.id.toLowerCase().includes(q) || (m.label ?? '').toLowerCase().includes(q));
+      // "/model opus" is the newest Opus offered (an API key or Claude plan offers several of each family).
+      const newest = matches.length > 1 && MODEL_FAMILIES.has(q);
+      if (newest) matches = [matches.reduce((best, m) => (parseModel(m.id).version > parseModel(best.id).version ? m : best))];
       if (matches.length === 0) return `No model matches "${arg}". Type /model to see the list.`;
       if (matches.length > 1) return `"${arg}" matches several models:\n${matches.map((m) => `  ${m.id}`).join('\n')}\nBe more specific.`;
       await repo.updateWorkflow(w.id, { model: matches[0].id, updated_at: now() });
-      return `Model switched to ${matches[0].id}. It applies from your next message.`;
+      return `Model switched to ${matches[0].id}${newest ? ` (the newest ${q[0].toUpperCase()}${q.slice(1)} here)` : ''}. It applies from your next message.`;
     }
 
     case 'agent': {

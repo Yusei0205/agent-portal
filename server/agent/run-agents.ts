@@ -12,6 +12,7 @@ import { config } from '../config.ts';
 import { one, type Row } from '../db.ts';
 import { getRunHomeDir } from '../user-config.ts';
 import { loadAgentDefinitions, type AgentDefinitionPayload } from './agent-defs.ts';
+import { anthropicModelFor } from './anthropic-models.ts';
 import type { AgentRun } from './types.ts';
 
 function projectClaudeDir(projectId: string | null | undefined): string | null {
@@ -46,10 +47,11 @@ export function leadAgentFor(run: Pick<AgentRun, 'leadAgent'>, agents: Record<st
   return name && Object.prototype.hasOwnProperty.call(agents, name) ? name : null;
 }
 
-/** Model names the Agent SDK understands for an agent, for the Anthropic API (and subscription) paths. */
+/**
+ * Model names the Agent SDK understands for an agent, for the Anthropic API (and subscription) paths: `inherit`, an
+ * alias or a Claude ID as given, and a Bedrock ID as the same model's Anthropic ID (an agent file written for Bedrock).
+ */
 export function anthropicAgentModel(model: string): string | undefined {
-  const m = model.trim();
-  if (!m) return undefined;
-  if (/^(inherit|haiku|sonnet|opus|fable)$/i.test(m)) return m.toLowerCase();
-  return /^claude-[a-z0-9.-]+$/i.test(m) ? m : undefined;
+  if (/^inherit$/i.test(model.trim())) return 'inherit';
+  return anthropicModelFor(model);
 }
