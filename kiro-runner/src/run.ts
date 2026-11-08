@@ -324,6 +324,8 @@ interface WarmKiro {
   stderr: { tail: string };
 }
 
+/** Shapes of sub-agent frames already logged by this process. */
+const seenFrameShapes = new Set<string>();
 let warm: WarmKiro | null = null;
 
 function waitForExit(w: WarmKiro, ms: number): Promise<number | null> {
@@ -561,6 +563,18 @@ export async function runKiroRun(
         const p = params as { update?: SessionUpdatePayload };
         const update = p?.update;
         if (!update) return;
+        // Kiro's frames for sub-agents are only partly documented: log each distinct shape once so a new one can be read.
+        {
+          const f = update as { sessionUpdate?: string; title?: string; rawInput?: unknown; _meta?: { kiro?: Record<string, unknown> } };
+          const kiroMeta = f._meta?.kiro;
+          if (kiroMeta || /\b(crew|sub-?agents?)\b/i.test(String(f.title ?? ''))) {
+            const shape = `${f.sessionUpdate}|${String(f.title ?? '').slice(0, 40)}|${JSON.stringify(Object.keys(kiroMeta ?? {}))}|${String(kiroMeta?.kind ?? '')}`;
+            if (!seenFrameShapes.has(shape) && seenFrameShapes.size < 60) {
+              seenFrameShapes.add(shape);
+              process.stdout.write(JSON.stringify({ event: 'acp_frame', sessionUpdate: f.sessionUpdate, title: f.title, kiro: kiroMeta, rawInput: JSON.stringify(f.rawInput ?? null).slice(0, 400) }) + '\n');
+            }
+          }
+        }
         // Sub-agents Kiro hands work to: tell the portal so the session's agents graph can show them.
         for (const ev of made.subagents.onUpdate(update as never)) made.emit({ ...ev });
         // A sub-agent's own messages and tool calls carry its id and name, so the portal shows them as that agent's.

@@ -106,7 +106,6 @@ describe('Kiro sub-agents → portal events', () => {
     const t = createSubagentTracker();
     assert.deepEqual(t.onUpdate({ sessionUpdate: 'tool_call', toolCallId: 'x', title: 'fs_read', rawInput: { path: 'a.ts' } }), []);
     assert.deepEqual(t.onUpdate({ sessionUpdate: 'tool_call', toolCallId: 'y', title: 'invoke_sub_agent', rawInput: { name: 'n' } }), [], 'no agentSubtaskId: nothing to track it by');
-    assert.deepEqual(t.onUpdate(said('unknown', 'stray text')), []);
     assert.deepEqual(t.onUpdate(done('call-unknown', 'completed')), []);
     assert.equal(t.onUpdate(start('s-1', 'explorer')).length, 1);
     assert.deepEqual(t.onUpdate(start('s-1', 'explorer')), [], 'a repeated start frame does not add a second node');
@@ -123,8 +122,42 @@ describe('Kiro sub-agents → portal events', () => {
     assert.deepEqual(t.ownerOf({ sessionUpdate: 'tool_call', toolCallId: 'x', title: 'fs_read', rawInput: {}, _meta: { kiro: { agentSubtaskId: 's-2' } } }), { id: 's-2', name: 'explorer' });
     // A frame with no tag is the main agent's.
     assert.equal(t.ownerOf({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'main' } }), null);
-    // A tag nothing was started under is not guessed at.
+    // A tag nothing has been seen under is not guessed at.
     assert.equal(t.ownerOf(said('unknown', 'stray')), null);
+  });
+
+  describe('a lead agent that spawns a crew', () => {
+    const crew = { sessionUpdate: 'tool_call', toolCallId: 'crew-1', title: 'Spawning agent crew', rawInput: {} };
+
+    it('shows each agent of the crew, though no call names them', () => {
+      const t = createSubagentTracker();
+      assert.deepEqual(t.onUpdate(crew), [], 'the hand-off call itself is the lead\'s');
+      const first = t.onUpdate(said('c-1', 'Looking at the first file'));
+      assert.deepEqual(first, [{ type: 'subagent-started', id: 'c-1', name: 'sub-agent' }]);
+      assert.equal(t.onUpdate(said('c-1', ' and the next')).length, 0, 'started once');
+      assert.equal(t.onUpdate(said('c-2', 'Another agent')).length, 1);
+      assert.equal(t.openCount, 2);
+      assert.deepEqual(t.ownerOf(said('c-2', 'more')), { id: 'c-2', name: 'sub-agent' });
+      assert.equal(t.ownerOf(crew), null);
+    });
+
+    it('starts an agent from a tool call of its own, and finishes the crew when the hand-off call ends', () => {
+      const t = createSubagentTracker();
+      t.onUpdate(crew);
+      const started = t.onUpdate({ sessionUpdate: 'tool_call', toolCallId: 'r1', title: 'Reading a.ts', rawInput: {}, _meta: { kiro: { agentSubtaskId: 'c-1' } } });
+      assert.equal(started[0]?.type, 'subagent-started');
+      t.onUpdate(said('c-1', 'Found nothing.'));
+      const ended = t.onUpdate(done('crew-1', 'completed'));
+      assert.deepEqual(ended.map((e) => [e.type, e.id]), [['subagent-finished', 'c-1']]);
+      assert.equal(ended[0]?.summary, 'Found nothing.');
+      assert.equal(t.openCount, 0);
+    });
+
+    it('uses the name the hand-off call gives when it is tagged and named', () => {
+      const t = createSubagentTracker();
+      const ev = t.onUpdate({ ...crew, rawInput: { name: 'reviewer', prompt: 'Review it' }, _meta: { kiro: { agentSubtaskId: 'c-9' } } });
+      assert.equal(ev[0]?.name, 'reviewer');
+    });
   });
 
   it('still names a sub-agent\'s late frame after it has finished', () => {
