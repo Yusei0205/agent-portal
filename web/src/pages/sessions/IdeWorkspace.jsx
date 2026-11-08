@@ -310,19 +310,25 @@ export function ComposerBar({
 
   // The session's commands: the portal's, /init and /review, and the owner's own commands and skills.
   useEffect(() => { setCommands(null); }, [workflow?.id, workflow?.engine]);
+  // Fetched as soon as the session is known, not on the first "/" keystroke, so the menu is ready when it is typed.
   useEffect(() => {
-    if (typedCommand === null || commands || !workflow?.id) return;
+    if (commands || !workflow?.id) return;
     api.get(`/api/projects/${projectId}/workflows/${workflow.id}/commands`)
       .then((d) => setCommands(d.commands ?? []))
       .catch(() => setCommands([]));
-  }, [typedCommand, commands, projectId, workflow?.id]);
+  }, [commands, projectId, workflow?.id]);
 
   useEffect(() => { setMenuIdx(0); }, [typedCommand]);
 
   const pickCommand = (c) => {
-    // Commands that take an argument keep the cursor ready for it; the rest are sent straight away.
-    setMessage(`/${c.name} `);
-    textareaRef.current?.focus();
+    // Commands whose usage has no argument placeholder (e.g. "/help") send immediately.
+    // Commands that expect an argument (e.g. "/model <name>") fill the box so the user can complete it.
+    if (c.usage === `/${c.name}`) {
+      send(`/${c.name}`);
+    } else {
+      setMessage(`/${c.name} `);
+      textareaRef.current?.focus();
+    }
   };
 
   // Auto-resize textarea height when in auto-grow mode
@@ -431,8 +437,9 @@ export function ComposerBar({
     }
   };
 
-  const send = async () => {
-    const text = message.trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
+  const send = async (textOverride) => {
+    // send is also the Send button's click handler, so only a string is a command picked from the menu.
+    const text = (typeof textOverride === 'string' ? textOverride : message).trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
     if (!text || busy || attachmentsBusy) return;
     const sentAttachments = [...attachmentIds];
     const isSlash = isSlashCommand(text);
@@ -934,6 +941,10 @@ export function IdeWorkspace({ id, project }) {
         timerRef.current = setTimeout(load, 300);
         // Also refresh output files when a run completes / updates
         loadOutputFiles();
+      }
+      // Refresh transcript when a command result arrives in another tab
+      if (event.type === 'workflow.command-result' && event.workflowId === id) {
+        setCommandTick((k) => k + 1);
       }
       // Refresh output files when the backend signals new outputs for this workflow
       if (event.type === 'output-files.updated' && event.workflowId === id) {
