@@ -660,6 +660,23 @@
   align-items: center;
 }
 
+/* ── Agents strip (top of a session) ────────────────── */
+.agents-strip { flex-shrink: 0; border-bottom: 1px solid var(--line-2); background: var(--surface-1, var(--panel)); }
+.agents-strip-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 0.8rem; }
+.agents-strip-count { color: var(--ink-3); }
+.agents-strip-chip { padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 0.7rem; font-weight: 700; }
+.agents-strip-chip.is-running { color: var(--accent); }
+.agents-strip-chip.is-failed { color: var(--danger); }
+.agents-strip-fold { margin-left: auto; }
+.agents-strip-body { display: flex; flex-wrap: wrap; height: 340px; border-top: 1px solid var(--line-2); }
+.agents-strip-graph { flex: 1 1 420px; min-width: 0; min-height: 220px; }
+.agents-strip-detail { flex: 0 0 300px; max-width: 100%; border-left: 1px solid var(--line-2); overflow: auto; }
+.agents-strip-detail .agent-detail { border-top: 0; max-height: none; }
+@media (max-width: 760px) { .agents-strip-body { height: 460px; } .agents-strip-detail { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--line-2); } }
+.agent-node-name { display: block; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-node-status { display: block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin: 1px 0 3px; }
+.agent-node-task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 0.8rem; color: var(--ink-3); line-height: 1.3; }
+
 /* ── Agent detail (selected node) ───────────────────── */
 .agent-item-pick { display: flex; align-items: center; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .agent-item-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }

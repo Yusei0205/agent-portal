@@ -31,7 +31,7 @@ test('agent graph shows concurrent and nested nodes, expands and refreshes witho
     await page.goto('http://portal.test/');
     await page.locator('.react-flow__node').nth(3).waitFor();
     assert.equal(await page.locator('.react-flow__node').count(), 4);
-    await page.locator('.react-flow__edge').nth(2).waitFor();
+    await page.locator('.react-flow__edge').nth(2).waitFor({ state: 'attached' }); // attached, not visible: a link between agents on one row is a flat line with no height
     await page.getByRole('button', { name: 'Expand agent graph' }).click();
     const dialog = page.getByRole('dialog', { name: 'Agent collaboration' });
     await dialog.waitFor();
@@ -55,7 +55,7 @@ test('agent graph shows concurrent and nested nodes, expands and refreshes witho
 
 test('conversation source and sandbox artifact links open in the portal instead of navigating to S3', async () => {
   const source = `import React from 'react'; import {createRoot} from 'react-dom/client'; import {SessionLive} from './web/src/pages/sessions/SessionLive.jsx'; createRoot(document.getElementById('root')).render(<SessionLive workflowId="session" projectId="project" runId="run" workflow={{status:'paused',engine:'codex'}} outputFiles={[{id:'report',name:'report.pdf',path:'report.pdf',download_url:'/api/report',preview_url:'/api/report/preview',run_id:'run'}]} onOpenWorkspaceFile={(path,line)=>{window.openedFile={path,line}}} />);`;
-  const bundle = await build({ stdin: { contents: source, resolveDir: process.cwd(), loader: 'jsx' }, bundle: true, write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
+  const bundle = await build({ stdin: { contents: source, resolveDir: process.cwd(), loader: 'jsx' }, bundle: true, write: false, outfile: 'conversation-fixture.js', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -63,7 +63,7 @@ test('conversation source and sandbox artifact links open in the portal instead 
     page.on('pageerror', error => errors.push(error.message));
     await page.route('http://portal.test/**', async route => {
       const url = route.request().url();
-      if (url.endsWith('/fixture.js')) await route.fulfill({ contentType: 'text/javascript', body: bundle.outputFiles[0].text });
+      if (url.endsWith('/fixture.js')) await route.fulfill({ contentType: 'text/javascript', body: bundle.outputFiles.find(f => f.path.endsWith('.js'))!.text });
       else if (url.includes('/api/runs/run/events')) await route.fulfill({ contentType: 'text/event-stream', body: 'data: ' + JSON.stringify({ type: 'event', event: { id: 1, type: 'assistant-text', run_id: 'run', payload: { text: '[API finding](/server/feedback.ts:376) and [Download report](sandbox:/mnt/data/report.pdf)' }, created_at: '2026-11-08T01:00:00Z' } }) + '\n\n' });
       else if (url.includes('/api/')) await route.fulfill({ json: { events: [], nextCursor: null } });
       else await route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body><div id="root"></div><script src="/fixture.js"></script></body></html>' });

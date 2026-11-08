@@ -19,6 +19,7 @@
 @import './styles/file-preview.css';
 @import './styles/sessions.css';
 @import './styles/ide.css';
+@import './styles/agents-panel.css';
 @import './styles/credentials.css';
 @import './styles/config.css';
 @import './styles/connections.css';

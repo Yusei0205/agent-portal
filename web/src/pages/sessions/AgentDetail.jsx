@@ -2,7 +2,7 @@
  * What one agent in the node view is doing: its task, its result once it has one, and how much it has used.
  * Shown under the graph for the selected node.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { href } from '../../lib/router.js';
 import { formatRelative } from '../../lib/util.js';
 
@@ -36,10 +36,15 @@ function useElapsed(agent) {
 }
 
 /**
- * @param {{ agent: object, projectId?: string }} props agent is a row from /api/workflows/:id/agents, or the session itself
+ * @param {{ agent: object, projectId?: string, lines?: Array<{ kind: 'text' | 'tool', text: string }>, transcriptNote?: string }} props
+ *   agent is a row from /api/workflows/:id/agents, or the session itself. `lines` is the agent's own transcript when the engine
+ *   reports one; `transcriptNote` says why there is none.
  */
-export function AgentDetail({ agent, projectId }) {
+export function AgentDetail({ agent, projectId, lines, transcriptNote }) {
   const elapsed = useElapsed(agent);
+  const logRef = useRef(null);
+  // Follow the newest line, as the conversation does.
+  useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [lines?.length]);
   return (
     <section className="agent-detail" aria-label={`Details for ${agent.name}`}>
       <div className="agent-detail-head">
@@ -48,6 +53,15 @@ export function AgentDetail({ agent, projectId }) {
       </div>
       <h4 className="agent-detail-label">Task</h4>
       <p className="agent-detail-text">{agent.description || 'This agent did not report a task.'}</p>
+      {lines && lines.length > 0 && (
+        <>
+          <h4 className="agent-detail-label">Transcript</h4>
+          <ol className="agent-transcript" ref={logRef} aria-label={`Transcript of ${agent.name}`}>
+            {lines.map((l, i) => <li key={i} className={`agent-transcript-line is-${l.kind}`}>{l.text}</li>)}
+          </ol>
+        </>
+      )}
+      {(!lines || lines.length === 0) && transcriptNote && <p className="agent-detail-hint" style={{ padding: '6px 0 0' }}>{transcriptNote}</p>}
       {agent.summary && (
         <>
           <h4 className="agent-detail-label">Result</h4>

@@ -114,13 +114,13 @@ export function IdeAgents({ workflowId, projectId, workflow }) {
 
   return (
     <div style={{ flex: 1, overflow: 'auto' }}>
-      <div style={{ height: 280 }}><AgentGraph agents={agents} workflowId={workflowId} selectedId={selectedId} onSelect={setSelectedId} /></div>
+      <div style={{ height: 280 }}><AgentGraph agents={agents} workflowId={workflowId} selectedId={selectedId} onSelect={setSelectedId} rootTask={workflow?.goal} rootStatus={workflow?.status} /></div>
       {detail}
       <button type="button" className="btn btn-sm btn-ghost" onClick={() => setExpanded(true)}>Expand agent graph</button>
       {expanded && createPortal(<dialog ref={dialogRef} aria-label="Agent collaboration" onCancel={() => setExpanded(false)} onClose={() => setExpanded(false)} style={{ width: 'min(1100px, 92vw)', maxWidth: '92vw', height: '80vh', background: 'var(--panel, #101820)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 8 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><strong>Agent collaboration</strong><button type="button" className="btn btn-sm" onClick={() => setExpanded(false)}>Close</button></div>
         <div style={{ height: 'calc(100% - 40px)', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 1, minHeight: 0 }}><AgentGraph agents={agents} workflowId={workflowId} selectedId={selectedId} onSelect={setSelectedId} /></div>
+          <div style={{ flex: 1, minHeight: 0 }}><AgentGraph agents={agents} workflowId={workflowId} selectedId={selectedId} onSelect={setSelectedId} rootTask={workflow?.goal} rootStatus={workflow?.status} /></div>
           {detail}
         </div>
       </dialog>, document.body)}
