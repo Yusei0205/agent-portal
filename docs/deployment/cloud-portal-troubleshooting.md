@@ -435,6 +435,13 @@ Native Codex collaboration items now produce portal sub-agent lifecycle events, 
 
 Older runs that did not record native collaboration events cannot display that missing history. New collaboration activity is recorded after deployment. The graph visualizes actual delegated sessions and native sub-agents; it does not turn sequential automation steps into concurrent steps.
 
+## Kiro sessions show no agents graph (2026-11-08)
+
+- **Symptom:** a Claude Code or Codex session shows the "Agents" graph above the conversation, but a Kiro session never does.
+- **Cause:** the graph draws from `subagent-started` / `subagent-finished` events. The Kiro runner used to ignore Kiro's sub-agent activity, so none were sent.
+- **Fix:** the runner now turns Kiro's `invoke_sub_agent` frames (ACP `tool_call` tagged `_meta.kiro.kind = "agent-subtask"`, with an `agentSubtaskId`) into those events (`kiro-runner/src/subagents.ts`). **The Kiro runner image must be rebuilt and the harness redeployed (`node infra/scripts/deploy-harness.mjs`) as well as the portal**, and only runs after that show agents.
+- **Limits:** Kiro does not document how a sub-agent ends, so a node finishes when its `invoke_sub_agent` tool call completes, or at the end of the turn at the latest. A sub-agent started by another sub-agent appears under the session, not under its parent, because Kiro does not say who started it. Agents that Kiro runs only inside its own process without `invoke_sub_agent` are not reported. Local (non-cloud) Kiro runs are not covered.
+
 ## "kiro-cli is not installed or not on PATH" on a Kiro API key (2026-11-08)
 
 - **Symptom:** Agent setup → Sign-ins → Kiro: a credential saved as an **API key** shows "kiro-cli is not installed or not on PATH" when you press Test.

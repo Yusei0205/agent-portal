@@ -40,6 +40,7 @@ import { inputFingerprint } from '../shared/agent/tool-policy.ts';
 import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
 import { writeKiroConfig } from './kiro-config.js';
 import { createHash } from 'node:crypto';
+import { createSubagentTracker } from './subagents.js';
 
 export type EmitFn = (event: Record<string, unknown>) => void;
 
@@ -318,6 +319,8 @@ interface WarmKiro {
   emit: EmitFn;
   /** What the permission handler needs to know about the message being worked on; replaced at the start of each message. */
   perm: PermContext | null;
+  /** Kiro's sub-agents in the message being worked on; replaced at the start of each message. */
+  subagents: ReturnType<typeof createSubagentTracker>;
   stderr: { tail: string };
 }
 
@@ -499,7 +502,7 @@ export async function runKiroRun(
       const acp = createAcpClient(child);
       const made: WarmKiro = {
         child, acp, acpSessionId: '', workDir, kiroHome, authTmpDir, defaultDbPath, fingerprint,
-        model: payload.model, expiresAtBefore: token.expiresAt, exited: false, exitCode: null, liveDir, startedAt: Date.now(), browserSession: null, emit, perm: null, stderr: { tail: '' },
+        model: payload.model, expiresAtBefore: token.expiresAt, exited: false, exitCode: null, liveDir, startedAt: Date.now(), browserSession: null, emit, perm: null, subagents: createSubagentTracker(), stderr: { tail: '' },
       };
       w = made;
 
@@ -558,6 +561,8 @@ export async function runKiroRun(
         const p = params as { update?: SessionUpdatePayload };
         const update = p?.update;
         if (!update) return;
+        // Sub-agents Kiro hands work to: tell the portal so the session's agents graph can show them.
+        for (const ev of made.subagents.onUpdate(update as never)) made.emit({ ...ev });
         switch (update.sessionUpdate) {
           case 'agent_message_chunk': {
             const text = extractText(update.content);
@@ -674,6 +679,7 @@ export async function runKiroRun(
     if (stop?.aborted) onStop();
     else stop?.addEventListener('abort', onStop, { once: true });
     // What the permission handler (set up once, with kiro-cli) needs to know about this run.
+    run.subagents = createSubagentTracker();
     run.perm = { trusted: payload.policy?.trusted ?? true, broker, approvals: payload.approvals, runId, abort: runAbort.signal, workDir: run.workDir };
 
     let acpError: Error | undefined;
@@ -782,6 +788,9 @@ export async function runKiroRun(
       try { acp.close(); } catch { /* ok */ }
       exitCode = await waitForExit(run, 5_000);
     }
+
+    // A sub-agent still open when the turn ends is done (or failed, if the turn did not go well): never leave a node running.
+    for (const ev of run.subagents.finishOpen(!acpError && !timedOut && !cancelled)) emit({ ...ev });
 
     if (acpError) {
       emit({ type: 'error', message: `ACP error: ${acpError.message.slice(0, 500)}` });
