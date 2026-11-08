@@ -493,3 +493,31 @@ export function registerGmailRoutes(): void {
     sendJson(res, 405, { error: 'This MCP endpoint is stateless. Use POST.' });
   });
 }
+
+// ── Listing for the portal's Mail page ───────────────────────────────────────
+
+export interface MailItem { id: string; from: string; subject: string; date: string; snippet: string; unread: boolean }
+
+/** Inbox messages received since `sinceSec` (unix seconds), newest first. */
+export async function listInboxSince(userId: string, sinceSec: number, limit = 50): Promise<MailItem[]> {
+  const q = `in:inbox after:${Math.floor(sinceSec)}`;
+  const list = await gfetch(userId, `/messages?maxResults=${limit}&q=${encodeURIComponent(q)}`) as { messages?: { id: string }[] };
+  const out: MailItem[] = [];
+  for (const m of (list.messages ?? []).slice(0, limit)) {
+    const d = await gfetch(userId, `/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`) as { id: string; snippet?: string; labelIds?: string[]; payload?: Part };
+    out.push({
+      id: d.id,
+      from: headerValue(d.payload?.headers, 'From'),
+      subject: headerValue(d.payload?.headers, 'Subject') || '(no subject)',
+      date: headerValue(d.payload?.headers, 'Date'),
+      snippet: d.snippet ?? '',
+      unread: (d.labelIds ?? []).includes('UNREAD'),
+    });
+  }
+  return out;
+}
+
+export async function gmailAccount(userId: string): Promise<{ connected: boolean; email: string }> {
+  const c = await loadConnection(userId);
+  return { connected: Boolean(c), email: c?.email ?? '' };
+}

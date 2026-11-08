@@ -397,6 +397,25 @@ export const HELP_TOPICS = [
       },
     ],
   },
+  {
+    id: 'mail',
+    group: 'work',
+    title: 'Mail',
+    icon: 'inbox',
+    page: { tab: 'mail', project: true },
+    summary: 'The inbox of your connected mail accounts for today, and an agent summary on demand.',
+    sections: [
+      {
+        heading: 'How to use it',
+        steps: true,
+        items: [
+          'Connect Gmail once under **Connect › Tools & services**.',
+          'The page lists the mail you received today. It is read only.',
+          'Click **Summarise mail**: the new session dialog opens with the request filled in. Start it and the agent reads your inbox through the mail tools and reports what needs a reply.',
+        ],
+      },
+    ],
+  },
 
   // ── Knowledge ───────────────────────────────────────────────────────────────
   {

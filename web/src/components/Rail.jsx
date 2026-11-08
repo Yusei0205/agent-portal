@@ -53,6 +53,7 @@ const NAV_SECTIONS = [
       { tab: 'reviews',    label: 'Reviews',    icon: 'git-pull-request', subTab: 'code', activeFor: ['review', 'branchscans'] },
       { tab: 'tests',      label: 'Tests',      icon: 'flask'     },
       { tab: 'tickets',    label: 'Tickets',    icon: 'ticket'    },
+      { tab: 'mail',       label: 'Mail',       icon: 'inbox'     },
     ],
   },
   {
