@@ -434,3 +434,9 @@ The conversation now opens matching deliverables in the output preview and sourc
 Native Codex collaboration items now produce portal sub-agent lifecycle events, including nested parent relationships. The Codex runner and portal must both be deployed. Open Agents activity in the session sidebar and select **Expand agent graph** to see the connected nodes. The panel refreshes every five seconds as a fallback to realtime updates.
 
 Older runs that did not record native collaboration events cannot display that missing history. New collaboration activity is recorded after deployment. The graph visualizes actual delegated sessions and native sub-agents; it does not turn sequential automation steps into concurrent steps.
+
+## "kiro-cli is not installed or not on PATH" on a Kiro API key (2026-11-08)
+
+- **Symptom:** Agent setup → Sign-ins → Kiro: a credential saved as an **API key** shows "kiro-cli is not installed or not on PATH" when you press Test.
+- **Cause:** the cloud portal does not run `kiro-cli` itself. Kiro runs in the AgentCore Kiro runtime, and the portal only sends that runtime an Identity Center token (for both running sessions and listing models). An API key is never sent, so the Test button fell through to a local `kiro-cli` that the portal function does not have. The message was misleading; the real limit is that API keys are not supported on the cloud portal.
+- **Fix:** the check now says so ("Kiro API keys are not supported on the cloud portal…"). Use **Add Kiro credential → Identity Center** instead. Supporting API keys would need the runner to accept `KIRO_API_KEY` (run and list-models modes), a rebuilt runner image and a harness redeploy.
