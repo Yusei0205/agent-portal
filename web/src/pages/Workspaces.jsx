@@ -22,6 +22,7 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
   const [defaultEngine, setDefaultEngine] = useState(workspace?.default_engine ?? '');
   const [defaultAgent, setDefaultAgent] = useState(workspace?.default_agent ?? '');
   const [defaultModel, setDefaultModel] = useState(workspace?.default_model ?? '');
+  const [defaultTrustTools, setDefaultTrustTools] = useState(Boolean(workspace?.default_trust_tools));
   const [agentList, setAgentList] = useState(null);
   const [agentLoading, setAgentLoading] = useState(false);
   const [modelList, setModelList] = useState([]);
@@ -84,6 +85,7 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
           defaultEngine,
           defaultAgent,
           defaultModel,
+          defaultTrustTools,
         });
         onSave(r.workspace);
       } else {
@@ -93,6 +95,7 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
           defaultEngine,
           defaultAgent,
           defaultModel,
+          defaultTrustTools,
         });
         onSave(r.workspace);
       }
@@ -236,6 +239,17 @@ function WorkspaceModal({ projectId, workspace, repos, onClose, onSave }) {
                     </select>
                   )}
                 </div>
+                <label className="choice" style={{ cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={defaultTrustTools}
+                    onChange={(e) => setDefaultTrustTools(e.target.checked)}
+                  />
+                  <span>
+                    <strong>Trust all tools by default</strong>{' '}
+                    <span className="muted">New sessions start with Trust all tools ticked (can still be changed per session).</span>
+                  </span>
+                </label>
               </div>
             </div>
             {error && <p className="error-note" role="alert">{error}</p>}

@@ -27,6 +27,7 @@ export interface Workspace {
   default_engine: string;
   default_agent: string;
   default_model: string;
+  default_trust_tools: number;
 }
 
 // ── Validation constants ───────────────────────────────────────────────────────
@@ -90,6 +91,7 @@ export function registerWorkspaceRoutes(): void {
       return;
     }
     const defaultModel: string = rawDefaultModel;
+    const defaultTrustTools = body.defaultTrustTools ? 1 : 0;
 
     const id = generateId();
     const ts = now();
@@ -97,6 +99,7 @@ export function registerWorkspaceRoutes(): void {
     const workspace = await getWorkspacesRepository().create({
       id, project_id: req.params.id, name, repo_ids: JSON.stringify(repoIds),
       default_engine: defaultEngine, default_agent: defaultAgent, default_model: defaultModel,
+      default_trust_tools: defaultTrustTools,
       created_at: ts,
     });
 
@@ -139,6 +142,8 @@ export function registerWorkspaceRoutes(): void {
       }
       patch.default_model = rawDM;
     }
+
+    if (body.defaultTrustTools !== undefined) patch.default_trust_tools = body.defaultTrustTools ? 1 : 0;
 
     if (Object.keys(patch).length === 0) {
       sendJson(res, 400, { error: 'Nothing to update' });

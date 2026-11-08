@@ -164,6 +164,22 @@ describe('Workspace default fields — POST and GET', () => {
       `error should mention defaultModel: ${JSON.stringify(r.body)}`,
     );
   });
+
+  it('defaultTrustTools is stored on create and changed on update; off when not given', async () => {
+    const mk = await fetchJson(baseUrl, `/api/projects/${projectId}/workspaces`, {
+      method: 'POST', body: { name: 'Trusting', defaultTrustTools: true }, cookie,
+    });
+    const ws = (mk.body as { workspace: { id: string; default_trust_tools: number } }).workspace;
+    assert.equal(ws.default_trust_tools, 1);
+    const off = await fetchJson(baseUrl, `/api/projects/${projectId}/workspaces/${ws.id}`, {
+      method: 'PUT', body: { defaultTrustTools: false }, cookie,
+    });
+    assert.equal((off.body as { workspace: { default_trust_tools: number } }).workspace.default_trust_tools, 0);
+    const plain = await fetchJson(baseUrl, `/api/projects/${projectId}/workspaces`, {
+      method: 'POST', body: { name: 'Plain' }, cookie,
+    });
+    assert.equal((plain.body as { workspace: { default_trust_tools: number } }).workspace.default_trust_tools, 0);
+  });
 });
 
 describe('Workspace default fields — PUT', () => {

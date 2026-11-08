@@ -15,7 +15,7 @@ import {
   QueryCommand,
 } from '@aws-sdk/client-dynamodb';
 import type { AttributeValue } from '@aws-sdk/client-dynamodb';
-import { getDynamoDbClient, marshalItem, getString, av } from './dynamo-client.ts';
+import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
 import type { WorkspacesRepository, WorkspaceRecord, CreateWorkspaceInput } from './workspaces.ts';
 
 function table(): string {
@@ -35,6 +35,7 @@ function itemToRecord(item: Record<string, AttributeValue>): WorkspaceRecord {
     default_engine: getString(item, 'default_engine') ?? '',
     default_agent: getString(item, 'default_agent') ?? '',
     default_model: getString(item, 'default_model') ?? '',
+    default_trust_tools: getNumber(item, 'default_trust_tools'),
   };
 }
 
@@ -86,7 +87,8 @@ export class DynamoDbWorkspacesRepository implements WorkspacesRepository {
       id: av(input.id), entityType: av('workspace'),
       ...marshalItem({ project_id: input.project_id, name: input.name, repo_ids: input.repo_ids,
         created_at: input.created_at, default_engine: input.default_engine,
-        default_agent: input.default_agent, default_model: input.default_model }),
+        default_agent: input.default_agent, default_model: input.default_model,
+        default_trust_tools: input.default_trust_tools ?? 0 }),
     };
     await this.client.send(new PutItemCommand({ TableName: table(), Item: item, ConditionExpression: 'attribute_not_exists(PK)' }));
     return itemToRecord(item);
@@ -135,7 +137,7 @@ export class DynamoDbWorkspacesRepository implements WorkspacesRepository {
     const vals: Record<string, AttributeValue> = {};
     keys.forEach((k, i) => {
       names[`#f${i}`] = k;
-      vals[`:v${i}`] = av((patch as Record<string, unknown>)[k] as string);
+      vals[`:v${i}`] = av((patch as Record<string, unknown>)[k] as string | number);
     });
     await this.client.send(new UpdateItemCommand({
       TableName: table(),

@@ -365,6 +365,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     if (!workspaceId) { setWsDefaultNote(''); return; }
     const ws = workspaces.find((w) => w.id === workspaceId);
     if (!ws) { setWsDefaultNote(''); return; }
+    setTrustTools(Boolean(ws.default_trust_tools));
     const defEngine = ws.default_engine || '';
     if (!defEngine) { setWsDefaultNote(''); return; }
     const available = isEngineAvailable(defEngine);
