@@ -80,7 +80,7 @@ let _ptyImport: PtyImportFn = (pkg) =>
 // win32-x64 binaries, never requires node-gyp.
 const PTY_PACKAGES = ['@lydell/node-pty', 'node-pty'] as const;
 
-async function tryLoadPty(): Promise<NodePty | null> {
+export async function tryLoadPty(): Promise<NodePty | null> {
   if (_ptyChecked) return _pty;
   _ptyChecked = true;
   for (const pkg of PTY_PACKAGES) {
