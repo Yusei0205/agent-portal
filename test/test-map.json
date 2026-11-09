@@ -1320,6 +1320,17 @@
       ],
       "smokeIds": []
     },
+    "repo-skills": {
+      "description": "Agent skills in the repository (agent/skills) and the docs and skills sync task",
+      "sources": [
+        "server/agent/skills-guidance.ts",
+        "web/src/lib/repoSync.js"
+      ],
+      "tests": [
+        "test/repo-skills.test.ts"
+      ],
+      "smokeIds": []
+    },
     "google-workspace": {
       "description": "Tests in google-workspace.test.ts",
       "sources": [

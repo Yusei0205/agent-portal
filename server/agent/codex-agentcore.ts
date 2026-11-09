@@ -10,6 +10,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import { persistFile } from '../durable-files.ts';
 import { HttpError } from '../util.ts';
 import type { RunContext } from './types.ts';
+import { withSkillsGuidance } from './skills-guidance.ts';
 import type { CodexTurnResult } from './codex-session.ts';
 import { getCodexConfigFiles } from '../user-config.ts';
 import { parseCodexPrRequest, type CodexPrRequest } from './codex-pr-tool.ts';
@@ -42,7 +43,7 @@ export async function runCodexViaAgentCore(
     const workflow = await getSessionsRepository().getWorkflowById(ctx.run.workflowId);
     finalizeCheck = await finalizeRunPayloadFlag(ctx.run.projectId, Boolean(workflow?.jira_key)).catch(() => false);
   }
-  const payload = { mode: 'codex-run', runId: ctx.run.runId, workflowId: ctx.run.workflowId, prompt, ...auth,
+  const payload = { mode: 'codex-run', runId: ctx.run.runId, workflowId: ctx.run.workflowId, prompt: withSkillsGuidance(prompt, Boolean(ctx.run.runnerRepos?.length)), ...auth,
     codexConfig: await getCodexConfigFiles(ctx.run.credentialOwnerId), leadAgent: ctx.run.leadAgent,
     trusted: ctx.run.trusted, rules: toPolicyRules(ctx.run.permissions.rules), approvals: runnerApprovals(),
     model: ctx.run.model, threadId: ctx.run.engineSessionId, repos: ctx.run.runnerRepos,

@@ -7,6 +7,8 @@ import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
+import { NewSessionDialog } from '../sessions/NewSessionDialog.jsx';
+import { syncGoal } from '../../lib/repoSync.js';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -760,6 +762,7 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
   const [showModal,   setShowModal]   = useState(false);
   const [expanded,    setExpanded]    = useState({});
   const [branches,    setBranches]    = useState({});
+  const [syncing,     setSyncing]     = useState(null); // {repo, branch}: the repository and branch whose docs and skills a session will update
   const [justSynced,  setJustSynced]  = useState({});  // { [id]: true } — brief success flash
   const [liveMessage, setLiveMessage] = useState('');  // aria-live announcement text
 
@@ -953,6 +956,14 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
                 <button
                   type="button"
                   className="btn btn-sm"
+                  onClick={() => setSyncing({ repo, branch: repo.default_branch || 'main' })}
+                  title="Start a session that updates the documentation and the agent skills (agent/skills/) from the latest code"
+                >
+                  Update docs &amp; skills
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
                   onClick={() => toggleBranches(repo.id)}
                   aria-expanded={Boolean(expanded[repo.id])}
                 >
@@ -994,6 +1005,15 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
                     {branches[repo.id].map((b) => (
                       <li key={b} className="branch-item muted small">
                         {b}
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          style={{ marginLeft: '0.5em' }}
+                          onClick={() => setSyncing({ repo, branch: b })}
+                          aria-label={`Update docs and skills of ${repo.name} from ${b}`}
+                        >
+                          Update docs &amp; skills
+                        </button>
                         {b === repo.default_branch ? (
                           <span className="badge" style={{ marginLeft: '0.5em' }}>default</span>
                         ) : (
@@ -1025,6 +1045,17 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
           existingRepos={repos}
           onNewRepos={(newRepos) => setRepos((prev) => [...prev, ...newRepos])}
           onClose={() => setShowModal(false)}
+        />
+      )}
+
+      {syncing && (
+        <NewSessionDialog
+          project={{ id: projectId, name: '' }}
+          repos={repos}
+          workspaces={[]}
+          onClose={() => setSyncing(null)}
+          initialRepoIds={[syncing.repo.id]}
+          initialGoal={syncGoal({ repoName: syncing.repo.name, branch: syncing.branch })}
         />
       )}
     </div>

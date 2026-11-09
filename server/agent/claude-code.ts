@@ -46,6 +46,7 @@ import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from '
 import { loadRunAgents, leadAgentFor, anthropicAgentModel } from './run-agents.ts';
 import { resolveAnthropicModel } from './anthropic-models.ts';
 import { withBrowserGuidance } from './browser-guidance.ts';
+import { withSkillsGuidance } from './skills-guidance.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -154,6 +155,8 @@ ${REVIEW_SYSTEM_APPEND}`;
   // The cloud browser is the browser to use (not Playwright): the agent is told so when the run has it.
   const browserOn = process.env.PORTAL_AGENTCORE_BROWSER === '1';
   prompt = withBrowserGuidance(prompt, browserOn);
+  // A repository's agent skills (agent/skills/) are the way in to its code: read the index, not everything.
+  prompt = withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length));
 
   const agents = loadRunAgents(run, anthropicAgentModel);
   const lead = leadAgentFor(run, agents);
