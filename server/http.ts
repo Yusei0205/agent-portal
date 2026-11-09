@@ -81,13 +81,23 @@ export function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   });
 }
 
+/** decodeURIComponent that returns null instead of throwing on malformed input such as "%E0". */
+export function safeDecode(s: string): string | null {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+}
+
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
     if (i < 0) continue;
-    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    const raw = part.slice(i + 1).trim();
+    out[part.slice(0, i).trim()] = safeDecode(raw) ?? raw;
   }
   return out;
 }
@@ -148,10 +158,12 @@ const MIME: Record<string, string> = {
 function serveStatic(ctx: Ctx): boolean {
   if (ctx.method !== 'GET' && ctx.method !== 'HEAD') return false;
   const root = config.webDir;
-  let rel = decodeURIComponent(ctx.path);
-  if (rel.includes('\0')) return false;
+  const rel = safeDecode(ctx.path);
+  if (rel === null || rel.includes('\0')) return false;
   let file = path.resolve(root, '.' + rel);
-  if (!file.startsWith(path.resolve(root))) return false;
+  // Compare with a trailing separator so a sibling such as "<webDir>-secret" does not pass.
+  const rootAbs = path.resolve(root);
+  if (file !== rootAbs && !file.startsWith(rootAbs + path.sep)) return false;
   let isIndex = false;
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     if (rel.startsWith('/assets/')) return false;
@@ -235,7 +247,11 @@ export function createHandler(authenticate: Authenticator) {
           continue;
         }
         matched = r;
-        r.keys.forEach((k, i) => (ctx.params[k] = decodeURIComponent(m[i + 1])));
+        r.keys.forEach((k, i) => {
+          const v = safeDecode(m[i + 1]);
+          if (v === null) throw new HttpError(400, 'The address is not valid');
+          ctx.params[k] = v;
+        });
         break;
       }
       if (!matched) throw new HttpError(methodMismatch ? 405 : 404, methodMismatch ? 'Method not allowed' : 'Not found');

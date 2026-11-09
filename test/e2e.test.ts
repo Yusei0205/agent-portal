@@ -324,6 +324,34 @@ test('decisions are not asked twice; follow-ups resume; stop works', async () =>
   assert.equal(leftovers.length, 0, 'pending questions are cancelled when a run stops');
 });
 
+test('runs: follow-ups cannot bypass permissions; files cannot escape the working copy', async () => {
+  // A symlink in the working copy (it could be committed to the repository) must not leak files outside it.
+  const first = await editor.get(`/api/runs/${firstRunId}`);
+  const wt = path.join(projectDir, first.run.worktree);
+  const outside = path.join(srv.dataDir, 'outside-secret.txt');
+  fs.writeFileSync(outside, 'top secret');
+  fs.symlinkSync(outside, path.join(wt, 'leak.txt'));
+  try {
+    const leak = await viewer.req('GET', `/api/runs/${firstRunId}/file?path=leak.txt`);
+    assert.equal(leak.status, 404);
+    assert.doesNotMatch(JSON.stringify(leak.data), /top secret/);
+    const plan = await viewer.get(`/api/runs/${firstRunId}/file?path=AGENT_PLAN.md`);
+    assert.ok(plan.content.length > 0, 'regular files still open');
+  } finally {
+    fs.rmSync(path.join(wt, 'leak.txt'));
+  }
+
+  const badLimit = await editor.req('GET', `/api/projects/${pid}/runs?limit=abc`);
+  assert.equal(badLimit.status, 400, 'a bad limit is a client error, not a server error');
+
+  // The follow-up may not pick a permission mode the run form does not offer.
+  const follow = await editor.post(`/api/runs/${firstRunId}/continue`, { prompt: 'Summarise the refund rules', permissionMode: 'bypassPermissions' });
+  const started = await editor.get(`/api/runs/${follow.run.id}`);
+  assert.equal(started.run.permission_mode, first.run.permission_mode);
+  await editor.post(`/api/runs/${follow.run.id}/stop`);
+  await runDone(editor, follow.run.id);
+});
+
 test('code review: findings from a branch diff, triage and status changes', async () => {
   const { review } = await editor.post(`/api/projects/${pid}/reviews`, { repoId, base: 'main', head: 'feature/refund-api', deep: true });
   const r = await waitFor(async () => {

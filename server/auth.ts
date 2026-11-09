@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { all, insert, one, run, update } from './db.ts';
-import { get, post, patch, del, setCookie, type Ctx, type User } from './http.ts';
+import { get, post, patch, del, safeDecode, setCookie, type Ctx, type User } from './http.ts';
 import { HttpError, badRequest, newId, now, sha256, str } from './util.ts';
 
 const COOKIE = 'portal_session';
@@ -62,11 +62,12 @@ function startSession(ctx: Ctx, userId: string): void {
 export function authenticate(ctx: Ctx): User | null {
   const cookie = ctx.req.headers.cookie || '';
   const m = cookie.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
-  if (!m) return null;
+  const token = m && safeDecode(m[1]);
+  if (!token) return null;
   const row = one<User & { expires_at: string; disabled: number }>(
     `SELECT u.id, u.email, u.name, u.is_admin, u.disabled, s.expires_at
        FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`,
-    sha256(decodeURIComponent(m[1])),
+    sha256(token),
   );
   if (!row || row.disabled || row.expires_at < now()) return null;
   return { id: row.id, email: row.email, name: row.name, is_admin: row.is_admin };
@@ -125,7 +126,8 @@ export function registerAuthRoutes(): void {
     '/api/auth/logout',
     (ctx) => {
       const m = (ctx.req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
-      if (m) run('DELETE FROM sessions WHERE token_hash = ?', sha256(decodeURIComponent(m[1])));
+      const token = m && safeDecode(m[1]);
+      if (token) run('DELETE FROM sessions WHERE token_hash = ?', sha256(token));
       setCookie(ctx.res, COOKIE, '', { maxAge: 0, secure: ctx.secure });
       return { ok: true };
     },
