@@ -23,6 +23,7 @@ import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from '
 import type { FetchProfilesResult } from './kiro-idc.ts';
 import { pollAgentCoreLoginShared } from './agent/kiro-agentcore.ts';
 import { findUserCredential } from './credential-default.ts';
+import { claudeLoginSupport, startClaudeLogin, submitClaudeLoginCode, cancelClaudeLogin, getClaudeLoginState } from './claude-login.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 import type { CredentialRecord } from './repositories/credentials.ts';
 
@@ -930,6 +931,49 @@ export function registerCredentialRoutes(): void {
     const rows = await getCredentialsRepository().listByUser(req.user!.id);
 
     sendJson(res, 200, { credentials: rows.map(credView) });
+  });
+
+  // ── Claude plan sign-in from the portal (drives `claude setup-token`; see claude-login.ts) ──
+  router.get('/api/claude-login/status', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const support = await claudeLoginSupport();
+    sendJson(res, 200, { ...support, login: getClaudeLoginState(req.user!.id) });
+  });
+
+  router.post('/api/claude-login/start', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    sendJson(res, 200, { login: await startClaudeLogin(req.user!.id) });
+  });
+
+  // Body: { code, name?, isDefault? } — stores the resulting token as a subscription_token credential.
+  router.post('/api/claude-login/complete', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const code = str(body.code as string, 'code', { max: 400 });
+    const name = (str(body.name as string, 'name', { max: 100, optional: true }).trim()) || 'Claude plan';
+    const isDefault = Boolean(body.isDefault ?? false);
+    const token = await submitClaudeLoginCode(req.user!.id, code);
+
+    const id = generateId();
+    const ts = now();
+    if (isDefault) await getCredentialsRepository().clearDefaults(req.user!.id, 'claude-code');
+    const created = await getCredentialsRepository().create({
+      id, user_id: req.user!.id, engine: 'claude-code', name, mode: 'subscription_token',
+      secret_enc: encrypt(token, config.secretKey),
+      extra_config: JSON.stringify({ via: 'portal_login' }),
+      is_default: isDefault ? 1 : 0,
+      last4: token.slice(-4),
+      created_at: ts, updated_at: ts, updated_by: req.user!.id,
+    });
+    appendAudit(getDb(), req.user!.id, 'credential.create', `credential:${id}`,
+      { engine: 'claude-code', mode: 'subscription_token', name, via: 'portal_login' }, req.ip);
+    sendJson(res, 201, { credential: credView(created) });
+  });
+
+  router.post('/api/claude-login/cancel', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!requireBrowser(req, res)) return;
+    cancelClaudeLogin(req.user!.id);
+    sendJson(res, 200, { ok: true });
   });
 
   // POST /api/credentials — create (browser only)
