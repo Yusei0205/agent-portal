@@ -264,7 +264,7 @@ export function CredentialPicker({ engine, credentials, value, onChange }) {
  *   initialTicket?: { key: string, summary?: string, status?: any, priority?: string, url?: string } | null,
  * }} props
  */
-export function NewSessionDialog({ project, repos = [], workspaces = [], onClose, onCreated, initialTicket = null, initialGoal = '' }) {
+export function NewSessionDialog({ project, repos = [], workspaces = [], onClose, onCreated, initialTicket = null, initialGoal = '', initialRepoIds = [] }) {
   const [goal, setGoal] = useState(
     initialTicket
       ? `Investigate and resolve ${initialTicket.key}: ${initialTicket.summary || initialTicket.key}`
@@ -276,7 +276,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   const [model, setModel] = useState('');
   const [credentialId, setCredentialId] = useState('');
   const [maxIterations, setMaxIterations] = useState(10);
-  const [selectedRepos, setSelectedRepos] = useState(new Set());
+  const [selectedRepos, setSelectedRepos] = useState(() => new Set(initialRepoIds));
   const [workspaceId, setWorkspaceId] = useState('');
   const [wsDefaultNote, setWsDefaultNote] = useState('');
   const [busy, setBusy] = useState(false);

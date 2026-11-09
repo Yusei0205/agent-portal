@@ -69,6 +69,7 @@ import {
 import type { KiroTokenPayload } from './kiro-agentcore.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { withBrowserGuidance } from './browser-guidance.ts';
+import { withSkillsGuidance } from './skills-guidance.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -983,6 +984,8 @@ async function runKiroViaAgentCoreAdapter(
   // The cloud browser is the browser to use (not Playwright): the agent is told so when the run has it.
   const browserOn = process.env.PORTAL_AGENTCORE_BROWSER === '1';
   prompt = withBrowserGuidance(prompt, browserOn);
+  // A repository's agent skills (agent/skills/) are the way in to its code: read the index, not everything.
+  prompt = withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length));
 
   const token = kiroTokenFromEnv(childEnv);
 
