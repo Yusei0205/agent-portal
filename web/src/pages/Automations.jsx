@@ -311,13 +311,20 @@ export default function Automations({ projectId }) {
       <Crumbs items={[{ label: 'Workflows', onClick: () => { setError(''); setView('list'); } }, { label: 'New workflow' }]} />
       <header className="automation-heading"><div><h1>New workflow</h1><p className="muted">Pick a template, check it on the canvas, then name and create it. You can change every step before publishing.</p></div></header>
       {banners}
-      <div role="radiogroup" aria-label="Template" className="automation-cards">{templates.map((t) => <button key={t.id} type="button" role="radio" aria-checked={t.id === newTemplateId}
-        className={`automation-card${t.id === newTemplateId ? ' is-selected' : ''}`} onClick={() => pickTemplate(t)}>
-        <strong>{t.name}</strong><span className="muted small">{t.description}</span><span className="small">{t.graph.nodes.length} steps</span>
-      </button>)}
-        <button type="button" role="radio" aria-checked={newTemplateId === AI} className={`automation-card${newTemplateId === AI ? ' is-selected' : ''}`} onClick={() => setNewTemplateId(AI)}>
-          <strong>Describe it (generate with AI)</strong><span className="muted small">Write what you want in plain words. The AI drafts the steps and adds the usual ones you did not mention (analysis, checks, review, approvals), and lists what it assumed.</span><span className="small">Draft, then edit</span>
-        </button>
+      <div className="automation-template-pick">
+        <label>Template
+          <select aria-label="Template" value={newTemplateId === AI ? AI : (newTemplate?.id ?? '')} onChange={(e) => {
+            if (e.target.value === AI) { setNewTemplateId(AI); return; }
+            const t = templates.find((x) => x.id === e.target.value);
+            if (t) pickTemplate(t);
+          }}>
+            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            <option value={AI}>Describe it (generate with AI)</option>
+          </select>
+        </label>
+        <p className="muted small" aria-live="polite">{newTemplateId === AI
+          ? 'Write what you want in plain words. The AI drafts the steps and adds the usual ones you did not mention (analysis, checks, review, approvals), and lists what it assumed.'
+          : newTemplate ? `${newTemplate.description} (${newTemplate.graph.nodes.length} steps)` : ''}</p>
       </div>
       {newTemplateId === AI && <section className="automation-ai" aria-label="Generate with AI">
         <label>Describe the workflow<textarea rows={5} value={aiText} maxLength={4000} onChange={(e) => setAiText(e.target.value)}

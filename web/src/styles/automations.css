@@ -29,3 +29,4 @@
 .automation-ai-notes p{grid-column:1/-1;margin:0}
 .automation-ai-notes h3{margin:0 0 4px;font-size:.88rem}
 .automation-ai-notes ul{margin:0;padding-left:18px;font-size:.85rem;list-style:disc}
+.automation-template-pick{display:grid;gap:6px;max-width:640px}.automation-template-pick label{display:grid;gap:4px}
