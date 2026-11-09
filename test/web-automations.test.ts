@@ -7,6 +7,16 @@ import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { stopLocalAutomationTimers } from '../server/automations/engine.ts';
 import { setCallTextModelOverride } from '../server/testing/model-provider.ts';
 
+/** Chooses a template in the Template dropdown by its visible name. */
+async function pickTemplate(page: import('playwright').Page, name: RegExp): Promise<void> {
+  const select = page.getByRole('combobox', { name: 'Template' });
+  const label = await select.evaluate((el, src) => {
+    const re = new RegExp(src);
+    return Array.from((el as HTMLSelectElement).options).find((o) => re.test(o.text))?.text ?? '';
+  }, name.source);
+  await select.selectOption({ label });
+}
+
 test('visual workflow editor saves, publishes, keeps published content, and fits mobile', async () => {
   const { baseUrl } = await createTestServer();
   const browser = await chromium.launch({ headless: true });
@@ -40,7 +50,7 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     await page.getByRole('button', { name: 'New workflow' }).first().click();
 
     // New workflow: pick a template card, see it on a canvas, name it, create it. Nothing exists before Create.
-    await page.getByRole('radiogroup', { name: 'Template' }).waitFor();
+    await page.getByRole('combobox', { name: 'Template' }).waitFor();
     await page.locator(preview).first().waitFor();
     assert.equal(await page.locator(preview).count(), 10, 'the SDLC template is drawn');
     assert.equal(await definitionsCount(), 0, 'looking creates nothing');
@@ -99,7 +109,7 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
 
     // A template can be read before creating, and Cancel leaves nothing behind.
     await page.getByRole('button', { name: 'New workflow' }).click();
-    await page.getByRole('radio', { name: /Development/ }).click();
+    await pickTemplate(page, /Development/);
     await page.locator(preview).nth(11).waitFor();
     assert.equal(await page.locator(preview).count(), 12);
     await page.locator('.automation-canvas[aria-label="Template canvas"]').getByText('Read Jira ticket', { exact: true }).click();
@@ -109,7 +119,7 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
 
     // Create from the Testing template; the default name is the template's own.
     await page.getByRole('button', { name: 'New workflow' }).click();
-    await page.getByRole('radio', { name: /Testing/ }).click();
+    await pickTemplate(page, /Testing/);
     assert.equal(await page.getByLabel('New workflow name').inputValue(), 'Testing');
     await page.getByRole('button', { name: 'Create workflow' }).click();
     await page.locator(canvas).first().waitFor();
@@ -119,7 +129,7 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     // The same template again gets a numbered name, and typing an existing name is refused instead of duplicating it.
     await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('button', { name: 'Workflows' }).click();
     await page.getByRole('button', { name: 'New workflow' }).click();
-    await page.getByRole('radio', { name: /Testing/ }).click();
+    await pickTemplate(page, /Testing/);
     assert.equal(await page.getByLabel('New workflow name').inputValue(), 'Testing 2');
     await page.getByLabel('New workflow name').fill('testing');
     await page.getByRole('button', { name: 'Create workflow' }).click();
@@ -144,7 +154,7 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     setCallTextModelOverride(async (_system, user) => { prompts.push(user); return JSON.stringify(drafts[prompts.length - 1]); });
     const countBefore = await definitionsCount();
     await page.getByRole('button', { name: 'New workflow' }).click();
-    await page.getByRole('radio', { name: /Describe it/ }).click();
+    await pickTemplate(page, /Describe it/);
     assert.equal(await page.getByRole('button', { name: 'Create workflow' }).isDisabled(), true, 'nothing to create before a draft exists');
     await page.getByLabel('Describe the workflow').fill('When I give a bug, find the cause and fix it.');
     await page.getByRole('button', { name: 'Generate workflow' }).click();
