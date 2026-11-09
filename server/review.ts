@@ -139,7 +139,12 @@ export async function createReview(opts: { repo: Repo; userId: string; prNumber?
     const pr = await githubApi(repo, 'GET', `/pulls/${prNumber}`);
     base = checkBranch(pr.base.ref);
     headSha = pr.head.sha;
-    head = await fetchPullRef(repo, prNumber);
+    // GitHub creates refs/pull/N/head asynchronously, so right after a pull request is opened the
+    // ref may not exist yet. When the caller knows the head branch (it just pushed it), review that.
+    head = await fetchPullRef(repo, prNumber).catch((e) => {
+      if (!opts.head) throw e;
+      return checkBranch(opts.head);
+    });
   } else {
     base = checkBranch(opts.base);
     head = checkBranch(opts.head);

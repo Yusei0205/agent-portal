@@ -4,7 +4,7 @@ import { all, one, run as exec, type Row } from './db.ts';
 import { del, get, post, openSse, HANDLED } from './http.ts';
 import { getProject, projectDir, requireProject } from './projects.ts';
 import { getRepo, githubApi, githubSlug, pushWorktree, removeWorktree, checkBranch } from './repos.ts';
-import { HttpError, badRequest, notFound, parseJson, safeJoin, str } from './util.ts';
+import { HttpError, badRequest, int, notFound, parseJson, safeJoin, str } from './util.ts';
 import { runChannel, subscribe } from './events.ts';
 import { git } from './git.ts';
 import { answerInput, getRun, inputView, isActive, oneshot, runSummary, startRun, stopRun } from './agent/runner.ts';
@@ -13,6 +13,8 @@ import { providerMode } from './settings.ts';
 import { recordFeedbackPr } from './feedback.ts';
 
 const MODEL_CHOICES = ['haiku', 'sonnet', 'opus'];
+/** Modes a user may pick for a run; anything else (e.g. bypassPermissions) is not accepted from the request. */
+const PERMISSION_MODES = ['default', 'acceptEdits', 'plan'];
 
 function runAccess(ctx: any, runId: string, min: 'viewer' | 'editor' = 'viewer'): Row {
   const r = getRun(runId);
@@ -39,7 +41,7 @@ export function registerRunRoutes(): void {
         ORDER BY r.created_at DESC LIMIT ?`,
       project.id,
       ...kinds,
-      Math.min(Number(ctx.query.get('limit') || 50), 200),
+      int(ctx.query.get('limit'), 'limit', 50, 1, 200),
     );
     return { runs: rows.map((r) => ({ ...runSummary(r), created_by_name: r.created_by_name, repo_id: r.repo_id, branch: r.branch })) };
   });
@@ -50,7 +52,7 @@ export function registerRunRoutes(): void {
     const prompt = str(body.prompt, 'Prompt', { max: 50_000 }).trim();
     if (!prompt) throw badRequest('Describe what the agent should do');
     const model = body.model && MODEL_CHOICES.includes(body.model) ? body.model : 'sonnet';
-    const mode = ['default', 'acceptEdits', 'plan'].includes(body.permissionMode) ? body.permissionMode : undefined;
+    const mode = PERMISSION_MODES.includes(body.permissionMode) ? body.permissionMode : undefined;
     let repoId: string | null = null;
     let branch: string | null = null;
     if (body.repoId) {
@@ -86,7 +88,7 @@ export function registerRunRoutes(): void {
 
   get('/api/runs/:id/stream', (ctx) => {
     const r = runAccess(ctx, ctx.params.id);
-    const after = Number(ctx.query.get('after') || 0);
+    const after = int(ctx.query.get('after'), 'after', 0, 0);
     const sse = openSse(ctx);
     // Subscribe first, then replay, so nothing falls in the gap; the client ignores duplicate seq numbers.
     sse.onClose(subscribe(runChannel(r.id), (event, data) => sse.send(event, data)));
@@ -118,7 +120,7 @@ export function registerRunRoutes(): void {
       title: `${prev.title.replace(/^Follow-up: /, '')} (follow-up)`.slice(0, 200),
       prompt,
       resumeOf: prev.id,
-      permissionMode: body.permissionMode ?? prev.permission_mode,
+      permissionMode: PERMISSION_MODES.includes(body.permissionMode) ? body.permissionMode : prev.permission_mode,
       model: prev.model,
     });
     return { run: runSummary(run) };
@@ -158,10 +160,15 @@ export function registerRunRoutes(): void {
     const r = runAccess(ctx, ctx.params.id);
     const p = getProject(r.project_id);
     const meta = parseJson<any>(r.meta, {});
+    if (!r.worktree && !meta.workDir) throw notFound('This run has no files');
     const base = path.join(projectDir(p), r.worktree || meta.workDir);
     const rel = str(ctx.query.get('path'), 'Path', { max: 500 });
     const file = safeJoin(base, rel);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw notFound('File not found');
+    // A symlink in the working copy (e.g. committed to the repository) must not expose files outside it.
+    const realBase = fs.realpathSync(base);
+    const realFile = fs.realpathSync(file);
+    if (realFile !== realBase && !realFile.startsWith(realBase + path.sep)) throw notFound('File not found');
     if (fs.statSync(file).size > 1_000_000) throw badRequest('File is too large to show here');
     return { path: rel, content: fs.readFileSync(file, 'utf8') };
   });
