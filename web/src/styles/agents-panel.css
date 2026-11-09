@@ -1,7 +1,7 @@
 /* ── Agents panel: orbit, tree, timeline, transcript ─── */
 /* However narrow the pane, the panel never takes more than 60% of the screen: it scrolls inside itself, so the conversation stays in view. */
 .agents-strip { max-height: 60vh; overflow-y: auto; }
-.agents-panel { display: flex; flex-direction: column; background: var(--surface-1, var(--panel)); }
+.agents-panel { container-type: inline-size; display: flex; flex-direction: column; background: var(--surface-1, var(--panel)); }
 .agents-panel-head { display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: 0.8rem; flex-wrap: wrap; }
 .agents-panel-count { color: var(--ink-3); }
 .agents-panel-done { color: var(--ink-3); margin-left: auto; font-size: 0.75rem; }
@@ -12,13 +12,13 @@
 .agents-panel-tabs button, .agents-panel-sub button { border: 0; background: transparent; color: var(--ink-3); font-size: 0.74rem; padding: 3px 10px; border-radius: 5px; cursor: pointer; }
 .agents-panel-tabs button.is-on, .agents-panel-sub button.is-on { background: var(--accent); color: #fff; }
 .agents-panel-close { border: 0; background: transparent; color: var(--ink-3); font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 0 4px; }
-.agents-panel-body { display: flex; flex-wrap: wrap; min-height: 420px; border-top: 1px solid var(--line-2); }
-.agents-panel-main { flex: 1 1 460px; min-width: 0; display: flex; flex-direction: column; min-height: 380px; overflow: auto; }
+.agents-panel-body { display: flex; flex-wrap: nowrap; height: var(--panel-h, 420px); overflow: hidden; border-top: 1px solid var(--line-2); }
+.agents-panel-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: auto; }
 .agents-panel-flow { flex: 1; min-height: 260px; }
-.agents-panel-side { flex: 1 1 280px; max-width: 100%; max-height: 420px; border-left: 1px solid var(--line-2); overflow: auto; display: flex; flex-direction: column; }
+.agents-panel-side { flex: 0 1 320px; min-height: 0; max-width: 100%; max-height: 100%; border-left: 1px solid var(--line-2); overflow: auto; display: flex; flex-direction: column; }
 .agents-panel-side .agent-detail { border-top: 0; max-height: none; }
 .agents-panel-hint { margin: 0; padding: 5px 12px; font-size: 0.7rem; color: var(--ink-3); border-top: 1px solid var(--line-2); }
-@media (max-width: 760px) { .agents-panel-side { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--line-2); } }
+@container (max-width: 760px) { .agents-panel-body { flex-direction: column; height: auto; min-height: var(--panel-h, 420px); overflow: visible; } .agents-panel-main { flex: 1 0 380px; } .agents-panel-side { flex: 0 0 auto; max-height: 420px; border-left: 0; border-top: 1px solid var(--line-2); } }
 
 .orbit { position: relative; flex: 1; min-height: 260px; overflow: hidden; outline: none; cursor: grab; touch-action: none;
   background-color: #090d1a;
@@ -104,3 +104,6 @@
 @media (prefers-reduced-motion: reduce) {
   .orbit-nerve.is-live .orbit-nerve-line, .orbit-nerve.is-live .orbit-nerve-glow, .orbit-node.is-running .orbit-dot, .orbit-halo, .orbit-fire { animation: none; }
 }
+.agents-panel-resize { height: 10px; cursor: ns-resize; border-top: 1px solid var(--line-2); background: transparent; position: relative; touch-action: none; }
+.agents-panel-resize::after { content: ''; position: absolute; left: 50%; top: 3px; width: 36px; height: 3px; margin-left: -18px; border-radius: 2px; background: var(--ink-3); opacity: 0.5; }
+.agents-panel-resize:hover::after, .agents-panel-resize:focus-visible::after { opacity: 1; background: var(--accent); }

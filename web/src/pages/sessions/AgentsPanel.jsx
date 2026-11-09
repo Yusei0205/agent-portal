@@ -2,7 +2,7 @@
  * The session's agents: a header with the counts, three views (Tree, Timeline, Graph — the graph as an Orbit or a box Tree),
  * and the selected agent's own transcript beside them.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { AgentOrbit } from './AgentOrbit.jsx';
 import { AgentGraph } from './AgentGraph.jsx';
 import { AgentTreeList, AgentTimeline } from './AgentViews.jsx';
@@ -11,6 +11,14 @@ import { summarizeActivity, agentLabels } from '../../lib/agent-activity.js';
 import { ORBIT_MAIN } from '../../lib/agent-orbit.js';
 
 const FINISHED = new Set(['done', 'failed', 'stopped']);
+const MIN_H = 240;
+const MAX_H = 1400;
+const HEIGHT_KEY = 'agents-panel-height';
+const clampH = (n) => Math.min(MAX_H, Math.max(MIN_H, Math.round(n)));
+function savedHeight() {
+  try { const n = Number(localStorage.getItem(HEIGHT_KEY)); return n ? clampH(n) : 420; } catch { return 420; }
+}
+
 const NO_TRANSCRIPT = 'This engine does not send this agent\'s own messages, so only its task and result are shown.';
 
 /**
@@ -21,6 +29,24 @@ export function AgentsPanel({ agents, events = [], workflowId, projectId, workfl
   const [view, setView] = useState('graph');
   const [graphMode, setGraphMode] = useState('orbit');
   const [selectedId, setSelectedId] = useState(null);
+  const [height, setHeight] = useState(savedHeight);
+
+  // Drag the bar under the panel (or use the arrow keys on it) to make the panel taller or shorter.
+  const startResize = useCallback((e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = height;
+    let last = startH;
+    const move = (ev) => { last = clampH(startH + ev.clientY - startY); setHeight(last); };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      try { localStorage.setItem(HEIGHT_KEY, String(last)); } catch { /* not saved */ }
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }, [height]);
+  const nudge = (d) => setHeight((h) => { const n = clampH(h + d); try { localStorage.setItem(HEIGHT_KEY, String(n)); } catch { /* not saved */ } return n; });
 
   const activity = useMemo(() => summarizeActivity(events, agents), [events, agents]);
   const labels = useMemo(() => agentLabels(agents), [agents]);
@@ -62,7 +88,7 @@ export function AgentsPanel({ agents, events = [], workflowId, projectId, workfl
         </div>
       )}
 
-      <div className="agents-panel-body">
+      <div className="agents-panel-body" style={{ '--panel-h': `${height}px` }}>
         <div className="agents-panel-main">
           {view === 'tree' && <AgentTreeList agents={agents} activity={activity} rootName={rootName} rootStatus={rootStatus} selectedId={selectedId} onSelect={select} />}
           {view === 'timeline' && <AgentTimeline agents={agents} selectedId={selectedId} onSelect={select} />}
@@ -84,6 +110,17 @@ export function AgentsPanel({ agents, events = [], workflowId, projectId, workfl
           </div>
         ) : null}
       </div>
+      <div
+        className="agents-panel-resize"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize agents panel (drag, or use the up and down arrow keys)"
+        tabIndex={0}
+        title="Drag to change the height (double-click to reset)"
+        onPointerDown={startResize}
+        onDoubleClick={() => nudge(420 - height)}
+        onKeyDown={(e) => { if (e.key === 'ArrowDown') { e.preventDefault(); nudge(40); } else if (e.key === 'ArrowUp') { e.preventDefault(); nudge(-40); } }}
+      />
     </section>
   );
 }
