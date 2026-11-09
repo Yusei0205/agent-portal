@@ -387,7 +387,7 @@ export async function handleGmailCallback(
   };
   if (!req.user) { back('Sign in to the portal first, then connect Gmail.'); return; }
   const state = req.query.get('state') ?? '';
-  const cookie = decodeURIComponent(parseCookies(req.headers.cookie)[GM_COOKIE] ?? '');
+  const cookie = parseCookies(req.headers.cookie)[GM_COOKIE] ?? '';
   if (!state || state !== cookie) { back('The connection attempt expired. Please try again.'); return; }
   if (req.query.get('error')) { back(req.query.get('error') === 'access_denied' ? 'Google access was not granted.' : 'Gmail connection failed.'); return; }
   const code = req.query.get('code') ?? '';

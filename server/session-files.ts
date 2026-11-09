@@ -30,7 +30,7 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one, all } from './db.ts';
 import type { Row } from './db.ts';
-import { safeJoin, now, generateId, badRequest, notFound } from './util.ts';
+import { safeJoin, realPathInside, now, generateId, badRequest, notFound } from './util.ts';
 import { config } from './config.ts';
 import { appendAudit } from './audit.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
@@ -206,24 +206,15 @@ function resolveScopePath(
     throw badRequest('Vault paths are read-only and accessed by file ID');
   }
   const root = scope === 'uploads' ? roots.uploadsDir : roots.workDir;
-  const safePath = relPath ? safeJoin(root, relPath) : root;
-  // Additional symlink-escape guard: if the resolved path exists, realpathSync it
+  if (!relPath) return root;
   try {
-    const real = fs.realpathSync(safePath);
-    const realRoot = fs.realpathSync(root);
-    // Use sep-aware containment to prevent sibling-prefix bypass
-    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
-      throw new Error(`Path escapes root`);
-    }
-    return safePath;
-  } catch (e: unknown) {
-    // If path doesn't exist yet (new file/dir creation), safeJoin already checked the prefix
-    if (e instanceof Error && e.message.includes('escapes root')) {
-      throw badRequest('Path traversal detected');
-    }
-    // ENOENT — path doesn't exist yet, safeJoin check is sufficient
-    return safePath;
+    // Refuses "..", absolute paths and, when the path exists, a symlink that points outside the root.
+    realPathInside(root, relPath);
+  } catch {
+    throw badRequest('Path traversal detected');
   }
+  // The joined path, not the real one: renaming or deleting a link acts on the link itself.
+  return safeJoin(root, relPath);
 }
 
 /** Check that the path is strictly inside the root (no escape). */

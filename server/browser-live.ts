@@ -67,7 +67,7 @@ function authenticateUpgrade(req: http.IncomingMessage): AuthResult | null {
   const token = cookies['portal_session'];
   if (!token) return null;
 
-  const tokenHash = createHash('sha256').update(decodeURIComponent(token)).digest('hex');
+  const tokenHash = createHash('sha256').update(token).digest('hex');
   const row = one<{ id: string; is_admin: number; disabled: number; expires_at: string }>(
     `SELECT u.id, u.is_admin, u.disabled, s.expires_at
        FROM sessions s JOIN users u ON u.id = s.user_id

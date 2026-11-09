@@ -1044,7 +1044,8 @@
         "test/approval-binding.test.ts",
         "test/run-limits.test.ts",
         "test/config-protection.test.ts",
-        "test/agent-env-scrub.test.ts"
+        "test/agent-env-scrub.test.ts",
+        "test/request-hardening.test.ts"
       ],
       "smokeIds": [],
       "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* — all in the shared section. Changes to those shared files already mark this module affected."

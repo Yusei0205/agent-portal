@@ -285,7 +285,7 @@ async function authenticateUpgrade(req: http.IncomingMessage): Promise<AuthResul
   const token = cookies['portal_session'];
   if (!token) return null;
 
-  const tokenHash = createHash('sha256').update(decodeURIComponent(token)).digest('hex');
+  const tokenHash = createHash('sha256').update(token).digest('hex');
 
   // Use the auth repository (works for both SQLite and DynamoDB).
   // For SQLite, the SqliteAuthRepository also exposes getSessionWithUserSync() but

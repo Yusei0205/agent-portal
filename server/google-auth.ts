@@ -178,7 +178,7 @@ export function registerGoogleAuthRoutes(startSession: StartSession): void {
 
     const code = req.query.get('code') ?? '';
     const state = req.query.get('state') ?? '';
-    const cookie = decodeURIComponent(parseCookies(req.headers.cookie)[STATE_COOKIE] ?? '');
+    const cookie = parseCookies(req.headers.cookie)[STATE_COOKIE] ?? '';
     const [cookieState, nonce] = cookie.split('.');
     if (!code || !state || !cookieState || !nonce || state !== cookieState) {
       fail(res, secure, 'Sign-in session expired. Please try again.');
