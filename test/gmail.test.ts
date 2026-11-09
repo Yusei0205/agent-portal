@@ -83,3 +83,11 @@ describe('Gmail outgoing mail', () => {
     assert.throws(() => buildRawMessage({ to: '', subject: 's', body: 'b' }), /required/);
   });
 });
+
+describe('Gmail entities', () => {
+  test('decodeEntities turns snippets and HTML text into characters', async () => {
+    const { decodeEntities } = await import('../server/gmail.ts');
+    assert.equal(decodeEntities('today&#39;s top &amp; best &quot;deals&quot; &lt;3 &#x1F600;'), 'today\'s top & best "deals" <3 😀');
+    assert.equal(decodeEntities('&amp;lt;'), '&lt;', 'not decoded twice');
+  });
+});

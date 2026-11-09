@@ -168,12 +168,22 @@ export function headerValue(headers: { name: string; value: string }[] | undefin
 
 const decode = (data: string): string => Buffer.from(data, 'base64url').toString('utf8');
 
+/** Gmail's snippet and HTML mail carry entities such as &#39; and &amp;: this turns them into the characters. */
+export function decodeEntities(s: string): string {
+  return s
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 function htmlToText(html: string): string {
-  return html
-    .replace(/<(style|script)[\s\S]*?<\/\1>/gi, '')
-    .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  return decodeEntities(
+    html
+      .replace(/<(style|script)[\s\S]*?<\/\1>/gi, '')
+      .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
+      .replace(/<[^>]+>/g, ''),
+  )
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -510,7 +520,7 @@ export async function listInboxSince(userId: string, sinceSec: number, limit = 5
       from: headerValue(d.payload?.headers, 'From'),
       subject: headerValue(d.payload?.headers, 'Subject') || '(no subject)',
       date: headerValue(d.payload?.headers, 'Date'),
-      snippet: d.snippet ?? '',
+      snippet: decodeEntities(d.snippet ?? ''),
       unread: (d.labelIds ?? []).includes('UNREAD'),
     });
   }
@@ -520,4 +530,19 @@ export async function listInboxSince(userId: string, sinceSec: number, limit = 5
 export async function gmailAccount(userId: string): Promise<{ connected: boolean; email: string }> {
   const c = await loadConnection(userId);
   return { connected: Boolean(c), email: c?.email ?? '' };
+}
+
+/** One message in full, for the Mail page. */
+export async function readMessageFull(userId: string, messageId: string): Promise<{
+  id: string; from: string; to: string; cc: string; date: string; subject: string; text: string; attachments: string[];
+}> {
+  const d = await gfetch(userId, `/messages/${encodeURIComponent(messageId)}?format=full`) as { id: string; payload?: Part };
+  const h = d.payload?.headers;
+  return {
+    id: d.id,
+    from: headerValue(h, 'From'), to: headerValue(h, 'To'), cc: headerValue(h, 'Cc'),
+    date: headerValue(h, 'Date'), subject: headerValue(h, 'Subject') || '(no subject)',
+    text: messageText(d.payload).slice(0, MAX_TEXT),
+    attachments: attachmentNames(d.payload),
+  };
 }
