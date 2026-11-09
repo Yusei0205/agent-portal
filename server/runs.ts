@@ -19,6 +19,10 @@ import { subscribeRun } from './events.ts';
 import type { RunEventRow } from './events.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
 import type { EventRecord, RunRecord } from './repositories/sessions.ts';
+import { realPathInside } from './util.ts';
+
+/** Largest file the preview reads into memory and sends back (images go out as base64, a third larger). */
+const MAX_PREVIEW_BYTES = 4 * 1024 * 1024;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -271,20 +275,26 @@ export function registerRunRoutes(): void {
       return;
     }
 
-    // Resolve and verify the path is inside workDir (path traversal guard)
-    const resolved = path.resolve(workDir, filePath);
-    if (!resolved.startsWith(path.resolve(workDir))) {
+    // The path must stay inside workDir, also after following symlinks: the agent (or a cloned
+    // repository) can leave a link such as `notes -> /etc/passwd` in the work dir.
+    let resolved: string | null;
+    try {
+      resolved = realPathInside(workDir, filePath);
+    } catch {
       sendJson(res, 403, { error: 'Path is outside the run work directory' });
       return;
     }
 
-    if (!fs.existsSync(resolved)) {
+    const stat = resolved ? fs.statSync(resolved, { throwIfNoEntry: false }) : undefined;
+    if (!resolved || !stat?.isFile()) {
       sendJson(res, 404, { error: 'File not found' });
       return;
     }
 
-    const ext = path.extname(resolved).toLowerCase();
-    const previewType = filePreviewType(ext);
+    const ext = path.extname(filePath).toLowerCase();
+    // A file too large to send back is shown like a binary file: its size, no content.
+    const tooLarge = stat.size > MAX_PREVIEW_BYTES;
+    const previewType = tooLarge ? 'binary' : filePreviewType(ext);
 
     if (previewType === 'text') {
       const content = fs.readFileSync(resolved, 'utf8');
@@ -306,7 +316,7 @@ export function registerRunRoutes(): void {
         ext,
       });
     } else {
-      sendJson(res, 200, { type: 'binary', ext, size: fs.statSync(resolved).size });
+      sendJson(res, 200, { type: 'binary', ext, size: stat.size, ...(tooLarge ? { tooLarge: true } : {}) });
     }
   });
 }

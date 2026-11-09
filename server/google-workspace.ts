@@ -383,7 +383,7 @@ export async function handleWorkspaceCallback(
   };
   if (!req.user) { back('Sign in to the portal first, then connect Google.'); return; }
   const state = req.query.get('state') ?? '';
-  const cookie = decodeURIComponent(parseCookies(req.headers.cookie)[WS_COOKIE] ?? '');
+  const cookie = parseCookies(req.headers.cookie)[WS_COOKIE] ?? '';
   if (!state || state !== cookie) { back('The connection attempt expired. Please try again.'); return; }
   if (req.query.get('error')) { back(req.query.get('error') === 'access_denied' ? 'Google access was not granted.' : 'Google connection failed.'); return; }
   const code = req.query.get('code') ?? '';

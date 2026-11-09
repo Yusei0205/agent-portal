@@ -212,13 +212,33 @@ export const router = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** decodeURIComponent that returns null instead of throwing on malformed input such as "%E0". */
+export function safeDecode(s: string): string | null {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+}
+
+/** The request target as a URL, or null when it cannot be parsed (e.g. "//["). */
+export function parseRequestUrl(target: string | undefined): URL | null {
+  try {
+    return new URL(target ?? '/', 'http://localhost');
+  } catch {
+    return null;
+  }
+}
+
+/** Cookie values come back decoded once. A value that is not valid percent-encoding is kept as sent. */
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
     if (i < 0) continue;
-    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    const raw = part.slice(i + 1).trim();
+    out[part.slice(0, i).trim()] = safeDecode(raw) ?? raw;
   }
   return out;
 }
@@ -287,15 +307,12 @@ const MIME: Record<string, string> = {
 function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string): boolean {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   const root = config.webDir;
-  let rel: string;
-  try {
-    rel = decodeURIComponent(urlPath);
-  } catch {
-    return false;
-  }
-  if (rel.includes('\0')) return false;
+  const rel = safeDecode(urlPath);
+  if (rel === null || rel.includes('\0')) return false;
   let file = path.resolve(root, '.' + rel);
-  if (!file.startsWith(path.resolve(root))) return false;
+  // Compare with a trailing separator, so a sibling folder such as "<webDir>-secret" does not pass.
+  const rootAbs = path.resolve(root);
+  if (file !== rootAbs && !file.startsWith(rootAbs + path.sep)) return false;
   let isIndex = false;
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     if (rel.startsWith('/assets/')) return false;
@@ -383,7 +400,12 @@ export function createRequestHandler(): (
   res: ServerResponse,
 ) => Promise<void> {
   return async (rawReq: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const url = new URL(rawReq.url ?? '/', 'http://localhost');
+    // A request target such as "//[" is not a valid URL; answer it as a client error.
+    const url = parseRequestUrl(rawReq.url);
+    if (!url) {
+      sendJson(res, 400, { error: 'The address is not valid' });
+      return;
+    }
     const urlPath = url.pathname;
 
     // Determine if request came over HTTPS (for cookie Secure flag)
@@ -466,7 +488,9 @@ export function createRequestHandler(): (
         }
         matched = route;
         route.keys.forEach((k, i) => {
-          req.params[k] = decodeURIComponent(m[i + 1] ?? '');
+          const value = safeDecode(m[i + 1] ?? '');
+          if (value === null) throw new HttpError(400, 'The address is not valid');
+          req.params[k] = value;
         });
         break;
       }

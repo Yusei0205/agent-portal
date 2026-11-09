@@ -121,7 +121,7 @@ export async function authenticate(rawReq: import('node:http').IncomingMessage, 
     const cookies = parseCookies(cookieHeader);
     const token = cookies[COOKIE_NAME];
     if (token) {
-      const session = await getAuthRepository().getSessionWithUser(sha256(decodeURIComponent(token)));
+      const session = await getAuthRepository().getSessionWithUser(sha256(token));
       if (session && !session.disabled && session.expires_at >= now()) {
         return {
           id: session.user_id,
@@ -272,7 +272,7 @@ export function registerAuthRoutes(): void {
     const cookies = parseCookies(req.headers.cookie);
     const token = cookies[COOKIE_NAME];
     if (token) {
-      await getAuthRepository().deleteSession(sha256(decodeURIComponent(token)));
+      await getAuthRepository().deleteSession(sha256(token));
     }
     setCookie(res, COOKIE_NAME, '', { maxAge: 0, secure: req.secure });
     if (req.user) {
@@ -424,7 +424,7 @@ export function registerAuthRoutes(): void {
   router.post('/api/auth/sign-out-others', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
-    const keep = token ? sha256(decodeURIComponent(token)) : '';
+    const keep = token ? sha256(token) : '';
     const signedOut = await getAuthRepository().deleteSessionsForUser(req.user.id, keep);
     appendAudit(null, req.user.id, 'auth.sign_out_others', `user:${req.user.id}`, { sessions: signedOut }, req.ip);
     sendJson(res, 200, { ok: true, signedOut });
@@ -446,7 +446,7 @@ export function registerAuthRoutes(): void {
     await getAuthRepository().updateUserFields(req.user.id, { password_hash: hashPassword(newPassword) });
     // A changed password ends the person's other sessions; this one stays.
     const cookieToken = parseCookies(req.headers.cookie)[COOKIE_NAME];
-    await getAuthRepository().deleteSessionsForUser(req.user.id, cookieToken ? sha256(decodeURIComponent(cookieToken)) : '').catch(() => 0);
+    await getAuthRepository().deleteSessionsForUser(req.user.id, cookieToken ? sha256(cookieToken) : '').catch(() => 0);
     appendAudit(null, req.user.id, 'auth.password_change', `user:${req.user.id}`, {}, req.ip);
     sendJson(res, 200, { ok: true });
   });

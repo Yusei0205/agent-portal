@@ -7,7 +7,7 @@
 import { loadConfig, setConfig, ensureDataDirs } from './config.ts';
 import type { Config } from './config.ts';
 import { openDb, closeDb, isDbOpen } from './db.ts';
-import { createServer, clearRoutes, router, setWsUpgradeHandler } from './http.ts';
+import { createServer, clearRoutes, parseRequestUrl, router, setWsUpgradeHandler } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { registerAuthRoutes, createUser, cleanupSessions, hashPassword } from './auth.ts';
 import { getAuthRepository } from './repositories/auth.ts';import { registerHealthRoutes } from './health.ts';
@@ -323,7 +323,13 @@ export async function startServer(
   // Register WebSocket upgrade handlers (terminal + browser live)
   const BROWSER_LIVE_RE = /^\/api\/workflows\/[^/]+\/browser\/live$/;
   setWsUpgradeHandler((req, socket, head) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
+    // This runs outside any promise, so a throw here would stop the server: refuse a bad address instead.
+    const url = parseRequestUrl(req.url);
+    if (!url) {
+      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     if (url.pathname === '/api/terminal/ws') {
       Promise.resolve(handleTerminalUpgrade(req, socket, head)).catch(() => { try { socket.destroy(); } catch { /* closed */ } });
     } else if (BROWSER_LIVE_RE.test(url.pathname)) {

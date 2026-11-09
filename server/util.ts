@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 
 // ── Error helper ────────────────────────────────────────────────────────────
@@ -145,4 +146,26 @@ export function safeJoin(root: string, rel: string): string {
     throw new Error(`Path "${rel}" escapes root "${root}"`);
   }
   return resolved;
+}
+
+/**
+ * safeJoin that also follows symlinks. When something exists at the path, its real location must be
+ * inside the root's real location too, so a link such as `notes -> /etc/passwd` is refused.
+ * Returns the real path to read, or null when nothing exists there (or it cannot be resolved).
+ * Throws like safeJoin when the path escapes the root.
+ */
+export function realPathInside(root: string, rel: string): string | null {
+  const joined = safeJoin(root, rel);
+  let real: string;
+  let realRoot: string;
+  try {
+    real = fs.realpathSync(joined);
+    realRoot = fs.realpathSync(root);
+  } catch {
+    return null;
+  }
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+    throw new Error(`Path "${rel}" escapes root "${root}"`);
+  }
+  return real;
 }
