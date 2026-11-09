@@ -186,9 +186,10 @@ export class AgentPortalHarnessStack extends cdk.Stack {
         networkConfiguration: { networkMode: 'PUBLIC' },
         lifecycleConfiguration: {
           // A run waiting for a person reports HealthyBusy, so idle time only counts between runs.
-          idleRuntimeSessionTimeout: 900,
-          // Long enough for the portal's default 60-minute run limit plus approval waits.
-          maxLifetime: 7200,
+          // Idle time between runs before the session (and the repositories cloned into it) is released. AgentCore allows up to 8 hours.
+          idleRuntimeSessionTimeout: 14400,
+          // Total life of a session, however busy: 8 hours (the AgentCore maximum). New runs do not extend it.
+          maxLifetime: 28800,
         },
         environmentVariables: { AWS_DEFAULT_REGION: this.region, AWS_REGION: this.region,
           PORTAL_TERMINAL_ISSUER_URL: new URL(this.node.tryGetContext('publicUrl') || 'https://d1tah6dqw2fe9f.cloudfront.net').origin },
