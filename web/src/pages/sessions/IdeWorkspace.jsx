@@ -306,7 +306,31 @@ export function ComposerBar({
       ...(typedCommand ? commands.filter((c) => !c.name.startsWith(typedCommand) && c.name.includes(typedCommand)) : []),
     ];
   const showMenu = menuItems.length > 0;
-  const showSlashHint = isSlashCommand(message) && !showMenu;
+  // "/model " and "/agent ": the choices are listed to pick from (arrow keys + Enter), as in the CLI, instead of
+  // typing a name. The list is the one the command itself prints (models of the session's sign-in, the owner's agents).
+  const argMatch = /^\/(model|agent) ([^\n]*)$/i.exec(message);
+  const argCmd = argMatch ? argMatch[1].toLowerCase() : null;
+  const argQuery = argMatch ? argMatch[2].trim().toLowerCase() : '';
+  const [argOptions, setArgOptions] = useState({ cmd: null, items: [] });
+  useEffect(() => {
+    if (!argCmd || !workflow?.id || argOptions.cmd === `${workflow.id}:${argCmd}`) return undefined;
+    let cancelled = false;
+    const key = `${workflow.id}:${argCmd}`;
+    const load = argCmd === 'model'
+      ? api.get(`/api/engines/${encodeURIComponent(workflow.engine)}/models${workflow.credential_id ? `?credentialId=${encodeURIComponent(workflow.credential_id)}` : ''}`)
+        .then((d) => (d.models ?? []).map((m) => ({ value: m.id, label: m.label && m.label !== m.id ? `${m.id} (${m.label})` : m.id, current: m.id === workflow.model })))
+      : api.get(`/api/user-config/agents?engine=${encodeURIComponent(workflow.engine)}`)
+        .then((d) => (d.agents ?? []).map((a) => ({ value: a.name, label: a.name, hint: a.description, current: a.name === workflow.lead_agent })));
+    load
+      .then((items) => { if (!cancelled) setArgOptions({ cmd: key, items: [{ value: 'default', label: 'default', hint: argCmd === 'model' ? 'the engine’s own default' : 'no lead agent', current: argCmd === 'model' ? !workflow.model : !workflow.lead_agent }, ...items] }); })
+      .catch(() => { if (!cancelled) setArgOptions({ cmd: key, items: [] }); });
+    return () => { cancelled = true; };
+  }, [argCmd, workflow?.id, workflow?.engine, workflow?.credential_id, workflow?.model, workflow?.lead_agent, argOptions.cmd]);
+  const argItems = argCmd && argOptions.cmd === `${workflow?.id}:${argCmd}`
+    ? argOptions.items.filter((o) => !argQuery || o.value.toLowerCase().includes(argQuery) || o.label.toLowerCase().includes(argQuery))
+    : [];
+  const showArgMenu = !showMenu && argItems.length > 0 && !argItems.some((o) => o.value.toLowerCase() === argQuery);
+  const showSlashHint = isSlashCommand(message) && !showMenu && !showArgMenu;
 
   // The session's commands: the portal's, /init and /review, and the owner's own commands and skills.
   useEffect(() => { setCommands(null); }, [workflow?.id, workflow?.engine]);
@@ -318,7 +342,9 @@ export function ComposerBar({
       .catch(() => setCommands([]));
   }, [commands, projectId, workflow?.id]);
 
-  useEffect(() => { setMenuIdx(0); }, [typedCommand]);
+  useEffect(() => { setMenuIdx(0); }, [typedCommand, argCmd, argQuery]);
+  // A change of model or agent made elsewhere (or by the command) must show on the next listing.
+  useEffect(() => { setArgOptions({ cmd: null, items: [] }); }, [workflow?.id, workflow?.model, workflow?.lead_agent]);
 
   const pickCommand = (c) => {
     // Commands whose usage has no argument placeholder (e.g. "/help") send immediately.
@@ -503,6 +529,16 @@ export function ComposerBar({
         return;
       }
     }
+    if (showArgMenu) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIdx((i) => (i + 1) % argItems.length); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setMenuIdx((i) => (i - 1 + argItems.length) % argItems.length); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); setMessage(''); return; }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        send(`/${argCmd} ${argItems[Math.min(menuIdx, argItems.length - 1)].value}`);
+        return;
+      }
+    }
     // Ctrl/Cmd+Enter → send (preserves old habit)
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -605,6 +641,21 @@ export function ComposerBar({
               {COMMAND_SOURCE_LABEL[c.source] && (
                 <span style={{ color: 'var(--ink-3)', fontSize: '0.7rem', flexShrink: 0 }}>{COMMAND_SOURCE_LABEL[c.source]}</span>
               )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {showArgMenu && (
+        <ul className="ide-slash-menu" role="listbox" aria-label={argCmd === 'model' ? 'Models' : 'Agents'}
+          style={{ listStyle: 'none', margin: 0, padding: '4px 0', borderTop: '1px solid var(--line)', maxHeight: 220, overflowY: 'auto' }}>
+          {argItems.map((o, i) => (
+            <li key={o.value} role="option" aria-selected={i === menuIdx}
+              onMouseDown={(e) => { e.preventDefault(); send(`/${argCmd} ${o.value}`); }}
+              onMouseEnter={() => setMenuIdx(i)}
+              style={{ display: 'flex', gap: 12, padding: '4px 12px', cursor: 'pointer', fontSize: '0.8rem',
+                background: i === menuIdx ? 'var(--bg-3, rgba(127,127,127,.15))' : 'transparent' }}>
+              <code style={{ minWidth: 150 }}>{o.current ? '● ' : ''}{o.label}</code>
+              {o.hint && <span style={{ color: 'var(--ink-3)', flex: 1, minWidth: 0 }}>{o.hint}</span>}
             </li>
           ))}
         </ul>
