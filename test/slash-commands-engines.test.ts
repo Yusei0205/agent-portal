@@ -147,7 +147,10 @@ describe('slash commands in each engine', () => {
       assert.match(r.answer, /Model switched to/, `${m.id}: ${r.answer}`);
       assert.equal(model(), m.id);
     }
+    const bar = async () => ((await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wfId}/status-bar`, { cookie })).body as { model: string | null }).model;
+    assert.equal(await bar(), models[2].id, 'the status bar shows the new model before any run');
     await run(wfId, '/model default');
     assert.equal(model(), '');
+    assert.equal(await bar(), null, 'no model of its own and no run yet');
   });
 });

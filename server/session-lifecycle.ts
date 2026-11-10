@@ -253,7 +253,8 @@ export function registerSessionLifecycleRoutes(): void {
       sendJson(res, 200, {
         agent: w.lead_agent ?? null,
         engine,
-        model: latestRun?.model ?? null,
+        // The model the next run uses (set by /model or the model chip), else the model of the last run.
+        model: (typeof w.model === 'string' && w.model.trim()) || latestRun?.model || null,
         contextPercent,
         toolApprovalMode: w.trust_tools ? 'trust-all' : 'ask',
         usageUnit: isKiro ? 'credits' : 'usd',

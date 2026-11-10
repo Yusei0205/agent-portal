@@ -2,7 +2,8 @@
  * IDE Status bar — shows agent, tokens, cost, tool approval mode.
  * Fetches from GET /api/projects/:pid/workflows/:wid/status-bar (handle 404 gracefully).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../lib/api.js';
 
 function formatCostSmall(usd) {
@@ -36,15 +37,32 @@ function ModelChip({ projectId, workflowId, engine, credentialId, model, onChang
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const rootRef = useRef(null);
+  const menuRef = useRef(null);
+  const [pos, setPos] = useState(null);
   const switchable = SWITCHABLE.has(engine);
 
   useEffect(() => {
     if (!open) return undefined;
-    const onDown = (e) => { if (!rootRef.current?.contains(e.target)) setOpen(false); };
+    const onDown = (e) => { if (!rootRef.current?.contains(e.target) && !menuRef.current?.contains(e.target)) setOpen(false); };
     const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  // The status bar clips whatever is inside it (overflow: hidden), so the list is drawn on the page itself
+  // and placed just above the chip. It follows the chip when the window is resized or scrolled.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const r = rootRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 248)), bottom: Math.max(8, window.innerHeight - r.top + 6) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
   }, [open]);
 
   // The list depends on the session's sign-in, so it is loaded when the picker opens, not with the bar.
@@ -80,10 +98,10 @@ function ModelChip({ projectId, workflowId, engine, credentialId, model, onChang
         title="Change the model for the next message"
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="ide-status-key">model</span> {model} <span aria-hidden="true">▾</span>
+        <span className="ide-status-key">model</span> {model || 'default'} <span aria-hidden="true">▾</span>
       </button>
-      {open && (
-        <div className="ide-status-menu" role="listbox" aria-label="Models">
+      {open && pos && createPortal(
+        <div className="ide-status-menu" ref={menuRef} role="listbox" aria-label="Models" style={{ left: pos.left, bottom: pos.bottom }}>
           {models === null && !error && <div className="ide-status-menu-note">Loading models…</div>}
           {error && <div className="ide-status-menu-note ide-status-menu-error" role="alert">{error}</div>}
           {models && models.map((m) => (
@@ -105,7 +123,8 @@ function ModelChip({ projectId, workflowId, engine, credentialId, model, onChang
               Use the engine default
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   );
@@ -150,13 +169,13 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
   return (
     <div className="ide-status-bar" aria-label="Status bar" role="status">
       {engineLabel && <span className="ide-status-engine">{engineLabel}</span>}
-      {bar?.model && (
+      {(bar?.model || SWITCHABLE.has(bar?.engine)) && (
         <ModelChip
           projectId={projectId}
           workflowId={workflowId}
           engine={bar.engine ?? engine}
           credentialId={credentialId}
-          model={bar.model}
+          model={bar.model ?? ''}
           onChanged={() => { load(); onModelChanged?.(); }}
         />
       )}
