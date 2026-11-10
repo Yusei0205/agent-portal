@@ -292,6 +292,17 @@ const MIME: Record<string, string> = {
   '.map': 'application/json',
 };
 
+
+/**
+ * The S3 address the browser uploads to directly when files are kept in S3 (attachments up to 50 MB), for the page's
+ * connect-src. Empty otherwise. On the cloud portal the page comes from CloudFront, which sets no such policy.
+ */
+function s3ConnectSrc(): string {
+  const bucket = process.env.STORAGE_S3_BUCKET;
+  const region = process.env.STORAGE_S3_REGION ?? process.env.AWS_REGION;
+  return process.env.STORAGE_BACKEND === 's3' && bucket && region ? ` https://${bucket}.s3.${region}.amazonaws.com` : '';
+}
+
 function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string): boolean {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   const root = config.webDir;
@@ -322,7 +333,7 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string)
     ...(ext === '.html'
       ? {
           'Content-Security-Policy':
-            "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src https://embed.diagrams.net; frame-ancestors 'none'",
+            `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'${s3ConnectSrc()}; frame-src https://embed.diagrams.net; frame-ancestors 'none'`,
           'X-Frame-Options': 'DENY',
         }
       : {}),

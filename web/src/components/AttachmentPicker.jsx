@@ -16,9 +16,15 @@
  *   onAttachmentsChange {Function} – called as (readyIds: string[], isBusy: boolean)
  *                                    whenever attachment state changes
  *   disabled            {boolean}  – disable all interaction (e.g. while parent is busy)
+ *   purpose             {'chat'|'default'} – 'chat' lets a file be up to the portal's chat limit (50 MB on the cloud portal)
+ *   maxFileBytes / maxTotalBytes {number} – limits shown and checked here; the portal checks them again
+ *
+ * Files go straight to S3 where the portal can take them that way (progress is shown), and through the portal otherwise.
  */
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
+import { uploadDirect } from '../lib/direct-upload.js';
+import { formatMb } from '../lib/attachment-limits.js';
 import { Icon } from './Icon.jsx';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -83,6 +89,7 @@ export function AttachmentPicker({
   hideTrigger = false,
   maxFileBytes = null,
   maxTotalBytes = null,
+  purpose = 'default',
 }) {
   const [items, setItems] = useState(() =>
     initialAttachments.map((att) => ({
@@ -207,6 +214,7 @@ export function AttachmentPicker({
         mimeType: file.type || null,
         kind:     null,
         state:    'uploading',
+        progress: null,
         error:    null,
         localUrl,
         source:   'new',
@@ -214,16 +222,22 @@ export function AttachmentPicker({
     ]);
 
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const data = await api.upload(
-        `/api/projects/${projectId}/ai-attachments`,
-        fd,
-      );
+      // Straight to storage where the portal allows it (no size limit from the portal's own server), else through the portal.
+      const onProgress = (fraction) => setItems((prev) => prev.map((a) => (a.clientId === clientId ? { ...a, progress: fraction } : a)));
+      let attachment = await uploadDirect({ projectId, file, purpose, onProgress });
+      if (!attachment) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const data = await api.upload(
+          `/api/projects/${projectId}/ai-attachments`,
+          fd,
+        );
+        attachment = data.attachment;
+      }
       setItems((prev) =>
         prev.map((a) =>
           a.clientId === clientId
-            ? { ...a, ...data.attachment, state: 'done' }
+            ? { ...a, ...attachment, state: 'done', progress: null }
             : a,
         ),
       );
@@ -271,9 +285,10 @@ export function AttachmentPicker({
 
   const canAdd = !disabled && items.filter((a) => a.state !== 'error').length < MAX_FILES;
 
-  const dropZoneLabel =
-    `Attach files — drag and drop, click to browse, or paste an image. ` +
-    `Docs up to ${DOC_MAX_MB} MB · images up to ${IMAGE_MAX_MB} MB · max ${MAX_FILES} files.`;
+  const limitText = maxFileBytes
+    ? `Up to ${formatMb(maxFileBytes)} each · max ${MAX_FILES} files`
+    : `Docs up to ${DOC_MAX_MB} MB · images up to ${IMAGE_MAX_MB} MB · max ${MAX_FILES} files`;
+  const dropZoneLabel = `Attach files — drag and drop, click to browse, or paste an image. ${limitText}.`;
 
   return (
     <div className="attachment-picker">
@@ -312,9 +327,7 @@ export function AttachmentPicker({
           <span>
             Drag &amp; drop, <span className="attachment-link">click to browse</span>, or paste an image
           </span>
-          <span className="attachment-hint">
-            Docs up to {DOC_MAX_MB} MB · images up to {IMAGE_MAX_MB} MB · max {MAX_FILES} files
-          </span>
+          <span className="attachment-hint">{limitText}</span>
         </div>
       )}
 
@@ -369,11 +382,16 @@ export function AttachmentPicker({
               {/* Upload status indicator */}
               <div className="attachment-status" aria-hidden="true">
                 {item.state === 'uploading' && (
-                  <span
-                    className="spinner"
-                    style={{ width: 14, height: 14 }}
-                    aria-label={`Uploading ${item.filename}`}
-                  />
+                  <>
+                    {typeof item.progress === 'number' && item.progress < 1 && (
+                      <span className="attachment-progress">{Math.round(item.progress * 100)}%</span>
+                    )}
+                    <span
+                      className="spinner"
+                      style={{ width: 14, height: 14 }}
+                      aria-label={`Uploading ${item.filename}`}
+                    />
+                  </>
                 )}
                 {item.state === 'done' && (
                   <Icon name="check" size={14} className="ok" />

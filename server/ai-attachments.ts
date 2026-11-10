@@ -28,7 +28,9 @@ import { one, all, run as dbRunSync, getDb } from './db.ts';
 import type { Row } from './db.ts';
 import { generateId, now, badRequest } from './util.ts';
 import { config } from './config.ts';
-import { persistFile, restoreFile, forgetFile } from './durable-files.ts';
+import { persistFile, restoreFile, forgetFile, durableKeyFor } from './durable-files.ts';
+import { directUploadStorage, sealUpload, openUpload, stagingKey, MAX_CHAT_UPLOAD_BYTES, UPLOAD_URL_SECONDS, UPLOAD_TOKEN_MS } from './direct-upload.ts';
+import { attachmentLimits } from './agent/input-file-urls.ts';
 import { appendAudit } from './audit.ts';
 import { getAiAttachmentRepository } from './repositories/ai-attachments.ts';
 import type { AiAttachmentRecord, AttachmentParentKind } from './repositories/ai-attachments.ts';
@@ -38,6 +40,12 @@ import { getMemberRow, getProjectRow } from './project-access.ts';
 
 const MAX_IMAGE_BYTES    = 10 * 1024 * 1024; // 10 MB — images
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024; // 20 MB — documents and diagrams
+
+/** The largest file for an upload of this kind and purpose: a chat message takes 50 MB (direct uploads only), anything else the limits above. */
+function uploadLimit(kind: 'image' | 'document' | 'diagram', purpose: 'chat' | 'default'): { bytes: number; label: string } {
+  if (purpose === 'chat') return { bytes: MAX_CHAT_UPLOAD_BYTES, label: '50 MB' };
+  return kind === 'image' ? { bytes: MAX_IMAGE_BYTES, label: '10 MB' } : { bytes: MAX_DOCUMENT_BYTES, label: '20 MB' };
+}
 
 /** Allowed extensions → (kind, canonical mime type) */
 const ALLOWED: Record<string, { kind: 'image' | 'document' | 'diagram'; mime: string }> = {
@@ -395,6 +403,142 @@ export async function cleanupOrphanedAttachments(): Promise<void> {
 // ── Route registration ────────────────────────────────────────────────────────
 
 export function registerAiAttachmentRoutes(): void {
+
+  // GET /api/attachment-limits
+  //
+  // What a chat message may carry on this portal, so the chat box can say so: 50 MB a file and 100 MB in all where files go
+  // straight to storage and reach the agent as download links (the cloud portal), 2 MB and 8 MB otherwise.
+  router.get(
+    '/api/attachment-limits',
+    (req: PortalRequest, res: PortalResponse): void => {
+      if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+      sendJson(res, 200, { direct: directUploadStorage() !== null, chat: attachmentLimits() });
+    },
+  );
+
+  // POST /api/projects/:id/ai-attachments/presign
+  //
+  // Start an upload that goes straight from the browser to S3, so a file is not limited by what a Lambda request can carry
+  // (6 MB). Body { filename, size, purpose?: 'chat' }. Answers { url, token }: the browser PUTs the file to `url`, then calls
+  // /complete with `token`. 409 when this deployment cannot do that (the browser then posts the file to the portal as before).
+  router.post(
+    '/api/projects/:id/ai-attachments/presign',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireEditorAccess(req, res, req.params.id);
+      if (!project) return;
+      const storage = directUploadStorage();
+      if (!storage) {
+        sendJson(res, 409, { error: 'Direct upload is not available here. Send the file through the portal instead.', direct: false });
+        return;
+      }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const originalName = typeof body.filename === 'string' ? body.filename.trim().slice(0, 255) : '';
+      if (!originalName) { sendJson(res, 400, { error: 'filename is required' }); return; }
+      const size = body.size;
+      if (typeof size !== 'number' || !Number.isInteger(size) || size < 0) { sendJson(res, 400, { error: 'size must be a whole number of bytes' }); return; }
+      if (size === 0) { sendJson(res, 400, { error: 'Uploaded file is empty' }); return; }
+      const purpose = body.purpose === 'chat' ? 'chat' : 'default';
+
+      const safe = sanitizeFilename(originalName);
+      const ext = path.extname(safe).toLowerCase();
+      const meta = ALLOWED[ext];
+      if (!meta) {
+        sendJson(res, 400, { error: `Unsupported file type "${ext || '(none)'}". Allowed: ` + Object.keys(ALLOWED).join(', ') });
+        return;
+      }
+      const limit = uploadLimit(meta.kind, purpose);
+      if (size > limit.bytes) {
+        sendJson(res, 400, { error: `File exceeds the ${limit.label} limit (got ${(size / 1024 / 1024).toFixed(1)} MB)` });
+        return;
+      }
+
+      const uploadId = generateId();
+      const url = await storage.presign(stagingKey(req.params.id, uploadId, safe), 'put', UPLOAD_URL_SECONDS, { contentLength: size });
+      const token = sealUpload({ v: 1, user: req.user!.id, project: req.params.id, id: uploadId, name: originalName, safe, size, purpose, exp: Date.now() + UPLOAD_TOKEN_MS });
+      sendJson(res, 200, { url, token, expiresIn: UPLOAD_URL_SECONDS });
+    },
+  );
+
+  // POST /api/projects/:id/ai-attachments/complete
+  //
+  // The browser has uploaded to the link /presign gave it. Check what arrived (it exists, it is the size that was chosen, it looks
+  // like what its name says), move it to its permanent place inside S3 and record it like any other attachment. Body { token }.
+  // Answers like the multipart upload: { attachment }. Calling it again for the same upload gives the same attachment.
+  router.post(
+    '/api/projects/:id/ai-attachments/complete',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const project = await requireEditorAccess(req, res, req.params.id);
+      if (!project) return;
+      const storage = directUploadStorage();
+      if (!storage) {
+        sendJson(res, 409, { error: 'Direct upload is not available here. Send the file through the portal instead.', direct: false });
+        return;
+      }
+      const upload = openUpload((req.body as { token?: unknown } | undefined)?.token, req.user!.id, req.params.id);
+      if (!upload) { sendJson(res, 400, { error: 'This upload has expired. Choose the file again.' }); return; }
+
+      const repo = getAiAttachmentRepository();
+      const existing = await repo.getById(upload.id);
+      if (existing) {
+        if (existing.project_id !== req.params.id || existing.uploaded_by !== req.user!.id) { sendJson(res, 400, { error: 'This upload has expired. Choose the file again.' }); return; }
+        sendJson(res, 200, { attachment: rowToView(existing) });
+        return;
+      }
+
+      const key = stagingKey(req.params.id, upload.id, upload.safe);
+      const refuse = async (error: string): Promise<void> => {
+        await storage.delete(key).catch(() => { /* the lifecycle rule removes it */ });
+        sendJson(res, 400, { error });
+      };
+
+      const head = await storage.head(key);
+      if (!head) { sendJson(res, 400, { error: 'The file did not arrive. Choose it again.' }); return; }
+      if (head.size !== upload.size) { await refuse('The file that arrived is not the size that was chosen. Choose it again.'); return; }
+
+      const ext = path.extname(upload.safe).toLowerCase();
+      const meta = ALLOWED[ext];
+      if (!meta) { await refuse(`Unsupported file type "${ext || '(none)'}"`); return; }
+      const limit = uploadLimit(meta.kind, upload.purpose);
+      if (head.size > limit.bytes) { await refuse(`File exceeds the ${limit.label} limit`); return; }
+
+      const first = await storage.readRange(key, 0, Math.min(head.size, 4096) - 1);
+      const magic = checkMagicBytes(first, ext);
+      if (!magic.ok) { await refuse(magic.reason ?? 'File content validation failed'); return; }
+
+      const filePath = path.join(attachmentsDir(String(project.slug)), `${upload.id}-${upload.safe}`);
+      const durable = durableKeyFor(filePath);
+      if (!durable) { await refuse('The file could not be stored'); return; }
+      // The copy gets the type the file's name stands for, not whatever the browser said it was.
+      await storage.copy(key, durable, { contentType: meta.mime });
+      await storage.delete(key).catch(() => { /* the lifecycle rule removes it */ });
+
+      await repo.create({
+        id: upload.id,
+        project_id: req.params.id,
+        filename: upload.safe,
+        original_name: upload.name,
+        mime_type: meta.mime,
+        size: head.size,
+        kind: meta.kind,
+        file_path: filePath,
+        parent_kind: null,
+        parent_id: null,
+        uploaded_by: req.user!.id,
+        created_at: now(),
+      });
+
+      appendAudit(
+        getDb(),
+        req.user!.id,
+        'ai_attachment.upload',
+        `project:${req.params.id}`,
+        { filename: upload.safe, kind: meta.kind, size: head.size, direct: true },
+        req.ip,
+      );
+
+      sendJson(res, 201, { attachment: { id: upload.id, filename: upload.safe, mimeType: meta.mime, size: head.size, kind: meta.kind } });
+    },
+  );
 
   // POST /api/projects/:id/ai-attachments
   router.post(

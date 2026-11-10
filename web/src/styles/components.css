@@ -851,6 +851,7 @@ input[type="radio"]:disabled {
   font-size: 0.74rem;
   color: var(--danger);
 }
+.attachment-progress { font-size: 0.72rem; font-variant-numeric: tabular-nums; color: var(--ink-3); margin-right: 6px; }
 .attachment-status {
   display: flex;
   align-items: center;

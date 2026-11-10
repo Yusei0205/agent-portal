@@ -37,6 +37,26 @@ export interface StorageBackend {
 
   /** Connectivity / health check. Throws on failure. */
   ping(): Promise<void>;
+
+  // ── S3 only. A backend without these is used through the portal alone (no direct uploads, no download links). ──
+
+  /**
+   * A presigned URL for uploading (`put`) or downloading (`get`) one object, for a caller that holds no AWS credentials.
+   * `contentLength` (put) is signed into the link, so S3 refuses a body of any other length.
+   */
+  presign?(logicalPath: string, method: 'get' | 'put', expiresInSeconds: number, opts?: { contentLength?: number }): Promise<string>;
+
+  /** The size of one object, or null when it does not exist. */
+  head?(logicalPath: string): Promise<{ size: number } | null>;
+
+  /** `start` to `endInclusive` bytes of one object. */
+  readRange?(logicalPath: string, start: number, endInclusive: number): Promise<Buffer>;
+
+  /**
+   * Copy one object to another place inside the same storage, without the bytes passing through the caller. With `contentType`
+   * the copy has that type, not the one the uploader claimed.
+   */
+  copy?(fromLogicalPath: string, toLogicalPath: string, opts?: { contentType?: string }): Promise<void>;
 }
 
 /**

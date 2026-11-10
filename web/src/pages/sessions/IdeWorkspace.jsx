@@ -20,6 +20,7 @@ import { reviewHandoffHref } from '../../lib/pullRequestCard.js';
 import { registerHandler, registerShortcuts } from '../../lib/shortcuts.js';
 import { Icon } from '../../components/Icon.jsx';
 import { AttachmentPicker } from '../../components/AttachmentPicker.jsx';
+import { useAttachmentLimits, formatMb, limitsHint } from '../../lib/attachment-limits.js';
 import { SessionLive } from './SessionLive.jsx';
 import { IdeHeader } from './IdeHeader.jsx';
 import { IdeExplorer } from './IdeExplorer.jsx';
@@ -220,6 +221,8 @@ export function ComposerBar({
 }) {
   const [message, setMessage] = useState('');
   const [attachmentIds, setAttachmentIds] = useState([]);
+  // 50 MB each on the cloud portal (files go straight to storage), 2 MB each on a local install; the portal says which.
+  const attachLimits = useAttachmentLimits();
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const [attachmentReset, setAttachmentReset] = useState(0);
   const attachmentInputRef = useRef(null);
@@ -657,13 +660,13 @@ export function ComposerBar({
       )}
       <AttachmentPicker key={workflow?.id + '-' + attachmentReset} projectId={projectId}
         fileInputRef={attachmentInputRef} hideTrigger onAttachmentsChange={attachmentsChanged}
-        disabled={busy || !workflow || cloning} maxFileBytes={2 * 1024 * 1024} maxTotalBytes={8 * 1024 * 1024} />
-      {attachmentIds.length > 0 && <span className="field-hint">Up to 5 files · 2 MB each · 8 MB total</span>}
+        disabled={busy || !workflow || cloning} purpose="chat" maxFileBytes={attachLimits.fileBytes} maxTotalBytes={attachLimits.totalBytes} />
+      {attachmentIds.length > 0 && <span className="field-hint">{limitsHint(attachLimits)}</span>}
       <div className={`ws-composer-row${composerH !== null && composerH <= 56 ? ' ws-composer-row--compact' : ''}`} ref={rowRef} style={composerH !== null ? { height: composerH } : undefined}>
         <button
           type="button"
           className="btn-icon"
-          title="Attach images or documents (up to 2 MB each)"
+          title={`Attach images or documents (up to ${formatMb(attachLimits.fileBytes)} each)`}
           aria-label="Attach file"
           onClick={() => attachmentInputRef.current?.click()}
           disabled={busy || !workflow || cloning || attachmentIds.length >= 5}

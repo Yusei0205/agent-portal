@@ -216,10 +216,36 @@ export type InputFile =
   | { path: string; url: string; size: number };
 // Both forms carry a `path` relative to the work folder, under attachments/ or docs/md/.
 
-/** Portal side: the files staged for a run (attachments, chosen project documents), within the limits. */
-export function collectInputFiles(workDir: string, preferredPaths: string[] = []): InputFile[] {
+/**
+ * Where collectInputFiles puts the files that are too large to send inline, when the caller can send them as download links
+ * (see input-file-urls.ts). The caller turns each one into `{ path, url, size }`.
+ */
+export interface LargeInputFiles {
+  /** The most one large file may be. */
+  fileBytes: number;
+  /** The most all large files together may be. */
+  totalBytes: number;
+  /** Filled in by collectInputFiles. `abs` is the file in the work folder. */
+  files: Array<{ path: string; abs: string; size: number }>;
+}
+
+/**
+ * Portal side: the files staged for a run (attachments, chosen project documents), within the limits. Files within the inline
+ * limits are returned with their content; without `large` anything bigger is left out (or, for a file of the current message, an
+ * error), and with `large` it is put there instead.
+ */
+export function collectInputFiles(workDir: string, preferredPaths: string[] = [], large?: LargeInputFiles): InputFile[] {
   const out: InputFile[] = [];
+  const taken = new Set<string>();
   let total = 0;
+  let largeTotal = 0;
+  const count = (): number => out.length + (large?.files.length ?? 0);
+  const fitsLarge = (size: number): boolean => Boolean(large) && size <= large!.fileBytes && largeTotal + size <= large!.totalBytes;
+  const takeLarge = (rel: string, abs: string, size: number): void => {
+    large!.files.push({ path: rel, abs, size });
+    largeTotal += size;
+    taken.add(rel);
+  };
   const walk = (abs: string, rel: string, depth: number): void => {
     if (depth > 3) return;
     let entries: fs.Dirent[];
@@ -229,12 +255,15 @@ export function collectInputFiles(workDir: string, preferredPaths: string[] = []
       const a = path.join(abs, e.name);
       const r = `${rel}/${e.name}`;
       if (e.isDirectory()) { walk(a, r, depth + 1); continue; }
-      if (!e.isFile() || out.some(f => f.path === r) || !INPUT_FILE_EXTS.has(path.extname(e.name).toLowerCase())) continue;
+      if (!e.isFile() || taken.has(r) || !INPUT_FILE_EXTS.has(path.extname(e.name).toLowerCase())) continue;
       let st: fs.Stats;
       try { st = fs.statSync(a); } catch { continue; }
-      if (st.size === 0 || st.size > INPUT_FILE_LIMITS.fileBytes) continue;
-      if (out.length >= INPUT_FILE_LIMITS.files || total + st.size > INPUT_FILE_LIMITS.totalBytes) continue;
-      try { out.push({ path: r, data: fs.readFileSync(a).toString('base64') }); total += st.size; } catch { /* skip */ }
+      if (st.size === 0 || count() >= INPUT_FILE_LIMITS.files) continue;
+      if (st.size <= INPUT_FILE_LIMITS.fileBytes && total + st.size <= INPUT_FILE_LIMITS.totalBytes) {
+        try { out.push({ path: r, data: fs.readFileSync(a).toString('base64') }); total += st.size; taken.add(r); } catch { /* skip */ }
+      } else if (fitsLarge(st.size)) {
+        takeLarge(r, a, st.size);
+      }
     }
   };
   // Current message files take precedence over older files in the working copy.
@@ -242,10 +271,17 @@ export function collectInputFiles(workDir: string, preferredPaths: string[] = []
     if (!rel.startsWith('attachments/') || path.posix.basename(rel) !== rel.slice('attachments/'.length)) continue;
     const abs = path.join(workDir, rel);
     const stat = fs.lstatSync(abs);
-    if (!stat.isFile() || !INPUT_FILE_EXTS.has(path.extname(rel).toLowerCase()) || stat.size > INPUT_FILE_LIMITS.fileBytes || total + stat.size > INPUT_FILE_LIMITS.totalBytes) throw new Error('Chat attachments exceed runner file limits');
-    if (out.some(f => f.path === rel)) continue;
-    out.push({ path: rel, data: fs.readFileSync(abs).toString('base64') });
-    total += stat.size;
+    if (!stat.isFile() || !INPUT_FILE_EXTS.has(path.extname(rel).toLowerCase())) throw new Error('Chat attachments exceed runner file limits');
+    const inline = stat.size <= INPUT_FILE_LIMITS.fileBytes && total + stat.size <= INPUT_FILE_LIMITS.totalBytes;
+    if (!inline && !fitsLarge(stat.size)) throw new Error('Chat attachments exceed runner file limits');
+    if (taken.has(rel)) continue;
+    if (inline) {
+      out.push({ path: rel, data: fs.readFileSync(abs).toString('base64') });
+      total += stat.size;
+      taken.add(rel);
+    } else {
+      takeLarge(rel, abs, stat.size);
+    }
   }
   for (const d of INPUT_DIRS) walk(path.join(workDir, ...d.split('/')), d, 0);
   return out;

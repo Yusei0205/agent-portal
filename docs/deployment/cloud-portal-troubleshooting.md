@@ -185,6 +185,24 @@ On Lambda the pack folder is `/tmp/data/tools/...`, which disappears when the in
 - **Seeing why a clone failed:** the prepare status shows git's exit code or signal, free disk and memory, and the last error lines.
 - **Measured on `rhb.backend.shared` (1.9 GB working tree, mostly `lambda/`) plus the frontend repo:** first save about 46 s in the background (884 MiB); restore on a fresh machine 17-20 s, about the same as a clone (24 s), so the benefit is that edits and installed dependencies survive, not clone speed.
 
+## Chat attachments up to 50 MB: the browser uploads straight to S3
+
+- **Why:** every request to the cloud portal passes through a Lambda Function URL, which takes at most 6 MB, so a bigger file cannot be posted to the portal. Before this, chat attachments were also limited to 2 MB each / 8 MB in all, because files went to the runner inside the AgentCore invocation as base64.
+- **How it works:** `POST /api/projects/:id/ai-attachments/presign` checks the name, type and size and answers with a presigned PUT link (15 minutes; the file's length is signed into it) and a sealed token (`server/direct-upload.ts`). The browser PUTs the file to S3 itself, then calls `.../complete`. The portal checks the object (it exists, it is the size that was chosen, it looks like what its name says), copies it inside S3 to its permanent place (`projects/<slug>/ai-attachments/<id>-<name>`, the key `durable-files.ts` already uses) and records the attachment like any other. Calling `complete` again returns the same attachment. Nothing is stored between the two calls, so there is no new table.
+- **To the agent:** files within the inline limits (2 MB each, 8 MB in all) still go inline. A larger file is sent as `{ path, url, size }`, a presigned GET link valid 2 hours (`server/agent/input-file-urls.ts`), and the runner downloads it (`writeInputFilesAsync` in `server/agent/runner-files.ts`: https and `*.amazonaws.com` only, no redirects, exactly the announced size, `.part` file then rename). A file that cannot be placed is said in a status line in the run, not dropped silently.
+- **Limits:** 5 files, 50 MB each, 100 MB in all per message, where files are in S3 (`GET /api/attachment-limits` tells the chat box). A local install keeps 2 MB / 8 MB and the browser posts the file through the portal (the presign call answers 409). Other upload dialogs keep 10 MB images / 20 MB documents, which now work in the cloud.
+- **One-time bucket setup (CDK cannot do it: the bucket is imported):** the bucket needs CORS for the portal's address and a lifecycle rule for abandoned uploads. Both calls replace the bucket's whole configuration, so use the script, which merges and keeps the `expire-workspace-snapshots` rule. Preview first (it only reads), then apply:
+
+  ```
+  AWS_PROFILE=agentcore node infra/scripts/apply-upload-bucket-config.mjs --bucket cy-ai-bucket --origin https://d1tah6dqw2fe9f.cloudfront.net
+  AWS_PROFILE=agentcore node infra/scripts/apply-upload-bucket-config.mjs --bucket cy-ai-bucket --origin https://d1tah6dqw2fe9f.cloudfront.net --apply
+  ```
+
+  Check with `aws s3api get-bucket-cors --bucket cy-ai-bucket` and `get-bucket-lifecycle-configuration`. Another address that serves the portal needs its own `--origin`.
+- **Rollout order:** runner images first, then the bucket setup, then the portal. An older runner given a download link drops it without a word (it has no version to check), so the portal must not send links until the new runner images serve new sessions. A runner machine that is still alive keeps its old image until it has been idle for 5 minutes, so wait a quarter of an hour after the runner deploy.
+- **"The upload could not reach storage":** almost always CORS. The browser console shows a blocked request to `<bucket>.s3.<region>.amazonaws.com`; run the setup script. **"The upload link was refused or has expired":** the link lives 15 minutes, and a link signed by the Lambda role stops working when that role's session ends; choose the file again.
+- **Abandoned uploads:** a file that was uploaded but never completed stays under `data/upload-staging/` and the lifecycle rule removes it after a day. They have no database row, so the attachment clean-up does not see them.
+
 ## Integrations: remote MCP servers in a session
 
 The Integrations page has two parts. **Connected services** is an overview of sign-ins the portal already has (Jira from Tickets, Git hosts from Connections, model sign-ins from Credentials) with links to where each is managed. **MCP servers** are the ones added on that page.
