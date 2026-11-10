@@ -7,6 +7,9 @@ import { getProjectRepository } from './repositories/projects.ts';
 import { validateAttachmentIds } from './ai-attachments.ts';
 import { persistFile, restoreFile } from './durable-files.ts';
 import { INPUT_FILE_EXTS, INPUT_FILE_LIMITS } from './agent/runner-files.ts';
+import { attachmentLimits } from './agent/input-file-urls.ts';
+
+const mb = (bytes: number): string => `${bytes / 1024 / 1024} MB`;
 
 export interface ChatAttachment { path: string; name: string; size: number }
 
@@ -26,6 +29,8 @@ export async function saveChatAttachments(projectId: string, workflowId: string,
   const checked = await validateAttachmentIds(projectId, ids);
   if (checked.error) throw badRequest(checked.error);
   const files: Array<{ source: string; name: string; size: number; ext: string }> = [];
+  // 2 MB each / 8 MB in all, or 50 MB each / 100 MB in all where large files can be sent to the runner as download links.
+  const limits = attachmentLimits();
   let total = 0;
   for (const row of checked.rows ?? []) {
     const source = String(row.file_path);
@@ -33,9 +38,9 @@ export async function saveChatAttachments(projectId: string, workflowId: string,
     if (!INPUT_FILE_EXTS.has(ext)) throw badRequest('Unsupported chat attachment type');
     if (!await restoreFile(source)) throw badRequest('Attachment is no longer available. Attach it again.');
     const stat = await fs.lstat(source);
-    if (!stat.isFile() || !stat.size || stat.size > INPUT_FILE_LIMITS.fileBytes) throw badRequest('Chat attachments must be between 1 byte and 2 MB each');
+    if (!stat.isFile() || !stat.size || stat.size > limits.fileBytes) throw badRequest(`Chat attachments must be between 1 byte and ${mb(limits.fileBytes)} each`);
     total += stat.size;
-    if (total > INPUT_FILE_LIMITS.totalBytes) throw badRequest('Chat attachments exceed the 8 MB total limit');
+    if (total > limits.totalBytes) throw badRequest(`Chat attachments exceed the ${mb(limits.totalBytes)} total limit`);
     files.push({ source, name: String(row.original_name || row.filename), size: stat.size, ext });
   }
   if (!files.length) return [];
@@ -91,7 +96,8 @@ export async function stageChatAttachments(projectId: string, workflowId: string
   }
   if (!attachments.length) return [];
   if (attachments.length > INPUT_FILE_LIMITS.files) throw new Error('Too many pending chat attachments');
-  if (attachments.reduce((sum, a) => sum + a.size, 0) > INPUT_FILE_LIMITS.totalBytes) throw new Error('Pending chat attachments exceed the 8 MB runner limit');
+  const runnerLimit = attachmentLimits().totalBytes;
+  if (attachments.reduce((sum, a) => sum + a.size, 0) > runnerLimit) throw new Error(`Pending chat attachments exceed the ${mb(runnerLimit)} runner limit`);
   const dir = await storageDir(projectId, workflowId);
   const target = path.join(workDir, 'attachments');
   await fs.mkdir(target, { recursive: true });

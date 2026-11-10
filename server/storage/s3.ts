@@ -49,6 +49,7 @@ async function s3Sdk(): Promise<{
   DeleteObjectCommand: new (opts: object) => AnyCommand;
   HeadObjectCommand: new (opts: object) => AnyCommand;
   HeadBucketCommand: new (opts: object) => AnyCommand;
+  CopyObjectCommand: new (opts: object) => AnyCommand;
   ListObjectsV2Command: new (opts: object) => AnyCommand;
 }> {
   return dynamicImport('@aws-sdk/client-s3') as Promise<ReturnType<typeof s3Sdk>>;
@@ -182,15 +183,55 @@ export class S3StorageBackend implements StorageBackend {
 
   /**
    * A presigned URL for uploading (`put`) or downloading (`get`) one object, for a caller that holds no AWS credentials
-   * (the AgentCore runners). Checksums are only added when S3 requires them: the newer default would put a checksum
-   * header into the signed URL that the uploader cannot reproduce.
+   * (the AgentCore runners, the browser). Checksums are only added when S3 requires them: the newer default would put a checksum
+   * header into the signed URL that the uploader cannot reproduce. A `contentLength` is signed into a put link, so S3 refuses a
+   * body of any other length.
    */
-  async presign(logicalPath: string, method: 'get' | 'put', expiresInSeconds: number): Promise<string> {
+  async presign(logicalPath: string, method: 'get' | 'put', expiresInSeconds: number, opts: { contentLength?: number } = {}): Promise<string> {
     const [s3Mod, presignMod] = await Promise.all([s3Sdk(), presignerSdk()]);
     const Client = s3Mod.S3Client as unknown as new (opts: object) => S3ClientLike;
     const client = new Client({ region: this.region, requestChecksumCalculation: 'WHEN_REQUIRED' });
     const Cmd = method === 'put' ? s3Mod.PutObjectCommand : s3Mod.GetObjectCommand;
-    return presignMod.getSignedUrl(client, new Cmd({ Bucket: this.bucket, Key: this.key(logicalPath) }), { expiresIn: expiresInSeconds });
+    const input: Record<string, unknown> = { Bucket: this.bucket, Key: this.key(logicalPath) };
+    if (method === 'put' && opts.contentLength !== undefined) input.ContentLength = opts.contentLength;
+    return presignMod.getSignedUrl(client, new Cmd(input), { expiresIn: expiresInSeconds });
+  }
+
+  async head(logicalPath: string): Promise<{ size: number } | null> {
+    const mod = await s3Sdk();
+    const client = await this.client();
+    try {
+      const res = await client.send(new mod.HeadObjectCommand({ Bucket: this.bucket, Key: this.key(logicalPath) })) as { ContentLength?: number };
+      return { size: Number(res.ContentLength ?? 0) };
+    } catch (e: unknown) {
+      const err = e as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (err.name === 'NoSuchKey' || err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) return null;
+      throw e;
+    }
+  }
+
+  async readRange(logicalPath: string, start: number, endInclusive: number): Promise<Buffer> {
+    const mod = await s3Sdk();
+    const client = await this.client();
+    const resp = await client.send(
+      new mod.GetObjectCommand({ Bucket: this.bucket, Key: this.key(logicalPath), Range: `bytes=${start}-${endInclusive}` }),
+    ) as { Body?: AsyncIterable<Uint8Array> };
+    if (!resp.Body) throw new Error(`S3 object ${logicalPath} has no body`);
+    const chunks: Buffer[] = [];
+    for await (const chunk of resp.Body) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  }
+
+  async copy(fromLogicalPath: string, toLogicalPath: string, opts: { contentType?: string } = {}): Promise<void> {
+    const mod = await s3Sdk();
+    const client = await this.client();
+    const source = this.key(fromLogicalPath).split('/').map(encodeURIComponent).join('/');
+    await client.send(new mod.CopyObjectCommand({
+      Bucket: this.bucket,
+      Key: this.key(toLogicalPath),
+      CopySource: `${this.bucket}/${source}`,
+      ...(opts.contentType ? { MetadataDirective: 'REPLACE', ContentType: opts.contentType } : {}),
+    }));
   }
 
   async ping(): Promise<void> {

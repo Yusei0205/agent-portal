@@ -21,6 +21,14 @@ function enabled(): boolean {
   return process.env.STORAGE_BACKEND === 's3';
 }
 
+/** True when files under DATA_DIR are mirrored to S3 (the cloud portal). */
+export const durableStorageEnabled = enabled;
+
+/** Logical key for an absolute path inside DATA_DIR, or null when the path is outside it. */
+export function durableKeyFor(absPath: string): string | null {
+  return keyFor(absPath);
+}
+
 /** Logical key for an absolute path inside DATA_DIR, or null when the path is outside it. */
 function keyFor(absPath: string): string | null {
   const rel = path.relative(config.dataDir, absPath);

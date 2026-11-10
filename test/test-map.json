@@ -70,11 +70,13 @@
       "description": "Deploy workflows wait for CI to pass on the commit they deploy",
       "sources": [
         "scripts/wait-for-ci.mjs",
+        "infra/scripts/apply-upload-bucket-config.mjs",
         ".github/workflows/deploy-portal.yml",
         ".github/workflows/deploy-agentcore.yml"
       ],
       "tests": [
-        "test/wait-for-ci.test.ts"
+        "test/wait-for-ci.test.ts",
+        "test/upload-bucket-config.test.ts"
       ],
       "smokeIds": []
     },
@@ -1044,10 +1046,16 @@
         "web/src/components/FilePreviewModal.jsx",
         "web/src/styles/file-preview.css",
         "server/session-attachments.ts",
+        "server/direct-upload.ts",
+        "server/agent/input-file-urls.ts",
+        "web/src/lib/direct-upload.js",
+        "web/src/lib/attachment-limits.js",
         "web/src/pages/sessions/IdeWorkspace.jsx"
       ],
       "tests": [
         "test/ai-attachments.test.ts",
+        "test/direct-upload.test.ts",
+        "test/direct-upload-web.test.ts",
         "test/ai-attachments-repo.test.ts",
         "test/chat-attachments.test.ts"
       ],
