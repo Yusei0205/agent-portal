@@ -75,13 +75,24 @@
 .agent-tree-count { font-size: 0.68rem; font-weight: 700; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--ink-3); }
 @keyframes orbit-pulse-dot { 50% { opacity: 0.4; } }
 
-.agent-timeline { padding: 8px 12px; display: grid; gap: 4px; }
-.agent-timeline-axis { display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--ink-3); padding-left: 120px; }
+.agent-timeline { padding: 8px 12px; display: grid; gap: 14px; }
+.agent-timeline-burst { display: grid; gap: 2px; }
+.agent-timeline-pause { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--ink-3); font-size: 0.7rem; }
+.agent-timeline-pause::before, .agent-timeline-pause::after { content: ""; flex: 1; border-top: 1px dashed color-mix(in srgb, var(--ink-3) 45%, transparent); }
+.agent-timeline-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 2px; }
+.agent-timeline-head strong { font-size: 0.8rem; color: var(--ink); }
+.agent-timeline-head span { font-size: 0.72rem; color: var(--ink-3); }
+.agent-timeline-axis { display: flex; justify-content: space-between; font-size: 0.66rem; color: var(--ink-3); padding-left: 164px; padding-right: 76px; font-variant-numeric: tabular-nums; }
 .agent-timeline-row { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.agent-timeline-row:hover .agent-timeline-track { background-color: color-mix(in srgb, var(--ink-3) 22%, transparent); }
 .agent-timeline-row.is-selected .agent-timeline-name { color: var(--accent); font-weight: 700; }
-.agent-timeline-name { flex: 0 0 112px; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-timeline-track { position: relative; flex: 1; height: 14px; background: color-mix(in srgb, var(--ink-3) 14%, transparent); border-radius: 4px; }
-.agent-timeline-bar { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: var(--ink-3); }
+.agent-timeline-name { flex: 0 0 156px; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-timeline-track { position: relative; flex: 1; height: 14px; border-radius: 4px; background-color: color-mix(in srgb, var(--ink-3) 14%, transparent);
+  background-image: linear-gradient(to right, color-mix(in srgb, var(--ink-3) 35%, transparent) 1px, transparent 1px); background-size: 25% 100%; }
+.agent-timeline-bar { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 4px; background: var(--ink-3); }
+.agent-timeline-took { flex: 0 0 68px; text-align: right; font-size: 0.74rem; font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap; }
+.agent-timeline-took.is-running { color: var(--accent); }
+.agent-timeline-took.is-failed { color: var(--danger); }
 .agent-timeline-bar.is-running { background: var(--accent); }
 .agent-timeline-bar.is-done { background: var(--ok); }
 .agent-timeline-bar.is-failed { background: var(--danger); }

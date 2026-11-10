@@ -328,6 +328,7 @@
         "web/src/pages/sessions/AgentViews.jsx",
         "web/src/pages/sessions/AgentsPanel.jsx",
         "web/src/lib/agent-activity.js",
+        "web/src/lib/agent-timeline.js",
         "web/src/lib/agent-orbit.js",
         "web/src/styles/agents-panel.css",
         "web/src/pages/sessions/SessionAgentsStrip.jsx",
@@ -355,6 +356,7 @@
       ],
       "tests": [
         "test/agent-orbit.test.ts",
+        "test/agent-timeline.test.ts",
         "test/web-agent-detail.test.ts",
         "test/browser-live.test.ts",
         "test/chat-attachments-ui.test.ts",

@@ -1,10 +1,11 @@
 /**
  * The list-style views of a session's agents: a Tree (who started whom, with what each is doing) and a Timeline (when each
- * one ran). Both select an agent the same way the orbit does.
+ * one ran, and for how long). Both select an agent the same way the orbit does.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { ORBIT_MAIN } from '../../lib/agent-orbit.js';
 import { badgeCount, agentLabels } from '../../lib/agent-activity.js';
+import { formatDuration, timelineBursts, barBox, scaleTicks } from '../../lib/agent-timeline.js';
 
 const STATUS_TEXT = { running: 'Running', pending: 'Starting', done: 'Done', failed: 'Failed', stopped: 'Stopped', paused: 'Paused' };
 const live = (s) => s === 'running' || s === 'pending';
@@ -60,7 +61,15 @@ export function AgentTreeList({ agents, activity, rootName, rootStatus, selected
   );
 }
 
-/** One bar per agent on a shared time axis; a running agent's bar grows to now. */
+/** "Nov 8, 19:33" in the person's own time zone. */
+const clock = (ms) => new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const clockSeconds = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+/**
+ * Agents on a time axis, in bursts. A session can span days, and on one axis an agent that ran for four minutes is a sliver,
+ * so each burst of activity (agents that ran within ten minutes of each other) has its own scale, and a pause between bursts
+ * is one line saying how long it was. Every bar says how long the agent ran; a running agent's bar grows to now.
+ */
 export function AgentTimeline({ agents, selectedId, onSelect }) {
   const labels = useMemo(() => agentLabels(agents), [agents]);
   const anyLive = agents.some((a) => live(a.status));
@@ -71,32 +80,47 @@ export function AgentTimeline({ agents, selectedId, onSelect }) {
     return () => clearInterval(t);
   }, [anyLive]);
 
-  const spans = agents.map((a) => {
+  const spans = useMemo(() => agents.map((a) => {
     const start = a.startedAt ? new Date(a.startedAt).getTime() : a.finishedAt ? new Date(a.finishedAt).getTime() : null;
     const end = a.finishedAt ? new Date(a.finishedAt).getTime() : live(a.status) ? now : start;
     return { agent: a, start, end };
-  }).filter((s) => s.start != null);
+  }).filter((s) => s.start != null), [agents, now]);
+  const bursts = useMemo(() => timelineBursts(spans), [spans]);
   if (!spans.length) return <p className="agent-detail-hint">No timing recorded yet.</p>;
 
-  const t0 = Math.min(...spans.map((s) => s.start));
-  const t1 = Math.max(now > t0 && anyLive ? now : t0, ...spans.map((s) => s.end));
-  const total = Math.max(1, t1 - t0);
-  const seconds = Math.round(total / 1000);
   return (
     <div className="agent-timeline" aria-label="Agents on a timeline">
-      <div className="agent-timeline-axis"><span>0s</span><span>{seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`}</span></div>
-      {spans.map(({ agent, start, end }) => {
-        const left = ((start - t0) / total) * 100;
-        const width = Math.max(1.5, ((end - start) / total) * 100);
-        return (
-          <button key={agent.id} type="button" className={`agent-timeline-row${selectedId === agent.id ? ' is-selected' : ''}`} aria-pressed={selectedId === agent.id} onClick={() => onSelect(agent.id)}>
-            <span className="agent-timeline-name">{labels.get(agent.id) ?? agent.name}</span>
-            <span className="agent-timeline-track">
-              <span className={`agent-timeline-bar ${dotClass(agent.status)}`} style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }} />
+      {bursts.map((burst, i) => (
+        <section key={burst.start} className="agent-timeline-burst" aria-label={`Agents that ran from ${clock(burst.start)}`}>
+          {burst.pauseBefore > 0 && <div className="agent-timeline-pause">{formatDuration(burst.pauseBefore)} later</div>}
+          <header className="agent-timeline-head">
+            <strong>{clock(burst.start)}</strong>
+            <span>
+              {burst.items.length} {burst.items.length === 1 ? 'agent' : 'agents'} · ran {formatDuration(burst.end - burst.start)}
+              {bursts.length > 1 ? ` · ${i + 1} of ${bursts.length}` : ''}
             </span>
-          </button>
-        );
-      })}
+          </header>
+          <div className="agent-timeline-axis" aria-hidden="true">
+            {scaleTicks(burst.total).map((label, k) => <span key={k}>{label}</span>)}
+          </div>
+          {burst.items.map((span) => {
+            const { agent, start, end } = span;
+            const { left, width } = barBox(span, burst);
+            // The runner's own measurement of the time it worked wins over the gap between its first and last event.
+            const took = live(agent.status) ? end - start : Number.isFinite(agent.durationMs) && agent.durationMs > 0 ? agent.durationMs : end - start;
+            const tip = `${labels.get(agent.id) ?? agent.name}: ${clockSeconds(start)} to ${live(agent.status) ? 'now' : clockSeconds(end)} (${formatDuration(took)})`;
+            return (
+              <button key={agent.id} type="button" title={tip} className={`agent-timeline-row${selectedId === agent.id ? ' is-selected' : ''}`} aria-pressed={selectedId === agent.id} onClick={() => onSelect(agent.id)}>
+                <span className="agent-timeline-name">{labels.get(agent.id) ?? agent.name}</span>
+                <span className="agent-timeline-track">
+                  <span className={`agent-timeline-bar ${dotClass(agent.status)}`} style={{ left: `${left}%`, width: `${width}%` }} />
+                </span>
+                <span className={`agent-timeline-took ${dotClass(agent.status)}`}>{formatDuration(took)}{live(agent.status) ? '…' : ''}</span>
+              </button>
+            );
+          })}
+        </section>
+      ))}
     </div>
   );
 }
