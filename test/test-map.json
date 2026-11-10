@@ -1,0 +1,1865 @@
+{
+  "version": "1",
+  "modules": {
+    "automations": {
+      "description": "Versioned visual workflows and durable orchestration",
+      "sources": [
+        "server/automations/**",
+        "server/repositories/automations.ts",
+        "server/repositories/automations-dynamodb.ts",
+        "web/src/pages/Automations.jsx",
+        "web/src/styles/automations.css",
+        "infra/lib/automation-bridge.js",
+        "server/automations/templates.ts",
+        "server/automations/generate.ts"
+      ],
+      "tests": [
+        "test/automations.test.ts",
+        "test/automations-repo.test.ts",
+        "test/web-automations.test.ts",
+        "test/automation-bridge.test.ts",
+        "test/automation-templates.test.ts",
+        "test/automation-list.test.ts",
+        "test/automation-run-options.test.ts",
+        "test/automation-generate.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "ci-runner": {
+      "description": "Bounded, deduplicated backend test execution",
+      "sources": [
+        "scripts/test-affected.mjs",
+        "scripts/test-pool.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "tests": [
+        "test/test-pool.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "deploy-gate": {
+      "description": "Deploy workflows wait for CI to pass on the commit they deploy",
+      "sources": [
+        "scripts/wait-for-ci.mjs",
+        ".github/workflows/deploy-portal.yml",
+        ".github/workflows/deploy-agentcore.yml"
+      ],
+      "tests": [
+        "test/wait-for-ci.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "auth": {
+      "description": "Authentication, login, session cookies",
+      "sources": [
+        "server/auth.ts",
+        "server/governance/users.ts",
+        "server/repositories/auth.ts",
+        "server/repositories/auth-sqlite.ts",
+        "server/repositories/auth-dynamodb.ts",
+        "web/src/pages/Auth.jsx"
+      ],
+      "tests": [
+        "test/auth.test.ts",
+        "test/auth-repo.test.ts",
+        "test/setup-security.test.ts"
+      ],
+      "smokeIds": [
+        "auth"
+      ]
+    },
+    "setup": {
+      "description": "First-run setup wizard",
+      "sources": [
+        "web/src/pages/setup/SetupWizard.jsx",
+        "web/src/pages/setup/AdminAccount.jsx",
+        "web/src/pages/setup/CloudSecurity.jsx",
+        "web/src/pages/setup/CloudStorage.jsx",
+        "web/src/pages/setup/ConfirmStep.jsx",
+        "web/src/pages/setup/DeployTarget.jsx",
+        "web/src/pages/setup/ModelProvider.jsx",
+        "web/src/pages/hub/ProjectHub.jsx",
+        "web/src/components/WizardProgress.jsx",
+        "web/src/styles/setup-wizard.css"
+      ],
+      "tests": [],
+      "smokeIds": [
+        "setup"
+      ]
+    },
+    "api-tokens": {
+      "description": "API token management and token scope enforcement",
+      "sources": [
+        "server/api-tokens.ts",
+        "server/repositories/api-tokens.ts",
+        "server/repositories/api-tokens-sqlite.ts",
+        "server/repositories/api-tokens-dynamodb.ts",
+        "web/src/pages/ApiAccess.jsx"
+      ],
+      "tests": [
+        "test/api-tokens.test.ts",
+        "test/token-scopes.test.ts",
+        "test/api-tokens-repo.test.ts"
+      ],
+      "smokeIds": [
+        "api-tokens"
+      ]
+    },
+    "permissions": {
+      "description": "Role-based access control, permission checks",
+      "sources": [
+        "server/permissions.ts",
+        "server/guardrails.ts",
+        "server/governance/users.ts",
+        "server/repositories/permissions.ts",
+        "server/repositories/permissions-sqlite.ts",
+        "server/repositories/permissions-dynamodb.ts"
+      ],
+      "tests": [
+        "test/permissions.test.ts",
+        "test/permissions-repo.test.ts"
+      ],
+      "smokeIds": [
+        "permissions"
+      ]
+    },
+    "audit": {
+      "description": "Audit log recording and retrieval",
+      "sources": [
+        "server/audit.ts",
+        "server/repositories/audit.ts",
+        "server/repositories/audit-sqlite.ts",
+        "server/repositories/audit-dynamodb.ts"
+      ],
+      "tests": [
+        "test/audit-fixes.test.ts",
+        "test/audit-fixes-3.test.ts",
+        "test/audit-repo.test.ts"
+      ],
+      "smokeIds": [
+        "audit"
+      ]
+    },
+    "delegation": {
+      "description": "Delegate tokens for sub-agent authentication",
+      "sources": [
+        "server/delegation.ts",
+        "server/repositories/delegation-settings.ts",
+        "server/repositories/delegation-settings-sqlite.ts",
+        "server/repositories/delegation-settings-dynamodb.ts",
+        "server/repositories/sessions.ts",
+        "server/repositories/sessions-sqlite.ts",
+        "server/repositories/sessions-dynamodb.ts"
+      ],
+      "tests": [
+        "test/delegate-token.test.ts",
+        "test/delegation.test.ts",
+        "test/delegation-repo.test.ts",
+        "test/delegation-session-repo.test.ts",
+        "test/agentcore-multi-agent.test.ts"
+      ],
+      "smokeIds": [
+        "delegation"
+      ]
+    },
+    "projects": {
+      "description": "Project CRUD and listing, project/team repository layer",
+      "sources": [
+        "server/projects.ts",
+        "server/project-settings-pr.ts",
+        "server/repositories/projects.ts",
+        "server/repositories/projects-sqlite.ts",
+        "server/repositories/projects-dynamodb.ts",
+        "web/src/pages/Projects.jsx"
+      ],
+      "tests": [
+        "test/projects.test.ts",
+        "test/projects-repo.test.ts",
+        "test/project-pr-settings.test.ts"
+      ],
+      "smokeIds": [
+        "projects"
+      ]
+    },
+    "workspaces": {
+      "description": "Workspace management per project",
+      "sources": [
+        "server/workspaces.ts",
+        "server/workflows/crud.ts",
+        "server/repositories/workspaces.ts",
+        "server/repositories/workspaces-sqlite.ts",
+        "server/repositories/workspaces-dynamodb.ts",
+        "web/src/pages/Workspaces.jsx",
+        "web/src/components/WorkspaceHeader.jsx",
+        "web/src/styles/workspace.css"
+      ],
+      "tests": [
+        "test/workspaces.test.ts",
+        "test/workspaces-repo.test.ts"
+      ],
+      "smokeIds": [
+        "workspaces"
+      ]
+    },
+    "sessions": {
+      "description": "Session lifecycle, context, files, and live run streaming",
+      "sources": [
+        "server/session-lifecycle.ts",
+        "server/session-context.ts",
+        "server/session-files.ts",
+        "server/runs.ts",
+        "server/portal-events.ts",
+        "server/superpowers-skills.ts",
+        "server/repositories/sessions.ts",
+        "server/repositories/sessions-sqlite.ts",
+        "server/repositories/sessions-dynamodb.ts",
+        "server/repositories/stats.ts",
+        "server/repositories/stats-sqlite.ts",
+        "server/repositories/stats-dynamodb.ts",
+        "server/repositories/vault-files.ts",
+        "server/repositories/vault-files-sqlite.ts",
+        "server/repositories/vault-files-dynamodb.ts",
+        "web/src/pages/sessions/SessionList.jsx",
+        "web/src/pages/sessions/SessionLive.jsx",
+        "web/src/pages/sessions/SessionsShell.jsx",
+        "web/src/pages/sessions/SessionWorkspace.jsx",
+        "web/src/pages/sessions/SessionChanges.jsx",
+        "web/src/pages/sessions/NewSessionDialog.jsx",
+        "web/src/pages/sessions/SwitchEngineDialog.jsx",
+        "web/src/lib/approvalState.js",
+        "web/src/lib/useRunStream.js",
+        "web/src/lib/mergeEvents.js",
+        "web/src/lib/outputFileMatch.js",
+        "web/src/lib/outputFileUtils.js",
+        "web/src/lib/pullRequestCard.js",
+        "web/src/lib/model-groups.js",
+        "web/src/components/ModelOptions.jsx",
+        "web/src/components/AiChoicePicker.jsx",
+        "web/src/pages/sessions/PullRequestCard.jsx",
+        "web/src/styles/sessions.css"
+      ],
+      "tests": [
+        "test/session-lifecycle.test.ts",
+        "test/session-agent-events.test.ts",
+        "test/session-context.test.ts",
+        "test/session-files.test.ts",
+        "test/sanitize-merge.test.ts",
+        "test/output-files-match.test.ts",
+        "test/conversation-files.test.ts",
+        "test/web-session-agents.test.ts",
+        "test/output-file-utils.test.ts",
+        "test/web-pull-request-card.test.ts",
+        "test/sessions-repo.test.ts",
+        "test/engine-switch.test.ts",
+        "test/approval-state.test.ts",
+        "test/session-composer-layout.test.ts",
+        "test/model-groups.test.ts"
+      ],
+      "smokeIds": [
+        "sessions"
+      ]
+    },
+    "workflows": {
+      "description": "Workflow engine, controls, and driver",
+      "sources": [
+        "server/workflows/crud.ts",
+        "server/workflows/controls.ts",
+        "server/workflows/driver.ts",
+        "server/workflows/working-copies.ts",
+        "server/tool-packs.ts",
+        "server/review-lifecycle.ts",
+        "server/repositories/sessions.ts",
+        "server/repositories/sessions-sqlite.ts",
+        "server/repositories/sessions-dynamodb.ts"
+      ],
+      "tests": [
+        "test/workflows.test.ts",
+        "test/session-sse.test.ts",
+        "test/run-events-sse.test.ts",
+        "test/working-copies.test.ts",
+        "test/resume-retry.test.ts",
+        "test/transcript-coalesce.test.ts",
+        "test/conditional-transitions.test.ts"
+      ],
+      "smokeIds": [
+        "sessions"
+      ],
+      "note": "No dedicated smoke section. Session creation (section 31) exercises workflow engine; use sessions smoke ID."
+    },
+    "ide": {
+      "description": "In-browser IDE workspace — editor, explorer, terminal, source control, live browser",
+      "sources": [
+        "server/terminal.ts",
+        "server/terminal-cloud.ts",
+        "server/agent/runner-terminal.ts",
+        "server/agent/runner-terminal-auth.ts",
+        "server/browser-live.ts",
+        "web/src/pages/sessions/AgentDetail.jsx",
+        "web/src/pages/sessions/AgentOrbit.jsx",
+        "web/src/pages/sessions/AgentViews.jsx",
+        "web/src/pages/sessions/AgentsPanel.jsx",
+        "web/src/lib/agent-activity.js",
+        "web/src/lib/agent-orbit.js",
+        "web/src/styles/agents-panel.css",
+        "web/src/pages/sessions/SessionAgentsStrip.jsx",
+        "web/src/pages/sessions/useSessionAgents.js",
+        "web/src/pages/sessions/IdeAgents.jsx",
+        "web/src/pages/sessions/AgentGraph.jsx",
+        "web/src/lib/conversationFiles.js",
+        "web/src/pages/sessions/IdeBrowser.jsx",
+        "web/src/pages/sessions/IdeEditor.jsx",
+        "web/src/pages/sessions/IdeExplorer.jsx",
+        "web/src/pages/sessions/IdeHeader.jsx",
+        "web/src/pages/sessions/IdeOutputs.jsx",
+        "web/src/pages/sessions/IdeSessionPanel.jsx",
+        "web/src/pages/sessions/IdeSourceControl.jsx",
+        "web/src/pages/sessions/IdeStatusBar.jsx",
+        "web/src/pages/sessions/IdeTerminal.jsx",
+        "web/src/pages/sessions/IdeWorkspace.jsx",
+        "web/src/pages/sessions/OutputFilePreview.jsx",
+        "web/src/pages/sessions/RunOutputsCard.jsx",
+        "web/src/pages/sessions/codemirror-editor.jsx",
+        "web/src/pages/sessions/xterm-terminal.jsx",
+        "web/src/lib/outputFileUtils.js",
+        "web/src/lib/terminal-pipe.js",
+        "web/src/styles/ide.css"
+      ],
+      "tests": [
+        "test/agent-orbit.test.ts",
+        "test/web-agent-detail.test.ts",
+        "test/browser-live.test.ts",
+        "test/chat-attachments-ui.test.ts",
+        "test/web-session-agents.test.ts",
+        "test/conversation-files.test.ts",
+        "test/terminal.test.ts",
+        "test/terminal-cloud.test.ts",
+        "test/runner-terminal.test.ts",
+        "test/terminal-pipe.test.ts"
+      ],
+      "smokeIds": [
+        "ide"
+      ]
+    },
+    "dashboard": {
+      "description": "Agent performance dashboard KPIs and drill-downs",
+      "sources": [
+        "server/dashboard.ts",
+        "server/repositories/stats.ts",
+        "server/repositories/stats-sqlite.ts",
+        "server/repositories/stats-dynamodb.ts",
+        "web/src/pages/Dashboard.jsx",
+        "web/src/styles/dashboard.css"
+      ],
+      "tests": [
+        "test/dashboard.test.ts",
+        "test/stats-repo.test.ts"
+      ],
+      "smokeIds": [
+        "dashboard"
+      ]
+    },
+    "knowledge": {
+      "description": "Knowledge base documents, search, ask, decisions, and learning content",
+      "sources": [
+        "server/knowledge.ts",
+        "server/learn.ts",
+        "server/repositories/knowledge.ts",
+        "server/repositories/knowledge-sqlite.ts",
+        "server/repositories/knowledge-dynamodb.ts",
+        "server/repositories/learn.ts",
+        "server/repositories/learn-sqlite.ts",
+        "server/repositories/learn-dynamodb.ts",
+        "web/src/pages/Knowledge.jsx",
+        "web/src/pages/Learn.jsx",
+        "web/src/lib/templates/index.js"
+      ],
+      "tests": [
+        "test/knowledge.test.ts",
+        "test/knowledge-repo.test.ts",
+        "test/learn-repo.test.ts"
+      ],
+      "smokeIds": [
+        "knowledge"
+      ]
+    },
+    "create": {
+      "description": "Create hub page (container for Diagrams / Documents / Decks tabs)",
+      "sources": [
+        "web/src/pages/Create.jsx"
+      ],
+      "tests": [
+        "test/create-repos.test.ts"
+      ],
+      "smokeIds": [
+        "create"
+      ]
+    },
+    "diagrams": {
+      "description": "Diagram creation and rendering — draw.io, mermaid, and icon packs",
+      "sources": [
+        "server/diagrams.ts",
+        "server/repositories/diagrams-data.ts",
+        "server/repositories/diagrams-data-sqlite.ts",
+        "server/repositories/diagrams-data-dynamodb.ts",
+        "server/drawio.ts",
+        "server/drawio-cloud.ts",
+        "server/drawio-pack.ts",
+        "server/drawio-render.ts",
+        "server/drawio-text.ts",
+        "server/diagram-icons.ts",
+        "server/diagram-text.ts",
+        "web/src/pages/Diagrams.jsx",
+        "web/src/components/DiagramStyle.jsx",
+        "web/src/components/MermaidViewer.jsx"
+      ],
+      "tests": [
+        "test/diagrams.test.ts",
+        "test/resume-retry.test.ts"
+      ],
+      "smokeIds": [
+        "create"
+      ],
+      "note": "Section 5 (Create) covers the Diagrams tab. No standalone diagrams smoke section."
+    },
+    "generated-docs": {
+      "description": "AI-generated documents — Word/PDF/HTML generation pipeline",
+      "sources": [
+        "server/generated-docs.ts",
+        "server/repositories/generated-docs-data.ts",
+        "server/repositories/generated-docs-data-sqlite.ts",
+        "server/repositories/generated-docs-data-dynamodb.ts",
+        "server/generated-doc-text.ts",
+        "server/docgen.ts",
+        "server/docimage.ts",
+        "server/docs-pack.ts",
+        "server/doc-templates.ts",
+        "server/repositories/doc-templates-data.ts",
+        "server/repositories/doc-templates-data-sqlite.ts",
+        "server/repositories/doc-templates-data-dynamodb.ts",
+        "server/docx-template.ts",
+        "server/ooxml.ts",
+        "server/template-check.ts",
+        "server/convert.ts",
+        "web/src/pages/GeneratedDocs.jsx"
+      ],
+      "tests": [
+        "test/generated-docs.test.ts",
+        "test/resume-retry.test.ts"
+      ],
+      "smokeIds": [
+        "create"
+      ],
+      "note": "Section 5 (Create) covers the Documents tab. No standalone generated-docs smoke section."
+    },
+    "presentations": {
+      "description": "AI-generated presentations — PPTX creation and preview",
+      "sources": [
+        "server/presentations.ts",
+        "server/repositories/presentations-data.ts",
+        "server/repositories/presentations-data-sqlite.ts",
+        "server/repositories/presentations-data-dynamodb.ts",
+        "server/presentation-text.ts",
+        "server/pptx-preview.ts",
+        "server/pptx-template.ts",
+        "web/src/pages/Presentations.jsx"
+      ],
+      "tests": [
+        "test/presentations.test.ts",
+        "test/resume-retry.test.ts"
+      ],
+      "smokeIds": [
+        "create"
+      ],
+      "note": "Section 5 (Create) covers the Decks tab. No standalone presentations smoke section."
+    },
+    "vault": {
+      "description": "Secret vault — project, personal, and portal secrets",
+      "sources": [
+        "server/vault.ts",
+        "server/vault-generated.ts",
+        "server/secrets.ts",
+        "server/repositories/vault-files.ts",
+        "server/repositories/vault-files-sqlite.ts",
+        "server/repositories/vault-files-dynamodb.ts",
+        "web/src/pages/Vault.jsx",
+        "web/src/lib/vaultFolders.js",
+        "web/src/styles/components.css"
+      ],
+      "tests": [
+        "test/vault.test.ts",
+        "test/vault-folders.test.ts",
+        "test/vault-files-repo.test.ts"
+      ],
+      "smokeIds": [
+        "vault"
+      ]
+    },
+    "insights": {
+      "description": "Session and cost insights analytics",
+      "sources": [
+        "server/insights.ts",
+        "server/repositories/stats.ts",
+        "server/repositories/stats-sqlite.ts",
+        "server/repositories/stats-dynamodb.ts",
+        "web/src/components/CostPanel.jsx"
+      ],
+      "tests": [
+        "test/insights.test.ts"
+      ],
+      "smokeIds": [
+        "insights"
+      ]
+    },
+    "budget": {
+      "description": "Budget usage tracking repository layer (budget_usage table)",
+      "sources": [
+        "server/repositories/budget.ts",
+        "server/repositories/budget-sqlite.ts",
+        "server/repositories/budget-dynamodb.ts",
+        "server/agent/litellm.ts",
+        "server/agent/claude-code.ts",
+        "server/agent/kiro.ts"
+      ],
+      "tests": [
+        "test/budget-repo.test.ts",
+        "test/usage-format.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "inbox": {
+      "description": "Agent inbox — approval requests, notifications, and the p6_inbox repository layer",
+      "sources": [
+        "server/inbox.ts",
+        "server/repositories/inbox.ts",
+        "server/repositories/inbox-sqlite.ts",
+        "server/repositories/inbox-dynamodb.ts",
+        "web/src/pages/Inbox.jsx"
+      ],
+      "tests": [
+        "test/inbox-repo.test.ts",
+        "test/inbox-ui.test.ts"
+      ],
+      "smokeIds": [
+        "inbox"
+      ]
+    },
+    "connections": {
+      "description": "Git provider connections management",
+      "sources": [
+        "server/git-connections.ts",
+        "server/repositories/git-connections.ts",
+        "server/repositories/git-connections-sqlite.ts",
+        "server/repositories/git-connections-dynamodb.ts",
+        "web/src/pages/Connections.jsx",
+        "web/src/pages/ConnectionsPage.jsx",
+        "web/src/styles/connections.css"
+      ],
+      "tests": [
+        "test/git-connections.test.ts",
+        "test/git-connections-repo.test.ts"
+      ],
+      "smokeIds": [
+        "connections"
+      ]
+    },
+    "repos": {
+      "description": "Repository listing, cloning, and clone progress tracking",
+      "sources": [
+        "server/repos.ts",
+        "server/git-progress.ts",
+        "server/repositories/git-repos.ts",
+        "server/repositories/git-repos-sqlite.ts",
+        "server/repositories/git-repos-dynamodb.ts"
+      ],
+      "tests": [
+        "test/repos.test.ts",
+        "test/repos-branches.test.ts",
+        "test/repos-progress.test.ts",
+        "test/git-repos-repo.test.ts"
+      ],
+      "smokeIds": [
+        "repos"
+      ]
+    },
+    "integrations": {
+      "description": "Third-party integrations (Atlassian, etc.)",
+      "sources": [
+        "server/integrations.ts",
+        "server/repositories/integrations.ts",
+        "server/repositories/integrations-sqlite.ts",
+        "server/repositories/integrations-dynamodb.ts",
+        "web/src/pages/Integrations.jsx"
+      ],
+      "tests": [
+        "test/integrations-repo.test.ts"
+      ],
+      "smokeIds": [
+        "integrations"
+      ]
+    },
+    "jira": {
+      "description": "Jira integration: OAuth/API-token auth, ticket browse, session context",
+      "sources": [
+        "server/jira.ts",
+        "server/jira-text.ts",
+        "server/jira-adf.ts",
+        "server/workflows/crud.ts",
+        "server/workflows/driver.ts",
+        "server/agent/runner.ts"
+      ],
+      "tests": [
+        "test/jira.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "aws-accounts": {
+      "description": "AWS account management and region selection",
+      "sources": [
+        "server/repositories/aws-accounts.ts",
+        "server/repositories/aws-accounts-sqlite.ts",
+        "server/repositories/aws-accounts-dynamodb.ts",
+        "web/src/components/AwsRegionSelect.jsx",
+        "web/src/lib/awsRegions.js",
+        "server/project-aws.ts",
+        "web/src/pages/ProjectAws.jsx"
+      ],
+      "tests": [
+        "test/aws-accounts-repo.test.ts"
+      ],
+      "smokeIds": [
+        "aws-accounts"
+      ]
+    },
+    "credentials": {
+      "description": "AWS credentials management and parser",
+      "sources": [
+        "server/credentials.ts",
+        "server/credential-default.ts",
+        "server/kiro-idc.ts",
+        "server/repositories/credentials.ts",
+        "server/repositories/credentials-sqlite.ts",
+        "server/repositories/credentials-dynamodb.ts",
+        "web/src/pages/Credentials.jsx",
+        "web/src/components/SetupChecklist.jsx",
+        "web/src/components/AwsKeysFields.jsx",
+        "web/src/lib/aws-paste.js",
+        "web/src/lib/awsCredParser.js",
+        "web/src/styles/credentials.css"
+      ],
+      "tests": [
+        "test/credentials.test.ts",
+        "test/kiro-credential-default.test.ts",
+        "test/bedrock-sign-in.test.ts",
+        "test/aws-keys-sign-in.test.ts",
+        "test/setup-checklist-ui.test.ts",
+        "test/aws-cred-parser.test.ts",
+        "test/credentials-repo.test.ts"
+      ],
+      "smokeIds": [
+        "credentials"
+      ]
+    },
+    "bedrock-sso": {
+      "description": "Bedrock SSO via AWS Identity Center (IDC)",
+      "sources": [
+        "server/bedrock-sso.ts",
+        "server/kiro-idc.ts",
+        "server/kiro-idc-check.ts",
+        "web/src/components/DeviceCodeBox.jsx"
+      ],
+      "tests": [
+        "test/bedrock-sso.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for Bedrock SSO device-code flow. Settings section 32 covers providers UI only."
+    },
+    "settings": {
+      "description": "Portal settings — AI provider, tools, permissions, code review, appearance",
+      "sources": [
+        "server/settings.ts",
+        "server/secrets.ts",
+        "server/repositories/settings.ts",
+        "server/repositories/settings-sqlite.ts",
+        "server/repositories/settings-dynamodb.ts",
+        "web/src/pages/settings/Appearance.jsx",
+        "web/src/pages/settings/Providers.jsx",
+        "web/src/pages/settings/Secrets.jsx",
+        "web/src/pages/settings/Settings.jsx",
+        "web/src/pages/settings/Users.jsx",
+        "web/src/pages/AdminPanel.jsx"
+      ],
+      "tests": [
+        "test/settings.test.ts",
+        "test/settings-repo.test.ts"
+      ],
+      "smokeIds": [
+        "settings"
+      ]
+    },
+    "config": {
+      "description": "Portal configuration — deploy target, cloud config, config file editor",
+      "sources": [
+        "server/config.ts",
+        "web/src/pages/Configuration.jsx",
+        "web/src/pages/config/ConfigEditor.jsx",
+        "web/src/pages/config/ConfigFileTree.jsx",
+        "web/src/pages/config/ConfigStatus.jsx",
+        "web/src/styles/config.css"
+      ],
+      "tests": [
+        "test/cloud-config.test.ts"
+      ],
+      "smokeIds": [
+        "config"
+      ]
+    },
+    "kiro": {
+      "description": "Kiro CLI integration — command runner, settings parser, MCP server",
+      "sources": [
+        "server/kiro-cmd.ts",
+        "server/kiro-settings.ts",
+        "server/mcp-server.ts",
+        "server/agent/kiro-agentcore.ts",
+        "server/agent/browser-guidance.ts",
+        "server/agent/agentcore-bridge.ts",
+        "server/agent/claude-agentcore.ts",
+        "server/agent/runtime-models.ts",
+        "server/agent/agent-defs.ts",
+        "server/agent/run-agents.ts",
+        "server/agent/kiro-config-files.ts",
+        "kiro-runner/src/kiro-config.ts",
+        "web/src/lib/agent-pack/index.js",
+        "web/src/lib/agent-pack/skills.js",
+        "server/repositories/agentcore-login.ts",
+        "server/repositories/agentcore-login-sqlite.ts",
+        "server/repositories/agentcore-login-dynamodb.ts"
+      ],
+      "tests": [
+        "test/kiro-cmd.test.ts",
+        "test/kiro-mcp-generate.test.ts",
+        "test/kiro-models-parser.test.ts",
+        "test/kiro-settings.test.ts",
+        "test/kiro-win-env.test.ts",
+        "test/kiro-agentcore.test.ts",
+        "test/kiro-subagents.test.ts",
+        "test/browser-guidance.test.ts",
+        "test/agentcore-portal.test.ts",
+        "test/agentcore-login-repo.test.ts",
+        "test/agent-defs.test.ts",
+        "test/agent-pack.test.ts",
+        "test/agentcore-multi-agent.test.ts",
+        "test/runtime-models.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."
+    },
+    "reviews": {
+      "description": "Code review creation, lifecycle, verdict, exports, and CI control plane",
+      "sources": [
+        "server/review.ts",
+        "server/review-result.ts",
+        "server/review-lifecycle.ts",
+        "server/pull-requests.ts",
+        "server/session-pr.ts",
+        "server/control-plane.ts",
+        "server/repositories/reviews.ts",
+        "server/repositories/reviews-sqlite.ts",
+        "server/repositories/reviews-dynamodb.ts",
+        "web/src/pages/Review.jsx",
+        "web/src/pages/ReviewDashboard.jsx",
+        "web/src/pages/ReviewDetail.jsx",
+        "web/src/pages/ReviewsPage.jsx",
+        "web/src/components/BranchSelect.jsx"
+      ],
+      "tests": [
+        "test/review.test.ts",
+        "test/review-result.test.ts",
+        "test/web-review-findings.test.ts",
+        "test/reviews-repo.test.ts",
+        "test/pull-requests.test.ts",
+        "test/session-pr.test.ts",
+        "test/review-create.test.ts",
+        "test/branch-select-ui.test.ts"
+      ],
+      "smokeIds": [
+        "reviews"
+      ]
+    },
+    "branch-scans": {
+      "description": "Branch scan creation and detail views",
+      "sources": [
+        "server/scan.ts",
+        "server/repositories/scans.ts",
+        "server/repositories/scans-sqlite.ts",
+        "server/repositories/scans-dynamodb.ts",
+        "web/src/pages/BranchScans.jsx",
+        "web/src/pages/BranchScanDetail.jsx"
+      ],
+      "tests": [
+        "test/scan.test.ts",
+        "test/scans-repo.test.ts"
+      ],
+      "smokeIds": [
+        "branch-scans"
+      ]
+    },
+    "testing-module": {
+      "description": "Tests module — test project management, script generation, and MCP tools",
+      "sources": [
+        "server/testing/index.ts",
+        "server/testing/generate.ts",
+        "server/testing/helpers.ts",
+        "server/testing/model-provider.ts",
+        "server/testing/projects.ts",
+        "server/testing/runner.ts",
+        "server/testing/scripts.ts",
+        "server/testing/ssrf.ts",
+        "server/testing/totp.ts",
+        "server/testing/types.ts",
+        "server/testing/vault.ts",
+        "server/testing/case-sets.ts",
+        "server/testing/curl.ts",
+        "server/testing/trace.ts",
+        "server/repositories/testing-data.ts",
+        "server/repositories/testing-data-sqlite.ts",
+        "server/repositories/testing-data-dynamodb.ts",
+        "server/mcp-routes.ts",
+        "web/src/pages/tests/TestsPage.jsx",
+        "web/src/pages/tests/GenerationTracker.jsx",
+        "web/src/pages/tests/CaseSetList.jsx",
+        "web/src/pages/tests/CaseSetViewer.jsx",
+        "web/src/pages/tests/GenerateCasesDialog.jsx",
+        "web/src/pages/tests/tests-cases.css",
+        "web/src/lib/curlBuilder.js"
+      ],
+      "tests": [
+        "test/testing.test.ts",
+        "test/testing-runs.test.ts",
+        "test/testing-generate.test.ts",
+        "test/testing-bedrock.test.ts",
+        "test/testing-kiro-provider.test.ts",
+        "test/mcp-tests-scope.test.ts",
+        "test/testing-case-sets.test.ts",
+        "test/curl-builder.test.ts",
+        "test/testing-trace.test.ts",
+        "test/testing-generation-progress.test.ts",
+        "test/resume-retry.test.ts",
+        "test/testing-data-repo.test.ts"
+      ],
+      "smokeIds": [
+        "testing-module"
+      ]
+    },
+    "api-access": {
+      "description": "API access page — scope checkboxes and MCP section (UI; backend covered by api-tokens)",
+      "sources": [
+        "web/src/pages/ApiAccess.jsx",
+        "web/src/styles/tokens.css"
+      ],
+      "tests": [],
+      "smokeIds": [
+        "api-access",
+        "api-tokens"
+      ]
+    },
+    "loop-specs": {
+      "description": "Loop specifications for multi-agent orchestration",
+      "sources": [
+        "server/loop-specs.ts",
+        "server/loop-triggers.ts",
+        "server/repositories/loop-specs.ts",
+        "server/repositories/loop-specs-sqlite.ts",
+        "server/repositories/loop-specs-dynamodb.ts",
+        "web/src/pages/LoopSpecs.jsx"
+      ],
+      "tests": [
+        "test/loop-specs.test.ts",
+        "test/loop-specs-repo.test.ts",
+        "test/loop-triggers.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for Loop Specs yet."
+    },
+    "engines": {
+      "description": "AI engine and model configuration, listing, and passthrough",
+      "sources": [
+        "server/models.ts",
+        "server/agent/anthropic-models.ts",
+        "server/kiro-list-models.ts",
+        "server/user-config.ts",
+        "server/repositories/credentials.ts",
+        "server/repositories/credentials-sqlite.ts",
+        "server/repositories/credentials-dynamodb.ts",
+        "server/repositories/user-config.ts",
+        "server/repositories/user-config-sqlite.ts",
+        "server/repositories/user-config-dynamodb.ts"
+      ],
+      "tests": [
+        "test/engines.test.ts",
+        "test/engine-models.test.ts",
+        "test/anthropic-models.test.ts",
+        "test/engine-model-passthrough.test.ts",
+        "test/model-listing.test.ts",
+        "test/kiro-acp.test.ts",
+        "test/kiro-session.test.ts"
+      ],
+      "smokeIds": [
+        "engines"
+      ]
+    },
+    "shell": {
+      "description": "App shell — rail navigation, command palette, shortcuts, header, breadcrumb, dialogs",
+      "sources": [
+        "web/src/components/Rail.jsx",
+        "web/src/components/CommandPalette.jsx",
+        "web/src/components/ShortcutsSheet.jsx",
+        "web/src/components/AppHeader.jsx",
+        "web/src/components/Breadcrumb.jsx",
+        "web/src/components/ConfirmDialog.jsx",
+        "web/src/components/BulkActionBar.jsx",
+        "web/src/components/Skeleton.jsx",
+        "web/src/lib/pages-extra.js",
+        "web/src/lib/useBulkSelect.js",
+        "web/src/lib/useFocusTrap.js",
+        "web/src/lib/useOverlayDismiss.js",
+        "web/src/styles/layout.css",
+        "web/src/styles/palette.css"
+      ],
+      "tests": [
+        "test/overlay-dismiss.test.ts"
+      ],
+      "smokeIds": [
+        "shell"
+      ]
+    },
+    "theme": {
+      "description": "Theme system — theme cycling, persistence, and custom CSS templates",
+      "sources": [
+        "server/themes.ts",
+        "server/repositories/themes.ts",
+        "server/repositories/themes-sqlite.ts",
+        "server/repositories/themes-dynamodb.ts",
+        "server/testing/model-provider.ts",
+        "web/src/lib/theme.js",
+        "web/src/lib/shortcuts.js",
+        "web/src/styles/aethrix.css",
+        "web/src/styles/clovi.css",
+        "web/src/styles/nebula.css",
+        "web/src/styles/aurora-glass.css",
+        "web/src/styles/cyber-hud.css",
+        "web/src/styles/twilight.css",
+        "web/src/styles/terminal.css",
+        "web/src/styles/kiro-ide.css",
+        "web/theme-init.js",
+        "shared/themes/aethrix-night.json",
+        "shared/themes/classic-teal.json",
+        "shared/themes/clovi.json",
+        "shared/themes/nebula.json",
+        "shared/themes/aurora-glass.json",
+        "shared/themes/cyber-hud.json",
+        "shared/themes/twilight.json",
+        "shared/themes/terminal.json",
+        "shared/themes/kiro-ide.json",
+        "web/src/pages/settings/Appearance.jsx",
+        "web/src/components/Rail.jsx"
+      ],
+      "tests": [
+        "test/themes.test.ts",
+        "test/themes-repo.test.ts"
+      ],
+      "smokeIds": [
+        "theme"
+      ]
+    },
+    "feedback": {
+      "description": "Feedback from users: send, follow, admin inbox, link to a session and its pull request",
+      "sources": [
+        "server/feedback.ts",
+        "server/repositories/feedback.ts",
+        "server/repositories/feedback-sqlite.ts",
+        "server/repositories/feedback-dynamodb.ts",
+        "web/src/pages/Feedback.jsx"
+      ],
+      "tests": [
+        "test/feedback.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "help": {
+      "description": "Help page: the in-portal user guide to every feature",
+      "sources": [
+        "web/src/pages/Help.jsx",
+        "web/src/lib/help-content.js",
+        "web/src/styles/help.css"
+      ],
+      "tests": [
+        "test/help-content.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "attachments": {
+      "description": "AI attachments — file upload, preview, and picker for session context",
+      "sources": [
+        "server/ai-attachments.ts",
+        "server/session-attachments.ts",
+        "server/repositories/ai-attachments.ts",
+        "server/repositories/ai-attachments-sqlite.ts",
+        "server/repositories/ai-attachments-dynamodb.ts",
+        "web/src/components/AttachmentPicker.jsx",
+        "web/src/components/FilePreviewModal.jsx",
+        "web/src/styles/file-preview.css",
+        "server/session-attachments.ts",
+        "web/src/pages/sessions/IdeWorkspace.jsx"
+      ],
+      "tests": [
+        "test/ai-attachments.test.ts",
+        "test/ai-attachments-repo.test.ts",
+        "test/chat-attachments.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "No dedicated smoke section for attachments yet."
+    },
+    "security": {
+      "description": "Security regression tests — SSRF guard, token scope enforcement, child-session cap, approval fingerprinting, run limits, config/hook guard (C), credential scrubbing (D)",
+      "sources": [
+        "server/agent/runner.ts",
+        "server/agent/approvals.ts",
+        "server/agent/types.ts",
+        "server/agent/claude-code.ts",
+        "server/agent/demo.ts",
+        "server/agent/kiro.ts",
+        "server/agent/kiro-agentcore.ts",
+        "server/agent/guard.ts",
+        "server/agent/env-scrub.ts",
+        "server/real-path.ts",
+        "server/git.ts",
+        "server/runs.ts",
+        "server/inbox.ts",
+        "server/workflows/crud.ts",
+        "server/settings.ts"
+      ],
+      "tests": [
+        "test/security-fixes.test.ts",
+        "test/ssrf.test.ts",
+        "test/approval-binding.test.ts",
+        "test/run-limits.test.ts",
+        "test/config-protection.test.ts",
+        "test/agent-env-scrub.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* — all in the shared section. Changes to those shared files already mark this module affected."
+    },
+    "storage": {
+      "description": "File storage abstraction — local filesystem and S3 backends",
+      "sources": [
+        "server/storage/index.ts",
+        "server/storage/local.ts",
+        "server/storage/s3.ts",
+        "server/storage-instance.ts"
+      ],
+      "tests": [
+        "test/storage.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "db": {
+      "description": "SQLite database recovery and migration tests (backend-only; server/db.ts is shared core)",
+      "sources": [],
+      "tests": [
+        "test/db-recovery.test.ts",
+        "test/resume-retry.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "server/db.ts is in the shared section (affects: *). Changes to db.ts already mark this module affected."
+    },
+    "health": {
+      "description": "Health-check endpoint",
+      "sources": [
+        "server/health.ts"
+      ],
+      "tests": [
+        "test/health.test.ts",
+        "test/startup-ordering.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "guardrails": {
+      "description": "Output guardrails runner",
+      "sources": [
+        "server/guardrails.ts"
+      ],
+      "tests": [
+        "test/guardrails-runner.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "output-files": {
+      "description": "Session output file management — collection, versioning, Vault copy, and routes",
+      "sources": [
+        "server/output-files.ts",
+        "server/repositories/output-files.ts",
+        "server/repositories/output-files-sqlite.ts",
+        "server/repositories/output-files-dynamodb.ts",
+        "web/src/lib/outputFileMatch.js",
+        "web/src/lib/outputFileUtils.js"
+      ],
+      "tests": [
+        "test/output-files.test.ts",
+        "test/output-files-match.test.ts",
+        "test/output-file-utils.test.ts",
+        "test/output-files-repo.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "user-config": {
+      "description": "Per-user configuration storage and retrieval",
+      "sources": [
+        "server/user-config.ts",
+        "server/repositories/user-config.ts",
+        "server/repositories/user-config-sqlite.ts",
+        "server/repositories/user-config-dynamodb.ts"
+      ],
+      "tests": [
+        "test/user-config.test.ts",
+        "test/user-config-repo.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "tickets": {
+      "description": "Jira ticket integration — connect, browse, and start sessions from tickets",
+      "sources": [
+        "web/src/pages/Tickets.jsx",
+        "web/src/components/JiraTicketPicker.jsx",
+        "web/src/components/TicketPreview.jsx",
+        "web/src/components/Markdown.jsx",
+        "web/src/pages/sessions/ticketVars.js",
+        "web/src/styles/jira.css"
+      ],
+      "tests": [],
+      "smokeIds": [
+        "tickets"
+      ]
+    },
+    "agent-runner": {
+      "description": "AgentCore Runtime container for Claude runs: payload validation, shared tool policy and approvals (backend-only; no smoke section)",
+      "sources": [
+        "agent-runner/src/validate.ts",
+        "agent-runner/src/run.ts",
+        "agent-runner/src/index.ts",
+        "server/agent/tool-policy.ts",
+        "server/agent/agentcore-approvals.ts",
+        "server/agent/runner-finalize.ts",
+        "server/agent/runner-finalize-run.ts",
+        "agent-runner/src/finalize.ts"
+      ],
+      "tests": [
+        "test/agent-runner-validation.test.ts",
+        "test/runner-snapshot-finalize.test.ts",
+        "test/runner-finalize.test.ts",
+        "test/kiro-runner-finalize.test.ts",
+        "test/agentcore-harness.test.ts",
+        "test/pricing.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."
+    },
+    "kiro-runner": {
+      "description": "Kiro CLI AgentCore Runtime container — payload validation (backend-only; no smoke section)",
+      "sources": [
+        "kiro-runner/src/validate.ts",
+        "kiro-runner/src/run.ts",
+        "kiro-runner/src/subagents.ts",
+        "kiro-runner/src/login.ts",
+        "kiro-runner/src/index.ts"
+      ],
+      "tests": [
+        "test/kiro-subagents.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "Spike B container. No unit tests yet — the container is tested end-to-end via infra/scripts/spike-b-run.mjs. Add kiro-runner-validation.test.ts if validate.ts logic grows."
+    },
+    "tool-packs": {
+      "description": "Tool-pack installer logic — uv, kiro-cli, and draw.io install, detection, and verification",
+      "sources": [
+        "server/tool-packs.ts",
+        "server/drawio-pack.ts"
+      ],
+      "tests": [
+        "test/tool-packs.test.ts"
+      ],
+      "smokeIds": [],
+      "note": "Backend-only. Tests exercise the installer logic (spawn mocks, path resolution, verification) without a running server."
+    },
+    "agent-runner-browser": {
+      "description": "Tests in agent-runner-browser.test.ts",
+      "sources": [
+        "agent-runner/src/browser-tools.ts"
+      ],
+      "tests": [
+        "test/agent-runner-browser.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "aws-env": {
+      "description": "Tests in aws-env.test.ts",
+      "sources": [
+        "kiro-runner/src/validate.ts",
+        "agent-runner/src/validate.ts"
+      ],
+      "tests": [
+        "test/aws-env.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "background-jobs": {
+      "description": "Background jobs: local setImmediate, Lambda self-invoke, inline fallback, and dispatch from /internal/events.",
+      "sources": [
+        "server/background-jobs.ts",
+        "server/scheduled-jobs.ts"
+      ],
+      "tests": [
+        "test/background-jobs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "browser-live-view": {
+      "description": "Tests in browser-live-view.test.ts",
+      "sources": [
+        "server/browser-live-view.ts"
+      ],
+      "tests": [
+        "test/browser-live-view.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "case-runs": {
+      "description": "Tests in case-runs.test.ts",
+      "sources": [
+        "server/agent/run-secrets.ts",
+        "server/testing/case-runs.ts"
+      ],
+      "tests": [
+        "test/case-runs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "claude-agentcore": {
+      "description": "Claude on AgentCore: event mapping, credential selection, errors, cancel.",
+      "sources": [
+        "server/agent/kiro-agentcore.ts",
+        "server/agent/claude-agentcore.ts",
+        "server/session-pr.ts",
+        "server/agent/types.ts"
+      ],
+      "tests": [
+        "test/claude-agentcore.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "create-inputs": {
+      "description": "Tests in create-inputs.test.ts",
+      "sources": [
+        "server/agent/runner-files.ts",
+        "server/create-ai.ts",
+        "server/repositories/credentials.ts"
+      ],
+      "tests": [
+        "test/create-inputs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "doc-templates-routes": {
+      "description": "Doc template routes: upload, list, make default, delete (repository-backed).",
+      "sources": [
+        "server/docgen.ts"
+      ],
+      "tests": [
+        "test/doc-templates-routes.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "durable-files": {
+      "description": "durable-files: files under DATA_DIR are mirrored to the storage backend (S3) only when STORAGE_BACKEND=s3,",
+      "sources": [
+        "server/storage-instance.ts",
+        "server/storage/index.ts",
+        "server/durable-files.ts"
+      ],
+      "tests": [
+        "test/durable-files.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "google-auth": {
+      "description": "Tests in google-auth.test.ts",
+      "sources": [
+        "server/google-auth.ts"
+      ],
+      "tests": [
+        "test/google-auth.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "mail-page": {
+      "description": "Mail page day window",
+      "sources": [
+        "server/mail.ts"
+      ],
+      "tests": [
+        "test/mail.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "gmail": {
+      "description": "Gmail connection, run token and outgoing mail helpers",
+      "sources": [
+        "server/gmail.ts"
+      ],
+      "tests": [
+        "test/gmail.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "repo-skills": {
+      "description": "Agent skills in the repository (agent/skills) and the docs and skills sync task",
+      "sources": [
+        "server/agent/skills-guidance.ts",
+        "web/src/lib/repoSync.js"
+      ],
+      "tests": [
+        "test/repo-skills.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "google-workspace": {
+      "description": "Tests in google-workspace.test.ts",
+      "sources": [
+        "server/google-workspace.ts"
+      ],
+      "tests": [
+        "test/google-workspace.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "harness-safety-switches": {
+      "description": "Safety switches ported from the harness work (Phase 1, PRs 1.2 and 1.3):",
+      "sources": [
+        "server/agent/runner.ts"
+      ],
+      "tests": [
+        "test/harness-safety-switches.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "knowledge-answer": {
+      "description": "Tests in knowledge-answer.test.ts",
+      "sources": [
+        "server/knowledge-answer.ts",
+        "server/knowledge-kb.ts"
+      ],
+      "tests": [
+        "test/knowledge-answer.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "knowledge-embeddings": {
+      "description": "Tests in knowledge-embeddings.test.ts",
+      "sources": [
+        "server/knowledge-embeddings.ts"
+      ],
+      "tests": [
+        "test/knowledge-embeddings.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "learn-routes": {
+      "description": "Learn routes: docs, quizzes (take + attempts) and learning paths with progress, on the learn repository.",
+      "sources": [
+        "server/repositories/learn.ts"
+      ],
+      "tests": [
+        "test/learn-routes.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "loop-iteration": {
+      "description": "Loop iteration logic: status parsing, stagnation (harness PR 1.7: loose matching, window of at least 2), the stop",
+      "sources": [
+        "server/loop-iteration.ts"
+      ],
+      "tests": [
+        "test/loop-iteration.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "loop-session": {
+      "description": "Loop sessions: after a run ends, the session either starts the next run or stops with the reason (workflows/loop.ts).",
+      "sources": [
+        "server/repositories/sessions.ts",
+        "server/workflows/loop.ts"
+      ],
+      "tests": [
+        "test/loop-session.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "mcp-core-tools": {
+      "description": "MCP core tools on the repositories: sessions, transcripts, reviews, scans.",
+      "sources": [
+        "server/repositories/reviews.ts",
+        "server/repositories/git-repos.ts"
+      ],
+      "tests": [
+        "test/mcp-core-tools.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "public-url": {
+      "description": "Tests in public-url.test.ts",
+      "sources": [
+        "server/public-url.ts"
+      ],
+      "tests": [
+        "test/public-url.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "realtime-token": {
+      "description": "Tests in realtime-token.test.ts",
+      "sources": [
+        "server/realtime.ts"
+      ],
+      "tests": [
+        "test/realtime-token.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-checks": {
+      "description": "Check steps for loop sessions (server/agent/runner-checks.ts): what a check command may be (harness PR 1.2) and how",
+      "sources": [
+        "server/agent/runner-checks.ts"
+      ],
+      "tests": [
+        "test/runner-checks.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-files": {
+      "description": "Files an agent writes in an AgentCore microVM come back to the portal: collect -> chunked events -> receiver.",
+      "sources": [
+        "server/agent/runner-files.ts",
+        "server/agent/kiro-agentcore.ts",
+        "server/agent/claude-agentcore.ts",
+        "server/agent/types.ts"
+      ],
+      "tests": [
+        "test/runner-files.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-inspect": {
+      "description": "Tests in runner-inspect.test.ts",
+      "sources": [
+        "server/agent/runner-inspect.ts"
+      ],
+      "tests": [
+        "test/runner-inspect.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-mcp": {
+      "description": "Tests in runner-mcp.test.ts",
+      "sources": [
+        "server/agent/runner-mcp.ts",
+        "server/agent/runner-integrations.ts"
+      ],
+      "tests": [
+        "test/runner-mcp.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-repos": {
+      "description": "Tests in runner-repos.test.ts",
+      "sources": [
+        "server/agent/runner-repos.ts"
+      ],
+      "tests": [
+        "test/runner-repos.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-memory": {
+      "description": "The runners' memory guard: commands marked kill-first, the biggest stopped when memory is nearly gone",
+      "sources": [
+        "server/agent/runner-memory.ts"
+      ],
+      "tests": [
+        "test/runner-memory.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "runner-snapshot": {
+      "description": "Tests in runner-snapshot.test.ts",
+      "sources": [
+        "server/agent/runner-snapshot.ts"
+      ],
+      "tests": [
+        "test/runner-snapshot.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "scheduled-jobs": {
+      "description": "Tests in scheduled-jobs.test.ts",
+      "sources": [
+        "server/scheduled-jobs.ts"
+      ],
+      "tests": [
+        "test/scheduled-jobs.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "session-files-mirror": {
+      "description": "Session files are mirrored to the storage backend (S3 on Lambda) and come back after the local disk is lost.",
+      "sources": [
+        "server/storage-instance.ts",
+        "server/storage/index.ts"
+      ],
+      "tests": [
+        "test/session-files-mirror.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "slash-commands": {
+      "description": "Slash commands in an engine session: the portal's own (/tools, /rename, /cost, /status, /help), /init and /review, and the owner's commands and skills from Agent setup.",
+      "sources": [
+        "server/workflows/session-commands.ts",
+        "server/workflows/slash-commands.ts",
+        "test/slash-commands.test.ts"
+      ],
+      "tests": [
+        "test/slash-commands.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "testing-trace-steps": {
+      "description": "Trace helpers (startStep / finishStep / getCaseSetTrace / getGenerationTrace) on both backends.",
+      "sources": [
+        "server/repositories/testing-data-sqlite.ts",
+        "server/repositories/testing-data.ts",
+        "server/testing/trace.ts"
+      ],
+      "tests": [
+        "test/testing-trace-steps.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "ticket-sort": {
+      "description": "Tests in ticket-sort.test.ts",
+      "sources": [
+        "web/src/lib/ticketSort.js"
+      ],
+      "tests": [
+        "test/ticket-sort.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "codex": {
+      "description": "Codex sign-in, stdio transport, engine runs, and credential isolation",
+      "sources": [
+        "server/codex-auth.ts",
+        "server/codex-command.ts",
+        "server/codex-client.ts",
+        "server/agent/codex.ts",
+        "web/src/components/CodexCredentials.jsx",
+        "server/codex-oauth.ts",
+        "server/codex-device.ts",
+        "server/codex-device-protocol.ts",
+        "codex-runner/src/device-auth.ts",
+        "server/repositories/codex-store.ts",
+        "server/agent/codex-session.ts",
+        "server/agent/codex-agents.ts",
+        "server/agent/codex-agentcore.ts",
+        "server/agent/codex-pr-tool.ts",
+        "codex-runner/src/service.ts",
+        "codex-runner/src/state.ts",
+        "server/agent/codex-config.ts",
+        "server/agent/codex-text.ts"
+      ],
+      "tests": [
+        "test/codex.test.ts",
+        "test/codex-oauth.test.ts",
+        "test/codex-device.test.ts",
+        "test/codex-runner.test.ts",
+        "test/codex-agents.test.ts",
+        "test/codex-pr-tool.test.ts",
+        "test/codex-store.test.ts",
+        "test/codex-setup.test.ts"
+      ],
+      "smokeIds": [
+        "credentials",
+        "codex-setup"
+      ]
+    }
+  },
+  "shared": [
+    {
+      "description": "Core server infrastructure — database, HTTP routing, utilities, entry point, event bus",
+      "sources": [
+        "server/db.ts",
+        "server/http.ts",
+        "server/util.ts",
+        "server/index.ts",
+        "server/events.ts"
+      ],
+      "affects": "*",
+      "rationale": "Every server module depends on the DB, router, util helpers, entry-point registration, or the event bus. The UI smoke tests run against the real server binary, so a change here can break any module's backend tests AND its smoke assertions. No part restriction."
+    },
+    {
+      "description": "Build and dependency manifest",
+      "sources": [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "scripts/build.mjs",
+        "scripts/preflight.mjs"
+      ],
+      "affects": "*",
+      "rationale": "Dependency or build-config changes can break any module silently — both compiled server code and the web bundle. Affects both backend and UI."
+    },
+    {
+      "description": "Shared backend test infrastructure",
+      "sources": [
+        "test/fixtures.ts",
+        "test/fake-sdk.mjs",
+        "test/fake-kiro.mjs"
+      ],
+      "affects": "*",
+      "part": "backend",
+      "rationale": "Every backend test imports from fixtures.ts. fake-sdk and fake-kiro are used across multiple test suites. These are test helpers only — they don't affect the built server or the smoke suite."
+    },
+    {
+      "description": "Smoke test runner",
+      "sources": [
+        "test/ui/smoke.ts"
+      ],
+      "affects": "*",
+      "part": "ui",
+      "rationale": "The smoke runner itself is shared UI infrastructure. Changes to timing, helpers, section list, or the SMOKE_ONLY mechanism only affect smoke (UI) outcomes, not backend unit tests."
+    },
+    {
+      "description": "Agent runner infrastructure",
+      "sources": [
+        "server/agent/runner.ts",
+        "server/agent/claude-code.ts",
+        "server/agent/claude-sessions.ts",
+        "server/agent/demo.ts",
+        "server/agent/kiro.ts",
+        "server/agent/kiro-agentcore.ts",
+        "server/agent/recap.ts",
+        "server/agent/browser-headless.ts",
+        "server/agent/browser-manager.ts",
+        "server/agent/litellm.ts",
+        "server/agent/pricing.ts",
+        "server/agent/types.ts"
+      ],
+      "affects": [
+        "sessions",
+        "workflows",
+        "reviews",
+        "branch-scans",
+        "testing-module",
+        "engines",
+        "ide"
+      ],
+      "rationale": "The agent runner executes sessions, drives workflow steps, runs code reviews, branch scans, and test runs. browser-headless.ts rewrites Playwright MCP entries; browser-manager.ts provides the per-session live browser. Server code — affects both backend tests and smoke (via running server behaviour). No part restriction."
+    },
+    {
+      "description": "Core web app infrastructure — routing, API client, event system, global styles",
+      "sources": [
+        "web/src/App.jsx",
+        "web/src/main.jsx",
+        "web/src/styles.css",
+        "web/src/styles/base.css",
+        "web/src/styles/components.css",
+        "web/src/lib/api.js",
+        "web/src/lib/events.js",
+        "web/src/lib/cx.js",
+        "web/src/lib/util.js"
+      ],
+      "affects": "*",
+      "part": "ui",
+      "rationale": "Every page is rendered through App.jsx and uses api.js, events, and the global stylesheet. Web-only files — they don't affect backend unit tests. Affects only UI parts."
+    },
+    {
+      "description": "Universal UI primitives — icons, skeleton loading, toast notifications",
+      "sources": [
+        "web/src/components/Icon.jsx",
+        "web/src/components/Skeleton.jsx",
+        "web/src/components/Toast.jsx"
+      ],
+      "affects": "*",
+      "part": "ui",
+      "rationale": "Used on virtually every page; a breakage is visible across the entire UI. Web-only files — affects only UI parts."
+    },
+    {
+      "description": "Live run-stream hook",
+      "sources": [
+        "web/src/lib/useRunStream.js"
+      ],
+      "affects": [
+        "sessions",
+        "reviews",
+        "testing-module"
+      ],
+      "part": "ui",
+      "rationale": "Only features that display real-time agent output use this hook. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Overlay dismiss hook — drag-safe backdrop close for all dialogs and modals",
+      "sources": [
+        "web/src/lib/useOverlayDismiss.js"
+      ],
+      "affects": [
+        "shell",
+        "sessions",
+        "ide",
+        "testing-module",
+        "dashboard",
+        "diagrams",
+        "generated-docs",
+        "presentations",
+        "vault",
+        "credentials",
+        "loop-specs",
+        "reviews",
+        "branch-scans",
+        "settings",
+        "theme",
+        "attachments"
+      ],
+      "part": "ui",
+      "rationale": "Used by every dialog and modal overlay in the app. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Markdown sanitizer (DOMPurify wrapper)",
+      "sources": [
+        "web/src/lib/sanitize.js"
+      ],
+      "affects": [
+        "sessions",
+        "attachments",
+        "knowledge"
+      ],
+      "part": "ui",
+      "rationale": "Used in SessionLive.jsx (sessions) and FilePreviewModal.jsx (attachments, knowledge) to sanitize marked output. Web-only — affects only UI parts."
+    },
+    {
+      "description": "File preview modal",
+      "sources": [
+        "web/src/components/FilePreviewModal.jsx"
+      ],
+      "affects": [
+        "attachments",
+        "sessions",
+        "knowledge"
+      ],
+      "part": "ui",
+      "rationale": "Used for previewing uploaded files in sessions, knowledge base documents, and the attachments picker. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "AWS credential and region utilities",
+      "sources": [
+        "web/src/lib/awsCredParser.js",
+        "web/src/lib/awsRegions.js",
+        "web/src/components/AwsRegionSelect.jsx"
+      ],
+      "affects": [
+        "credentials",
+        "aws-accounts",
+        "bedrock-sso"
+      ],
+      "part": "ui",
+      "rationale": "Specific to AWS credential entry, account management, and Bedrock SSO flows. Web-only files — affects only UI parts."
+    },
+    {
+      "description": "Device code OAuth box",
+      "sources": [
+        "web/src/components/DeviceCodeBox.jsx"
+      ],
+      "affects": [
+        "bedrock-sso",
+        "auth",
+        "credentials"
+      ],
+      "part": "ui",
+      "rationale": "Used in Bedrock SSO device-code flow, auth provider setup, and the Kiro IAM Identity Center re-authentication flow in the Credentials page. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Workspace / session header component",
+      "sources": [
+        "web/src/components/WorkspaceHeader.jsx"
+      ],
+      "affects": [
+        "workspaces",
+        "sessions",
+        "ide"
+      ],
+      "part": "ui",
+      "rationale": "Rendered in workspace and session views. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Shared router and navigation",
+      "sources": [
+        "web/src/lib/router.js"
+      ],
+      "affects": [
+        "shell",
+        "projects",
+        "auth",
+        "setup"
+      ],
+      "part": "ui",
+      "rationale": "Route changes affect navigation in shell, project listing, post-login redirect, and setup wizard steps. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Template library",
+      "sources": [
+        "web/src/lib/templates/index.js"
+      ],
+      "affects": [
+        "knowledge",
+        "generated-docs",
+        "presentations"
+      ],
+      "part": "ui",
+      "rationale": "Document and presentation templates used across knowledge base, generated docs, and presentations. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Shared theme CSS variables",
+      "sources": [
+        "shared/themes"
+      ],
+      "affects": [
+        "theme"
+      ],
+      "part": "ui",
+      "rationale": "Theme palette CSS definitions — web-only. Changes affect only the theme module's UI part."
+    },
+    {
+      "description": "DynamoDB repository infrastructure — shared client, region config, and attribute helpers",
+      "sources": [
+        "server/repositories/backend.ts",
+        "server/repositories/dynamo-client.ts"
+      ],
+      "affects": [
+        "api-tokens",
+        "auth",
+        "permissions",
+        "audit",
+        "delegation"
+      ],
+      "part": "backend",
+      "rationale": "Shared backend selector (usesDynamoDb), DynamoDB client singleton, and attribute-marshaling helpers used by all DynamoDB repository implementations. Backend only — not compiled into the web bundle."
+    }
+  ]
+}

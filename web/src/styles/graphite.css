@@ -1,0 +1,74 @@
+/**
+ * Graphite: developer-workbench look. Everything is gated on [data-template="graphite"].
+ *
+ * Flat surfaces and small corners, one amber accent, headings in a plain weight instead of display type,
+ * a rail whose active item is a thin accent bar, underlined tabs, compact rows, and code-like ids.
+ */
+
+/* Headings: plain, tight */
+[data-template="graphite"] h1,
+[data-template="graphite"] h2,
+[data-template="graphite"] h3 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
+}
+[data-template="graphite"] .page-head-text h1 { font-size: 1.3rem; }
+
+/* Rail: labels as quiet small caps, active item is a bar, not a pill */
+[data-template="graphite"] .rail-section-label {
+  font-size: 0.64rem;
+  letter-spacing: 0.09em;
+  padding-top: 8px;
+  color: var(--ink-3);
+}
+[data-template="graphite"] .rail-link {
+  border-radius: var(--radius-sm, 3px);
+  font-weight: 500;
+  padding: 4px 9px;
+}
+[data-template="graphite"] .rail-link:hover { background: var(--panel-2); }
+[data-template="graphite"] .rail-link.is-active {
+  background: var(--accent-wash);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--ink);
+}
+
+/* Tabs: underline */
+[data-template="graphite"] .tab-bar { border-bottom: 1px solid var(--line); gap: 2px; background: none; }
+[data-template="graphite"] .tab-btn {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--ink-3);
+  font-weight: 500;
+  padding: 8px 12px;
+  margin-bottom: -1px;
+}
+[data-template="graphite"] .tab-btn:hover { color: var(--ink); }
+[data-template="graphite"] .tab-btn.is-active { color: var(--ink); border-bottom-color: var(--accent); background: none; }
+
+/* Buttons: flat */
+[data-template="graphite"] .btn { box-shadow: none; font-weight: 500; }
+[data-template="graphite"] .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+[data-template="graphite"] .btn-primary:hover { filter: brightness(1.08); }
+
+/* Panels and cards: hairline, no glow */
+[data-template="graphite"] .card,
+[data-template="graphite"] .panel { box-shadow: none; border-color: var(--line); }
+
+/* Ids, paths and keys read as code */
+[data-template="graphite"] kbd,
+[data-template="graphite"] code { font-family: var(--mono); }
+[data-template="graphite"] kbd { border: 1px solid var(--line); border-radius: 3px; background: var(--panel-2); }
+
+/* Tables: compact rows with hairlines */
+[data-template="graphite"] table th {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+[data-template="graphite"] table td { padding-top: 7px; padding-bottom: 7px; }

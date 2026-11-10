@@ -1,360 +1,789 @@
+/**
+ * Repositories API routes.
+ *
+ * Routes:
+ *   GET    /api/projects/:id/repos                         — list repos
+ *   POST   /api/projects/:id/repos                         — add repo
+ *   GET    /api/projects/:id/repos/progress                — lightweight progress poll
+ *   GET    /api/projects/:id/repos/:repoId                 — get repo details
+ *   DELETE /api/projects/:id/repos/:repoId                 — remove repo
+ *   POST   /api/projects/:id/repos/:repoId/sync            — trigger clone/sync
+ *   GET    /api/projects/:id/repos/:repoId/branches        — list branches
+ *   PUT    /api/projects/:id/repos/:repoId/default-branch  — update default branch
+ */
+
+import { registerBackgroundJob, runInBackground } from './background-jobs.ts';
+import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
 import fs from 'node:fs';
+import os from 'node:os';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { all, insert, one, run, update, type Row } from './db.ts';
-import { del, get, patch, post } from './http.ts';
-import { HttpError, badRequest, newId, notFound, now, slugify, str, withLock } from './util.ts';
-import { getProject, notifyProject, projectDir, requireProject, writeClaudeMd } from './projects.ts';
-import { git, gitConfigEnv, PORTAL_GIT_IDENTITY, redact } from './git.ts';
-import { deleteSecret, getSecret, secretInfo, setSecret } from './secrets.ts';
-import { awsEnv, githubToken } from './settings.ts';
+import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { router, sendJson } from './http.ts';
+import type { PortalRequest, PortalResponse } from './http.ts';
+import { one } from './db.ts';
+import { generateId, now, str, badRequest, notFound, parseJson } from './util.ts';
+import { config } from './config.ts';
+import { buildGitEnv } from './git-connections.ts';
+import { decrypt } from './secrets.ts';
+import { ProgressTracker, redactCredentials } from './git-progress.ts';
+import type { ProgressInfo } from './git-progress.ts';
+import { getGitReposRepository } from './repositories/git-repos.ts';
+import { getGitConnectionsRepository } from './repositories/git-connections.ts';
 
-export type Provider = 'github' | 'codecommit' | 'git';
+import { getMemberRow, getProjectRow, getRepoRow } from './project-access.ts';
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface Repo {
+export interface Repository {
   id: string;
   project_id: string;
   name: string;
-  slug: string;
-  provider: Provider;
   url: string;
-  default_branch: string;
-  token_secret: string | null;
-  auth_user: string | null;
+  provider: string;
   status: string;
-  error: string | null;
-  last_sync: string | null;
+  default_branch: string | null;
+  identity: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  connection_id: string | null;
 }
 
-export function getRepo(id: string): Repo {
-  const r = one<Repo>('SELECT * FROM repos WHERE id = ?', id);
+/** Alias used by diagram modules — same shape as Repository. */
+export type Repo = Repository;
+
+// ── In-memory progress state ──────────────────────────────────────────────────
+
+/**
+ * Active progress trackers, keyed by repo id.
+ * Populated when a sync starts; deleted ~2 s after it finishes.
+ */
+const repoProgress = new Map<string, ProgressTracker>();
+
+/**
+ * Repo ids whose sync is currently in-flight.
+ * Used to prevent concurrent syncs and to return 409.
+ */
+const syncInFlight = new Set<string>();
+
+/** @internal Exposed for tests only — do not mutate from outside tests. */
+export const _repoProgressForTest = repoProgress;
+/** @internal Exposed for tests only. */
+export const _syncInFlightForTest = syncInFlight;
+
+/**
+ * Active git child processes (clone/fetch) tracked for graceful shutdown.
+ * Populated when a git subprocess starts; removed when it exits.
+ */
+const activeGitProcs = new Set<ChildProcess>();
+
+/**
+ * Kill all tracked git child processes.
+ * Called on server shutdown so in-flight git operations do not keep
+ * the Node.js event loop alive after the HTTP server has closed.
+ */
+export function killActiveGitProcesses(): void {
+  for (const proc of activeGitProcs) {
+    try { proc.kill(); } catch { /* already dead */ }
+  }
+  activeGitProcs.clear();
+}
+
+/** Attach the current progress snapshot (or null) to a repo row. */
+function withProgress(repo: Repository): Repository & { progress: ProgressInfo | null } {
+  return { ...repo, progress: repoProgress.get(repo.id)?.snapshot ?? null };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Resolve the directory on disk for a cloned repo. Uses the raw repo name (no slugification). */
+function repoCloneDir(projectSlug: string, repoName: string): string {
+  return path.join(config.dataDir, 'projects', projectSlug, 'repos', repoName);
+}
+
+/**
+ * The on-disk path for a repo's reference clone, keyed by project slug and raw repo name.
+ *
+ * Exported so runner.ts and working-copies.ts can derive the same path without re-implementing
+ * the logic. Uses `repoName` verbatim — this matches what `performSync` writes on disk (the
+ * clone directory is always named after the raw repo name, never slugified).
+ */
+export function repoRefDir(projectSlug: string, repoName: string): string {
+  return repoCloneDir(projectSlug, repoName);
+}
+
+/**
+ * The reference clone directory for a repository. Used by diagram and document agents
+ * to find the checked-out source files.
+ *
+ * Uses the raw `repo.name` (not slugified) — this matches what `performSync` wrote to disk.
+ */
+export async function repoDir(repo: Repo): Promise<string> {
+  const slug = String((await getProjectRow(repo.project_id))?.slug ?? 'unknown');
+  return repoCloneDir(slug, repo.name);
+}
+
+/** Look up a repo by id. Throws notFound if missing. */
+export async function getRepo(id: string): Promise<Repo> {
+  const r = await getRepoRow(id);
   if (!r) throw notFound('Repository not found');
-  return r;
+  return r as unknown as Repo;
 }
 
-export function repoDir(r: Repo): string {
-  return path.join(projectDir(getProject(r.project_id)), 'repos', r.slug);
+/** Get the project slug for a project id. */
+async function getProjectSlug(projectId: string): Promise<string | null> {
+  const row = await getProjectRow(projectId);
+  return row ? String(row.slug) : null;
 }
 
-const GITHUB_RE = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
-const CODECOMMIT_HTTPS_RE = /^https:\/\/git-codecommit\.([a-z0-9-]+)\.amazonaws\.com\/v1\/repos\/([A-Za-z0-9_.-]+)$/;
-const CODECOMMIT_GRC_RE = /^codecommit:(?::([a-z0-9-]+))?\/\/(?:[A-Za-z0-9_-]+@)?([A-Za-z0-9_.-]+)$/;
-
-export function validateUrl(provider: Provider, url: string, isAdmin: boolean): string {
-  const u = url.trim();
-  if (provider === 'github') {
-    if (!GITHUB_RE.test(u)) throw badRequest('Use the HTTPS address, like https://github.com/owner/repo');
-    return u.replace(/\/$/, '');
-  }
-  if (provider === 'codecommit') {
-    if (!CODECOMMIT_HTTPS_RE.test(u) && !CODECOMMIT_GRC_RE.test(u)) {
-      throw badRequest('Use https://git-codecommit.<region>.amazonaws.com/v1/repos/<name> or codecommit::<region>://<name>');
-    }
-    return u;
-  }
-  if (/^https:\/\/[^\s]+$/.test(u) || /^ssh:\/\/[^\s]+$/.test(u) || /^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:[^\s]+$/.test(u)) return u;
-  if (/^file:\/\/\//.test(u) || u.startsWith('/')) {
-    if (!isAdmin) throw badRequest('Only admins can connect repositories from the server’s own disk');
-    return u;
-  }
-  throw badRequest('Use an https://, ssh:// or git@host:path address');
+/** Require the caller to be authenticated and a member (or admin) of the project. */
+async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
+  if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
+  const project = await getProjectRow(projectId);
+  if (!project) { sendJson(res, 404, { error: 'Project not found' }); return false; }
+  if (req.user.is_admin) return true;
+  const member = await getMemberRow(projectId, req.user.id);
+  if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
+  return true;
 }
 
-export function githubSlug(url: string): { owner: string; repo: string } | null {
-  const m = url.match(GITHUB_RE);
-  return m ? { owner: m[1], repo: m[2] } : null;
-}
-
-async function repoToken(r: Repo): Promise<string | null> {
-  if (r.token_secret) {
-    const t = await getSecret(r.token_secret);
-    if (t) return t;
-  }
-  return r.provider === 'github' ? githubToken() : null;
-}
-
-/** Environment that lets git authenticate for this repository without writing credentials to disk. */
-export async function repoGitEnv(r: Repo): Promise<Record<string, string>> {
-  if (r.provider === 'codecommit') {
-    const aws = await awsEnv();
-    if (r.url.startsWith('https://')) {
-      return {
-        ...aws,
-        ...gitConfigEnv([
-          ['credential.helper', ''],
-          ['credential.helper', '!aws codecommit credential-helper $@'],
-          ['credential.UseHttpPath', 'true'],
-        ]),
-      };
-    }
-    return aws;
-  }
-  const token = await repoToken(r);
-  if (!token || !r.url.startsWith('https://')) return {};
-  const user = r.auth_user || 'x-access-token';
-  const origin = new URL(r.url).origin;
-  return gitConfigEnv([[`http.${origin}/.extraheader`, `AUTHORIZATION: basic ${Buffer.from(`${user}:${token}`).toString('base64')}`]]);
-}
-
-function view(r: Repo) {
-  return { ...r, token: r.token_secret ? secretInfo(r.token_secret) : { set: false } };
-}
-
-function publishRepo(r: Repo) {
-  notifyProject(r.project_id, 'repo.updated', view(getRepo(r.id)));
-}
-
-export async function cloneRepo(r: Repo): Promise<void> {
-  const dir = repoDir(r);
-  await withLock(`repo:${r.id}`, async () => {
-    update('repos', r.id, { status: 'cloning', error: null });
-    publishRepo(r);
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(dir), { recursive: true });
-      await git(['clone', '--quiet', '--origin', 'origin', r.url, dir], { env: await repoGitEnv(r), timeoutMs: 15 * 60_000 });
-      const head = await git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: dir }).catch(() => null);
-      const def = head?.stdout.trim().replace(/^origin\//, '');
-      const branch = r.default_branch || def || 'main';
-      update('repos', r.id, { status: 'ready', last_sync: now(), default_branch: branch });
-    } catch (e: any) {
-      update('repos', r.id, { status: 'error', error: redact(String(e?.message ?? e)) });
-    }
-    publishRepo(r);
-  });
-}
-
-export async function syncRepo(r: Repo): Promise<void> {
-  const dir = repoDir(r);
-  if (!fs.existsSync(path.join(dir, '.git'))) return cloneRepo(r);
-  await withLock(`repo:${r.id}`, async () => {
-    update('repos', r.id, { status: 'syncing', error: null });
-    publishRepo(r);
-    try {
-      await git(['fetch', '--quiet', '--prune', 'origin'], { cwd: dir, env: await repoGitEnv(r), timeoutMs: 10 * 60_000 });
-      const fresh = getRepo(r.id);
-      await git(['checkout', '--quiet', '-B', fresh.default_branch, `origin/${fresh.default_branch}`], { cwd: dir });
-      await git(['reset', '--quiet', '--hard', `origin/${fresh.default_branch}`], { cwd: dir });
-      update('repos', r.id, { status: 'ready', last_sync: now() });
-    } catch (e: any) {
-      update('repos', r.id, { status: 'error', error: redact(String(e?.message ?? e)) });
-    }
-    publishRepo(r);
-  });
-}
-
-export async function listBranches(r: Repo): Promise<{ name: string; sha: string; date: string; subject: string }[]> {
-  const dir = repoDir(r);
-  if (!fs.existsSync(path.join(dir, '.git'))) return [];
-  const out = await git(['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)%09%(objectname:short)%09%(committerdate:iso8601)%09%(subject)', 'refs/remotes/origin'], { cwd: dir });
-  return out.stdout
-    .split('\n')
-    .filter(Boolean)
-    .map((l) => {
-      const [ref, sha, date, ...subject] = l.split('\t');
-      return { name: ref.replace(/^origin\//, ''), sha, date, subject: subject.join('\t') };
-    })
-    .filter((b) => b.name !== 'HEAD' && b.name !== 'origin');
-}
-
-const BRANCH_RE = /^(?!.*\.\.)(?!\/)(?!.*\/$)[A-Za-z0-9._\/-]{1,200}$/;
-
-export function checkBranch(b: unknown): string {
-  if (typeof b !== 'string' || !BRANCH_RE.test(b) || b.startsWith('-')) throw badRequest('Branch name is not valid');
-  return b;
-}
-
-export async function ensureFresh(r: Repo): Promise<void> {
-  const fresh = getRepo(r.id);
-  if (fresh.status !== 'ready') throw badRequest(`Repository "${r.name}" is not ready (${fresh.status}). Sync it on the Repos tab.`);
-  if (!fresh.last_sync || Date.now() - Date.parse(fresh.last_sync) > 2 * 60_000) await syncRepo(fresh);
-}
-
-export async function fetchPullRef(r: Repo, pr: number): Promise<string> {
-  const dir = repoDir(r);
-  await git(['fetch', '--quiet', 'origin', `+refs/pull/${pr}/head:refs/remotes/origin/pr/${pr}`], { cwd: dir, env: await repoGitEnv(r) });
-  return `pr/${pr}`;
-}
-
-export async function createWorktree(r: Repo, branch: string, dest: string): Promise<void> {
-  checkBranch(branch);
-  await ensureFresh(r);
-  const dir = repoDir(r);
-  await withLock(`repo:${r.id}`, async () => {
-    await git(['rev-parse', '--verify', '--quiet', `origin/${branch}`], { cwd: dir }).catch(() => {
-      throw badRequest(`Branch "${branch}" was not found in ${r.name}`);
+/** Run a git command, returning stdout or throwing on failure. */
+function spawnGit(args: string[], cwd: string, env?: Record<string, string>, timeoutMs?: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...env },
+      ...(timeoutMs ? { timeout: timeoutMs } : {}),
     });
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    await git(['worktree', 'add', '--quiet', '--detach', dest, `origin/${branch}`], { cwd: dir });
+    proc.unref();
+    (proc.stdout as unknown as { unref(): void }).unref();
+    (proc.stderr as unknown as { unref(): void }).unref();
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    proc.stdout.on('data', (d: Buffer) => out.push(d));
+    proc.stderr.on('data', (d: Buffer) => err.push(d));
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve(Buffer.concat(out).toString('utf8').trim());
+      } else {
+        reject(new Error(Buffer.concat(err).toString('utf8').trim() || `git exited with ${code}`));
+      }
+    });
+    proc.on('error', reject);
   });
 }
 
-export async function removeWorktree(r: Repo, dest: string): Promise<void> {
-  const dir = repoDir(r);
-  await withLock(`repo:${r.id}`, async () => {
-    await git(['worktree', 'remove', '--force', dest], { cwd: dir }).catch(() => undefined);
-    fs.rmSync(dest, { recursive: true, force: true });
-    await git(['worktree', 'prune'], { cwd: dir }).catch(() => undefined);
+/**
+ * Like spawnGit but:
+ *   - Feeds stderr chunks to `onStderrChunk` for live progress parsing.
+ *   - Redacts credentials from error messages before rejecting.
+ */
+function spawnGitWithProgress(
+  args: string[],
+  cwd: string,
+  env?: Record<string, string>,
+  onStderrChunk?: (chunk: Buffer) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...env },
+    });
+    // Unref everything so the event loop can exit once the server closes,
+    // even if the git process is still running (e.g. slow network or test cleanup).
+    proc.unref();
+    (proc.stdout as unknown as { unref(): void }).unref();
+    (proc.stderr as unknown as { unref(): void }).unref();
+    activeGitProcs.add(proc);
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    proc.stdout.on('data', (d: Buffer) => out.push(d));
+    proc.stderr.on('data', (d: Buffer) => {
+      err.push(d);
+      onStderrChunk?.(d);
+    });
+    proc.on('close', (code) => {
+      activeGitProcs.delete(proc);
+      if (code === 0) {
+        resolve(Buffer.concat(out).toString('utf8').trim());
+      } else {
+        const raw = Buffer.concat(err).toString('utf8').trim() || `git exited with ${code}`;
+        reject(new Error(redactCredentials(raw)));
+      }
+    });
+    proc.on('error', (e) => {
+      activeGitProcs.delete(proc);
+      reject(e);
+    });
   });
 }
 
-export async function diffRefs(r: Repo, base: string, head: string): Promise<string> {
-  const dir = repoDir(r);
-  const out = await git(['diff', '--no-color', '--no-ext-diff', '--unified=3', '--find-renames', `origin/${base}...origin/${head}`], {
-    cwd: dir,
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  return out.stdout;
+// ── Branch list ────────────────────────────────────────────────────────────────
+
+interface BranchList {
+  branches: string[];
+  defaultBranch: string | null;
+  /** 'remote' = asked the host just now, 'clone' = read from the local clone, 'none' = nothing available. */
+  source: 'remote' | 'clone' | 'none';
+  error?: string;
 }
 
-export async function pushWorktree(r: Repo, worktreeAbs: string, branch: string, message: string): Promise<{ commit: string | null; pushed: boolean }> {
-  checkBranch(branch);
-  await git(['checkout', '--quiet', '-B', branch], { cwd: worktreeAbs });
-  await git(['add', '-A'], { cwd: worktreeAbs });
-  const staged = await git(['diff', '--cached', '--name-only'], { cwd: worktreeAbs });
-  let commit: string | null = null;
-  if (staged.stdout.trim()) {
-    await git(['commit', '--quiet', '-m', message], { cwd: worktreeAbs, env: PORTAL_GIT_IDENTITY });
+const BRANCH_LIST_TTL_MS = 30_000;
+const branchListCache = new Map<string, { at: number; data: BranchList }>();
+
+/** Tests only. */
+export function _clearBranchListCache(): void { branchListCache.clear(); }
+
+/** Branch names from `git ls-remote --heads` output (`<sha>\trefs/heads/<name>` per line). */
+export function parseLsRemoteHeads(output: string): string[] {
+  const names: string[] = [];
+  for (const line of output.split('\n')) {
+    const m = /^[0-9a-f]{7,64}\s+refs\/heads\/(.+?)\s*$/.exec(line.trim());
+    if (m) names.push(m[1]);
   }
-  const ahead = await git(['rev-list', '--count', `origin/${getRepo(r.id).default_branch}..HEAD`], { cwd: worktreeAbs }).catch(() => ({ stdout: '1' }));
-  if (Number(ahead.stdout.trim()) === 0) throw badRequest('There are no changes to push in this run’s working copy');
-  commit = (await git(['rev-parse', 'HEAD'], { cwd: worktreeAbs })).stdout.trim();
-  await git(['push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`], { cwd: worktreeAbs, env: await repoGitEnv(r), timeoutMs: 5 * 60_000 });
-  return { commit, pushed: true };
+  return [...new Set(names)];
 }
 
-/* ------------------------------------------------------------------ */
-/* GitHub API                                                          */
-/* ------------------------------------------------------------------ */
-
-export async function githubApi(r: Repo, method: string, apiPath: string, body?: unknown): Promise<any> {
-  const slug = githubSlug(r.url);
-  if (!slug) throw badRequest('This is not a GitHub repository');
-  const token = await repoToken(r);
-  if (!token) throw badRequest('Add a GitHub token for this repository (Repos tab) or in Settings');
-  const res = await fetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}${apiPath}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'agent-portal',
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!res.ok) throw new HttpError(502, `GitHub said ${res.status}: ${data?.message ?? text.slice(0, 200)}`);
-  return data;
+/** The default branch first, then the rest alphabetically. */
+export function orderBranches(names: string[], defaultBranch: string | null): string[] {
+  const rest = [...new Set(names)].filter((n) => n !== defaultBranch).sort((a, b) => a.localeCompare(b));
+  return defaultBranch && names.includes(defaultBranch) ? [defaultBranch, ...rest] : rest;
 }
 
-/* ------------------------------------------------------------------ */
-/* Routes                                                              */
-/* ------------------------------------------------------------------ */
-
-function checkProvider(p: unknown): Provider {
-  if (p !== 'github' && p !== 'codecommit' && p !== 'git') throw badRequest('Provider must be github, codecommit or git');
-  return p;
+/** Ask the host for the repository's branches (works for GitHub, CodeCommit and any other git host). */
+export async function listRemoteBranches(repo: Repository, env: Record<string, string>): Promise<string[]> {
+  const out = await spawnGit(['ls-remote', '--heads', '--', repo.url], os.tmpdir(), env, 25_000);
+  return parseLsRemoteHeads(out);
 }
+
+// ── Git credential helpers ─────────────────────────────────────────────────────
+
+/**
+ * Generate a SigV4-derived username/password for CodeCommit HTTPS.
+ *
+ * Implements the exact algorithm from the AWS CLI codecommit credential helper
+ * (awscli/customizations/codecommit.py, CodeCommitGetCommand.sign_request).
+ *
+ * canonical_request = "GIT\n{repoPath}\n\nhost:{hostname}\n\nhost\n"
+ * string_to_sign    = "AWS4-HMAC-SHA256\n{timestamp}\n{scope}\n{sha256(canonical_request)}"
+ * password          = "{timestamp}Z{hex(HMAC-signing-key, string_to_sign)}"
+ * username          = accessKeyId [ "%" rawSessionToken ]   ← token is NOT percent-encoded
+ *
+ * The path signed is /v1/repos/<name> (trailing slash and .git stripped).
+ * CodeCommit validates the signature against the repo path regardless of the
+ * sub-path git requests (/info/refs, /git-upload-pack, …), so signing the
+ * repo root path is correct when we inject a static http.<host>.extraHeader.
+ *
+ * Region is parsed from the host rather than passed as a parameter so the
+ * credential exactly matches the endpoint git is talking to.
+ */
+export function _buildCodeCommitSigV4Password(
+  accessKeyId: string,
+  secretAccessKey: string,
+  sessionToken: string | undefined,
+  remoteUrl: string,
+  nowDate: Date = new Date(),
+): { username: string; password: string } {
+  let hostname: string;
+  let repoPath: string;
+  try {
+    const u = new URL(remoteUrl);
+    hostname = u.hostname;
+    repoPath = u.pathname.replace(/\.git$/, '').replace(/\/$/, '') || '/';
+  } catch {
+    throw new Error(`Invalid CodeCommit remote URL: ${remoteUrl}`);
+  }
+
+  const regionMatch = hostname.match(
+    /(vpce-.+\.)?git-codecommit(-fips)?\.([^.]+)\.(vpce\.)?amazonaws\.com/,
+  );
+  const region = regionMatch ? regionMatch[3] : 'us-east-1';
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const datestamp = `${nowDate.getUTCFullYear()}${pad(nowDate.getUTCMonth() + 1)}${pad(nowDate.getUTCDate())}`;
+  const timestamp = `${datestamp}T${pad(nowDate.getUTCHours())}${pad(nowDate.getUTCMinutes())}${pad(nowDate.getUTCSeconds())}`;
+
+  const canonicalRequest = `GIT\n${repoPath}\n\nhost:${hostname}\n\nhost\n`;
+  const canonicalHash = crypto.createHash('sha256').update(canonicalRequest, 'utf8').digest('hex');
+
+  const scope = `${datestamp}/${region}/codecommit/aws4_request`;
+  const stringToSign = `AWS4-HMAC-SHA256\n${timestamp}\n${scope}\n${canonicalHash}`;
+
+  const hmac = (key: Buffer | string, data: string): Buffer =>
+    crypto.createHmac('sha256', key).update(data, 'utf8').digest();
+
+  const kDate = hmac(Buffer.from('AWS4' + secretAccessKey, 'utf8'), datestamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, 'codecommit');
+  const kSigning = hmac(kService, 'aws4_request');
+  const signature = hmac(kSigning, stringToSign).toString('hex');
+
+  const username = sessionToken
+    ? `${accessKeyId}%${sessionToken}`
+    : accessKeyId;
+
+  return { username, password: `${timestamp}Z${signature}` };
+}
+
+/**
+ * Build a git credential environment using GIT_CONFIG_COUNT/GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n
+ * (git ≥ 2.31) to inject an http.extraHeader Authorization header.
+ *
+ * Keeps secrets out of argv, out of process substitution, and out of .git/config.
+ * Always adds GIT_TERMINAL_PROMPT=0 so a missing credential fails fast.
+ */
+async function getCloneEnv(repo: Repository): Promise<Record<string, string>> {
+  // A CodeCommit repository clones with the project's default AWS account (Workspaces → AWS) when it has usable keys:
+  // refreshing the keys there is enough, no Git connection is needed. Other hosts and projects without such an
+  // account fall through to the repository's Git connection.
+  if (repo.project_id && /git-codecommit(-fips)?\.[^.]+\.(vpce\.)?amazonaws\.com/.test(repo.url)) {
+    try {
+      const { readDefaultId } = await import('./project-aws.ts');
+      const accountId = readDefaultId(String(repo.project_id));
+      const acc = accountId ? await getAwsAccountsRepository().getById(accountId) : null;
+      if (acc && String(acc.project_id) === String(repo.project_id) && acc.auth_method === 'keys' && acc.credentials_enc) {
+        const c = parseJson<Record<string, string>>(decrypt(acc.credentials_enc, config.secretKey), {});
+        if (c.accessKeyId && c.secretAccessKey) {
+          const { username, password } = _buildCodeCommitSigV4Password(c.accessKeyId, c.secretAccessKey, c.sessionToken, repo.url);
+          return buildGitEnv({ username, password }, 'codecommit', repo.url);
+        }
+      }
+    } catch { /* fall back to the connection */ }
+  }
+
+  if (!repo.connection_id) return { GIT_TERMINAL_PROMPT: '0' };
+
+  const conn = await getGitConnectionsRepository().getById(repo.connection_id);
+  if (!conn?.credentials_enc) return { GIT_TERMINAL_PROMPT: '0' };
+
+  let creds: Record<string, string>;
+  try {
+    const plain = decrypt(conn.credentials_enc, config.secretKey);
+    creds = parseJson<Record<string, string>>(plain, {});
+  } catch {
+    return { GIT_TERMINAL_PROMPT: '0' };
+  }
+
+  if (conn.provider === 'codecommit') {
+    const mode = (creds.mode as 'keys' | 'aws-account' | 'portal-sso' | undefined) ?? 'keys';
+    const region = creds.region ?? 'us-east-1';
+
+    let accessKeyId: string | undefined;
+    let secretAccessKey: string | undefined;
+    let sessionToken: string | undefined;
+
+    if (mode === 'keys') {
+      accessKeyId = creds.accessKeyId;
+      secretAccessKey = creds.secretAccessKey;
+      sessionToken = creds.sessionToken;
+    } else if (mode === 'aws-account') {
+      // The project's AWS account (AWS tab): the one the connection names, else the project's default one. Changing the
+      // keys there changes what clones use. The account must belong to the repository's project.
+      const { readDefaultId } = await import('./project-aws.ts');
+      const accountId = creds.awsAccountId || (repo.project_id ? readDefaultId(String(repo.project_id)) : null);
+      const acc = accountId ? await getAwsAccountsRepository().getById(accountId) : null;
+      if (acc && (!repo.project_id || !acc.project_id || String(acc.project_id) === String(repo.project_id)) && acc.auth_method === 'keys' && acc.credentials_enc) {
+        const plain = decrypt(acc.credentials_enc, config.secretKey);
+        const c = parseJson<Record<string, string>>(plain, {});
+        accessKeyId = c.accessKeyId;
+        secretAccessKey = c.secretAccessKey;
+        sessionToken = c.sessionToken;
+      }
+    } else if (mode === 'portal-sso') {
+      const { getBedrockSsoCredentials } = await import('./bedrock-sso.ts');
+      const sso = await getBedrockSsoCredentials();
+      accessKeyId = sso.accessKeyId;
+      secretAccessKey = sso.secretAccessKey;
+      sessionToken = sso.sessionToken;
+    }
+
+    if (!accessKeyId || !secretAccessKey) return { GIT_TERMINAL_PROMPT: '0' };
+
+    const { username, password } = _buildCodeCommitSigV4Password(
+      accessKeyId, secretAccessKey, sessionToken, repo.url,
+    );
+    return buildGitEnv({ username, password }, 'codecommit', repo.url);
+  }
+
+  // GitHub, Bitbucket, and generic git — buildGitEnv knows each provider's header format.
+  return buildGitEnv(creds, conn.provider, repo.url);
+}
+
+/** @internal Exposed for tests and diagnostic scripts — same as getCloneEnv. */
+export const _getCloneEnv = getCloneEnv;
+
+/** Background clone/sync operation. Updates status in the database. */
+async function performSync(repoId: string, projectId: string): Promise<void> {
+  // In test environments (PORTAL_DISABLE_GIT_SYNC=1), skip the actual git
+  // subprocess so the event loop can exit cleanly after server close.
+  if (process.env.PORTAL_DISABLE_GIT_SYNC === '1') return;
+
+  // Prevent concurrent syncs of the same repo
+  if (syncInFlight.has(repoId)) return;
+  syncInFlight.add(repoId);
+
+  // Create a fresh progress tracker and register it before any await
+  const tracker = new ProgressTracker();
+  repoProgress.set(repoId, tracker);
+
+  const repo = await getGitReposRepository().getByIdForProject(repoId, projectId);
+  if (!repo) {
+    syncInFlight.delete(repoId);
+    repoProgress.delete(repoId);
+    return;
+  }
+
+  const slug = await getProjectSlug(projectId);
+  if (!slug) {
+    syncInFlight.delete(repoId);
+    repoProgress.delete(repoId);
+    return;
+  }
+
+  const cloneDir = repoCloneDir(slug, repo.name);
+  const cloneEnv = await getCloneEnv(repo);
+
+  // In the cloud the agents clone the repository themselves inside their own microVM, and Lambda's disk is
+  // temporary and small, so "adding" a repository only checks that the portal can reach it and finds its
+  // default branch. Nothing is stored on this machine.
+  if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.PORTAL_REPO_SYNC_MODE === 'check') {
+    try {
+      const out = await spawnGit(['ls-remote', '--symref', repo.url, 'HEAD'], os.tmpdir(), cloneEnv);
+      const m = out.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m);
+      await getGitReposRepository().updateStatus(repoId, 'ready', {
+        lastSyncedAt: now(),
+        defaultBranch: m ? m[1] : repo.default_branch,
+        lastError: null,
+      });
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : String(e);
+      await getGitReposRepository().updateStatus(repoId, 'error', {
+        lastError: `Could not reach the repository: ${raw}`.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 500),
+      });
+    } finally {
+      repoProgress.delete(repoId);
+      syncInFlight.delete(repoId);
+    }
+    return;
+  }
+
+  const onChunk = (chunk: Buffer) => tracker.feedChunk(chunk);
+
+  try {
+    if (fs.existsSync(path.join(cloneDir, '.git'))) {
+      // Already cloned — fetch with progress
+      await spawnGitWithProgress(['fetch', '--all', '--prune', '--progress'], cloneDir, cloneEnv, onChunk);
+    } else {
+      // Fresh clone with progress.
+      // -c core.longpaths=true: enables Win32 long-path API so repos with deeply-nested
+      // paths (>260 chars) clone successfully on Windows.
+      await fsp.mkdir(path.dirname(cloneDir), { recursive: true });
+      await spawnGitWithProgress(
+        ['clone', '--progress', '-c', 'core.longpaths=true', repo.url, cloneDir],
+        path.dirname(cloneDir),
+        cloneEnv,
+        onChunk,
+      );
+    }
+
+    tracker.finalize();
+
+    // Detect default branch
+    let defaultBranch: string | null = repo.default_branch;
+    try {
+      const ref = await spawnGit(
+        ['symbolic-ref', 'refs/remotes/origin/HEAD', '--short'],
+        cloneDir,
+      );
+      defaultBranch = ref.replace('origin/', '');
+    } catch {
+      // Fall back to existing value
+    }
+
+    await getGitReposRepository().updateStatus(repoId, 'ready', {
+      lastSyncedAt: now(),
+      defaultBranch,
+      lastError: null,
+    });
+
+    // Keep progress visible at 100% briefly so pollers catch the finished state
+    setTimeout(() => {
+      repoProgress.delete(repoId);
+    }, 2000);
+
+  } catch (e: unknown) {
+    const raw = e instanceof Error ? e.message : String(e);
+    // Enrich error with the phase context so users know where it failed
+    const snap = tracker.snapshot;
+    const phaseContext =
+      snap.phase !== 'connecting' && snap.phase !== 'finalizing'
+        ? `Failed while ${snap.phaseLabel.toLowerCase()} (${snap.phasePercent ?? '?'}%): `
+        : '';
+    const msg = `${phaseContext}${raw}`.slice(0, 1000);
+
+    await getGitReposRepository().updateStatus(repoId, 'error', { lastError: msg });
+    repoProgress.delete(repoId);
+  } finally {
+    syncInFlight.delete(repoId);
+  }
+}
+
+// On Lambda a clone started after the reply would be frozen or recycled mid-way, so it runs as its own invocation.
+registerBackgroundJob('repo-sync', async (a) => { await performSync(String(a.repoId), String(a.projectId)); });
+
+// ── Route registration ────────────────────────────────────────────────────────
 
 export function registerRepoRoutes(): void {
-  get('/api/projects/:pid/repos', (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid);
-    return { repos: all<Repo>('SELECT * FROM repos WHERE project_id = ? ORDER BY name', project.id).map(view) };
+
+  // GET /api/projects/:id/repos
+  router.get('/api/projects/:id/repos', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const repos = await getGitReposRepository().listByProject(req.params.id);
+    sendJson(res, 200, { repos: repos.map(withProgress) });
   });
 
-  post('/api/projects/:pid/repos', async (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'editor');
-    const body = await ctx.json();
-    const provider = checkProvider(body.provider);
-    const url = validateUrl(provider, str(body.url, 'Repository address', { max: 500 }), Boolean(ctx.user!.is_admin));
-    const inferred = url.split(/[/:]/).filter(Boolean).pop()!.replace(/\.git$/, '');
-    const name = str(body.name, 'Name', { max: 100, optional: true }).trim() || inferred;
-    let slug = slugify(name, 40);
-    let n = 2;
-    while (one('SELECT id FROM repos WHERE project_id = ? AND slug = ?', project.id, slug)) slug = `${slugify(name, 36)}-${n++}`;
-    const id = newId('g_');
-    let tokenSecret: string | null = null;
-    if (body.token) {
-      tokenSecret = `repo.${id}.token`;
-      await setSecret(tokenSecret, str(body.token, 'Token', { max: 2000 }).trim());
+  // POST /api/projects/:id/repos
+  router.post('/api/projects/:id/repos', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+
+    const body = req.body as Record<string, unknown>;
+    const name = str(body.name, 'name', { max: 120 }).trim();
+    const url = str(body.url, 'url', { max: 1000 }).trim();
+    const provider = str(body.provider, 'provider', { max: 32 }).trim();
+
+    if (!['github', 'codecommit', 'bitbucket', 'git'].includes(provider)) {
+      sendJson(res, 400, { error: 'provider must be github, codecommit, bitbucket, or git' });
+      return;
     }
-    insert('repos', {
-      id,
-      project_id: project.id,
-      name,
-      slug,
-      provider,
-      url,
-      default_branch: body.defaultBranch ? checkBranch(body.defaultBranch) : '',
-      token_secret: tokenSecret,
-      auth_user: body.username ? str(body.username, 'Username', { max: 100 }).trim() : null,
-      status: 'new',
-      created_at: now(),
+    if (!url) { sendJson(res, 400, { error: 'url is required' }); return; }
+
+    const connectionId = typeof body.connectionId === 'string' ? body.connectionId.trim() : null;
+
+    const id = generateId();
+    const ts = now();
+
+    const repo = await getGitReposRepository().create({
+      id, project_id: req.params.id, name, url, provider, status: 'cloning',
+      default_branch: typeof body.defaultBranch === 'string' ? body.defaultBranch.trim() : null,
+      identity: null, last_synced_at: null, last_error: null, created_at: ts,
+      connection_id: connectionId,
     });
-    const repo = getRepo(id);
-    void cloneRepo(repo).then(() => writeClaudeMd(project.id, `Connect repository ${name}`)).catch(() => undefined);
-    return { repo: view(repo) };
+
+    // Start background clone immediately
+    await runInBackground('repo-sync', { repoId: id, projectId: req.params.id });
+
+    sendJson(res, 201, { repo: withProgress(repo) });
   });
 
-  patch('/api/repos/:id', async (ctx) => {
-    const repo = getRepo(ctx.params.id);
-    requireProject(ctx, repo.project_id, 'editor');
-    const body = await ctx.json();
-    const p: Record<string, any> = {};
-    if (body.name !== undefined) p.name = str(body.name, 'Name', { max: 100 }).trim();
-    if (body.defaultBranch !== undefined) p.default_branch = checkBranch(body.defaultBranch);
-    if (body.username !== undefined) p.auth_user = body.username ? str(body.username, 'Username', { max: 100 }).trim() : null;
-    if (body.token === null) {
-      if (repo.token_secret) deleteSecret(repo.token_secret);
-      p.token_secret = null;
-    } else if (body.token) {
-      const name = repo.token_secret || `repo.${repo.id}.token`;
-      await setSecret(name, str(body.token, 'Token', { max: 2000 }).trim());
-      p.token_secret = name;
+  // GET /api/projects/:id/repos/progress
+  // Lightweight polling endpoint — returns only id, status, progress, lastError
+  // for every repo in the project. Must be registered before /:repoId so the
+  // literal segment "progress" is not captured as a repoId.
+  router.get('/api/projects/:id/repos/progress', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const repos = await getGitReposRepository().listByProject(req.params.id);
+    const result = repos.map((r) => ({
+      id: r.id,
+      status: r.status,
+      progress: repoProgress.get(r.id)?.snapshot ?? null,
+      lastError: r.last_error,
+    }));
+    sendJson(res, 200, { repos: result });
+  });
+
+  // GET /api/projects/:id/repos/:repoId
+  router.get('/api/projects/:id/repos/:repoId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+
+    const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
+    if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+
+    sendJson(res, 200, { repo: withProgress(repo) });
+  });
+
+  // DELETE /api/projects/:id/repos/:repoId
+  router.delete('/api/projects/:id/repos/:repoId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+
+    const deleted = await getGitReposRepository().delete(req.params.repoId, req.params.id);
+    if (!deleted) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+
+    // A workspace must not keep pointing at a repository that is gone (new sessions of it would start with nothing).
+    try {
+      const { getWorkspacesRepository } = await import('./repositories/workspaces.ts');
+      const wsRepo = getWorkspacesRepository();
+      for (const ws of await wsRepo.listByProject(req.params.id)) {
+        const ids = parseJson<string[]>(ws.repo_ids, []);
+        if (ids.includes(req.params.repoId)) {
+          await wsRepo.update(ws.id, req.params.id, { repo_ids: JSON.stringify(ids.filter((x) => x !== req.params.repoId)) });
+        }
+      }
+    } catch (e) { console.error('[repos] could not update workspaces after delete:', e); }
+
+    sendJson(res, 200, { ok: true });
+  });
+
+  // POST /api/projects/:id/repos/:repoId/sync
+  router.post('/api/projects/:id/repos/:repoId/sync', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+
+    const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
+    if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+
+    // If a sync is already running, attach to it
+    if (syncInFlight.has(repo.id)) {
+      sendJson(res, 202, { ok: true, status: repo.status, alreadySyncing: true });
+      return;
     }
-    update('repos', repo.id, p);
-    publishRepo(repo);
-    if (p.name || p.default_branch) await writeClaudeMd(repo.project_id, 'Update repository details');
-    return { repo: view(getRepo(repo.id)) };
+
+    const slug = await getProjectSlug(req.params.id);
+    const isReclone = slug
+      ? fs.existsSync(path.join(repoCloneDir(slug, repo.name), '.git'))
+      : false;
+    const nextStatus = isReclone ? 'syncing' : 'cloning';
+
+    await getGitReposRepository().updateStatus(repo.id, nextStatus, { lastError: null });
+
+    await runInBackground('repo-sync', { repoId: repo.id, projectId: req.params.id });
+
+    sendJson(res, 202, { ok: true, status: nextStatus });
   });
 
-  post('/api/repos/:id/sync', async (ctx) => {
-    const repo = getRepo(ctx.params.id);
-    requireProject(ctx, repo.project_id, 'editor');
-    if (repo.status === 'cloning' || repo.status === 'syncing') return { repo: view(repo) };
-    void (repo.status === 'error' && !fs.existsSync(path.join(repoDir(repo), '.git')) ? cloneRepo(repo) : syncRepo(repo));
-    return { repo: view(getRepo(repo.id)) };
+  // GET /api/projects/:id/repos/:repoId/branches
+  router.get('/api/projects/:id/repos/:repoId/branches', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+
+    const found = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
+    const repo = (found ?? undefined) as unknown as Repository | undefined;
+    if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+
+    const slug = await getProjectSlug(req.params.id);
+    if (!slug) { sendJson(res, 404, { error: 'Project not found' }); return; }
+
+    const cloneDir = repoCloneDir(slug, repo.name);
+    const refresh = req.query.get('refresh') === '1';
+    const cached = branchListCache.get(repo.id);
+    if (!refresh && cached && Date.now() - cached.at < BRANCH_LIST_TTL_MS) {
+      sendJson(res, 200, cached.data);
+      return;
+    }
+
+    // The remote is the source of truth: it works in the cloud (no clone is kept there) and is never stale.
+    // A local clone is only the fallback when the remote cannot be reached.
+    let data: BranchList;
+    try {
+      const names = await listRemoteBranches(repo, await getCloneEnv(repo));
+      data = { branches: orderBranches(names, repo.default_branch), defaultBranch: repo.default_branch, source: 'remote' };
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : String(e);
+      const error = redactCredentials(raw).replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 300);
+      let local: string[] = [];
+      if (fs.existsSync(path.join(cloneDir, '.git'))) {
+        try {
+          const output = await spawnGit(['branch', '-r', '--format=%(refname:short)'], cloneDir);
+          local = output.split('\n').map((b) => b.trim().replace(/^origin\//, '')).filter((b) => b && b !== 'HEAD');
+        } catch { /* no local list either */ }
+      }
+      data = {
+        branches: orderBranches(local, repo.default_branch),
+        defaultBranch: repo.default_branch,
+        source: local.length ? 'clone' : 'none',
+        ...(local.length ? {} : { error }),
+      };
+      // A failure is not cached: the next open tries the remote again.
+      sendJson(res, 200, data);
+      return;
+    }
+    branchListCache.set(repo.id, { at: Date.now(), data });
+    sendJson(res, 200, data);
   });
 
-  get('/api/repos/:id/branches', async (ctx) => {
-    const repo = getRepo(ctx.params.id);
-    requireProject(ctx, repo.project_id);
-    return { branches: await listBranches(repo), defaultBranch: repo.default_branch };
+  // PUT /api/projects/:id/repos/:repoId/default-branch
+  router.put('/api/projects/:id/repos/:repoId/default-branch', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+
+    const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
+    if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+
+    const body = req.body as Record<string, unknown>;
+    const branch = str(body.branch, 'branch', { max: 255 }).trim();
+    if (!branch) { sendJson(res, 400, { error: 'branch must not be empty' }); return; }
+
+    await getGitReposRepository().updateDefaultBranch(repo.id, branch);
+    // The branch list is cached with the default first: it must be ordered again.
+    branchListCache.delete(repo.id);
+
+    sendJson(res, 200, { ok: true, defaultBranch: branch });
   });
 
-  get('/api/repos/:id/pulls', async (ctx) => {
-    const repo = getRepo(ctx.params.id);
-    requireProject(ctx, repo.project_id);
-    if (repo.provider !== 'github') return { pulls: [] };
-    const pulls = await githubApi(repo, 'GET', '/pulls?state=open&per_page=50');
-    return {
-      pulls: pulls.map((p: any) => ({ number: p.number, title: p.title, base: p.base.ref, head: p.head.ref, headSha: p.head.sha, author: p.user?.login, url: p.html_url })),
-    };
-  });
+  // POST /api/projects/:id/repos/bulk
+  // Bulk-add repos from a connection, skipping duplicates (by URL).
+  router.post('/api/projects/:id/repos/bulk', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
 
-  del('/api/repos/:id', async (ctx) => {
-    const repo = getRepo(ctx.params.id);
-    requireProject(ctx, repo.project_id, 'editor');
-    await withLock(`repo:${repo.id}`, async () => {
-      fs.rmSync(repoDir(repo), { recursive: true, force: true });
-    });
-    if (repo.token_secret) deleteSecret(repo.token_secret);
-    run('DELETE FROM repos WHERE id = ?', repo.id);
-    await writeClaudeMd(repo.project_id, `Disconnect repository ${repo.name}`);
-    notifyProject(repo.project_id, 'repo.deleted', { id: repo.id });
-    return { ok: true };
+    const body = req.body as Record<string, unknown>;
+    const connectionId = typeof body.connectionId === 'string' ? body.connectionId.trim() : '';
+    if (!connectionId) { sendJson(res, 400, { error: 'connectionId is required' }); return; }
+
+    const repoList = Array.isArray(body.repos) ? body.repos as Array<Record<string, unknown>> : [];
+    if (repoList.length === 0) { sendJson(res, 400, { error: 'repos array is required and must not be empty' }); return; }
+    if (repoList.length > 100) { sendJson(res, 400, { error: 'Cannot bulk-add more than 100 repos at once' }); return; }
+
+    // Verify connection exists and is accessible
+    const conn = await getGitConnectionsRepository().getById(connectionId);
+    if (!conn) { sendJson(res, 404, { error: 'Connection not found' }); return; }
+
+    // Access check: personal connections only usable by their owner
+    if (conn.scope === 'personal' && !req.user!.is_admin && conn.owner_id !== req.user!.id) {
+      sendJson(res, 403, { error: 'You do not have access to this connection' });
+      return;
+    }
+
+    // Collect existing URLs in this project to detect duplicates
+    const existingUrlList = await getGitReposRepository().listUrlsByProject(req.params.id);
+    const existingUrls = new Set(existingUrlList.map((u) => u.toLowerCase()));
+
+    const added: Array<Record<string, unknown>> = [];
+    const skipped: Array<{ url: string; reason: string }> = [];
+    const errors: Array<{ url: string; error: string }> = [];
+    const ts = now();
+
+    for (const repoInput of repoList) {
+      const url = typeof repoInput.url === 'string' ? repoInput.url.trim() : '';
+      if (!url) { errors.push({ url: '', error: 'url is required' }); continue; }
+
+      if (existingUrls.has(url.toLowerCase())) {
+        skipped.push({ url, reason: 'already in project' });
+        continue;
+      }
+
+      try {
+        let name = typeof repoInput.name === 'string' ? repoInput.name.trim() : '';
+        if (!name) {
+          const urlObj = new URL(url);
+          name = urlObj.pathname.replace(/\.git$/, '').split('/').filter(Boolean).pop() ?? 'repo';
+        }
+        const defaultBranch = typeof repoInput.defaultBranch === 'string' ? repoInput.defaultBranch.trim() : null;
+
+        const id = generateId();
+        const repo = await getGitReposRepository().create({
+          id, project_id: req.params.id, name: name.slice(0, 120), url,
+          provider: conn.provider, status: 'cloning', default_branch: defaultBranch,
+          identity: null, last_synced_at: null, last_error: null, created_at: ts,
+          connection_id: connectionId,
+        });
+        existingUrls.add(url.toLowerCase());
+        added.push(withProgress(repo) as unknown as Record<string, unknown>);
+        await runInBackground('repo-sync', { repoId: id, projectId: req.params.id });
+      } catch (e: unknown) {
+        errors.push({ url, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    sendJson(res, 200, { added, skipped, errors });
   });
 }
-
-export type { Row };

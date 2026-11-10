@@ -1,0 +1,209 @@
+# Deploy the cloud portal (AgentPortalCloud: API Lambda, web files, tables, CloudFront) to AWS.
+#
+#   verify  — on every push to main_v3 that touches the portal, and on pull requests that do:
+#             type check and the production build (no AWS access).
+#   wait-for-ci — alongside verify, on the same pushes and manual runs as deploy: waits for CI
+#             (ci.yml) on this commit and fails unless it passed (scripts/wait-for-ci.mjs).
+#   deploy  — on pushes to main_v3 only, or by hand on main_v3, once verify and CI have passed: build
+#             the web files and run `cdk deploy AgentPortalCloud` with the same context values used
+#             for manual deploys.
+#
+# When CI fails on a flaky test, re-run CI's failed jobs, and once they pass, re-run this workflow's
+# failed jobs: the CI check then sees the passing run and the deploy goes ahead.
+#
+# AWS access is the same as deploy-agentcore.yml: GitHub OIDC into agent-portal-github-deploy, which
+# trusts only jobs of this repository in the "aws-prod" environment, so give that environment required
+# reviewers and limit it to main_v3 (Settings › Environments) and every deploy waits for an approval.
+#
+# The context values below are the account's current ones. Override any of them with a repository
+# variable of the same name (Settings › Variables) when the runtimes or bucket change; a value dropped
+# from `cdk deploy` removes the matching setting or resource, so keep the set complete.
+#
+# The Codex runner is deployed here before the portal so the runtime ARN can be passed into Lambda.
+name: Deploy portal
+
+on:
+  push:
+    branches: [main_v3]
+    paths:
+      - server/**
+      - codex-runner/**
+      - web/**
+      - scripts/**
+      - '!scripts/test-*.mjs'
+      - infra/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/deploy-portal.yml
+  pull_request:
+    paths:
+      - server/**
+      - codex-runner/**
+      - web/**
+      - infra/**
+      - .github/workflows/deploy-portal.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push waits for the running one instead of cancelling it half way.
+concurrency:
+  group: deploy-portal-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Type check and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          npm ci --prefix agent-runner --no-audit --no-fund
+          npm ci --prefix kiro-runner --no-audit --no-fund
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build the web files
+        run: npm run build:web
+
+      - name: Type-check the infrastructure
+        run: |
+          cd infra
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+
+  wait-for-ci:
+    name: Wait for CI to pass
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main_v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read # list CI's runs on this commit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Wait for CI on this commit
+        run: node scripts/wait-for-ci.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  deploy:
+    name: Deploy to AWS (ap-southeast-1)
+    needs: [verify, wait-for-ci]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main_v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: aws-prod
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC → AWS
+    env:
+      BUDGET_EMAIL: ${{ vars.BUDGET_EMAIL || 'yuseitan@gmail.com' }}
+      KIRO_RUNTIME_ARN: ${{ vars.KIRO_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalKiroHarness-cb9yhJCYyX' }}
+      CLAUDE_RUNTIME_ARN: ${{ vars.CLAUDE_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalClaudeHarness-BW7D1pFqIl' }}
+      STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET || 'cy-ai-bucket' }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
+      CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'oauth' }}
+      CODEX_OAUTH_CLIENT_ID: ${{ vars.CODEX_OAUTH_CLIENT_ID }}
+      CODEX_OAUTH_CLIENT_SECRET_ARN: ${{ vars.CODEX_OAUTH_CLIENT_SECRET_ARN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Sign in to AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::366019841051:role/agent-portal-github-deploy' }}
+          role-session-name: agent-portal-portal-${{ github.run_id }}
+          aws-region: ap-southeast-1
+
+      - name: Install dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          npm ci --prefix agent-runner --no-audit --no-fund
+          npm ci --prefix kiro-runner --no-audit --no-fund
+          npm ci --prefix infra --no-audit --no-fund
+
+      - name: Build the web files
+        # The stack uploads dist/web and does not build it.
+        run: npm run build:web
+
+      - name: Enable ARM64 Docker builds
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: Deploy Codex AgentCore runner
+        working-directory: infra
+        run: >-
+          npx aws-cdk@2.1147.0 deploy AgentPortalCodexRunner
+          -c codexRunner=1
+          -c "publicUrl=$PUBLIC_URL"
+          --require-approval never
+          --outputs-file "$RUNNER_TEMP/codex-runner-outputs.json"
+
+      - name: Read Codex AgentCore runtime ARN
+        shell: node {0}
+        run: |
+          const fs = require('node:fs');
+          const outputs = JSON.parse(fs.readFileSync(process.env.OUTPUTS_FILE, 'utf8'));
+          const arn = outputs.AgentPortalCodexRunner?.CodexRuntimeArn;
+          if (!arn) throw new Error('CDK did not return the CodexRuntimeArn output');
+          const callback = `${process.env.PUBLIC_URL.replace(/\/+$/, '')}/api/codex/oauth/callback`;
+          fs.appendFileSync(process.env.GITHUB_ENV, `CODEX_RUNTIME_ARN=${arn}\nCODEX_OAUTH_REDIRECT_URI=${callback}\n`);
+        env:
+          OUTPUTS_FILE: ${{ runner.temp }}/codex-runner-outputs.json
+
+      - name: Deploy AgentPortalCloud
+        working-directory: infra
+        shell: bash
+        run: |
+          args=(
+            deploy AgentPortalCloud --require-approval never
+            -c "budgetEmail=$BUDGET_EMAIL"
+            -c "kiroRuntimeArn=$KIRO_RUNTIME_ARN"
+            -c "claudeRuntimeArn=$CLAUDE_RUNTIME_ARN"
+            -c "storageBucket=$STORAGE_BUCKET"
+            -c agentcoreBrowser=true
+            -c "publicUrl=$PUBLIC_URL"
+            -c "codexRuntimeArn=$CODEX_RUNTIME_ARN"
+            -c "codexAuthMode=$CODEX_AUTH_MODE"
+            -c "codexOAuthClientId=$CODEX_OAUTH_CLIENT_ID"
+            -c "codexOAuthRedirectUri=$CODEX_OAUTH_REDIRECT_URI"
+          )
+          if [[ -n "$CODEX_OAUTH_CLIENT_SECRET_ARN" ]]; then
+            args+=(-c "codexOAuthSecretArn=$CODEX_OAUTH_CLIENT_SECRET_ARN")
+          fi
+          npx aws-cdk@2.1147.0 "${args[@]}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Portal deploy"
+            echo "Commit \`${GITHUB_SHA::7}\` → AgentPortalCloud, ${PUBLIC_URL}"
+            echo "Codex AgentCore runner deployed and linked to the portal."
+          } >> "$GITHUB_STEP_SUMMARY"

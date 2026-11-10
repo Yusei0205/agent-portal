@@ -1,0 +1,1412 @@
+/* ── IDE Workspace ─────────────────────────────────────── */
+
+/* ── Layout ──────────────────────────────────────────── */
+.ide-workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.ide-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Activity bar ────────────────────────────────────── */
+.ide-activity-bar {
+  width: 40px;
+  flex-shrink: 0;
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  gap: 2px;
+  z-index: 2;
+}
+
+.ide-activity-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  border-radius: var(--radius);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  transition: color 0.12s, background 0.12s;
+}
+.ide-activity-btn:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.ide-activity-btn.is-active {
+  background: var(--accent-wash);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* ── Sidebar panel ───────────────────────────────────── */
+.ide-sidebar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  position: relative;
+  min-width: 160px;
+}
+
+.ide-resize-handle-x {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 10;
+  transition: background 0.12s;
+}
+.ide-resize-handle-x:hover,
+.ide-resize-handle-x.is-dragging {
+  background: var(--accent);
+}
+
+.ide-resize-handle-y {
+  height: 4px;
+  cursor: row-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  transition: background 0.12s;
+}
+.ide-resize-handle-y:hover,
+.ide-resize-handle-y.is-dragging {
+  background: var(--accent);
+}
+
+/* Panel section header */
+.ide-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 12px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  min-height: 32px;
+}
+.ide-panel-header-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ide-panel-header-actions {
+  display: flex;
+  gap: 2px;
+}
+
+/* ── Main content area ───────────────────────────────── */
+.ide-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.ide-main-row {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Editor panel ────────────────────────────────────── */
+.ide-editor-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  border-right: 1px solid var(--line);
+}
+
+.ide-editor-tabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+  overflow-x: auto;
+  min-height: 36px;
+}
+.ide-editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 14px;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  border: none;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 180px;
+  position: relative;
+  flex-shrink: 0;
+}
+.ide-editor-tab:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+  color: var(--ink);
+}
+.ide-editor-tab.is-active {
+  background: var(--canvas);
+  color: var(--ink);
+  border-bottom: 2px solid var(--accent);
+}
+.ide-editor-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.ide-editor-tab-dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.ide-editor-tab-close {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  flex-shrink: 0;
+  opacity: 0;
+}
+.ide-editor-tab:hover .ide-editor-tab-close,
+.ide-editor-tab.is-active .ide-editor-tab-close {
+  opacity: 1;
+}
+.ide-editor-tab-close:hover {
+  background: var(--line);
+}
+
+.ide-editor-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+/* CodeMirror host */
+.ide-codemirror-host {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+}
+.ide-codemirror-host .cm-editor {
+  height: 100%;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+}
+.ide-codemirror-host .cm-scroller {
+  overflow: auto;
+}
+
+/* Conflict banner */
+.ide-stale-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--warn-wash);
+  border-bottom: 1px solid var(--warn);
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.83rem;
+  z-index: 5;
+}
+.ide-stale-banner-msg {
+  flex: 1;
+  color: var(--ink);
+}
+
+/* Empty editor placeholder */
+.ide-editor-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--ink-3);
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  font-size: 0.875rem;
+}
+
+/* ── Collapsible editor area ─────────────────────────── */
+.ide-editor-area {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  min-width: 200px;
+}
+
+/* Thin vertical strip that toggles the editor panel */
+.ide-editor-toggle-strip {
+  width: 14px;
+  align-self: stretch;
+  flex-shrink: 0;
+  background: var(--panel);
+  border: none;
+  border-right: 1px solid var(--line);
+  color: var(--ink-3);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0 0;
+  transition: background 0.12s, color 0.12s;
+  outline: none;
+}
+.ide-editor-toggle-strip:hover {
+  background: color-mix(in srgb, var(--raised) 70%, var(--accent-wash) 30%);
+  color: var(--ink);
+}
+.ide-editor-toggle-strip:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+
+/* ── Agent panel ─────────────────────────────────────── */
+.ide-agent-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  position: relative;
+  min-width: 280px; /* moved from JSX inline style; overridden to 0 on mobile */
+}
+
+/* ── Terminal panel ──────────────────────────────────── */
+.ide-terminal-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  background: var(--term-bg, #1e1e1e);
+  position: relative;
+
+  /*
+   * Terminal colour palette — override any of these in a theme CSS file to
+   * re-skin the terminal without touching the component code.
+   * Defaults are VS Code Dark+ colours.
+   */
+  --term-bg:            #1e1e1e;
+  --term-fg:            #d4d4d4;
+  --term-cursor:        #d4d4d4;
+  --term-selection:     rgba(255, 255, 255, 0.2);
+  --term-black:         #000000;
+  --term-red:           #cd3131;
+  --term-green:         #0dbc79;
+  --term-yellow:        #e5e510;
+  --term-blue:          #2472c8;
+  --term-magenta:       #bc3fbc;
+  --term-cyan:          #11a8cd;
+  --term-white:         #e5e5e5;
+  --term-bright-black:  #666666;
+  --term-bright-red:    #f14c4c;
+  --term-bright-green:  #23d18b;
+  --term-bright-yellow: #f5f543;
+  --term-bright-blue:   #3b8eea;
+  --term-bright-magenta:#d670d6;
+  --term-bright-cyan:   #29b8db;
+  --term-bright-white:  #e5e5e5;
+}
+
+.ide-terminal-host {
+  /*
+   * Root cause of the scroll bug (fixed 2025):
+   *
+   * The project uses box-sizing:border-box globally.  The old rule had
+   * padding:4px and overflow:hidden.  FitAddon reads
+   * getComputedStyle(container).height which under border-box returns the
+   * TOTAL box height (content + padding).  It then sized xterm to fill that
+   * total height.  But xterm opens inside the CONTENT area (inside the
+   * padding), which is 8 px shorter.  The terminal overflowed by 8 px and
+   * overflow:hidden clipped it — hiding the last terminal row AND the bottom
+   * of the scrollbar track, making wheel-scroll and the scrollbar thumb
+   * non-functional for the last portion of content.
+   *
+   * Fix: remove padding and overflow:hidden from this element.  FitAddon now
+   * measures the exact available area.  The outer .ide-terminal-panel retains
+   * overflow:hidden as the clipping boundary.
+   */
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ── Status bar ──────────────────────────────────────── */
+.ide-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 8px;
+  height: 26px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.ide-status-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  white-space: nowrap;
+  border-right: 1px solid rgba(255,255,255,0.2);
+  height: 100%;
+  font-weight: 500;
+}
+.ide-status-item:last-child {
+  border-right: none;
+}
+.ide-status-item.muted {
+  opacity: 0.7;
+}
+/* Model name: the global .muted colour (grey ink) is unreadable on the
+   accent-coloured bar, so keep the bar's light text and only soften it slightly. */
+.ide-status-item.ide-status-model {
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--mono);
+}
+
+/* ── IDE Header ──────────────────────────────────────── */
+.ide-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 42px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+  /* Must not clip: the "More session actions" dropdown hangs below the header.
+     The title wrap truncates long titles on its own. */
+  overflow: visible;
+  position: relative;
+  z-index: 20;
+}
+
+.ide-header-title-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ide-header-title {
+  font-size: 0.88rem;
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  color: var(--ink);
+}
+
+.ide-header-rename-form {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ide-header-rename-input {
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 620;
+  height: 28px;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.ide-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Engine badge in header */
+.ide-engine-badge {
+  font-size: 0.69rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+/* ── File explorer ───────────────────────────────────── */
+.ide-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-size: 0.82rem;
+}
+
+.ide-tree-root {
+  margin-bottom: 2px;
+}
+
+.ide-tree-root-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 4px 8px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-2);
+  user-select: none;
+}
+.ide-tree-root-header:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+}
+.ide-tree-root-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+}
+.ide-tree-root-header:hover .ide-tree-root-actions {
+  opacity: 1;
+}
+
+.ide-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 0;
+  cursor: pointer;
+  color: var(--ink);
+  user-select: none;
+  border-radius: var(--radius);
+  position: relative;
+}
+.ide-tree-node:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+}
+.ide-tree-node.is-active {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.ide-tree-node.is-ignored {
+  opacity: 0.45;
+}
+.ide-tree-node-icon {
+  flex-shrink: 0;
+  color: var(--ink-3);
+}
+.ide-tree-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.ide-tree-node-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  flex-shrink: 0;
+}
+.ide-tree-node:hover .ide-tree-node-actions {
+  opacity: 1;
+}
+
+/* Drop zone highlight */
+.ide-tree.drag-over {
+  background: var(--accent-wash);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── Source control ──────────────────────────────────── */
+.ide-sc-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+.ide-sc-file:hover {
+  background: color-mix(in srgb, var(--canvas) 50%, transparent);
+}
+.ide-sc-status {
+  font-size: 0.72rem;
+  font-weight: 700;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.ide-sc-status.M { color: var(--warn); }
+.ide-sc-status.A { color: var(--ok); }
+.ide-sc-status.D { color: var(--danger); }
+.ide-sc-status.R { color: var(--accent); }
+.ide-sc-status.\? { color: var(--ink-3); }
+
+.ide-diff-view {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.ide-diff-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ide-diff-line.add { background: color-mix(in srgb, var(--ok-wash) 80%, transparent); color: var(--ok); }
+.ide-diff-line.del { background: color-mix(in srgb, var(--danger-wash) 80%, transparent); color: var(--danger); }
+.ide-diff-line.hunk { background: var(--canvas); color: var(--ink-3); font-style: italic; }
+
+/* ── Browser panel ───────────────────────────────────── */
+.ide-browser-url {
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  color: var(--ink-2);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ide-browser-screenshot {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px;
+}
+.ide-browser-screenshot img {
+  max-width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+/* ── Agents activity ─────────────────────────────────── */
+.ide-agent-item {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-2);
+  display: grid;
+  gap: 2px;
+}
+.ide-agent-item-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ide-agent-item-meta {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ── Agents strip (top of a session) ────────────────── */
+.agents-strip { flex-shrink: 0; border-bottom: 1px solid var(--line-2); background: var(--surface-1, var(--panel)); }
+.agents-strip-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 0.8rem; }
+.agents-strip-count { color: var(--ink-3); }
+.agents-strip-chip { padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 0.7rem; font-weight: 700; }
+.agents-strip-chip.is-running { color: var(--accent); }
+.agents-strip-chip.is-failed { color: var(--danger); }
+.agents-strip-fold { margin-left: auto; }
+.agents-strip-body { display: flex; flex-wrap: wrap; height: 340px; border-top: 1px solid var(--line-2); }
+.agents-strip-graph { flex: 1 1 420px; min-width: 0; min-height: 220px; }
+.agents-strip-detail { flex: 0 0 300px; max-width: 100%; border-left: 1px solid var(--line-2); overflow: auto; }
+.agents-strip-detail .agent-detail { border-top: 0; max-height: none; }
+@media (max-width: 760px) { .agents-strip-body { height: 460px; } .agents-strip-detail { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--line-2); } }
+.agent-node-name { display: block; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-node-status { display: block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin: 1px 0 3px; }
+.agent-node-task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 0.8rem; color: var(--ink-3); line-height: 1.3; }
+
+/* ── Agent detail (selected node) ───────────────────── */
+.agent-item-pick { display: flex; align-items: center; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.agent-item-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.ide-agent-item.is-selected { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.agent-node-btn { all: unset; display: block; width: 100%; cursor: pointer; box-sizing: border-box; }
+.agent-node-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.agent-detail { padding: 10px 12px; border-top: 1px solid var(--line-2); overflow: auto; max-height: 40%; }
+.agent-detail-hint { margin: 0; padding: 8px 12px; font-size: 0.78rem; color: var(--ink-3); }
+.agent-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.agent-detail-name { font-size: 0.86rem; overflow-wrap: anywhere; }
+.agent-detail-pill { font-size: 0.7rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; flex-shrink: 0; }
+.agent-detail-pill.is-running { color: var(--accent); }
+.agent-detail-pill.is-done { color: var(--ok); }
+.agent-detail-pill.is-failed { color: var(--danger); }
+.agent-detail-label { margin: 8px 0 2px; font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
+.agent-detail-text { margin: 0; font-size: 0.82rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-detail-stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 10px 0 0; font-size: 0.78rem; }
+.agent-detail-stats dt { color: var(--ink-3); }
+.agent-detail-stats dd { margin: 0; }
+.agent-detail-open { display: inline-block; margin-top: 10px; font-size: 0.8rem; color: var(--accent); }
+
+/* ── Idle stop banner ────────────────────────────────── */
+.ide-idle-banner {
+  background: var(--warn-wash);
+  border-bottom: 1px solid var(--warn);
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  flex-shrink: 0;
+}
+.ide-idle-banner-msg {
+  flex: 1;
+  color: var(--ink);
+}
+
+/* ── Transcript load more ────────────────────────────── */
+.ide-load-more {
+  padding: 8px 12px;
+  text-align: center;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+/* ── Slash command event ─────────────────────────────── */
+.live-slash-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--line-2);
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+.live-slash-command-label {
+  font-family: var(--mono);
+  font-weight: 650;
+  color: var(--accent);
+}
+.live-slash-command-result {
+  margin: 0 12px 4px;
+  padding: 4px 8px;
+  background: var(--canvas);
+  border-radius: var(--radius);
+  border-left: 2px solid var(--ink-3);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+/* ── Rename in session list ──────────────────────────── */
+.session-row-rename-form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  padding: 2px 4px;
+}
+.session-row-rename-input {
+  flex: 1;
+  font-size: 0.875rem;
+  font-weight: 550;
+  height: 26px;
+  padding: 0 6px;
+  min-width: 0;
+}
+
+/* ── Live browser panel (idb-*) ─────────────────────────────────────────── */
+
+/* Outer container */
+.idb-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  background: var(--canvas);
+}
+.idb-panel.is-popped {
+  height: 100%;
+}
+
+/* Tab strip */
+.idb-tabstrip {
+  display: flex;
+  align-items: stretch;
+  background: var(--rail);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  flex-shrink: 0;
+  min-height: 30px;
+  scrollbar-width: none;
+}
+.idb-tabstrip::-webkit-scrollbar { display: none; }
+
+.idb-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  border: none;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 160px;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.idb-tab:hover {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  color: var(--ink);
+}
+.idb-tab.is-active {
+  background: var(--canvas);
+  color: var(--ink);
+  border-bottom: 2px solid var(--accent);
+}
+.idb-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toolbar */
+.idb-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
+/* Address bar form */
+.idb-address-form {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.idb-address {
+  flex: 1;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  outline: none;
+  min-width: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.idb-address:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
+.idb-address.is-readonly {
+  cursor: default;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--canvas) 70%, var(--panel));
+}
+
+/* Status dot */
+.idb-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+.idb-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  /* Subtle pulse for "Live" state handled via class below */
+}
+.idb-status-label {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Remote control toggle */
+.idb-remote-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.idb-remote-label {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Toggle switch */
+.idb-toggle {
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  border: none;
+  background: var(--line);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.18s;
+  padding: 0;
+  outline: none;
+}
+.idb-toggle:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
+}
+.idb-toggle.is-on {
+  background: var(--accent);
+}
+.idb-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s;
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+.idb-toggle.is-on .idb-toggle-knob {
+  transform: translateX(14px);
+}
+
+/* Control active banner */
+.idb-control-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: var(--warn-wash);
+  border-bottom: 1px solid var(--warn);
+  flex-shrink: 0;
+}
+
+/* Socket error banner */
+.idb-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  flex-shrink: 0;
+}
+
+/* Viewport container */
+.idb-viewport {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  background: #202020;
+}
+.idb-viewport.can-control {
+  cursor: default;
+}
+
+/* Canvas — hidden until first frame */
+.idb-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: none;
+  outline: none;
+}
+.idb-canvas.is-visible {
+  display: block;
+}
+.idb-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Fallback screenshot */
+.idb-fallback {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  opacity: 0.85;
+}
+
+/* Empty-state placeholder */
+.idb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-3);
+  text-align: center;
+  padding: 24px 16px;
+  font-size: 0.84rem;
+}
+.idb-empty p {
+  margin: 0;
+}
+
+/* View-only hint overlay (shown on hover when not in control) */
+.idb-viewonly-hint {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  text-align: center;
+  background: rgba(0,0,0,0.55);
+  color: rgba(255,255,255,0.9);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.idb-viewport:hover .idb-viewonly-hint {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .idb-viewonly-hint { transition: none; }
+}
+
+/* Sidebar popped note */
+.idb-sidebar-popped-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  padding: 20px 12px;
+  color: var(--ink-3);
+  font-size: 0.83rem;
+  text-align: center;
+}
+.idb-sidebar-popped-note p {
+  margin: 0;
+}
+
+/* Main-area pop-out overlay */
+.idb-main-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+  border-left: 1px solid var(--line);
+}
+
+/* ── Activity bar badge (Outputs count) ─────────────────────────── */
+.ide-activity-btn {
+  position: relative; /* ensure badge positions relative to button */
+}
+.ide-activity-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ── Outputs panel ───────────────────────────────────────────────── */
+.ide-outputs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.ide-outputs-actions {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.ide-outputs-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  padding: 20px 14px;
+  color: var(--ink-3);
+  text-align: center;
+  font-size: 0.82rem;
+}
+.ide-outputs-empty p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.ide-outputs-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* .ide-outputs-item layout now defined at the bottom of the file (flex + thumb/badge) */
+
+.ide-outputs-item-name {
+  font-size: 0.82rem;
+  font-weight: 560;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ide-outputs-version {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-wash);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.ide-outputs-item-folder {
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.ide-outputs-item-meta {
+  font-size: 0.72rem;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.ide-outputs-item-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+/* ── Outputs panel — item with leading thumbnail/badge ──── */
+.ide-outputs-item {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-2);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ide-outputs-item:last-child {
+  border-bottom: none;
+}
+/* Thumbnail button (images) */
+.ide-outputs-thumb-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.12s;
+}
+.ide-outputs-thumb-btn:hover {
+  border-color: var(--accent);
+}
+.ide-outputs-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  display: block;
+}
+/* Type badge (non-images) */
+.ide-outputs-type-badge {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--canvas);
+}
+.ide-outputs-type-label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1;
+}
+/* Main info column (wraps name, folder, meta, actions) */
+.ide-outputs-item-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+/* ── Activity button flash ───────────────────────────── */
+@keyframes ide-activity-flash {
+  0%   { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+  60%  { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  100% { background: transparent; color: var(--ink-3); }
+}
+.ide-activity-btn--flash {
+  animation: ide-activity-flash 2s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ide-activity-btn--flash { animation: none; }
+}
+
+/* ── Run outputs card (in the chat feed) ─────────────── */
+.run-outputs-card {
+  margin: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--canvas);
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+.run-outputs-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--line-2);
+  font-weight: 600;
+  font-size: 0.79rem;
+  color: var(--ink-2);
+}
+.run-outputs-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.run-outputs-card-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line-2);
+}
+.run-outputs-card-item:last-child {
+  border-bottom: none;
+}
+/* Thumbnail button */
+.run-outputs-card-thumb-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.12s;
+}
+.run-outputs-card-thumb-btn:hover {
+  border-color: var(--accent);
+}
+.run-outputs-card-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  display: block;
+}
+/* Type badge */
+.run-outputs-card-type-badge {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+.run-outputs-card-type-label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1;
+}
+/* File info column */
+.run-outputs-card-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.run-outputs-card-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 540;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.run-outputs-card-item-meta {
+  font-size: 0.72rem;
+}
+/* Actions */
+.run-outputs-card-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* Show-all button */
+.run-outputs-card-show-more {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 5px 12px;
+  border-top: 1px solid var(--line-2);
+  border-radius: 0;
+  color: var(--ink-2);
+  font-size: 0.79rem;
+}
+/* Footer */
+.run-outputs-card-footer {
+  display: flex;
+  gap: 4px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--line-2);
+  background: var(--raised);
+}
+
+/* AgentCore Live View (cloud browser) */
+.idb-live-wrap { position: absolute; inset: 0; background: #202020; }
+.idb-live-shield { position: absolute; inset: 0; z-index: 5; cursor: not-allowed; }
+
+/* Status bar chips */
+.ide-status-bar { gap: 6px; padding: 0 10px; }
+.ide-status-engine {
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em;
+  padding: 1px 6px; border-radius: 4px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.ide-status-chip { white-space: nowrap; font-family: var(--mono); color: var(--ink-2); padding: 0 4px; }
+.ide-status-key { color: var(--ink-3); }
+.ide-status-spacer { flex: 1; }
+.ide-status-pill {
+  font-size: 0.68rem; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  color: var(--ink-2); border: 1px solid var(--line); background: var(--canvas);
+}
+.ide-status-pill--warn { color: var(--warn, #d9a441); border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, transparent); }
+.ide-status-ctx { display: inline-flex; align-items: center; gap: 5px; }
+.ide-status-meter { width: 46px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; display: inline-block; }
+.ide-status-meter-fill { display: block; height: 100%; background: var(--ok); border-radius: 3px; }
+.ide-status-meter-fill.is-mid { background: var(--warn, #d9a441); }
+.ide-status-meter-fill.is-high { background: var(--danger); }

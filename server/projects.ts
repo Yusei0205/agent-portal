@@ -1,320 +1,466 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { all, insert, one, run, update, type Row } from './db.ts';
-import { del, get, openSse, patch, post, HANDLED, type Ctx, type User } from './http.ts';
-import { dataPath } from './config.ts';
-import { HttpError, badRequest, forbidden, newId, notFound, now, slugify, str, withLock } from './util.ts';
-import { commitAll, git } from './git.ts';
-import { projectChannel, publish, subscribe } from './events.ts';
-import { monthSpend } from './settings.ts';
+/**
+ * Projects API routes.
+ *
+ * Routes:
+ *   GET    /api/projects                      — list projects user is member of (all if admin)
+ *   POST   /api/projects                      — create project
+ *   GET    /api/projects/:id                  — get project details + members
+ *   PUT    /api/projects/:id                  — update name/description (owner only)
+ *   DELETE /api/projects/:id                  — archive project (owner only)
+ *   GET    /api/projects/:id/members          — list members with roles
+ *   POST   /api/projects/:id/members          — add member (owner only)
+ *   PUT    /api/projects/:id/members/:userId  — change member role (owner only)
+ *   DELETE /api/projects/:id/members/:userId  — remove member (owner only)
+ *   GET    /api/projects/:id/events           — SSE stream for project events
+ */
 
-export type Access = 'viewer' | 'editor' | 'owner';
-const RANK: Record<Access, number> = { viewer: 1, editor: 2, owner: 3 };
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { router, sendJson } from './http.ts';
+import type { PortalRequest, PortalResponse } from './http.ts';
+import { generateId, now, str } from './util.ts';
+import { config } from './config.ts';
+import { subscribe, emit } from './events.ts';
+import { SUPERPOWERS_SKILLS } from './superpowers-skills.ts';
+import { getProjectRepository, SlugAlreadyTakenError } from './repositories/projects.ts';
+import { getAuthRepository } from './repositories/auth.ts';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Project {
   id: string;
   slug: string;
   name: string;
   description: string;
-  notes: string;
-  created_by: string;
+  created_by: string | null;
   created_at: string;
   archived: number;
 }
 
-export function projectDir(p: Pick<Project, 'slug'>): string {
-  return dataPath('projects', p.slug);
+export interface ProjectMember {
+  project_id: string;
+  user_id: string;
+  access: string;
+  role: string;
 }
 
-export function getProject(id: string): Project {
-  const p = one<Project>('SELECT * FROM projects WHERE id = ?', id);
-  if (!p) throw notFound('Project not found');
-  return p;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Convert a name to a URL-safe kebab-case slug. */
+export function generateSlug(name: string, existingSlugs: string[]): string {
+  const base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'project';
+
+  if (!existingSlugs.includes(base)) return base;
+
+  let n = 2;
+  while (existingSlugs.includes(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
 }
 
-export function accessOf(user: User, projectId: string): Access | null {
-  if (user.is_admin) return 'owner';
-  const m = one<{ access: Access }>('SELECT access FROM project_members WHERE project_id = ? AND user_id = ?', projectId, user.id);
-  return m?.access ?? null;
-}
+/** Generate CLAUDE.md content for a project. */
+export function renderClaudeMd(project: Project): string {
+  return `# ${project.name}
 
-/** Load a project and check the signed-in user has at least `min` access. */
-export function requireProject(ctx: Ctx, projectId: string, min: Access = 'viewer'): { project: Project; access: Access } {
-  const project = getProject(projectId);
-  const access = accessOf(ctx.user!, projectId);
-  if (!access) throw notFound('Project not found');
-  if (RANK[access] < RANK[min]) {
-    throw forbidden(min === 'owner' ? 'Only project owners can do this' : 'You have view-only access to this project');
-  }
-  return { project, access };
-}
+${project.description ? project.description + '\n' : ''}
+**Project ID:** ${project.id}
 
-export function notifyProject(projectId: string, event: string, data: unknown = {}): void {
-  publish(projectChannel(projectId), event, data);
-}
+## Paths
 
-const GITIGNORE = `# Managed by Agent Portal
-repos/
-work/
-docs/originals/
-`;
+- Agents: \`.claude/agents/\`
+- Skills: \`.claude/skills/\`
+- Documents: \`docs/md/\`
+- Decisions: \`docs/decisions.md\`
+- Generated docs: \`docs/generated/\`
+- Architecture diagrams: \`docs/diagrams/\`
 
-const PROJECT_DOCS_SKILL = `---
-name: project-docs
-description: Use whenever a question or task depends on this project's requirements, design or decisions. Explains where the project documents live and how to search and cite them.
----
+# Superpowers bootstrap
 
-# Project documents
-
-- Uploaded documents (FSD, TSD, API specs, meeting notes) are converted to Markdown in \`docs/md/\`. One file per document; headings are kept.
-- Team decisions are in \`docs/decisions.md\`, newest last. Read it before asking anything; an answer there is final unless the user says otherwise.
-- Generated, approved documentation is in \`docs/generated/\`.
-
-## How to use them
-
-1. Search first: use Grep over \`docs/md/\` and \`docs/decisions.md\` with two or three key terms from the task.
-2. Read only the matching sections (use the line numbers from Grep with Read offset/limit) instead of whole files.
-3. Cite what you used as \`docs/md/<file>.md › <heading>\`.
-4. If the documents are silent, contradict each other, or allow several valid options, call AskUserQuestion with concrete choices. Do not guess requirements.
-`;
-
-export function renderClaudeMd(p: Project): string {
-  const repos = all<Row>('SELECT name, slug, provider, default_branch FROM repos WHERE project_id = ? ORDER BY name', p.id);
-  const repoLines = repos.length
-    ? repos.map((r) => `- \`repos/${r.slug}/\` — ${r.name} (${r.provider}, default branch \`${r.default_branch}\`)`).join('\n')
-    : '- No repositories connected yet.';
-  return `# ${p.name}
-
-${p.description || 'No description yet.'}
-
-<!-- This file is generated by Agent Portal. Edit "Project notes" in the portal instead. -->
-
-## How to work in this project
-
-- Project documents, converted to Markdown, are in \`docs/md/\`. Search them with Grep before answering or designing anything, and cite the file and heading you used.
-- Decisions the team already made are in \`docs/decisions.md\`. Read it first and never ask a question that is already answered there.
-- If requirements are missing, conflict, or allow several valid approaches, use the AskUserQuestion tool with 2–4 concrete options instead of guessing.
-- Reference clones of the code are in \`repos/\` and are read-only. A run that changes code gets its own working copy under \`work/<run id>/\`; only edit files there.
-- Approved generated documentation lives in \`docs/generated/\`.
-- Role subagents are in \`.claude/agents/\` and skills in \`.claude/skills/\`. When a task matches a role, delegate it to that subagent.
-
-## Repositories
-
-${repoLines}
-
-## Project notes
-
-${p.notes || 'None yet.'}
+Before responding, read .claude/skills/superpowers-bootstrap/SKILL.md and follow its instructions.
 `;
 }
 
-export async function writeClaudeMd(projectId: string, commitMessage?: string): Promise<void> {
-  const p = getProject(projectId);
-  const dir = projectDir(p);
-  await withLock(`git:${dir}`, async () => {
-    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), renderClaudeMd(p));
-    if (commitMessage) await commitAll(dir, commitMessage, ['CLAUDE.md']);
+/** Run a git command in the given directory, resolving with stdout or rejecting on failure. */
+function runGit(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    proc.stdout.on('data', (d: Buffer) => out.push(d));
+    proc.stderr.on('data', (d: Buffer) => err.push(d));
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve(Buffer.concat(out).toString('utf8').trim());
+      } else {
+        reject(new Error(Buffer.concat(err).toString('utf8').trim() || `git exited with ${code}`));
+      }
+    });
+    proc.on('error', reject);
   });
 }
 
-export async function commitProject(projectId: string, message: string, paths: string[] = ['.']): Promise<void> {
-  const p = getProject(projectId);
-  const dir = projectDir(p);
-  await withLock(`git:${dir}`, () => commitAll(dir, message, paths));
+/** Seed the 9 built-in Superpowers skills into the project directory. */
+export async function ensureBuiltInSkills(projectDir: string): Promise<void> {
+  const skillsDir = path.join(projectDir, '.claude', 'skills');
+  await fsp.mkdir(skillsDir, { recursive: true });
+
+  for (const skill of SUPERPOWERS_SKILLS) {
+    const skillDir = path.join(skillsDir, skill.name);
+    await fsp.mkdir(skillDir, { recursive: true });
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    // Only write if it doesn't already exist
+    if (!fs.existsSync(skillFile)) {
+      await fsp.writeFile(skillFile, skill.content, 'utf8');
+    }
+  }
 }
 
-async function createProjectFolder(p: Project): Promise<void> {
-  const dir = projectDir(p);
-  for (const d of [
-    'docs/md',
-    'docs/originals',
-    'docs/generated',
-    'repos',
-    'work',
-    '.claude/agents',
-    '.claude/skills/project-docs',
-    '.claude/_disabled/agents',
-    '.claude/_disabled/skills',
-  ]) {
-    fs.mkdirSync(path.join(dir, d), { recursive: true });
+/** Create the project directory on disk, initialise git, and write CLAUDE.md. */
+export async function initProjectDir(slug: string, dataDir: string, project: Project): Promise<void> {
+  const dir = path.join(dataDir, 'projects', slug);
+  await fsp.mkdir(dir, { recursive: true });
+
+  // Create subdirectories
+  for (const sub of ['repos', 'work', 'docs/md', 'docs/generated', 'docs/diagrams', '.claude/agents', '.claude/skills']) {
+    await fsp.mkdir(path.join(dir, sub), { recursive: true });
   }
-  fs.writeFileSync(path.join(dir, '.gitignore'), GITIGNORE);
-  fs.writeFileSync(path.join(dir, '.claude/skills/project-docs/SKILL.md'), PROJECT_DOCS_SKILL);
-  fs.writeFileSync(path.join(dir, '.claude/settings.json'), JSON.stringify({ permissions: { deny: ['Read(./.env)', 'Read(./**/.env)'] } }, null, 2) + '\n');
-  fs.writeFileSync(
-    path.join(dir, 'docs/decisions.md'),
-    `# Decisions log\n\nAnswers the team gave to agent questions. Agents read this before asking anything.\n`,
+
+  // Initialise git repo
+  try {
+    await runGit(['init'], dir);
+  } catch {
+    // Non-fatal: git may not be available in all environments
+  }
+
+  // Write CLAUDE.md
+  const claudeMd = renderClaudeMd(project);
+  await fsp.writeFile(path.join(dir, 'CLAUDE.md'), claudeMd, 'utf8');
+
+  // Write .gitignore
+  await fsp.writeFile(
+    path.join(dir, '.gitignore'),
+    '# Managed by Agent Portal\nrepos/\nwork/\n',
+    'utf8',
   );
-  for (const keep of ['docs/md/.gitkeep', 'docs/generated/.gitkeep', '.claude/agents/.gitkeep']) {
-    fs.writeFileSync(path.join(dir, keep), '');
+
+  // Seed built-in skills
+  await ensureBuiltInSkills(dir);
+
+  // Initial commit (best effort)
+  try {
+    await runGit(['add', '-A'], dir);
+    await runGit(['commit', '-m', 'chore: initialise project'], dir);
+  } catch {
+    // Non-fatal
   }
-  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), renderClaudeMd(p));
-  await git(['init', '-q', '-b', 'main'], { cwd: dir });
-  await commitAll(dir, 'Create project');
 }
 
-export function listProjectsFor(user: User): Row[] {
-  const sql = `
-    SELECT p.*, ${user.is_admin ? "'owner'" : 'm.access'} AS access,
-      (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id AND d.kind = 'upload') AS docs,
-      (SELECT COUNT(*) FROM repos r WHERE r.project_id = p.id) AS repos,
-      (SELECT COUNT(*) FROM inputs i WHERE i.project_id = p.id AND i.status = 'pending') AS open_questions,
-      (SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id) AS members
-    FROM projects p
-    ${user.is_admin ? '' : 'JOIN project_members m ON m.project_id = p.id AND m.user_id = ?'}
-    ORDER BY p.archived, p.name COLLATE NOCASE`;
-  return user.is_admin ? all(sql) : all(sql, user.id);
+// ── Async access helpers ──────────────────────────────────────────────────────
+
+/** Require the caller to be a project owner (or admin). Sends 403/404 and returns false on failure. */
+async function requireOwner(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
+  if (!req.user) {
+    sendJson(res, 401, { error: 'Sign in to continue' });
+    return false;
+  }
+  const repo = getProjectRepository();
+  const project = await repo.getProjectById(projectId);
+  if (!project || project.archived) {
+    sendJson(res, 404, { error: 'Project not found' });
+    return false;
+  }
+  if (req.user.is_admin) return true;
+  const member = await repo.getMember(projectId, req.user.id);
+  if (!member || member.role !== 'owner') {
+    sendJson(res, 403, { error: 'Project owner access required' });
+    return false;
+  }
+  return true;
 }
+
+/** Require user to be at least a member of the project. Returns the project or null. */
+async function requireMember(req: PortalRequest, res: PortalResponse, projectId: string): Promise<Project | null> {
+  if (!req.user) {
+    sendJson(res, 401, { error: 'Sign in to continue' });
+    return null;
+  }
+  const repo = getProjectRepository();
+  const project = await repo.getProjectById(projectId);
+  if (!project || project.archived) {
+    sendJson(res, 404, { error: 'Project not found' });
+    return null;
+  }
+  if (req.user.is_admin) return project as Project;
+  const member = await repo.getMember(projectId, req.user.id);
+  if (!member) {
+    sendJson(res, 404, { error: 'Project not found' });
+    return null;
+  }
+  return project as Project;
+}
+
+// ── Route registration ────────────────────────────────────────────────────────
 
 export function registerProjectRoutes(): void {
-  get('/api/projects', (ctx) => ({ projects: listProjectsFor(ctx.user!) }));
 
-  post('/api/projects', async (ctx) => {
-    const body = await ctx.json();
-    const name = str(body.name, 'Project name', { max: 120 }).trim();
-    if (!name) throw badRequest('Project name is required');
-    let slug = slugify(name, 40);
-    let n = 2;
-    while (one('SELECT id FROM projects WHERE slug = ?', slug) || fs.existsSync(dataPath('projects', slug))) {
-      slug = `${slugify(name, 36)}-${n++}`;
+  // GET /api/projects
+  router.get('/api/projects', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+
+    const repo = getProjectRepository();
+    let projects;
+    if (req.user.is_admin) {
+      projects = await repo.listProjects();
+    } else {
+      projects = await repo.listMyProjects(req.user.id);
     }
-    const p: Project = {
-      id: newId('p_'),
-      slug,
-      name,
-      description: str(body.description, 'Description', { max: 4000, optional: true }),
-      notes: '',
-      created_by: ctx.user!.id,
-      created_at: now(),
-      archived: 0,
-    };
-    insert('projects', { ...p });
-    insert('project_members', { project_id: p.id, user_id: ctx.user!.id, access: 'owner', role: '' });
-    try {
-      await createProjectFolder(p);
-    } catch (e) {
-      run('DELETE FROM projects WHERE id = ?', p.id);
-      fs.rmSync(projectDir(p), { recursive: true, force: true });
-      throw e;
-    }
-    const { registerDecisionsDoc } = await import('./knowledge.ts');
-    await registerDecisionsDoc(p.id, ctx.user!.id);
-    return { project: { ...p, access: 'owner' } };
-  });
 
-  get('/api/projects/:pid', (ctx) => {
-    const { project, access } = requireProject(ctx, ctx.params.pid);
-    return {
-      project: { ...project, access },
-      members: all(
-        `SELECT u.id, u.email, u.name, m.access, m.role FROM project_members m JOIN users u ON u.id = m.user_id
-          WHERE m.project_id = ? ORDER BY u.name`,
-        project.id,
-      ),
-      counts: one(
-        `SELECT
-          (SELECT COUNT(*) FROM documents WHERE project_id = ?1 AND kind = 'upload') AS docs,
-          (SELECT COUNT(*) FROM repos WHERE project_id = ?1) AS repos,
-          (SELECT COUNT(*) FROM runs WHERE project_id = ?1) AS runs,
-          (SELECT COUNT(*) FROM inputs WHERE project_id = ?1 AND status = 'pending') AS open_questions,
-          (SELECT COUNT(*) FROM learn_docs WHERE project_id = ?1) AS learn_docs,
-          (SELECT COUNT(*) FROM quizzes WHERE project_id = ?1) AS quizzes`,
-        project.id,
-      ),
-      monthUsd: monthSpend(project.id),
-    };
-  });
-
-  patch('/api/projects/:pid', async (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'owner');
-    const body = await ctx.json();
-    const p: Record<string, any> = {};
-    if (body.name !== undefined) p.name = str(body.name, 'Project name', { max: 120 }).trim();
-    if (body.description !== undefined) p.description = str(body.description, 'Description', { max: 4000, optional: true });
-    if (body.notes !== undefined) p.notes = str(body.notes, 'Project notes', { max: 20000, optional: true });
-    if (body.archived !== undefined) p.archived = body.archived ? 1 : 0;
-    update('projects', project.id, p);
-    if (p.name !== undefined || p.description !== undefined || p.notes !== undefined) {
-      await writeClaudeMd(project.id, 'Update project notes');
-    }
-    notifyProject(project.id, 'project.updated');
-    return { project: getProject(project.id) };
-  });
-
-  del('/api/projects/:pid', async (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'owner');
-    const body = await ctx.json();
-    if (body.confirm !== project.name) throw badRequest('Type the project name to confirm deletion');
-    const trash = dataPath('trash', `${project.slug}-${Date.now()}`);
-    fs.mkdirSync(path.dirname(trash), { recursive: true });
-    if (fs.existsSync(projectDir(project))) fs.renameSync(projectDir(project), trash);
-    run('DELETE FROM sections_fts WHERE rowid IN (SELECT id FROM sections WHERE project_id = ?)', project.id);
-    run('DELETE FROM projects WHERE id = ?', project.id);
-    return { ok: true, movedTo: trash };
-  });
-
-  // ---- Members ----
-  post('/api/projects/:pid/members', async (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'owner');
-    const body = await ctx.json();
-    const email = str(body.email, 'Email', { max: 200 }).trim().toLowerCase();
-    const user = one<{ id: string }>('SELECT id FROM users WHERE email = ?', email);
-    if (!user) throw badRequest('No user with that email. An admin can add them under Settings › Users.');
-    const access = checkAccess(body.access ?? 'editor');
-    const role = str(body.role, 'Role', { max: 60, optional: true });
-    run(
-      `INSERT INTO project_members (project_id, user_id, access, role) VALUES (?, ?, ?, ?)
-       ON CONFLICT(project_id, user_id) DO UPDATE SET access = excluded.access, role = excluded.role`,
-      project.id,
-      user.id,
-      access,
-      role,
+    // Attach member counts
+    const withCounts = await Promise.all(
+      projects.map(async (p) => {
+        const cnt = await repo.countMembers(p.id);
+        return { ...p, member_count: cnt };
+      }),
     );
-    notifyProject(project.id, 'members.updated');
-    return { ok: true };
+
+    sendJson(res, 200, { projects: withCounts });
   });
 
-  patch('/api/projects/:pid/members/:uid', async (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'owner');
-    const body = await ctx.json();
-    const m = one('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?', project.id, ctx.params.uid);
-    if (!m) throw notFound('Member not found');
-    const access = body.access !== undefined ? checkAccess(body.access) : m.access;
-    const role = body.role !== undefined ? str(body.role, 'Role', { max: 60, optional: true }) : m.role;
-    if (m.access === 'owner' && access !== 'owner') assertAnotherOwner(project.id, ctx.params.uid);
-    run('UPDATE project_members SET access = ?, role = ? WHERE project_id = ? AND user_id = ?', access, role, project.id, ctx.params.uid);
-    notifyProject(project.id, 'members.updated');
-    return { ok: true };
+  // POST /api/projects
+  router.post('/api/projects', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+
+    const body = req.body as Record<string, unknown>;
+    const name = str(body.name, 'name', { max: 120 }).trim();
+    const description = typeof body.description === 'string' ? body.description.trim() : '';
+
+    const repo = getProjectRepository();
+
+    const id = generateId();
+    const ts = now();
+
+    // Retry on slug collision (race between getAllSlugs and createProjectWithOwner).
+    // Each iteration refreshes the slug list so generateSlug can pick a free suffix.
+    const MAX_RETRIES = 5;
+    let project;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const existingSlugs = await repo.getAllSlugs();
+      const slug = generateSlug(name, existingSlugs);
+      try {
+        project = await repo.createProjectWithOwner({
+          id,
+          slug,
+          name,
+          description,
+          notes:              '',
+          created_by:         req.user.id,
+          created_at:         ts,
+          archived:           0,
+          default_lead_agent: '',
+          default_model:      '',
+          vault_generated:    1,
+        }, req.user.id);
+        break;
+      } catch (e: unknown) {
+        if (e instanceof SlugAlreadyTakenError && attempt < MAX_RETRIES) {
+          continue;
+        }
+        if (e instanceof SlugAlreadyTakenError) {
+          sendJson(res, 409, { error: 'Could not generate a unique slug for this project name. Please try again.' });
+          return;
+        }
+        throw e;
+      }
+    }
+
+    // Create project directory (async, non-blocking)
+    initProjectDir(project!.slug, config.dataDir, project! as Project).catch((e: unknown) => {
+      console.error(`[projects] Failed to init project dir for ${project!.slug}:`, e);
+    });
+
+    sendJson(res, 201, { project });
   });
 
-  del('/api/projects/:pid/members/:uid', (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid, 'owner');
-    const m = one('SELECT access FROM project_members WHERE project_id = ? AND user_id = ?', project.id, ctx.params.uid);
-    if (m?.access === 'owner') assertAnotherOwner(project.id, ctx.params.uid);
-    run('DELETE FROM project_members WHERE project_id = ? AND user_id = ?', project.id, ctx.params.uid);
-    notifyProject(project.id, 'members.updated');
-    return { ok: true };
+  // GET /api/projects/:id
+  router.get('/api/projects/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const project = await requireMember(req, res, req.params.id);
+    if (!project) return;
+
+    const repo = getProjectRepository();
+    const authRepo = getAuthRepository();
+
+    const members = await repo.listMembers(project.id);
+
+    // Batch-get user names/emails from auth repository
+    const userIds = members.map((m) => m.user_id);
+    const users = await authRepo.getUsersByIds(userIds);
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const enriched = members
+      .map((m) => {
+        const u = userMap.get(m.user_id);
+        return {
+          user_id: m.user_id,
+          name:    u?.name ?? '',
+          email:   u?.email ?? '',
+          role:    m.role,
+          access:  m.access,
+        };
+      })
+      .sort((a, b) => {
+        if (a.role === b.role) return a.name.localeCompare(b.name);
+        // owner first
+        if (a.role === 'owner') return -1;
+        if (b.role === 'owner') return 1;
+        return a.role.localeCompare(b.role);
+      });
+
+    sendJson(res, 200, { project, members: enriched });
   });
 
-  // ---- Live updates for one project ----
-  get('/api/projects/:pid/stream', (ctx) => {
-    const { project } = requireProject(ctx, ctx.params.pid);
-    const sse = openSse(ctx);
-    sse.onClose(subscribe(projectChannel(project.id), (event, data) => sse.send(event, data)));
-    return HANDLED;
+  // PUT /api/projects/:id
+  router.put('/api/projects/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireOwner(req, res, req.params.id)) return;
+
+    const body = req.body as Record<string, unknown>;
+    const patch: Record<string, string | number | null> = {};
+    if (body.name !== undefined) patch.name = str(body.name, 'name', { max: 120 }).trim();
+    if (body.description !== undefined) patch.description = String(body.description ?? '').trim();
+
+    if (Object.keys(patch).length === 0) {
+      sendJson(res, 400, { error: 'Nothing to update' });
+      return;
+    }
+
+    const project = await getProjectRepository().updateProject(req.params.id, patch);
+    sendJson(res, 200, { project });
   });
-}
 
-function checkAccess(a: unknown): Access {
-  if (a !== 'viewer' && a !== 'editor' && a !== 'owner') throw badRequest('Access must be viewer, editor or owner');
-  return a;
-}
+  // DELETE /api/projects/:id
+  router.delete('/api/projects/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireOwner(req, res, req.params.id)) return;
+    await getProjectRepository().archiveProject(req.params.id);
+    sendJson(res, 200, { ok: true });
+  });
 
-function assertAnotherOwner(projectId: string, leavingUserId: string): void {
-  const owners = one<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM project_members WHERE project_id = ? AND access = 'owner' AND user_id != ?",
-    projectId,
-    leavingUserId,
-  )!.n;
-  if (owners === 0) throw new HttpError(400, 'A project needs at least one owner');
+  // GET /api/projects/:id/members
+  router.get('/api/projects/:id/members', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireMember(req, res, req.params.id)) return;
+
+    const repo = getProjectRepository();
+    const authRepo = getAuthRepository();
+
+    const members = await repo.listMembers(req.params.id);
+    const userIds = members.map((m) => m.user_id);
+    const users = await authRepo.getUsersByIds(userIds);
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const enriched = members
+      .map((m) => {
+        const u = userMap.get(m.user_id);
+        return {
+          user_id: m.user_id,
+          name:    u?.name ?? '',
+          email:   u?.email ?? '',
+          role:    m.role,
+          access:  m.access,
+        };
+      })
+      .sort((a, b) => {
+        if (a.role === b.role) return a.name.localeCompare(b.name);
+        if (a.role === 'owner') return -1;
+        if (b.role === 'owner') return 1;
+        return a.role.localeCompare(b.role);
+      });
+
+    sendJson(res, 200, { members: enriched });
+  });
+
+  // POST /api/projects/:id/members
+  router.post('/api/projects/:id/members', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireOwner(req, res, req.params.id)) return;
+
+    const body = req.body as Record<string, unknown>;
+    const userId = str(body.userId, 'userId');
+    const role = str(body.role, 'role', { max: 32 });
+
+    if (!['owner', 'editor', 'viewer'].includes(role)) {
+      sendJson(res, 400, { error: 'role must be owner, editor, or viewer' });
+      return;
+    }
+
+    const user = await getAuthRepository().getUserById(userId);
+    if (!user) { sendJson(res, 404, { error: 'User not found' }); return; }
+
+    const repo = getProjectRepository();
+    const existing = await repo.getMember(req.params.id, userId);
+    if (existing) {
+      sendJson(res, 409, { error: 'User is already a member of this project' });
+      return;
+    }
+
+    await repo.addMember(req.params.id, userId, role);
+
+    emit(req.params.id, { type: 'member.added', userId, role });
+    sendJson(res, 201, { ok: true });
+  });
+
+  // PUT /api/projects/:id/members/:userId
+  router.put('/api/projects/:id/members/:userId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireOwner(req, res, req.params.id)) return;
+
+    const body = req.body as Record<string, unknown>;
+    const role = str(body.role, 'role', { max: 32 });
+
+    if (!['owner', 'editor', 'viewer'].includes(role)) {
+      sendJson(res, 400, { error: 'role must be owner, editor, or viewer' });
+      return;
+    }
+
+    const repo = getProjectRepository();
+    const existing = await repo.getMember(req.params.id, req.params.userId);
+    if (!existing) { sendJson(res, 404, { error: 'Member not found' }); return; }
+
+    await repo.updateMember(req.params.id, req.params.userId, role);
+
+    emit(req.params.id, { type: 'member.updated', userId: req.params.userId, role });
+    sendJson(res, 200, { ok: true });
+  });
+
+  // DELETE /api/projects/:id/members/:userId
+  router.delete('/api/projects/:id/members/:userId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireOwner(req, res, req.params.id)) return;
+
+    const repo = getProjectRepository();
+
+    // Prevent owner from removing themselves if they are the last owner
+    const ownerCount = await repo.countOwners(req.params.id);
+    if (
+      req.params.userId === req.user!.id &&
+      ownerCount <= 1
+    ) {
+      sendJson(res, 400, { error: 'Cannot remove the last owner' });
+      return;
+    }
+
+    const removed = await repo.removeMember(req.params.id, req.params.userId);
+    if (!removed) { sendJson(res, 404, { error: 'Member not found' }); return; }
+
+    emit(req.params.id, { type: 'member.removed', userId: req.params.userId });
+    sendJson(res, 200, { ok: true });
+  });
+
+  // GET /api/projects/:id/events  (SSE)
+  router.sse('/api/projects/:id/events', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
+    const project = await requireMember(req, res, req.params.id);
+    if (!project) return;
+    subscribe(req.params.id, res);
+  });
 }

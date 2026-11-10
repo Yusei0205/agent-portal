@@ -1,92 +1,80 @@
-/** The subset of Claude Agent SDK shapes the portal relies on. Unknown message types pass through untouched. */
-export interface SdkMessage {
-  type: string;
-  subtype?: string;
-  uuid?: string;
-  session_id?: string;
-  parent_tool_use_id?: string | null;
-  message?: {
-    id?: string;
-    role?: string;
-    model?: string;
-    content?: ContentBlock[] | string;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_read_input_tokens?: number;
-      cache_creation_input_tokens?: number;
-    };
-  };
-  result?: string;
-  is_error?: boolean;
-  total_cost_usd?: number;
-  usage?: Record<string, number>;
-  num_turns?: number;
-  duration_ms?: number;
-  [k: string]: unknown;
-}
+/**
+ * Core type definitions for P6 agent runs.
+ */
 
-export type ContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: unknown; is_error?: boolean }
-  | { type: string; [k: string]: unknown };
+import type { RunPermissions } from '../guardrails.ts';
 
-export type PermissionResult =
-  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
-  | { behavior: 'deny'; message: string; interrupt?: boolean };
+// ── Agent run descriptor ──────────────────────────────────────────────────────
 
-export type CanUseTool = (
-  toolName: string,
-  input: Record<string, unknown>,
-  opts: { signal: AbortSignal; toolUseID?: string; agentID?: string },
-) => Promise<PermissionResult>;
-
-/** Called before every tool call; return a reason string to block it. */
-export type PreToolGuard = (toolName: string, input: Record<string, unknown>) => string | null;
-
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan';
-
-export interface DemoContext {
-  projectDir: string;
+export interface AgentRun {
   runId: string;
-  kind: string;
-  agents: { name: string; description: string; model: string }[];
-  skills: string[];
-  /** Absolute folder the run may write to. */
-  writeDir: string;
-  /** Path relative to the project folder, as the agent sees it. */
-  writeDirRel: string;
-  decisions: string;
-  search: (q: string, limit: number) => { file: string; heading: string; snippet: string; line: number }[];
-  speed: number;
+  workflowId: string;
+  projectId: string | null;
+  goal: string;
+  /** Explicit workflow kind — 'review' for code-review runs; null for generic runs. */
+  kind: string | null;
+  engine: 'claude-code' | 'kiro' | 'codex' | 'demo';
+  trusted: boolean;
+  dataDir: string;
+  /** Absolute path: DATA_DIR/projects/<slug>/work/<runId>/ */
+  workDir: string;
+  repoIds: string[];
+  /** The session's own choice of MCP integrations; null = the project's enabled ones. */
+  integrationIds?: string[] | null;
+  /** Set when the run goes to an AgentCore runner: the repositories it must clone (see runner-repos.ts). */
+  runnerRepos?: import('./runner-repos.ts').RunnerRepo[];
+  /** Set when the run goes to an AgentCore runner: the project's enabled MCP integrations (see runner-integrations.ts). */
+  runnerMcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** The project's default AWS account as AWS_* variables for the agent's shell (server/project-aws.ts). */
+  runnerAwsEnv?: Record<string, string>;
+  /** Files staged in the run folder (attachments, chosen project documents) to hand to the runner. */
+  runnerInputFiles?: import('./runner-files.ts').InputFile[];
+  /** Set for a loop session's runs on an AgentCore runner: the check steps the runner runs after the agent finishes. */
+  runnerChecks?: import('./runner-checks.ts').CheckStep[];
+  leadAgent: string | null;
+  permissions: RunPermissions;
+  /** Optional per-user credential to use for this run (F4). */
+  credentialId: string | null;
+  /** User ID of the workflow owner — used to look up their default credential. */
+  credentialOwnerId: string | null;
+  /**
+   * Optional model ID chosen by the user when creating the session (F-MODEL).
+   * Empty/null means engine default.  Engines pass --model <id> (kiro) or
+   * set model in the SDK options (claude-code).
+   */
+  model: string | null;
+  /**
+   * Engine session ID stored from the previous run (F-SESSION-RESUME).
+   * Kiro: passed to session/load; Claude Code: passed as SDK resume option.
+   * Null on first run or after /clear.
+   */
+  engineSessionId: string | null;
 }
 
-export interface ProviderRunOptions {
-  prompt: string;
-  cwd: string;
-  /** Alias (sonnet, haiku, opus) or exact model ID. */
-  model: string;
-  /** Appended to the Claude Code system prompt. Ignored when `systemPrompt` is set. */
-  systemAppend?: string;
-  /** Replace the system prompt entirely (single-shot tasks). */
-  systemPrompt?: string;
-  permissionMode: PermissionMode;
-  /** Tools that run without asking. */
-  allowedTools?: string[];
-  /** Restrict the tools Claude can see at all. */
-  tools?: string[];
-  maxTurns?: number;
-  resume?: string;
-  settingSources: ('user' | 'project' | 'local')[];
-  additionalDirectories?: string[];
-  canUseTool: CanUseTool;
-  guard?: PreToolGuard;
-  onHook?: (event: string, input: Record<string, unknown>) => void;
-  abort: AbortController;
-  env: Record<string, string>;
-  demo?: DemoContext;
+// ── Tool call ─────────────────────────────────────────────────────────────────
+
+export interface ToolCall {
+  toolName: string;
+  toolInput: string;
+  category: string | null;
 }
 
-export type ProviderRun = (opts: ProviderRunOptions) => AsyncIterable<SdkMessage>;
+// ── Run context ───────────────────────────────────────────────────────────────
+
+export interface RunContext {
+  run: AgentRun;
+  emit: (type: string, payload: object) => void;
+  awaitInput: (toolName: string, toolInput: Record<string, unknown>) => Promise<{
+    decision: 'allow' | 'deny';
+    remember: boolean;
+    message: string;
+    expired?: boolean;
+  }>;
+  /**
+   * Keys already allowed for the rest of the run, keyed by rememberKey().
+   * One exact shell command, one web host for WebFetch, or one other tool name.
+   */
+  allowed: Set<string>;
+  /** Abort signal for the run; engines must propagate this to child processes and SDK calls. */
+  signal: AbortSignal | null;
+}

@@ -1,491 +1,444 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
-import { useProject } from '../lib/context.js';
-import { useProjectEvents } from '../lib/events.js';
-import { go, href } from '../lib/router.js';
-import { useLoad } from '../lib/useAsync.js';
-import { bytes, cx, plural, timeAgo } from '../lib/util.js';
+import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
-import { Markdown } from '../components/Markdown.jsx';
-import { InputCard } from '../components/InputCard.jsx';
-import { Badge, Button, Empty, ErrorNote, IconButton, Note, PageHeader, Segmented, Spinner, Tabs, useUi } from '../components/ui.jsx';
+import { Learn } from './Learn.jsx';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
+import { KnowledgeSearchSetup } from '../components/KnowledgeSearchSetup.jsx';
+import { KnowledgeDocViewer } from '../components/KnowledgeDocViewer.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
+import { useBulkSelect } from '../lib/useBulkSelect.js';
+import { BulkActionBar } from '../components/BulkActionBar.jsx';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useSort } from '../lib/useSort.jsx';
+import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
-export function Knowledge({ route }) {
-  const { project, counts } = useProject();
-  const [sub, a, b] = route.rest;
-  if (sub === 'doc' && a) return <DocView docId={a} anchor={b} />;
-  const tab = ['ask', 'inbox', 'decisions'].includes(sub) ? sub : 'docs';
-  return (
-    <div className="page">
-      <PageHeader title="Knowledge" sub="Project documents agents search before they answer, and the questions they raise." />
-      <Tabs
-        value={tab}
-        tabs={[
-          { value: 'docs', label: 'Documents', href: href(project.id, 'knowledge') },
-          { value: 'ask', label: 'Ask', href: href(project.id, 'knowledge', 'ask') },
-          { value: 'inbox', label: 'Open questions', href: href(project.id, 'knowledge', 'inbox'), count: counts.open_questions },
-          { value: 'decisions', label: 'Decisions log', href: href(project.id, 'knowledge', 'decisions') },
-        ]}
-      />
-      {tab === 'docs' ? <Documents /> : tab === 'ask' ? <Ask /> : tab === 'inbox' ? <Inbox /> : <Decisions />}
-    </div>
-  );
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/* ---------------- Documents and search ---------------- */
+function StatusBadge({ status }) {
+  const map = { processing: 'badge-info', ready: 'badge-success', error: 'badge-error' };
+  return <span className={`badge ${map[status] || 'badge-neutral'}`}>{status}</span>;
+}
 
-const TYPE_LABEL = { '.md': 'Markdown', '.markdown': 'Markdown', '.txt': 'Text', '.pdf': 'PDF', '.docx': 'Word', '.xlsx': 'Excel', '.pptx': 'PowerPoint', '.html': 'HTML', '.htm': 'HTML', '.csv': 'CSV', '.json': 'JSON', '.yaml': 'YAML', '.yml': 'YAML', '.odt': 'OpenDocument', '.rtf': 'RTF', '.epub': 'EPUB' };
+// ── Documents tab ─────────────────────────────────────────────────────────────
 
-function Documents() {
-  const { project, canEdit } = useProject();
-  const { toast, confirm } = useUi();
-  const docs = useLoad(() => api.get(`/api/projects/${project.id}/documents`), [project.id]);
-  useProjectEvents(['document.updated', 'document.deleted'], () => docs.reload(true));
-  const [uploads, setUploads] = useState([]);
-  const [drag, setDrag] = useState(false);
-  const fileInput = useRef(null);
-  const [q, setQ] = useState('');
-  const [hits, setHits] = useState(null);
-  const [searchError, setSearchError] = useState(null);
+function DocumentsTab({ projectId, onOpenDoc }) {
+  const [docs, setDocs] = useState([]);
+  const { sorted: sortedDocs, sortProps } = useSort(docs, { name: (doc) => doc.name, type: (doc) => doc.mime_type, size: (doc) => doc.size_bytes, status: (doc) => doc.status, uploaded: (doc) => doc.created_at });
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const fileRef = useRef(null);
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
+  const bulk = useBulkSelect(docs);
 
-  useEffect(() => {
-    if (!q.trim()) {
-      setHits(null);
-      return;
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await api.get(`/api/projects/${projectId}/knowledge`);
+      setDocs(r.docs || []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
-    const t = setTimeout(async () => {
-      try {
-        setSearchError(null);
-        setHits(await api.get(`/api/projects/${project.id}/search?q=${encodeURIComponent(q)}`));
-      } catch (e) {
-        setSearchError(e);
-      }
-    }, 250);
-    return () => clearTimeout(t);
-  }, [q, project.id]);
+  }, [projectId]);
 
-  const upload = async (files) => {
-    for (const f of files) {
-      const id = Math.random().toString(36).slice(2);
-      setUploads((u) => [...u, { id, name: f.name, status: 'uploading' }]);
-      try {
-        const r = await api.upload(`/api/projects/${project.id}/documents?name=${encodeURIComponent(f.name)}`, f);
-        setUploads((u) => u.map((x) => (x.id === id ? { ...x, status: r.document.status, error: r.document.error } : x)));
-      } catch (e) {
-        setUploads((u) => u.map((x) => (x.id === id ? { ...x, status: 'error', error: e.message } : x)));
+  useEffect(() => { load(); }, [load]);
+
+  const upload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(`/api/projects/${projectId}/knowledge/upload`, {
+        method: 'POST',
+        headers: { 'x-requested-with': 'agent-portal' },
+        body: fd,
+        credentials: 'same-origin',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Upload failed (${res.status})`);
       }
+      fileRef.current.value = '';
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
     }
-    docs.reload(true);
-    setTimeout(() => setUploads((u) => u.filter((x) => x.status === 'error')), 4000);
   };
 
-  const list = docs.data?.documents || [];
-  const uploaded = list.filter((d) => d.kind === 'upload');
+  const deleteDoc = async (docId) => {
+    if (!await requestConfirm('Delete this document?', 'Delete', 'danger')) return;
+    try {
+      await api.delete(`/api/projects/${projectId}/knowledge/${docId}`);
+      setDocs((d) => d.filter((x) => x.id !== docId));
+      bulk.clearAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const n = bulk.selected.size;
+    if (!await requestConfirm(
+      `Delete ${n} document${n === 1 ? '' : 's'}? This cannot be undone.`,
+      'Delete', 'danger',
+    )) return;
+    setBulkBusy(true);
+    const ids = [...bulk.selected];
+    const failed = [];
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await api.delete(`/api/projects/${projectId}/knowledge/${id}`);
+      } catch {
+        failed.push(id);
+      }
+    }));
+    setDocs((d) => d.filter((x) => !ids.includes(x.id) || failed.includes(x.id)));
+    bulk.clearAll();
+    if (failed.length > 0) {
+      toast(`${failed.length} document${failed.length === 1 ? '' : 's'} could not be deleted.`, 'error');
+    }
+    setBulkBusy(false);
+  };
+
+  if (loading) return <p className="muted">Loading…</p>;
 
   return (
-    <div className="stack-lg">
-      <div className="searchbar">
-        <Icon name="search" />
-        <input className="input" type="search" placeholder="Search all documents and decisions" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search documents" />
+    <div className="stack">
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
+      {error && <p className="error-note" role="alert">{error}</p>}
+
+      <div className="actions-row">
+        <label className={`btn btn-primary${uploading ? ' disabled' : ''}`}>
+          <Icon name="upload" size={14} />
+          {uploading ? 'Uploading…' : 'Upload document'}
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.docx,.xlsx,.pptx,.html,.txt,.md,.csv"
+            style={{ display: 'none' }}
+            onChange={upload}
+            disabled={uploading}
+            aria-label="Upload document"
+          />
+        </label>
       </div>
-      <ErrorNote error={searchError} />
-      {hits ? (
-        <SearchResults hits={hits} projectId={project.id} />
+
+      {docs.length === 0 ? (
+        <div className="empty-state">
+          <p>No documents yet. Upload a PDF, Word, Excel, PowerPoint or text file.</p>
+        </div>
       ) : (
-        <>
-          {canEdit ? (
-            <div
-              className={cx('dropzone', drag && 'is-drag')}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDrag(true);
-              }}
-              onDragLeave={() => setDrag(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDrag(false);
-                upload([...e.dataTransfer.files]);
-              }}
-            >
-              <Icon name="upload" size={22} />
-              <div>
-                <strong>Drop the FSD, TSD, API specs or meeting notes here</strong>
-                <p className="muted small">
-                  Word, PDF, Excel, PowerPoint, Markdown, HTML and text, up to {docs.data?.maxUploadMb ?? 50} MB each. Uploading a file with the same name replaces it.
-                </p>
-              </div>
-              <Button icon="upload" onClick={() => fileInput.current?.click()}>
-                Choose files
-              </Button>
-              <input
-                ref={fileInput}
-                type="file"
-                multiple
-                hidden
-                accept={(docs.data?.supported || []).join(',')}
-                onChange={(e) => {
-                  upload([...e.target.files]);
-                  e.target.value = '';
-                }}
-              />
-            </div>
-          ) : null}
-          {uploads.length ? (
-            <ul className="upload-list">
-              {uploads.map((u) => (
-                <li key={u.id}>
-                  {u.status === 'uploading' ? <Spinner small /> : <Badge status={u.status === 'ready' ? 'ready' : 'error'} />}
-                  <span>{u.name}</span>
-                  {u.error ? <span className="danger small">{u.error}</span> : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {docs.loading && !docs.data ? (
-            <Spinner />
-          ) : uploaded.length === 0 ? (
-            <Empty icon="knowledge" title="No documents yet">
-              Agents answer from these documents and cite them. Start with the functional and technical specifications.
-            </Empty>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Document</th>
-                  <th>Type</th>
-                  <th className="num">Sections</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th aria-label="Actions" />
+        <div style={{ position: 'relative' }}>
+          <table className="data-table" aria-label="Knowledge documents">
+            <thead>
+              <tr>
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all documents"
+                    checked={bulk.allSelected}
+                    ref={(el) => { if (el) el.indeterminate = bulk.someSelected; }}
+                    onChange={bulk.toggleAll}
+                  />
+                </th>
+                <th {...sortProps('name')}>Name</th>
+                <th {...sortProps('type')}>Type</th>
+                <th {...sortProps('size')}>Size</th>
+                <th {...sortProps('status')}>Status</th>
+                <th {...sortProps('uploaded')}>Uploaded</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedDocs.map((doc) => (
+                <tr key={doc.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${doc.name}`}
+                      checked={bulk.selected.has(doc.id)}
+                      onChange={() => bulk.toggle(doc.id)}
+                    />
+                  </td>
+                  <td>
+                    {doc.status === 'ready'
+                      ? <button type="button" className="link-btn" onClick={() => onOpenDoc({ docId: doc.id, name: doc.name })} title="Read the document">{doc.name}</button>
+                      : doc.name}
+                  </td>
+                  <td><span className="muted">{doc.mime_type || '—'}</span></td>
+                  <td>{formatBytes(doc.size_bytes)}</td>
+                  <td><StatusBadge status={doc.status} /></td>
+                  <td className="muted">{formatRelative(doc.created_at)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => deleteDoc(doc.id)}
+                      aria-label={`Delete ${doc.name}`}
+                      title="Delete"
+                    >
+                      <Icon name="trash" size={14} />
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {list.map((d) => (
-                  <tr key={d.id}>
-                    <td>
-                      <a href={href(project.id, 'knowledge', 'doc', d.id)} className="strong-link">
-                        {d.name}
-                      </a>
-                      {d.kind === 'decisions' ? <span className="muted small"> built in</span> : null}
-                      {d.error ? <div className="danger small">{d.error}</div> : null}
-                    </td>
-                    <td className="muted">{d.kind === 'decisions' ? 'Log' : TYPE_LABEL[d.mime] || d.mime}{d.size ? `, ${bytes(d.size)}` : ''}</td>
-                    <td className="num">{d.sections_count}</td>
-                    <td>
-                      <Badge status={d.status} />
-                    </td>
-                    <td className="muted">{timeAgo(d.updated_at)}</td>
-                    <td className="actions">
-                      {d.kind === 'upload' ? (
-                        <>
-                          <a className="icon-btn" href={`/api/documents/${d.id}/original`} aria-label={`Download ${d.name}`} title="Download original">
-                            <Icon name="download" size={17} />
-                          </a>
-                          {canEdit ? (
-                            <IconButton
-                              icon="trash"
-                              label={`Delete ${d.name}`}
-                              onClick={async () => {
-                                if (!(await confirm({ title: 'Delete document', message: `Delete “${d.name}”? Agents will no longer find it. Learning content built from it will be marked out of date.`, confirmLabel: 'Delete', danger: true }))) return;
-                                try {
-                                  await api.del(`/api/documents/${d.id}`);
-                                  toast('Document deleted');
-                                  docs.reload(true);
-                                } catch (e) {
-                                  toast(e.message, 'danger');
-                                }
-                              }}
-                            />
-                          ) : null}
-                        </>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </>
+              ))}
+            </tbody>
+          </table>
+          <BulkActionBar
+            selected={bulk.selected}
+            onDelete={handleBulkDelete}
+            onClear={bulk.clearAll}
+            busy={bulkBusy}
+            noun="document"
+          />
+        </div>
       )}
     </div>
   );
 }
 
-export function Highlight({ text, start, end }) {
-  const parts = [];
-  let rest = text || '';
-  let i = 0;
-  while (rest.length) {
-    const a = rest.indexOf(start);
-    if (a < 0) {
-      parts.push(<Fragment key={i++}>{rest}</Fragment>);
-      break;
-    }
-    const b = rest.indexOf(end, a);
-    if (a > 0) parts.push(<Fragment key={i++}>{rest.slice(0, a)}</Fragment>);
-    parts.push(<mark key={i++}>{rest.slice(a + start.length, b < 0 ? undefined : b)}</mark>);
-    rest = b < 0 ? '' : rest.slice(b + end.length);
-  }
-  return <>{parts}</>;
-}
+// ── Search tab ────────────────────────────────────────────────────────────────
 
-function SearchResults({ hits, projectId }) {
-  if (!hits.hits.length) return <Empty icon="search" title="Nothing found">Try fewer or different words.</Empty>;
-  return (
-    <ol className="results">
-      {hits.hits.map((h) => (
-        <li key={h.sectionId}>
-          <a href={href(projectId, 'knowledge', 'doc', h.docId, h.anchor)}>
-            <span className="muted small">{h.docName}</span>
-            <strong>{h.heading}</strong>
-          </a>
-          <p>
-            <Highlight text={h.snippet} start={hits.markStart} end={hits.markEnd} />
-          </p>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-/* ---------------- Document viewer ---------------- */
-
-function DocView({ docId, anchor }) {
-  const { project, canEdit } = useProject();
-  const { toast } = useUi();
-  const doc = useLoad(() => api.get(`/api/documents/${docId}`), [docId]);
-  useProjectEvents(['document.updated'], (_e, d) => d?.id === docId && doc.reload(true));
-  const [reindexing, setReindexing] = useState(false);
-  useEffect(() => {
-    if (!doc.data || !anchor) return;
-    const t = setTimeout(() => document.getElementById(`sec-${anchor}`)?.scrollIntoView({ block: 'start' }), 50);
-    return () => clearTimeout(t);
-  }, [doc.data, anchor]);
-  if (doc.error) return <div className="page"><ErrorNote error={doc.error} /></div>;
-  if (!doc.data) return <div className="page"><Spinner /></div>;
-  const d = doc.data.document;
-  return (
-    <div className="page">
-      <a className="back" href={href(project.id, 'knowledge')}>
-        ← All documents
-      </a>
-      <PageHeader
-        title={d.name}
-        sub={`${plural(d.sections_count, 'section')}, updated ${timeAgo(d.updated_at)}. Agents read the Markdown version shown here.`}
-        actions={
-          <>
-            {d.kind === 'upload' ? (
-              <a className="btn btn-default" href={`/api/documents/${d.id}/original`}>
-                <Icon name="download" size={17} />
-                <span>Original</span>
-              </a>
-            ) : null}
-            {canEdit ? (
-              <Button
-                icon="refresh"
-                busy={reindexing}
-                onClick={async () => {
-                  setReindexing(true);
-                  try {
-                    await api.post(`/api/documents/${d.id}/reindex`);
-                    toast('Converted and indexed again');
-                    doc.reload(true);
-                  } catch (e) {
-                    toast(e.message, 'danger');
-                  } finally {
-                    setReindexing(false);
-                  }
-                }}
-              >
-                Convert again
-              </Button>
-            ) : null}
-          </>
-        }
-      />
-      {d.error ? <ErrorNote error={new Error(d.error)} /> : null}
-      <div className="doc-layout">
-        <nav className="doc-outline" aria-label="Sections">
-          <ol>
-            {doc.data.sections.map((s) => (
-              <li key={s.id} className={cx(`lvl-${s.level}`, s.anchor === anchor && 'is-active')}>
-                <a href={href(project.id, 'knowledge', 'doc', d.id, s.anchor)}>{s.heading}</a>
-              </li>
-            ))}
-          </ol>
-        </nav>
-        <article className="doc-body">
-          <Markdown text={doc.data.markdown} />
-        </article>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------- Ask ---------------- */
-
-function Ask() {
-  const { project } = useProject();
-  const { toast } = useUi();
-  const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState(null);
-  const [busy, setBusy] = useState(false);
+function SearchTab({ projectId, onOpenDoc }) {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [inboxQ, setInboxQ] = useState('');
-  const [sent, setSent] = useState(false);
-  const history = useLoad(() => api.get(`/api/projects/${project.id}/qa`), [project.id]);
+  const [via, setVia] = useState(null);
+  const [searchNote, setSearchNote] = useState(null);
 
-  const ask = async (e) => {
-    e?.preventDefault();
-    if (!question.trim()) return;
-    setBusy(true);
+  const search = async (e) => {
+    e.preventDefault();
+    if (!q.trim()) return;
+    setLoading(true);
     setError(null);
-    setSent(false);
     try {
-      const r = await api.post(`/api/projects/${project.id}/ask`, { question });
-      setAnswer({ ...r, question });
-      setInboxQ(r.suggestedQuestion || question);
-      history.reload(true);
+      const r = await api.get(`/api/projects/${projectId}/knowledge/search?q=${encodeURIComponent(q)}`);
+      setResults(r.results || []);
+      setSearchNote(r.note || null);
+      setVia(r.via || null);
     } catch (err) {
-      setError(err);
+      setError(err.message);
+      setResults([]);
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
   };
 
-  const citeTransform = useCallback((t) => t.replace(/\[(\d{1,2})\]/g, (_m, n) => `<sup class="cite" data-n="${n}"><a href="#">${n}</a></sup>`), []);
-  const [focusN, setFocusN] = useState(null);
+  const highlight = (text) => {
+    if (!text) return text;
+    // Replace ⟦…⟧ markers with highlighted spans
+    const parts = String(text).split(/(⟦[^⟧]*⟧)/);
+    return parts.map((p, i) => {
+      if (p.startsWith('⟦') && p.endsWith('⟧')) {
+        return <mark key={i}>{p.slice(1, -1)}</mark>;
+      }
+      return p;
+    });
+  };
 
   return (
-    <div className="ask-layout">
-      <div className="stack-lg">
-        <form className="ask-box" onSubmit={ask}>
-          <label htmlFor="ask-q" className="field-label">
-            Ask anything about this project
-          </label>
-          <textarea
-            id="ask-q"
-            className="input"
-            rows={3}
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Who has to approve a refund above 500 USD?"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) ask();
-            }}
-          />
-          <div className="row">
-            <Button variant="primary" type="submit" busy={busy} disabled={!question.trim()}>
-              Ask
-            </Button>
-            <span className="muted small">Answers come only from the project documents and decisions, with sources.</span>
-          </div>
-        </form>
-        <ErrorNote error={error} />
-        {answer ? (
-          <section className="answer">
-            <Markdown text={answer.answer} transform={citeTransform} onCite={setFocusN} />
-            {answer.sources.length ? (
-              <ol className="sources">
-                {answer.sources.map((s) => (
-                  <li key={s.n} className={cx(s.cited && 'is-cited', focusN === s.n && 'is-focus')}>
-                    <span className="src-n">{s.n}</span>
-                    <a href={href(project.id, 'knowledge', 'doc', s.docId, s.anchor)}>
-                      {s.docName} › {s.heading}
-                    </a>
-                  </li>
-                ))}
-              </ol>
-            ) : null}
-            {answer.missing ? (
-              <Note tone="warn" icon="question">
-                <p>
-                  <strong>The documents don’t answer this yet.</strong> Send it to the team as an open question; the answer goes into the decisions log, so agents and future answers can use it.
-                </p>
-                <div className="row">
-                  <input className="input" value={inboxQ} onChange={(e) => setInboxQ(e.target.value)} aria-label="Question for the team" />
-                  <Button
-                    disabled={sent || !inboxQ.trim()}
-                    onClick={async () => {
-                      try {
-                        await api.post(`/api/projects/${project.id}/inbox`, { question: inboxQ });
-                        setSent(true);
-                        toast('Sent to open questions');
-                      } catch (e) {
-                        toast(e.message, 'danger');
-                      }
-                    }}
-                  >
-                    {sent ? 'Sent' : 'Ask the team'}
-                  </Button>
-                </div>
-              </Note>
-            ) : null}
-          </section>
-        ) : null}
-      </div>
-      <aside className="side">
-        <h2 className="side-title">Recent questions</h2>
-        {history.data?.history?.length ? (
-          <ul className="plain-list">
-            {history.data.history.map((h) => (
-              <li key={h.id}>
-                <button type="button" className="linkish" onClick={() => setQuestion(h.meta?.question || h.title.replace(/^Question: /, ''))}>
-                  {h.meta?.question || h.title}
-                </button>
-                <span className="muted small">
-                  {h.asked_by}, {timeAgo(h.created_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted small">Questions people ask show up here.</p>
-        )}
-      </aside>
+    <div className="stack">
+      {error && <p className="error-note" role="alert">{error}</p>}
+
+      <form onSubmit={search} className="search-form" role="search">
+        <input
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search your documents…"
+          aria-label="Search knowledge base"
+          className="input-search"
+        />
+        <button type="submit" className="btn btn-primary" disabled={loading}>
+          {loading ? 'Searching…' : 'Search'}
+        </button>
+      </form>
+
+      {searchNote && <p className="field-hint" role="status">{searchNote}</p>}
+      {via && !searchNote && <p className="field-hint">Searched by {VIA_LABEL[via] || via}.</p>}
+      {results !== null && results.length === 0 && (
+        <p className="muted">No results found.</p>
+      )}
+
+      {results?.map((r, i) => (
+        <div key={i} className="knowledge-result-card">
+          <div className="knowledge-result-name">{r.name}{r.heading ? ` › ${r.heading}` : ""}</div>
+          <p className="knowledge-result-snippet">{highlight(r.snippet)}</p>
+          <button type="button" className="btn btn-sm" onClick={() => onOpenDoc({ docId: r.docId, name: r.name, passage: r.passage || r.snippet, heading: r.heading })}>
+            Open document
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
 
-/* ---------------- Open questions ---------------- */
+const VIA_LABEL = { keyword: 'keywords', embeddings: 'meaning and keywords', kb: 'the AWS Knowledge Base' };
 
-export function Inbox() {
-  const { project, canEdit } = useProject();
-  const [filter, setFilter] = useState('pending');
-  const inputs = useLoad(() => api.get(`/api/projects/${project.id}/inputs?status=${filter === 'pending' ? 'pending' : 'all'}`), [project.id, filter]);
-  useProjectEvents(['input.created', 'input.resolved'], () => inputs.reload(true));
-  const { toast } = useUi();
-  const list = inputs.data?.inputs || [];
+// ── Ask tab ───────────────────────────────────────────────────────────────────
+
+function AskTab({ projectId, onOpenDoc }) {
+  const [question, setQuestion] = useState('');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [teamSent, setTeamSent] = useState(false);
+  const [ai, setAi] = useState({});
+
+  const ask = async (e) => {
+    e.preventDefault();
+    if (!question.trim()) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setTeamSent(false);
+    try {
+      const r = await api.post(`/api/projects/${projectId}/knowledge/ask`, { question, ...ai });
+      setResult(r);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendToTeam = async () => {
+    try {
+      await api.post(`/api/projects/${projectId}/knowledge/decisions`, {
+        question,
+        answer: '(Pending team response)',
+      });
+      setTeamSent(true);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   return (
-    <div className="stack-lg">
-      <div className="row between">
-        <p className="muted">Questions agents asked during runs, and questions people sent from Ask. Answers go into the decisions log.</p>
-        <Segmented value={filter} onChange={setFilter} options={[{ value: 'pending', label: 'Open' }, { value: 'all', label: 'All' }]} label="Filter" />
-      </div>
-      {inputs.loading && !inputs.data ? (
-        <Spinner />
-      ) : list.length === 0 ? (
-        <Empty icon="inbox" title={filter === 'pending' ? 'No open questions' : 'Nothing here yet'}>
-          When an agent is unsure, it asks here instead of guessing.
-        </Empty>
+    <div className="stack">
+      {error && <p className="error-note" role="alert">{error}</p>}
+
+      <form onSubmit={ask} className="stack">
+        <div className="field">
+          <label htmlFor="ask-question">Question</label>
+          <textarea
+            id="ask-question"
+            rows={3}
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="Ask something about your project documents…"
+            className="input-textarea"
+          />
+        </div>
+        <AiChoicePicker onChange={setAi} disabled={loading} idPrefix="ask-ai" />
+        <p className="field-hint">
+          Ask finds the passages that use your words, then the model above answers from those passages only and cites them.
+        </p>
+        <button type="submit" className="btn btn-primary" disabled={loading || !question.trim()}>
+          {loading ? 'Reading the documents…' : 'Ask'}
+        </button>
+      </form>
+
+      {result && !result.needsTeam && (
+        <div className="knowledge-answer">
+          <h3>Answer</h3>
+          {result.note && <p className="field-hint" role="status">{result.note}</p>}
+          {result.searchNote ? <p className="field-hint" role="status">{result.searchNote}</p> : result.via ? <p className="field-hint">Passages found by {VIA_LABEL[result.via] || result.via}.</p> : null}
+          <p style={{ whiteSpace: 'pre-wrap' }}>{result.answer}</p>
+          {result.sources?.length > 0 && (
+            <div className="knowledge-sources">
+              <h4>Sources</h4>
+              {result.sources.map((s, i) => (
+                <div key={i} className="knowledge-source-item">
+                  <span className="knowledge-source-name">
+                    {s.n ? `[${s.n}] ` : ''}{s.name}{s.heading ? ` › ${s.heading}` : ''}
+                    {result.mode === 'model' && result.cited?.includes(s.n) ? ' · cited' : ''}
+                  </span>
+                  <span className="knowledge-source-snippet muted">{s.snippet}</span>
+                  <button type="button" className="link-btn" onClick={() => onOpenDoc({ docId: s.docId, name: s.name, passage: s.passage || s.snippet, heading: s.heading })}>
+                    Open in the document
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {result?.needsTeam && !teamSent && (
+        <div className="knowledge-needs-team">
+          <p>The documents don't contain a clear answer to this question.</p>
+          <button type="button" className="btn btn-secondary" onClick={sendToTeam}>
+            Send to team questions
+          </button>
+        </div>
+      )}
+
+      {teamSent && (
+        <p className="success-note">
+          <Icon name="check" size={14} /> Sent to team questions.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Decisions tab ─────────────────────────────────────────────────────────────
+
+function DecisionsTab({ projectId }) {
+  const [decisions, setDecisions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    api.get(`/api/projects/${projectId}/knowledge/decisions`)
+      .then((r) => setDecisions(r.decisions || []))
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [projectId]);
+
+  if (loading) return <p className="muted">Loading…</p>;
+
+  return (
+    <div className="stack">
+      {error && <p className="error-note" role="alert">{error}</p>}
+      {decisions.length === 0 ? (
+        <div className="empty-state">
+          <p>No decisions yet. They appear when team questions are answered.</p>
+        </div>
       ) : (
-        <div className="stack">
-          {list.map((i) => (
-            <div key={i.id} className="inbox-item">
-              <InputCard input={i} projectId={project.id} canApprove={canEdit} onDone={() => inputs.reload(true)} />
-              {i.status === 'pending' && !i.run_id && canEdit ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={async () => {
-                    await api.post(`/api/inputs/${i.id}/dismiss`);
-                    toast('Question dismissed');
-                    inputs.reload(true);
-                  }}
-                >
-                  Dismiss
-                </Button>
-              ) : null}
+        <div className="decisions-list">
+          {decisions.map((d) => (
+            <div key={d.id} className="decision-card">
+              <div className="decision-q">
+                <strong>Q:</strong> {d.question}
+              </div>
+              <div className="decision-a">
+                <strong>A:</strong> {d.answer}
+              </div>
+              <div className="decision-meta muted">
+                {formatRelative(d.created_at)}
+              </div>
             </div>
           ))}
         </div>
@@ -494,18 +447,56 @@ export function Inbox() {
   );
 }
 
-/* ---------------- Decisions ---------------- */
+// ── Main page ─────────────────────────────────────────────────────────────────
 
-function Decisions() {
-  const { project } = useProject();
-  const docs = useLoad(() => api.get(`/api/projects/${project.id}/documents`), [project.id]);
-  const decisionsDoc = useMemo(() => docs.data?.documents.find((d) => d.kind === 'decisions'), [docs.data]);
-  const doc = useLoad(() => (decisionsDoc ? api.get(`/api/documents/${decisionsDoc.id}`) : Promise.resolve(null)), [decisionsDoc?.id, decisionsDoc?.updated_at]);
-  useProjectEvents(['document.updated'], () => docs.reload(true));
-  if (!doc.data) return <Spinner />;
+const TABS = [
+  { id: 'docs',      label: 'Documents' },
+  { id: 'search',    label: 'Search'    },
+  { id: 'ask',       label: 'Ask'       },
+  { id: 'decisions', label: 'Decisions' },
+  { id: 'learn',     label: 'Learn'     },
+];
+
+export function Knowledge({ projectId }) {
+  const [tab, setTab] = useState('docs');
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [viewer, setViewer] = useState(null); // { docId, name, passage?, heading? }
+
   return (
-    <div className="doc-body narrow-doc">
-      <Markdown text={doc.data.markdown} />
+    <div className="page">
+      <PageHeader title="Knowledge" description="Documents, decisions and learning material that agents in this project can draw on.">
+        <button type="button" className="btn" onClick={() => setSetupOpen(true)}>
+          <Icon name="settings" size={14} />
+          Search setup
+        </button>
+      </PageHeader>
+      {setupOpen && <KnowledgeSearchSetup projectId={projectId} onClose={() => setSetupOpen(false)} />}
+      {viewer && <KnowledgeDocViewer projectId={projectId} {...viewer} onClose={() => setViewer(null)} />}
+
+      <div className="tab-bar" role="tablist" aria-label="Knowledge sections">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`tab-btn${tab === t.id ? ' is-active' : ''}`}
+            onClick={() => setTab(t.id)}
+            type="button"
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="tab-content">
+        {tab === 'docs'      && <DocumentsTab  projectId={projectId} onOpenDoc={setViewer} />}
+        {tab === 'search'    && <SearchTab     projectId={projectId} onOpenDoc={setViewer} />}
+        {tab === 'ask'       && <AskTab        projectId={projectId} onOpenDoc={setViewer} />}
+        {tab === 'decisions' && <DecisionsTab  projectId={projectId} />}
+        {tab === 'learn'     && <Learn         projectId={projectId} />}
+      </div>
     </div>
   );
 }
+
+export default Knowledge;
