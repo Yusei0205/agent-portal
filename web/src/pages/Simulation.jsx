@@ -180,7 +180,7 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
                   </div>
                   <div className="field">
                     <label htmlFor="sim-label">Version of the document <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
-                    <input id="sim-label" value={label} maxLength={60} disabled={busy} onChange={(e) => setLabel(e.target.value)} placeholder="For example v1.9" style={{ maxWidth: 240 }} />
+                    <input id="sim-label" value={label} maxLength={60} disabled={busy} onChange={(e) => setLabel(e.target.value)} placeholder="ver 1" style={{ maxWidth: 240 }} />
                     <span className="field-hint">Shown next to the version number, so you can tell which document version each spec version came from.</span>
                   </div>
                 </>
@@ -189,8 +189,8 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
               {kind === 'xlsx' && (
                 <fieldset className="field" disabled={busy} style={{ border: 0, padding: 0 }}>
                   <legend className="field-label">How to read the workbook</legend>
-                  <label className="sim-check small"><input type="radio" name="how" checked={mode === 'ai'} onChange={() => setMode('ai')} /> <span><strong>With AI</strong> <span className="muted">(works with any layout)</span></span></label>
-                  <label className="sim-check small"><input type="radio" name="how" checked={mode === 'layout'} onChange={() => setMode('layout')} /> <span><strong>By a fixed layout, without AI</strong> <span className="muted">(only for workbooks laid out like the FLASH sample: one sheet per API with “1. Request” and “2. Response” tables)</span></span></label>
+                  <label className="sim-check small"><input type="radio" name="how" checked={mode === 'ai'} onChange={() => setMode('ai')} /> <span><strong>Read with AI</strong></span></label>
+                  <label className="sim-check small"><input type="radio" name="how" checked={mode === 'layout'} onChange={() => setMode('layout')} /> <span><strong>Read by fixed layout</strong> <span className="muted">(one sheet per API with “1. Request” and “2. Response” tables)</span></span></label>
                 </fieldset>
               )}
 
