@@ -169,6 +169,14 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
   return (
     <div className="ide-status-bar" aria-label="Status bar" role="status">
       {engineLabel && <span className="ide-status-engine">{engineLabel}</span>}
+      {bar?.signIn && (
+        <span
+          className={`ide-status-signin ide-status-signin--${bar.signIn.kind}`}
+          title={`Runs on: ${bar.signIn.detail}`}
+        >
+          {bar.signIn.label}
+        </span>
+      )}
       {(bar?.model || SWITCHABLE.has(bar?.engine)) && (
         <ModelChip
           projectId={projectId}

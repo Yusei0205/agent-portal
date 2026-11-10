@@ -26,6 +26,7 @@ import { getSessionBrowserState, shutdownSessionBrowser } from './agent/browser-
 import { getSetting } from './settings.ts';
 import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
+import { sessionSignIn } from './session-sign-in.ts';
 import { presignLiveViewUrl, setAutomationStream } from './browser-live-view.ts';
 
 // ── Idle stop ─────────────────────────────────────────────────────────────────
@@ -205,6 +206,7 @@ export function registerSessionLifecycleRoutes(): void {
   // Response:
   //   {
   //     agent: string|null, engine: string, model: string|null,
+  //     signIn: { kind, label, detail } | null,   — what the session runs on, e.g. "Pro/Max plan" or "Bedrock (AWS keys)"
   //     toolApprovalMode: 'trust-all'|'ask',
   //     usageUnit: 'usd'|'credits',   — Kiro bills in credits, the other engines in dollars
   //     thisTurn: { costUsd: number, credits: number, inputTokens: number|null, outputTokens: number|null } | null,
@@ -256,6 +258,8 @@ export function registerSessionLifecycleRoutes(): void {
         // The model the next run uses (set by /model or the model chip), else the model of the last run.
         model: (typeof w.model === 'string' && w.model.trim()) || latestRun?.model || null,
         contextPercent,
+        // Which sign-in the session runs on: a Claude plan, an API key, Bedrock, ... (null for a demo session).
+        signIn: await sessionSignIn(w).catch(() => null),
         toolApprovalMode: w.trust_tools ? 'trust-all' : 'ask',
         usageUnit: isKiro ? 'credits' : 'usd',
         thisTurn,

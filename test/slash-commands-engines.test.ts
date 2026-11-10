@@ -134,6 +134,32 @@ describe('slash commands in each engine', () => {
     });
   }
 
+  it('the status bar tells which sign-in a session runs on', async () => {
+    const barOf = async (id: string) => ((await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${id}/status-bar`, { cookie })).body as { signIn: { kind: string; label: string } | null }).signIn;
+    const mk = async (engine: string, credentialId?: string) => {
+      const w = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, { method: 'POST', body: { goal: 'g', engine, ...(credentialId ? { credentialId } : {}) }, cookie });
+      return ((w.body as Record<string, unknown>).workflow as Record<string, unknown>).id as string;
+    };
+    const cred = async (body: Record<string, unknown>) => {
+      const r = await fetchJson(baseUrl, '/api/credentials', { method: 'POST', cookie, body });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      return ((r.body as Record<string, unknown>).credential as Record<string, unknown>).id as string;
+    };
+    // Claude: the plan made in before(), an API key, AWS keys, an IAM role
+    assert.deepEqual(await barOf(await mk('claude-code', planCredentialId)), { kind: 'plan', label: 'Pro/Max plan', detail: 'Your Claude Pro or Max subscription' });
+    assert.equal((await barOf(await mk('claude-code', await cred({ engine: 'claude-code', mode: 'api_key', name: 'Key', secret: 'sk-ant-api03-test' }))))?.label, 'Anthropic API key');
+    assert.equal((await barOf(await mk('claude-code', await cred({ engine: 'claude-code', mode: 'bedrock_role', name: 'Role', config: { roleArn: 'arn:aws:iam::123456789012:role/r', region: 'us-east-1' } }))))?.label, 'Bedrock (IAM role)');
+    // The name the person gave does not decide the label
+    assert.equal((await barOf(await mk('claude-code', await cred({ engine: 'claude-code', mode: 'api_key', name: 'My Claude Pro plan', secret: 'sk-ant-api03-test2' }))))?.kind, 'api_key');
+    // Codex, a removed sign-in, and the demo engine
+    assert.equal((await barOf(await mk('codex')))?.kind, 'chatgpt');
+    const gone = await mk('claude-code', planCredentialId);
+    const { run: dbRun } = await import('../server/db.ts');
+    dbRun('UPDATE p6_workflows SET credential_id = ? WHERE id = ?', 'no-such-credential', gone);
+    assert.equal((await barOf(gone))?.kind, 'missing');
+    assert.equal(await barOf(await mk('demo')), null);
+  });
+
   it('the model chip: choosing a model sends "/model <id>", which switches it and can be undone with default', async () => {
     const wfId = await session('claude-code');
     const { one } = await import('../server/db.ts');

@@ -1399,6 +1399,14 @@
 }
 .ide-status-chip { white-space: nowrap; font-family: var(--mono); color: var(--ink-2); padding: 0 4px; }
 .ide-status-key { color: var(--ink-3); }
+.ide-status-signin {
+  font-size: 0.66rem; font-weight: 600; padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+  color: var(--ink-2); background: color-mix(in srgb, var(--ink-2) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-2) 25%, transparent);
+}
+.ide-status-signin--plan, .ide-status-signin--chatgpt { color: var(--ok, #15803d); background: color-mix(in srgb, var(--ok, #15803d) 12%, transparent); border-color: color-mix(in srgb, var(--ok, #15803d) 35%, transparent); }
+.ide-status-signin--bedrock { color: var(--warn, #b45309); background: color-mix(in srgb, var(--warn, #b45309) 12%, transparent); border-color: color-mix(in srgb, var(--warn, #b45309) 35%, transparent); }
+.ide-status-signin--missing { color: var(--danger, #b91c1c); background: color-mix(in srgb, var(--danger, #b91c1c) 12%, transparent); border-color: color-mix(in srgb, var(--danger, #b91c1c) 35%, transparent); }
 .ide-status-pick { position: relative; display: inline-flex; }
 .ide-status-chip-btn { background: none; border: 0; cursor: pointer; font: inherit; border-radius: 4px; }
 .ide-status-chip-btn:hover, .ide-status-chip-btn[aria-expanded="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); }
