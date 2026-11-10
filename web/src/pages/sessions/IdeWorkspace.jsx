@@ -1296,7 +1296,13 @@ export function IdeWorkspace({ id, project }) {
       </div>
 
       {/* Status bar */}
-      <IdeStatusBar projectId={project.id} workflowId={id} engine={workflow?.engine} />
+      <IdeStatusBar
+        projectId={project.id}
+        workflowId={id}
+        engine={workflow?.engine}
+        credentialId={workflow?.credential_id ?? null}
+        onModelChanged={() => { load(); setCommandTick((k) => k + 1); }}
+      />
 
       {/* Composer */}
       <ComposerBar
