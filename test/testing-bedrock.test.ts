@@ -15,6 +15,8 @@ import {
   setBedrockClientFactory,
   setKiroRunnerOverride,
   pickTextEngine,
+  textPromptLimit,
+  KIRO_RUNNER_MAX_PROMPT,
   callTextModel,
   type BedrockClientLike,
   type BedrockConverseInput,
@@ -225,6 +227,43 @@ describe('Bedrock provider — callTextModel', () => {
       assert.equal(await pickTextEngine(userId, claudeCred), 'claude-code');
       // Someone else's credential id is not usable.
       assert.equal(await pickTextEngine(generateId(), kiroCred), null);
+    } finally {
+      setKiroRunnerOverride(null);
+      dbRun('DELETE FROM engine_credentials WHERE user_id = ?', userId);
+      dbRun('DELETE FROM users WHERE id = ?', userId);
+    }
+  });
+
+  it('the Kiro runner takes 100,000 characters: the limit is known, and a longer prompt is refused with a clear message', async () => {
+    setSetting(getDb(), 'provider.mode', 'demo');
+    const userId = generateId();
+    const ts = now();
+    insert('users', { id: userId, email: `kiro-limit-${Date.now()}@test.com`, name: 'Kiro limit', password_hash: 'x', is_admin: 0, disabled: 0, created_at: ts });
+    const cred = (engine: string): string => {
+      const id = generateId();
+      insert('engine_credentials', {
+        id, user_id: userId, engine, name: `my ${engine}`, mode: engine === 'kiro' ? 'identity_center' : 'api_key', secret_enc: encrypt('x', config.secretKey),
+        extra_config: '{}', is_default: 0, last4: 'abcd', created_at: ts, updated_at: ts, updated_by: userId,
+      });
+      return id;
+    };
+    const kiroCred = cred('kiro');
+    const sent: number[] = [];
+    setKiroRunnerOverride(async (prompt) => { sent.push(prompt.length); return 'ok'; });
+    try {
+      assert.equal(KIRO_RUNNER_MAX_PROMPT, 100_000);
+      assert.equal(await textPromptLimit(userId, null), 99_400, 'system and user text may take what is left after the reply instructions');
+      assert.equal(await textPromptLimit(null, null), null, 'no person, no Kiro');
+      assert.equal(await textPromptLimit(userId, cred('claude-code')), null, 'a Claude sign-in takes longer text');
+      assert.equal(await textPromptLimit(userId, kiroCred), 99_400);
+
+      // Text that fits within the limit reaches the runner; text over it never does.
+      assert.equal(await callTextModel('s', 'x'.repeat(99_000), { createdBy: userId, credentialId: kiroCred }), 'ok');
+      await assert.rejects(
+        callTextModel('s', 'x'.repeat(100_001), { createdBy: userId, credentialId: kiroCred }),
+        /Kiro accepts at most 100,000.*shorter document/,
+      );
+      assert.equal(sent.length, 1, 'only the first reached the runner');
     } finally {
       setKiroRunnerOverride(null);
       dbRun('DELETE FROM engine_credentials WHERE user_id = ?', userId);

@@ -18,7 +18,7 @@ import { registerBackgroundJob, runInBackground } from '../background-jobs.ts';
 import { restoreFile } from '../durable-files.ts';
 import { convertToMarkdown } from '../convert.ts';
 import { deleteAttachmentsByIds, validateAttachmentIds } from '../ai-attachments.ts';
-import { callTextModel } from '../testing/model-provider.ts';
+import { callTextModel, textPromptLimit } from '../testing/model-provider.ts';
 import { requireProjectAccess, bad } from './access.ts';
 import { extractApis } from './ai-extract.ts';
 import type { ModelCall } from './ai-extract.ts';
@@ -91,9 +91,11 @@ async function runJob(jobId: string): Promise<void> {
     await restoreFile(filePath);
     const markdown = await convertToMarkdown(filePath, String(file.mime_type));
 
+    // The Kiro runner takes at most 100,000 characters in a request, so a long document is cut to fit it.
+    const promptChars = await textPromptLimit(job.userId, job.credentialId);
     const result = await extractApis(markdown, modelFor(job), async (p) => {
       await update({ phase: p.phase, done: p.done, total: p.total, current: p.current ?? '' });
-    });
+    }, promptChars ? { promptChars } : {});
 
     const liveBaseUrl = pickLiveBaseUrl(result.baseUrls);
     const created = result.drafts.length > 0
