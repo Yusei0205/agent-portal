@@ -202,6 +202,14 @@ export const router = {
     registerRoute('POST', pattern, handler, false, true);
   },
   /**
+   * Register any-method endpoint that bypasses the CSRF check and body parsing, for API-token callers (the simulated
+   * client APIs). The handler reads the body itself and MUST insist on token authentication, since the CSRF guard
+   * is what protects cookie sessions.
+   */
+  rawMethod(method: string, pattern: string, handler: Handler): void {
+    registerRoute(method.toUpperCase(), pattern, handler, false, true);
+  },
+  /**
    * Register a GET endpoint that bypasses body parsing (body is never relevant for GET,
    * but marks the route so the handler can opt out of standard processing if needed).
    */

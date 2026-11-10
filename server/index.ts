@@ -51,6 +51,7 @@ import { registerAuditRoutes } from './audit.ts';
 import { registerLearnRoutes } from './learn.ts';
 import { registerControlPlaneRoutes } from './control-plane.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
+import { registerSimulationRoutes } from './api-sim/routes.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerProjectPullRequestSettingsRoutes } from './project-settings-pr.ts';
 import { registerSessionPullRequestRoutes } from './session-pr.ts';
@@ -174,6 +175,7 @@ export async function startServer(
   await initCredentialsRepository();
   await initAwsAccountsRepository();
   await initIntegrationsRepository();
+  await (await import('./repositories/simulation.ts')).initSimulationRepository();
   await initThemesRepository();
   await initFeedbackRepository();
   await initUserConfigRepository();
@@ -271,6 +273,7 @@ export async function startServer(
   registerLearnRoutes();
   registerControlPlaneRoutes();
   registerIntegrationRoutes();
+  registerSimulationRoutes();
   registerProjectAwsRoutes();
   registerProjectPullRequestSettingsRoutes();
   registerSessionPullRequestRoutes();

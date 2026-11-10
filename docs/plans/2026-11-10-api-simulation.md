@@ -1,6 +1,6 @@
 # Plan: Client API simulation (mock REST APIs from client specs)
 
-Status: in progress. Phases 1 and 2 (mock engine, Excel parser) are built and tested on `feat/api-simulation` (`server/api-sim/`, `test/api-sim.test.ts`, uncommitted at the time of writing). Everything from phase 3 on is a proposal. Written 2026-11-10.
+Status: in progress. Phases 1-3 are built and tested on `feat/api-simulation`: mock engine, Excel parser, storage (SQLite + DynamoDB), routes and the hosted simulated API. The DynamoDB repository type-checks but has not been run against DynamoDB. Phase 4 onward (UI, AI enrichment, MCP facade, spec diff) is a proposal. Written 2026-11-10.
 
 ## Goal
 
@@ -48,6 +48,12 @@ Reference: `WS_GENAI_FLASH_ISD3_RestAPI_v1.9.xlsx` (22 sheets; 8 of them are API
 - No URL paths or base URL are given. Some sheets are near-duplicates, and one sheet's API Name does not match its sheet.
 - Some sheets are images only; some have absurd used ranges (up to column XEU).
 
+## How to call it (built)
+
+- Team routes live under `/api/projects/:id/sim/...` (import, list, approve, set path, rules, try).
+- The simulated API is `/api/sim/:projectId/:apiId/call/<path in the spec>`. It needs a portal API token in `Authorization: Bearer ap_...`, so the client's own credential goes in `X-Sim-Authorization`. The portal token is never forwarded to the live API.
+- It answers only from an approved spec version; before that it returns 409 `API_NOT_APPROVED`.
+
 ## Design
 
 ```
@@ -92,7 +98,7 @@ New repository (SQLite + DynamoDB, same pattern as integrations). Per project: A
 
 1. **Core (building now):** OpenAPI types, mock engine with request validation, schema-based response generation and the block rule. Unit tested.
 2. **Excel parser (building now):** deterministic parse of the layout above into a field tree and a draft OpenAPI document, tested on a synthetic workbook and on the real sample when present.
-3. **Storage and routes:** repository, CRUD for APIs and spec versions, the hosted REST endpoint, mode routing.
+3. **Storage and routes (built):** repository, import, version/approve flow, rules, "Try it", the hosted REST endpoint and mode routing. Live mode forwards the caller's own credential (`X-Sim-Authorization`); stored, encrypted live credentials are not built. Per-call logging is a console line only; a stored call log for the run view is still to do.
 4. **Team UI:** "Simulation" tab on the project's Integrations page: import, review with flags, endpoint list with mode toggles, "Try it" panel, version history.
 5. **AI enrichment:** per-sheet job, model dropdown, validation with one repair pass.
 6. **MCP facade:** the simulation as an MCP server so agents can use it.
