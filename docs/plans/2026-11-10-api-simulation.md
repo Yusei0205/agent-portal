@@ -141,10 +141,10 @@ Read of `server/testing/` and `web/src/pages/tests/` on 2026-11-10; nothing belo
 
 ### Delivery order
 1. **(built)** Deterministic generator (`server/api-sim/test-cases.ts`, route `POST /api/projects/:pid/tests/:tpid/case-sets/from-api`). It is reached from the existing "Generate test cases" dialog, where the API specification is optional: choose an API from the simulation, or import a file that is read for the cases only and not added to the simulation. A description is then optional too; with one, the AI generation also runs and makes its own case set. Tested: every generated runnable case gets the status it expects from the mock engine and from the hosted endpoint. Limits today: a rejected request is assumed to return HTTP 400, a successful one is checked by status only, and a rule stated only in words becomes a manual case.
-2. API target on a test project, resolved by the runner (in-process for simulated mode).
-3. `assert_schema` and the per-API error-style setting.
+2. **(built, differently from the first sketch)** API runs without a browser: the existing script runner needs one and the cloud portal has none, so `server/api-sim/api-runner.ts` runs a case set's API cases directly: in-process against the simulation, or over HTTP (SSRF-checked) against the client's live address. Settings per test project (`GET/PUT .../api-target`): which APIs, how the client's API reports a rejected request (HTTP status or a result code in the body), and a live login header that must be a vault reference (never a plain secret) and replaces the placeholder token in the cases that send one. Results are written into the sheet as Status and a "Run [...]" remark.
+3. **(built)** Response check: a successful answer is compared with the specification's response fields (`assert_schema` as part of the run, not as a new step kind), and the error style setting. The scripts the generator writes still use the old `api_request` step and are not changed.
 4. AI business-rule cases and the model dropdown.
-5. Mock-versus-live contract report; scheduled runs.
+5. **(built)** Mock-versus-live comparison ("Compare both" on the case sheet): runs the same cases on both and lists the ones that pass on the simulation but fail on the live API. Scheduled runs are not built.
 
 ## Risks
 
