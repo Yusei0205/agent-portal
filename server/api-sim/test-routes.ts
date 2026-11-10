@@ -6,7 +6,8 @@
  *     name?,
  *     source: { kind: 'sim', apiIds: string[] }                 APIs already in the simulation
  *           | { kind: 'xlsx', contentBase64, paths? }           a requirement workbook, used only for this
- *           | { kind: 'openapi', spec },                        an OpenAPI document, used only for this
+ *           | { kind: 'openapi', spec }                         an OpenAPI document, used only for this
+ *           | { kind: 'postman', collection },                  a Postman collection, used only for this
  *     createScript?: boolean,                                   also write runnable api_request scripts
  *     baseUrl?: string,                                         shown in front of each path in the case sheet
  *   }
@@ -25,6 +26,7 @@ import { requireTestProject, hasScope } from '../testing/helpers.ts';
 import { validateSteps } from '../testing/types.ts';
 import { getSimulationRepository } from '../repositories/simulation.ts';
 import { checkOpenApi } from './openapi.ts';
+import { postmanToSpecs } from './postman.ts';
 import { parseSheets, readWorkbook, toDraftSpec } from './excel-spec.ts';
 import { generateApiCases } from './test-cases.ts';
 import type { ApiCase } from './test-cases.ts';
@@ -78,7 +80,13 @@ async function resolveSource(projectId: string, source: unknown): Promise<{ spec
     return { specs: [{ name: checked.spec.info.title, spec: checked.spec }] };
   }
 
-  return { error: 'source.kind must be "sim", "xlsx" or "openapi"' };
+  if (s.kind === 'postman') {
+    const { drafts, errors } = postmanToSpecs(s.collection);
+    if (drafts.length === 0) return { error: errors.join(' ') };
+    return { specs: drafts.map((d) => ({ name: d.name, spec: d.spec })) };
+  }
+
+  return { error: 'source.kind must be "sim", "xlsx", "openapi" or "postman"' };
 }
 
 export function registerApiTestRoutes(): void {

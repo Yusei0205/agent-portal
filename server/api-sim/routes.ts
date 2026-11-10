@@ -31,6 +31,8 @@ import type { SimApiRecord, SimMode } from '../repositories/simulation.ts';
 import { handleMockRequest, locateOperation } from './mock-engine.ts';
 import { checkOpenApi } from './openapi.ts';
 import { registerApiTestRoutes } from './test-routes.ts';
+import { postmanToSpecs } from './postman.ts';
+import { diffSpecs } from './spec-diff.ts';
 import { registerApiRunRoutes } from './api-run-routes.ts';
 import { registerAiRuleRoutes } from './ai-rules.ts';
 import { parseSheets, readWorkbook, toDraftSpec } from './excel-spec.ts';
@@ -242,6 +244,14 @@ export function registerSimulationRoutes(): void {
       return;
     }
 
+    if (body.kind === 'postman') {
+      const { drafts, errors } = postmanToSpecs(body.collection);
+      if (drafts.length === 0) { bad(res, errors.join(' ')); return; }
+      const created = await importDrafts(req.params.id, userId, drafts.map((d) => ({ key: `postman:${d.name}`, name: d.name, spec: d.spec })));
+      sendJson(res, 201, { created, flags: errors.map((message) => ({ code: 'POSTMAN_NOTE', severity: 'warning', message })) });
+      return;
+    }
+
     if (body.kind === 'xlsx') {
       if (typeof body.contentBase64 !== 'string' || body.contentBase64.length === 0) { bad(res, 'contentBase64 is required'); return; }
       const paths = stringMap(body.paths, 100);
@@ -260,7 +270,7 @@ export function registerSimulationRoutes(): void {
       return;
     }
 
-    bad(res, 'kind must be "xlsx" or "openapi"');
+    bad(res, 'kind must be "xlsx", "openapi" or "postman"');
   });
 
   router.get(`${base}/apis/:aid`, async (req, res) => {
@@ -272,6 +282,17 @@ export function registerSimulationRoutes(): void {
     if (!ver) { bad(res, 'Version not found', 404); return; }
     const versions = (await repo().listVersions(a.id)).map((v) => ({ version: v.version, status: v.status, createdAt: v.created_at, flags: collectFlags(v.spec).length }));
     sendJson(res, 200, { api: summary(a, ver.spec), version: { version: ver.version, status: ver.status }, spec: ver.spec, flags: collectFlags(ver.spec), versions, rules: await repo().listRules(a.id) });
+  });
+
+  router.get(`${base}/apis/:aid/diff`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    const to = Number(req.query.get('to') ?? a.latest_version);
+    const from = Number(req.query.get('from') ?? (a.approved_version > 0 && a.approved_version < to ? a.approved_version : to - 1));
+    const [before, after] = await Promise.all([repo().getVersion(a.id, from), repo().getVersion(a.id, to)]);
+    if (!before || !after) { bad(res, 'Version not found', 404); return; }
+    sendJson(res, 200, { from, to, ...diffSpecs(before.spec, after.spec) });
   });
 
   router.put(`${base}/apis/:aid`, async (req, res) => {

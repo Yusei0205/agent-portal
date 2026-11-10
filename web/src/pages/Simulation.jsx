@@ -48,7 +48,8 @@ function ImportDialog({ projectId, onClose, onDone }) {
       if (kind === 'openapi') {
         let spec;
         try { spec = JSON.parse(await file.text()); } catch { throw new Error('That file is not valid JSON. OpenAPI must be the JSON form.'); }
-        body = { kind: 'openapi', spec };
+        // A Postman collection is also JSON: it has "info" and a list of "item".
+        body = spec && Array.isArray(spec.item) && spec.info ? { kind: 'postman', collection: spec } : { kind: 'openapi', spec };
       } else {
         body = { kind: 'xlsx', contentBase64: await fileToBase64(file) };
       }
@@ -73,13 +74,14 @@ function ImportDialog({ projectId, onClose, onDone }) {
           {!result && (
             <>
               <p className="muted small">
-                An Excel workbook where each sheet describes one API (the “1. Request” / “2. Response” field tables), or an OpenAPI
-                document in JSON. Each Excel sheet becomes its own API. Importing the same file again adds a new version of each API.
+                An Excel workbook where each sheet describes one API (the “1. Request” / “2. Response” field tables), an OpenAPI
+                document in JSON, or a Postman collection (JSON). Each Excel sheet, and each Postman folder, becomes its own API. Importing the
+                same file again adds a new version of each API.
               </p>
               <div className="field">
                 <label htmlFor="sim-file">File</label>
                 <input id="sim-file" ref={input} type="file" accept=".xlsx,.json" onChange={(e) => { setFile(e.target.files?.[0] || null); setError(''); }} />
-                {file && <span className="field-hint">{kind === 'openapi' ? 'Read as OpenAPI (JSON)' : 'Read as an Excel requirement workbook'} · {(file.size / 1024).toFixed(0)} KB</span>}
+                {file && <span className="field-hint">{kind === 'openapi' ? 'Read as OpenAPI or Postman (JSON)' : 'Read as an Excel requirement workbook'} · {(file.size / 1024).toFixed(0)} KB</span>}
               </div>
               {error && <p className="error-note" role="alert">{error}</p>}
             </>

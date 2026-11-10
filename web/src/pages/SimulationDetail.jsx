@@ -123,6 +123,55 @@ function OperationCard({ op, editable, onSavePath, busy }) {
   );
 }
 
+/** What changed from another version, so an updated client document can be checked against the old one. */
+function ChangesPanel({ data, projectId }) {
+  const versions = data.versions.map((v) => v.version);
+  const to = data.version.version;
+  const earlier = versions.filter((v) => v < to);
+  const [from, setFrom] = useState(() => (data.api.approvedVersion > 0 && data.api.approvedVersion < to ? data.api.approvedVersion : to - 1));
+  const [diff, setDiff] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => { setFrom((f) => (earlier.includes(f) ? f : earlier[earlier.length - 1])); }, [to]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (earlier.length === 0 || !earlier.includes(from)) return;
+    let live = true;
+    setDiff(null);
+    api.get(`/api/projects/${projectId}/sim/apis/${data.api.id}/diff?from=${from}&to=${to}`)
+      .then((r) => { if (live) { setDiff(r); setError(''); } })
+      .catch((e) => { if (live) setError(e.message); });
+    return () => { live = false; };
+  }, [from, to, projectId, data.api.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (earlier.length === 0) return null;
+  return (
+    <details className="card" open={diff?.count > 0}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+        What changed since version {from}{diff ? ` (${diff.count} difference${diff.count === 1 ? '' : 's'})` : ''}
+      </summary>
+      <div className="stack" style={{ marginTop: 10 }}>
+        <label className="small muted">Compare with{' '}
+          <select value={from} onChange={(e) => setFrom(Number(e.target.value))} aria-label="Compare with version">
+            {earlier.map((v) => <option key={v} value={v}>v{v}</option>)}
+          </select>
+        </label>
+        {error && <p className="error-note" role="alert">{error}</p>}
+        {diff && diff.changes.length === 0 && <p className="muted small">No differences between version {from} and version {to}.</p>}
+        {diff && diff.changes.map((c) => (
+          <div key={c.operationId} className="stack" style={{ gap: 4 }}>
+            <div className="row" style={{ gap: 8 }}>
+              <span className={`badge ${c.kind === 'added' ? 'badge-ok' : c.kind === 'removed' ? 'badge-danger' : 'badge-warn'}`}>{c.kind === 'added' ? 'New' : c.kind === 'removed' ? 'Removed' : 'Changed'}</span>
+              <code>{c.label}</code>
+            </div>
+            <ul className="sim-howto small">{c.details.map((d) => <li key={d}>{d}</li>)}</ul>
+          </div>
+        ))}
+        {diff && diff.count > 0 && <p className="muted small">Mock rules for an operation that changed are switched off when this version is approved, until you confirm them again.</p>}
+      </div>
+    </details>
+  );
+}
+
 /** Rules the document states in words: turned into checks by the AI step, confirmed by a person. */
 function BusinessRules({ data, ops, projectId, isDraft, reload, toast, onOpenVersion }) {
   const [ai, setAi] = useState({});
@@ -264,6 +313,7 @@ function ReviewPanel({ data, projectId, reload, toast, busy, setBusy, onOpenVers
           </div>
         </div>
       )}
+      <ChangesPanel data={data} projectId={projectId} />
       <BusinessRules data={data} ops={ops} projectId={projectId} isDraft={isDraft} reload={reload} toast={toast} onOpenVersion={onOpenVersion} />
       {ops.map((op) => (
         <OperationCard key={op.operationId} op={op} editable={isDraft} onSavePath={savePath} busy={busy} />

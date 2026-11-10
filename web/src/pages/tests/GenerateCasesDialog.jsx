@@ -65,7 +65,7 @@ export function GenerateCasesDialog({ testProjectId, projectId, onClose, onGener
     if (/\.json$/i.test(specFile.name)) {
       let spec;
       try { spec = JSON.parse(await specFile.text()); } catch { throw new Error('That file is not valid JSON. OpenAPI must be the JSON form.'); }
-      return { kind: 'openapi', spec };
+      return spec && Array.isArray(spec.item) && spec.info ? { kind: 'postman', collection: spec } : { kind: 'openapi', spec };
     }
     return { kind: 'xlsx', contentBase64: await fileToBase64(specFile) };
   };
@@ -214,7 +214,7 @@ export function GenerateCasesDialog({ testProjectId, projectId, onClose, onGener
             {specMode === 'file' && (
               <div className="field" style={{ marginTop: 8 }}>
                 <input type="file" accept=".xlsx,.json" aria-label="API specification file" onChange={(e) => setSpecFile(e.target.files?.[0] || null)} />
-                <span className="field-hint">An Excel requirement workbook or an OpenAPI JSON file. It is read for these cases only; it is not added to the simulation.</span>
+                <span className="field-hint">An Excel requirement workbook, an OpenAPI JSON file or a Postman collection. It is read for these cases only; it is not added to the simulation.</span>
               </div>
             )}
             {specMode !== 'none' && (
