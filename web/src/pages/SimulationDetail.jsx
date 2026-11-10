@@ -103,7 +103,7 @@ function OperationCard({ op, editable, onSavePath, busy, onMakeRule }) {
         {op.secured && <span className="badge badge-neutral" title="Callers must send the client’s credential">Needs login token</span>}
       </header>
       {needsPath && (
-        <p className="sim-note"><Icon name="warning" size={14} /> The document does not give a URL path. Type the real one (for example <code>/flash/update</code>) and confirm it.</p>
+        <p className="sim-note"><Icon name="warning" size={14} /> The document does not give a URL path. Type the real one (for example <code>/api/update</code>) and confirm it.</p>
       )}
       {op.headers.length > 0 && (
         <p className="small muted">Headers: {op.headers.map((h) => `${h.name}${h.required ? ' (needed)' : ''}`).join(', ')}</p>
