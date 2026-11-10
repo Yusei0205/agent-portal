@@ -72,6 +72,22 @@ describe('Codex AgentCore runner HTTP contract', () => {
     assert.equal(second.find(e => e.type === 'result').threadId, result.threadId);
     assert.equal((await post({ ...payload(), workflowId: 'different-owner-session' })).status, 403);
   });
+  it('says so when an attached file cannot be placed, instead of dropping it silently', async () => {
+    const out = await events(await post({
+      ...payload(),
+      inputFiles: [
+        { path: 'attachments/fine.txt', data: Buffer.from('hello').toString('base64') },
+        // a download link that is not an S3 link is refused, and the agent is told
+        { path: 'attachments/big.pdf', url: 'https://evil.example.com/big.pdf', size: 1000 },
+        { path: 'attachments/none.pdf' },
+      ],
+    }));
+    const status = out.filter(e => e.type === 'status').map(e => String(e.text));
+    assert.ok(status.some(t => /big\.pdf was skipped: its download address is not allowed/.test(t)), status.join(' | '));
+    assert.ok(status.some(t => /none\.pdf was skipped: it came with no content/.test(t)), status.join(' | '));
+    assert.ok(!status.some(t => /fine\.txt/.test(t)), 'the inline file was placed without a complaint');
+    assert.ok(out.some(e => e.type === 'result' || e.type === 'done' || e.type === 'turn-complete' || e.type === 'assistant-text'), 'the run itself went on');
+  });
   it('streams native sub-agent lifecycle through the cloud protocol', async () => {
     const output = await events(await post(payload('COLLAB_AGENTS')));
     const lifecycle = output.filter(e => e.type === 'portal-event' && e.eventType.startsWith('subagent-'));

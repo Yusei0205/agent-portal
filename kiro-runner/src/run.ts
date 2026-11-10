@@ -20,7 +20,7 @@
  *   - A cancel from the portal (or the portal hanging up) stops kiro-cli.
  */
 
-import { emitRunnerFiles, writeInputFiles } from '../shared/runner-files.js';
+import { emitRunnerFiles, writeInputFilesAsync } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace, moveSnapshotMarks } from '../shared/runner-snapshot.js';
@@ -436,7 +436,7 @@ export async function runKiroRun(
       workDir = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-work-${runId}-`));
       kiroHome = await fsp.mkdtemp(path.join(os.tmpdir(), `kiro-home-${runId}-`));
       if (payload.inputFiles?.length) {
-        const n = writeInputFiles(workDir, payload.inputFiles);
+        const n = await writeInputFilesAsync(workDir, payload.inputFiles, emit);
         emit({ type: 'status', text: `${n} input file${n === 1 ? '' : 's'} placed in the work folder` });
       }
 

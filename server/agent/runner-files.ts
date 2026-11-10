@@ -12,6 +12,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 /** Same list the portal accepts as session output (see output-files.ts). */
 export const RUNNER_FILE_EXTS = new Set([
@@ -204,12 +206,15 @@ export const INPUT_FILE_EXTS = new Set([
 
 export const INPUT_FILE_LIMITS = { files: 30, fileBytes: 2 * 1024 * 1024, totalBytes: 8 * 1024 * 1024 };
 
-export interface InputFile {
-  /** Relative path inside the work folder, under attachments/ or docs/md/. */
-  path: string;
-  /** File content, base64. */
-  data: string;
-}
+/** What a file larger than the inline limits is sent as: the runner downloads it from `url`, which must deliver exactly `size` bytes. */
+export const URL_FILE_LIMITS = { fileBytes: 50 * 1024 * 1024, totalBytes: 100 * 1024 * 1024, timeoutMs: 5 * 60_000 };
+
+export type InputFile =
+  /** Content sent inline, base64: for files within INPUT_FILE_LIMITS. */
+  | { path: string; data: string }
+  /** A large file the runner downloads (a presigned S3 link). */
+  | { path: string; url: string; size: number };
+// Both forms carry a `path` relative to the work folder, under attachments/ or docs/md/.
 
 /** Portal side: the files staged for a run (attachments, chosen project documents), within the limits. */
 export function collectInputFiles(workDir: string, preferredPaths: string[] = []): InputFile[] {
@@ -246,27 +251,130 @@ export function collectInputFiles(workDir: string, preferredPaths: string[] = []
   return out;
 }
 
-/** Runner side: write the files the portal sent into the work folder. Re-checks every path and limit. Returns how many were written. */
+/** The place of an input file inside the work folder, or null when the path is not an allowed one. */
+function inputTarget(root: string, rel: unknown): { norm: string; abs: string } | null {
+  if (typeof rel !== 'string' || !rel || rel.length > 300 || rel.includes('\0') || rel.includes('\\') || rel.startsWith('/')) return null;
+  const norm = path.posix.normalize(rel);
+  if (norm.split('/').some((seg) => seg === '..' || seg === '') || !INPUT_DIRS.some((d) => norm.startsWith(`${d}/`))) return null;
+  if (!INPUT_FILE_EXTS.has(path.posix.extname(norm).toLowerCase())) return null;
+  const abs = path.resolve(root, ...norm.split('/'));
+  return abs.startsWith(root + path.sep) ? { norm, abs } : null;
+}
+
+/** Runner side: write the files the portal sent inline (base64) into the work folder. Re-checks every path and limit. Returns how many were written. */
 export function writeInputFiles(workDir: string, files: unknown): number {
   if (!Array.isArray(files)) return 0;
   const root = path.resolve(workDir);
   let written = 0;
   let total = 0;
   for (const f of files.slice(0, INPUT_FILE_LIMITS.files)) {
-    const rel = (f as { path?: unknown })?.path;
     const data = (f as { data?: unknown })?.data;
-    if (typeof rel !== 'string' || typeof data !== 'string' || !rel || rel.length > 300 || rel.includes('\0') || rel.includes('\\') || rel.startsWith('/')) continue;
-    const norm = path.posix.normalize(rel);
-    if (norm.split('/').some((seg) => seg === '..' || seg === '') || !INPUT_DIRS.some((d) => norm.startsWith(`${d}/`))) continue;
-    if (!INPUT_FILE_EXTS.has(path.posix.extname(norm).toLowerCase())) continue;
+    const target = inputTarget(root, (f as { path?: unknown })?.path);
+    if (!target || typeof data !== 'string') continue;
     const buf = Buffer.from(data, 'base64');
     if (buf.length === 0 || buf.length > INPUT_FILE_LIMITS.fileBytes || total + buf.length > INPUT_FILE_LIMITS.totalBytes) continue;
-    const abs = path.resolve(root, ...norm.split('/'));
-    if (!abs.startsWith(root + path.sep)) continue;
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, buf);
+    fs.mkdirSync(path.dirname(target.abs), { recursive: true });
+    fs.writeFileSync(target.abs, buf);
     total += buf.length;
     written++;
+  }
+  return written;
+}
+
+/**
+ * A download address the runner will fetch: https, on an amazonaws.com host (an S3 presigned link), with no credentials in it.
+ * A host that ends in amazonaws.com cannot be an IP address or localhost.
+ */
+export function isInputFileUrl(u: unknown): u is string {
+  if (typeof u !== 'string' || u.length > 4000) return false;
+  try {
+    const x = new URL(u);
+    return x.protocol === 'https:' && !x.username && !x.password && /(^|\.)amazonaws\.com$/.test(x.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export interface InputFileDownloadOptions {
+  /** Tests point this at a local server. */
+  fetchImpl?: typeof fetch;
+  /** Tests allow a local address. Default: isInputFileUrl. */
+  allowUrl?: (url: string) => boolean;
+  timeoutMs?: number;
+}
+
+type StatusEmitter = (e: { type: 'status'; text: string }) => void;
+
+// A link carries its signature, so nothing the runner says about a failure may repeat it.
+const noLinks = (s: string): string => s.replace(/https?:\/\/\S+/g, '[link]').slice(0, 200);
+
+/** Download `url` to `abs` through a `.part` file, refusing redirects and anything but exactly `size` bytes. */
+async function downloadInputFile(url: string, abs: string, size: number, fetchImpl: typeof fetch, timeoutMs: number): Promise<void> {
+  const part = `${abs}.part`;
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  try {
+    const res = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok || !res.body) throw new Error(`the server answered ${res.status}`);
+    const announced = Number(res.headers.get('content-length'));
+    if (Number.isFinite(announced) && announced > size) throw new Error('the file is larger than the portal said');
+    let bytes = 0;
+    const count = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        bytes += chunk.length;
+        if (bytes > size) cb(new Error('the file is larger than the portal said')); else cb(null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(res.body as unknown as Parameters<typeof Readable.fromWeb>[0]), count, fs.createWriteStream(part));
+    if (bytes !== size) throw new Error('the file is not the size the portal said');
+    fs.renameSync(part, abs);
+  } catch (e) {
+    try { fs.rmSync(part, { force: true }); } catch { /* nothing to remove */ }
+    throw e;
+  }
+}
+
+/**
+ * Runner side: write the files the portal sent into the work folder, both the inline ones ({path, data}) and the large ones
+ * ({path, url, size}), which are downloaded. Every path and limit is re-checked. An entry that is skipped or fails is said in a
+ * status line, never silently. Returns how many files were written.
+ */
+export async function writeInputFilesAsync(workDir: string, files: unknown, emit: StatusEmitter = () => {}, opts: InputFileDownloadOptions = {}): Promise<number> {
+  if (!Array.isArray(files)) return 0;
+  const root = path.resolve(workDir);
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const allow = opts.allowUrl ?? isInputFileUrl;
+  const timeoutMs = opts.timeoutMs ?? URL_FILE_LIMITS.timeoutMs;
+  let written = 0;
+  let inlineTotal = 0;
+  let urlTotal = 0;
+  const skipped = (label: string, why: string): void => emit({ type: 'status', text: `Input file ${label} was skipped: ${why}` });
+  for (const [i, f] of files.slice(0, INPUT_FILE_LIMITS.files).entries()) {
+    const entry = (f && typeof f === 'object' ? f : {}) as { path?: unknown; data?: unknown; url?: unknown; size?: unknown };
+    const label = typeof entry.path === 'string' && entry.path ? path.posix.basename(entry.path).slice(0, 80) : `#${i + 1}`;
+    const target = inputTarget(root, entry.path);
+    if (!target) { skipped(label, 'it is not in an allowed folder or of an allowed type'); continue; }
+
+    if (typeof entry.data === 'string') {
+      const buf = Buffer.from(entry.data, 'base64');
+      if (buf.length === 0 || buf.length > INPUT_FILE_LIMITS.fileBytes || inlineTotal + buf.length > INPUT_FILE_LIMITS.totalBytes) { skipped(label, 'it is empty or over the size limit'); continue; }
+      fs.mkdirSync(path.dirname(target.abs), { recursive: true });
+      fs.writeFileSync(target.abs, buf);
+      inlineTotal += buf.length;
+      written++;
+      continue;
+    }
+
+    if (entry.url === undefined) { skipped(label, 'it came with no content'); continue; }
+    const size = entry.size;
+    if (typeof entry.url !== 'string' || !allow(entry.url)) { skipped(label, 'its download address is not allowed'); continue; }
+    if (typeof size !== 'number' || !Number.isInteger(size) || size <= 0 || size > URL_FILE_LIMITS.fileBytes || urlTotal + size > URL_FILE_LIMITS.totalBytes) { skipped(label, 'it is over the size limit'); continue; }
+    try {
+      await downloadInputFile(entry.url, target.abs, size, fetchImpl, timeoutMs);
+      urlTotal += size;
+      written++;
+    } catch (e) {
+      emit({ type: 'status', text: `Input file ${label} could not be downloaded: ${noLinks(e instanceof Error ? e.message : String(e))}` });
+    }
   }
   return written;
 }
