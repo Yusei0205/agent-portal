@@ -35,6 +35,29 @@ export interface Flag {
   at?: string;
 }
 
+/** One test on a field of the request body. Paths are dotted (a.b.c) and never go through a list. */
+export interface RuleCondition {
+  field: string;
+  op: 'equals' | 'not_equals' | 'in' | 'present' | 'absent';
+  value?: string | string[];
+}
+
+/**
+ * A rule the client's document states in words ("mandatory when action = 142"), as a check the engine can apply.
+ * It is only enforced once a person has confirmed it; `suggested` rules (made by the AI step) are shown, not applied.
+ */
+export interface BusinessRule {
+  id: string;
+  /** The rule in words, for people. */
+  description: string;
+  /** All of these must hold for the rule to apply. */
+  when: RuleCondition[];
+  /** Fields that must then be present and not empty. */
+  requires: string[];
+  status: 'suggested' | 'confirmed';
+  source: 'ai' | 'manual';
+}
+
 export interface Parameter {
   name: string;
   in: 'header' | 'query' | 'path';
@@ -51,6 +74,7 @@ export interface Operation {
   responses: Record<string, { description?: string; content?: { 'application/json': { schema: Schema; example?: unknown } } }>;
   /** Present (even if empty-valued) means the operation needs an Authorization header. */
   security?: Array<Record<string, string[]>>;
+  'x-rules'?: BusinessRule[];
   'x-flags'?: Flag[];
 }
 

@@ -24,7 +24,7 @@ import type { IncomingMessage } from 'node:http';
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { generateId, now } from '../util.ts';
-import { getMemberRow, getProjectRow } from '../project-access.ts';
+import { requireProjectAccess, bad } from './access.ts';
 import { assertNotBlocked } from '../testing/ssrf.ts';
 import { getSimulationRepository } from '../repositories/simulation.ts';
 import type { SimApiRecord, SimMode } from '../repositories/simulation.ts';
@@ -32,6 +32,7 @@ import { handleMockRequest, locateOperation } from './mock-engine.ts';
 import { checkOpenApi } from './openapi.ts';
 import { registerApiTestRoutes } from './test-routes.ts';
 import { registerApiRunRoutes } from './api-run-routes.ts';
+import { registerAiRuleRoutes } from './ai-rules.ts';
 import { parseSheets, readWorkbook, toDraftSpec } from './excel-spec.ts';
 import type { ApiSpec, FailureKind, Flag, HttpMethod, MockRule } from './types.ts';
 
@@ -42,17 +43,6 @@ const MAX_HOSTED_BODY = 1024 * 1024;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function requireProjectAccess(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
-  if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  const project = await getProjectRow(projectId);
-  if (!project) { sendJson(res, 404, { error: 'Project not found' }); return false; }
-  if (req.user.is_admin) return true;
-  const member = await getMemberRow(projectId, req.user.id);
-  if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
-  return true;
-}
-
-function bad(res: PortalResponse, message: string, status = 400): void { sendJson(res, status, { error: message }); }
 
 export function collectFlags(spec: ApiSpec): Flag[] {
   const out: Flag[] = [...(spec['x-flags'] ?? [])];
@@ -491,4 +481,5 @@ export function registerSimulationRoutes(): void {
 
   registerApiTestRoutes();
   registerApiRunRoutes();
+  registerAiRuleRoutes();
 }

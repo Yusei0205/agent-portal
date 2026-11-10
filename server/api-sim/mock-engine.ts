@@ -8,6 +8,7 @@
 
 import type { ApiSpec, Flag, HttpMethod, MockRequest, MockResult, MockRule, Operation } from './types.ts';
 import { generateValue, validateValue } from './schema.ts';
+import { checkRules } from './rules.ts';
 
 export interface EngineOptions {
   /** When true, an operation with no matching rule is blocked instead of answered from its response schema. */
@@ -142,7 +143,12 @@ export function handleMockRequest(spec: ApiSpec, rules: MockRule[], req: MockReq
     } else {
       const v = validateValue(req.body, bodySpec, 'body');
       errors.push(...v.errors);
-      warnings.push(...v.warnings);
+      // Rules the document states in words, once a person has confirmed them. The field itself may then no longer
+      // need its "may be required" warning.
+      const ruleErrors = checkRules(operation['x-rules'], req.body);
+      errors.push(...ruleErrors);
+      const covered = new Set((operation['x-rules'] ?? []).filter((r) => r.status === 'confirmed').flatMap((r) => r.requires.map((f) => `body.${f}`)));
+      warnings.push(...v.warnings.filter((w) => !(w.at && covered.has(w.at))));
     }
   }
   if (errors.length > 0) return invalid(errors);

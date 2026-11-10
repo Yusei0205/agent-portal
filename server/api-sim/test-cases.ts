@@ -12,9 +12,11 @@
 
 import type { ApiSpec, HttpMethod, Operation, Schema } from './types.ts';
 import { generateValue } from './schema.ts';
+import { describeRule, listFields } from './rules.ts';
+import type { BusinessRule, RuleCondition } from './types.ts';
 
 export type ApiCaseKind =
-  | 'valid' | 'no_token' | 'missing_header' | 'missing_required' | 'wrong_type' | 'invalid_enum' | 'too_long' | 'conditional';
+  | 'valid' | 'no_token' | 'missing_header' | 'missing_required' | 'wrong_type' | 'invalid_enum' | 'too_long' | 'rule' | 'conditional';
 
 export interface ApiRequestStep {
   kind: 'api_request';
@@ -112,6 +114,54 @@ function trimRequest(r: ApiCase['request']): ApiCase['request'] {
   return rest;
 }
 
+/** A value of the field's own type for a rule's text value (rules keep values as text). */
+function typed(type: string, v: string): unknown {
+  if ((type === 'integer' || type === 'number') && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v);
+  if (type === 'boolean') return v === 'true';
+  return v;
+}
+
+/** A value for the field that is neither of `avoid`: another allowed value if there is one. */
+function otherValue(allowed: string[], avoid: string[]): string {
+  return allowed.find((a) => !avoid.includes(a)) ?? (avoid.includes('other-value') ? 'other-value-2' : 'other-value');
+}
+
+/** Makes `c` hold (satisfy) or fail (!satisfy) in a copy of the body. */
+function shapeCondition(body: unknown, c: RuleCondition, satisfy: boolean, info: Map<string, { type: string; allowed: string[] }>): unknown {
+  const path = c.field.split('.');
+  const f = info.get(c.field) ?? { type: 'string', allowed: [] };
+  const set = (v: unknown): unknown => mutate(body, path, { set: v });
+  const values = c.op === 'in' ? (Array.isArray(c.value) ? c.value : []) : [String(c.value ?? '')];
+  switch (c.op) {
+    case 'present': return satisfy ? body : mutate(body, path, { remove: true });
+    case 'absent': return satisfy ? mutate(body, path, { remove: true }) : set(typed(f.type, 'sample-value'));
+    case 'equals': return set(typed(f.type, satisfy ? values[0] : otherValue(f.allowed, values)));
+    case 'in': return set(typed(f.type, satisfy ? values[0] : otherValue(f.allowed, values)));
+    case 'not_equals': return set(typed(f.type, satisfy ? otherValue(f.allowed, values) : values[0]));
+    default: return body;
+  }
+}
+
+function ruleCases(rule: BusinessRule, validBody: unknown, bodySchema: Schema | undefined): Array<{ scenario: string; expected: 'ok' | 'rejected'; body: unknown; change: string }> {
+  const fieldInfo = new Map(listFields(bodySchema).map((f) => [f.path, f]));
+  const info = new Map([...fieldInfo].map(([k, f]) => [k, { type: f.type, allowed: f.allowed }]));
+  // A field the schema already requires says nothing new about this rule, and cannot be left out when the condition fails.
+  const ruleOnly = rule.requires.filter((f) => !fieldInfo.get(f)?.required);
+  let holds = validBody;
+  for (const c of rule.when) holds = shapeCondition(holds, c, true, info);
+  const out: Array<{ scenario: string; expected: 'ok' | 'rejected'; body: unknown; change: string }> = [];
+  const label = describeRule(rule);
+  out.push({ scenario: `Rule "${label}": request that meets the condition and gives the field is accepted`, expected: 'ok', body: holds, change: 'condition met, required fields given' });
+  for (const f of ruleOnly) {
+    out.push({ scenario: `Rule "${label}": "${f}" missing when the condition is met`, expected: 'rejected', body: mutate(holds, f.split('.'), { remove: true }), change: `condition met, ${f} removed` });
+  }
+  if (ruleOnly.length > 0) {
+    const broken = shapeCondition(validBody, rule.when[0], false, info);
+    out.push({ scenario: `Rule "${label}": "${ruleOnly[0]}" may be missing when the condition is not met`, expected: 'ok', body: mutate(broken, ruleOnly[0].split('.'), { remove: true }), change: `condition not met, ${ruleOnly[0]} removed` });
+  }
+  return out;
+}
+
 export function generateApiCases(spec: ApiSpec, opts: GenerateOptions = {}): GeneratedApiCases {
   const rejection = opts.rejectionStatus ?? 400;
   const cap = opts.maxPerOperation ?? 60;
@@ -196,7 +246,16 @@ export function generateApiCases(spec: ApiSpec, opts: GenerateOptions = {}): Gen
       }
 
       // 4. Rules the document only states in words.
-      for (const f of refs.filter((x) => x.schema['x-conditional'])) {
+      const confirmed = (op['x-rules'] ?? []).filter((r) => r.status === 'confirmed');
+      const covered = new Set(confirmed.flatMap((r) => r.requires));
+      for (const rule of confirmed) {
+        for (const rc of ruleCases(rule, validBody, bodySchema)) {
+          add('rule', rc.scenario, rc.expected === 'ok' ? `HTTP ${okCode}.` : `HTTP ${rejection}. The error names the field.`, rc.change,
+            goodHeaders, rc.body, rc.expected === 'ok' ? Number(okCode) : rejection,
+            'Made from a rule the document states in words, as confirmed on the API simulation tab.');
+        }
+      }
+      for (const f of refs.filter((x) => x.schema['x-conditional'] && !covered.has(pathLabel(x.path)))) {
         const rule = String(f.schema['x-conditional']).split('\n')[0].slice(0, 300);
         add('conditional', `Conditional rule for "${pathLabel(f.path)}": ${rule}`,
           `The API applies this rule: ${rule}`, 'one request that meets the condition and one that breaks it',

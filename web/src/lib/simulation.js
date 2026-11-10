@@ -81,6 +81,7 @@ export function operationsOf(spec) {
         headers: (op.parameters || []).filter((p) => p.in === 'header'),
         query: (op.parameters || []).filter((p) => p.in === 'query'),
         flags: op['x-flags'] || [],
+        rules: op['x-rules'] || [],
         requestSchema: op.requestBody?.content?.['application/json']?.schema || null,
         responseSchema: op.responses?.['200']?.content?.['application/json']?.schema
           || Object.values(op.responses || {})[0]?.content?.['application/json']?.schema || null,
@@ -123,4 +124,20 @@ export async function fileToBase64(file) {
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   return btoa(bin);
+}
+
+/** Words for a rule's tests, for people. */
+export function describeCondition(c) {
+  switch (c.op) {
+    case 'present': return `${c.field} is given`;
+    case 'absent': return `${c.field} is empty`;
+    case 'equals': return `${c.field} = ${c.value}`;
+    case 'not_equals': return `${c.field} is not ${c.value}`;
+    case 'in': return `${c.field} is one of ${(c.value || []).join(', ')}`;
+    default: return c.field;
+  }
+}
+
+export function describeRule(r) {
+  return `${r.requires.join(', ')} required when ${r.when.map(describeCondition).join(' and ')}`;
 }

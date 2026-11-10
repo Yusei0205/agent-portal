@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api.js';
 import {
   MODES, FAILURES, sampleFromSchema, flattenSchema, operationsOf, simulatedUrl,
-  parseJsonField, ruleCondition, ruleOutcome, newRuleId,
+  parseJsonField, ruleCondition, ruleOutcome, newRuleId, describeRule,
 } from '../lib/simulation.js';
 import { Icon } from '../components/Icon.jsx';
 import { FlagBadge } from '../components/FlagBadge.jsx';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 
 const SECTIONS = [
   { id: 'review', label: 'Review' },
@@ -122,7 +123,91 @@ function OperationCard({ op, editable, onSavePath, busy }) {
   );
 }
 
-function ReviewPanel({ data, projectId, reload, toast, busy, setBusy }) {
+/** Rules the document states in words: turned into checks by the AI step, confirmed by a person. */
+function BusinessRules({ data, ops, projectId, isDraft, reload, toast, onOpenVersion }) {
+  const [ai, setAi] = useState({});
+  const [running, setRunning] = useState(false);
+  const [note, setNote] = useState(null);
+  const base = `/api/projects/${projectId}/sim/apis/${data.api.id}/versions/${data.version.version}`;
+
+  const inWords = useMemo(() => ops.reduce((n, o) => n + flattenSchema(o.requestSchema).filter((r) => r.conditional).length, 0), [ops]);
+  const rules = ops.flatMap((o) => o.rules.map((r) => ({ ...r, operation: o })));
+  if (inWords === 0 && rules.length === 0) return null;
+
+  const suggest = async () => {
+    setRunning(true);
+    setNote(null);
+    try {
+      const r = await api.post(`${base}/ai-rules`, { credentialId: ai.credentialId || undefined, model: ai.model || undefined });
+      setNote(r);
+      if (r.version) { toast(`${r.accepted} suggested check${r.accepted === 1 ? '' : 's'} saved as version ${r.version}. Confirm the ones that are right.`, 'ok'); onOpenVersion(r.version); }
+      await reload();
+    } catch (e) { toast(e.message, 'error'); } finally { setRunning(false); }
+  };
+
+  const decide = async (rule, status) => {
+    try { await api.put(`${base}/rules/${rule.id}`, { status }); await reload(); } catch (e) { toast(e.message, 'error'); }
+  };
+
+  return (
+    <section className="card stack">
+      <header className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h3 className="sim-h3">Rules the document states in words</h3>
+          <p className="muted small" style={{ margin: '2px 0 0' }}>
+            {inWords} field{inWords === 1 ? ' has' : 's have'} a rule such as “mandatory when action = 142”. Today these only raise a warning.
+            Once turned into a check and confirmed, the simulation refuses requests that break it and the test cases include it.
+          </p>
+        </div>
+      </header>
+
+      {isDraft && inWords > 0 && (
+        <div className="stack">
+          <AiChoicePicker onChange={setAi} disabled={running} idPrefix="simrules" />
+          <div className="row" style={{ gap: 8 }}>
+            <button type="button" className="btn btn-sm btn-primary" disabled={running} onClick={suggest}>
+              <Icon name="sparkles" size={13} /> {running ? 'Asking the model…' : 'Turn them into checks with AI'}
+            </button>
+            <span className="muted small">The result is saved as a new draft version for you to review. Nothing is applied until you confirm it.</span>
+          </div>
+        </div>
+      )}
+
+      {note && note.rejected?.length > 0 && (
+        <div className="sim-callout" role="status">
+          <Icon name="warning" size={15} />
+          <div><strong>{note.version ? 'Some suggestions were left out' : 'No usable checks came back'}</strong>
+            <ul>{note.rejected.slice(0, 6).map((m) => <li key={m}>{m}</li>)}</ul></div>
+        </div>
+      )}
+
+      {rules.length > 0 && (
+        <ul className="sim-rule-list">
+          {rules.map((r) => (
+            <li key={r.id} className={`sim-rule-item ${r.status}`}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <span className={`badge ${r.status === 'confirmed' ? 'badge-ok' : 'badge-warn'}`}>{r.status === 'confirmed' ? 'Applied' : 'Suggested'}</span>
+                  <strong className="small">{r.description}</strong>
+                </div>
+                <div className="muted small">{describeRule(r)}{ops.length > 1 ? ` · ${r.operation.method} ${r.operation.path}` : ''}</div>
+              </div>
+              {isDraft && (
+                <div className="row" style={{ gap: 6 }}>
+                  {r.status !== 'confirmed' && <button type="button" className="btn btn-sm btn-primary" onClick={() => decide(r, 'confirmed')}>Confirm</button>}
+                  {r.status === 'confirmed' && <button type="button" className="btn btn-sm" onClick={() => decide(r, 'suggested')}>Undo</button>}
+                  <button type="button" className="btn-icon" aria-label={`Remove check: ${r.description}`} onClick={() => decide(r, 'removed')}><Icon name="trash" size={14} /></button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ReviewPanel({ data, projectId, reload, toast, busy, setBusy, onOpenVersion }) {
   const ops = useMemo(() => operationsOf(data.spec), [data.spec]);
   const isDraft = data.version.status === 'draft';
   const missing = data.flags.some((f) => f.code === 'MISSING_PATH');
@@ -179,6 +264,7 @@ function ReviewPanel({ data, projectId, reload, toast, busy, setBusy }) {
           </div>
         </div>
       )}
+      <BusinessRules data={data} ops={ops} projectId={projectId} isDraft={isDraft} reload={reload} toast={toast} onOpenVersion={onOpenVersion} />
       {ops.map((op) => (
         <OperationCard key={op.operationId} op={op} editable={isDraft} onSavePath={savePath} busy={busy} />
       ))}
@@ -595,7 +681,7 @@ export function SimulationDetail({ projectId, apiId, onBack, onChanged, toast })
       </div>
 
       <div role="tabpanel" className="sim-panel">
-        {section === 'review' && <ReviewPanel data={data} projectId={projectId} reload={reload} toast={toast} busy={busy} setBusy={setBusy} />}
+        {section === 'review' && <ReviewPanel data={data} projectId={projectId} reload={reload} toast={toast} busy={busy} setBusy={setBusy} onOpenVersion={setVersion} />}
         {section === 'rules' && <RulesPanel data={data} projectId={projectId} reload={reload} toast={toast} />}
         {section === 'try' && <TryPanel data={data} projectId={projectId} />}
         {section === 'settings' && <SettingsPanel data={data} projectId={projectId} reload={reload} toast={toast} />}
