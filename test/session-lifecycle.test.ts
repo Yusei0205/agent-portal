@@ -937,6 +937,23 @@ describe('GET /api/workflows/:wid/agents', () => {
     assert.equal(agents.find((a: any) => a.id === 'native-tests').status, 'stopped');
   });
 
+  it('shows a subagent whose run ended without a finish event as stopped, and keeps one in a run that is still going', async () => {
+    const ended = '2026-11-06T19:34:01.550Z';
+    insert('p6_runs', { id: 'stale-run-failed', workflow_id: workflowId, status: 'failed', created_at: '2026-11-06T19:26:20.948Z', finished_at: ended });
+    insert('p6_runs', { id: 'stale-run-live', workflow_id: workflowId, status: 'running', created_at: now() });
+    const event = (run_id: string, type: string, payload: object) => insert('p6_events', { run_id, type, payload: JSON.stringify(payload), created_at: now() });
+    event('stale-run-failed', 'subagent-started', { id: 'lost', name: 'backend-engineer' });
+    event('stale-run-failed', 'subagent-started', { id: 'kept', name: 'infra-engineer' });
+    event('stale-run-failed', 'subagent-finished', { id: 'kept', name: 'infra-engineer' });
+    event('stale-run-live', 'subagent-started', { id: 'working', name: 'frontend-engineer' });
+    const agents = ((await fetchJson(baseUrl, `/api/workflows/${workflowId}/agents`, { cookie: adminCookie })).body as any).agents;
+    const byName = (name: string) => agents.find((a: any) => a.name === name);
+    assert.equal(byName('backend-engineer').status, 'stopped', 'its run failed first');
+    assert.equal(byName('backend-engineer').finishedAt, ended, 'finished when its run ended');
+    assert.equal(byName('infra-engineer').status, 'done', 'a finish event still counts');
+    assert.equal(byName('frontend-engineer').status, 'running', 'its run is still going');
+  });
+
   it('returns 401 for unauthenticated', async () => {
     const r = await fetchJson(baseUrl, `/api/workflows/${workflowId}/agents`);
     assert.equal(r.status, 401);

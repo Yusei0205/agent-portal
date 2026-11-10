@@ -59,6 +59,7 @@ import { registerSessionFileRoutes } from './session-files.ts';
 import { registerTerminalRoutes, handleTerminalUpgrade, shutdownAllTerminals } from './terminal.ts';
 import { registerSessionLifecycleRoutes, startIdleStopTimer, stopIdleStopTimer } from './session-lifecycle.ts';
 import { registerCredentialRoutes } from './credentials.ts';
+import { registerClaudePlanRoutes } from './claude-plan-oauth.ts';
 import { registerCodexRoutes } from './codex-auth.ts';
 import { registerUserConfigRoutes } from './user-config.ts';
 import { registerScanRoutes } from './scan.ts';
@@ -284,6 +285,7 @@ export async function startServer(
   registerScanRoutes();
   registerUserConfigRoutes();
   registerCredentialRoutes();
+  registerClaudePlanRoutes();
   registerCodexRoutes();
   registerMcpRoutes();
   registerTestingRoutes();

@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { orbitLayout, neighbourInDirection, nervePath, ORBIT_MAIN } from '../../lib/agent-orbit.js';
 import { badgeCount, agentLabels, increasedTools } from '../../lib/agent-activity.js';
 
-const MIN_ZOOM = 0.2;
+const MIN_ZOOM = 0.06; // low enough to fit a crowded ring (a session with 40 agents) in a short panel
 const MAX_ZOOM = 2.5;
 const ARROWS = { ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 } };
 

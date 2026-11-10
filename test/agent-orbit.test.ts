@@ -212,6 +212,49 @@ describe('orbitLayout', () => {
     }
   });
 
+  // What is drawn for an agent (AgentOrbit.jsx): a circle of radius 22 with its pulse, the name (13px, up to 24 characters)
+  // and the current action (11px, up to 30 characters) under it: about 190px wide, from 36px above to 70px below the centre.
+  const footprint = (n: { x: number; y: number }) => ({ l: n.x - 95, r: n.x + 95, t: n.y - 36, b: n.y + 70 });
+  const overlaps = (g: { nodes: Array<{ id: string; x: number; y: number }> }) => {
+    const hits: string[] = [];
+    for (let i = 0; i < g.nodes.length; i++) {
+      for (let j = i + 1; j < g.nodes.length; j++) {
+        const a = footprint(g.nodes[i]);
+        const b = footprint(g.nodes[j]);
+        if (a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b) hits.push(`${g.nodes[i].id}/${g.nodes[j].id}`);
+      }
+    }
+    return hits;
+  };
+
+  it('draws no agent over another, even with many agents on one ring (a session with 12 subagents)', () => {
+    for (const n of [2, 3, 5, 8, 12, 20, 40]) {
+      const g = orbitLayout(Array.from({ length: n }, (_, i) => ({ id: `a${i}`, name: `agent ${i}` })));
+      assert.deepEqual(overlaps(g), [], `${n} agents`);
+    }
+  });
+
+  it('draws no agent over another in a tree, wherever the families land', () => {
+    const agents: Array<{ id: string; parentId?: string }> = [];
+    for (let p = 0; p < 6; p++) {
+      agents.push({ id: `p${p}` });
+      for (let c = 0; c < 4; c++) {
+        agents.push({ id: `p${p}c${c}`, parentId: `p${p}` });
+        if (c < 2) for (let d = 0; d < 3; d++) agents.push({ id: `p${p}c${c}d${d}`, parentId: `p${p}c${c}` });
+      }
+    }
+    assert.deepEqual(overlaps(orbitLayout(agents)), []);
+    // two rings that each have a single agent on the same side: the second must clear the first label sideways
+    assert.deepEqual(overlaps(orbitLayout([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e', parentId: 'b' }, { id: 'f', parentId: 'd' }])), []);
+  });
+
+  it('puts the ring where its agents fit, and keeps the rings one step apart', () => {
+    const g = orbitLayout(Array.from({ length: 12 }, (_, i) => ({ id: `a${i}` })));
+    assert.ok(g.rings[0] > RING_STEP, 'a crowded first ring is wider than one step');
+    const two = orbitLayout([...Array.from({ length: 12 }, (_, i) => ({ id: `a${i}` })), { id: 'k', parentId: 'a0' }]);
+    assert.ok(two.rings[1] - two.rings[0] >= RING_STEP - 1e-9);
+  });
+
   it('keeps an agent whose parent is unknown, a parent loop and a self parent', () => {
     const g = orbitLayout([
       { id: 'x', parentId: 'gone' },
