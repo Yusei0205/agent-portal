@@ -225,3 +225,62 @@ describe('POST case-sets/from-api', () => {
     assert.equal((await post({ source: { kind: 'sim', apiIds: [apiId] }, baseUrl: 'ftp://x' })).status, 400);
   });
 });
+
+// ── Path and query parameters ─────────────────────────────────────────────────
+
+describe('operations with path and query parameters', () => {
+  const GETSPEC: ApiSpec = {
+    openapi: '3.0.3', info: { title: 'Lookup', version: '1' },
+    paths: {
+      '/pets/{id}': {
+        get: {
+          operationId: 'getPet',
+          parameters: [
+            { name: 'ApplicationNo', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'verbose', in: 'query', required: false, schema: { type: 'boolean' } },
+          ],
+          responses: { '200': { description: 'ok', content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' } } } } } } },
+        },
+      },
+    },
+  };
+
+  test('the valid request carries the required query parameter and a value for {id}; each required parameter gets a missing case', () => {
+    const { cases } = generateApiCases(GETSPEC);
+    const valid = cases.find((c) => c.kind === 'valid')!;
+    assert.equal(valid.step!.path, '/pets/sample-id?ApplicationNo=sample-ApplicationNo');
+    assert.equal(valid.request.url, '/pets/sample-id?ApplicationNo=sample-ApplicationNo');
+    const missing = cases.filter((c) => c.kind === 'missing_query');
+    assert.deepEqual(missing.map((c) => c.scenario), ['Required query parameter "ApplicationNo" missing']);
+    assert.equal(missing[0].step!.path, '/pets/sample-id');
+    assert.equal(missing[0].step!.expectedStatus, 400);
+  });
+
+  test('every case gets the status it expects from the engine, query string included', () => {
+    for (const c of generateApiCases(GETSPEC).cases.filter((x) => x.step)) {
+      const u = new URL(c.step!.path, 'http://x.invalid');
+      const r = handleMockRequest(GETSPEC, [], { method: c.step!.method, path: u.pathname, query: Object.fromEntries(u.searchParams), headers: c.step!.headers });
+      assert.equal(r.status, c.step!.expectedStatus, `${c.scenario}: ${r.status}`);
+    }
+  });
+
+  test('and through the real runner: the generated cases pass on the simulation', async () => {
+    const { baseUrl, cookie } = await (async () => {
+      const b = (await createTestServer()).baseUrl;
+      await fetchJson(b, '/api/auth/setup', { body: { email: 'a@query.test', password: 'adminpassword1', name: 'A' } });
+      return { baseUrl: b, cookie: (await fetchJson(b, '/api/auth/login', { body: { email: 'a@query.test', password: 'adminpassword1' } })).cookie ?? '' };
+    })();
+    const pid = ((await fetchJson(baseUrl, '/api/projects', { body: { name: 'Q' }, cookie })).body as { project: { id: string } }).project.id;
+    const tpid = ((await fetchJson(baseUrl, `/api/projects/${pid}/tests`, { body: { name: 'T', appUrl: 'https://app.example' }, cookie })).body as { testProject: { id: string } }).testProject.id;
+    const imp = await fetchJson(baseUrl, `/api/projects/${pid}/sim/import`, { body: { kind: 'openapi', spec: GETSPEC }, cookie });
+    const apiId = (imp.body as { created: Array<{ id: string }> }).created[0].id;
+    await fetchJson(baseUrl, `/api/projects/${pid}/sim/apis/${apiId}/versions/1/approve`, { body: {}, cookie });
+    const gen = await fetchJson(baseUrl, `/api/projects/${pid}/tests/${tpid}/case-sets/from-api`, { body: { source: { kind: 'sim', apiIds: [apiId] } }, cookie });
+    const csId = (gen.body as { caseSet: { id: string } }).caseSet.id;
+    const run = await fetchJson(baseUrl, `/api/projects/${pid}/tests/${tpid}/case-sets/${csId}/api-runs`, { body: { target: 'simulation' }, cookie });
+    const b = run.body as { summary: { pass: number; fail: number }; results: Array<{ outcome: string; scenario: string; reason: string }> };
+    assert.equal(b.summary.fail, 0, JSON.stringify(b.results.filter((r) => r.outcome === 'fail')));
+    assert.equal(b.summary.pass, 2);
+    await cleanup();
+  });
+});

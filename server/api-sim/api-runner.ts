@@ -56,8 +56,11 @@ function parseJson<T>(raw: string | null): T | null {
   try { return JSON.parse(raw) as T; } catch { return null; }
 }
 
-function pathOf(url: string): string {
-  try { return new URL(url, 'http://placeholder.invalid').pathname; } catch { return url; }
+function partsOf(url: string): { path: string; search: string; query: Record<string, string> } {
+  try {
+    const u = new URL(url, 'http://placeholder.invalid');
+    return { path: u.pathname, search: u.search, query: Object.fromEntries(u.searchParams) };
+  } catch { return { path: url, search: '', query: {} }; }
 }
 
 function responseSchemaOf(spec: ApiSpec, method: string, path: string): Schema | null {
@@ -110,9 +113,9 @@ export function judgeResponse(a: {
   return { ok: true, reason: `HTTP ${actual} as expected${expected < 300 && schema ? ', and the response matches the specification' : ''}.` };
 }
 
-async function callLive(t: TargetApi, testProjectId: string, cfg: ApiTargetConfig, method: string, path: string, headers: Record<string, string>, body: unknown): Promise<Called> {
+async function callLive(t: TargetApi, testProjectId: string, cfg: ApiTargetConfig, method: string, path: string, search: string, headers: Record<string, string>, body: unknown): Promise<Called> {
   const base = t.api.live_base_url;
-  const url = base.replace(/\/+$/, '') + path;
+  const url = base.replace(/\/+$/, '') + path + search;
   const out: Record<string, string> = { 'Content-Type': 'application/json' };
   for (const [k, v] of Object.entries(headers)) out[k] = v;
   // A live header replaces the case's header of the same name (the placeholder token becomes the real one). It is not
@@ -140,7 +143,7 @@ async function runOne(c: CaseInput, target: RunTarget, apis: TargetApi[], cfg: A
   if (res?.status === undefined || res?.status === null) return skip('No expected status is written for this case, so it needs a person.');
   const expected = Number(res.status);
   const method = req.method.toUpperCase();
-  const path = pathOf(req.url);
+  const { path, search, query } = partsOf(req.url);
 
   const t = apis.find((x) => locateOperation(x.spec, method, path));
   if (!t) return skip(`No API in the target handles ${method} ${path}. If the API's path changed since these cases were made, generate them again.`, expected);
@@ -148,11 +151,11 @@ async function runOne(c: CaseInput, target: RunTarget, apis: TargetApi[], cfg: A
   try {
     let called: Called;
     if (target === 'simulation') {
-      const r = handleMockRequest(t.spec, t.rules, { method, path, headers: req.headers ?? {}, body: req.body }, { requireExplicitRule: t.api.require_explicit_rule });
+      const r = handleMockRequest(t.spec, t.rules, { method, path, query, headers: req.headers ?? {}, body: req.body }, { requireExplicitRule: t.api.require_explicit_rule });
       called = { status: r.status, body: r.body };
     } else {
       if (!t.api.live_base_url) return skip(`${t.api.name} has no live address. Set it on the API simulation tab, under Settings.`, expected);
-      called = await callLive(t, testProjectId, cfg, method, path, req.headers ?? {}, req.body);
+      called = await callLive(t, testProjectId, cfg, method, path, search, req.headers ?? {}, req.body);
     }
     const verdict = judgeResponse({ target, expected, actual: called.status, body: called.body, errorStyle: cfg.errorStyle, schema: responseSchemaOf(t.spec, method, path) });
     return { ...base, outcome: verdict.ok ? 'pass' : 'fail', reason: verdict.reason, expectedStatus: expected, actualStatus: called.status, durationMs: Date.now() - started };

@@ -16,7 +16,7 @@ import { describeRule, listFields } from './rules.ts';
 import type { BusinessRule, RuleCondition } from './types.ts';
 
 export type ApiCaseKind =
-  | 'valid' | 'no_token' | 'missing_header' | 'missing_required' | 'wrong_type' | 'invalid_enum' | 'too_long' | 'rule' | 'conditional';
+  | 'valid' | 'no_token' | 'missing_header' | 'missing_query' | 'missing_required' | 'wrong_type' | 'invalid_enum' | 'too_long' | 'rule' | 'conditional';
 
 export interface ApiRequestStep {
   kind: 'api_request';
@@ -192,10 +192,18 @@ export function generateApiCases(spec: ApiSpec, opts: GenerateOptions = {}): Gen
       }
 
       const local: ApiCase[] = [];
-      const add = (kind: ApiCaseKind, scenario: string, expected: string, change: string, headers: Record<string, string>, body: unknown, status: number | null, remarks = ''): void => {
-        const request = trimRequest({ method, url: `${base}${path}`, headers, ...(body !== undefined ? { body } : {}) });
+      // {id} in the path needs a value to be a real request; required query parameters belong in every request that is meant to work.
+      const concretePath = path.replace(/\{([^}]+)\}/g, 'sample-$1');
+      const queryParams = (op.parameters ?? []).filter((p) => p.in === 'query');
+      const goodQuery: Record<string, string> = {};
+      for (const q of queryParams) if (q.required) goodQuery[q.name] = String(generateValue(q.schema ?? { type: 'string' }, q.name));
+      const withQuery = (q: Record<string, string>): string => (Object.keys(q).length ? `${concretePath}?${new URLSearchParams(q).toString()}` : concretePath);
+
+      const add = (kind: ApiCaseKind, scenario: string, expected: string, change: string, headers: Record<string, string>, body: unknown, status: number | null, remarks = '', query: Record<string, string> = goodQuery): void => {
+        const target = withQuery(query);
+        const request = trimRequest({ method, url: `${base}${target}`, headers, ...(body !== undefined ? { body } : {}) });
         const steps = [
-          `1. Send ${method} ${base}${path}`,
+          `1. Send ${method} ${base}${target}`,
           ...(Object.keys(headers).length ? [`2. Headers: ${Object.keys(headers).join(', ')}`] : []),
           ...(body !== undefined ? [`${Object.keys(headers).length ? 3 : 2}. Body: ${change}`] : []),
         ].join('\n');
@@ -204,7 +212,7 @@ export function generateApiCases(spec: ApiSpec, opts: GenerateOptions = {}): Gen
           steps, expectedResult: expected, remarks, request,
           response: status === null ? null : { status },
           step: status === null ? null : {
-            kind: 'api_request', method, path, headers, ...(body !== undefined ? { body } : {}), expectedStatus: status,
+            kind: 'api_request', method, path: target, headers, ...(body !== undefined ? { body } : {}), expectedStatus: status,
           },
         });
       };
@@ -222,6 +230,11 @@ export function generateApiCases(spec: ApiSpec, opts: GenerateOptions = {}): Gen
       for (const h of headerParams.filter((x) => x.required)) {
         const { [h.name]: _h, ...rest } = goodHeaders;
         add('missing_header', `Required header "${h.name}" missing`, `HTTP ${rejection}. The error names the header.`, `valid body, no ${h.name} header`, rest, validBody, rejection);
+      }
+
+      for (const q of queryParams.filter((x) => x.required)) {
+        const { [q.name]: _q, ...rest } = goodQuery;
+        add('missing_query', `Required query parameter "${q.name}" missing`, `HTTP ${rejection}. The error names the parameter.`, `no ${q.name} in the address`, goodHeaders, validBody, rejection, '', rest);
       }
 
       // 3. Field rules, from the request body schema.
