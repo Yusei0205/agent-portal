@@ -51,6 +51,7 @@ import { registerAuditRoutes } from './audit.ts';
 import { registerLearnRoutes } from './learn.ts';
 import { registerControlPlaneRoutes } from './control-plane.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
+import { registerSimulationRoutes } from './api-sim/routes.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
 import { registerProjectPullRequestSettingsRoutes } from './project-settings-pr.ts';
 import { registerSessionPullRequestRoutes } from './session-pr.ts';
@@ -68,6 +69,7 @@ import { registerFeedbackRoutes } from './feedback.ts';
 import { registerPortalEventsRoutes } from './portal-events.ts';
 import { registerAiAttachmentRoutes, cleanupOrphanedAttachments } from './ai-attachments.ts';
 import { runDueTriggers } from './loop-triggers.ts';
+import { startScheduleTimer } from './api-sim/api-schedule.ts';
 import { registerBedrockSsoRoutes } from './bedrock-sso.ts';
 import { registerKiroSettingsRoutes } from './kiro-settings.ts';
 import { registerEngineModelRoutes } from './models.ts';
@@ -174,6 +176,7 @@ export async function startServer(
   await initCredentialsRepository();
   await initAwsAccountsRepository();
   await initIntegrationsRepository();
+  await (await import('./repositories/simulation.ts')).initSimulationRepository();
   await initThemesRepository();
   await initFeedbackRepository();
   await initUserConfigRepository();
@@ -271,6 +274,7 @@ export async function startServer(
   registerLearnRoutes();
   registerControlPlaneRoutes();
   registerIntegrationRoutes();
+  registerSimulationRoutes();
   registerProjectAwsRoutes();
   registerProjectPullRequestSettingsRoutes();
   registerSessionPullRequestRoutes();
@@ -372,6 +376,9 @@ export async function startServer(
     if (!onLambda && isDbOpen()) void runDueTriggers().catch((e) => console.error('[loop-trigger] tick failed:', e));
   }, 60_000);
   loopTriggerTimer.unref();
+
+  // 9c. Scheduled API test runs (on Lambda: the `api-test-runs` schedule)
+  startScheduleTimer(onLambda);
 
   // 10. Graceful shutdown
   if (!onLambda) await recoverLocalAutomations();

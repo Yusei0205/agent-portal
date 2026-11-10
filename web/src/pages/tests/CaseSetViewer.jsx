@@ -21,6 +21,7 @@
  *   onBack()    - called when Back is clicked
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ApiRunDialog } from './ApiRunDialog.jsx';
 import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
@@ -819,6 +820,7 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
   const [editRow, setEditRow]   = useState(null); // case row to edit
   const [showAdd, setShowAdd]   = useState(false);
   const [agentRunOpen, setAgentRunOpen] = useState(false);
+  const [apiRunOpen, setApiRunOpen] = useState(false);
   const [resumeRun, setResumeRun] = useState(null);
   const [historyOpen, setHistoryOpen]   = useState(false);
 
@@ -1229,6 +1231,11 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
             <button type="button" className="btn btn-primary btn-sm" onClick={() => setAgentRunOpen(true)} aria-label="Run the test cases with an agent">
               <Icon name="agents" size={13} /> Run with agent
             </button>
+            {cases.some((c) => c.request) && (
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setApiRunOpen(true)} aria-label="Run the API cases against the simulation or the live API">
+                <Icon name="play" size={13} /> Run API cases
+              </button>
+            )}
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => setHistoryOpen(true)} aria-label="Open the run history">
               <Icon name="clock" size={13} /> Run history
             </button>
@@ -1261,6 +1268,15 @@ export function CaseSetViewer({ caseSetId, testProject, projectId, onBack }) {
           cases={cases}
           onClose={() => { setAgentRunOpen(false); setResumeRun(null); }}
           onStarted={() => { setAgentRunOpen(false); setResumeRun(null); setHistoryOpen(true); }}
+        />
+      )}
+      {apiRunOpen && (
+        <ApiRunDialog
+          projectId={projectId}
+          testProjectId={testProject.id}
+          caseSetId={caseSetId}
+          onClose={() => setApiRunOpen(false)}
+          onChanged={load}
         />
       )}
       {historyOpen && !resumeRun && (

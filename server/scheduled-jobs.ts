@@ -14,6 +14,7 @@ import { checkIdleSessions } from './session-lifecycle.ts';
 import { cleanupOrphanedAttachments } from './ai-attachments.ts';
 import { cleanupSessions } from './auth.ts';
 import { runDueTriggers } from './loop-triggers.ts';
+import { runDueSchedules } from './api-sim/api-schedule.ts';
 
 export const SCHEDULED_EVENT_PATH = '/internal/events';
 
@@ -22,6 +23,7 @@ export const JOBS = {
   'attachment-cleanup': async (): Promise<void> => { await cleanupOrphanedAttachments(); },
   'session-cleanup': async (): Promise<void> => { cleanupSessions(); },
   'loop-triggers': async (): Promise<void> => { await runDueTriggers(); },
+  'api-test-runs': async (): Promise<void> => { await runDueSchedules(); },
 } as const;
 
 export type JobName = keyof typeof JOBS;

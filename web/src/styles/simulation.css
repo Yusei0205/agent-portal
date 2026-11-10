@@ -1,0 +1,92 @@
+/* API simulation (Tests > API simulation). Uses the shared tokens so every theme applies. */
+.sim-cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+.sim-card { display: grid; gap: 10px; align-content: start; }
+.sim-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.sim-card-head h3 { margin: 0; font-size: 1rem; flex-basis: 100%; }
+.sim-card-foot { display: flex; align-items: center; gap: 8px; }
+.sim-card-foot .spacer, .sim-detail-head .spacer { flex: 1; }
+.sim-ops { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 0.88rem; }
+.sim-ops code, .sim-op code, .sim-url code { overflow-wrap: anywhere; }
+.sim-method {
+  display: inline-block; min-width: 3.4em; text-align: center; padding: 1px 6px; border-radius: 6px;
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; background: var(--surface-2); color: var(--ink-2);
+}
+.sim-empty { display: flex; gap: 14px; align-items: flex-start; }
+.sim-empty p { margin: 4px 0 0; }
+
+/* The exclamation marker: a warning to look at, not an error. */
+.sim-flag {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px;
+  background: var(--warn-wash); color: var(--warn); font-size: 0.78rem; font-weight: 600;
+}
+.sim-flags { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sim-flag-row { display: flex; gap: 8px; align-items: flex-start; font-size: 0.86rem; }
+.sim-flag-row.warning { color: var(--ink); }
+.sim-flag-row.warning > svg { color: var(--warn); flex: none; margin-top: 2px; }
+.sim-flag-row.info > svg { color: var(--ink-3); flex: none; margin-top: 2px; }
+.sim-at { margin-left: 8px; color: var(--ink-3); font-size: 0.78rem; }
+.sim-callout, .sim-note {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--radius-lg, 10px);
+  background: var(--warn-wash); color: var(--ink); font-size: 0.88rem;
+}
+.sim-callout > svg, .sim-note > svg { color: var(--warn); flex: none; margin-top: 2px; }
+.sim-callout ul { margin: 4px 0 0; padding-left: 18px; }
+.sim-note { margin: 0; }
+
+.sim-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.sim-detail-head h2 { margin: 0; font-size: 1.15rem; }
+.sim-version { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.sim-panel { margin-top: 14px; }
+
+.sim-approve { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.sim-approve p { margin: 2px 0 0; }
+.sim-approve.ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+
+.sim-op { display: grid; gap: 10px; }
+.sim-op-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sim-path-edit { display: flex; gap: 8px; align-items: center; flex: 1 1 280px; min-width: 0; }
+.sim-path-edit input { flex: 1; min-width: 0; font-family: var(--mono, ui-monospace, monospace); }
+.sim-input-warn { border-color: var(--warn) !important; }
+.sim-op summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; padding: 4px 0; }
+
+.sim-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; margin-top: 6px; }
+.sim-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.sim-table th, .sim-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.sim-table thead th { background: var(--surface-2); font-size: 0.78rem; color: var(--ink-2); }
+.sim-table tbody tr:last-child td { border-bottom: 0; }
+.sim-allowed { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.sim-chip { padding: 0 6px; border-radius: 6px; background: var(--surface-2); font-family: var(--mono, ui-monospace, monospace); font-size: 0.76rem; }
+
+.sim-check { display: inline-flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.sim-rule { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.sim-rule-main { display: grid; gap: 3px; min-width: 0; flex: 1 1 260px; }
+.sim-rule.needs-review { border-color: var(--warn); }
+
+.sim-try-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+.sim-try-grid textarea, .modal textarea { font-family: var(--mono, ui-monospace, monospace); font-size: 0.84rem; }
+.sim-h3 { margin: 0; font-size: 0.95rem; }
+.sim-pre {
+  margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line);
+  max-height: 420px; overflow: auto; font-size: 0.82rem; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.sim-modes { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sim-mode { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.sim-mode span { display: grid; gap: 2px; }
+.sim-mode.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.sim-url { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.sim-url code { flex: 1; min-width: 0; }
+.sim-howto { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.sim-import-list { margin: 0; padding-left: 18px; }
+.sim-try-grid > .stack { align-content: start; }
+.sim-callout ul { list-style: disc; }
+.sim-rule-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sim-rule-item { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.sim-rule-item.suggested { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+
+.sim-progress { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 0.88rem; }
+
+.sim-group { display: grid; gap: 10px; margin-bottom: 22px; }
+.sim-group-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.sim-group-head h2 { margin: 0; font-size: 1.05rem; }
+.sim-group-head .spacer { flex: 1; }

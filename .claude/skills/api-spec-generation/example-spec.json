@@ -1,0 +1,58 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Get Application Record", "version": "1" },
+  "paths": {
+    "/application/get_application": {
+      "get": {
+        "operationId": "getApplicationRecord",
+        "summary": "Get Application Record",
+        "parameters": [
+          { "name": "ApplicationNo", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Unique application number" }
+        ],
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["StatusCode", "Message"],
+                  "properties": {
+                    "StatusCode": { "type": "integer" },
+                    "Message": { "type": "string" },
+                    "Application": {
+                      "type": "object",
+                      "properties": {
+                        "ApplicationNo": { "type": "string", "description": "Unique application number" },
+                        "Applicants": { "type": "array", "items": { "type": "string" }, "description": "List of applicant names" },
+                        "PublicationStatus": { "type": "string", "enum": ["Y", "N"], "description": "Publication status (Y/N)" },
+                        "FilingDate": { "type": "string", "description": "Filing date of entry form (PF1 or PF37)." }
+                      }
+                    }
+                  }
+                },
+                "example": { "StatusCode": 200, "Message": "Application record retrieved successfully", "Application": { "ApplicationNo": "43534523", "Applicants": ["Iasdjlkwer TD."], "PublicationStatus": "Y", "FilingDate": "05/02/2021" } }
+              }
+            }
+          },
+          "404": {
+            "description": "Application not found / Record not found",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "StatusCode": { "type": "integer" }, "Message": { "type": "string" } } },
+                "example": { "StatusCode": 404, "Message": "Record not found" }
+              }
+            }
+          }
+        },
+        "x-flags": [
+          { "code": "AI_EXTRACTED", "severity": "info", "message": "Read from the document by an agent. Check the fields, types and which are required against the original." },
+          { "code": "REQUIRED_UNKNOWN", "severity": "warning", "message": "The document does not say which response fields are always present; only StatusCode and Message are marked required." },
+          { "code": "ERROR_SAMPLES", "severity": "info", "message": "The document shows a 404 answer; make a mock rule from it to simulate a missing record." }
+        ]
+      }
+    }
+  },
+  "components": { "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } } }
+}
