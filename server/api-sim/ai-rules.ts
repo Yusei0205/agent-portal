@@ -90,7 +90,7 @@ export function registerAiRuleRoutes(): void {
     if (accepted === 0) { sendJson(res, 200, { version: null, accepted: 0, rejected, operationsTried: tried }); return; }
 
     const next = api.latest_version + 1;
-    await repo.addVersion({ api_id: api.id, version: next, status: 'draft', spec, created_by: req.user!.id, created_at: now() });
+    await repo.addVersion({ api_id: api.id, version: next, status: 'draft', label: `AI checks on v${ver.version}`, spec, created_by: req.user!.id, created_at: now() });
     await repo.updateApi(req.params.id, api.id, { latest_version: next });
     auditRaw(req.user!.id, 'sim_api.ai_rules', `sim_api:${api.id}`, { from: ver.version, to: next, accepted, model: ai.model ?? 'default' });
     sendJson(res, 201, { version: next, accepted, rejected, operationsTried: tried });

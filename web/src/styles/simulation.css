@@ -85,3 +85,8 @@
 .sim-rule-item.suggested { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
 
 .sim-progress { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 0.88rem; }
+
+.sim-group { display: grid; gap: 10px; margin-bottom: 22px; }
+.sim-group-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.sim-group-head h2 { margin: 0; font-size: 1.05rem; }
+.sim-group-head .spacer { flex: 1; }

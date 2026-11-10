@@ -22,7 +22,7 @@ import { callTextModel } from '../testing/model-provider.ts';
 import { requireProjectAccess, bad } from './access.ts';
 import { extractApis } from './ai-extract.ts';
 import type { ModelCall } from './ai-extract.ts';
-import { importDrafts } from './import-drafts.ts';
+import { cleanGroup, importDrafts } from './import-drafts.ts';
 import type { ImportedApi } from './import-drafts.ts';
 
 export interface ImportJob {
@@ -31,6 +31,9 @@ export interface ImportJob {
   userId: string;
   attachmentId: string;
   fileName: string;
+  /** The group the APIs are saved in, and what to call this version of the document. */
+  group: string;
+  label: string;
   credentialId: string | null;
   model: string | null;
   status: 'running' | 'done' | 'failed';
@@ -94,7 +97,7 @@ async function runJob(jobId: string): Promise<void> {
 
     const liveBaseUrl = pickLiveBaseUrl(result.baseUrls);
     const created = result.drafts.length > 0
-      ? await importDrafts(job.projectId, job.userId, result.drafts.map((d) => ({ ...d, liveBaseUrl })))
+      ? await importDrafts(job.projectId, job.userId, result.drafts.map((d) => ({ ...d, liveBaseUrl })), { group: job.group, label: job.label })
       : [];
     const notes = [...result.notes];
     if (liveBaseUrl && created.some((c) => c.isNew)) {
@@ -128,8 +131,12 @@ export function registerAiImportRoutes(): void {
     const { rows, error } = await validateAttachmentIds(req.params.id, [attachmentId]);
     if (error || !rows) { bad(res, error ?? 'Attachment not found'); return; }
 
+    const fileName = String(rows[0].original_name ?? rows[0].filename ?? '');
     const job: ImportJob = {
-      id: generateId(), projectId: req.params.id, userId: req.user!.id, attachmentId, fileName: String(rows[0].original_name ?? rows[0].filename ?? ''),
+      id: generateId(), projectId: req.params.id, userId: req.user!.id, attachmentId, fileName,
+      // With no group given, the document's own name is the group.
+      group: cleanGroup(body.group) || cleanGroup(fileName.replace(/\.[^.]+$/, '')),
+      label: typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '',
       credentialId: typeof body.credentialId === 'string' && body.credentialId ? body.credentialId : null,
       model: typeof body.model === 'string' && body.model ? body.model.slice(0, 200) : null,
       status: 'running', phase: 'queued', done: 0, total: 0, current: '', created: [], errors: [], notes: [], baseUrls: [], liveBaseUrl: '',

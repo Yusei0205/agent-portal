@@ -2265,6 +2265,22 @@ const M52_API_SIMULATION = `
   CREATE INDEX IF NOT EXISTS sim_rules_api ON sim_rules(api_id);
 `;
 
+/**
+ * The API simulation tables, checked on every start instead of trusting a migration number. Migration numbers are
+ * positions in the list above, so two branches that each add one claim the same number, and a database that has met the
+ * other branch skips this one. Everything here is idempotent: it creates what is missing and changes nothing else.
+ */
+function ensureApiSimSchema(database: DatabaseSync): void {
+  database.exec(M52_API_SIMULATION);
+  const columns = (table: string): Set<string> =>
+    new Set((database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name));
+  // A group name on each API (the client or document it came from).
+  if (!columns('sim_apis').has('group_name')) database.exec("ALTER TABLE sim_apis ADD COLUMN group_name TEXT NOT NULL DEFAULT ''");
+  // A label on each version, for example the document version "v1.9".
+  if (!columns('sim_spec_versions').has('label')) database.exec("ALTER TABLE sim_spec_versions ADD COLUMN label TEXT NOT NULL DEFAULT ''");
+  database.exec('CREATE INDEX IF NOT EXISTS sim_apis_group ON sim_apis(project_id, group_name)');
+}
+
 const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig, M52_API_SIMULATION];
 
 MIGRATIONS.push(`CREATE TABLE IF NOT EXISTS automation_records (
@@ -2336,6 +2352,8 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
       throw enhanced;
     }
   }
+
+  ensureApiSimSchema(db);
 
   // Startup recovery: any workflow or run that was left 'running' when the
   // previous process stopped (crash, SIGKILL, restart) will never complete.

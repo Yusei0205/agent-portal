@@ -16,6 +16,7 @@ function toApi(r: Row): SimApiRecord {
     id: String(r.id),
     project_id: String(r.project_id),
     name: String(r.name ?? ''),
+    group_name: String(r.group_name ?? ''),
     source_key: String(r.source_key ?? ''),
     mode: (String(r.mode ?? 'mock') as SimApiRecord['mode']),
     live_base_url: String(r.live_base_url ?? ''),
@@ -34,6 +35,7 @@ function toVersion(r: Row): SimVersionRecord {
     api_id: String(r.api_id),
     version: Number(r.version),
     status: String(r.status) === 'approved' ? 'approved' : 'draft',
+    label: String(r.label ?? ''),
     spec: parse<ApiSpec>(r.spec_json, { openapi: '3.0.3', info: { title: '', version: '1' }, paths: {} }),
     created_by: r.created_by != null ? String(r.created_by) : null,
     created_at: String(r.created_at ?? ''),
@@ -55,6 +57,7 @@ export class SqliteSimulationRepository implements SimulationRepository {
       id: rec.id,
       project_id: rec.project_id,
       name: rec.name,
+      group_name: rec.group_name,
       source_key: rec.source_key,
       mode: rec.mode,
       live_base_url: rec.live_base_url,
@@ -74,6 +77,7 @@ export class SqliteSimulationRepository implements SimulationRepository {
     const vals: Array<string | number> = [];
     const add = (col: string, v: string | number): void => { sets.push(`${col} = ?`); vals.push(v); };
     if (fields.name !== undefined) add('name', fields.name);
+    if (fields.group_name !== undefined) add('group_name', fields.group_name);
     if (fields.mode !== undefined) add('mode', fields.mode);
     if (fields.live_base_url !== undefined) add('live_base_url', fields.live_base_url);
     if (fields.require_explicit_rule !== undefined) add('require_explicit_rule', fields.require_explicit_rule ? 1 : 0);
@@ -101,6 +105,7 @@ export class SqliteSimulationRepository implements SimulationRepository {
       api_id: rec.api_id,
       version: rec.version,
       status: rec.status,
+      label: rec.label,
       spec_json: JSON.stringify(rec.spec),
       created_by: rec.created_by,
       created_at: rec.created_at,

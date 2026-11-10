@@ -206,7 +206,7 @@ export function GenerateCasesDialog({ testProjectId, projectId, onClose, onGener
                       checked={chosenApis.includes(a.id)}
                       onChange={(e) => setChosenApis((prev) => (e.target.checked ? [...prev, a.id] : prev.filter((x) => x !== a.id)))}
                     />
-                    <span>{a.name} <span className="muted">· {a.approvedVersion > 0 ? `approved v${a.approvedVersion}` : 'draft'}</span></span>
+                    <span>{a.group ? `${a.group} / ` : ''}{a.name} <span className="muted">· {a.approvedVersion > 0 ? `approved v${a.approvedVersion}` : 'draft'}</span></span>
                   </label>
                 ))}
               </div>

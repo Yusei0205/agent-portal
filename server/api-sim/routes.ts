@@ -24,12 +24,13 @@ import type { IncomingMessage } from 'node:http';
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { generateId, now } from '../util.ts';
+import { auditRaw } from '../audit.ts';
 import { requireProjectAccess, bad } from './access.ts';
 import { getSimulationRepository } from '../repositories/simulation.ts';
 import type { SimApiRecord, SimMode } from '../repositories/simulation.ts';
 import { handleMockRequest } from './mock-engine.ts';
 import { answerCall, clientHeaders } from './call.ts';
-import { importDrafts } from './import-drafts.ts';
+import { cleanGroup, importDrafts, sameGroup } from './import-drafts.ts';
 import { checkOpenApi } from './openapi.ts';
 import { registerApiTestRoutes } from './test-routes.ts';
 import { postmanToSpecs } from './postman.ts';
@@ -38,6 +39,7 @@ import { registerApiRunRoutes } from './api-run-routes.ts';
 import { registerAiRuleRoutes } from './ai-rules.ts';
 import { registerSimMcpRoutes } from './mcp.ts';
 import { registerAiImportRoutes } from './ai-import.ts';
+import { registerApiScheduleRoutes } from './api-schedule.ts';
 import { parseSheets, readWorkbook, toDraftSpec } from './excel-spec.ts';
 import type { ApiSpec, FailureKind, Flag, HttpMethod, MockRule } from './types.ts';
 
@@ -70,7 +72,7 @@ function operations(spec: ApiSpec): Array<{ path: string; method: HttpMethod; op
 function summary(a: SimApiRecord, spec: ApiSpec | null) {
   const flags = spec ? collectFlags(spec) : [];
   return {
-    id: a.id, name: a.name, mode: a.mode, approvedVersion: a.approved_version, latestVersion: a.latest_version,
+    id: a.id, name: a.name, group: a.group_name, mode: a.mode, approvedVersion: a.approved_version, latestVersion: a.latest_version,
     requireExplicitRule: a.require_explicit_rule, liveBaseUrl: a.live_base_url, operationModes: a.operation_modes,
     operations: spec ? operations(spec) : [],
     flags: { total: flags.length, warnings: flags.filter((f) => f.severity === 'warning').length, missingPath: spec ? hasMissingPath(spec) : false },
@@ -182,11 +184,13 @@ export function registerSimulationRoutes(): void {
     if (!await requireProjectAccess(req, res, req.params.id)) return;
     const body = req.body as Record<string, unknown>;
     const userId = req.user!.id;
+    // The group the APIs go into (the client or document), and an optional label for this version of the document.
+    const opts = (dflt: string) => ({ group: cleanGroup(body.group) || cleanGroup(dflt), label: typeof body.label === 'string' ? body.label : '' });
 
     if (body.kind === 'openapi') {
       const checked = checkOpenApi(body.spec);
       if (!checked.spec) { bad(res, checked.errors.join('; ')); return; }
-      const created = await importDrafts(req.params.id, userId, [{ key: `openapi:${checked.spec.info.title}`, name: checked.spec.info.title, spec: checked.spec }]);
+      const created = await importDrafts(req.params.id, userId, [{ key: `openapi:${checked.spec.info.title}`, name: checked.spec.info.title, spec: checked.spec }], opts(checked.spec.info.title));
       sendJson(res, 201, { created });
       return;
     }
@@ -194,7 +198,7 @@ export function registerSimulationRoutes(): void {
     if (body.kind === 'postman') {
       const { drafts, errors } = postmanToSpecs(body.collection);
       if (drafts.length === 0) { bad(res, errors.join(' ')); return; }
-      const created = await importDrafts(req.params.id, userId, drafts.map((d) => ({ key: `postman:${d.name}`, name: d.name, spec: d.spec })));
+      const created = await importDrafts(req.params.id, userId, drafts.map((d) => ({ key: `postman:${d.name}`, name: d.name, spec: d.spec })), opts(((body.collection as { info?: { name?: string } })?.info?.name) ?? ''));
       sendJson(res, 201, { created, flags: errors.map((message) => ({ code: 'POSTMAN_NOTE', severity: 'warning', message })) });
       return;
     }
@@ -212,7 +216,7 @@ export function registerSimulationRoutes(): void {
       }
       if (parsed.apis.length === 0) { bad(res, 'No API sheets were found. Each API sheet needs a "1. Request" section and a FIELD NAME table.'); return; }
       const drafts = parsed.apis.map((a) => ({ key: `xlsx:${a.sheet}`, name: a.sheet, spec: toDraftSpec(a, { path: paths[a.sheet] }) }));
-      const created = await importDrafts(req.params.id, userId, drafts);
+      const created = await importDrafts(req.params.id, userId, drafts, opts(''));
       sendJson(res, 201, { created, skippedSheets: parsed.skipped, flags: parsed.flags });
       return;
     }
@@ -227,7 +231,7 @@ export function registerSimulationRoutes(): void {
     const wanted = Number(req.query.get('version') ?? a.latest_version);
     const ver = await repo().getVersion(a.id, wanted);
     if (!ver) { bad(res, 'Version not found', 404); return; }
-    const versions = (await repo().listVersions(a.id)).map((v) => ({ version: v.version, status: v.status, createdAt: v.created_at, flags: collectFlags(v.spec).length }));
+    const versions = (await repo().listVersions(a.id)).map((v) => ({ version: v.version, status: v.status, label: v.label, createdAt: v.created_at, flags: collectFlags(v.spec).length }));
     sendJson(res, 200, { api: summary(a, ver.spec), version: { version: ver.version, status: ver.status }, spec: ver.spec, flags: collectFlags(ver.spec), versions, rules: await repo().listRules(a.id) });
   });
 
@@ -253,6 +257,7 @@ export function registerSimulationRoutes(): void {
       if (!n || n.length > 120) { bad(res, 'name must be 1-120 characters'); return; }
       fields.name = n;
     }
+    if (b.group !== undefined) fields.group_name = cleanGroup(b.group);
     if (b.mode !== undefined) {
       if (!MODES.includes(b.mode as SimMode)) { bad(res, `mode must be one of: ${MODES.join(', ')}`); return; }
       fields.mode = b.mode as SimMode;
@@ -281,6 +286,42 @@ export function registerSimulationRoutes(): void {
     if (Object.keys(fields).length === 0) { bad(res, 'Nothing to update'); return; }
     const updated = await repo().updateApi(req.params.id, a.id, fields);
     sendJson(res, 200, { api: updated ? summary(updated, await latestSpec(updated)) : null });
+  });
+
+  // ── Groups: the APIs of one client or document, listed and removed together ──
+  router.get(`${base}/groups`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const a of await repo().listApis(req.params.id)) {
+      const k = a.group_name.toLowerCase();
+      counts.set(k, { name: counts.get(k)?.name ?? a.group_name, count: (counts.get(k)?.count ?? 0) + 1 });
+    }
+    sendJson(res, 200, { groups: [...counts.values()].sort((x, y) => x.name.localeCompare(y.name)) });
+  });
+
+  router.put(`${base}/groups`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const from = cleanGroup(b.from);
+    const to = cleanGroup(b.to);
+    if (!to) { bad(res, 'Give the group a name'); return; }
+    const members = (await repo().listApis(req.params.id)).filter((a) => sameGroup(a.group_name, from));
+    if (members.length === 0) { bad(res, 'Group not found', 404); return; }
+    for (const a of members) await repo().updateApi(req.params.id, a.id, { group_name: to });
+    auditRaw(req.user!.id, 'sim_group.rename', `project:${req.params.id}`, { from, to, apis: members.length });
+    sendJson(res, 200, { renamed: members.length });
+  });
+
+  // Removes every API in the group with its versions and mock rules. Not for "no group": that is not a group.
+  router.delete(`${base}/groups`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const name = cleanGroup(req.query.get('name'));
+    if (!name) { bad(res, 'Say which group to remove. APIs with no group are removed one at a time.'); return; }
+    const members = (await repo().listApis(req.params.id)).filter((a) => sameGroup(a.group_name, name));
+    if (members.length === 0) { bad(res, 'Group not found', 404); return; }
+    for (const a of members) await repo().deleteApi(req.params.id, a.id);
+    auditRaw(req.user!.id, 'sim_group.delete', `project:${req.params.id}`, { name, apis: members.length });
+    sendJson(res, 200, { removed: members.length, names: members.map((a) => a.name) });
   });
 
   router.delete(`${base}/apis/:aid`, async (req, res) => {
@@ -429,4 +470,5 @@ export function registerSimulationRoutes(): void {
   registerAiRuleRoutes();
   registerSimMcpRoutes();
   registerAiImportRoutes();
+  registerApiScheduleRoutes();
 }

@@ -333,7 +333,7 @@ describe('importing a Word document with AI', () => {
 
   test('upload, read with the chosen model, and get drafts, notes, a live address and no leftover document', async () => {
     const att = await upload(await docxBuffer('pets/get', 'id'), 'spec.docx');
-    const { job } = await runImport(att, { model: 'my-model', credentialId: 'cred-9' });
+    const { job } = await runImport(att, { model: 'my-model', credentialId: 'cred-9', group: 'Pet store', label: 'v1' });
     assert.equal(job.status, 'done', JSON.stringify(job));
     const j = job as unknown as { created: Array<{ id: string; name: string; isNew: boolean }>; errors: Array<{ api: string }>; liveBaseUrl: string; notes: string[] };
     assert.deepEqual(j.created.map((c) => c.name).sort(), ['Get Pet', 'Make Pet']);
@@ -343,6 +343,7 @@ describe('importing a Word document with AI', () => {
     assert.ok(j.notes.some((n) => /live address/.test(n)));
     assert.deepEqual(seen.at(-1), { model: 'my-model', credentialId: 'cred-9' });
     assert.equal(await getAiAttachmentRepository().getById(att), null);
+    assert.ok(j.created.every((c) => (c as { group?: string }).group === 'Pet store'));
 
     const list = (await fetchJson(baseUrl, m('/apis'), { cookie })).body as { apis: Array<{ name: string; liveBaseUrl: string; approvedVersion: number; operations: Array<{ path: string }>; flags: { total: number } }> };
     const get = list.apis.find((a) => a.name === 'Get Pet')!;
@@ -355,7 +356,7 @@ describe('importing a Word document with AI', () => {
   test('reading an updated document adds a version to the same API, even if the API was renamed in it', async () => {
     overrides = { get: { name: 'Fetch A Pet', path: 'pets/get', responses: [{ status: 200, fields: [{ name: 'name', type: 'string' }, { name: 'age', type: 'integer' }], example: { name: 'Rex', age: 3 } }] } };
     const att = await upload(await docxBuffer('pets/get', 'id, age'), 'spec-v2.docx');
-    const { job } = await runImport(att);
+    const { job } = await runImport(att, { group: 'pet STORE', label: 'v2' }); // the group is matched without regard to case
     const j = job as unknown as { created: Array<{ id: string; name: string; version: number; isNew: boolean }> };
     const get = j.created.find((c) => c.name === 'Get Pet')!;
     assert.equal(get.isNew, false, JSON.stringify(j.created));

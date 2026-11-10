@@ -21,6 +21,8 @@ export interface SimApiRecord {
   id: string;
   project_id: string;
   name: string;
+  /** The client or document this API belongs to. Empty = no group. Deleting a group deletes the APIs in it. */
+  group_name: string;
   /** Where it came from: the sheet name for an Excel import, the title for OpenAPI. Re-importing matches on this. */
   source_key: string;
   mode: SimMode;
@@ -38,12 +40,14 @@ export interface SimApiRecord {
   updated_at: string;
 }
 
-export type SimApiUpdate = Partial<Pick<SimApiRecord, 'name' | 'mode' | 'live_base_url' | 'require_explicit_rule' | 'operation_modes' | 'approved_version' | 'latest_version'>>;
+export type SimApiUpdate = Partial<Pick<SimApiRecord, 'name' | 'group_name' | 'mode' | 'live_base_url' | 'require_explicit_rule' | 'operation_modes' | 'approved_version' | 'latest_version'>>;
 
 export interface SimVersionRecord {
   api_id: string;
   version: number;
   status: 'draft' | 'approved';
+  /** What the person called this version when importing it, for example the document version "v1.9". */
+  label: string;
   spec: ApiSpec;
   created_by: string | null;
   created_at: string;

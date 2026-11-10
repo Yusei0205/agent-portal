@@ -19,7 +19,22 @@ export interface DraftInput {
   liveBaseUrl?: string;
 }
 
-export interface ImportedApi { id: string; name: string; version: number; isNew: boolean }
+export interface ImportedApi { id: string; name: string; version: number; isNew: boolean; group: string }
+
+export interface ImportOptions {
+  /** The group the APIs belong to (the client or document). Matching an earlier import only looks inside the group. */
+  group?: string;
+  /** What to call the version being added, for example the document version "v1.9". */
+  label?: string;
+}
+
+/** A group name as stored: trimmed, one line, at most 120 characters. */
+export function cleanGroup(raw: unknown): string {
+  return typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+}
+
+export const sameGroup = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+
 
 /** "POST /flash/update" for the first operation of a spec. */
 export function signatureOf(spec: ApiSpec): string {
@@ -71,9 +86,12 @@ export function carryOverPaths(before: ApiSpec, after: ApiSpec): void {
   }
 }
 
-export async function importDrafts(projectId: string, userId: string, drafts: DraftInput[]): Promise<ImportedApi[]> {
+export async function importDrafts(projectId: string, userId: string, drafts: DraftInput[], opts: ImportOptions = {}): Promise<ImportedApi[]> {
   const repo = getSimulationRepository();
-  const existing = await repo.listApis(projectId);
+  const group = cleanGroup(opts.group);
+  const label = (opts.label ?? '').trim().slice(0, 60);
+  // An earlier import is only the same API when it is in the same group.
+  const existing = (await repo.listApis(projectId)).filter((e) => sameGroup(e.group_name, group));
 
   // Signatures of what is stored now, read once and only if some draft has no match by key.
   let signatures: Map<string, SimApiRecord> | null = null;
@@ -100,18 +118,18 @@ export async function importDrafts(projectId: string, userId: string, drafts: Dr
       const version = found.latest_version + 1;
       const prev = await repo.getVersion(found.id, found.latest_version);
       if (prev) { keepOperationIds(prev.spec, d.spec); carryOverPaths(prev.spec, d.spec); }
-      await repo.addVersion({ api_id: found.id, version, status: 'draft', spec: d.spec, created_by: userId, created_at: at });
+      await repo.addVersion({ api_id: found.id, version, status: 'draft', label, spec: d.spec, created_by: userId, created_at: at });
       await repo.updateApi(projectId, found.id, { latest_version: version });
-      out.push({ id: found.id, name: found.name, version, isNew: false });
+      out.push({ id: found.id, name: found.name, version, isNew: false, group: found.group_name });
     } else {
       const id = generateId();
       await repo.createApi({
-        id, project_id: projectId, name: d.name, source_key: d.key, mode: 'mock', live_base_url: d.liveBaseUrl ?? '',
+        id, project_id: projectId, name: d.name, group_name: group, source_key: d.key, mode: 'mock', live_base_url: d.liveBaseUrl ?? '',
         require_explicit_rule: false, operation_modes: {}, approved_version: 0, latest_version: 1,
         created_by: userId, created_at: at, updated_at: at,
       });
-      await repo.addVersion({ api_id: id, version: 1, status: 'draft', spec: d.spec, created_by: userId, created_at: at });
-      out.push({ id, name: d.name, version: 1, isNew: true });
+      await repo.addVersion({ api_id: id, version: 1, status: 'draft', label, spec: d.spec, created_by: userId, created_at: at });
+      out.push({ id, name: d.name, version: 1, isNew: true, group });
     }
   }
   return out;

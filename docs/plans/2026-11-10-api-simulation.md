@@ -104,13 +104,21 @@ New repository (SQLite + DynamoDB, same pattern as integrations). Per project: A
 6. **MCP facade (built):** `POST /api/sim-mcp/:projectId` serves the approved APIs of a project as MCP tools (one per operation), through the same code as the hosted endpoint. Checked with the runner's own MCP client. The agent runner only accepts https addresses, so it works on a portal reached over https.
 7. **Versioning (built):** a version diff in plain sentences, and Postman collections as a third import format. The contract check against the real API is "Compare both" on the case sheet.
 
+### Added after the first plan
+- **Word and Excel of any layout are read by AI** (`ai-extract.ts`, `ai-import.ts`). Both document types vary from project to project, so nothing in the reader knows a layout: the document is converted to text, an outline call finds the APIs and the general information, and one call per API returns a description that is checked and rebuilt into a draft. It runs as a background job with progress, with the model chosen from the dropdown. OpenAPI and Postman files are read directly, with no AI. The fixed-layout Excel reader still exists as an optional choice for workbooks laid out like the FLASH sample.
+- **Updating from a new document:** reading an updated document into the same group adds a version to the APIs it recognises, matched by the same source or by method and path, keeping their operation ids, and a URL path someone typed in is kept.
+- **Groups:** every API belongs to a group (the client or document). An import names the group and, optionally, the version of the document ("v1.9"), which is shown on each spec version. Deleting a group removes all its APIs with their versions and rules. Importing into a different group keeps a separate copy instead of adding a version.
+- **Mock rules from the document's own error samples**, one click each.
+- **Scheduled API test runs** (`api-schedule.ts`): a case set run on a cron schedule against the simulation, the live API or both, with a run history shared with the Run button. Locally a timer runs it; on AWS the new `api-test-runs` schedule in `infra/lib/portal-stack.ts` (not deployed).
+- The simulation tables repair themselves when the database is opened (`ensureApiSimSchema` in `server/db.ts`), because migration numbers are positions in a list and a database that has met another branch can skip one.
+
 ### Not built
-- Word documents as an input (no sample to build a reader against; export the tables to Excel in the same layout, or use the workbook).
-- Enum values held on separate lookup sheets ("Refer to the Workflow Status List sheet") are not attached to the fields that refer to them.
 - Stateful mocks (a POST followed by a GET that returns what was created).
-- Re-applying hand edits when a spec is re-imported, and a stored per-call log in the run view.
-- Scheduled test runs, and stored encrypted credentials for the live API (a vault reference is used instead).
-- The AI steps have only been run against a stand-in model that returns fixed answers, not a real one.
+- A stored per-call log in the run view (calls only print a console line).
+- Stored, encrypted credentials for the live API in hosted and MCP calls (a vault reference is used for test runs; a caller sends its own login for live calls).
+- Word files that are not in the document order the converter expects (scanned or image-only documents).
+- The AI steps have only been run against stand-in models that return fixed answers, not a real one.
+- The DynamoDB repository type-checks but has not been run against DynamoDB.
 
 ## Test automation: generating tests from the specs
 

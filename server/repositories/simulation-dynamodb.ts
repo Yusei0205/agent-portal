@@ -29,6 +29,7 @@ function toApi(i: Record<string, AttributeValue>): SimApiRecord {
     id: getString(i, 'id') ?? '',
     project_id: getString(i, 'project_id') ?? '',
     name: getString(i, 'name') ?? '',
+    group_name: getString(i, 'group_name') ?? '',
     source_key: getString(i, 'source_key') ?? '',
     mode: (getString(i, 'mode') ?? 'mock') as SimApiRecord['mode'],
     live_base_url: getString(i, 'live_base_url') ?? '',
@@ -46,7 +47,7 @@ function apiItem(r: SimApiRecord): Record<string, AttributeValue> {
   return {
     ...apiKey(r.project_id, r.id),
     ...marshalItem({
-      id: r.id, project_id: r.project_id, name: r.name, source_key: r.source_key, mode: r.mode,
+      id: r.id, project_id: r.project_id, name: r.name, group_name: r.group_name, source_key: r.source_key, mode: r.mode,
       live_base_url: r.live_base_url, require_explicit_rule: r.require_explicit_rule ? 1 : 0,
       operation_modes: JSON.stringify(r.operation_modes), approved_version: r.approved_version,
       latest_version: r.latest_version, created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
@@ -59,6 +60,7 @@ function toVersion(i: Record<string, AttributeValue>): SimVersionRecord {
     api_id: getString(i, 'api_id') ?? '',
     version: getNumber(i, 'version'),
     status: getString(i, 'status') === 'approved' ? 'approved' : 'draft',
+    label: getString(i, 'label') ?? '',
     spec: parse<ApiSpec>(getString(i, 'spec_json'), { openapi: '3.0.3', info: { title: '', version: '1' }, paths: {} }),
     created_by: getString(i, 'created_by'),
     created_at: getString(i, 'created_at') ?? '',
@@ -124,7 +126,7 @@ export class DynamoDbSimulationRepository implements SimulationRepository {
   async addVersion(rec: SimVersionRecord): Promise<void> {
     await this.client.send(new PutItemCommand({
       TableName: table(),
-      Item: { ...verKey(rec.api_id, rec.version), ...marshalItem({ api_id: rec.api_id, version: rec.version, status: rec.status, spec_json: JSON.stringify(rec.spec), created_by: rec.created_by, created_at: rec.created_at }) },
+      Item: { ...verKey(rec.api_id, rec.version), ...marshalItem({ api_id: rec.api_id, version: rec.version, status: rec.status, label: rec.label, spec_json: JSON.stringify(rec.spec), created_by: rec.created_by, created_at: rec.created_at }) },
     }));
   }
 

@@ -6,12 +6,24 @@
  *   POST    .../case-sets/:csid/api-compare
  *
  * A run writes Pass / Fail and a "Run [...]" remark into the sheet, so onChanged() reloads it.
+ *
+ *   GET .../api-runs                       the run history of the test project
+ *   GET .../api-schedules, PUT/DELETE .../case-sets/:csid/api-schedule   run on a cron schedule (UTC)
  */
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
+
+const PRESETS = [
+  { cron: '*/15 * * * *', label: 'Every 15 minutes' },
+  { cron: '0 * * * *', label: 'Every hour' },
+  { cron: '0 2 * * *', label: 'Every day at 02:00 UTC' },
+  { cron: '0 9 * * 1-5', label: 'Weekdays at 09:00 UTC' },
+];
+
+const TARGET_LABEL = { simulation: 'Simulation', live: 'Live API', compare: 'Both, compared' };
 
 const VERDICTS = {
   match: { label: 'Same on both', cls: 'badge-ok' },
@@ -35,8 +47,36 @@ export function ApiRunDialog({ projectId, testProjectId, caseSetId, onClose, onC
   const [error, setError] = useState('');
   const [result, setResult] = useState(null); // { kind: 'run'|'compare', ... }
   const [onlyProblems, setOnlyProblems] = useState(true);
+  const [history, setHistory] = useState([]);
+  const [sched, setSched] = useState(null);   // the saved schedule for this case set, or null
+  const [form, setForm] = useState({ enabled: true, preset: PRESETS[2].cron, custom: '', target: 'simulation' });
+  const [schedMsg, setSchedMsg] = useState('');
   const trapRef = useFocusTrap();
   const overlay = useOverlayDismiss(onClose, { disabled: busy });
+
+  const loadHistory = () => api.get(`${base}/api-runs`).then((r) => setHistory(r.runs || [])).catch(() => {});
+  const loadSchedule = () => api.get(`${base}/api-schedules`).then((r) => {
+    const mine = (r.schedules || []).find((x) => x.caseSetId === caseSetId) || null;
+    setSched(mine);
+    if (mine) {
+      const preset = PRESETS.find((x) => x.cron === mine.cron);
+      setForm({ enabled: mine.enabled, preset: preset ? preset.cron : 'custom', custom: preset ? '' : mine.cron, target: mine.target });
+    }
+  }).catch(() => {});
+  useEffect(() => { loadHistory(); loadSchedule(); }, [base, caseSetId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveSchedule = async () => {
+    setSchedMsg('');
+    const cron = form.preset === 'custom' ? form.custom.trim() : form.preset;
+    try {
+      await api.put(`${base}/case-sets/${caseSetId}/api-schedule`, { cron, target: form.target, enabled: form.enabled });
+      setSchedMsg('Schedule saved.');
+      await loadSchedule();
+    } catch (e) { setSchedMsg(e.message); }
+  };
+  const removeSchedule = async () => {
+    try { await api.delete(`${base}/case-sets/${caseSetId}/api-schedule`); setSched(null); setSchedMsg('Schedule removed.'); } catch (e) { setSchedMsg(e.message); }
+  };
 
   useEffect(() => {
     api.get(`${base}/api-target`).then((r) => setCfg({
@@ -74,6 +114,7 @@ export function ApiRunDialog({ projectId, testProjectId, caseSetId, onClose, onC
         setResult({ kind: 'run', ...(await api.post(`${base}/case-sets/${caseSetId}/api-runs`, { target: kind })) });
       }
       onChanged?.();
+      loadHistory();
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
@@ -204,6 +245,72 @@ export function ApiRunDialog({ projectId, testProjectId, caseSetId, onClose, onC
               </div>
             </div>
           )}
+        </div>
+
+        <div className="dialog-body stack" style={{ paddingTop: 0 }}>
+          <details className="gc-spec">
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+              Run on a schedule {sched ? <span className={`badge ${sched.enabled ? 'badge-ok' : 'badge-neutral'}`}>{sched.enabled ? 'On' : 'Paused'}</span> : <span className="muted small" style={{ fontWeight: 400 }}>(off)</span>}
+            </summary>
+            <div className="stack" style={{ marginTop: 10 }}>
+              <p className="muted small" style={{ margin: 0 }}>
+                Runs these cases automatically and records each run under Run history. Times are UTC. The simulation can run as often as every 5 minutes;
+                the live API, which is the client’s server, at most every 15. A scheduled run is made as you, and is skipped if you stop being an editor of the project.
+              </p>
+              <div className="row wrap" style={{ gap: 10 }}>
+                <label className="small">Run on{' '}
+                  <select value={form.target} onChange={(e) => setForm((f) => ({ ...f, target: e.target.value }))} aria-label="What to run on">
+                    {Object.entries(TARGET_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </label>
+                <label className="small">When{' '}
+                  <select value={form.preset} onChange={(e) => setForm((f) => ({ ...f, preset: e.target.value }))} aria-label="When to run">
+                    {PRESETS.map((x) => <option key={x.cron} value={x.cron}>{x.label}</option>)}
+                    <option value="custom">Custom (cron)…</option>
+                  </select>
+                </label>
+                {form.preset === 'custom' && (
+                  <input aria-label="Cron expression" placeholder="m h dom mon dow, e.g. 30 6 * * *" style={{ width: 200 }} value={form.custom} onChange={(e) => setForm((f) => ({ ...f, custom: e.target.value }))} spellCheck={false} />
+                )}
+                <label className="sim-check small"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))} /> On</label>
+              </div>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <button type="button" className="btn btn-sm btn-primary" onClick={saveSchedule}>Save schedule</button>
+                {sched && <button type="button" className="btn btn-sm" onClick={removeSchedule}>Remove</button>}
+                {sched?.lastRunAt && <span className="muted small">Last run {new Date(sched.lastRunAt).toLocaleString()}</span>}
+                {schedMsg && <span className="small" role="status">{schedMsg}</span>}
+              </div>
+            </div>
+          </details>
+
+          <details className="gc-spec">
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Run history <span className="muted small" style={{ fontWeight: 400 }}>({history.length})</span></summary>
+            <div className="sim-table-wrap" style={{ marginTop: 10, maxHeight: 260, overflow: 'auto' }}>
+              <table className="sim-table">
+                <thead><tr><th>When</th><th>Case set</th><th>Ran on</th><th>By</th><th>Result</th></tr></thead>
+                <tbody>
+                  {history.length === 0 && <tr><td colSpan={5} className="muted">No runs yet.</td></tr>}
+                  {history.map((h) => (
+                    <tr key={h.id}>
+                      <td>{new Date(h.at).toLocaleString()}</td>
+                      <td>{h.caseSetName}</td>
+                      <td>{TARGET_LABEL[h.target] || h.target}</td>
+                      <td>{h.trigger === 'schedule' ? 'Schedule' : 'A person'}</td>
+                      <td className="small">
+                        {h.error ? <span className="sim-flag"><Icon name="warning" size={13} /> {h.error}</span> : (
+                          <>
+                            <span className="badge badge-ok">{h.pass} pass</span>{' '}
+                            <span className={`badge ${h.fail ? 'badge-danger' : 'badge-neutral'}`}>{h.fail} fail</span>{' '}
+                            {h.mismatch > 0 && <span className="badge badge-danger">{h.mismatch} differ</span>}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </div>
 
         <div className="dialog-foot">

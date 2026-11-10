@@ -668,6 +668,7 @@ function SettingsPanel({ data, projectId, reload, toast }) {
   const a = data.api;
   const ops = useMemo(() => operationsOf(data.spec), [data.spec]);
   const [name, setName] = useState(a.name);
+  const [group, setGroup] = useState(a.group || '');
   const [mode, setMode] = useState(a.mode);
   const [liveBaseUrl, setLiveBaseUrl] = useState(a.liveBaseUrl || '');
   const [explicit, setExplicit] = useState(a.requireExplicitRule);
@@ -679,7 +680,7 @@ function SettingsPanel({ data, projectId, reload, toast }) {
     setBusy(true);
     setError('');
     try {
-      await api.put(`/api/projects/${projectId}/sim/apis/${a.id}`, { name, mode, liveBaseUrl, requireExplicitRule: explicit, operationModes: opModes });
+      await api.put(`/api/projects/${projectId}/sim/apis/${a.id}`, { name, group, mode, liveBaseUrl, requireExplicitRule: explicit, operationModes: opModes });
       toast('Settings saved.', 'ok');
       await reload();
     } catch (e) { setError(e.message); } finally { setBusy(false); }
@@ -692,6 +693,11 @@ function SettingsPanel({ data, projectId, reload, toast }) {
         <div className="field">
           <label htmlFor="set-name">Name</label>
           <input id="set-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
+        </div>
+        <div className="field">
+          <label htmlFor="set-group">Group</label>
+          <input id="set-group" value={group} onChange={(e) => setGroup(e.target.value)} maxLength={120} placeholder="No group" />
+          <span className="field-hint">The client or document this API belongs to. Deleting a group deletes every API in it.</span>
         </div>
         <fieldset className="sim-modes">
           <legend className="field-label">Who answers calls</legend>
@@ -789,13 +795,14 @@ export function SimulationDetail({ projectId, apiId, onBack, onChanged, toast })
       <div className="sim-detail-head">
         <button type="button" className="btn btn-sm" onClick={onBack}><Icon name="x" size={12} /> Close</button>
         <h2>{data.api.name}</h2>
+        {data.api.group && <span className="badge badge-neutral" title="Group">{data.api.group}</span>}
         <FlagBadge flags={data.api.flags} />
         <span className="spacer" />
         <label className="sim-version small">
           Version
           <select value={data.version.version} onChange={(e) => setVersion(Number(e.target.value))} aria-label="Specification version">
             {data.versions.map((v) => (
-              <option key={v.version} value={v.version}>v{v.version} · {v.status === 'approved' ? 'approved' : 'draft'}{v.flags ? ` · ${v.flags} notes` : ''}</option>
+              <option key={v.version} value={v.version}>v{v.version}{v.label ? ` “${v.label}”` : ''} · {v.status === 'approved' ? 'approved' : 'draft'}{v.flags ? ` · ${v.flags} notes` : ''}</option>
             ))}
           </select>
         </label>
