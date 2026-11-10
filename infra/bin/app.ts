@@ -66,6 +66,8 @@ if (budgetEmail) {
     agentcoreBrowser: String(app.node.tryGetContext('agentcoreBrowser')) === 'true',
     publicUrl: app.node.tryGetContext('publicUrl'),
     googleAllowed: app.node.tryGetContext('googleAllowed'),
+    jobRuntime: String(app.node.tryGetContext('jobRuntime')) === 'true',
+    jobRuntimeMaxHours: app.node.tryGetContext('jobRuntimeMaxHours') ? Number(app.node.tryGetContext('jobRuntimeMaxHours')) : undefined,
   });
 }
 

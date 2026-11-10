@@ -356,7 +356,8 @@ export async function startServer(
   }
 
   // On Lambda there is no long-lived process: EventBridge Scheduler runs these jobs (see scheduled-jobs.ts).
-  const onLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+  // The job runtime is not where the schedules run either: one place (the portal's Lambda) runs each of them.
+  const onLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) || process.env.PORTAL_JOB_RUNNER === '1';
 
   // 8. Periodic session cleanup every 6 hours
   const sessionCleanupTimer = setInterval(() => {

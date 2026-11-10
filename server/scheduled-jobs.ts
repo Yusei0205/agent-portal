@@ -7,7 +7,8 @@
  * that CloudFront sends as x-portal-origin, so only the schedule (or CloudFront) can trigger jobs.
  */
 
-import { hasBackgroundJob, runBackgroundJobNow } from './background-jobs.ts';
+import { hasBackgroundJob, runBackgroundJobNow, runningJobCount } from './background-jobs.ts';
+import { flushRealtime, realtimeEnabled } from './realtime.ts';
 import { timingSafeEqual } from 'node:crypto';
 import type http from 'node:http';
 import { checkIdleSessions } from './session-lifecycle.ts';
@@ -94,4 +95,48 @@ export async function handleScheduledEvent(
     console.error(`[scheduled-job] ${payload.job} failed:`, e instanceof Error ? e.message : e);
     reply(res, 500, { ok: false, job: payload.job });
   }
+}
+
+// ── Job runtime (AgentCore) ───────────────────────────────────────────────────
+
+export const JOB_RUNNER_INVOKE_PATH = '/invocations';
+export const JOB_RUNNER_PING_PATH = '/ping';
+
+/** GET /ping: HealthyBusy while a job runs, so AgentCore does not stop the session as idle in the middle of it. */
+export function handleJobRunnerPing(res: http.ServerResponse): void {
+  reply(res, 200, { status: runningJobCount() > 0 ? 'HealthyBusy' : 'Healthy', time_of_last_update: Math.floor(Date.now() / 1000) });
+}
+
+/**
+ * POST /invocations on the job runtime: {job, args, secret}. Answers 202 at once and runs the job in this process.
+ * Live-update events the job queues are sent every second and when it ends (a Lambda sends them as each response ends).
+ */
+export async function handleJobInvocation(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  expectedSecret: string | undefined,
+): Promise<void> {
+  if (req.method !== 'POST' || !expectedSecret) { reply(res, 403, { error: 'Forbidden' }); return; }
+  let payload: { job?: unknown; secret?: unknown; args?: unknown };
+  try {
+    payload = JSON.parse(await readBody(req)) as { job?: unknown; secret?: unknown; args?: unknown };
+  } catch {
+    reply(res, 400, { error: 'Invalid request' });
+    return;
+  }
+  if (!secretMatches(payload.secret, expectedSecret)) { reply(res, 403, { error: 'Forbidden' }); return; }
+  if (!hasBackgroundJob(payload.job)) { reply(res, 400, { error: 'Unknown job' }); return; }
+  const job = payload.job;
+  const args = payload.args && typeof payload.args === 'object' ? (payload.args as Record<string, unknown>) : {};
+  const timer = realtimeEnabled() ? setInterval(() => { void flushRealtime().catch(() => undefined); }, 1000) : null;
+  timer?.unref();
+  const started = Date.now();
+  void runBackgroundJobNow(job, args)
+    .then(() => console.log(`[job-runner] ${job} finished in ${Math.round((Date.now() - started) / 1000)}s`))
+    .catch((e) => console.error(`[job-runner] ${job} failed:`, e instanceof Error ? e.message : e))
+    .finally(() => {
+      if (timer) clearInterval(timer);
+      if (realtimeEnabled()) void flushRealtime().catch(() => undefined);
+    });
+  reply(res, 202, { accepted: true, job });
 }

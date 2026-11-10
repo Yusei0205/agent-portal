@@ -9,7 +9,8 @@
  *   router.sse('/api/foo/stream', (req, res) => { ... });
  */
 
-import { SCHEDULED_EVENT_PATH, handleScheduledEvent } from './scheduled-jobs.ts';
+import { SCHEDULED_EVENT_PATH, handleScheduledEvent, JOB_RUNNER_INVOKE_PATH, JOB_RUNNER_PING_PATH, handleJobInvocation, handleJobRunnerPing } from './scheduled-jobs.ts';
+import { isJobRunner } from './job-runtime.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import http from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -612,6 +613,11 @@ export function createServer(): http.Server {
     if (req.url === SCHEDULED_EVENT_PATH) {
       void handleScheduledEvent(req, res, originSecret);
       return;
+    }
+    // The job runtime's contract with AgentCore (see job-runtime.ts). AgentCore sends no CloudFront header; the body carries the secret.
+    if (isJobRunner()) {
+      if (req.url === JOB_RUNNER_PING_PATH && req.method === 'GET') { handleJobRunnerPing(res); return; }
+      if (req.url === JOB_RUNNER_INVOKE_PATH) { void handleJobInvocation(req, res, originSecret); return; }
     }
     if (originSecret && !req.url?.startsWith('/api/health')) {
       const a = Buffer.from(String(req.headers['x-portal-origin'] ?? ''));

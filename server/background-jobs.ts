@@ -10,6 +10,8 @@
  *   await runInBackground('scan-run', { id })                    from a request handler
  */
 
+import { isJobRunner, runsOnJobRuntime, startOnJobRuntime } from './job-runtime.ts';
+
 type Handler = (args: Record<string, unknown>) => Promise<unknown>;
 
 const handlers = new Map<string, Handler>();
@@ -22,16 +24,28 @@ export function hasBackgroundJob(name: unknown): name is string {
   return typeof name === 'string' && handlers.has(name);
 }
 
+let activeJobs = 0;
+/** How many jobs are running in this process. The job runtime reports itself busy while this is above zero. */
+export function runningJobCount(): number {
+  return activeJobs;
+}
+
 /** Run a registered job in this process and wait for it. */
 export async function runBackgroundJobNow(name: string, args: Record<string, unknown>): Promise<unknown> {
   const h = handlers.get(name);
   if (!h) throw new Error(`Unknown background job: ${name}`);
-  return await h(args);
+  activeJobs += 1;
+  try {
+    return await h(args);
+  } finally {
+    activeJobs -= 1;
+  }
 }
 
 /** True when this process should hand background work to a separate Lambda invocation. */
 export function useLambdaInvoke(): boolean {
-  return Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.PORTAL_ORIGIN_SECRET);
+  // The job runtime runs a job where it is: it sets AWS_LAMBDA_FUNCTION_NAME only so the code takes its cloud paths.
+  return Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.PORTAL_ORIGIN_SECRET) && !isJobRunner();
 }
 
 let invoker: ((payload: Record<string, unknown>) => Promise<void>) | null = null;
@@ -57,6 +71,16 @@ async function invokeSelf(payload: Record<string, unknown>): Promise<void> {
  */
 export async function runInBackground(name: string, args: Record<string, unknown>): Promise<void> {
   if (!handlers.has(name)) throw new Error(`Unknown background job: ${name}`);
+  // A long job goes to the job runtime (no 15-minute limit, no Lambda slot). If that cannot be reached, a Lambda
+  // invocation below still runs it.
+  if (runsOnJobRuntime(name) && process.env.PORTAL_ORIGIN_SECRET) {
+    try {
+      await startOnJobRuntime(name, args, process.env.PORTAL_ORIGIN_SECRET);
+      return;
+    } catch (e) {
+      console.error(`[background-jobs] job runtime did not take ${name}, using Lambda:`, e instanceof Error ? e.message : e);
+    }
+  }
   if (useLambdaInvoke()) {
     try {
       await invokeSelf({ job: name, args, secret: process.env.PORTAL_ORIGIN_SECRET });
