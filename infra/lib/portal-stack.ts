@@ -123,6 +123,10 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   jobRuntime?: boolean;
   /** Longest a job may run, in hours (-c jobRuntimeMaxHours=4). AgentCore allows up to 8. */
   jobRuntimeMaxHours?: number;
+  /** Also run agent runs (execute-run) on the job runtime, so they can pass 15 minutes (-c jobRuntimeAgentRuns=true). */
+  jobRuntimeAgentRuns?: boolean;
+  /** `none`: a job that cannot start on the runtime fails at once instead of running on Lambda (-c jobRuntimeFallback=none). */
+  jobRuntimeFallback?: string;
 }
 
 export class AgentPortalCloudStack extends cdk.Stack {
@@ -526,6 +530,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
       });
       jobRuntime.addDependency(jobPolicy.node.defaultChild as cdk.CfnResource);
       fn.addEnvironment('PORTAL_JOB_RUNTIME_ARN', jobRuntime.attrAgentRuntimeArn);
+      if (props.jobRuntimeAgentRuns) fn.addEnvironment('PORTAL_JOB_RUNTIME_JOBS', '+execute-run');
+      if (props.jobRuntimeFallback) fn.addEnvironment('PORTAL_JOB_RUNTIME_FALLBACK', props.jobRuntimeFallback);
       new cdk.CfnOutput(this, 'JobRuntimeArn', { value: jobRuntime.attrAgentRuntimeArn, description: 'Set on the portal function as PORTAL_JOB_RUNTIME_ARN' });
     }
 

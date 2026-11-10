@@ -17,7 +17,7 @@ registerBackgroundJob('scan-run', async (args) => { seen.push(args); });
 registerBackgroundJob('slow-job', async () => { await new Promise<void>((r) => { release = r; }); });
 registerBackgroundJob('quick-job', async (args) => { seen.push(args); });
 
-const KEYS = ['AWS_LAMBDA_FUNCTION_NAME', 'PORTAL_ORIGIN_SECRET', 'PORTAL_JOB_RUNTIME_ARN', 'PORTAL_JOB_RUNTIME_JOBS', 'PORTAL_JOB_RUNNER'] as const;
+const KEYS = ['AWS_LAMBDA_FUNCTION_NAME', 'PORTAL_ORIGIN_SECRET', 'PORTAL_JOB_RUNTIME_ARN', 'PORTAL_JOB_RUNTIME_JOBS', 'PORTAL_JOB_RUNNER', 'PORTAL_JOB_RUNTIME_FALLBACK'] as const;
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
@@ -48,6 +48,14 @@ describe('which jobs go to the job runtime', () => {
     assert.deepEqual([...jobRuntimeJobs()].sort(), ['execute-run', 'scan-run']);
     assert.equal(runsOnJobRuntime('execute-run'), true);
     assert.equal(runsOnJobRuntime('test-run'), false);
+  });
+
+  it('a name with + is added to the default list', () => {
+    process.env.PORTAL_JOB_RUNTIME_ARN = ARN;
+    process.env.PORTAL_JOB_RUNTIME_JOBS = '+execute-run';
+    assert.equal(runsOnJobRuntime('execute-run'), true);
+    assert.equal(runsOnJobRuntime('scan-run'), true);
+    assert.equal(runsOnJobRuntime('repo-sync'), false);
   });
 
   it('never inside the runtime itself', () => {
@@ -103,6 +111,16 @@ describe('runInBackground with a job runtime', () => {
     await runInBackground('scan-run', { id: 'y' });
     assert.equal(lambdaSent.length, 1);
     assert.equal(lambdaSent[0].job, 'scan-run');
+  });
+
+  it('with PORTAL_JOB_RUNTIME_FALLBACK=none a runtime failure is raised and Lambda is not used', async () => {
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'agent-portal';
+    process.env.PORTAL_ORIGIN_SECRET = 's3cret';
+    process.env.PORTAL_JOB_RUNTIME_ARN = ARN;
+    process.env.PORTAL_JOB_RUNTIME_FALLBACK = 'none';
+    _setJobRuntimeInvoker(async () => { throw new Error('HTTP 503'); });
+    _setLambdaInvoker(async () => { assert.fail('must not fall back to Lambda'); });
+    await assert.rejects(runInBackground('scan-run', { id: 'q' }), /could not start scan-run.*HTTP 503/);
   });
 
   it('inside the runtime a job started by a job runs in that process', async () => {

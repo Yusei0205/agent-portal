@@ -10,7 +10,7 @@
  *   await runInBackground('scan-run', { id })                    from a request handler
  */
 
-import { isJobRunner, runsOnJobRuntime, startOnJobRuntime } from './job-runtime.ts';
+import { isJobRunner, jobRuntimeFallsBackToLambda, runsOnJobRuntime, startOnJobRuntime } from './job-runtime.ts';
 
 type Handler = (args: Record<string, unknown>) => Promise<unknown>;
 
@@ -78,7 +78,12 @@ export async function runInBackground(name: string, args: Record<string, unknown
       await startOnJobRuntime(name, args, process.env.PORTAL_ORIGIN_SECRET);
       return;
     } catch (e) {
-      console.error(`[background-jobs] job runtime did not take ${name}, using Lambda:`, e instanceof Error ? e.message : e);
+      const why = e instanceof Error ? e.message : String(e);
+      if (!jobRuntimeFallsBackToLambda()) {
+        console.error(`[background-jobs] job runtime did not take ${name} and PORTAL_JOB_RUNTIME_FALLBACK=none:`, why);
+        throw new Error(`The long-job runtime could not start ${name}: ${why}`);
+      }
+      console.error(`[background-jobs] job runtime did not take ${name}, using Lambda (15 minute limit applies):`, why);
     }
   }
   if (useLambdaInvoke()) {

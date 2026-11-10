@@ -32,11 +32,25 @@ export function jobRuntimeArn(): string {
   return (process.env.PORTAL_JOB_RUNTIME_ARN ?? '').trim();
 }
 
-/** The job names that go to the runtime. `PORTAL_JOB_RUNTIME_JOBS` (comma separated) replaces the default list. */
+/**
+ * The job names that go to the runtime. `PORTAL_JOB_RUNTIME_JOBS` (comma separated) replaces the default list; a name
+ * written with a leading `+` (for example `+execute-run`) is added to the default list instead.
+ */
 export function jobRuntimeJobs(): Set<string> {
   const raw = process.env.PORTAL_JOB_RUNTIME_JOBS;
-  const list = raw === undefined || raw.trim() === '' ? [...DEFAULT_JOB_RUNTIME_JOBS] : raw.split(',').map((s) => s.trim()).filter(Boolean);
-  return new Set(list);
+  const items = raw === undefined ? [] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const added = items.filter((s) => s.startsWith('+')).map((s) => s.slice(1).trim()).filter(Boolean);
+  const replaced = items.filter((s) => !s.startsWith('+'));
+  return new Set([...(replaced.length ? replaced : DEFAULT_JOB_RUNTIME_JOBS), ...added]);
+}
+
+/**
+ * What to do when a job cannot be started on the runtime. `lambda` (default) runs it as a Lambda invocation instead, so
+ * it is not lost but is limited to 15 minutes again. `none` makes runInBackground throw, so the caller can fail it at
+ * once instead of letting a long job die at 15 minutes with no obvious cause (PORTAL_JOB_RUNTIME_FALLBACK=none).
+ */
+export function jobRuntimeFallsBackToLambda(): boolean {
+  return (process.env.PORTAL_JOB_RUNTIME_FALLBACK ?? 'lambda').trim().toLowerCase() !== 'none';
 }
 
 /** True when this job should be started on the job runtime rather than here. Never true inside the runtime itself. */
