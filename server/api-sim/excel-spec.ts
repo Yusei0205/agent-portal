@@ -383,18 +383,18 @@ export function parseSheets(sheets: Array<{ name: string; grid: Grid }>): Workbo
   }
   const flags: Flag[] = [];
   resolveResponseRefs(apis);
-  const seen = new Map<string, string>();
+  // One message per shared name (not one per pair), listed once for the workbook and once on each sheet involved.
+  const byName = new Map<string, ParsedApi[]>();
   for (const a of apis) {
     const key = a.apiName.toLowerCase();
-    if (!key) continue;
-    const first = seen.get(key);
-    if (first) {
-      const msg = `Sheets "${first}" and "${a.sheet}" both declare the API name "${a.apiName}". One may be a copy or have the wrong name.`;
-      flags.push({ code: 'DUPLICATE_API_NAME', severity: 'warning', message: msg });
-      a.flags.push({ code: 'DUPLICATE_API_NAME', severity: 'warning', message: msg });
-    } else {
-      seen.set(key, a.sheet);
-    }
+    if (key) byName.set(key, [...(byName.get(key) ?? []), a]);
+  }
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const names = group.map((g) => `"${g.sheet}"`).join(', ');
+    const msg = `${group.length} sheets declare the same API name "${group[0].apiName}": ${names}. Some may be copies or have the wrong name.`;
+    flags.push({ code: 'DUPLICATE_API_NAME', severity: 'warning', message: msg });
+    for (const g of group) g.flags.push({ code: 'DUPLICATE_API_NAME', severity: 'warning', message: msg });
   }
   return { apis, skipped, flags };
 }

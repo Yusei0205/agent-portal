@@ -1,6 +1,6 @@
 # Plan: Client API simulation (mock REST APIs from client specs)
 
-Status: in progress. Phases 1-3 are built and tested on `feat/api-simulation`: mock engine, Excel parser, storage (SQLite + DynamoDB), routes and the hosted simulated API. The DynamoDB repository type-checks but has not been run against DynamoDB. Phase 4 onward (UI, AI enrichment, MCP facade, spec diff) is a proposal. Written 2026-11-10.
+Status: in progress. Phases 1-4 are built and tested on `feat/api-simulation`: mock engine, Excel parser, storage, routes, the hosted simulated API, and the team UI (Connect > API simulation). The DynamoDB repository type-checks but has not been run against DynamoDB. Phase 5 onward (AI enrichment, MCP facade, spec diff) is a proposal. Written 2026-11-10.
 
 ## Goal
 
@@ -99,7 +99,7 @@ New repository (SQLite + DynamoDB, same pattern as integrations). Per project: A
 1. **Core (building now):** OpenAPI types, mock engine with request validation, schema-based response generation and the block rule. Unit tested.
 2. **Excel parser (building now):** deterministic parse of the layout above into a field tree and a draft OpenAPI document, tested on a synthetic workbook and on the real sample when present.
 3. **Storage and routes (built):** repository, import, version/approve flow, rules, "Try it", the hosted REST endpoint and mode routing. Live mode forwards the caller's own credential (`X-Sim-Authorization`); stored, encrypted live credentials are not built. Per-call logging is a console line only; a stored call log for the run view is still to do.
-4. **Team UI:** "Simulation" tab on the project's Integrations page: import, review with flags, endpoint list with mode toggles, "Try it" panel, version history.
+4. **Team UI (built):** the "API simulation" tab on Connect: import, a review screen with exclamation-icon warnings and field tables, path entry, approve, mock rules, "Try it", settings and a "How to call it" panel. Not built yet: the version diff view and the model dropdown (it belongs to the AI step).
 5. **AI enrichment:** per-sheet job, model dropdown, validation with one repair pass.
 6. **MCP facade:** the simulation as an MCP server so agents can use it.
 7. **Versioning, diff, overrides;** Word and Postman import; contract check against the real API; stateful mocks.

@@ -23,6 +23,7 @@
 @import './styles/credentials.css';
 @import './styles/config.css';
 @import './styles/connections.css';
+@import './styles/simulation.css';
 @import './styles/dashboard.css';
 @import './styles/jira.css';
 @import './styles/help.css';
