@@ -11,6 +11,9 @@ import { getSetting } from '../settings.ts';
 import { getDb } from '../db.ts';
 import { fetchWithSsrfCheck } from '../testing/runner.ts';
 import { resolveVaultRefs } from '../testing/vault.ts';
+import { readLiveHeaders } from './live-credentials.ts';
+import { applyToSnapshot } from './rule-store.ts';
+import type { RecordData } from '../repositories/simulation.ts';
 import type { SimApiRecord } from '../repositories/simulation.ts';
 import { handleMockRequest, locateOperation } from './mock-engine.ts';
 import { validateValue } from './schema.ts';
@@ -31,7 +34,11 @@ export interface ApiTargetConfig {
 
 export const DEFAULT_TARGET: ApiTargetConfig = { apiIds: [], target: 'simulation', errorStyle: { kind: 'http' }, liveHeaders: {} };
 
-export interface TargetApi { api: SimApiRecord; spec: ApiSpec; rules: MockRule[] }
+export interface TargetApi {
+  api: SimApiRecord; spec: ApiSpec; rules: MockRule[];
+  /** The records a stateful API remembers, copied for this run: cases see what earlier cases saved, and nothing is kept. */
+  data?: RecordData;
+}
 
 export interface CaseInput { id: string; testId: string; scenario: string; request: string | null; response: string | null }
 
@@ -120,6 +127,10 @@ async function callLive(t: TargetApi, testProjectId: string, cfg: ApiTargetConfi
   for (const [k, v] of Object.entries(headers)) out[k] = v;
   // A live header replaces the case's header of the same name (the placeholder token becomes the real one). It is not
   // added to a case that does not send it, or the "no login token" case would carry a token and could never fail.
+  for (const [k, v] of Object.entries(readLiveHeaders(t.api.live_headers_enc))) {
+    const present = Object.keys(out).find((h) => h.toLowerCase() === k.toLowerCase());
+    if (present) out[present] = v;
+  }
   for (const [k, v] of Object.entries(cfg.liveHeaders)) {
     const present = Object.keys(out).find((h) => h.toLowerCase() === k.toLowerCase());
     if (present) out[present] = await resolveVaultRefs(v, testProjectId);
@@ -151,7 +162,8 @@ async function runOne(c: CaseInput, target: RunTarget, apis: TargetApi[], cfg: A
   try {
     let called: Called;
     if (target === 'simulation') {
-      const r = handleMockRequest(t.spec, t.rules, { method, path, query, headers: req.headers ?? {}, body: req.body }, { requireExplicitRule: t.api.require_explicit_rule });
+      const r = handleMockRequest(t.spec, t.rules, { method, path, query, headers: req.headers ?? {}, body: req.body }, { requireExplicitRule: t.api.require_explicit_rule, data: t.data });
+      if (t.data && r.changes?.length) applyToSnapshot(t.data, r.changes);
       called = { status: r.status, body: r.body };
     } else {
       if (!t.api.live_base_url) return skip(`${t.api.name} has no live address. Set it on the API simulation tab, under Settings.`, expected);

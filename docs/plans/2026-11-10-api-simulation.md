@@ -112,13 +112,17 @@ New repository (SQLite + DynamoDB, same pattern as integrations). Per project: A
 - **Scheduled API test runs** (`api-schedule.ts`): a case set run on a cron schedule against the simulation, the live API or both, with a run history shared with the Run button. Locally a timer runs it; on AWS the new `api-test-runs` schedule in `infra/lib/portal-stack.ts` (not deployed).
 - The simulation tables repair themselves when the database is opened (`ensureApiSimSchema` in `server/db.ts`), because migration numbers are positions in a list and a database that has met another branch can skip one.
 
+### Also built
+- **Stateful mocks** (`rule-store.ts`): a mock rule can look up, save, remove or list the records an API remembers, with the key taken from the request (`query.id`, `path.id`, `header.x`, `body.a.b`) and reply tokens such as `{{record}}`. It is data-driven rather than REST-guessing, so it fits RPC-style APIs like the ones in the Word sample. Records can be seeded and cleared on the Mock rules tab. "Try it" reads them but never changes them; a test run works on an in-memory copy, so cases within a run see each other's saves and nothing is kept. Up to 5,000 records per API.
+- **Call log** (`call-log.ts`): the latest 300 calls per API, through the REST address and the MCP tools, with status, how it was answered (rule, made up, rejected, blocked, simulated failure, live) and timing. Headers are never kept; request and response bodies only when a person turns that on, cut short and with passwords and tokens hidden.
+- **Stored live login** (`live-credentials.ts`): header values for the live API kept encrypted with the portal key, shown by name only, used when a caller sends none of its own (a caller's header of the same name wins; the portal token is never sent). A test run's live call starts from it too. Calls through the hosted address and MCP tools still refuse private addresses.
+- **An agent and a skill** that read a document and write specs: `.claude/agents/api-spec-agent.md`, `.claude/skills/api-spec-generation/`, and `scripts/api-spec/` (read a document as the portal does, validate a spec the way the portal reads it, import it as drafts).
+
 ### Not built
-- Stateful mocks (a POST followed by a GET that returns what was created).
-- A stored per-call log in the run view (calls only print a console line).
-- Stored, encrypted credentials for the live API in hosted and MCP calls (a vault reference is used for test runs; a caller sends its own login for live calls).
-- Word files that are not in the document order the converter expects (scanned or image-only documents).
+- Word files that are scanned or image-only (nothing to read).
 - The AI steps have only been run against stand-in models that return fixed answers, not a real one.
-- The DynamoDB repository type-checks but has not been run against DynamoDB.
+- The DynamoDB repository (including the new call log and records) type-checks but has not been run against DynamoDB.
+- A call log for calls made by test runs (they are not calls to the hosted address).
 
 ## Test automation: generating tests from the specs
 

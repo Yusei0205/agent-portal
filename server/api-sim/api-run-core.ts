@@ -119,7 +119,9 @@ async function loadTargetApis(projectId: string, apiIds: string[]): Promise<Targ
   const out: TargetApi[] = [];
   for (const api of chosen) {
     const ver = await repo.getVersion(api.id, api.approved_version > 0 ? api.approved_version : api.latest_version);
-    if (ver) out.push({ api, spec: ver.spec, rules: await repo.listRules(api.id) });
+    if (!ver) continue;
+    const rules = await repo.listRules(api.id);
+    out.push({ api, spec: ver.spec, rules, ...(rules.some((r) => r.store) ? { data: structuredClone(await repo.loadRecords(api.id)) } : {}) });
   }
   return out;
 }

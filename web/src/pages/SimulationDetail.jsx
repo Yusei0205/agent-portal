@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api.js';
 import {
   MODES, FAILURES, sampleFromSchema, flattenSchema, operationsOf, simulatedUrl,
@@ -12,6 +12,7 @@ const SECTIONS = [
   { id: 'review', label: 'Review' },
   { id: 'rules', label: 'Mock rules' },
   { id: 'try', label: 'Try it' },
+  { id: 'calls', label: 'Calls' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -361,6 +362,11 @@ function RuleDialog({ rule, ops, onClose, onSave }) {
   const [bodyText, setBodyText] = useState(rule?.response?.body !== undefined ? JSON.stringify(rule.response.body, null, 2) : '');
   const [failure, setFailure] = useState(rule?.failure || 'server_error');
   const [delay, setDelay] = useState(String(rule?.delayMs ?? 0));
+  const [storeAction, setStoreAction] = useState(rule?.store?.action || '');
+  const [storeCollection, setStoreCollection] = useState(rule?.store?.collection || '');
+  const [storeKey, setStoreKey] = useState(rule?.store?.key || '');
+  const [storeFrom, setStoreFrom] = useState(rule?.store?.from || '');
+  const [notFound, setNotFound] = useState(String(rule?.store?.notFound?.status ?? 404));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -383,6 +389,7 @@ function RuleDialog({ rule, ops, onClose, onSave }) {
       ...(when.value ? { when: { body: when.value } } : {}),
       delayMs: Number(delay) || 0,
       needsReview: false,
+      ...(storeAction ? { store: { action: storeAction, collection: storeCollection.trim(), ...(storeKey.trim() ? { key: storeKey.trim() } : {}), ...(storeAction === 'save' && storeFrom.trim() ? { from: storeFrom.trim() } : {}), ...(storeAction === 'find' || storeAction === 'remove' ? { notFound: { status: Number(notFound) || 404 } } : {}) } } : {}),
       ...(kind === 'failure' ? { failure } : { response: { status: Number(status), ...(body.value !== undefined ? { body: body.value } : {}) } }),
     };
     setBusy(true);
@@ -451,6 +458,52 @@ function RuleDialog({ rule, ops, onClose, onSave }) {
               </select>
             </div>
           )}
+          <details className="gc-spec" open={Boolean(storeAction)}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Remember data between calls <span className="muted small" style={{ fontWeight: 400 }}>(optional)</span></summary>
+            <div className="stack" style={{ marginTop: 10 }}>
+              <p className="muted small" style={{ margin: 0 }}>
+                Lets a call that creates something be followed by a call that finds it. The reply body can use <code>{'{{record}}'}</code>, <code>{'{{records}}'}</code>,
+                <code>{' {{record.Field}}'}</code> and <code>{'{{request.body.Field}}'}</code>.
+              </p>
+              <div className="field">
+                <label htmlFor="rule-store">When this rule applies</label>
+                <select id="rule-store" value={storeAction} onChange={(e) => setStoreAction(e.target.value)}>
+                  <option value="">Do not remember anything</option>
+                  <option value="save">Save the request as a record</option>
+                  <option value="find">Look a record up and answer with it</option>
+                  <option value="remove">Remove a record</option>
+                  <option value="list">Answer with every record</option>
+                </select>
+              </div>
+              {storeAction && (
+                <>
+                  <div className="field">
+                    <label htmlFor="rule-coll">Collection</label>
+                    <input id="rule-coll" value={storeCollection} onChange={(e) => setStoreCollection(e.target.value)} placeholder="applications" maxLength={40} style={{ maxWidth: 260 }} />
+                  </div>
+                  {storeAction !== 'list' && (
+                    <div className="field">
+                      <label htmlFor="rule-key">Where the record’s key is in the request</label>
+                      <input id="rule-key" value={storeKey} onChange={(e) => setStoreKey(e.target.value)} placeholder="query.ApplicationNo  or  body.Application.ApplicationNo  or  path.id" spellCheck={false} />
+                      {storeAction === 'save' && <span className="field-hint">Leave empty to give each record a made-up key.</span>}
+                    </div>
+                  )}
+                  {storeAction === 'save' && (
+                    <div className="field">
+                      <label htmlFor="rule-from">Which part of the request to save</label>
+                      <input id="rule-from" value={storeFrom} onChange={(e) => setStoreFrom(e.target.value)} placeholder="body  (or body.Application)" spellCheck={false} style={{ maxWidth: 360 }} />
+                    </div>
+                  )}
+                  {(storeAction === 'find' || storeAction === 'remove') && (
+                    <div className="field">
+                      <label htmlFor="rule-nf">Status when there is no such record</label>
+                      <input id="rule-nf" type="number" min="100" max="599" value={notFound} onChange={(e) => setNotFound(e.target.value)} style={{ maxWidth: 120 }} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </details>
           <div className="field">
             <label htmlFor="rule-delay">Delay before answering (ms)</label>
             <input id="rule-delay" type="number" min="0" max="60000" value={delay} onChange={(e) => setDelay(e.target.value)} style={{ maxWidth: 140 }} />
@@ -463,6 +516,72 @@ function RuleDialog({ rule, ops, onClose, onSave }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** The records a stateful API remembers: seed them, see how many there are, clear them. */
+function DataCard({ data, projectId, toast }) {
+  const base = `/api/projects/${projectId}/sim/apis/${data.api.id}/data`;
+  const [collections, setCollections] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ collection: '', keyField: '', text: '' });
+  const [busy, setBusy] = useState(false);
+  const usesStore = data.rules.some((r) => r.store);
+
+  const load = useCallback(() => api.get(base).then((r) => setCollections(r.collections || [])).catch(() => {}), [base]);
+  useEffect(() => { load(); }, [load]);
+  if (!usesStore && collections.length === 0 && !open) {
+    return (
+      <p className="muted small">
+        Want an API that remembers what it is given (a POST followed by a GET that finds it)? Open a rule and choose <em>Remember data between calls</em>.
+      </p>
+    );
+  }
+
+  const save = async () => {
+    const parsed = parseJsonField(form.text, 'The records');
+    if (parsed.error || !Array.isArray(parsed.value)) { toast(parsed.error || 'The records must be a JSON list of objects, for example [{"id": "1"}]', 'error'); return; }
+    setBusy(true);
+    try {
+      const r = await api.put(`${base}/${encodeURIComponent(form.collection.trim())}`, { keyField: form.keyField.trim(), records: parsed.value });
+      toast(`${r.saved} record${r.saved === 1 ? '' : 's'} saved in “${form.collection.trim()}”.`, 'ok');
+      setOpen(false);
+      setForm({ collection: '', keyField: '', text: '' });
+      await load();
+    } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); }
+  };
+  const clear = async (name) => {
+    try { await api.delete(`${base}/${encodeURIComponent(name)}`); await load(); } catch (e) { toast(e.message, 'error'); }
+  };
+
+  return (
+    <section className="card stack">
+      <header className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h3 className="sim-h3">Remembered data</h3>
+          <p className="muted small" style={{ margin: '2px 0 0' }}>What this API has been given, for rules that look records up. “Try it” and test runs never change it.</p>
+        </div>
+        <button type="button" className="btn btn-sm" onClick={() => setOpen((o) => !o)}>{open ? 'Cancel' : 'Add or replace records'}</button>
+      </header>
+      {collections.length === 0 && <p className="muted small">Nothing is remembered yet.</p>}
+      {collections.map((c) => (
+        <div key={c.name} className="row" style={{ gap: 10 }}>
+          <code>{c.name}</code><span className="muted small">{c.count} record{c.count === 1 ? '' : 's'}</span>
+          <span style={{ flex: 1 }} />
+          <button type="button" className="btn btn-sm" onClick={() => clear(c.name)}>Clear</button>
+        </div>
+      ))}
+      {open && (
+        <div className="stack">
+          <div className="row wrap" style={{ gap: 10 }}>
+            <label className="small">Collection <input aria-label="Collection" value={form.collection} onChange={(e) => setForm((f) => ({ ...f, collection: e.target.value }))} placeholder="applications" style={{ width: 180 }} /></label>
+            <label className="small">Key field <input aria-label="Key field" value={form.keyField} onChange={(e) => setForm((f) => ({ ...f, keyField: e.target.value }))} placeholder="ApplicationNo" style={{ width: 180 }} /></label>
+          </div>
+          <textarea aria-label="Records (JSON list)" rows={6} value={form.text} onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))} placeholder='[{"ApplicationNo": "A1", "Title": "First"}]' spellCheck={false} />
+          <div><button type="button" className="btn btn-sm btn-primary" disabled={busy || !form.collection.trim()} onClick={save}>Replace the collection with these records</button></div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -509,6 +628,7 @@ function RulesPanel({ data, projectId, reload, toast }) {
           </div>
         </article>
       ))}
+      <DataCard data={data} projectId={projectId} toast={toast} />
       {editing && <RuleDialog rule={editing} ops={ops} onClose={() => setEditing(null)} onSave={save} />}
     </div>
   );
@@ -662,6 +782,84 @@ function AgentAccess({ projectId, approved }) {
   );
 }
 
+// ── Calls ─────────────────────────────────────────────────────────────────────
+
+const ANSWERED = {
+  rule: 'A mock rule', generated: 'Made up from the response fields', invalid: 'Rejected: does not match the specification',
+  blocked: 'Blocked: nothing to answer with', failure: 'A simulated failure', live: 'The live API',
+};
+
+function CallsPanel({ data, projectId, toast }) {
+  const base = `/api/projects/${projectId}/sim/apis/${data.api.id}/calls`;
+  const [log, setLog] = useState(null);
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [confirming, setConfirming] = useState(false);
+
+  const load = useCallback(() => api.get(`${base}?limit=200`).then(setLog).catch((e) => toast(e.message, 'error')), [base, toast]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return undefined;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [auto, load]);
+
+  const clear = async () => {
+    try { await api.delete(base); setConfirming(false); await load(); } catch (e) { toast(e.message, 'error'); }
+  };
+  if (!log) return <p className="muted">Loading…</p>;
+  const shown = log.calls.filter((c) => !errorsOnly || c.status >= 400);
+  return (
+    <div className="stack">
+      <div className="row wrap" style={{ gap: 10 }}>
+        <p className="muted small" style={{ margin: 0, flex: 1, minWidth: 240 }}>
+          The latest calls made to this API through its address and the MCP tools (a few hundred are kept). Headers are never kept.
+          {log.logBodies ? ' Request and response bodies are kept, cut short, with passwords and tokens hidden.' : ' Request and response bodies are not kept: turn that on in Settings to see them.'}
+        </p>
+        <label className="sim-check small"><input type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} /> Only errors</label>
+        <label className="sim-check small"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Refresh every 5 s</label>
+        <button type="button" className="btn btn-sm" onClick={load}><Icon name="refresh" size={13} /> Refresh</button>
+        {!confirming
+          ? <button type="button" className="btn btn-sm" disabled={log.calls.length === 0} onClick={() => setConfirming(true)}>Clear log</button>
+          : <span className="row" style={{ gap: 6 }}><span className="small">Clear the log?</span><button type="button" className="btn btn-sm btn-danger" onClick={clear}>Yes, clear</button><button type="button" className="btn btn-sm" onClick={() => setConfirming(false)}>No</button></span>}
+      </div>
+      <div className="sim-table-wrap">
+        <table className="sim-table">
+          <thead><tr><th>When</th><th>Through</th><th>Call</th><th>Status</th><th>Answered by</th><th>Time</th></tr></thead>
+          <tbody>
+            {shown.length === 0 && <tr><td colSpan={6} className="muted">{log.calls.length === 0 ? 'No calls yet.' : 'No errors in the latest calls.'}</td></tr>}
+            {shown.map((c) => (
+              <Fragment key={c.id}>
+                <tr style={{ cursor: 'pointer' }} onClick={() => setOpenId(openId === c.id ? null : c.id)} aria-expanded={openId === c.id}>
+                  <td>{new Date(c.at).toLocaleTimeString()}</td>
+                  <td><span className="badge badge-neutral">{c.via === 'mcp' ? 'MCP' : 'REST'}</span></td>
+                  <td><span className="sim-method">{c.method}</span> <code>{c.path}</code></td>
+                  <td><span className={`badge ${c.status < 300 ? 'badge-ok' : c.status < 500 ? 'badge-warn' : 'badge-danger'}`}>{c.status}</span></td>
+                  <td className="small">{ANSWERED[c.source] || c.source}{c.mode === 'live' && c.source !== 'live' ? ' (live)' : ''}{c.ruleId ? <span className="muted"> · {data.rules.find((r) => r.id === c.ruleId)?.name || c.ruleId}</span> : null}{c.warnings ? <span className="sim-flag" style={{ marginLeft: 6 }}><Icon name="warning" size={12} /> {c.warnings}</span> : null}</td>
+                  <td className="small muted">{c.ms} ms</td>
+                </tr>
+                {openId === c.id && (
+                  <tr>
+                    <td colSpan={6}>
+                      {c.request || c.response ? (
+                        <div className="sim-try-grid">
+                          <div><div className="muted small">Request body</div><pre className="sim-pre">{c.request || '—'}</pre></div>
+                          <div><div className="muted small">Response body</div><pre className="sim-pre">{c.response || '—'}</pre></div>
+                        </div>
+                      ) : <span className="muted small">No bodies were kept for this call.</span>}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 function SettingsPanel({ data, projectId, reload, toast }) {
@@ -672,6 +870,9 @@ function SettingsPanel({ data, projectId, reload, toast }) {
   const [mode, setMode] = useState(a.mode);
   const [liveBaseUrl, setLiveBaseUrl] = useState(a.liveBaseUrl || '');
   const [explicit, setExplicit] = useState(a.requireExplicitRule);
+  const [logBodies, setLogBodies] = useState(Boolean(a.logBodies));
+  // The login for the live API: names are known, values never come back, so a saved one shows empty and keeps its value.
+  const [loginRows, setLoginRows] = useState((a.liveHeaderNames || []).map((n) => ({ name: n, value: '', saved: true })));
   const [opModes, setOpModes] = useState(a.operationModes || {});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -680,7 +881,7 @@ function SettingsPanel({ data, projectId, reload, toast }) {
     setBusy(true);
     setError('');
     try {
-      await api.put(`/api/projects/${projectId}/sim/apis/${a.id}`, { name, group, mode, liveBaseUrl, requireExplicitRule: explicit, operationModes: opModes });
+      await api.put(`/api/projects/${projectId}/sim/apis/${a.id}`, { name, group, mode, liveBaseUrl, requireExplicitRule: explicit, operationModes: opModes, logBodies, liveHeaders: loginRows.filter((r) => r.name.trim()).map((r) => ({ name: r.name.trim(), value: r.value })) });
       toast('Settings saved.', 'ok');
       await reload();
     } catch (e) { setError(e.message); } finally { setBusy(false); }
@@ -729,6 +930,24 @@ function SettingsPanel({ data, projectId, reload, toast }) {
             <span className="field-hint">https only. The caller’s own login token (sent as X-Sim-Authorization) is passed on; the portal token never is.</span>
           </div>
         )}
+        {(mode === 'live' || mode === 'hybrid') && (
+          <div className="field">
+            <span className="field-label">Login for the live API <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></span>
+            {loginRows.map((r, i) => (
+              <div key={i} className="row" style={{ gap: 8 }}>
+                <input aria-label="Header name" style={{ width: 160 }} value={r.name} disabled={r.saved} placeholder="Authorization" onChange={(e) => setLoginRows((rows) => rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+                <input aria-label={`Value of ${r.name || 'the header'}`} type="password" autoComplete="off" style={{ flex: 1, minWidth: 160 }} value={r.value} placeholder={r.saved ? 'Saved. Type to replace it.' : 'Bearer …'} onChange={(e) => setLoginRows((rows) => rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+                <button type="button" className="btn-icon" aria-label={`Remove ${r.name || 'header'}`} onClick={() => setLoginRows((rows) => rows.filter((_, j) => j !== i))}><Icon name="trash" size={14} /></button>
+              </div>
+            ))}
+            {loginRows.length < 5 && <div><button type="button" className="btn btn-sm" onClick={() => setLoginRows((rows) => [...rows, { name: '', value: '', saved: false }])}><Icon name="plus" size={13} /> Add a header</button></div>}
+            <span className="field-hint">Stored encrypted and never shown again. Used when a caller does not send its own login; a caller’s own login always wins. The portal token is never sent.</span>
+          </div>
+        )}
+        <label className="sim-check">
+          <input type="checkbox" checked={logBodies} onChange={(e) => setLogBodies(e.target.checked)} />
+          <span>Keep request and response bodies in the call log <span className="muted small">(cut short, passwords and tokens hidden; off by default because bodies can hold personal data)</span></span>
+        </label>
         <label className="sim-check">
           <input type="checkbox" checked={explicit} onChange={(e) => setExplicit(e.target.checked)} />
           <span>Block calls that have no mock rule <span className="muted small">(otherwise they are answered from the response fields)</span></span>
@@ -820,6 +1039,7 @@ export function SimulationDetail({ projectId, apiId, onBack, onChanged, toast })
         {section === 'review' && <ReviewPanel data={data} projectId={projectId} reload={reload} toast={toast} busy={busy} setBusy={setBusy} onOpenVersion={setVersion} />}
         {section === 'rules' && <RulesPanel data={data} projectId={projectId} reload={reload} toast={toast} />}
         {section === 'try' && <TryPanel data={data} projectId={projectId} />}
+        {section === 'calls' && <CallsPanel data={data} projectId={projectId} toast={toast} />}
         {section === 'settings' && <SettingsPanel data={data} projectId={projectId} reload={reload} toast={toast} />}
       </div>
     </div>

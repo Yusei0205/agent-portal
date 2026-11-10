@@ -9,8 +9,12 @@
 import type { ApiSpec, Flag, HttpMethod, MockRequest, MockResult, MockRule, Operation } from './types.ts';
 import { generateValue, validateValue } from './schema.ts';
 import { checkRules } from './rules.ts';
+import { requestView, runStore } from './rule-store.ts';
+import type { RecordData } from '../repositories/simulation.ts';
 
 export interface EngineOptions {
+  /** A snapshot of the records the API remembers. Rules with a `store` read it and return their changes. */
+  data?: RecordData;
   /** When true, an operation with no matching rule is blocked instead of answered from its response schema. */
   requireExplicitRule?: boolean;
 }
@@ -19,6 +23,15 @@ const METHODS: HttpMethod[] = ['get', 'post', 'put', 'patch', 'delete'];
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
 interface Located { operation: Operation; template: string; exact: boolean }
+
+/** {id} values of a templated path, for rules that look a record up by a path parameter. */
+export function pathParams(template: string, path: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const t = template.split('/');
+  const p = normalisePath(path).split('/');
+  t.forEach((seg, i) => { const m = /^\{([^}]+)\}$/.exec(seg); if (m && p[i] !== undefined) out[m[1]] = decodeURIComponent(p[i]); });
+  return out;
+}
 
 function templateToRegex(template: string): RegExp {
   const src = template
@@ -161,6 +174,21 @@ export function handleMockRequest(spec: ApiSpec, rules: MockRule[], req: MockReq
   }
 
   if (rule?.failure) return failureResult(rule, opId, warnings);
+
+  if (rule?.store) {
+    const out = runStore(rule.store, rule.response, requestView(req, pathParams(found.template, req.path)), opts.data);
+    return {
+      status: out.status,
+      headers: { ...JSON_HEADERS, ...out.headers, 'x-mock-source': 'rule' },
+      body: out.body,
+      delayMs: rule.delayMs ?? 0,
+      source: 'rule',
+      operationId: opId,
+      ruleId: rule.id,
+      warnings,
+      ...(out.changes.length > 0 ? { changes: out.changes } : {}),
+    };
+  }
 
   if (rule?.response) {
     const body = rule.response.body;

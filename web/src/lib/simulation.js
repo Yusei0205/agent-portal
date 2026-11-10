@@ -110,7 +110,10 @@ export function ruleCondition(rule) {
   return parts.length ? `When ${parts.join(' and ')}` : 'Any request';
 }
 
+const STORE_WORDS = { save: 'Save the request in', find: 'Look up a record in', remove: 'Remove a record from', list: 'List every record in' };
+
 export function ruleOutcome(rule) {
+  if (rule.store) return `${STORE_WORDS[rule.store.action] || 'Remember in'} “${rule.store.collection}”${rule.response ? `, reply ${rule.response.status}` : ''}`;
   if (rule.failure) return FAILURES.find((f) => f.id === rule.failure)?.label || rule.failure;
   return rule.response ? `Reply ${rule.response.status}` : 'No reply set';
 }

@@ -30,6 +30,9 @@ import { getSimulationRepository } from '../repositories/simulation.ts';
 import type { SimApiRecord, SimMode } from '../repositories/simulation.ts';
 import { handleMockRequest } from './mock-engine.ts';
 import { answerCall, clientHeaders } from './call.ts';
+import { recordCall } from './call-log.ts';
+import { buildLiveHeaders, readLiveHeaders } from './live-credentials.ts';
+import { cleanStore, storeProblem } from './rule-store.ts';
 import { cleanGroup, importDrafts, sameGroup } from './import-drafts.ts';
 import { checkOpenApi } from './openapi.ts';
 import { registerApiTestRoutes } from './test-routes.ts';
@@ -73,7 +76,7 @@ function summary(a: SimApiRecord, spec: ApiSpec | null) {
   const flags = spec ? collectFlags(spec) : [];
   return {
     id: a.id, name: a.name, group: a.group_name, mode: a.mode, approvedVersion: a.approved_version, latestVersion: a.latest_version,
-    requireExplicitRule: a.require_explicit_rule, liveBaseUrl: a.live_base_url, operationModes: a.operation_modes,
+    requireExplicitRule: a.require_explicit_rule, logBodies: a.log_bodies, liveHeaderNames: Object.keys(readLiveHeaders(a.live_headers_enc)), liveBaseUrl: a.live_base_url, operationModes: a.operation_modes,
     operations: spec ? operations(spec) : [],
     flags: { total: flags.length, warnings: flags.filter((f) => f.severity === 'warning').length, missingPath: spec ? hasMissingPath(spec) : false },
     updatedAt: a.updated_at,
@@ -124,7 +127,12 @@ export function parseRule(body: Record<string, unknown>, id: string, opIds: Set<
     if (!FAILURES.includes(body.failure as FailureKind)) return `failure must be one of: ${FAILURES.join(', ')}`;
     rule.failure = body.failure as FailureKind;
   }
-  if (!rule.response && !rule.failure) return 'A rule needs a response or a failure';
+  if (body.store !== undefined && body.store !== null) {
+    const p = storeProblem(body.store);
+    if (p) return p;
+    rule.store = cleanStore(body.store as Record<string, unknown>);
+  }
+  if (!rule.response && !rule.failure && !rule.store) return 'A rule needs a response, a failure or something to remember';
   if (body.delayMs !== undefined) {
     const d = Number(body.delayMs);
     if (!Number.isFinite(d) || d < 0 || d > 60_000) return 'delayMs must be 0-60000';
@@ -268,6 +276,12 @@ export function registerSimulationRoutes(): void {
       fields.live_base_url = u;
     }
     if (b.requireExplicitRule !== undefined) fields.require_explicit_rule = b.requireExplicitRule === true;
+    if (b.logBodies !== undefined) fields.log_bodies = b.logBodies === true;
+    if (b.liveHeaders !== undefined) {
+      const built = buildLiveHeaders(b.liveHeaders, a.live_headers_enc);
+      if ('error' in built) { bad(res, built.error); return; }
+      fields.live_headers_enc = built.enc;
+    }
     if (b.operationModes !== undefined) {
       const m = b.operationModes as Record<string, unknown>;
       if (!m || typeof m !== 'object' || Array.isArray(m)) { bad(res, 'operationModes must be an object'); return; }
@@ -286,6 +300,81 @@ export function registerSimulationRoutes(): void {
     if (Object.keys(fields).length === 0) { bad(res, 'Nothing to update'); return; }
     const updated = await repo().updateApi(req.params.id, a.id, fields);
     sendJson(res, 200, { api: updated ? summary(updated, await latestSpec(updated)) : null });
+  });
+
+  // ── The records a stateful API remembers
+  const COLLECTION_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
+  router.get(`${base}/apis/:aid/data`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    const data = await repo().loadRecords(a.id);
+    sendJson(res, 200, { collections: Object.entries(data).map(([name, recs]) => ({ name, count: Object.keys(recs).length })).sort((x, y) => x.name.localeCompare(y.name)) });
+  });
+
+  router.get(`${base}/apis/:aid/data/:collection`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    const recs = (await repo().loadRecords(a.id))[req.params.collection] ?? {};
+    sendJson(res, 200, { total: Object.keys(recs).length, records: Object.entries(recs).slice(0, 200).map(([key, record]) => ({ key, record })) });
+  });
+
+  // Replaces the whole collection: seed data for a mock to answer from.
+  router.put(`${base}/apis/:aid/data/:collection`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    if (!COLLECTION_RE.test(req.params.collection)) { bad(res, 'The collection name must be 1-40 letters, digits, - or _'); return; }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!Array.isArray(b.records) || b.records.length > 1000) { bad(res, 'records must be a list of at most 1000 objects'); return; }
+    const keyField = typeof b.keyField === 'string' ? b.keyField.trim() : '';
+    const items: Array<{ key: string; record: unknown }> = [];
+    const seen = new Set<string>();
+    for (const [i, r] of (b.records as unknown[]).entries()) {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) { bad(res, `Record ${i + 1} is not an object`); return; }
+      const key = keyField ? (r as Record<string, unknown>)[keyField] : `r${i + 1}`;
+      if (key === undefined || key === null || String(key) === '') { bad(res, `Record ${i + 1} has no "${keyField}" to use as its key`); return; }
+      if (seen.has(String(key))) { bad(res, `Two records have the key "${String(key)}"`); return; }
+      seen.add(String(key));
+      items.push({ key: String(key), record: r });
+    }
+    if (JSON.stringify(items).length > 1_000_000) { bad(res, 'That is more than 1 MB of records'); return; }
+    await repo().replaceCollection(a.id, req.params.collection, items);
+    sendJson(res, 200, { saved: items.length });
+  });
+
+  router.delete(`${base}/apis/:aid/data/:collection`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    await repo().clearCollection(a.id, req.params.collection);
+    sendJson(res, 200, { ok: true });
+  });
+
+  // ── The call log of one API
+  router.get(`${base}/apis/:aid/calls`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    const limit = Math.max(1, Math.min(Number(req.query.get('limit') ?? 100) || 100, 300));
+    const calls = await repo().listCalls(a.id, limit);
+    sendJson(res, 200, {
+      logBodies: a.log_bodies,
+      calls: calls.map((c) => ({
+        id: c.id, at: c.at, via: c.via, method: c.method, path: c.path, status: c.status, mode: c.mode, source: c.source,
+        ruleId: c.rule_id, warnings: c.warnings, ms: c.ms, request: c.request_text, response: c.response_text,
+      })),
+    });
+  });
+
+  router.delete(`${base}/apis/:aid/calls`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    await repo().clearCalls(a.id);
+    sendJson(res, 200, { ok: true });
   });
 
   // ── Groups: the APIs of one client or document, listed and removed together ──
@@ -421,9 +510,12 @@ export function registerSimulationRoutes(): void {
     const headers = stringMap(b.headers, 30);
     const query = stringMap(b.query, 30);
     if (!headers || !query) { bad(res, 'headers and query must be objects of strings'); return; }
-    const result = handleMockRequest(ver.spec, await repo().listRules(a.id), {
+    const rules = await repo().listRules(a.id);
+    // Try it reads the remembered records but never changes them.
+    const data = rules.some((r) => r.store) ? await repo().loadRecords(a.id) : undefined;
+    const result = handleMockRequest(ver.spec, rules, {
       method: String(b.method ?? 'POST'), path: String(b.path ?? '/'), headers, query, body: b.body,
-    }, { requireExplicitRule: a.require_explicit_rule });
+    }, { requireExplicitRule: a.require_explicit_rule, data });
     sendJson(res, 200, { result });
   });
 
@@ -455,9 +547,11 @@ export function registerSimulationRoutes(): void {
       else if (a.mode === 'mock') { bad(res, 'Send a JSON body with Content-Type: application/json'); return; }
     }
 
+    const started = Date.now();
     const out = await answerCall(a, ver, await repo().listRules(a.id), {
       method, path: rest, search: url.search, headers: clientHeaders(req.headers), rawBody: raw, body: parsedBody,
     });
+    await recordCall(a, { via: 'rest', method, path: rest, search: url.search, body: parsedBody }, out, Date.now() - started);
     if (out.delayMs > 0) await new Promise((r) => setTimeout(r, Math.min(out.delayMs, MAX_HOSTED_DELAY_MS)));
     console.log(`[api-sim] ${a.project_id}/${a.id} ${method} ${rest} -> ${out.status} ${out.source}${out.ruleId ? ` rule=${out.ruleId}` : ''}${out.warnings ? ` warnings=${out.warnings}` : ''}`);
     sendRaw(res, out.status, out.headers, out.text);

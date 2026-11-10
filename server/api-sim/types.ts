@@ -99,9 +99,23 @@ export interface MockRule {
   when?: { body?: Record<string, unknown>; query?: Record<string, string> };
   response?: { status: number; headers?: Record<string, string>; body?: unknown };
   failure?: FailureKind;
+  /** Look up, save, remove or list remembered records, and answer from them. */
+  store?: RuleStore;
   delayMs?: number;
   /** Set when the spec changed under the rule; the rule is blocked until a person confirms it. */
   needsReview?: boolean;
+}
+
+/** What a rule does with the records an API remembers (see rule-store.ts). */
+export interface RuleStore {
+  action: 'find' | 'save' | 'remove' | 'list';
+  collection: string;
+  /** Where the key is in the request: query.id, path.id, header.x-id or body.a.b. */
+  key?: string;
+  /** save: where the record is in the request. The whole body when absent. */
+  from?: string;
+  /** find and remove: the answer when there is no such record (404 when absent). */
+  notFound?: { status: number; body?: unknown };
 }
 
 export interface MockRequest {
@@ -126,4 +140,6 @@ export interface MockResult {
   ruleId?: string;
   /** Non-blocking findings, e.g. a conditional rule the request may break. */
   warnings: Flag[];
+  /** Changes the rule made to the remembered records. The caller decides whether to keep them. */
+  changes?: Array<{ collection: string; key: string; record: unknown | null }>;
 }

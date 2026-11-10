@@ -20,6 +20,7 @@ import { getSimulationRepository } from '../repositories/simulation.ts';
 import type { SimApiRecord, SimVersionRecord } from '../repositories/simulation.ts';
 import { requireProjectAccess } from './access.ts';
 import { answerCall } from './call.ts';
+import { recordCall } from './call-log.ts';
 import type { HttpMethod, Operation, Schema } from './types.ts';
 
 const MAX_TOOLS = 200;
@@ -164,10 +165,12 @@ async function callTool(tool: SimTool, args: Record<string, unknown>): Promise<R
   if (hasBody) headers['content-type'] = 'application/json';
 
   const rules = await getSimulationRepository().listRules(tool.api.id);
+  const started = Date.now();
   const out = await answerCall(tool.api, tool.ver, rules, {
     method: tool.method.toUpperCase(), path, search: search.size ? `?${search}` : '', headers, rawBody, body: hasBody ? args.body : undefined,
   });
   if (out.delayMs > 0) await new Promise((r) => setTimeout(r, Math.min(out.delayMs, MAX_DELAY_MS)));
+  await recordCall(tool.api, { via: 'mcp', method: tool.method, path, search: search.size ? `?${search}` : '', body: hasBody ? args.body : undefined }, out, Date.now() - started);
 
   let shown = out.text;
   try { shown = JSON.stringify(JSON.parse(out.text), null, 2); } catch { /* not JSON: show as is */ }

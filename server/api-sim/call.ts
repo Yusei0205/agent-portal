@@ -10,6 +10,8 @@ import { assertNotBlocked } from '../testing/ssrf.ts';
 import type { SimApiRecord, SimVersionRecord } from '../repositories/simulation.ts';
 import { handleMockRequest, locateOperation } from './mock-engine.ts';
 import type { MockRule } from './types.ts';
+import { readLiveHeaders } from './live-credentials.ts';
+import { getSimulationRepository } from '../repositories/simulation.ts';
 
 export interface CallInput {
   method: string;
@@ -48,9 +50,13 @@ export function clientHeaders(raw: Record<string, string | string[] | undefined>
   return out;
 }
 
+/** Calls through the hosted address and the MCP tools never reach private addresses. Test hook only. */
+let allowPrivateAddresses = false;
+export function _allowPrivateAddressesForTests(allow: boolean): void { allowPrivateAddresses = allow; }
+
 async function forwardLive(base: string, input: CallInput): Promise<{ status: number; type: string; text: string }> {
   const url = base.replace(/\/+$/, '') + input.path + input.search;
-  await assertNotBlocked(url, false);
+  await assertNotBlocked(url, allowPrivateAddresses);
   const res = await fetch(url, {
     method: input.method,
     headers: input.headers,
@@ -65,14 +71,18 @@ const json = (status: number, body: unknown, source: string, mode: 'mock' | 'liv
   status, headers: { 'Content-Type': 'application/json', 'x-sim-source': source }, text: JSON.stringify(body), mode, delayMs: 0, warnings: 0, source,
 });
 
-export async function answerCall(api: SimApiRecord, ver: SimVersionRecord, rules: MockRule[], input: CallInput): Promise<CallOutput> {
+export async function answerCall(api: SimApiRecord, ver: SimVersionRecord, rules: MockRule[], input: CallInput, opts: { persist?: boolean } = {}): Promise<CallOutput> {
   const loc = locateOperation(ver.spec, input.method, input.path);
   const mode: 'mock' | 'live' = api.mode === 'live' ? 'live' : api.mode === 'hybrid' && loc ? (api.operation_modes[loc.operation.operationId] ?? 'mock') : 'mock';
 
   if (mode === 'live') {
     if (!api.live_base_url) return json(409, { error: 'LIVE_NOT_CONFIGURED', message: 'This API is set to live but has no live address.' }, 'live', 'live');
     try {
-      const r = await forwardLive(api.live_base_url, input);
+      // The login stored for this API is used where the caller sent none of its own (a caller's header of the same name wins).
+      const stored = readLiveHeaders(api.live_headers_enc);
+      const have = new Set(Object.keys(input.headers).map((h) => h.toLowerCase()));
+      const headers = { ...Object.fromEntries(Object.entries(stored).filter(([k]) => !have.has(k.toLowerCase()))), ...input.headers };
+      const r = await forwardLive(api.live_base_url, { ...input, headers });
       return { status: r.status, headers: { 'Content-Type': r.type, 'x-sim-source': 'live' }, text: r.text, mode, delayMs: 0, warnings: 0, source: 'live' };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -80,6 +90,9 @@ export async function answerCall(api: SimApiRecord, ver: SimVersionRecord, rules
     }
   }
 
+  // Records are only read when some rule uses them.
+  const usesStore = rules.some((r) => r.store);
+  const data = usesStore ? await getSimulationRepository().loadRecords(api.id) : undefined;
   const { authorization, ...others } = input.headers;
   const result = handleMockRequest(ver.spec, rules, {
     method: input.method,
@@ -87,7 +100,8 @@ export async function answerCall(api: SimApiRecord, ver: SimVersionRecord, rules
     query: Object.fromEntries(new URLSearchParams(input.search)),
     headers: { ...others, ...(authorization ? { authorization } : {}) },
     body: input.body,
-  }, { requireExplicitRule: api.require_explicit_rule });
+  }, { requireExplicitRule: api.require_explicit_rule, data });
+  if (usesStore && result.changes?.length && opts.persist !== false) await getSimulationRepository().applyChanges(api.id, result.changes);
   const headers = { ...result.headers };
   if (result.warnings.length > 0) headers['x-mock-warnings'] = String(result.warnings.length);
   return {

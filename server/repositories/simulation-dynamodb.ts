@@ -10,7 +10,10 @@ import { GetItemCommand, PutItemCommand, DeleteItemCommand, QueryCommand } from 
 import type { AttributeValue, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
 import type { ApiSpec, MockRule } from '../api-sim/types.ts';
-import type { SimApiRecord, SimApiUpdate, SimVersionRecord, SimulationRepository } from './simulation.ts';
+import type { RecordChange, RecordData, SimApiRecord, SimApiUpdate, SimCallRecord, SimVersionRecord, SimulationRepository } from './simulation.ts';
+
+const KEEP_CALLS = 300;
+const MAX_RECORDS = 5000;
 
 function table(): string {
   return process.env.DYNAMODB_TABLE_PORTAL_PROJECTS ?? 'portal-projects';
@@ -34,6 +37,8 @@ function toApi(i: Record<string, AttributeValue>): SimApiRecord {
     mode: (getString(i, 'mode') ?? 'mock') as SimApiRecord['mode'],
     live_base_url: getString(i, 'live_base_url') ?? '',
     require_explicit_rule: getNumber(i, 'require_explicit_rule') === 1,
+    log_bodies: getNumber(i, 'log_bodies') === 1,
+    live_headers_enc: getString(i, 'live_headers_enc'),
     operation_modes: parse(getString(i, 'operation_modes'), {}),
     approved_version: getNumber(i, 'approved_version'),
     latest_version: getNumber(i, 'latest_version'),
@@ -48,7 +53,7 @@ function apiItem(r: SimApiRecord): Record<string, AttributeValue> {
     ...apiKey(r.project_id, r.id),
     ...marshalItem({
       id: r.id, project_id: r.project_id, name: r.name, group_name: r.group_name, source_key: r.source_key, mode: r.mode,
-      live_base_url: r.live_base_url, require_explicit_rule: r.require_explicit_rule ? 1 : 0,
+      live_base_url: r.live_base_url, require_explicit_rule: r.require_explicit_rule ? 1 : 0, log_bodies: r.log_bodies ? 1 : 0, live_headers_enc: r.live_headers_enc,
       operation_modes: JSON.stringify(r.operation_modes), approved_version: r.approved_version,
       latest_version: r.latest_version, created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
     }),
@@ -77,8 +82,9 @@ export class DynamoDbSimulationRepository implements SimulationRepository {
     do {
       const res = await this.client.send(new QueryCommand({
         TableName: table(),
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :p)',
-        ExpressionAttributeValues: { ':pk': av(pk), ':p': av(prefix) },
+        // DynamoDB does not accept an empty string in begins_with: with no prefix, take the whole partition.
+        KeyConditionExpression: prefix ? 'PK = :pk AND begins_with(SK, :p)' : 'PK = :pk',
+        ExpressionAttributeValues: prefix ? { ':pk': av(pk), ':p': av(prefix) } : { ':pk': av(pk) },
         ExclusiveStartKey: start,
       }));
       out.push(...(res.Items ?? []));
@@ -115,6 +121,8 @@ export class DynamoDbSimulationRepository implements SimulationRepository {
     const children = [
       ...(await this.queryAll(`SIMVER#${id}`, 'V#')),
       ...(await this.queryAll(`SIMRULE#${id}`, 'R#')),
+      ...(await this.queryAll(`SIMCALL#${id}`, '')),
+      ...(await this.queryAll(`SIMREC#${id}`, 'C#')),
     ];
     for (const c of children) {
       await this.client.send(new DeleteItemCommand({ TableName: table(), Key: { PK: c.PK, SK: c.SK } }));
@@ -143,6 +151,63 @@ export class DynamoDbSimulationRepository implements SimulationRepository {
     const cur = await this.getVersion(apiId, version);
     if (!cur) return;
     await this.addVersion({ ...cur, ...(fields.status ? { status: fields.status } : {}), ...(fields.spec ? { spec: fields.spec } : {}) });
+  }
+
+  // Calls: PK=SIMCALL#<apiId>  SK=<ISO time>#<random>, newest read first, the oldest beyond a few hundred dropped.
+  async appendCall(rec: SimCallRecord): Promise<void> {
+    await this.client.send(new PutItemCommand({
+      TableName: table(),
+      Item: { PK: av(`SIMCALL#${rec.api_id}`), SK: av(`${rec.at}#${rec.id}`), ...marshalItem({ ...rec }) },
+    }));
+    // Trim now and then, not on every call.
+    if (Math.random() < 0.05) {
+      const res = await this.client.send(new QueryCommand({
+        TableName: table(), KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': av(`SIMCALL#${rec.api_id}`) }, ScanIndexForward: false, Limit: KEEP_CALLS + 100,
+      }));
+      for (const old of (res.Items ?? []).slice(KEEP_CALLS)) await this.client.send(new DeleteItemCommand({ TableName: table(), Key: { PK: old.PK, SK: old.SK } }));
+    }
+  }
+
+  async listCalls(apiId: string, limit: number): Promise<SimCallRecord[]> {
+    const res = await this.client.send(new QueryCommand({
+      TableName: table(), KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': av(`SIMCALL#${apiId}`) }, ScanIndexForward: false, Limit: Math.max(1, Math.min(limit, KEEP_CALLS)),
+    }));
+    return (res.Items ?? []).map((i) => ({
+      id: getString(i, 'id') ?? '', api_id: apiId, at: getString(i, 'at') ?? '', via: getString(i, 'via') === 'mcp' ? 'mcp' : 'rest', method: getString(i, 'method') ?? '', path: getString(i, 'path') ?? '',
+      status: getNumber(i, 'status'), mode: getString(i, 'mode') === 'live' ? 'live' : 'mock', source: getString(i, 'source') ?? '', rule_id: getString(i, 'rule_id'),
+      warnings: getNumber(i, 'warnings'), ms: getNumber(i, 'ms'), request_text: getString(i, 'request_text'), response_text: getString(i, 'response_text'),
+    }));
+  }
+
+  async clearCalls(apiId: string): Promise<void> {
+    for (const i of await this.queryAll(`SIMCALL#${apiId}`, '')) await this.client.send(new DeleteItemCommand({ TableName: table(), Key: { PK: i.PK, SK: i.SK } }));
+  }
+
+  // Records: PK=SIMREC#<apiId>  SK=C#<collection>#K#<key>
+  async loadRecords(apiId: string): Promise<RecordData> {
+    const out: RecordData = {};
+    for (const i of (await this.queryAll(`SIMREC#${apiId}`, 'C#')).slice(0, MAX_RECORDS)) {
+      const m = /^C#(.*?)#K#(.*)$/.exec(getString(i, 'SK') ?? '');
+      if (m) (out[m[1]] ??= {})[m[2]] = parse<unknown>(getString(i, 'record_json'), null);
+    }
+    return out;
+  }
+
+  async applyChanges(apiId: string, changes: RecordChange[]): Promise<void> {
+    for (const c of changes) {
+      const key = { PK: av(`SIMREC#${apiId}`), SK: av(`C#${c.collection}#K#${c.key}`) };
+      if (c.record === null) await this.client.send(new DeleteItemCommand({ TableName: table(), Key: key }));
+      else await this.client.send(new PutItemCommand({ TableName: table(), Item: { ...key, ...marshalItem({ record_json: JSON.stringify(c.record), updated_at: new Date().toISOString() }) } }));
+    }
+  }
+
+  async replaceCollection(apiId: string, collection: string, items: Array<{ key: string; record: unknown }>): Promise<void> {
+    await this.clearCollection(apiId, collection);
+    await this.applyChanges(apiId, items.map((i) => ({ collection, key: i.key, record: i.record })));
+  }
+
+  async clearCollection(apiId: string, collection: string): Promise<void> {
+    for (const i of await this.queryAll(`SIMREC#${apiId}`, `C#${collection}#K#`)) await this.client.send(new DeleteItemCommand({ TableName: table(), Key: { PK: i.PK, SK: i.SK } }));
   }
 
   async listRules(apiId: string): Promise<MockRule[]> {
