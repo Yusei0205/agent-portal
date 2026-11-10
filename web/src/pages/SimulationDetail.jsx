@@ -585,6 +585,50 @@ function TryPanel({ data, projectId }) {
   );
 }
 
+/** How to give the simulated APIs to agents as tools. */
+function AgentAccess({ projectId, approved }) {
+  const [info, setInfo] = useState(null);
+  useEffect(() => {
+    if (!approved) return;
+    api.get(`/api/projects/${projectId}/sim/mcp-info`).then(setInfo).catch(() => setInfo({ tools: [], path: '' }));
+  }, [projectId, approved]);
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const url = info ? `${origin}${info.path}` : '';
+  return (
+    <div className="card stack">
+      <h3 className="sim-h3">Let agents call it (MCP)</h3>
+      <p className="muted small" style={{ margin: 0 }}>
+        The approved APIs of this project can be given to an agent as tools, one per operation, so a session can try the client’s API
+        before the real one exists. A call goes through the same mode as above: simulated, or forwarded to the live API.
+      </p>
+      {!approved ? (
+        <p className="muted small">Approve a version of an API first. Tools only appear for approved APIs.</p>
+      ) : (
+        <>
+          <div className="sim-url">
+            <code>{url || '…'}</code>
+            <button type="button" className="btn-icon" aria-label="Copy the MCP address" onClick={() => navigator.clipboard?.writeText(url)}><Icon name="copy" size={14} /></button>
+          </div>
+          <ol className="small muted sim-howto">
+            <li>Create an API token (API access in the menu).</li>
+            <li>On Connect › Tools &amp; services, add a remote MCP server with this address and the header <code>Authorization: Bearer ap_…</code>. Turn on <em>allow writes</em> so the POST, PUT, PATCH and DELETE tools are offered too.</li>
+            <li>Start a session of this project: its agent now has the tools below.</li>
+          </ol>
+          {info && info.tools.length > 0 && (
+            <div className="sim-table-wrap">
+              <table className="sim-table">
+                <thead><tr><th>Tool</th><th>Calls</th><th>API</th></tr></thead>
+                <tbody>{info.tools.map((t) => (<tr key={t.name}><td><code>{t.name}</code></td><td>{t.method} {t.path}{t.readOnly ? '' : ' (changes data)'}</td><td>{t.api}</td></tr>))}</tbody>
+              </table>
+            </div>
+          )}
+          <p className="muted small" style={{ margin: 0 }}>The agent’s runner only accepts https addresses, so this works on a portal reached over https.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 function SettingsPanel({ data, projectId, reload, toast }) {
@@ -677,6 +721,8 @@ function SettingsPanel({ data, projectId, reload, toast }) {
           </>
         )}
       </div>
+
+      <AgentAccess projectId={projectId} approved={a.approvedVersion > 0} />
     </div>
   );
 }

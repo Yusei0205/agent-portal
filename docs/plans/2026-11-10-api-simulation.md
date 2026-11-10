@@ -1,6 +1,6 @@
 # Plan: Client API simulation (mock REST APIs from client specs)
 
-Status: in progress. Phases 1-4 and step 1 of test automation are built and tested on `feat/api-simulation`: mock engine, Excel parser, storage, routes, the hosted simulated API, the team UI (Tests > API simulation), and test cases generated from a specification by rule. The DynamoDB repository type-checks but has not been run against DynamoDB. Phase 5 onward (AI enrichment, MCP facade, spec diff) and steps 2-5 of test automation are proposals. Written 2026-11-10.
+Status: built on `feat/api-simulation` and tested, with the gaps listed under "Not built" below. Written 2026-11-10.
 
 ## Goal
 
@@ -96,17 +96,25 @@ New repository (SQLite + DynamoDB, same pattern as integrations). Per project: A
 
 ## Phases
 
-1. **Core (building now):** OpenAPI types, mock engine with request validation, schema-based response generation and the block rule. Unit tested.
-2. **Excel parser (building now):** deterministic parse of the layout above into a field tree and a draft OpenAPI document, tested on a synthetic workbook and on the real sample when present.
-3. **Storage and routes (built):** repository, import, version/approve flow, rules, "Try it", the hosted REST endpoint and mode routing. Live mode forwards the caller's own credential (`X-Sim-Authorization`); stored, encrypted live credentials are not built. Per-call logging is a console line only; a stored call log for the run view is still to do.
-4. **Team UI (built):** the "API simulation" tab on the Tests page (`#/p/<project>/tests/simulation`): import, a review screen with exclamation-icon warnings and field tables, path entry, approve, mock rules, "Try it", settings and a "How to call it" panel. Not built yet: the version diff view and the model dropdown (it belongs to the AI step).
-5. **AI enrichment:** per-sheet job, model dropdown, validation with one repair pass.
-6. **MCP facade:** the simulation as an MCP server so agents can use it.
-7. **Versioning, diff, overrides;** Word and Postman import; contract check against the real API; stateful mocks.
+1. **Core (built):** OpenAPI types, mock engine with request validation, schema-based response generation and the block rule.
+2. **Excel parser (built):** deterministic parse of the layout above into a field tree and a draft OpenAPI document, tested on a synthetic workbook and on the real sample (8 APIs found).
+3. **Storage and routes (built):** repository (SQLite and DynamoDB), import, version/approve flow, rules, "Try it", the hosted REST endpoint and mode routing. Live mode forwards the caller's own credential (`X-Sim-Authorization`); stored, encrypted live credentials are not built. Per-call logging is a console line only.
+4. **Team UI (built):** the "API simulation" tab on the Tests page (`#/p/<project>/tests/simulation`): import, a review screen with exclamation-icon warnings and field tables, path entry, approve, mock rules, "Try it", settings, and a "how to call it" panel.
+5. **AI (built, narrower than first planned):** the AI step turns rules the document states in words into structured checks (see test automation, step 4), with a model dropdown. The Excel-to-OpenAPI conversion itself is deterministic, not AI, because the sample's layout is regular.
+6. **MCP facade (built):** `POST /api/sim-mcp/:projectId` serves the approved APIs of a project as MCP tools (one per operation), through the same code as the hosted endpoint. Checked with the runner's own MCP client. The agent runner only accepts https addresses, so it works on a portal reached over https.
+7. **Versioning (built):** a version diff in plain sentences, and Postman collections as a third import format. The contract check against the real API is "Compare both" on the case sheet.
 
-## Test automation: generating tests from the specs (proposal)
+### Not built
+- Word documents as an input (no sample to build a reader against; export the tables to Excel in the same layout, or use the workbook).
+- Enum values held on separate lookup sheets ("Refer to the Workflow Status List sheet") are not attached to the fields that refer to them.
+- Stateful mocks (a POST followed by a GET that returns what was created).
+- Re-applying hand edits when a spec is re-imported, and a stored per-call log in the run view.
+- Scheduled test runs, and stored encrypted credentials for the live API (a vault reference is used instead).
+- The AI steps have only been run against a stand-in model that returns fixed answers, not a real one.
 
-Read of `server/testing/` and `web/src/pages/tests/` on 2026-11-10; nothing below is built.
+## Test automation: generating tests from the specs
+
+Read of `server/testing/` and `web/src/pages/tests/` on 2026-11-10. Steps 1 to 5 below are built; the notes say how.
 
 ### What the Tests module already has
 - **Test projects** with `app_url`, `api_base_url`, a vault of logins and secrets, and a timeout.

@@ -25,16 +25,17 @@ import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { generateId, now } from '../util.ts';
 import { requireProjectAccess, bad } from './access.ts';
-import { assertNotBlocked } from '../testing/ssrf.ts';
 import { getSimulationRepository } from '../repositories/simulation.ts';
 import type { SimApiRecord, SimMode } from '../repositories/simulation.ts';
-import { handleMockRequest, locateOperation } from './mock-engine.ts';
+import { handleMockRequest } from './mock-engine.ts';
+import { answerCall, clientHeaders } from './call.ts';
 import { checkOpenApi } from './openapi.ts';
 import { registerApiTestRoutes } from './test-routes.ts';
 import { postmanToSpecs } from './postman.ts';
 import { diffSpecs } from './spec-diff.ts';
 import { registerApiRunRoutes } from './api-run-routes.ts';
 import { registerAiRuleRoutes } from './ai-rules.ts';
+import { registerSimMcpRoutes } from './mcp.ts';
 import { parseSheets, readWorkbook, toDraftSpec } from './excel-spec.ts';
 import type { ApiSpec, FailureKind, Flag, HttpMethod, MockRule } from './types.ts';
 
@@ -170,32 +171,6 @@ async function importDrafts(
     }
   }
   return out;
-}
-
-// ── Live forwarding ───────────────────────────────────────────────────────────
-
-// The portal API token travels in Authorization, so it must never reach the client's server. The client's own credential
-// is sent as X-Sim-Authorization and becomes Authorization on the way through (to the mock or to the live API).
-const HOP = new Set(['host', 'connection', 'content-length', 'cookie', 'x-requested-with', 'transfer-encoding', 'accept-encoding', 'authorization', 'x-sim-authorization']);
-
-async function forwardLive(base: string, method: string, restPath: string, search: string, req: IncomingMessage, body: Buffer): Promise<{ status: number; type: string; text: string }> {
-  const url = base.replace(/\/+$/, '') + restPath + search;
-  await assertNotBlocked(url, false);
-  const headers: Record<string, string> = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (HOP.has(k.toLowerCase()) || v === undefined) continue;
-    headers[k] = Array.isArray(v) ? v.join(', ') : v;
-  }
-  const clientAuth = req.headers['x-sim-authorization'];
-  if (typeof clientAuth === 'string' && clientAuth) headers['authorization'] = clientAuth;
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body.length > 0 && method !== 'GET' && method !== 'HEAD' ? new Uint8Array(body) : undefined,
-    signal: AbortSignal.timeout(30_000),
-    redirect: 'error',
-  });
-  return { status: res.status, type: res.headers.get('content-type') ?? 'application/json', text: await res.text() };
 }
 
 function readRaw(req: IncomingMessage, limit: number): Promise<Buffer> {
@@ -467,35 +442,12 @@ export function registerSimulationRoutes(): void {
       else if (a.mode === 'mock') { bad(res, 'Send a JSON body with Content-Type: application/json'); return; }
     }
 
-    const loc = locateOperation(ver.spec, method, rest);
-    const mode: 'mock' | 'live' = a.mode === 'live' ? 'live' : a.mode === 'hybrid' && loc ? (a.operation_modes[loc.operation.operationId] ?? 'mock') : 'mock';
-
-    if (mode === 'live') {
-      if (!a.live_base_url) { bad(res, 'This API is set to live but has no liveBaseUrl', 409); return; }
-      try {
-        const r = await forwardLive(a.live_base_url, method, rest, url.search, req, raw);
-        sendRaw(res, r.status, { 'Content-Type': r.type, 'x-sim-source': 'live' }, r.text);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        sendRaw(res, 502, { 'Content-Type': 'application/json', 'x-sim-source': 'live' }, JSON.stringify({ error: 'LIVE_CALL_FAILED', message: msg.replace(/https?:\/\/\S+/g, '[url]').slice(0, 200) }));
-      }
-      return;
-    }
-
-    const headers: Record<string, string> = {};
-    for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string' && k !== 'authorization' && k !== 'x-sim-authorization') headers[k] = v;
-    const clientAuth = req.headers['x-sim-authorization'];
-    if (typeof clientAuth === 'string' && clientAuth) headers['authorization'] = clientAuth;
-    const result = handleMockRequest(ver.spec, await repo().listRules(a.id), {
-      method, path: rest, query: Object.fromEntries(url.searchParams), headers, body: parsedBody,
-    }, { requireExplicitRule: a.require_explicit_rule });
-
-    if (result.delayMs > 0) await new Promise((r) => setTimeout(r, Math.min(result.delayMs, MAX_HOSTED_DELAY_MS)));
-    const out = typeof result.body === 'string' ? result.body : JSON.stringify(result.body ?? null);
-    const extra: Record<string, string> = { ...result.headers };
-    if (result.warnings.length > 0) extra['x-mock-warnings'] = String(result.warnings.length);
-    console.log(`[api-sim] ${a.project_id}/${a.id} ${method} ${rest} -> ${result.status} ${result.source}${result.ruleId ? ` rule=${result.ruleId}` : ''}${result.warnings.length ? ` warnings=${result.warnings.length}` : ''}`);
-    sendRaw(res, result.status, extra, out);
+    const out = await answerCall(a, ver, await repo().listRules(a.id), {
+      method, path: rest, search: url.search, headers: clientHeaders(req.headers), rawBody: raw, body: parsedBody,
+    });
+    if (out.delayMs > 0) await new Promise((r) => setTimeout(r, Math.min(out.delayMs, MAX_HOSTED_DELAY_MS)));
+    console.log(`[api-sim] ${a.project_id}/${a.id} ${method} ${rest} -> ${out.status} ${out.source}${out.ruleId ? ` rule=${out.ruleId}` : ''}${out.warnings ? ` warnings=${out.warnings}` : ''}`);
+    sendRaw(res, out.status, out.headers, out.text);
   };
   const hostedPattern = '/api/sim/:projectId/:apiId/call(?:/.*)?';
   for (const m of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) router.rawMethod(m, hostedPattern, hosted);
@@ -503,4 +455,5 @@ export function registerSimulationRoutes(): void {
   registerApiTestRoutes();
   registerApiRunRoutes();
   registerAiRuleRoutes();
+  registerSimMcpRoutes();
 }
