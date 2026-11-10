@@ -130,6 +130,23 @@ export async function pickTextEngine(userId: string | null, credentialId: string
   return null;
 }
 
+/**
+ * The most the Kiro runner accepts as one prompt (MAX_PROMPT in kiro-runner/src/validate.ts). A longer prompt is refused with
+ * a bare 400, which comes back as "AgentCore returned HTTP 424" and says nothing about why.
+ */
+export const KIRO_RUNNER_MAX_PROMPT = 100_000;
+/** What callTextModel adds around the system and user text for Kiro (the reply instructions), with room to spare. */
+const KIRO_WRAPPER_CHARS = 600;
+
+/**
+ * The most system and user text together that callTextModel can send for this person and sign-in, or null when the model has
+ * no limit that matters. Callers that build a long prompt from a document use it to cut the document to fit.
+ */
+export async function textPromptLimit(userId: string | null, credentialId: string | null = null): Promise<number | null> {
+  if (!userId || !(process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN || _kiroRunnerOverride)) return null;
+  return (await pickTextEngine(userId, credentialId)) === 'kiro' ? KIRO_RUNNER_MAX_PROMPT - KIRO_WRAPPER_CHARS : null;
+}
+
 let _kiroRunnerOverride: ((prompt: string, userId: string, credentialId: string | null, model?: string | null) => Promise<string>) | null = null;
 /** Replace the Kiro runner call in tests. Pass null to restore. */
 export function setKiroRunnerOverride(fn: typeof _kiroRunnerOverride): void {
@@ -146,6 +163,9 @@ async function callKiroViaRunner(
   credentialId: string | null,
   model: string | null = null,
 ): Promise<string> {
+  if (prompt.length > KIRO_RUNNER_MAX_PROMPT) {
+    throw new Error(`The text to send is ${prompt.length.toLocaleString('en-US')} characters, and Kiro accepts at most ${KIRO_RUNNER_MAX_PROMPT.toLocaleString('en-US')}. Use a shorter document, or choose a Claude sign-in, which takes longer text.`);
+  }
   if (_kiroRunnerOverride) return _kiroRunnerOverride(prompt, userId, credentialId, model);
   const runtimeArn = process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN;
   if (!runtimeArn) throw new Error('The Kiro runner is not set up for this portal, so a Kiro credential cannot be used here.');

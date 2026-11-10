@@ -83,9 +83,28 @@ export const OUTLINE_SYSTEM = [
 
 const flat = (s: string, n: number): string => s.replace(/[|]/g, ' ').replace(/-{3,}/g, ' ').replace(/<br\s*\/?>/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
-export function outlineUser(sections: Section[]): string {
-  const lines = sections.slice(0, 500).map((s) => `[${s.id}] ${'#'.repeat(Math.max(1, s.level))} ${s.title} · ${s.body.split('\n').length} lines · ${flat(s.body, 150)}`);
-  return `Sections of the document:\n${lines.join('\n')}${sections.length > 500 ? '\n(more sections follow but are not listed)' : ''}`;
+/**
+ * The outline request: every section with its title, size and the start of its text. `budget` is how many characters it may
+ * take; when the document is too long for it the first characters of each section are dropped, and then sections from the end.
+ */
+export function outlineUser(sections: Section[], budget = Infinity): string {
+  const head = 'Sections of the document:\n';
+  const more = '\n(more sections follow but are not listed)';
+  const line = (s: Section, detail: number) => `[${s.id}] ${'#'.repeat(Math.max(1, s.level))} ${s.title} · ${s.body.split('\n').length} lines${detail > 0 ? ` · ${flat(s.body, detail)}` : ''}`;
+  const listed = sections.slice(0, 500);
+  for (const detail of [150, 60, 0]) {
+    const lines = listed.map((s) => line(s, detail));
+    const text = `${head}${lines.join('\n')}${sections.length > 500 ? more : ''}`;
+    if (text.length <= budget) return text;
+    if (detail === 0) {
+      // Even titles alone are too long: keep as many sections as fit.
+      let used = head.length + more.length;
+      const fit: string[] = [];
+      for (const l of lines) { if (used + l.length + 1 > budget) break; fit.push(l); used += l.length + 1; }
+      return `${head}${fit.join('\n')}${more}`;
+    }
+  }
+  return head;
 }
 
 export function extractJsonObject(text: string): unknown {
@@ -379,7 +398,13 @@ function textOf(sections: Section[], ids: number[], cap: number): { text: string
   return text.length > cap ? { text: `${text.slice(0, cap)}\n[... cut: the text is longer than the limit ...]`, cut: true } : { text, cut: false };
 }
 
-export async function extractApis(markdown: string, call: ModelCall, onProgress?: (p: Progress) => void | Promise<void>): Promise<ExtractionResult> {
+/** What the model behind `call` accepts: `promptChars` is the most system and user text together in one request. */
+export interface ExtractionLimits { promptChars?: number }
+
+// What apiUser adds around the two texts, and room for the name and the model's own formatting.
+const API_WRAPPER_CHARS = 600;
+
+export async function extractApis(markdown: string, call: ModelCall, onProgress?: (p: Progress) => void | Promise<void>, limits: ExtractionLimits = {}): Promise<ExtractionResult> {
   const sections = splitSections(compactMarkdown(markdown));
   const result: ExtractionResult = { drafts: [], baseUrls: [], notes: [], errors: [] };
   if (sections.length === 0) { result.errors.push({ api: '(document)', message: 'The document has no text to read.' }); return result; }
@@ -388,7 +413,7 @@ export async function extractApis(markdown: string, call: ModelCall, onProgress?
   let outline: Outline | null = null;
   let problems: string[] = [];
   try {
-    const text = await call(OUTLINE_SYSTEM, outlineUser(sections), 4096);
+    const text = await call(OUTLINE_SYSTEM, outlineUser(sections, limits.promptChars ? limits.promptChars - OUTLINE_SYSTEM.length : Infinity), 4096);
     ({ outline, problems } = parseOutline(extractJsonObject(text), sections.length));
   } catch (e) {
     result.errors.push({ api: '(outline)', message: `The model could not be used: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` });
@@ -402,7 +427,9 @@ export async function extractApis(markdown: string, call: ModelCall, onProgress?
   result.baseUrls = outline.baseUrls;
   result.notes.push(...outline.notes);
 
-  const shared = textOf(sections, outline.shared, SHARED_CAP).text;
+  // The general information is at most a sixth of what the model takes, and each API gets the rest.
+  const sharedCap = limits.promptChars ? Math.min(SHARED_CAP, Math.floor(limits.promptChars / 6)) : SHARED_CAP;
+  const shared = textOf(sections, outline.shared, sharedCap).text;
   const apis = outline.apis.slice(0, MAX_APIS);
   if (outline.apis.length > MAX_APIS) result.notes.push(`Only the first ${MAX_APIS} of ${outline.apis.length} APIs were read.`);
   const taken = new Set<string>();
@@ -410,7 +437,10 @@ export async function extractApis(markdown: string, call: ModelCall, onProgress?
   for (let i = 0; i < apis.length; i++) {
     const a = apis[i];
     await onProgress?.({ phase: 'extract', done: i, total: apis.length, current: a.name });
-    const body = textOf(sections, a.sections, API_CAP);
+    const apiCap = limits.promptChars
+      ? Math.max(2000, Math.min(API_CAP, limits.promptChars - API_SYSTEM.length - shared.length - API_WRAPPER_CHARS - a.name.length))
+      : API_CAP;
+    const body = textOf(sections, a.sections, apiCap);
     let extracted: Extracted | { error: string } = { error: 'No answer' };
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -425,7 +455,7 @@ export async function extractApis(markdown: string, call: ModelCall, onProgress?
     if ('error' in extracted) { result.errors.push({ api: a.name, message: extracted.error }); continue; }
     if (body.cut) {
       const op = Object.values(Object.values(extracted.spec.paths)[0])[0]!;
-      op['x-flags']!.push({ code: 'TEXT_CUT', severity: 'warning', message: `This API's text was longer than the limit (${API_CAP} characters) and was cut, so later fields may be missing.` });
+      op['x-flags']!.push({ code: 'TEXT_CUT', severity: 'warning', message: `This API's text was longer than the limit (${apiCap.toLocaleString('en-US')} characters) and was cut, so later fields may be missing.` });
     }
     result.drafts.push({ key: `ai:${slugOf(extracted.name)}`, name: extracted.name, spec: extracted.spec });
   }

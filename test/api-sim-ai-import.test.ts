@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import {
-  API_SYSTEM, OUTLINE_SYSTEM, compactMarkdown, extractApis, extractJsonObject, normalizeExtractedApi, parseOutline, splitSections,
+  API_SYSTEM, OUTLINE_SYSTEM, compactMarkdown, extractApis, extractJsonObject, normalizeExtractedApi, outlineUser, parseOutline, splitSections,
 } from '../server/api-sim/ai-extract.ts';
 import { _setImportModel, pickLiveBaseUrl } from '../server/api-sim/ai-import.ts';
 import { getAiAttachmentRepository } from '../server/repositories/ai-attachments.ts';
@@ -247,6 +247,63 @@ describe('reading a whole document', () => {
     assert.equal(r.drafts.length, 0);
     assert.match(r.errors[0].message, /credentials expired/);
     assert.equal((await extractApis('', async () => '{}')).errors.length, 1);
+  });
+});
+
+describe('a model that takes only so much text (the Kiro runner: 100,000 characters a request)', () => {
+  // A big workbook: 480 sections of 300 characters each, and one API whose text is all of them.
+  const sectionsMd = Array.from({ length: 480 }, (_, i) => `## Section ${i}\n\n${`field${i} `.repeat(40)}`).join('\n\n');
+  const bigDoc = `# Big workbook\n\n| Configuration | Value |\n| --- | --- |\n| Endpoint | https://uat.example.com |\n\n${sectionsMd}`;
+
+  /** Answers like a sensible model, and refuses a request longer than `max` the way the Kiro runner does. */
+  function limited(max: number, seen: number[]): ModelCall {
+    return async (system, user) => {
+      seen.push(system.length + user.length);
+      if (system.length + user.length > max) throw new Error('AgentCore returned HTTP 424');
+      if (system === OUTLINE_SYSTEM) {
+        const ids = [...user.matchAll(/\[(\d+)\] #+/g)].map((m) => Number(m[1]));
+        return JSON.stringify({ shared: [ids[0]], apis: [{ name: 'Big One', sections: ids.slice(1) }], baseUrls: [], notes: [] });
+      }
+      return JSON.stringify(PET('pets/big', 'Big One'));
+    };
+  }
+
+  test('without a limit the outline and the API text are as long as before, and a small model cannot take them', async () => {
+    const seen: number[] = [];
+    const r = await extractApis(bigDoc, limited(100_000, seen));
+    assert.ok(Math.max(...seen) > 100_000, `the largest request was ${Math.max(...seen)} characters`);
+    assert.match(r.errors[0].message, /The model could not be used/);
+  });
+
+  test('with a limit every request fits, and the document is still read', async () => {
+    const seen: number[] = [];
+    const r = await extractApis(bigDoc, limited(100_000, seen), undefined, { promptChars: 99_400 });
+    assert.ok(Math.max(...seen) <= 99_400, `the largest request was ${Math.max(...seen)} characters`);
+    assert.deepEqual(r.errors, []);
+    assert.deepEqual(r.drafts.map((d) => d.name), ['Big One']);
+    // the API's text was cut, and the draft says so
+    assert.ok(Object.values(opOf(r.drafts[0].spec).op['x-flags'] ?? []).some((f) => (f as { code: string }).code === 'TEXT_CUT'));
+  });
+
+  test('the outline keeps every section while it fits, then drops the detail, then sections from the end', () => {
+    const sections = splitSections(bigDoc);
+    const full = outlineUser(sections);
+    assert.ok(full.length > 60_000);
+    assert.equal(outlineUser(sections, 1_000_000), full, 'a budget that is large enough changes nothing');
+    const shorter = outlineUser(sections, 40_000);
+    assert.ok(shorter.length <= 40_000 && shorter.length < full.length);
+    assert.ok(shorter.includes(`[${sections.length - 1}] `), 'all sections are still listed, with less detail');
+    const titlesOnly = outlineUser(sections, 8_000);
+    assert.ok(titlesOnly.length <= 8_000);
+    assert.match(titlesOnly, /more sections follow but are not listed/);
+    assert.ok(titlesOnly.includes('[1] '), 'it starts at the beginning of the document');
+  });
+
+  test('a small limit still gives each API some text', async () => {
+    const seen: number[] = [];
+    const r = await extractApis(bigDoc, limited(20_000, seen), undefined, { promptChars: 20_000 });
+    assert.ok(Math.max(...seen) <= 20_000);
+    assert.equal(r.drafts.length, 1);
   });
 });
 
