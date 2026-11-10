@@ -127,6 +127,142 @@ function useDevicePoll(credId, challenge, onComplete) {
   return pollStatus;
 }
 
+// ── Claude plan sign-in (server drives `claude setup-token`; no copy from your computer) ──
+
+function ClaudePlanSignIn({ name, isDefault, onDone, fallback = null }) {
+  const [support, setSupport] = useState(null); // { supported, reason }
+  const [url, setUrl] = useState(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    api.get('/api/claude-login/status')
+      .then((r) => { if (live) setSupport(r); })
+      .catch(() => { if (live) setSupport({ supported: false }); });
+    // Drop a half-finished sign-in when the dialog closes.
+    return () => { live = false; api.post('/api/claude-login/cancel', {}).catch(() => {}); };
+  }, []);
+
+  if (!support) return null;
+  // No `claude` command on this host (the cloud portal): sign in without it.
+  if (!support.supported) return fallback;
+
+  const start = async () => {
+    setBusy(true); setError(null);
+    try {
+      const { login } = await api.post('/api/claude-login/start', {});
+      setUrl(login.url);
+      window.open(login.url, '_blank', 'noopener,noreferrer');
+    } catch (err) { setError(err.message); }
+    setBusy(false);
+  };
+
+  const finish = async () => {
+    setBusy(true); setError(null);
+    try {
+      const { credential } = await api.post('/api/claude-login/complete',
+        { code: code.trim(), name: name.trim() || undefined, isDefault });
+      onDone(credential);
+    } catch (err) { setError(err.message); setBusy(false); }
+  };
+
+  return (
+    <div className="field">
+      <span className="field-label">Sign in with your Claude plan</span>
+      {!url ? (
+        <button type="button" className="btn" onClick={start} disabled={busy}>
+          {busy ? 'Starting…' : 'Sign in with Claude'}
+        </button>
+      ) : (
+        <div className="stack">
+          <p className="field-hint">
+            1. Approve access in the tab that opened (<a href={url} target="_blank" rel="noopener noreferrer">open it again</a>).
+            {' '}2. Copy the code Claude shows you and paste it here.
+          </p>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              type="text" value={code} onChange={(e) => setCode(e.target.value)}
+              placeholder="Paste the code" autoComplete="off" spellCheck={false} aria-label="Code from Claude"
+              style={{ flex: 1 }}
+            />
+            <button type="button" className="btn btn-primary" onClick={finish} disabled={busy || code.trim().length < 10}>
+              {busy ? 'Checking…' : 'Finish'}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="field-error" role="alert">{error}</p>}
+      <p className="field-hint">Uses Claude Code's own sign-in on the portal server. Or paste a token below instead.</p>
+    </div>
+  );
+}
+
+// ── Claude plan sign-in without the CLI (the portal does the same OAuth sign-in as `claude setup-token`) ──
+//
+// Used when the portal's host has no `claude` command (the cloud portal runs on Lambda). The token comes back to the form
+// (see server/claude-plan-oauth.ts) and is saved with the credential.
+
+function ClaudePlanNativeSignIn({ onToken }) {
+  const [state, setState] = useState({ flow: null, url: null, code: '', busy: false, done: false, error: null });
+
+  const start = async () => {
+    setState((p) => ({ ...p, busy: true, error: null }));
+    try {
+      const r = await api.post('/api/credentials/claude-plan/start', {});
+      setState({ flow: r.flow, url: r.url, code: '', busy: false, done: false, error: null });
+      window.open(r.url, '_blank', 'noopener,noreferrer');
+    } catch (err) { setState((p) => ({ ...p, busy: false, error: err.message })); }
+  };
+  const finish = async () => {
+    setState((p) => ({ ...p, busy: true, error: null }));
+    try {
+      const r = await api.post('/api/credentials/claude-plan/finish', { flow: state.flow, code: state.code });
+      onToken(r.token);
+      setState({ flow: null, url: null, code: '', busy: false, done: true, error: null });
+    } catch (err) { setState((p) => ({ ...p, busy: false, error: err.message })); }
+  };
+
+  return (
+    <div className="field">
+      <label htmlFor="cred-plan-code">Sign in with Claude</label>
+      {state.done ? (
+        <p className="field-hint" role="status">Signed in. The token is filled in below. Save the credential to keep it.</p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" className="btn" onClick={start} disabled={state.busy}>
+              {state.url ? 'Get a new sign-in link' : 'Sign in with Claude'}
+            </button>
+            {state.url && (
+              <a href={state.url} target="_blank" rel="noopener noreferrer" className="btn">Open sign-in page</a>
+            )}
+          </div>
+          {state.flow && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <input
+                id="cred-plan-code"
+                type="text"
+                value={state.code}
+                onChange={(e) => setState((p) => ({ ...p, code: e.target.value }))}
+                placeholder="Paste the code shown after you sign in"
+                autoComplete="off"
+                style={{ flex: 1 }}
+              />
+              <button type="button" className="btn" onClick={finish} disabled={state.busy || !state.code.trim()}>
+                Connect
+              </button>
+            </div>
+          )}
+          <p className="field-hint">Sign in on the page that opens, then copy the code it shows and paste it here. The token lasts one year.</p>
+        </>
+      )}
+      {state.error && <p className="field-hint" role="alert" style={{ color: 'var(--danger, #b91c1c)' }}>{state.error}</p>}
+    </div>
+  );
+}
+
 // ── Add Credential dialog ──────────────────────────────────────────────────────
 
 function AddCredentialDialog({ engine, onClose, onCreated }) {
@@ -149,8 +285,6 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const [error, setError] = useState(null);
   const [deviceChallenge, setDeviceChallenge] = useState(null);
   const [deviceCredId, setDeviceCredId] = useState(null);
-  // Claude plan sign-in (replaces running `claude setup-token` yourself)
-  const [plan, setPlan] = useState({ flow: null, url: null, code: '', busy: false, done: false, error: null });
 
   const KIRO_MODES = [
     { id: 'api_key',          label: 'API key',              desc: 'You have a Kiro API key (from kiro.dev)' },
@@ -199,23 +333,6 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
       onClose();
     },
   );
-
-  const startPlanSignIn = async () => {
-    setPlan((p) => ({ ...p, busy: true, error: null }));
-    try {
-      const r = await api.post('/api/credentials/claude-plan/start', {});
-      setPlan({ flow: r.flow, url: r.url, code: '', busy: false, done: false, error: null });
-      window.open(r.url, '_blank', 'noopener,noreferrer');
-    } catch (err) { setPlan((p) => ({ ...p, busy: false, error: err.message })); }
-  };
-  const finishPlanSignIn = async () => {
-    setPlan((p) => ({ ...p, busy: true, error: null }));
-    try {
-      const r = await api.post('/api/credentials/claude-plan/finish', { flow: plan.flow, code: plan.code });
-      setSecret(r.token);
-      setPlan({ flow: null, url: null, code: '', busy: false, done: true, error: null });
-    } catch (err) { setPlan((p) => ({ ...p, busy: false, error: err.message })); }
-  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -312,41 +429,12 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
           </div>
 
           {mode === 'subscription_token' && (
-            <div className="field">
-              <label htmlFor="cred-plan-code">Sign in with Claude</label>
-              {plan.done ? (
-                <p className="field-hint" role="status">Signed in. The token is filled in below. Save the credential to keep it.</p>
-              ) : (
-                <>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button type="button" className="btn" onClick={startPlanSignIn} disabled={plan.busy}>
-                      {plan.url ? 'Get a new sign-in link' : 'Sign in with Claude'}
-                    </button>
-                    {plan.url && (
-                      <a href={plan.url} target="_blank" rel="noopener noreferrer" className="btn">Open sign-in page</a>
-                    )}
-                  </div>
-                  {plan.flow && (
-                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                      <input
-                        id="cred-plan-code"
-                        type="text"
-                        value={plan.code}
-                        onChange={(e) => setPlan((p) => ({ ...p, code: e.target.value }))}
-                        placeholder="Paste the code shown after you sign in"
-                        autoComplete="off"
-                        style={{ flex: 1 }}
-                      />
-                      <button type="button" className="btn" onClick={finishPlanSignIn} disabled={plan.busy || !plan.code.trim()}>
-                        Connect
-                      </button>
-                    </div>
-                  )}
-                  <p className="field-hint">Sign in on the page that opens, then copy the code it shows and paste it here. The token lasts one year.</p>
-                </>
-              )}
-              {plan.error && <p className="field-hint" role="alert" style={{ color: 'var(--danger, #b91c1c)' }}>{plan.error}</p>}
-            </div>
+            <ClaudePlanSignIn
+              name={name}
+              isDefault={isDefault}
+              fallback={<ClaudePlanNativeSignIn onToken={setSecret} />}
+              onDone={(credential) => { onCreated(credential); onClose(); }}
+            />
           )}
 
           {/* Secret fields by mode */}

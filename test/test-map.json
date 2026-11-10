@@ -666,6 +666,7 @@
         "server/credential-default.ts",
         "server/kiro-idc.ts",
         "server/claude-plan-oauth.ts",
+        "server/claude-login.ts",
         "server/repositories/credentials.ts",
         "server/repositories/credentials-sqlite.ts",
         "server/repositories/credentials-dynamodb.ts",
@@ -679,6 +680,7 @@
       "tests": [
         "test/credentials.test.ts",
         "test/claude-plan-oauth.test.ts",
+        "test/claude-login.test.ts",
         "test/kiro-credential-default.test.ts",
         "test/bedrock-sign-in.test.ts",
         "test/aws-keys-sign-in.test.ts",
