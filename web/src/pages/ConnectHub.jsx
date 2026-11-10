@@ -8,7 +8,6 @@ import { HubContext, PageHeader } from '../components/PageHeader.jsx';
 import { navigate } from '../lib/router.js';
 import { ConnectionsPage } from './ConnectionsPage.jsx';
 import { Integrations } from './Integrations.jsx';
-import { Simulation } from './Simulation.jsx';
 
 export const CONNECT_TABS = [
   {
@@ -20,11 +19,6 @@ export const CONNECT_TABS = [
     id: 'tools',
     label: 'Tools & services',
     render: ({ projectId }) => <Integrations projectId={projectId} />,
-  },
-  {
-    id: 'simulation',
-    label: 'API simulation',
-    render: ({ projectId }) => <Simulation projectId={projectId} />,
   },
 ];
 

@@ -25,7 +25,8 @@ import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { AiChoicePicker } from '../../components/AiChoicePicker.jsx';
 import { InfoTip } from '../../components/InfoTip.jsx';
-import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
+import { PageHeader, SectionHead, HubContext } from '../../components/PageHeader.jsx';
+import { Simulation } from '../Simulation.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -2667,9 +2668,44 @@ function TestProjectList({ projectId, onSelect }) {
  *   route: { rest: string[] },
  * }} props
  */
+/** The two things the Tests page opens on: test projects, and the API simulation that API tests run against. */
+const HOME_TABS = [
+  { id: 'projects', label: 'Test projects' },
+  { id: 'simulation', label: 'API simulation' },
+];
+
+function TestsHome({ projectId, current, onSelect }) {
+  return (
+    <div className="tests-home">
+      <div className="tab-bar" role="tablist" aria-label="Tests sections">
+        {HOME_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={current === t.id}
+            className={`tab-btn${current === t.id ? ' is-active' : ''}`}
+            onClick={() => navigate(href(projectId, 'tests', t.id === 'projects' ? undefined : t.id))}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {current === 'simulation' ? (
+        <HubContext.Provider value>
+          <Simulation projectId={projectId} />
+        </HubContext.Provider>
+      ) : (
+        <TestProjectList projectId={projectId} onSelect={onSelect} />
+      )}
+    </div>
+  );
+}
+
 export function TestsPage({ projectId, route }) {
   const rest = route?.rest || [];
-  const testProjectId = rest[0] || null;
+  const testProjectId = rest[0] === 'simulation' ? null : (rest[0] || null);
+  const showSimulation = rest[0] === 'simulation';
   const activeTab     = rest[1] || 'scripts';
   // rest[2] is the id of script/run when rest[1] is 'scripts'/'runs'
   const subId         = rest[2] || null;
@@ -2683,7 +2719,7 @@ export function TestsPage({ projectId, route }) {
   };
 
   if (!testProjectId) {
-    return <TestProjectList projectId={projectId} onSelect={handleSelect} />;
+    return <TestsHome projectId={projectId} current={showSimulation ? 'simulation' : 'projects'} onSelect={handleSelect} />;
   }
 
   // Derive scriptId/runId/caseSetId from URL so state is URL-driven

@@ -1,4 +1,4 @@
-/* API simulation (Connect > API simulation). Uses the shared tokens so every theme applies. */
+/* API simulation (Tests > API simulation). Uses the shared tokens so every theme applies. */
 .sim-cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
 .sim-card { display: grid; gap: 10px; align-content: start; }
 .sim-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
