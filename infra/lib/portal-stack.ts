@@ -516,6 +516,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
         environmentVariables: {
           ...sharedEnv,
           PORTAL_JOB_RUNNER: '1',
+          // Agent turns inside the runtime may run as long as the session lives (less 5 minutes to finish cleanly).
+          PORTAL_RUN_TIMEOUT_MS: String((maxHours * 3600 - 300) * 1000),
           // Set so the code takes the same cloud paths as on Lambda; the runner never invokes Lambda (background-jobs.ts).
           AWS_LAMBDA_FUNCTION_NAME: 'agent-portal-jobs',
           AWS_REGION: this.region,
