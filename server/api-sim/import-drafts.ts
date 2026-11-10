@@ -45,6 +45,32 @@ export function keepOperationIds(before: ApiSpec, after: ApiSpec): void {
   }
 }
 
+/**
+ * A URL path someone typed in is not lost when the document is read again. If the new draft has no path for an
+ * operation (the document never gave one) and the version before it did, the new draft takes that path and the
+ * "path needed" flag is cleared. Operations are matched by operation id.
+ */
+export function carryOverPaths(before: ApiSpec, after: ApiSpec): void {
+  const old = new Map<string, { path: string; method: string }>();
+  for (const [path, item] of Object.entries(before.paths)) {
+    for (const [method, op] of Object.entries(item)) {
+      if (op && !(op['x-flags'] ?? []).some((f) => f.code === 'MISSING_PATH')) old.set(op.operationId, { path, method });
+    }
+  }
+  for (const [path, item] of Object.entries({ ...after.paths })) {
+    for (const [method, op] of Object.entries(item)) {
+      if (!op || !(op['x-flags'] ?? []).some((f) => f.code === 'MISSING_PATH')) continue;
+      const prev = old.get(op.operationId);
+      if (!prev || prev.method !== method || after.paths[prev.path]?.[method as 'get']) continue;
+      delete after.paths[path][method as 'get'];
+      if (Object.keys(after.paths[path]).length === 0) delete after.paths[path];
+      (after.paths[prev.path] ??= {})[method as 'get'] = op;
+      op['x-flags'] = (op['x-flags'] ?? []).filter((f) => f.code !== 'MISSING_PATH');
+      if (op['x-flags'].length === 0) delete op['x-flags'];
+    }
+  }
+}
+
 export async function importDrafts(projectId: string, userId: string, drafts: DraftInput[]): Promise<ImportedApi[]> {
   const repo = getSimulationRepository();
   const existing = await repo.listApis(projectId);
@@ -73,7 +99,7 @@ export async function importDrafts(projectId: string, userId: string, drafts: Dr
       used.add(found.id);
       const version = found.latest_version + 1;
       const prev = await repo.getVersion(found.id, found.latest_version);
-      if (prev) keepOperationIds(prev.spec, d.spec);
+      if (prev) { keepOperationIds(prev.spec, d.spec); carryOverPaths(prev.spec, d.spec); }
       await repo.addVersion({ api_id: found.id, version, status: 'draft', spec: d.spec, created_by: userId, created_at: at });
       await repo.updateApi(projectId, found.id, { latest_version: version });
       out.push({ id: found.id, name: found.name, version, isNew: false });
