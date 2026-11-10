@@ -149,6 +149,8 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const [error, setError] = useState(null);
   const [deviceChallenge, setDeviceChallenge] = useState(null);
   const [deviceCredId, setDeviceCredId] = useState(null);
+  // Claude plan sign-in (replaces running `claude setup-token` yourself)
+  const [plan, setPlan] = useState({ flow: null, url: null, code: '', busy: false, done: false, error: null });
 
   const KIRO_MODES = [
     { id: 'api_key',          label: 'API key',              desc: 'You have a Kiro API key (from kiro.dev)' },
@@ -156,7 +158,7 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   ];
   const CLAUDE_MODES = [
     { id: 'api_key',           label: 'Anthropic API key',    desc: 'You have a key from console.anthropic.com. Usage is billed to it.' },
-    { id: 'subscription_token', label: 'Claude plan (Pro / Max)', desc: 'Run `claude setup-token` on your computer and paste the token.' },
+    { id: 'subscription_token', label: 'Claude plan (Pro / Max)', desc: 'Sign in with your Claude account here, or paste a token from `claude setup-token`.' },
     { id: 'aws_keys',          label: 'Amazon Bedrock (AWS access keys)', desc: 'Your company signs in to AWS with SSO. Paste the keys the AWS access portal copies for you; they expire after a few hours.' },
     { id: 'bedrock_role',      label: 'Amazon Bedrock (IAM role)', desc: 'Your company runs Claude on AWS Bedrock and gave you a role ARN. No secret is stored.' },
   ];
@@ -197,6 +199,23 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
       onClose();
     },
   );
+
+  const startPlanSignIn = async () => {
+    setPlan((p) => ({ ...p, busy: true, error: null }));
+    try {
+      const r = await api.post('/api/credentials/claude-plan/start', {});
+      setPlan({ flow: r.flow, url: r.url, code: '', busy: false, done: false, error: null });
+      window.open(r.url, '_blank', 'noopener,noreferrer');
+    } catch (err) { setPlan((p) => ({ ...p, busy: false, error: err.message })); }
+  };
+  const finishPlanSignIn = async () => {
+    setPlan((p) => ({ ...p, busy: true, error: null }));
+    try {
+      const r = await api.post('/api/credentials/claude-plan/finish', { flow: plan.flow, code: plan.code });
+      setSecret(r.token);
+      setPlan({ flow: null, url: null, code: '', busy: false, done: true, error: null });
+    } catch (err) { setPlan((p) => ({ ...p, busy: false, error: err.message })); }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -291,6 +310,44 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
               maxLength={100}
             />
           </div>
+
+          {mode === 'subscription_token' && (
+            <div className="field">
+              <label htmlFor="cred-plan-code">Sign in with Claude</label>
+              {plan.done ? (
+                <p className="field-hint" role="status">Signed in. The token is filled in below. Save the credential to keep it.</p>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button type="button" className="btn" onClick={startPlanSignIn} disabled={plan.busy}>
+                      {plan.url ? 'Get a new sign-in link' : 'Sign in with Claude'}
+                    </button>
+                    {plan.url && (
+                      <a href={plan.url} target="_blank" rel="noopener noreferrer" className="btn">Open sign-in page</a>
+                    )}
+                  </div>
+                  {plan.flow && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                      <input
+                        id="cred-plan-code"
+                        type="text"
+                        value={plan.code}
+                        onChange={(e) => setPlan((p) => ({ ...p, code: e.target.value }))}
+                        placeholder="Paste the code shown after you sign in"
+                        autoComplete="off"
+                        style={{ flex: 1 }}
+                      />
+                      <button type="button" className="btn" onClick={finishPlanSignIn} disabled={plan.busy || !plan.code.trim()}>
+                        Connect
+                      </button>
+                    </div>
+                  )}
+                  <p className="field-hint">Sign in on the page that opens, then copy the code it shows and paste it here. The token lasts one year.</p>
+                </>
+              )}
+              {plan.error && <p className="field-hint" role="alert" style={{ color: 'var(--danger, #b91c1c)' }}>{plan.error}</p>}
+            </div>
+          )}
 
           {/* Secret fields by mode */}
           {(mode === 'api_key' || mode === 'subscription_token') && (

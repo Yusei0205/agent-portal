@@ -524,7 +524,7 @@ export const HELP_TOPICS = [
           ['Kiro: API key', 'You have a Kiro API key from kiro.dev.'],
           ['Kiro: Company sign-in (AWS SSO)', 'Your company gives you Kiro through AWS. You approve a code in your browser.'],
           ['Claude Code: Anthropic API key', 'A key from console.anthropic.com. Usage is billed to it.'],
-          ['Claude Code: Claude plan (Pro / Max)', 'Run `claude setup-token` on your computer and paste the token.'],
+          ['Claude Code: Claude plan (Pro / Max)', 'Click Sign in with Claude, sign in on the page that opens, then paste the code it shows back into the dialog.'],
           ['Claude Code: Amazon Bedrock (AWS access keys)', 'Your company signs in to AWS with SSO. In the AWS access portal choose your account and role, then **Command line or programmatic access**, copy the block and paste it in: the fields fill themselves. The keys expire after a few hours: press **Replace keys** and paste new ones. They work on the cloud portal too.'],
           ['Claude Code: Amazon Bedrock (IAM role)', 'Your company gave you a role ARN. No secret is stored.'],
           ['Claude Code: Amazon Bedrock (this AWS account)', 'Cloud portal only. Needs no key: the AWS account of this portal pays.'],
