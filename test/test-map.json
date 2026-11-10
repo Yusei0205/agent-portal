@@ -1488,7 +1488,8 @@
         "server/agent/types.ts"
       ],
       "tests": [
-        "test/runner-files.test.ts"
+        "test/runner-files.test.ts",
+        "test/input-file-downloads.test.ts"
       ],
       "smokeIds": []
     },

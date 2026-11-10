@@ -11,7 +11,7 @@ import { cloneRunnerRepos, parseRunnerRepos } from '../../server/agent/runner-re
 import { parseSnapshot, restoreWorkspace, flushWorkspaceStrict as flushWorkspace } from '../../server/agent/runner-snapshot.ts';
 import { inspectWorkspace } from '../../server/agent/runner-inspect.ts';
 import { runFinalize, validateFinalizeRequest, reportRepoChanges } from '../../server/agent/runner-finalize-run.ts';
-import { writeInputFiles, emitRunnerFiles } from '../../server/agent/runner-files.ts';
+import { writeInputFilesAsync, emitRunnerFiles } from '../../server/agent/runner-files.ts';
 import { runCheckSteps, validateCheckSteps } from '../../server/agent/runner-checks.ts';
 import { parseMcpServers } from '../../server/agent/runner-mcp.ts';
 import { restoreCodexState, saveCodexState } from './state.ts';
@@ -193,7 +193,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         if (!parsed.ok) throw new Error(parsed.error);
         const repos = parsed.repos;
         await cloneRunnerRepos(repos, workDir, send);
-        writeInputFiles(workDir, body.inputFiles);
+        await writeInputFilesAsync(workDir, body.inputFiles, send);
         const connections = Object.fromEntries(parseMcpServers(body.mcpServers).map(s => [s.name, s]));
         const mcp = Object.fromEntries(Object.keys(connections).map(name => [name, {
           command: process.execPath, args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs')],

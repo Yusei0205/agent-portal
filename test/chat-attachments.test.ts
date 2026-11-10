@@ -46,7 +46,8 @@ describe('chat attachment delivery', () => {
     const staged = await stageChatAttachments(projectId, workflowId, [event], dir);
     const files = collectInputFiles(dir, staged.map(a => 'attachments/' + a.path));
     assert.equal(files.length, 1);
-    assert.equal(Buffer.from(files[0].data, 'base64').toString(), 'Requirements for the agent');
+    assert.ok('data' in files[0], 'a small file is sent inline');
+    assert.equal(Buffer.from((files[0] as { data: string }).data, 'base64').toString(), 'Requirements for the agent');
     assert.equal(one<{ n: number }>('SELECT COUNT(*) AS n FROM p6_runs WHERE workflow_id = ?', workflowId)!.n, 0, 'saving attachments must not invoke the AI');
   });
   it('rejects malformed, foreign-project, oversized attachments and slash commands before saving a message', async () => {

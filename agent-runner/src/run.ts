@@ -57,7 +57,7 @@ import { decideToolCall, inputFingerprint } from '../shared/agent/tool-policy.ts
 import { estimateCost } from '../shared/agent/pricing.ts';
 import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
-import { emitRunnerFiles, writeInputFiles } from '../shared/runner-files.js';
+import { emitRunnerFiles, writeInputFilesAsync } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace } from '../shared/runner-snapshot.js';
@@ -290,7 +290,7 @@ export async function runInvocation(
 
   // Files the portal staged for this run (attachments, chosen project documents).
   if (payload.inputFiles?.length) {
-    const n = writeInputFiles(workDir, payload.inputFiles);
+    const n = await writeInputFilesAsync(workDir, payload.inputFiles, emit);
     emit({ type: 'status', text: `${n} input file${n === 1 ? '' : 's'} placed in the work folder` });
   }
 
