@@ -30,6 +30,7 @@ import { getSimulationRepository } from '../repositories/simulation.ts';
 import type { SimApiRecord, SimMode } from '../repositories/simulation.ts';
 import { handleMockRequest, locateOperation } from './mock-engine.ts';
 import { checkOpenApi } from './openapi.ts';
+import { registerApiTestRoutes } from './test-routes.ts';
 import { parseSheets, readWorkbook, toDraftSpec } from './excel-spec.ts';
 import type { ApiSpec, FailureKind, Flag, HttpMethod, MockRule } from './types.ts';
 
@@ -486,4 +487,6 @@ export function registerSimulationRoutes(): void {
   };
   const hostedPattern = '/api/sim/:projectId/:apiId/call(?:/.*)?';
   for (const m of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) router.rawMethod(m, hostedPattern, hosted);
+
+  registerApiTestRoutes();
 }

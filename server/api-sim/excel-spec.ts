@@ -322,7 +322,8 @@ export function toDraftSpec(api: ParsedApi, opts: DraftOptions = {}): ApiSpec {
 
   const operation: Operation = {
     operationId,
-    summary: api.apiName || api.sheet,
+    // The sheet name is what people know the API by: several sheets can share one API name.
+    summary: api.sheet,
     responses: {
       '200': { description: 'Success', content: { 'application/json': { schema: responseSchema } } },
     },

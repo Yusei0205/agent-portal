@@ -544,6 +544,17 @@ export function CaseSetList({ testProject, projectId, onOpenCaseSet }) {
             addGenJob(csid, name, desc);
             load(true);
           }}
+          onCreated={(r) => {
+            setShowGenerate(false);
+            toast(
+              `${r.caseSet.caseCount} cases created from the API specification`
+              + (r.manualCases ? ` (${r.manualCases} need a person to finish)` : '')
+              + (r.scripts?.length ? `, and ${r.scripts.length} runnable script${r.scripts.length === 1 ? '' : 's'}` : '')
+              + '.',
+              'ok',
+            );
+            load(true);
+          }}
         />
       )}
 

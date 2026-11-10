@@ -1,6 +1,6 @@
 # Plan: Client API simulation (mock REST APIs from client specs)
 
-Status: in progress. Phases 1-4 are built and tested on `feat/api-simulation`: mock engine, Excel parser, storage, routes, the hosted simulated API, and the team UI (Tests > API simulation). The DynamoDB repository type-checks but has not been run against DynamoDB. Phase 5 onward (AI enrichment, MCP facade, spec diff) is a proposal. Written 2026-11-10.
+Status: in progress. Phases 1-4 and step 1 of test automation are built and tested on `feat/api-simulation`: mock engine, Excel parser, storage, routes, the hosted simulated API, the team UI (Tests > API simulation), and test cases generated from a specification by rule. The DynamoDB repository type-checks but has not been run against DynamoDB. Phase 5 onward (AI enrichment, MCP facade, spec diff) and steps 2-5 of test automation are proposals. Written 2026-11-10.
 
 ## Goal
 
@@ -140,7 +140,7 @@ Read of `server/testing/` and `web/src/pages/tests/` on 2026-11-10; nothing belo
 - **Contract report:** run the same script against the simulation, then against the live API, and show the difference per case. A case that passes on the simulation and fails on live means the client's API does not match their own document.
 
 ### Delivery order
-1. Deterministic generator that writes a case set and a script from an approved version, with a "Generate tests" button on the API's page.
+1. **(built)** Deterministic generator (`server/api-sim/test-cases.ts`, route `POST /api/projects/:pid/tests/:tpid/case-sets/from-api`). It is reached from the existing "Generate test cases" dialog, where the API specification is optional: choose an API from the simulation, or import a file that is read for the cases only and not added to the simulation. A description is then optional too; with one, the AI generation also runs and makes its own case set. Tested: every generated runnable case gets the status it expects from the mock engine and from the hosted endpoint. Limits today: a rejected request is assumed to return HTTP 400, a successful one is checked by status only, and a rule stated only in words becomes a manual case.
 2. API target on a test project, resolved by the runner (in-process for simulated mode).
 3. `assert_schema` and the per-API error-style setting.
 4. AI business-rule cases and the model dropdown.
