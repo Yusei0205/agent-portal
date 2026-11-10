@@ -7,7 +7,8 @@
  * that CloudFront sends as x-portal-origin, so only the schedule (or CloudFront) can trigger jobs.
  */
 
-import { hasBackgroundJob, runBackgroundJobNow, runningJobCount } from './background-jobs.ts';
+import { hasBackgroundJob, registerBackgroundJob, runBackgroundJobNow, runningJobCount } from './background-jobs.ts';
+import { isJobRunner } from './job-runtime.ts';
 import { flushRealtime, realtimeEnabled } from './realtime.ts';
 import { timingSafeEqual } from 'node:crypto';
 import type http from 'node:http';
@@ -98,6 +99,23 @@ export async function handleScheduledEvent(
 }
 
 // ── Job runtime (AgentCore) ───────────────────────────────────────────────────
+
+/**
+ * Self-test for the job runtime: waits `seconds` (at most 8 hours) and logs a line every minute. It touches no data. Use it
+ * to check that a session outlives a Lambda invocation (15 minutes) and the idle timeout, because a running job reports
+ * HealthyBusy. Runs only inside the job runtime.
+ */
+registerBackgroundJob('job-selftest', async (a) => {
+  if (!isJobRunner()) throw new Error('job-selftest runs only on the job runtime');
+  const total = Math.min(Math.max(Math.floor(Number(a.seconds) || 0), 0), 8 * 3600);
+  const t0 = Date.now();
+  console.log(`[job-selftest] start, ${total}s`);
+  while (Date.now() - t0 < total * 1000) {
+    await new Promise((r) => setTimeout(r, Math.min(60_000, Math.max(0, total * 1000 - (Date.now() - t0)))));
+    console.log(`[job-selftest] alive ${Math.round((Date.now() - t0) / 1000)}s of ${total}s`);
+  }
+  console.log(`[job-selftest] done after ${Math.round((Date.now() - t0) / 1000)}s`);
+});
 
 export const JOB_RUNNER_INVOKE_PATH = '/invocations';
 export const JOB_RUNNER_PING_PATH = '/ping';
