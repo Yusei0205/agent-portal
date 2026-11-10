@@ -636,6 +636,7 @@
         "server/credentials.ts",
         "server/credential-default.ts",
         "server/kiro-idc.ts",
+        "server/claude-plan-oauth.ts",
         "server/repositories/credentials.ts",
         "server/repositories/credentials-sqlite.ts",
         "server/repositories/credentials-dynamodb.ts",
@@ -648,6 +649,7 @@
       ],
       "tests": [
         "test/credentials.test.ts",
+        "test/claude-plan-oauth.test.ts",
         "test/kiro-credential-default.test.ts",
         "test/bedrock-sign-in.test.ts",
         "test/aws-keys-sign-in.test.ts",
@@ -1534,10 +1536,13 @@
       "sources": [
         "server/workflows/session-commands.ts",
         "server/workflows/slash-commands.ts",
-        "test/slash-commands.test.ts"
+        "server/session-sign-in.ts",
+        "test/slash-commands.test.ts",
+        "test/slash-commands-engines.test.ts"
       ],
       "tests": [
-        "test/slash-commands.test.ts"
+        "test/slash-commands.test.ts",
+        "test/slash-commands-engines.test.ts"
       ],
       "smokeIds": []
     },
