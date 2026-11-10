@@ -82,6 +82,7 @@ export function operationsOf(spec) {
         query: (op.parameters || []).filter((p) => p.in === 'query'),
         flags: op['x-flags'] || [],
         rules: op['x-rules'] || [],
+        responses: op.responses || {},
         requestSchema: op.requestBody?.content?.['application/json']?.schema || null,
         responseSchema: op.responses?.['200']?.content?.['application/json']?.schema
           || Object.values(op.responses || {})[0]?.content?.['application/json']?.schema || null,
@@ -140,4 +141,12 @@ export function describeCondition(c) {
 
 export function describeRule(r) {
   return `${r.requires.join(', ')} required when ${r.when.map(describeCondition).join(' and ')}`;
+}
+
+/** Answers the document shows for statuses other than success, with their sample bodies. */
+export function documentedErrors(op) {
+  return Object.entries(op.responses || {})
+    .filter(([code]) => !/^2\d\d$/.test(code))
+    .map(([code, r]) => ({ status: Number(code), description: r.description || '', example: r.content?.['application/json']?.example }))
+    .filter((e) => e.example !== undefined);
 }

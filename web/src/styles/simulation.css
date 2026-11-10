@@ -83,3 +83,5 @@
 .sim-rule-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .sim-rule-item { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
 .sim-rule-item.suggested { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+
+.sim-progress { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 0.88rem; }

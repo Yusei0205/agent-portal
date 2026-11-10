@@ -29,6 +29,7 @@ import { getSimulationRepository } from '../repositories/simulation.ts';
 import type { SimApiRecord, SimMode } from '../repositories/simulation.ts';
 import { handleMockRequest } from './mock-engine.ts';
 import { answerCall, clientHeaders } from './call.ts';
+import { importDrafts } from './import-drafts.ts';
 import { checkOpenApi } from './openapi.ts';
 import { registerApiTestRoutes } from './test-routes.ts';
 import { postmanToSpecs } from './postman.ts';
@@ -36,6 +37,7 @@ import { diffSpecs } from './spec-diff.ts';
 import { registerApiRunRoutes } from './api-run-routes.ts';
 import { registerAiRuleRoutes } from './ai-rules.ts';
 import { registerSimMcpRoutes } from './mcp.ts';
+import { registerAiImportRoutes } from './ai-import.ts';
 import { parseSheets, readWorkbook, toDraftSpec } from './excel-spec.ts';
 import type { ApiSpec, FailureKind, Flag, HttpMethod, MockRule } from './types.ts';
 
@@ -142,36 +144,6 @@ async function latestSpec(a: SimApiRecord): Promise<ApiSpec | null> {
 }
 
 // ── Import ────────────────────────────────────────────────────────────────────
-
-async function importDrafts(
-  projectId: string,
-  userId: string,
-  drafts: Array<{ key: string; name: string; spec: ApiSpec }>,
-) {
-  const repo = getSimulationRepository();
-  const existing = await repo.listApis(projectId);
-  const out: Array<{ id: string; name: string; version: number; isNew: boolean }> = [];
-  for (const d of drafts) {
-    const found = existing.find((e) => e.source_key === d.key);
-    const at = now();
-    if (found) {
-      const version = found.latest_version + 1;
-      await repo.addVersion({ api_id: found.id, version, status: 'draft', spec: d.spec, created_by: userId, created_at: at });
-      await repo.updateApi(projectId, found.id, { latest_version: version });
-      out.push({ id: found.id, name: found.name, version, isNew: false });
-    } else {
-      const id = generateId();
-      await repo.createApi({
-        id, project_id: projectId, name: d.name, source_key: d.key, mode: 'mock', live_base_url: '',
-        require_explicit_rule: false, operation_modes: {}, approved_version: 0, latest_version: 1,
-        created_by: userId, created_at: at, updated_at: at,
-      });
-      await repo.addVersion({ api_id: id, version: 1, status: 'draft', spec: d.spec, created_by: userId, created_at: at });
-      out.push({ id, name: d.name, version: 1, isNew: true });
-    }
-  }
-  return out;
-}
 
 function readRaw(req: IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -456,4 +428,5 @@ export function registerSimulationRoutes(): void {
   registerApiRunRoutes();
   registerAiRuleRoutes();
   registerSimMcpRoutes();
+  registerAiImportRoutes();
 }

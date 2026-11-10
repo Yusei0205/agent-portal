@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api.js';
 import {
   MODES, FAILURES, sampleFromSchema, flattenSchema, operationsOf, simulatedUrl,
-  parseJsonField, ruleCondition, ruleOutcome, newRuleId, describeRule,
+  parseJsonField, ruleCondition, ruleOutcome, newRuleId, describeRule, documentedErrors,
 } from '../lib/simulation.js';
 import { Icon } from '../components/Icon.jsx';
 import { FlagBadge } from '../components/FlagBadge.jsx';
@@ -76,7 +76,7 @@ function FlagList({ flags }) {
 
 // ── Review ────────────────────────────────────────────────────────────────────
 
-function OperationCard({ op, editable, onSavePath, busy }) {
+function OperationCard({ op, editable, onSavePath, busy, onMakeRule }) {
   const [path, setPath] = useState(op.path);
   useEffect(() => setPath(op.path), [op.path]);
   const needsPath = op.flags.some((f) => f.code === 'MISSING_PATH');
@@ -115,6 +115,20 @@ function OperationCard({ op, editable, onSavePath, busy }) {
         <summary>Response</summary>
         <SchemaTable schema={op.responseSchema} empty="No response fields were found." />
       </details>
+      {documentedErrors(op).length > 0 && (
+        <details>
+          <summary>Other answers the document shows ({documentedErrors(op).length})</summary>
+          <ul className="sim-howto small" style={{ listStyle: 'none', paddingLeft: 0 }}>
+            {documentedErrors(op).map((e) => (
+              <li key={e.status} className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                <span className="badge badge-warn">{e.status}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>{e.description || 'No description'}</span>
+                <button type="button" className="btn btn-sm" onClick={() => onMakeRule(op, e)}>Make a mock rule</button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <details open={op.flags.length > 0}>
         <summary>To check ({op.flags.filter((f) => f.severity === 'warning').length} need attention)</summary>
         <FlagList flags={op.flags} />
@@ -261,6 +275,18 @@ function ReviewPanel({ data, projectId, reload, toast, busy, setBusy, onOpenVers
   const isDraft = data.version.status === 'draft';
   const missing = data.flags.some((f) => f.code === 'MISSING_PATH');
   const [justApproved, setJustApproved] = useState(null);
+  const [ruleDraft, setRuleDraft] = useState(null);
+
+  const makeRule = (op, e) => setRuleDraft({
+    operationId: op.operationId,
+    name: `Answer ${e.status}: ${e.description || 'from the document'}`.slice(0, 120),
+    response: { status: e.status, body: e.example },
+  });
+  const saveRule = async (id, payload) => {
+    await api.put(`/api/projects/${projectId}/sim/apis/${data.api.id}/rules/${id}`, payload);
+    toast('Mock rule saved. Add a condition on the Mock rules tab so it only applies to the requests you want.', 'ok');
+    await reload();
+  };
 
   const savePath = async (op, path) => {
     setBusy(true);
@@ -314,9 +340,10 @@ function ReviewPanel({ data, projectId, reload, toast, busy, setBusy, onOpenVers
         </div>
       )}
       <ChangesPanel data={data} projectId={projectId} />
+      {ruleDraft && <RuleDialog rule={ruleDraft} ops={ops} onClose={() => setRuleDraft(null)} onSave={saveRule} />}
       <BusinessRules data={data} ops={ops} projectId={projectId} isDraft={isDraft} reload={reload} toast={toast} onOpenVersion={onOpenVersion} />
       {ops.map((op) => (
-        <OperationCard key={op.operationId} op={op} editable={isDraft} onSavePath={savePath} busy={busy} />
+        <OperationCard key={op.operationId} op={op} editable={isDraft} onSavePath={savePath} busy={busy} onMakeRule={makeRule} />
       ))}
     </div>
   );
@@ -389,7 +416,13 @@ function RuleDialog({ rule, ops, onClose, onSave }) {
           <div className="field">
             <label htmlFor="rule-when">Only when the request body has (optional)</label>
             <textarea id="rule-when" rows={3} value={whenText} onChange={(e) => setWhenText(e.target.value)} placeholder='{"action": "142"}' spellCheck={false} />
-            <span className="field-hint">Field values the request must contain. Leave empty to match every request.</span>
+            {whenText.trim() ? (
+              <span className="field-hint">Field values the request must contain.</span>
+            ) : (
+              <span className="sim-flag" style={{ justifySelf: 'start' }}>
+                <Icon name="warning" size={13} /> No condition: every request to this API gets this answer. Add one such as {'{"action": "142"}'} to limit it.
+              </span>
+            )}
           </div>
           <div className="field">
             <span className="field-label">Then</span>
