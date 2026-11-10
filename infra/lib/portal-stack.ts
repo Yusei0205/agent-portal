@@ -123,6 +123,8 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   jobRuntime?: boolean;
   /** Longest a job may run, in hours (-c jobRuntimeMaxHours=4). AgentCore allows up to 8. */
   jobRuntimeMaxHours?: number;
+  /** How long an idle job session is kept after its job ends, in minutes (-c jobRuntimeIdleMinutes=20). 1 to 480. */
+  jobRuntimeIdleMinutes?: number;
   /** Also run agent runs (execute-run) on the job runtime, so they can pass 15 minutes (-c jobRuntimeAgentRuns=true). */
   jobRuntimeAgentRuns?: boolean;
   /** `none`: a job that cannot start on the runtime fails at once instead of running on Lambda (-c jobRuntimeFallback=none). */
@@ -479,6 +481,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
     // job ends, so the idle timeout only counts after it. Opt-in: nothing here exists without -c jobRuntime=true.
     if (props.jobRuntime) {
       const maxHours = Math.min(8, Math.max(1, props.jobRuntimeMaxHours ?? 4));
+      const idleMinutes = Math.min(480, Math.max(1, props.jobRuntimeIdleMinutes ?? 20));
       const jobImage = new ecrAssets.DockerImageAsset(this, 'JobRuntimeImage', {
         directory: props.repoRoot,
         file: 'Dockerfile.jobs',
@@ -514,7 +517,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
         networkConfiguration: { networkMode: 'PUBLIC' },
         lifecycleConfiguration: {
           // A running job reports HealthyBusy, so this counts only the wait after it ends.
-          idleRuntimeSessionTimeout: 300,
+          idleRuntimeSessionTimeout: idleMinutes * 60,
           maxLifetime: maxHours * 3600,
         },
         environmentVariables: {

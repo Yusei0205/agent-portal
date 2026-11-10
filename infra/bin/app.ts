@@ -69,6 +69,7 @@ if (budgetEmail) {
     jobRuntime: String(app.node.tryGetContext('jobRuntime')) === 'true',
     jobRuntimeAgentRuns: String(app.node.tryGetContext('jobRuntimeAgentRuns')) === 'true',
     jobRuntimeFallback: app.node.tryGetContext('jobRuntimeFallback') ? String(app.node.tryGetContext('jobRuntimeFallback')) : undefined,
+    jobRuntimeIdleMinutes: app.node.tryGetContext('jobRuntimeIdleMinutes') ? Number(app.node.tryGetContext('jobRuntimeIdleMinutes')) : undefined,
     jobRuntimeMaxHours: app.node.tryGetContext('jobRuntimeMaxHours') ? Number(app.node.tryGetContext('jobRuntimeMaxHours')) : undefined,
   });
 }
