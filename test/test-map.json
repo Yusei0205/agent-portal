@@ -1,6 +1,35 @@
 {
   "version": "1",
   "modules": {
+    "api-simulation": {
+      "description": "API simulation: import an API specification from a document, host a simulated API with stateful mocks and a call log, business rules, generated test cases, scheduled runs against the simulation and the live API, MCP tools for agents.",
+      "sources": [
+        "server/api-sim/**",
+        "server/repositories/simulation.ts",
+        "server/repositories/simulation-sqlite.ts",
+        "server/repositories/simulation-dynamodb.ts",
+        "web/src/pages/Simulation.jsx",
+        "web/src/pages/SimulationDetail.jsx",
+        "web/src/lib/simulation.js",
+        "web/src/styles/simulation.css"
+      ],
+      "tests": [
+        "test/api-sim.test.ts",
+        "test/api-sim-routes.test.ts",
+        "test/api-sim-ai-import.test.ts",
+        "test/api-sim-diff-postman.test.ts",
+        "test/api-sim-groups.test.ts",
+        "test/api-sim-mcp.test.ts",
+        "test/api-sim-reimport.test.ts",
+        "test/api-sim-rules.test.ts",
+        "test/api-sim-runs.test.ts",
+        "test/api-sim-schedule.test.ts",
+        "test/api-sim-state.test.ts",
+        "test/api-sim-testgen.test.ts",
+        "test/web-simulation-lib.test.ts"
+      ],
+      "smokeIds": []
+    },
     "automations": {
       "description": "Versioned visual workflows and durable orchestration",
       "sources": [
