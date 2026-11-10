@@ -497,6 +497,8 @@ export function registerSessionLifecycleRoutes(): void {
       );
 
       const eventMap = new Map<string, (typeof agents)[number]>();
+      // The run whose events last touched each row: a subagent can only be running while that run is.
+      const runOf = new Map<string, string>();
       // The repository returns newest first; replay oldest first so a finish follows its start.
       // DynamoDB sequences restart for each run; timestamps order resumed turns.
       const oldestFirst = [...agentEvents].sort((a, b) => a.created_at.localeCompare(b.created_at) || Number(a.id) - Number(b.id));
@@ -525,6 +527,7 @@ export function registerSessionLifecycleRoutes(): void {
         // The parent is named by the same row id, or the graph could not find it and would hang the agent off the session.
         const identity = { id: key, ...(typeof payload.parentId === 'string' && payload.parentId ? { parentId: rowId(payload.parentId) } : {}) };
 
+        if (ev.run_id) runOf.set(key, String(ev.run_id));
         if (ev.type === 'subagent-started') {
           eventMap.set(key, {
             ...eventMap.get(key),
@@ -570,6 +573,28 @@ export function registerSessionLifecycleRoutes(): void {
               ...detailsOf(payload),
             });
           }
+        }
+      }
+
+      // A subagent is marked running by its "started" event and done or failed by a later one. When its run ends first
+      // (it failed, was cut off, ran out of budget or was stopped) no later event comes, so the row would stay "running"
+      // for good and keep the Agents panel counting and animating it. Such a row is shown as stopped, at the time its run ended.
+      const runEnded = new Map<string, { ended: boolean; at: string | null }>();
+      const hasActiveRun = Boolean(await repo.getActiveRun(wid));
+      for (const [key, row] of eventMap) {
+        if (row.status !== 'running' && row.status !== 'pending') continue;
+        const runId = runOf.get(key);
+        if (runId && !runEnded.has(runId)) {
+          const run = await repo.getRunById(runId);
+          runEnded.set(runId, run
+            ? { ended: run.status !== 'running' && run.status !== 'pending', at: run.finished_at ?? run.created_at ?? null }
+            // The run record is gone: trust the session, which has no run going when nothing is active.
+            : { ended: !hasActiveRun, at: null });
+        }
+        const state = runId ? runEnded.get(runId) : { ended: !hasActiveRun, at: null };
+        if (state?.ended) {
+          row.status = 'stopped';
+          row.finishedAt = state.at ?? String(wf.updated_at ?? now());
         }
       }
 
