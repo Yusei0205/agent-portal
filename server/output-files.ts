@@ -210,11 +210,13 @@ async function copyToVault(
   workflowId: string,
   projectId: string,
   files: VaultCandidate[],
+  // `force`: a person asked for this file to go to the Vault, so the project's automatic-copy setting does not apply.
+  opts: { force?: boolean } = {},
 ): Promise<void> {
   if (!files.length) return;
 
   const proj = await getProjectRepository().getProjectById(projectId);
-  if (!proj || proj.vault_generated === 0) return;
+  if (!proj || (proj.vault_generated === 0 && !opts.force)) return;
 
   const wf = await getSessionsRepository().getWorkflowById(workflowId);
   if (!wf) return;
@@ -458,12 +460,53 @@ export function registerOutputFileRoutes(): void {
       let vaultFolderName: string | null = null;
       if (wf.project_id) {
         const proj = await getProjectRepository().getProjectById(wf.project_id);
-        if (!proj || proj.vault_generated !== 0) {
+        // Also when automatic copying is off but a file was added by hand: the folder exists then.
+        if (!proj || proj.vault_generated !== 0 || files.some((f) => f.vault_file_id)) {
           vaultFolderName = computeVaultFolder(wf);
         }
       }
 
       sendJson(res, 200, { files: enriched, vaultFolder: vaultFolderName });
+    },
+  );
+
+  // POST /api/workflows/:id/output-files/:fileId/vault: add one output file to the project Vault by hand
+  router.post(
+    '/api/workflows/:id/output-files/:fileId/vault',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const wf = await requireWorkflowAccess(req, res, req.params.id);
+      if (!wf) return;
+      if (!wf.project_id) { sendJson(res, 400, { error: 'This session is not in a project, so there is no Vault to add to' }); return; }
+      const projectId = String(wf.project_id);
+
+      const outputRepo = getOutputFilesRepository();
+      const file = await outputRepo.getById(req.params.fileId, req.params.id);
+      if (!file) { sendJson(res, 404, { error: 'File not found' }); return; }
+      if (file.refused_reason) { sendJson(res, 403, { error: file.refused_reason }); return; }
+
+      if (file.vault_file_id) {
+        const existing = await getVaultFilesRepository().getById(file.vault_file_id);
+        if (existing) { sendJson(res, 200, { vault_file_id: existing.id, vaultFolder: computeVaultFolder(wf), already: true }); return; }
+      }
+
+      let absPath: string | null = null;
+      const workDir = await resolveWorkDir(wf);
+      if (workDir) {
+        const candidate = path.resolve(workDir, file.path);
+        // The run may have been on another machine (the job runtime), so fetch the file from storage when it is not here.
+        if (candidate.startsWith(path.resolve(workDir)) && (await restoreFile(candidate))) absPath = candidate;
+      }
+      if (!absPath) { sendJson(res, 410, { error: 'The file is no longer available in the session' }); return; }
+
+      let size: number;
+      try { size = fs.statSync(absPath).size; } catch { sendJson(res, 410, { error: 'The file is no longer available in the session' }); return; }
+      const mime = String(file.mime_type || mimeForExt(path.extname(file.name).toLowerCase()));
+      await copyToVault(wf.id, projectId, [{ id: file.id, relPath: file.path, absPath, mime, size }], { force: true });
+
+      const updated = await outputRepo.getById(file.id, req.params.id);
+      if (!updated?.vault_file_id) { sendJson(res, 500, { error: 'The file could not be added to the Vault' }); return; }
+      try { emit(projectId, { type: 'output-files.updated', workflowId: wf.id, count: await outputRepo.countByWorkflow(wf.id) }); } catch { /* non-fatal */ }
+      sendJson(res, 200, { vault_file_id: updated.vault_file_id, vaultFolder: computeVaultFolder(wf) });
     },
   );
 
@@ -541,7 +584,7 @@ export function registerOutputFileRoutes(): void {
       const workDir = await resolveWorkDir(wf);
       if (workDir) {
         const candidate = path.resolve(workDir, file.path);
-        if (candidate.startsWith(path.resolve(workDir)) && fs.existsSync(candidate)) {
+        if (candidate.startsWith(path.resolve(workDir)) && (await restoreFile(candidate))) {
           absPath = candidate;
         }
       }
