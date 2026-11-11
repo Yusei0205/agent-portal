@@ -205,7 +205,7 @@ describe('collectOutputFiles — extension filter', () => {
     }
   });
 
-  it('lists source files from the work folder, keeps them out of the Vault, and skips lock files and build output', async () => {
+  it('lists source files from the work folder, copies them to the Vault (the explorer lists it), and skips lock files and build output', async () => {
     const workflowId = await createWorkflow(baseUrl, adminCookie, projectId, 'ext code');
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
@@ -225,9 +225,10 @@ describe('collectOutputFiles — extension filter', () => {
     for (const name of hidden) assert.ok(!names.includes(path.basename(name)), `${name} should NOT be listed`);
     assert.equal(collected.find((f) => f.name === 'Component.tsx')?.mime_type, 'text/plain');
 
-    // The Vault holds documents; source files stay out of it.
-    const vault = all<Row>('SELECT name FROM vault_files WHERE source_workflow_id = ?', workflowId);
-    assert.equal(vault.length, 0, 'no source file reaches the Vault');
+    // The explorer lists the Vault folder, so listed source files must be there too (and the skipped ones not).
+    const vaultNames = all<Row>('SELECT name FROM vault_files WHERE source_workflow_id = ?', workflowId).map((f) => f.name as string);
+    for (const name of shown) assert.ok(vaultNames.includes(name), `${name} should be in the Vault`);
+    for (const name of hidden) assert.ok(!vaultNames.includes(path.basename(name)), `${name} should NOT be in the Vault`);
   });
 });
 

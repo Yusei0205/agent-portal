@@ -373,8 +373,8 @@ export async function collectOutputFiles(
 
     fileCount++;
     totalBytes += stat.size;
-    // The Vault holds documents; source files stay in the session's own output list.
-    if (!isCode) vaultCandidates.push({ id: fileId, relPath, absPath, mime, size: stat.size });
+    // Copied to the Vault like other outputs: the session explorer lists the Vault folder, so this is what shows them there.
+    vaultCandidates.push({ id: fileId, relPath, absPath, mime, size: stat.size });
   }
 
   if (vaultCandidates.length && projectId) {
