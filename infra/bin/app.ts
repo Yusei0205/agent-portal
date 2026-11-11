@@ -66,6 +66,11 @@ if (budgetEmail) {
     agentcoreBrowser: String(app.node.tryGetContext('agentcoreBrowser')) === 'true',
     publicUrl: app.node.tryGetContext('publicUrl'),
     googleAllowed: app.node.tryGetContext('googleAllowed'),
+    jobRuntime: String(app.node.tryGetContext('jobRuntime')) === 'true',
+    jobRuntimeAgentRuns: String(app.node.tryGetContext('jobRuntimeAgentRuns')) === 'true',
+    jobRuntimeFallback: app.node.tryGetContext('jobRuntimeFallback') ? String(app.node.tryGetContext('jobRuntimeFallback')) : undefined,
+    jobRuntimeIdleMinutes: app.node.tryGetContext('jobRuntimeIdleMinutes') ? Number(app.node.tryGetContext('jobRuntimeIdleMinutes')) : undefined,
+    jobRuntimeMaxHours: app.node.tryGetContext('jobRuntimeMaxHours') ? Number(app.node.tryGetContext('jobRuntimeMaxHours')) : undefined,
   });
 }
 

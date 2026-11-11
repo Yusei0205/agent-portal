@@ -148,7 +148,7 @@ export function _setAgentCoreInvokerOverride(fn: AgentCoreInvoker | null): void 
 
 // ── AWS credential + SigV4 helpers ────────────────────────────────────────────
 
-interface AwsCreds {
+export interface AwsCreds {
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken?: string;
@@ -202,7 +202,7 @@ class NodeSha256 {
  * Resolve AWS credentials from the default provider chain or a named profile.
  * Uses @aws-sdk/credential-providers (already in portal deps).
  */
-async function resolveAwsCredentials(profile?: string): Promise<AwsCreds> {
+export async function resolveAwsCredentials(profile?: string): Promise<AwsCreds> {
   type CredsModule = {
     fromNodeProviderChain: () => () => Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken?: string }>;
     fromIni: (opts: { profile: string }) => () => Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken?: string }>;
@@ -218,7 +218,7 @@ async function resolveAwsCredentials(profile?: string): Promise<AwsCreds> {
  * Sign an HTTP request using AWS Signature V4.
  * Returns the signed headers to add to the request.
  */
-async function signRequest(opts: {
+export async function signRequest(opts: {
   method: string;
   url: URL;
   headers: Record<string, string>;
@@ -288,7 +288,7 @@ async function signRequest(opts: {
  * Extract the region and runtime ID from a bedrock-agentcore runtime ARN.
  * ARN format: arn:aws:bedrock-agentcore:{region}:{account}:runtime/{runtimeId}
  */
-function parseRuntimeArn(arn: string): { region: string; runtimeId: string } {
+export function parseRuntimeArn(arn: string): { region: string; runtimeId: string } {
   const parts = arn.split(':');
   if (parts.length < 6) throw new Error(`Invalid AgentCore runtime ARN: ${arn}`);
   const region = parts[3];

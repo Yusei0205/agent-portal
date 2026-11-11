@@ -28,6 +28,7 @@ import * as appsync from 'aws-cdk-lib/aws-appsync';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
+import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { Construct } from 'constructs';
 import tablesJson from '../tables.json';
@@ -115,6 +116,19 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   publicUrl?: string;
   /** Emails / @domains allowed to sign in with Google without an invite, comma separated. */
   googleAllowed?: string;
+  /**
+   * Run long background jobs (scans, test runs, AI document reading) on their own AgentCore runtime instead of a
+   * Lambda invocation: no 15-minute limit and no Lambda concurrency slot (-c jobRuntime=true). See server/job-runtime.ts.
+   */
+  jobRuntime?: boolean;
+  /** Longest a job may run, in hours (-c jobRuntimeMaxHours=4). AgentCore allows up to 8. */
+  jobRuntimeMaxHours?: number;
+  /** How long an idle job session is kept after its job ends, in minutes (-c jobRuntimeIdleMinutes=20). 1 to 480. */
+  jobRuntimeIdleMinutes?: number;
+  /** Also run agent runs (execute-run) on the job runtime, so they can pass 15 minutes (-c jobRuntimeAgentRuns=true). */
+  jobRuntimeAgentRuns?: boolean;
+  /** `none`: a job that cannot start on the runtime fails at once instead of running on Lambda (-c jobRuntimeFallback=none). */
+  jobRuntimeFallback?: string;
 }
 
 export class AgentPortalCloudStack extends cdk.Stack {
@@ -272,6 +286,35 @@ export class AgentPortalCloudStack extends cdk.Stack {
       };
     }
 
+    // Shared with the job runtime (see the end of the constructor): it runs the same code against the same data.
+    const portalEnv: Record<string, string> = {
+      ...tableEnv,
+      USE_DYNAMODB: 'true',
+      SECRET_KEY_ARN: masterKey.secretArn,
+      PORTAL_ORIGIN_SECRET: originSecret.secretValue.unsafeUnwrap(),
+      PORTAL_EVENTS_HTTP_DOMAIN: eventsApi.attrDnsHttp,
+      PORTAL_EVENTS_REALTIME_DOMAIN: eventsApi.attrDnsRealtime,
+      ...(props.storageBucket
+        ? { STORAGE_BACKEND: 's3', STORAGE_S3_BUCKET: props.storageBucket, STORAGE_S3_PREFIX: 'data', STORAGE_S3_REGION: this.region }
+        : {}),
+      // A run lives inside one Lambda invocation (15 min max): end agent runs a little before that.
+      PORTAL_RUN_TIMEOUT_MS: String(14 * 60_000),
+      // Lambda Web Adapter forwards non-HTTP events (EventBridge Scheduler) to this path.
+      AWS_LWA_PASS_THROUGH_PATH: '/internal/events',
+      PORTAL_GOOGLE_SECRET_ARN: googleSecret.secretArn,
+      ...(props.publicUrl ? { PORTAL_PUBLIC_URL: props.publicUrl } : {}),
+      ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
+      ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
+      ...(props.codexRuntimeArn ? { PORTAL_CODEX_AGENTCORE_RUNTIME_ARN: props.codexRuntimeArn } : {}),
+      PORTAL_CODEX_AUTH_MODE: props.codexAuthMode || 'oauth',
+      ...(props.codexOAuthClientId ? { PORTAL_CODEX_OAUTH_CLIENT_ID: props.codexOAuthClientId } : {}),
+      ...(props.codexOAuthRedirectUri ? { PORTAL_CODEX_OAUTH_REDIRECT_URI: props.codexOAuthRedirectUri } : {}),
+      ...(props.codexOAuthSecretArn ? { PORTAL_CODEX_OAUTH_CLIENT_SECRET_ARN: props.codexOAuthSecretArn, PORTAL_CODEX_OAUTH_CLIENT_AUTH: 'client_secret_basic' } : {}),
+      ...(props.agentcoreBrowser ? { PORTAL_AGENTCORE_BROWSER: '1' } : {}),
+      ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
+      ...kbEnv,
+    };
+
     const fn = new lambda.DockerImageFunction(this, 'Portal', {
       functionName: PORTAL_FUNCTION_NAME,
       code: lambda.DockerImageCode.fromImageAsset(props.repoRoot, {
@@ -283,33 +326,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       // Repository clones and agent files live on /tmp: the default 512 MB is too small for a large repository.
       ephemeralStorageSize: cdk.Size.mebibytes(4096),
-      environment: {
-        ...tableEnv,
-        USE_DYNAMODB: 'true',
-        SECRET_KEY_ARN: masterKey.secretArn,
-        PORTAL_ORIGIN_SECRET: originSecret.secretValue.unsafeUnwrap(),
-        PORTAL_EVENTS_HTTP_DOMAIN: eventsApi.attrDnsHttp,
-        PORTAL_EVENTS_REALTIME_DOMAIN: eventsApi.attrDnsRealtime,
-        ...(props.storageBucket
-          ? { STORAGE_BACKEND: 's3', STORAGE_S3_BUCKET: props.storageBucket, STORAGE_S3_PREFIX: 'data', STORAGE_S3_REGION: this.region }
-          : {}),
-        // A run lives inside one Lambda invocation (15 min max): end agent runs a little before that.
-        PORTAL_RUN_TIMEOUT_MS: String(14 * 60_000),
-        // Lambda Web Adapter forwards non-HTTP events (EventBridge Scheduler) to this path.
-        AWS_LWA_PASS_THROUGH_PATH: '/internal/events',
-        PORTAL_GOOGLE_SECRET_ARN: googleSecret.secretArn,
-        ...(props.publicUrl ? { PORTAL_PUBLIC_URL: props.publicUrl } : {}),
-        ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
-        ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
-        ...(props.codexRuntimeArn ? { PORTAL_CODEX_AGENTCORE_RUNTIME_ARN: props.codexRuntimeArn } : {}),
-        PORTAL_CODEX_AUTH_MODE: props.codexAuthMode || 'oauth',
-        ...(props.codexOAuthClientId ? { PORTAL_CODEX_OAUTH_CLIENT_ID: props.codexOAuthClientId } : {}),
-        ...(props.codexOAuthRedirectUri ? { PORTAL_CODEX_OAUTH_REDIRECT_URI: props.codexOAuthRedirectUri } : {}),
-        ...(props.codexOAuthSecretArn ? { PORTAL_CODEX_OAUTH_CLIENT_SECRET_ARN: props.codexOAuthSecretArn, PORTAL_CODEX_OAUTH_CLIENT_AUTH: 'client_secret_basic' } : {}),
-        ...(props.agentcoreBrowser ? { PORTAL_AGENTCORE_BROWSER: '1' } : {}),
-        ...(props.kiroRuntimeArn ? { PORTAL_KIRO_AGENTCORE_RUNTIME_ARN: props.kiroRuntimeArn } : {}),
-        ...kbEnv,
-      },
+      environment: portalEnv,
     });
     tables.forEach((t) => t.grantReadWriteData(fn));
     // Durable visual workflow coordination. Agent turns remain on the existing runner path;
@@ -495,6 +512,69 @@ export class AgentPortalCloudStack extends cdk.Stack {
         },
       },
     });
+
+    // ── Job runtime ───────────────────────────────────────────────────────────
+    // The same portal code (Dockerfile.jobs, arm64) on AgentCore Runtime: one microVM per job. The portal starts a job
+    // there with POST /invocations (server/job-runtime.ts); the runtime answers at once and reports HealthyBusy until the
+    // job ends, so the idle timeout only counts after it. Opt-in: nothing here exists without -c jobRuntime=true.
+    if (props.jobRuntime) {
+      const maxHours = Math.min(8, Math.max(1, props.jobRuntimeMaxHours ?? 4));
+      const idleMinutes = Math.min(480, Math.max(1, props.jobRuntimeIdleMinutes ?? 20));
+      const jobImage = new ecrAssets.DockerImageAsset(this, 'JobRuntimeImage', {
+        directory: props.repoRoot,
+        file: 'Dockerfile.jobs',
+        platform: ecrAssets.Platform.LINUX_ARM64,
+        ignoreMode: cdk.IgnoreMode.DOCKER,
+      });
+      const jobRole = new iam.Role(this, 'JobRuntimeRole', {
+        assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', { conditions: { StringEquals: { 'aws:SourceAccount': this.account } } }),
+        description: 'Agent Portal job runtime: the same data, secret and model access as the portal function',
+      });
+      jobImage.repository.grantPull(jobRole);
+      jobRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'],
+        resources: [`arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`],
+      }));
+      // The portal function starts jobs here. The runtime id is not known until the runtime exists, and the function's
+      // policy must not depend on the runtime (the runtime waits for that policy), so match the runtime by name.
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+        resources: [`arn:aws:bedrock-agentcore:${this.region}:${this.account}:runtime/agentPortalJobRunner-*`],
+      }));
+      // Everything the portal function is allowed to do, the job runtime is too: it runs the same jobs. One policy
+      // document is shared, so a permission added to the function above is not forgotten here.
+      const fnPolicy = fn.role!.node.tryFindChild('DefaultPolicy') as iam.Policy;
+      const jobPolicy = new iam.Policy(this, 'JobRuntimePolicy', { document: fnPolicy.document, roles: [jobRole] });
+      const { PORTAL_RUN_TIMEOUT_MS: _runLimit, AWS_LWA_PASS_THROUGH_PATH: _lwa, ...sharedEnv } = portalEnv;
+      void _runLimit; void _lwa;
+      const jobRuntime = new agentcore.CfnRuntime(this, 'JobRuntime', {
+        agentRuntimeName: 'agentPortalJobRunner',
+        description: 'Agent Portal long background jobs: one session per job, up to ' + maxHours + ' hours',
+        agentRuntimeArtifact: { containerConfiguration: { containerUri: jobImage.imageUri } },
+        roleArn: jobRole.roleArn,
+        networkConfiguration: { networkMode: 'PUBLIC' },
+        lifecycleConfiguration: {
+          // A running job reports HealthyBusy, so this counts only the wait after it ends.
+          idleRuntimeSessionTimeout: idleMinutes * 60,
+          maxLifetime: maxHours * 3600,
+        },
+        environmentVariables: {
+          ...sharedEnv,
+          PORTAL_JOB_RUNNER: '1',
+          // Agent turns inside the runtime may run as long as the session lives (less 5 minutes to finish cleanly).
+          PORTAL_RUN_TIMEOUT_MS: String((maxHours * 3600 - 300) * 1000),
+          // Set so the code takes the same cloud paths as on Lambda; the runner never invokes Lambda (background-jobs.ts).
+          AWS_LAMBDA_FUNCTION_NAME: 'agent-portal-jobs',
+          AWS_REGION: this.region,
+          AWS_DEFAULT_REGION: this.region,
+        },
+      });
+      jobRuntime.addDependency(jobPolicy.node.defaultChild as cdk.CfnResource);
+      fn.addEnvironment('PORTAL_JOB_RUNTIME_ARN', jobRuntime.attrAgentRuntimeArn);
+      if (props.jobRuntimeAgentRuns) fn.addEnvironment('PORTAL_JOB_RUNTIME_JOBS', '+execute-run');
+      if (props.jobRuntimeFallback) fn.addEnvironment('PORTAL_JOB_RUNTIME_FALLBACK', props.jobRuntimeFallback);
+      new cdk.CfnOutput(this, 'JobRuntimeArn', { value: jobRuntime.attrAgentRuntimeArn, description: 'Set on the portal function as PORTAL_JOB_RUNTIME_ARN' });
+    }
 
     // ── Scheduled jobs ────────────────────────────────────────────────────────
     // Replaces the in-process timers (setInterval) that cannot run on Lambda. Each schedule invokes the

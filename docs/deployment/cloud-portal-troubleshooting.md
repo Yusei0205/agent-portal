@@ -493,3 +493,15 @@ Older runs that did not record native collaboration events cannot display that m
 ## Choosing the default branch of a repository
 
 **Workspaces › Repositories › Branches** lists the branches; **Make default** sets the one new sessions start from.
+
+## Long jobs on their own runtime (no 15-minute limit)
+
+A Lambda invocation stops after 15 minutes and holds one of the account's concurrent-execution slots (limit 10) while it runs. With `-c jobRuntime=true` the stack also creates an AgentCore runtime, `agentPortalJobRunner`, that runs the same portal code (`Dockerfile.jobs`, arm64) with one session (one microVM) per job.
+
+- **Which jobs:** `scan-estimate`, `scan-run`, `knowledge-process`, `knowledge-embed`, `test-run`, `test-generate`, `case-set-generate`, `case-set-generate-filtered`, `sim-ai-import`. Agent runs (`execute-run`) stay on Lambda. Change the list with the portal function's `PORTAL_JOB_RUNTIME_JOBS` (comma separated; replaces the default). Code: `server/job-runtime.ts`.
+- **How:** `runInBackground` signs a `POST /invocations` to the runtime with `{job, args, secret}`. The runtime answers 202 at once and runs the job; `GET /ping` says `HealthyBusy` until the last job ends, so AgentCore does not stop the session as idle mid-job. If starting a job on the runtime fails, it runs as a Lambda invocation instead (look for "job runtime did not take" in the portal log).
+- **Limits:** a job lasts up to `-c jobRuntimeMaxHours` (default 4, at most 8). Idle timeout is 5 minutes after the job ends. The runtime has the same IAM permissions as the portal function (one shared policy document) and the same environment, minus the 14-minute run limit and the Lambda adapter setting.
+- **Schedules:** the runtime does not run the periodic jobs (idle stop, cleanup, loop and API-test schedules); they stay on the portal function.
+- **Cost:** pay per use, no charge with no sessions. CPU is billed while the code is working, memory while the session exists, so a job that mostly waits on model calls costs little; a job that stops being busy still holds memory for the 5 idle minutes.
+- **Deploy:** the image is built for arm64 (same as the Codex runner), so the machine that runs `cdk deploy` needs Docker with arm64 support. Add `-c jobRuntime=true` to the full flag set in your deploy notes; leaving it out removes the runtime and the `PORTAL_JOB_RUNTIME_ARN` setting, and jobs go back to Lambda.
+- **Check it works:** start a scan or an API-simulation AI import, then look at the runtime's log group `/aws/bedrock-agentcore/runtimes/agentPortalJobRunner-*` for `[job-runner] <job> finished`.

@@ -113,7 +113,13 @@ export async function startRun(workflowId: string, suppliedRunId?: string): Prom
 
   // Run it in the background. On Lambda this is a separate invocation, so the run keeps going after this
   // request's reply is sent (otherwise the instance freezes and the run only moves when something wakes it).
-  await runInBackground('execute-run', { runId, workflowId });
+  try {
+    await runInBackground('execute-run', { runId, workflowId });
+  } catch (e) {
+    // Only when the long-job runtime is required and unreachable: fail the run now rather than leave it pending.
+    await failRun(runId, workflowId, 'pending');
+    throw e;
+  }
 
   return runId;
 }
@@ -124,6 +130,13 @@ async function runTurn(runId: string, workflowId: string): Promise<void> {
     await executeRun(runId, workflowId);
   } catch (e: unknown) {
     console.error(`[driver] Unhandled error in run ${runId}:`, e);
+    await failRun(runId, workflowId);
+  }
+}
+
+/** Best-effort: mark a run (and its workflow) failed. Also used when the run could not be started. */
+async function failRun(runId: string, workflowId: string, from: 'pending' | 'running' = 'running'): Promise<void> {
+  {
     const repo = getSessionsRepository();
     const workflow = await repo.getWorkflowById(workflowId).catch(() => null);
     // Best-effort: mark the run failed via finalizeRun so rollups are updated.
@@ -133,7 +146,7 @@ async function runTurn(runId: string, workflowId: string): Promise<void> {
       projectId: workflow?.project_id ?? null,
       agentName: (workflow?.lead_agent ?? '').trim() || 'default',
     };
-    await repo.finalizeRun(runId, 'running', { status: 'failed', finished_at: errTs }, errHint).catch(() => {});
+    await repo.finalizeRun(runId, from, { status: 'failed', finished_at: errTs }, errHint).catch(() => {});
     await repo.updateWorkflowConditional(workflowId, 'running', { status: 'failed', updated_at: errTs }).catch(() => {});
     if (workflow?.project_id) {
       emit(workflow.project_id, { type: 'run.updated', workflowId, runId, status: 'failed' });
