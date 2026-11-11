@@ -83,6 +83,7 @@ describe('getFileTypeMeta — office / text types', () => {
   it('returns Text by text/* mime', () => {
     assert.equal(getFileTypeMeta('text/plain', 'notes.txt').label, 'Text');
     assert.equal(getFileTypeMeta('text/html', 'page.html').label, 'Text');
+    assert.equal(getFileTypeMeta('text/plain', 'DelayedShipments.tsx').label, 'TSX');
   });
 
   it('returns ZIP by extension', () => {

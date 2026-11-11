@@ -40,10 +40,30 @@ describe('collectRunnerFiles', () => {
     write('.agent-notes/lead-orchestrator.md', 'x');
     write('repos/app/README.md', 'x');
     write('node_modules/p/readme.md', 'x');
-    write('script.sh', 'echo');
+    write('app.exe', 'MZ');
     write('empty.md', '');
     const { files } = collectRunnerFiles(src);
     assert.deepEqual(files.map((f) => f.rel).sort(), ['docs/diagram.drawio', 'report.md']);
+  });
+
+  it('sends source files from the work folder, but not lock files, build output, dotfiles or repositories', () => {
+    write('DelayedShipments.tsx', 'export {}');
+    write('src/util.py', 'x = 1');
+    write('setup.sh', 'echo');
+    write('package-lock.json', '{}');
+    write('dist/bundle.js', 'x');
+    write('.eslintrc.json', '{}');
+    write('repos/app/src/index.ts', 'x');
+    write('node_modules/p/index.js', 'x');
+    const { files } = collectRunnerFiles(src);
+    assert.deepEqual(files.map((f) => f.rel).sort(), ['DelayedShipments.tsx', 'setup.sh', 'src/util.py']);
+  });
+
+  it('the receiver accepts a source file path and still refuses one inside repos/ or dist/', () => {
+    assert.equal(safeRelPath('DelayedShipments.tsx'), 'DelayedShipments.tsx');
+    assert.equal(safeRelPath('repos/app/index.ts'), null);
+    assert.equal(safeRelPath('dist/bundle.js'), null);
+    assert.equal(safeRelPath('package-lock.json'), null);
   });
 
   it('only returns files changed since the given time', () => {
@@ -88,7 +108,7 @@ describe('receiver safety', () => {
 
   it('rejects traversal, absolute paths, tool folders and disallowed extensions', async () => {
     const rx = createFileReceiver(dst);
-    for (const p of ['../evil.md', 'a/../../evil.md', '/etc/passwd.md', 'C:/x.md', 'a' + String.fromCharCode(92) + 'b.md', '.git/x.md', 'repos/x/y.md', 'run.sh', 'x.exe', '']) {
+    for (const p of ['../evil.md', 'a/../../evil.md', '/etc/passwd.md', 'C:/x.md', 'a' + String.fromCharCode(92) + 'b.md', '.git/x.md', 'repos/x/y.md', 'run.bat', 'x.exe', '']) {
       await rx.handle(chunk({ path: p }));
     }
     assert.equal(rx.received.length, 0);

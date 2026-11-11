@@ -21,9 +21,32 @@ export const RUNNER_FILE_EXTS = new Set([
   '.md', '.docx', '.xlsx', '.pptx', '.csv', '.html', '.drawio',
 ]);
 
+/**
+ * Source and plain-text files an agent writes as its answer (a component, a script, a config), so they show in the session
+ * explorer. Only in the session's own work folder: files in cloned repositories are never sent (see RUNNER_EXCLUDED_DIRS).
+ */
+export const RUNNER_CODE_EXTS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.py', '.java', '.kt', '.go', '.rs', '.rb', '.php', '.cs',
+  '.c', '.h', '.cpp', '.hpp', '.swift', '.sh', '.sql', '.css', '.scss', '.txt', '.json', '.yaml', '.yml', '.xml', '.toml',
+]);
+const CODE_NOISE_FILES = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml']);
+const CODE_NOISE_DIRS = new Set(['dist', 'build', 'out', 'coverage', 'target', 'vendor', '__pycache__', '.venv', 'venv', '.next', '.nuxt', '.gradle', '.idea', '.vscode']);
+
+/** True for a source or text file (path relative to the work folder) that is an answer, not a dependency or build product. */
+export function isCodeOutputFile(rel: string): boolean {
+  const parts = rel.split('/');
+  const name = parts[parts.length - 1] ?? '';
+  if (!name || name.startsWith('.') || CODE_NOISE_FILES.has(name)) return false;
+  if (parts.slice(0, -1).some((d) => CODE_NOISE_DIRS.has(d))) return false;
+  return RUNNER_CODE_EXTS.has(path.extname(name).toLowerCase());
+}
+
 /** The deck's slide list: a JSON file the portal turns into the PowerPoint (presentations.ts), the one JSON file sent back. */
 export const RUNNER_DECK_SPEC = 'deck.json';
-const allowedRunnerName = (name: string): boolean => RUNNER_FILE_EXTS.has(path.extname(name).toLowerCase()) || name === RUNNER_DECK_SPEC;
+const allowedRunnerFile = (rel: string): boolean => {
+  const name = path.posix.basename(rel);
+  return RUNNER_FILE_EXTS.has(path.extname(name).toLowerCase()) || name === RUNNER_DECK_SPEC || isCodeOutputFile(rel);
+};
 
 /** Folders that hold tool state, clones, dependencies or the agents' shared notes, not the agent's deliverables. */
 export const RUNNER_EXCLUDED_DIRS = new Set([
@@ -75,7 +98,7 @@ export function collectRunnerFiles(workDir: string, sinceMs = 0): { files: Runne
         continue;
       }
       if (!e.isFile()) continue;
-      if (!allowedRunnerName(e.name)) continue;
+      if (!allowedRunnerFile(r)) continue;
       let st: fs.Stats;
       try { st = fs.statSync(abs); } catch { continue; }
       if (st.mtimeMs < sinceMs) continue;
@@ -129,7 +152,7 @@ export function safeRelPath(p: unknown): string | null {
   if (norm === '.' || norm.startsWith('/')) return null;
   const parts = norm.split('/');
   if (parts.some((s) => RUNNER_EXCLUDED_DIRS.has(s) && s !== parts[parts.length - 1])) return null;
-  if (!allowedRunnerName(path.posix.basename(norm))) return null;
+  if (!allowedRunnerFile(norm)) return null;
   return norm;
 }
 
