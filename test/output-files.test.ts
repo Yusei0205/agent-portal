@@ -205,27 +205,29 @@ describe('collectOutputFiles — extension filter', () => {
     }
   });
 
-  it('skips code and config files silently (.ts, .js, .py, .sh, .json, .yaml, .txt)', async () => {
-    const workflowId = await createWorkflow(baseUrl, adminCookie, projectId, 'ext denied');
+  it('lists source files from the work folder, keeps them out of the Vault, and skips lock files and build output', async () => {
+    const workflowId = await createWorkflow(baseUrl, adminCookie, projectId, 'ext code');
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
     const cutoff = new Date().toISOString();
     await new Promise((r) => setTimeout(r, 30)); // file clock can lag Date.now() on Linux
 
-    // Documents and images only; config files the agent edits must not reach the Vault
-    const denied = ['script.ts', 'helper.js', 'run.py', 'setup.sh', 'config.json', 'values.yaml', 'notes.txt'];
-    for (const name of denied) writeFile(workDir, `ext-denied/${name}`, 'x');
+    const shown = ['Component.tsx', 'helper.js', 'run.py', 'setup.sh', 'config.json', 'values.yaml', 'notes.txt'];
+    const hidden = ['package-lock.json', 'dist/bundle.js', 'build/out.css', '__pycache__/m.py', '.eslintrc.json', 'binary.exe'];
+    for (const name of shown) writeFile(workDir, `ext-code/${name}`, 'x');
+    for (const name of hidden) writeFile(workDir, `ext-code/${name}`, 'x');
 
     await collectOutputFiles(runId, workflowId, workDir, cutoff);
 
-    const collected = all<Row>(
-      'SELECT name FROM output_files WHERE workflow_id = ?',
-      workflowId,
-    ).map((f) => f.name as string);
+    const collected = all<Row>('SELECT name, mime_type FROM output_files WHERE workflow_id = ?', workflowId);
+    const names = collected.map((f) => f.name as string);
+    for (const name of shown) assert.ok(names.includes(name), `${name} should be listed`);
+    for (const name of hidden) assert.ok(!names.includes(path.basename(name)), `${name} should NOT be listed`);
+    assert.equal(collected.find((f) => f.name === 'Component.tsx')?.mime_type, 'text/plain');
 
-    for (const name of denied) {
-      assert.ok(!collected.includes(name), `${name} should NOT be collected`);
-    }
+    // The Vault holds documents; source files stay out of it.
+    const vault = all<Row>('SELECT name FROM vault_files WHERE source_workflow_id = ?', workflowId);
+    assert.equal(vault.length, 0, 'no source file reaches the Vault');
   });
 });
 

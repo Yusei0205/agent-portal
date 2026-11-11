@@ -26,6 +26,7 @@ import { getProjectRepository } from './repositories/projects.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { getOutputFilesRepository } from './repositories/output-files.ts';
 import { persistFile, restoreFile } from './durable-files.ts';
+import { RUNNER_CODE_EXTS, isCodeOutputFile } from './agent/runner-files.ts';
 
 // ── Extension allow-list ──────────────────────────────────────────────────────
 
@@ -66,10 +67,12 @@ const EXT_MIME: Record<string, string> = {
   '.yml':    'text/yaml',
   '.csv':    'text/csv',
   '.drawio': 'application/xml',
+  '.xml':    'application/xml',
 };
 
 function mimeForExt(ext: string): string {
-  return EXT_MIME[ext] ?? 'application/octet-stream';
+  // Source files the session wrote (see isCodeOutputFile) are plain text.
+  return EXT_MIME[ext] ?? (RUNNER_CODE_EXTS.has(ext) ? 'text/plain' : 'application/octet-stream');
 }
 
 const INLINE_EXTS = new Set([
@@ -297,6 +300,8 @@ export async function collectOutputFiles(
     } catch { /* skip */ }
   }
 
+  // Source files count as session output only from the work folder; changes inside cloned repositories belong to the repository.
+  const repoCandidates = new Set(allCandidates);
   const nonRepoFiles = collectFromWorkDir(workDir, cutoffMs);
   allCandidates.push(...nonRepoFiles);
 
@@ -313,7 +318,9 @@ export async function collectOutputFiles(
     const ext = path.extname(absPath).toLowerCase();
     const name = path.basename(absPath);
 
-    if (!ALLOWED_EXTS.has(ext)) continue;
+    const isCode = !ALLOWED_EXTS.has(ext) && !repoCandidates.has(absPath)
+      && isCodeOutputFile(path.relative(workDir, absPath).split(path.sep).join('/'));
+    if (!ALLOWED_EXTS.has(ext) && !isCode) continue;
 
     let stat: fs.Stats;
     try { stat = fs.statSync(absPath); } catch { continue; }
@@ -366,7 +373,8 @@ export async function collectOutputFiles(
 
     fileCount++;
     totalBytes += stat.size;
-    vaultCandidates.push({ id: fileId, relPath, absPath, mime, size: stat.size });
+    // The Vault holds documents; source files stay in the session's own output list.
+    if (!isCode) vaultCandidates.push({ id: fileId, relPath, absPath, mime, size: stat.size });
   }
 
   if (vaultCandidates.length && projectId) {
@@ -579,7 +587,7 @@ export function registerOutputFileRoutes(): void {
         }
         return;
       }
-      if (['.md', '.csv', '.html', '.xml', '.txt', '.json', '.yaml', '.yml'].includes(ext)) {
+      if (['.md', '.csv', '.html', '.xml', '.txt', '.json', '.yaml', '.yml'].includes(ext) || RUNNER_CODE_EXTS.has(ext)) {
         try {
           const TEXT_PREVIEW_LIMIT = 512 * 1024;
           const buf = fs.readFileSync(absPath);
