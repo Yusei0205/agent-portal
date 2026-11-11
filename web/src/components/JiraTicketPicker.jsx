@@ -18,6 +18,7 @@ import { formatRelative } from '../lib/util.js';
 import { Icon } from './Icon.jsx';
 import { TicketPreview } from './TicketPreview.jsx';
 
+import { safeUrl } from '../lib/safeUrl.js';
 const LS_KEY = (pid) => `jira-picker-project-${pid}`;
 
 /** Map Jira priority → badge class */
@@ -194,7 +195,7 @@ export function JiraTicketPicker({ projectId, jiraMapping = null, value, onChang
           )}
           {value.url && (
             <a
-              href={value.url}
+              href={safeUrl(value.url)}
               target="_blank"
               rel="noopener noreferrer"
               className="btn-icon"

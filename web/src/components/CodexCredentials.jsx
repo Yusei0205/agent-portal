@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from './Icon.jsx';
 
+import { safeUrl } from '../lib/safeUrl.js';
 export function CodexCredentials({ isAdmin }) {
   const [status, setStatus] = useState(null);
   const [challenge, setChallenge] = useState(null);
@@ -77,7 +78,7 @@ export function CodexCredentials({ isAdmin }) {
                 <h4>Sign in to Codex</h4>
                 <p>{challenge.userCode ? 'Open the sign-in page and enter this one-time code:' : 'Preparing your device authorization code...'}</p>
                 {challenge.userCode && <div className="device-user-code-row"><strong className="device-user-code">{challenge.userCode}</strong></div>}
-                {challenge.verificationUrl && <a className="device-code-url" href={challenge.verificationUrl} target="_blank" rel="noopener noreferrer">Sign in with ChatGPT</a>}
+                {challenge.verificationUrl && <a className="device-code-url" href={safeUrl(challenge.verificationUrl)} target="_blank" rel="noopener noreferrer">Sign in with ChatGPT</a>}
                 <p className="device-status">Waiting for authorization. Enable device-code login in ChatGPT Settings → Security if prompted. If the code expires, cancel and start again.</p>
                 <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => act('login/cancel')}>Cancel sign-in</button>
               </div>

@@ -22,6 +22,7 @@ import { DeviceCodeBox } from '../components/DeviceCodeBox.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
+import { safeUrl } from '../lib/safeUrl.js';
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function modeLabel(engine, mode) {
@@ -178,7 +179,7 @@ function ClaudePlanSignIn({ name, isDefault, onDone, fallback = null }) {
       ) : (
         <div className="stack">
           <p className="field-hint">
-            1. Approve access in the tab that opened (<a href={url} target="_blank" rel="noopener noreferrer">open it again</a>).
+            1. Approve access in the tab that opened (<a href={safeUrl(url)} target="_blank" rel="noopener noreferrer">open it again</a>).
             {' '}2. Copy the code Claude shows you and paste it here.
           </p>
           <div style={{ display: 'flex', gap: 6 }}>
@@ -236,7 +237,7 @@ function ClaudePlanNativeSignIn({ onToken }) {
               {state.url ? 'Get a new sign-in link' : 'Sign in with Claude'}
             </button>
             {state.url && (
-              <a href={state.url} target="_blank" rel="noopener noreferrer" className="btn">Open sign-in page</a>
+              <a href={safeUrl(state.url)} target="_blank" rel="noopener noreferrer" className="btn">Open sign-in page</a>
             )}
           </div>
           {state.flow && (
@@ -549,7 +550,7 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
               </p>
               <div className="device-code-url">
                 <a
-                  href={deviceChallenge.verificationUriComplete || deviceChallenge.verificationUri}
+                  href={safeUrl(deviceChallenge.verificationUriComplete || deviceChallenge.verificationUri)}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

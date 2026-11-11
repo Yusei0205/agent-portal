@@ -16,6 +16,7 @@ import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 
+import { safeUrl } from '../lib/safeUrl.js';
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function statusBadgeClass(status) {
@@ -1164,7 +1165,7 @@ function ConnectedHeader({ jira, projectId, onDisconnected }) {
           {jira.site?.url && (
             <a
               className="muted small"
-              href={jira.site.url}
+              href={safeUrl(jira.site.url)}
               target="_blank"
               rel="noopener noreferrer"
             >

@@ -15,6 +15,7 @@ import { formatRelative } from '../lib/util.js';
 import { Icon } from './Icon.jsx';
 import { Markdown } from './Markdown.jsx';
 
+import { safeUrl } from '../lib/safeUrl.js';
 function formatBytes(n) {
   if (!n) return '';
   if (n < 1024) return `${n} B`;
@@ -151,7 +152,7 @@ export function TicketPreview({ projectId, ticketKey, onStartSession }) {
           {t.url && (
             <a
               className="small"
-              href={t.url}
+              href={safeUrl(t.url)}
               target="_blank"
               rel="noopener noreferrer"
               style={{ whiteSpace: 'nowrap' }}
