@@ -35,7 +35,7 @@ import { config } from './config.ts';
 import { appendAudit } from './audit.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { getDb } from './db.ts';
-import { persistFile, forgetFile, restoreTree, forgetTree, persistTree } from './durable-files.ts';
+import { persistFile, forgetFile, restoreFile, restoreTree, forgetTree, persistTree } from './durable-files.ts';
 import { inspectViaRunner, isCloudSession } from './agent/runner-inspect-client.ts';
 import type { InspectRequest } from './agent/runner-inspect.ts';
 
@@ -500,25 +500,39 @@ export function registerSessionFileRoutes(): void {
       sendJson(res, 400, { error: 'path query parameter required' });
       return;
     }
-    if (scope === 'vault') {
-      sendJson(res, 400, { error: 'Use the vault download route for vault files' });
-      return;
-    }
-
-    if (scope === 'work' && await answerFromRunner(wf, res, { op: 'file', path: relPath })) return;
-
-    const roots = await resolveWorkingCopyRoots(req.params.id);
-    if (!roots) {
-      sendJson(res, 404, { error: 'Session working copy not found' });
-      return;
-    }
-
     let absPath: string;
-    try {
-      absPath = resolveScopePath(roots, scope, relPath);
-    } catch {
-      sendJson(res, 400, { error: 'Invalid path' });
-      return;
+    if (scope === 'vault' || scope === 'vault:team') {
+      // The tree lists Vault files by id, so the id is the path here. The same lists as the tree decide what this person may
+      // open; the content is under the data folder (fetched from storage when this machine does not have it).
+      const projectId = String(wf.project_id ?? '');
+      if (!projectId) { sendJson(res, 404, { error: 'File not found' }); return; }
+      const userId = req.user!.id;
+      const vaultRepo = getVaultFilesRepository();
+      const visible = scope === 'vault'
+        ? await vaultRepo.listByProject(projectId, userId, 'personal')
+        : [
+            ...(await vaultRepo.listByProject(projectId, userId, 'project')),
+            ...(await vaultRepo.listByProject(projectId, userId, 'portal')),
+          ];
+      const vf = visible.find((f) => f.id === relPath);
+      if (!vf) { sendJson(res, 404, { error: 'File not found' }); return; }
+      absPath = path.join(config.dataDir, vf.path);
+      if (!(await restoreFile(absPath))) { sendJson(res, 404, { error: 'File not found' }); return; }
+    } else {
+      if (scope === 'work' && await answerFromRunner(wf, res, { op: 'file', path: relPath })) return;
+
+      const roots = await resolveWorkingCopyRoots(req.params.id);
+      if (!roots) {
+        sendJson(res, 404, { error: 'Session working copy not found' });
+        return;
+      }
+
+      try {
+        absPath = resolveScopePath(roots, scope, relPath);
+      } catch {
+        sendJson(res, 400, { error: 'Invalid path' });
+        return;
+      }
     }
 
     if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {

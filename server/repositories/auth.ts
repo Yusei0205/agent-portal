@@ -58,6 +58,7 @@ export interface SessionWithUser {
   is_admin: number;
   disabled: number;
   expires_at: string;
+  created_at: string;
 }
 
 export interface CreateUserInput {
@@ -162,6 +163,9 @@ export interface AuthRepository {
    * DynamoDB: 1 GSI query + 1 GetItem (see design doc "Keep it to one lookup plus user fetch").
    */
   getSessionWithUser(tokenHash: string): Promise<SessionWithUser | null>;
+
+  /** Move a session's expiry (sliding idle timeout). */
+  extendSession(userId: string, tokenHash: string, expiresAt: string): Promise<void>;
 
   /** Delete a single session (logout). */
   deleteSession(tokenHash: string): Promise<void>;

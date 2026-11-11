@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { Icon } from '../../components/Icon.jsx';
 import { navigate } from '../../lib/router.js';
 import { formatBytes, getFileTypeMeta, isImageFile } from '../../lib/outputFileUtils.js';
+import { AddToVaultButton } from './AddToVaultButton.jsx';
 
 const MAX_COLLAPSED = 4;
 
@@ -34,7 +35,7 @@ function downloadFile(file) {
  *   onPreview: (file: object) => void,
  * }} props
  */
-function FileRow({ file, onPreview }) {
+function FileRow({ file, workflowId, onPreview }) {
   const isImg = isImageFile(file);
   const { icon, label } = getFileTypeMeta(file.mime_type, file.name);
 
@@ -97,6 +98,7 @@ function FileRow({ file, onPreview }) {
           <Icon name="download" size={12} aria-hidden="true" />
           Download
         </button>
+        <AddToVaultButton workflowId={workflowId} file={file} />
       </div>
     </li>
   );
@@ -152,6 +154,7 @@ export function RunOutputsCard({ files, workflowId, projectId, vaultFolder, onPr
           <FileRow
             key={file.id}
             file={file}
+            workflowId={workflowId}
             onPreview={(f) => onPreview(f, files)}
           />
         ))}

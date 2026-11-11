@@ -9,7 +9,8 @@
  *   router.sse('/api/foo/stream', (req, res) => { ... });
  */
 
-import { SCHEDULED_EVENT_PATH, handleScheduledEvent } from './scheduled-jobs.ts';
+import { SCHEDULED_EVENT_PATH, handleScheduledEvent, JOB_RUNNER_INVOKE_PATH, JOB_RUNNER_PING_PATH, handleJobInvocation, handleJobRunnerPing } from './scheduled-jobs.ts';
+import { isJobRunner } from './job-runtime.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import http from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -231,6 +232,19 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
+/**
+ * Whether a browser page at `origin` may call the API with the person's cookie: the portal's own address
+ * (PORTAL_PUBLIC_URL), any address listed in PORTAL_ALLOWED_ORIGINS, or the host the request arrived on.
+ */
+export function isAllowedOrigin(origin: string, host: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const allowed = new Set<string>();
+  for (const o of String(env.PORTAL_ALLOWED_ORIGINS ?? '').split(',')) if (o.trim()) allowed.add(o.trim().replace(/\/+$/, ''));
+  const pub = env.PORTAL_PUBLIC_URL?.trim();
+  if (pub) allowed.add(pub.replace(/\/+$/, ''));
+  if (allowed.has(origin)) return true;
+  try { return host !== '' && new URL(origin).host === host; } catch { return false; }
+}
+
 export function setCookie(
   res: ServerResponse,
   name: string,
@@ -438,7 +452,7 @@ export function createRequestHandler(): (
 
       // ── CORS headers ──────────────────────────────────────────────────────
       const origin = String(rawReq.headers.origin ?? '');
-      if (origin) {
+      if (origin && isAllowedOrigin(origin, String(rawReq.headers.host ?? ''))) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Vary', 'Origin');
@@ -612,6 +626,11 @@ export function createServer(): http.Server {
     if (req.url === SCHEDULED_EVENT_PATH) {
       void handleScheduledEvent(req, res, originSecret);
       return;
+    }
+    // The job runtime's contract with AgentCore (see job-runtime.ts). AgentCore sends no CloudFront header; the body carries the secret.
+    if (isJobRunner()) {
+      if (req.url === JOB_RUNNER_PING_PATH && req.method === 'GET') { handleJobRunnerPing(res); return; }
+      if (req.url === JOB_RUNNER_INVOKE_PATH) { void handleJobInvocation(req, res, originSecret); return; }
     }
     if (originSecret && !req.url?.startsWith('/api/health')) {
       const a = Buffer.from(String(req.headers['x-portal-origin'] ?? ''));

@@ -33,7 +33,7 @@ import type { TestProject, TestScript, TestRun, TestGroup } from './helpers.ts';
 import { validateSteps } from './types.ts';
 import type { Step, LocatorShape } from './types.ts';
 import { resolveVaultRefs } from './vault.ts';
-import { assertNotBlocked } from './ssrf.ts';
+import { assertNotBlocked, privateNetworksAllowed } from './ssrf.ts';
 import { callTextModel } from './model-provider.ts';
 
 // ── In-memory concurrency + cancellation tracking ─────────────────────────────
@@ -502,7 +502,7 @@ async function executeRun(runId: string, scripts: TestScript[], tp: TestProject)
     await testingRepo().updateTestRun(runId, { artifact_dir: artifactDir });
 
     // SSRF guard setting — metadata/link-local always blocked; private networks allowed by default
-    const allowPrivateNetworks = getSetting(getDb(), 'test.allowPrivateNetworks') !== 'false';
+    const allowPrivateNetworks = privateNetworksAllowed(getSetting(getDb(), 'test.allowPrivateNetworks'));
 
     const pw = await loadPlaywright();
     if (!pw) {

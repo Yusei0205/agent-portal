@@ -10,6 +10,7 @@
 import { getSetting } from '../settings.ts';
 import { getDb } from '../db.ts';
 import { fetchWithSsrfCheck } from '../testing/runner.ts';
+import { privateNetworksAllowed } from '../testing/ssrf.ts';
 import { resolveVaultRefs } from '../testing/vault.ts';
 import { readLiveHeaders } from './live-credentials.ts';
 import { applyToSnapshot } from './rule-store.ts';
@@ -135,7 +136,7 @@ async function callLive(t: TargetApi, testProjectId: string, cfg: ApiTargetConfi
     const present = Object.keys(out).find((h) => h.toLowerCase() === k.toLowerCase());
     if (present) out[present] = await resolveVaultRefs(v, testProjectId);
   }
-  const allowPrivate = getSetting(getDb(), 'test.allowPrivateNetworks') !== 'false';
+  const allowPrivate = privateNetworksAllowed(getSetting(getDb(), 'test.allowPrivateNetworks'));
   const resp = await fetchWithSsrfCheck(url, method, out, body !== undefined ? JSON.stringify(body) : undefined, LIVE_TIMEOUT_MS, allowPrivate);
   const text = await resp.text();
   let parsed: unknown = text;

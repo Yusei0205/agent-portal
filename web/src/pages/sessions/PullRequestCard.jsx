@@ -8,6 +8,7 @@ import { Icon } from '../../components/Icon.jsx';
 import { api } from '../../lib/api.js';
 import { sessionPullRequestCards, describePullRequest } from '../../lib/pullRequestCard.js';
 
+import { safeUrl } from '../../lib/safeUrl.js';
 function Card({ event, workflowId, projectId }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -44,7 +45,7 @@ function Card({ event, workflowId, projectId }) {
             <a
               key={a.label}
               className="btn btn-sm btn-ghost"
-              href={a.href}
+              href={safeUrl(a.href)}
               {...(/^https?:/i.test(a.href) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
             >{a.label}</a>
           ) : (

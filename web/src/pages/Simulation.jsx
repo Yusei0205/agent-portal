@@ -155,12 +155,20 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
               </p>
               <div className="field">
                 <label htmlFor="sim-file">File</label>
-                <input id="sim-file" ref={input} type="file" accept=".xlsx,.docx,.json" disabled={busy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    setFile(f); setError(''); setMode('ai');
-                    if (f && !groupTouched) setGroup(f.name.replace(/\.[^.]+$/, ''));
-                  }} />
+                {/* The native file button ignores the theme, so the real input is hidden inside a themed button. */}
+                <div className="sim-file-pick">
+                  <label className={`btn${busy ? ' disabled' : ''}`}>
+                    <Icon name="upload" size={14} />
+                    {file ? 'Change file' : 'Choose file'}
+                    <input id="sim-file" ref={input} type="file" accept=".xlsx,.docx,.json" disabled={busy} className="sim-file-input"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null;
+                        setFile(f); setError(''); setMode('ai');
+                        if (f && !groupTouched) setGroup(f.name.replace(/\.[^.]+$/, ''));
+                      }} />
+                  </label>
+                  <span className="small sim-file-name" title={file?.name || ''}>{file ? file.name : 'No file chosen'}</span>
+                </div>
                 {file && !kind && <span className="field-hint">Choose a .docx, .xlsx or .json file.</span>}
                 {kind === 'json' && <span className="field-hint">OpenAPI or Postman: read directly, no AI needed.</span>}
               </div>
@@ -169,7 +177,7 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
                 <>
                   <div className="field">
                     <label htmlFor="sim-group">Group</label>
-                    <input id="sim-group" list="sim-groups" value={group} maxLength={120} disabled={busy}
+                    <input type="text" id="sim-group" list="sim-groups" value={group} maxLength={120} disabled={busy}
                       onChange={(e) => { setGroup(e.target.value); setGroupTouched(true); }} placeholder="For example the client or the document" />
                     <datalist id="sim-groups">{groups.map((g) => <option key={g} value={g} />)}</datalist>
                     <span className="field-hint">
@@ -180,7 +188,7 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
                   </div>
                   <div className="field">
                     <label htmlFor="sim-label">Version of the document <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
-                    <input id="sim-label" value={label} maxLength={60} disabled={busy} onChange={(e) => setLabel(e.target.value)} placeholder="ver 1" style={{ maxWidth: 240 }} />
+                    <input type="text" id="sim-label" value={label} maxLength={60} disabled={busy} onChange={(e) => setLabel(e.target.value)} placeholder="ver 1" style={{ maxWidth: 240 }} />
                     <span className="field-hint">Shown next to the version number, so you can tell which document version each spec version came from.</span>
                   </div>
                 </>
@@ -248,7 +256,7 @@ function RenameGroupDialog({ projectId, name, onClose, onDone, toast }) {
         <div className="modal-body stack">
           <div className="field">
             <label htmlFor="grp-name">Group name</label>
-            <input id="grp-name" value={to} maxLength={120} onChange={(e) => setTo(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && to.trim() && to.trim() !== name) submit(); }} autoFocus />
+            <input type="text" id="grp-name" value={to} maxLength={120} onChange={(e) => setTo(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && to.trim() && to.trim() !== name) submit(); }} autoFocus />
           </div>
         </div>
         <div className="modal-footer">

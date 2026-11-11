@@ -89,7 +89,7 @@ function OperationCard({ op, editable, onSavePath, busy, onMakeRule }) {
         <span className="sim-method">{op.method}</span>
         {editable ? (
           <div className="sim-path-edit">
-            <input
+            <input type="text"
               aria-label={`URL path for ${op.summary || op.operationId}`}
               className={needsPath ? 'sim-input-warn' : ''}
               value={path}
@@ -411,7 +411,7 @@ function RuleDialog({ rule, ops, onClose, onSave }) {
           <p className="muted small">Rules are tried from the top; the first one whose condition matches answers the call. With no matching rule the answer is made up from the response fields.</p>
           <div className="field">
             <label htmlFor="rule-name">Name</label>
-            <input id="rule-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Reject action 142" maxLength={120} />
+            <input type="text" id="rule-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Reject action 142" maxLength={120} />
           </div>
           {ops.length > 1 && (
             <div className="field">
@@ -480,19 +480,19 @@ function RuleDialog({ rule, ops, onClose, onSave }) {
                 <>
                   <div className="field">
                     <label htmlFor="rule-coll">Collection</label>
-                    <input id="rule-coll" value={storeCollection} onChange={(e) => setStoreCollection(e.target.value)} placeholder="applications" maxLength={40} style={{ maxWidth: 260 }} />
+                    <input type="text" id="rule-coll" value={storeCollection} onChange={(e) => setStoreCollection(e.target.value)} placeholder="applications" maxLength={40} style={{ maxWidth: 260 }} />
                   </div>
                   {storeAction !== 'list' && (
                     <div className="field">
                       <label htmlFor="rule-key">Where the record’s key is in the request</label>
-                      <input id="rule-key" value={storeKey} onChange={(e) => setStoreKey(e.target.value)} placeholder="query.ApplicationNo  or  body.Application.ApplicationNo  or  path.id" spellCheck={false} />
+                      <input type="text" id="rule-key" value={storeKey} onChange={(e) => setStoreKey(e.target.value)} placeholder="query.ApplicationNo  or  body.Application.ApplicationNo  or  path.id" spellCheck={false} />
                       {storeAction === 'save' && <span className="field-hint">Leave empty to give each record a made-up key.</span>}
                     </div>
                   )}
                   {storeAction === 'save' && (
                     <div className="field">
                       <label htmlFor="rule-from">Which part of the request to save</label>
-                      <input id="rule-from" value={storeFrom} onChange={(e) => setStoreFrom(e.target.value)} placeholder="body  (or body.Application)" spellCheck={false} style={{ maxWidth: 360 }} />
+                      <input type="text" id="rule-from" value={storeFrom} onChange={(e) => setStoreFrom(e.target.value)} placeholder="body  (or body.Application)" spellCheck={false} style={{ maxWidth: 360 }} />
                     </div>
                   )}
                   {(storeAction === 'find' || storeAction === 'remove') && (
@@ -575,8 +575,8 @@ function DataCard({ data, projectId, toast }) {
       {open && (
         <div className="stack">
           <div className="row wrap" style={{ gap: 10 }}>
-            <label className="small">Collection <input aria-label="Collection" value={form.collection} onChange={(e) => setForm((f) => ({ ...f, collection: e.target.value }))} placeholder="applications" style={{ width: 180 }} /></label>
-            <label className="small">Key field <input aria-label="Key field" value={form.keyField} onChange={(e) => setForm((f) => ({ ...f, keyField: e.target.value }))} placeholder="ApplicationNo" style={{ width: 180 }} /></label>
+            <label className="small">Collection <input type="text" aria-label="Collection" value={form.collection} onChange={(e) => setForm((f) => ({ ...f, collection: e.target.value }))} placeholder="applications" style={{ width: 180 }} /></label>
+            <label className="small">Key field <input type="text" aria-label="Key field" value={form.keyField} onChange={(e) => setForm((f) => ({ ...f, keyField: e.target.value }))} placeholder="ApplicationNo" style={{ width: 180 }} /></label>
           </div>
           <textarea aria-label="Records (JSON list)" rows={6} value={form.text} onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))} placeholder='[{"ApplicationNo": "A1", "Title": "First"}]' spellCheck={false} />
           <div><button type="button" className="btn btn-sm btn-primary" disabled={busy || !form.collection.trim()} onClick={save}>Replace the collection with these records</button></div>
@@ -692,7 +692,7 @@ function TryPanel({ data, projectId }) {
           )}
           <div className="field">
             <label htmlFor="try-path">Path</label>
-            <div className="sim-path-edit"><span className="sim-method">{op.method}</span><input id="try-path" value={path} onChange={(e) => setPath(e.target.value)} spellCheck={false} /></div>
+            <div className="sim-path-edit"><span className="sim-method">{op.method}</span><input type="text" id="try-path" value={path} onChange={(e) => setPath(e.target.value)} spellCheck={false} /></div>
           </div>
           <div className="field">
             <label htmlFor="try-headers">Headers (JSON)</label>
@@ -894,11 +894,11 @@ function SettingsPanel({ data, projectId, reload, toast }) {
       <div className="card stack">
         <div className="field">
           <label htmlFor="set-name">Name</label>
-          <input id="set-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
+          <input type="text" id="set-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
         </div>
         <div className="field">
           <label htmlFor="set-group">Group</label>
-          <input id="set-group" value={group} onChange={(e) => setGroup(e.target.value)} maxLength={120} placeholder="No group" />
+          <input type="text" id="set-group" value={group} onChange={(e) => setGroup(e.target.value)} maxLength={120} placeholder="No group" />
           <span className="field-hint">The client or document this API belongs to. Deleting a group deletes every API in it.</span>
         </div>
         <fieldset className="sim-modes">
@@ -927,7 +927,7 @@ function SettingsPanel({ data, projectId, reload, toast }) {
         {(mode === 'live' || mode === 'hybrid') && (
           <div className="field">
             <label htmlFor="set-live">Client’s real API address</label>
-            <input id="set-live" value={liveBaseUrl} onChange={(e) => setLiveBaseUrl(e.target.value)} placeholder="https://api.client.example" spellCheck={false} />
+            <input type="text" id="set-live" value={liveBaseUrl} onChange={(e) => setLiveBaseUrl(e.target.value)} placeholder="https://api.client.example" spellCheck={false} />
             <span className="field-hint">https only. The caller’s own login token (sent as X-Sim-Authorization) is passed on; the portal token never is.</span>
           </div>
         )}
@@ -936,7 +936,7 @@ function SettingsPanel({ data, projectId, reload, toast }) {
             <span className="field-label">Login for the live API <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></span>
             {loginRows.map((r, i) => (
               <div key={i} className="row" style={{ gap: 8 }}>
-                <input aria-label="Header name" style={{ width: 160 }} value={r.name} disabled={r.saved} placeholder="Authorization" onChange={(e) => setLoginRows((rows) => rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+                <input type="text" aria-label="Header name" style={{ width: 160 }} value={r.name} disabled={r.saved} placeholder="Authorization" onChange={(e) => setLoginRows((rows) => rows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
                 <input aria-label={`Value of ${r.name || 'the header'}`} type="password" autoComplete="off" style={{ flex: 1, minWidth: 160 }} value={r.value} placeholder={r.saved ? 'Saved. Type to replace it.' : 'Bearer …'} onChange={(e) => setLoginRows((rows) => rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
                 <button type="button" className="btn-icon" aria-label={`Remove ${r.name || 'header'}`} onClick={() => setLoginRows((rows) => rows.filter((_, j) => j !== i))}><Icon name="trash" size={14} /></button>
               </div>

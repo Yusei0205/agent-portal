@@ -6,6 +6,7 @@ import { Icon } from '../components/Icon.jsx';
 import { PageHeader } from '../components/PageHeader.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
+import { safeUrl } from '../lib/safeUrl.js';
 const KINDS = [
   { value: 'bug', label: 'Something is broken' },
   { value: 'idea', label: 'Idea' },
@@ -159,7 +160,7 @@ function Mine() {
             <tr key={f.id}>
               <td>
                 <strong>{f.title}</strong>
-                {f.pr_url ? <div className="small"><a href={f.pr_url} target="_blank" rel="noreferrer">See the change</a></div> : null}
+                {f.pr_url ? <div className="small"><a href={safeUrl(f.pr_url)} target="_blank" rel="noreferrer">See the change</a></div> : null}
               </td>
               <td>{KIND_LABEL[f.kind]}</td>
               <td><StatusBadge status={f.status} /></td>
@@ -229,7 +230,7 @@ function AdminInbox() {
                   <td>{f.user_name || 'Deleted user'}</td>
                   <td>{KIND_LABEL[f.kind]}</td>
                   <td><StatusBadge status={f.status} /></td>
-                  <td>{f.pr_url ? <a href={f.pr_url} target="_blank" rel="noreferrer">Pull request</a> : f.workflow_id ? <span className="muted small">Session running</span> : <span className="muted small">None</span>}</td>
+                  <td>{f.pr_url ? <a href={safeUrl(f.pr_url)} target="_blank" rel="noreferrer">Pull request</a> : f.workflow_id ? <span className="muted small">Session running</span> : <span className="muted small">None</span>}</td>
                   <td className="muted small">{formatRelative(f.created_at)}</td>
                 </tr>
               ))}
@@ -307,7 +308,7 @@ function Detail({ item, target, onClose, onChanged }) {
               {item.status === 'in_review' ? (
                 <>
                   <p className="muted small">
-                    Check the change{item.pr_url ? <> on <a href={item.pr_url} target="_blank" rel="noreferrer">the pull request</a></> : null}. Approving records your decision here;
+                    Check the change{item.pr_url ? <> on <a href={safeUrl(item.pr_url)} target="_blank" rel="noreferrer">the pull request</a></> : null}. Approving records your decision here;
                     merge the pull request on the git host. To ask for changes, write to the agent in its session.
                   </p>
                   <div className="actions-row"><button type="button" className="btn btn-primary" onClick={approve} disabled={busy}>Approve</button></div>

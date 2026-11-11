@@ -11,6 +11,7 @@ import { Icon } from '../../components/Icon.jsx';
 import { formatRelative } from '../../lib/util.js';
 import { navigate } from '../../lib/router.js';
 import { formatBytes, getFileTypeMeta, isImageFile } from '../../lib/outputFileUtils.js';
+import { AddToVaultButton } from './AddToVaultButton.jsx';
 
 /** Returns the folder portion of a file's relative path (everything before the last segment). */
 function shortFolder(path) {
@@ -179,6 +180,7 @@ export function IdeOutputs({ outputFiles = [], loading, workflowId, projectId, v
                       <Icon name="download" size={12} aria-hidden="true" />
                       Download
                     </button>
+                    <AddToVaultButton workflowId={workflowId} file={file} />
                     {file.vault_file_id && (
                       <button
                         type="button"

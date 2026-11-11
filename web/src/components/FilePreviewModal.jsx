@@ -3,6 +3,7 @@ import { sanitizeMarkdown } from '../lib/sanitize.js';
 import { PanZoom, TextZoom } from './PanZoom.jsx';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
+import { safeUrl } from '../lib/safeUrl.js';
 // ── FilePreviewModal ──────────────────────────────────────────────────────────
 //
 // Props:
@@ -181,9 +182,7 @@ function MarkdownPreview({ content }) {
     // Lazy-load marked
     import('marked').then(({ marked }) => {
       const rendered = typeof marked === 'function' ? marked(content) : marked.parse(content);
-      // Basic sanitisation: strip scripts
-      const safe = String(rendered).replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-      setHtml(safe);
+      setHtml(sanitizeMarkdown(String(rendered)));
     }).catch(() => {
       // Fallback: plain text
       setHtml(`<pre style="white-space:pre-wrap">${escapeHtml(content)}</pre>`);

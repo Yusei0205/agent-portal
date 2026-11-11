@@ -39,6 +39,8 @@ export function getFileTypeMeta(mimeType, fileName) {
   if (ext === 'pptx' || mimeType?.includes('presentationml')) return { icon: 'file', label: 'PPTX' };
   if (ext === 'docx' || mimeType?.includes('wordprocessingml')) return { icon: 'file', label: 'DOCX' };
   if (ext === 'md' || mimeType === 'text/markdown') return { icon: 'file', label: 'MD' };
+  // A source file the session wrote (text/plain with a code extension) is labelled by its extension, e.g. TSX.
+  if (mimeType === 'text/plain' && ext && ext !== 'txt') return { icon: 'file', label: ext.toUpperCase() };
   if (mimeType?.startsWith('text/') || ext === 'txt') return { icon: 'file', label: 'Text' };
   if (ext === 'zip' || mimeType === 'application/zip' || mimeType === 'application/x-zip-compressed') {
     return { icon: 'zip-download', label: 'ZIP' };
