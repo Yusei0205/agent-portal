@@ -24,6 +24,7 @@ import { EmailAlreadyTakenError, AdminAlreadyExistsError } from './repositories/
 import { appendAudit } from './audit.ts';
 import { config } from './config.ts';
 import { absoluteMs, nextExpiry, sessionExpiry } from './session-policy.ts';
+import { clearLoginFailures, loginBlocked, recordLoginFailure } from './login-limiter.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,12 @@ export function verifyPassword(password: string, stored: string): boolean {
   }
   if (actual.length !== expected.length) return false;
   return timingSafeEqual(expected, actual);
+}
+
+let _dummyHash: string | null = null;
+/** A hash nobody knows the password for, used when the email is not registered. */
+export function dummyPasswordHash(): string {
+  return (_dummyHash ??= hashPassword(randomBytes(16).toString('hex')));
 }
 
 function sha256(s: string): string {
@@ -168,7 +175,6 @@ export async function authenticate(rawReq: import('node:http').IncomingMessage, 
 
 // ── Rate limiting ──────────────────────────────────────────────────────────────
 
-const loginFailures = new Map<string, { count: number; until: number }>();
 const setupAttempts = new Map<string, { count: number; until: number }>();
 
 // ── Platform detection ────────────────────────────────────────────────────────
@@ -248,27 +254,23 @@ export function registerAuthRoutes(): void {
     const email = String(body.email ?? '').trim().toLowerCase();
     const password = String(body.password ?? '');
 
-    // Rate limiting: 8 failures per 15 minutes per IP+email
-    const rateKey = `${req.ip}|${email}`;
-    const failures = loginFailures.get(rateKey);
-    if (failures && failures.count >= 8 && failures.until > Date.now()) {
+    // Failure limits live in the auth repository (shared by every instance), per account and per address.
+    if (await loginBlocked(email, req.ip)) {
       sendJson(res, 429, { error: 'Too many failed attempts. Wait 15 minutes and try again.' });
       return;
     }
 
     const user = await getAuthRepository().getUserByEmail(email);
 
-    if (!user || user.disabled || !verifyPassword(password, user.password_hash)) {
-      const next = {
-        count: (failures && failures.until > Date.now() ? failures.count : 0) + 1,
-        until: Date.now() + 15 * 60_000,
-      };
-      loginFailures.set(rateKey, next);
+    // Always spend the same hashing time, so an unknown email cannot be told apart from a wrong password by speed.
+    const passwordOk = verifyPassword(password, user?.password_hash ?? dummyPasswordHash());
+    if (!user || user.disabled || !passwordOk) {
+      await recordLoginFailure(email, req.ip);
       sendJson(res, 401, { error: 'Email or password is incorrect' });
       return;
     }
 
-    loginFailures.delete(rateKey);
+    await clearLoginFailures(email);
     await startSession(res, user.id, req.secure);
     appendAudit(null, user.id, 'auth.login', `user:${user.id}`, { email }, req.ip);
     sendJson(res, 200, { ok: true });
