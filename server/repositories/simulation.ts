@@ -34,6 +34,8 @@ export interface SimApiRecord {
   log_bodies: boolean;
   /** The login headers sent to the live API, as encrypted JSON {name: value}. Never returned to a browser. */
   live_headers_enc: string | null;
+  /** The environments (dev, UAT, prod) as encrypted JSON, see api-sim/environments.ts. Never returned to a browser as it is. */
+  environments_enc: string | null;
   /** Hybrid only: operationId -> mode. Anything not listed is mocked. */
   operation_modes: Record<string, 'mock' | 'live'>;
   /** 0 = nothing approved yet; the hosted endpoint refuses to answer until a version is approved. */
@@ -44,7 +46,7 @@ export interface SimApiRecord {
   updated_at: string;
 }
 
-export type SimApiUpdate = Partial<Pick<SimApiRecord, 'name' | 'group_name' | 'mode' | 'live_base_url' | 'require_explicit_rule' | 'log_bodies' | 'live_headers_enc' | 'operation_modes' | 'approved_version' | 'latest_version'>>;
+export type SimApiUpdate = Partial<Pick<SimApiRecord, 'name' | 'group_name' | 'mode' | 'live_base_url' | 'require_explicit_rule' | 'log_bodies' | 'live_headers_enc' | 'environments_enc' | 'operation_modes' | 'approved_version' | 'latest_version'>>;
 
 export interface SimVersionRecord {
   api_id: string;

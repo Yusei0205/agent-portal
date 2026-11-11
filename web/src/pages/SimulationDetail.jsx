@@ -7,6 +7,7 @@ import {
 import { Icon } from '../components/Icon.jsx';
 import { FlagBadge } from '../components/FlagBadge.jsx';
 import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
+import { EnvironmentBar, EnvironmentsEditor } from './SimulationEnvironments.jsx';
 
 const SECTIONS = [
   { id: 'review', label: 'Review' },
@@ -956,6 +957,8 @@ function SettingsPanel({ data, projectId, reload, toast }) {
         <div><button type="button" className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save settings'}</button></div>
       </div>
 
+      <EnvironmentsEditor data={data} projectId={projectId} reload={reload} toast={toast} />
+
       <div className="card stack">
         <h3 className="sim-h3">How to call it</h3>
         {a.approvedVersion === 0 ? (
@@ -1026,6 +1029,8 @@ export function SimulationDetail({ projectId, apiId, onBack, onChanged, toast })
           </select>
         </label>
       </div>
+
+      <EnvironmentBar data={data} projectId={projectId} reload={reload} toast={toast} onManage={() => setSection('settings')} />
 
       <div className="tab-bar" role="tablist" aria-label="API sections">
         {SECTIONS.map((s) => (

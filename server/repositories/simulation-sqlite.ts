@@ -26,6 +26,7 @@ function toApi(r: Row): SimApiRecord {
     require_explicit_rule: Number(r.require_explicit_rule ?? 0) === 1,
     log_bodies: Number(r.log_bodies ?? 0) === 1,
     live_headers_enc: r.live_headers_enc != null ? String(r.live_headers_enc) : null,
+    environments_enc: r.environments_enc != null ? String(r.environments_enc) : null,
     operation_modes: parse(r.operation_modes, {}),
     approved_version: Number(r.approved_version ?? 0),
     latest_version: Number(r.latest_version ?? 0),
@@ -69,6 +70,7 @@ export class SqliteSimulationRepository implements SimulationRepository {
       require_explicit_rule: rec.require_explicit_rule ? 1 : 0,
       log_bodies: rec.log_bodies ? 1 : 0,
       live_headers_enc: rec.live_headers_enc,
+      environments_enc: rec.environments_enc,
       operation_modes: JSON.stringify(rec.operation_modes),
       approved_version: rec.approved_version,
       latest_version: rec.latest_version,
@@ -90,6 +92,7 @@ export class SqliteSimulationRepository implements SimulationRepository {
     if (fields.require_explicit_rule !== undefined) add('require_explicit_rule', fields.require_explicit_rule ? 1 : 0);
     if (fields.log_bodies !== undefined) add('log_bodies', fields.log_bodies ? 1 : 0);
     if (fields.live_headers_enc !== undefined) sets.push('live_headers_enc = ?'), vals.push(fields.live_headers_enc as string);
+    if (fields.environments_enc !== undefined) sets.push('environments_enc = ?'), vals.push(fields.environments_enc as string);
     if (fields.operation_modes !== undefined) add('operation_modes', JSON.stringify(fields.operation_modes));
     if (fields.approved_version !== undefined) add('approved_version', fields.approved_version);
     if (fields.latest_version !== undefined) add('latest_version', fields.latest_version);

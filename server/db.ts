@@ -2283,6 +2283,8 @@ function ensureApiSimSchema(database: DatabaseSync): void {
   // encrypted (see secrets.ts).
   if (!columns('sim_apis').has('log_bodies')) database.exec('ALTER TABLE sim_apis ADD COLUMN log_bodies INTEGER NOT NULL DEFAULT 0');
   if (!columns('sim_apis').has('live_headers_enc')) database.exec('ALTER TABLE sim_apis ADD COLUMN live_headers_enc TEXT');
+  // The environments of the API (dev, UAT, prod: base URL, variables, login), encrypted (see api-sim/environments.ts).
+  if (!columns('sim_apis').has('environments_enc')) database.exec('ALTER TABLE sim_apis ADD COLUMN environments_enc TEXT');
   database.exec(`
     CREATE TABLE IF NOT EXISTS sim_calls (
       id TEXT PRIMARY KEY,

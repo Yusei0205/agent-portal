@@ -39,6 +39,7 @@ function toApi(i: Record<string, AttributeValue>): SimApiRecord {
     require_explicit_rule: getNumber(i, 'require_explicit_rule') === 1,
     log_bodies: getNumber(i, 'log_bodies') === 1,
     live_headers_enc: getString(i, 'live_headers_enc'),
+    environments_enc: getString(i, 'environments_enc'),
     operation_modes: parse(getString(i, 'operation_modes'), {}),
     approved_version: getNumber(i, 'approved_version'),
     latest_version: getNumber(i, 'latest_version'),
@@ -53,7 +54,7 @@ function apiItem(r: SimApiRecord): Record<string, AttributeValue> {
     ...apiKey(r.project_id, r.id),
     ...marshalItem({
       id: r.id, project_id: r.project_id, name: r.name, group_name: r.group_name, source_key: r.source_key, mode: r.mode,
-      live_base_url: r.live_base_url, require_explicit_rule: r.require_explicit_rule ? 1 : 0, log_bodies: r.log_bodies ? 1 : 0, live_headers_enc: r.live_headers_enc,
+      live_base_url: r.live_base_url, require_explicit_rule: r.require_explicit_rule ? 1 : 0, log_bodies: r.log_bodies ? 1 : 0, live_headers_enc: r.live_headers_enc, environments_enc: r.environments_enc,
       operation_modes: JSON.stringify(r.operation_modes), approved_version: r.approved_version,
       latest_version: r.latest_version, created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
     }),
