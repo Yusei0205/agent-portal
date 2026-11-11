@@ -26,7 +26,8 @@
         "test/api-sim-schedule.test.ts",
         "test/api-sim-state.test.ts",
         "test/api-sim-testgen.test.ts",
-        "test/web-simulation-lib.test.ts"
+        "test/web-simulation-lib.test.ts",
+        "test/api-sim-environments.test.ts"
       ],
       "smokeIds": []
     },
@@ -93,7 +94,8 @@
       "tests": [
         "test/auth.test.ts",
         "test/auth-repo.test.ts",
-        "test/setup-security.test.ts"
+        "test/setup-security.test.ts",
+        "test/session-policy.test.ts"
       ],
       "smokeIds": [
         "auth"
@@ -284,7 +286,8 @@
         "test/engine-switch.test.ts",
         "test/approval-state.test.ts",
         "test/session-composer-layout.test.ts",
-        "test/model-groups.test.ts"
+        "test/model-groups.test.ts",
+        "test/session-files-vault-read.test.ts"
       ],
       "smokeIds": [
         "sessions"
@@ -1087,7 +1090,11 @@
         "test/approval-binding.test.ts",
         "test/run-limits.test.ts",
         "test/config-protection.test.ts",
-        "test/agent-env-scrub.test.ts"
+        "test/agent-env-scrub.test.ts",
+        "test/safe-url.test.ts",
+        "test/sanitize-preview.test.ts",
+        "test/security-p0.test.ts",
+        "test/ssrf-defaults.test.ts"
       ],
       "smokeIds": [],
       "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* — all in the shared section. Changes to those shared files already mark this module affected."
@@ -1150,7 +1157,8 @@
         "test/output-files.test.ts",
         "test/output-files-match.test.ts",
         "test/output-file-utils.test.ts",
-        "test/output-files-repo.test.ts"
+        "test/output-files-repo.test.ts",
+        "test/output-files-vault-button.test.ts"
       ],
       "smokeIds": []
     },
@@ -1261,7 +1269,8 @@
         "server/scheduled-jobs.ts"
       ],
       "tests": [
-        "test/background-jobs.test.ts"
+        "test/background-jobs.test.ts",
+        "test/job-runtime.test.ts"
       ],
       "smokeIds": []
     },
@@ -1473,7 +1482,9 @@
         "server/realtime.ts"
       ],
       "tests": [
-        "test/realtime-token.test.ts"
+        "test/realtime-token.test.ts",
+        "test/realtime-authorizer.test.ts",
+        "test/realtime-order.test.ts"
       ],
       "smokeIds": []
     },
