@@ -33,6 +33,7 @@ import { resolveConversationPath } from '../../lib/conversationFiles.js';
 import { IdeSessionPanel } from './IdeSessionPanel.jsx';
 import { IdeStatusBar } from './IdeStatusBar.jsx';
 import { IdeOutputs } from './IdeOutputs.jsx';
+import { OUTPUT_FILES_CHANGED } from './AddToVaultButton.jsx';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
 
 // Pre-register workspace shortcuts so the palette / sheet always knows them
@@ -881,6 +882,13 @@ export function IdeWorkspace({ id, project }) {
       setOutputFilesLoading(false);
     }
   }, [id]);
+
+  // A file was added to the Vault from the Outputs panel or the chat card: reload the list so both show it.
+  useEffect(() => {
+    const onChanged = (e) => { if (e.detail?.workflowId === id) loadOutputFiles(); };
+    window.addEventListener(OUTPUT_FILES_CHANGED, onChanged);
+    return () => window.removeEventListener(OUTPUT_FILES_CHANGED, onChanged);
+  }, [id, loadOutputFiles]);
 
   // Optimistic-send handlers
   const handleOptimisticSend = useCallback((clientId, text, attachmentIds = []) => {
