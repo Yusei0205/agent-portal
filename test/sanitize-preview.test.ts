@@ -3,6 +3,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+// @ts-expect-error jsdom ships no type declarations in this repo
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
@@ -11,6 +12,7 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>');
 
 describe('sanitizeMarkdown on file previews', () => {
   it('removes event handlers, script tags and javascript links', async () => {
+    // @ts-expect-error plain JS module shared with the web app
     const { sanitizeMarkdown } = await import('../web/src/lib/sanitize.js');
     const out = sanitizeMarkdown('<img src=x onerror="alert(1)"><script>alert(2)</script><a href="javascript:alert(3)">x</a><iframe src="https://e.example"></iframe>');
     assert.ok(!/onerror|<script|javascript:|<iframe/i.test(out), out);
