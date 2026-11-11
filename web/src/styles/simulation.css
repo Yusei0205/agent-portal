@@ -91,6 +91,17 @@
 .sim-group-head h2 { margin: 0; font-size: 1.05rem; }
 .sim-group-head .spacer { flex: 1; }
 
+/* Base URL and environment: under the page header, and the environment editor on the Settings tab. */
+.sim-envbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); min-width: 0; }
+.sim-envbar-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); }
+.sim-envbar-url { font-family: var(--mono, ui-monospace, monospace); font-size: 0.82rem; overflow-wrap: anywhere; min-width: 0; }
+.sim-envbar-problem { color: var(--warn); display: inline-flex; align-items: center; gap: 4px; }
+.sim-envbar-note { flex-basis: 100%; }
+.sim-env { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.sim-env.is-active { border-color: var(--accent); }
+.sim-visually-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }
+
+
 /* File picker in the import dialog: a themed button with the chosen name beside it (the input itself is visually hidden but
    still reachable by keyboard; the button shows the focus ring). */
 .sim-file-pick { display: flex; align-items: center; gap: 10px; min-width: 0; }

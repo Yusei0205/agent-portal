@@ -17,6 +17,8 @@ export interface DraftInput {
   spec: ApiSpec;
   /** The client's real address, when the document gives one. Used only when the API is new. */
   liveBaseUrl?: string;
+  /** Environments read from the file (encrypted, see environments.ts); the live address above should be the active one's. */
+  environmentsEnc?: string | null;
 }
 
 export interface ImportedApi { id: string; name: string; version: number; isNew: boolean; group: string }
@@ -125,7 +127,7 @@ export async function importDrafts(projectId: string, userId: string, drafts: Dr
       const id = generateId();
       await repo.createApi({
         id, project_id: projectId, name: d.name, group_name: group, source_key: d.key, mode: 'mock', live_base_url: d.liveBaseUrl ?? '',
-        require_explicit_rule: false, log_bodies: false, live_headers_enc: null, operation_modes: {}, approved_version: 0, latest_version: 1,
+        require_explicit_rule: false, log_bodies: false, live_headers_enc: null, environments_enc: d.environmentsEnc ?? null, operation_modes: {}, approved_version: 0, latest_version: 1,
         created_by: userId, created_at: at, updated_at: at,
       });
       await repo.addVersion({ api_id: id, version: 1, status: 'draft', label, spec: d.spec, created_by: userId, created_at: at });

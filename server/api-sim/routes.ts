@@ -32,6 +32,10 @@ import { handleMockRequest } from './mock-engine.ts';
 import { answerCall, clientHeaders } from './call.ts';
 import { recordCall } from './call-log.ts';
 import { buildLiveHeaders, readLiveHeaders } from './live-credentials.ts';
+import {
+  buildEnvironments, mergeEnvironments, parseEnvironmentFile, publicEnvironments, readEnvironments, recordFields,
+} from './environments.ts';
+import type { SimEnvironment } from './environments.ts';
 import { cleanStore, storeProblem } from './rule-store.ts';
 import { cleanGroup, importDrafts, sameGroup } from './import-drafts.ts';
 import { checkOpenApi } from './openapi.ts';
@@ -74,13 +78,25 @@ function operations(spec: ApiSpec): Array<{ path: string; method: HttpMethod; op
 
 function summary(a: SimApiRecord, spec: ApiSpec | null) {
   const flags = spec ? collectFlags(spec) : [];
+  const envs = publicEnvironments(readEnvironments(a.environments_enc));
   return {
+    environments: envs.environments, activeEnvironment: envs.active,
     id: a.id, name: a.name, group: a.group_name, mode: a.mode, approvedVersion: a.approved_version, latestVersion: a.latest_version,
     requireExplicitRule: a.require_explicit_rule, logBodies: a.log_bodies, liveHeaderNames: Object.keys(readLiveHeaders(a.live_headers_enc)), liveBaseUrl: a.live_base_url, operationModes: a.operation_modes,
     operations: spec ? operations(spec) : [],
     flags: { total: flags.length, warnings: flags.filter((f) => f.severity === 'warning').length, missingPath: spec ? hasMissingPath(spec) : false },
     updatedAt: a.updated_at,
   };
+}
+
+/** The environments a spec file carries (a Postman collection's variables, an OpenAPI file's servers), for a new API. */
+function environmentsOfFile(name: string, doc: unknown): { liveBaseUrl?: string; environmentsEnc?: string | null } {
+  let text = '';
+  try { text = JSON.stringify(doc); } catch { return {}; }
+  const parsed = parseEnvironmentFile(name, text);
+  if (parsed.environments.length === 0) return {};
+  const fields = recordFields({ active: parsed.environments[0].id, environments: parsed.environments });
+  return { liveBaseUrl: fields.live_base_url, environmentsEnc: fields.environments_enc };
 }
 
 function isHttpsUrl(v: string): boolean {
@@ -198,7 +214,8 @@ export function registerSimulationRoutes(): void {
     if (body.kind === 'openapi') {
       const checked = checkOpenApi(body.spec);
       if (!checked.spec) { bad(res, checked.errors.join('; ')); return; }
-      const created = await importDrafts(req.params.id, userId, [{ key: `openapi:${checked.spec.info.title}`, name: checked.spec.info.title, spec: checked.spec }], opts(checked.spec.info.title));
+      const fromFile = environmentsOfFile('openapi.json', body.spec);
+      const created = await importDrafts(req.params.id, userId, [{ key: `openapi:${checked.spec.info.title}`, name: checked.spec.info.title, spec: checked.spec, ...fromFile }], opts(checked.spec.info.title));
       sendJson(res, 201, { created });
       return;
     }
@@ -206,7 +223,8 @@ export function registerSimulationRoutes(): void {
     if (body.kind === 'postman') {
       const { drafts, errors } = postmanToSpecs(body.collection);
       if (drafts.length === 0) { bad(res, errors.join(' ')); return; }
-      const created = await importDrafts(req.params.id, userId, drafts.map((d) => ({ key: `postman:${d.name}`, name: d.name, spec: d.spec })), opts(((body.collection as { info?: { name?: string } })?.info?.name) ?? ''));
+      const fromFile = environmentsOfFile('collection.json', body.collection);
+      const created = await importDrafts(req.params.id, userId, drafts.map((d) => ({ key: `postman:${d.name}`, name: d.name, spec: d.spec, ...fromFile })), opts(((body.collection as { info?: { name?: string } })?.info?.name) ?? ''));
       sendJson(res, 201, { created, flags: errors.map((message) => ({ code: 'POSTMAN_NOTE', severity: 'warning', message })) });
       return;
     }
@@ -300,6 +318,49 @@ export function registerSimulationRoutes(): void {
     if (Object.keys(fields).length === 0) { bad(res, 'Nothing to update'); return; }
     const updated = await repo().updateApi(req.params.id, a.id, fields);
     sendJson(res, 200, { api: updated ? summary(updated, await latestSpec(updated)) : null });
+  });
+
+  // ── Environments: dev, UAT, prod (base URL, variables, login). The active one is what live calls use.
+  router.put(`${base}/apis/:aid/environments`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    const built = buildEnvironments(req.body, readEnvironments(a.environments_enc));
+    if ('error' in built) { bad(res, built.error); return; }
+    const updated = await repo().updateApi(req.params.id, a.id, recordFields(built.state));
+    sendJson(res, 200, { api: updated ? summary(updated, await latestSpec(updated)) : null });
+  });
+
+  router.put(`${base}/apis/:aid/environments/active`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    const state = readEnvironments(a.environments_enc);
+    const wanted = String((req.body as { active?: unknown })?.active ?? '');
+    if (!state.environments.some((e: SimEnvironment) => e.id === wanted)) { bad(res, 'That environment does not exist'); return; }
+    const updated = await repo().updateApi(req.params.id, a.id, recordFields({ ...state, active: wanted }));
+    sendJson(res, 200, { api: updated ? summary(updated, await latestSpec(updated)) : null });
+  });
+
+  // Files people already have: a Postman environment or collection, an OpenAPI file, a .env file. The browser sends their text.
+  router.post(`${base}/apis/:aid/environments/import`, async (req, res) => {
+    if (!await requireProjectAccess(req, res, req.params.id)) return;
+    const a = await repo().getApi(req.params.id, req.params.aid);
+    if (!a) { bad(res, 'API not found', 404); return; }
+    const files = (req.body as { files?: unknown })?.files;
+    if (!Array.isArray(files) || files.length === 0 || files.length > 10) { bad(res, 'files must be a list of 1 to 10 {name, content}'); return; }
+    const incoming: SimEnvironment[] = [];
+    const notes: string[] = [];
+    for (const f of files as Array<{ name?: unknown; content?: unknown }>) {
+      if (typeof f?.name !== 'string' || typeof f?.content !== 'string' || f.content.length > 1_000_000) { bad(res, 'Each file needs a name and text content of at most 1 MB'); return; }
+      const parsed = parseEnvironmentFile(f.name, f.content);
+      incoming.push(...parsed.environments);
+      notes.push(...parsed.notes);
+    }
+    if (incoming.length === 0) { bad(res, notes.join(' ') || 'No environment was found in those files'); return; }
+    const merged = mergeEnvironments(readEnvironments(a.environments_enc), incoming);
+    const updated = await repo().updateApi(req.params.id, a.id, recordFields(merged.state));
+    sendJson(res, 200, { api: updated ? summary(updated, await latestSpec(updated)) : null, added: merged.added, updated: merged.updated, skipped: merged.skipped, notes });
   });
 
   // ── The records a stateful API remembers

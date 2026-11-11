@@ -24,6 +24,7 @@ import { extractApis } from './ai-extract.ts';
 import type { ModelCall } from './ai-extract.ts';
 import { cleanGroup, importDrafts } from './import-drafts.ts';
 import type { ImportedApi } from './import-drafts.ts';
+import { environmentsFromBaseUrls, recordFields } from './environments.ts';
 
 export interface ImportJob {
   id: string;
@@ -98,8 +99,12 @@ async function runJob(jobId: string): Promise<void> {
     }, promptChars ? { promptChars } : {});
 
     const liveBaseUrl = pickLiveBaseUrl(result.baseUrls);
+    // Every labelled address the document gives (UAT, PROD ...) becomes an environment; the one chosen above is active.
+    const envs = environmentsFromBaseUrls(result.baseUrls);
+    const chosen = envs.find((e) => e.baseUrl === liveBaseUrl) ?? envs[0];
+    const environmentsEnc = envs.length > 0 ? recordFields({ active: chosen?.id ?? '', environments: envs }).environments_enc : null;
     const created = result.drafts.length > 0
-      ? await importDrafts(job.projectId, job.userId, result.drafts.map((d) => ({ ...d, liveBaseUrl })), { group: job.group, label: job.label })
+      ? await importDrafts(job.projectId, job.userId, result.drafts.map((d) => ({ ...d, liveBaseUrl, environmentsEnc })), { group: job.group, label: job.label })
       : [];
     const notes = [...result.notes];
     if (liveBaseUrl && created.some((c) => c.isNew)) {
