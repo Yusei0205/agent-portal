@@ -23,11 +23,11 @@ import { getAuthRepository } from './repositories/auth.ts';
 import { EmailAlreadyTakenError, AdminAlreadyExistsError } from './repositories/auth.ts';
 import { appendAudit } from './audit.ts';
 import { config } from './config.ts';
+import { absoluteMs, nextExpiry, sessionExpiry } from './session-policy.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const COOKIE_NAME = 'portal_session';
-const SESSION_DAYS = 14;
 
 // ── Password hashing ──────────────────────────────────────────────────────────
 
@@ -95,15 +95,16 @@ export async function createUser(input: {
 
 async function startSession(res: PortalResponse, userId: string, secure: boolean): Promise<void> {
   const token = randomBytes(32).toString('base64url');
-  const expires = new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString();
   const ts = now();
+  const expires = sessionExpiry(ts, Date.now());
   await getAuthRepository().createSession({
     token_hash: sha256(token),
     user_id: userId,
     expires_at: expires,
     created_at: ts,
   });
-  setCookie(res, COOKIE_NAME, token, { maxAge: SESSION_DAYS * 86400, secure });
+  // The cookie lasts as long as the longest a session can; the server ends it sooner when the person is idle.
+  setCookie(res, COOKIE_NAME, token, { maxAge: Math.round(absoluteMs() / 1000), secure });
 }
 
 export function cleanupSessions(): void {
@@ -123,6 +124,9 @@ export async function authenticate(rawReq: import('node:http').IncomingMessage, 
     if (token) {
       const session = await getAuthRepository().getSessionWithUser(sha256(decodeURIComponent(token)));
       if (session && !session.disabled && session.expires_at >= now()) {
+        // Sliding idle timeout: each request pushes the end out (written at most every few minutes).
+        const next = nextExpiry(session.created_at, session.expires_at, Date.now());
+        if (next) registerBackgroundWrite(getAuthRepository().extendSession(session.user_id, sha256(decodeURIComponent(token)), next).catch(() => {/* non-fatal */}));
         return {
           id: session.user_id,
           email: session.email,
@@ -214,6 +218,7 @@ export function registerAuthRoutes(): void {
   router.get('/api/auth/state', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const needsSetup = (await getAuthRepository().countUsers()) === 0;
     const user = req.user;
+    if (!user && parseCookies(req.headers.cookie)[COOKIE_NAME]) setCookie(res, COOKIE_NAME, '', { maxAge: 0, secure: req.secure });
     sendJson(res, 200, {
       loggedIn: user != null,
       needsSetup,
@@ -227,6 +232,8 @@ export function registerAuthRoutes(): void {
         : undefined,
       deployTarget: config.deployTarget ?? null,
       googleEnabled: await googleSignInEnabled(),
+      // A session cookie arrived but is no longer good: the person was idle too long (or signed out elsewhere).
+      sessionExpired: user == null && Boolean(parseCookies(req.headers.cookie)[COOKIE_NAME]),
     });
   });
 

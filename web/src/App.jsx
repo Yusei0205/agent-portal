@@ -617,7 +617,7 @@ export function App() {
   const load = useCallback(async () => {
     try {
       const s = await api.get('/api/auth/state');
-      setAuth({ loading: false, needsSetup: s.needsSetup, user: s.user, googleEnabled: Boolean(s.googleEnabled) });
+      setAuth({ loading: false, needsSetup: s.needsSetup, user: s.user, googleEnabled: Boolean(s.googleEnabled), sessionExpired: Boolean(s.sessionExpired) });
     } catch (e) {
       setAuth({ loading: false, error: e });
     }
@@ -626,6 +626,13 @@ export function App() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // The session ended while the page was open (idle too long): go to the sign-in page with a notice.
+  useEffect(() => {
+    const onSignedOut = () => setAuth((a) => (a.user ? { loading: false, needsSetup: false, user: undefined, googleEnabled: a.googleEnabled, sessionExpired: true } : a));
+    window.addEventListener('portal:signed-out', onSignedOut);
+    return () => window.removeEventListener('portal:signed-out', onSignedOut);
+  }, []);
 
   if (auth.loading) {
     return (
@@ -656,7 +663,7 @@ export function App() {
     if (window.location.hash.startsWith('#/accept-invite')) {
       return <AcceptInvite onDone={() => { window.location.hash = '#/'; load(); }} />;
     }
-    return <Login onDone={load} googleEnabled={auth.googleEnabled} />;
+    return <Login onDone={load} googleEnabled={auth.googleEnabled} expired={Boolean(auth.sessionExpired)} />;
   }
 
   return <Shell user={auth.user} onSignOut={load} />;

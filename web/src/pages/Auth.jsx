@@ -56,7 +56,7 @@ const LOGIN_STEPS = [
  * Google is the main route when it is set up; email and password stay available below it.
  * @param {{ onDone: () => void }} props
  */
-export function Login({ onDone, googleEnabled = false }) {
+export function Login({ onDone, googleEnabled = false, expired = false }) {
   const tmpl = getTemplate(getActiveTemplateId());
   const productName = tmpl?.brand?.productName || 'Agent Portal';
   const logoSvg = tmpl?.brand?.logoSvg;
@@ -70,7 +70,7 @@ export function Login({ onDone, googleEnabled = false }) {
     const h = window.location.hash;
     return h.includes('?') ? new URLSearchParams(h.slice(h.indexOf('?') + 1)).get('error') : null;
   })();
-  const [error, setError] = useState(/** @type {string|null} */ (hashError));
+  const [error, setError] = useState(/** @type {string|null} */ (hashError ?? (expired ? 'Your session ended because you were away for a while. Sign in again to continue.' : null)));
   // With Google on, the password form is folded away until asked for.
   const [showPassword, setShowPassword] = useState(!googleEnabled);
   const [forgot, setForgot] = useState(false);

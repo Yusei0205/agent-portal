@@ -173,6 +173,25 @@ function runContract(
       assert.equal(session.expires_at, expiresAt);
     });
 
+    test('extendSession — moves the expiry and keeps created_at', async () => {
+      const userId = `ses-${sfx}-ext`;
+      await repo.createUser({
+        id: userId, email: `ses-${sfx}-ext@test.com`, name: 'Extend User',
+        password_hash: 'h', is_admin: 0, disabled: 0, created_at: now(),
+      });
+      const tokenHash = sha256(`session-token-${sfx}-ext`);
+      const createdAt = now();
+      await repo.createSession({ token_hash: tokenHash, user_id: userId, expires_at: new Date(Date.now() + 60_000).toISOString(), created_at: createdAt });
+      const later = new Date(Date.now() + 3_600_000).toISOString();
+      await repo.extendSession(userId, tokenHash, later);
+      const session = await repo.getSessionWithUser(tokenHash);
+      assert.ok(session);
+      assert.equal(session.expires_at, later);
+      assert.equal(session.created_at, createdAt);
+      // An unknown session is a no-op, not an error.
+      await repo.extendSession(userId, sha256(`nope-${sfx}`), later);
+    });
+
     test('getSessionWithUser — returns null for unknown hash', async () => {
       const result = await repo.getSessionWithUser('0000000000000000000000000000000000000000');
       assert.equal(result, null);

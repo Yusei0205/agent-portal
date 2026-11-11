@@ -47,6 +47,16 @@ async function requestUpload(url, formData) {
 }
 
 /**
+ * The server answers "Sign in to continue" when the session has ended (idle too long, signed out elsewhere).
+ * Tell the app once so it shows the sign-in page instead of a screen of failing calls.
+ */
+function notifySignedOut(status, message, url) {
+  if (status !== 401 || message !== 'Sign in to continue') return;
+  if (String(url).startsWith('/api/auth/')) return;
+  window.dispatchEvent(new CustomEvent('portal:signed-out'));
+}
+
+/**
  * @param {string} method
  * @param {string} url
  * @param {unknown} [body]
@@ -80,6 +90,7 @@ async function request(method, url, body) {
     const msg =
       (data && typeof data === 'object' && data.error) ||
       `Request failed (${res.status})`;
+    notifySignedOut(res.status, msg, url);
     throw new ApiError(res.status, msg, typeof data === 'object' && data !== null ? data : undefined);
   }
   return data;

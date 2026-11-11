@@ -97,6 +97,7 @@ function itemToSessionWithUser(
     is_admin:   getNumber(userItem, 'isAdmin'),
     disabled:   getNumber(userItem, 'disabled'),
     expires_at: getString(sessionItem, 'expiresAt') ?? '',
+    created_at: getString(sessionItem, 'createdAt') ?? '',
   };
 }
 
@@ -589,6 +590,20 @@ export class DynamoDbAuthRepository implements AuthRepository {
     if (!userResp.Item) return null;
 
     return itemToSessionWithUser(sessionItem, userResp.Item);
+  }
+
+  async extendSession(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    await this.client.send(
+      new UpdateItemCommand({
+        TableName: this.tableName,
+        Key: { PK: { S: `USER#${userId}` }, SK: { S: `SESSION#${tokenHash}` } },
+        UpdateExpression: 'SET expiresAt = :e, expiresAtEpoch = :t',
+        ConditionExpression: 'attribute_exists(PK)',
+        ExpressionAttributeValues: marshalItem({ ':e': expiresAt, ':t': ttlEpoch(expiresAt) ?? 0 }),
+      }),
+    ).catch((e: unknown) => {
+      if ((e as { name?: string })?.name !== 'ConditionalCheckFailedException') throw e;
+    });
   }
 
   async deleteSession(tokenHash: string): Promise<void> {
