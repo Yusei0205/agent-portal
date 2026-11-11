@@ -78,8 +78,17 @@ const MAX_BATCH = 5; // AppSync Events accepts at most 5 events per publish requ
 const queues = new Map<string, string[]>();
 let flushTimer: NodeJS.Timeout | null = null;
 const inflight = new Set<Promise<void>>();
+// Per channel: the batches of one flush are sent one after another, and the next flush waits for the previous one. Sent in
+// parallel they reach the browser out of order, and streamed text came out scrambled.
+const chains = new Map<string, Promise<void>>();
+
+type BatchPublisher = (channel: string, events: string[]) => Promise<void>;
+let publisherOverride: BatchPublisher | null = null;
+/** Test hook: replace the request that publishes one batch. */
+export function _setBatchPublisher(fn: BatchPublisher | null): void { publisherOverride = fn; }
 
 async function publishBatch(channel: string, events: string[]): Promise<void> {
+  if (publisherOverride) return publisherOverride(channel, events);
   const domain = process.env.PORTAL_EVENTS_HTTP_DOMAIN!;
   const body = JSON.stringify({ channel, events });
   const signed = await (await getSigner()).sign({
@@ -97,13 +106,18 @@ async function publishBatch(channel: string, events: string[]): Promise<void> {
 function startFlush(): Promise<void> {
   const work: Promise<void>[] = [];
   for (const [channel, events] of queues) {
-    for (let i = 0; i < events.length; i += MAX_BATCH) {
-      work.push(
-        publishBatch(channel, events.slice(i, i + MAX_BATCH)).catch((e) => {
+    const batches: string[][] = [];
+    for (let i = 0; i < events.length; i += MAX_BATCH) batches.push(events.slice(i, i + MAX_BATCH));
+    const next = (chains.get(channel) ?? Promise.resolve()).then(async () => {
+      for (const batch of batches) {
+        try { await publishBatch(channel, batch); } catch (e) {
           console.error('[realtime] publish failed:', e instanceof Error ? e.message : e);
-        }),
-      );
-    }
+        }
+      }
+    });
+    chains.set(channel, next);
+    void next.finally(() => { if (chains.get(channel) === next) chains.delete(channel); });
+    work.push(next);
   }
   queues.clear();
   const p = Promise.all(work).then(() => undefined);

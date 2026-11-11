@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { realtimeAvailable, subscribeChannel } from './realtime.js';
+import { insertRunEvent } from './runEventOrder.js';
 
 /**
  * @param {string | null | undefined} runId
@@ -92,7 +93,7 @@ export function useRunStream(runId) {
       const key = ev.id ?? `${ev.type}-${ev.created_at}`;
       if (ev.id && seen.current.has(key)) return;
       if (ev.id) seen.current.add(key);
-      setState((s) => ({ ...s, events: [...s.events, ev] }));
+      setState((s) => ({ ...s, events: insertRunEvent(s.events, ev) }));
     };
 
     realtimeAvailable().then(async (enabled) => {
