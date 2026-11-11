@@ -17,6 +17,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { timingSafeEqual } from 'node:crypto';
 import { realtimeEnabled, flushRealtime } from './realtime.ts';
 import { HttpError } from './util.ts';
+import { clientIp } from './client-ip.ts';
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
@@ -427,11 +428,10 @@ export function createRequestHandler(): (
         (config.trustProxy && forwardedProto === 'https'));
 
     // Determine client IP
-    const forwardedFor =
-      config.trustProxy
-        ? String(rawReq.headers['x-forwarded-for'] ?? '').split(',')[0].trim()
-        : '';
-    const ip = forwardedFor || (rawReq.socket.remoteAddress ?? '');
+    const ip = clientIp(rawReq.headers, rawReq.socket.remoteAddress, {
+      originSecretSet: Boolean(process.env.PORTAL_ORIGIN_SECRET),
+      trustProxy: config.trustProxy,
+    });
 
     // Build PortalRequest
     const req = rawReq as PortalRequest;
