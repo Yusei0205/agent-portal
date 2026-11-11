@@ -139,7 +139,7 @@ export class SqliteAuthRepository implements AuthRepository {
 
   async getSessionWithUser(tokenHash: string): Promise<SessionWithUser | null> {
     const row = one<Row>(
-      `SELECT u.id AS user_id, u.email, u.name, u.is_admin, u.disabled, s.expires_at
+      `SELECT u.id AS user_id, u.email, u.name, u.is_admin, u.disabled, s.expires_at, s.created_at
          FROM sessions s
          JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = ?`,
@@ -153,7 +153,12 @@ export class SqliteAuthRepository implements AuthRepository {
       is_admin: Number(row.is_admin ?? 0),
       disabled: Number(row.disabled ?? 0),
       expires_at: String(row.expires_at),
+      created_at: String(row.created_at ?? ''),
     };
+  }
+
+  async extendSession(_userId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    dbRun('UPDATE sessions SET expires_at = ? WHERE token_hash = ?', expiresAt, tokenHash);
   }
 
   async deleteSession(tokenHash: string): Promise<void> {
@@ -251,7 +256,7 @@ export class SqliteAuthRepository implements AuthRepository {
   getSessionWithUserSync(tokenHash: string): SessionWithUser | null {
     const db = getDb();
     const row = db.prepare(
-      `SELECT u.id AS user_id, u.email, u.name, u.is_admin, u.disabled, s.expires_at
+      `SELECT u.id AS user_id, u.email, u.name, u.is_admin, u.disabled, s.expires_at, s.created_at
          FROM sessions s
          JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = ?`,
@@ -264,6 +269,7 @@ export class SqliteAuthRepository implements AuthRepository {
       is_admin: Number(row.is_admin ?? 0),
       disabled: Number(row.disabled ?? 0),
       expires_at: String(row.expires_at),
+      created_at: String(row.created_at ?? ''),
     };
   }
 }
