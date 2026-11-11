@@ -167,6 +167,14 @@ export interface AuthRepository {
   /** Move a session's expiry (sliding idle timeout). */
   extendSession(userId: string, tokenHash: string, expiresAt: string): Promise<void>;
 
+  /**
+   * Sign-in failure counters, shared by every server instance (a Lambda cold start no longer forgets them).
+   * `key` is already hashed by the caller. Counting starts at the first failure and lasts `windowMs`.
+   */
+  recordLoginFailure(key: string, windowMs: number, nowMs: number): Promise<number>;
+  getLoginFailures(key: string, nowMs: number): Promise<number>;
+  clearLoginFailures(key: string): Promise<void>;
+
   /** Delete a single session (logout). */
   deleteSession(tokenHash: string): Promise<void>;
 

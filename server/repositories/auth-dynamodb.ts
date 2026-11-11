@@ -606,6 +606,48 @@ export class DynamoDbAuthRepository implements AuthRepository {
     });
   }
 
+  async recordLoginFailure(key: string, windowMs: number, nowMs: number): Promise<number> {
+    const nowSec = Math.floor(nowMs / 1000);
+    const itemKey = { PK: { S: `RATE#${key}` }, SK: { S: '#LOGIN' } };
+    try {
+      // Inside a live window: add one atomically.
+      const r = await this.client.send(new UpdateItemCommand({
+        TableName: this.tableName,
+        Key: itemKey,
+        UpdateExpression: 'ADD failures :one',
+        ConditionExpression: 'attribute_exists(PK) AND expiresAtEpoch > :now',
+        ExpressionAttributeValues: marshalItem({ ':one': 1, ':now': nowSec }),
+        ReturnValues: 'UPDATED_NEW',
+      }));
+      return r.Attributes ? getNumber(r.Attributes, 'failures') : 1;
+    } catch (e) {
+      if ((e as { name?: string })?.name !== 'ConditionalCheckFailedException') throw e;
+    }
+    // No window yet, or the last one ended (DynamoDB removes expired rows late): start a new one.
+    await this.client.send(new PutItemCommand({
+      TableName: this.tableName,
+      Item: { ...itemKey, ...marshalItem({ failures: 1, expiresAtEpoch: nowSec + Math.ceil(windowMs / 1000) }) },
+    }));
+    return 1;
+  }
+
+  async getLoginFailures(key: string, nowMs: number): Promise<number> {
+    const r = await this.client.send(new GetItemCommand({
+      TableName: this.tableName,
+      Key: { PK: { S: `RATE#${key}` }, SK: { S: '#LOGIN' } },
+      ConsistentRead: true,
+    }));
+    if (!r.Item) return 0;
+    return getNumber(r.Item, 'expiresAtEpoch') > Math.floor(nowMs / 1000) ? getNumber(r.Item, 'failures') : 0;
+  }
+
+  async clearLoginFailures(key: string): Promise<void> {
+    await this.client.send(new DeleteItemCommand({
+      TableName: this.tableName,
+      Key: { PK: { S: `RATE#${key}` }, SK: { S: '#LOGIN' } },
+    }));
+  }
+
   async deleteSession(tokenHash: string): Promise<void> {
     // Need userId to build the PK. Query GSI-TokenHash first.
     const resp = await this.client.send(

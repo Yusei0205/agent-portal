@@ -54,6 +54,25 @@ function toInvitationRecord(row: Row): InvitationRecord {
 // ── Implementation ─────────────────────────────────────────────────────────────
 
 export class SqliteAuthRepository implements AuthRepository {
+  private readonly loginFailures = new Map<string, { count: number; until: number }>();
+
+  async recordLoginFailure(key: string, windowMs: number, nowMs: number): Promise<number> {
+    const cur = this.loginFailures.get(key);
+    const live = cur && cur.until > nowMs ? cur : { count: 0, until: nowMs + windowMs };
+    live.count += 1;
+    this.loginFailures.set(key, live);
+    return live.count;
+  }
+
+  async getLoginFailures(key: string, nowMs: number): Promise<number> {
+    const cur = this.loginFailures.get(key);
+    return cur && cur.until > nowMs ? cur.count : 0;
+  }
+
+  async clearLoginFailures(key: string): Promise<void> {
+    this.loginFailures.delete(key);
+  }
+
   async countUsers(): Promise<number> {
     const row = one<{ n: number }>('SELECT COUNT(*) AS n FROM users');
     return Number(row?.n ?? 0);

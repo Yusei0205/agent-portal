@@ -95,7 +95,8 @@
         "test/auth.test.ts",
         "test/auth-repo.test.ts",
         "test/setup-security.test.ts",
-        "test/session-policy.test.ts"
+        "test/session-policy.test.ts",
+        "test/login-limiter.test.ts"
       ],
       "smokeIds": [
         "auth"

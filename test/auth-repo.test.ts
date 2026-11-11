@@ -192,6 +192,20 @@ function runContract(
       await repo.extendSession(userId, sha256(`nope-${sfx}`), later);
     });
 
+    test('login failure counters — count inside a window, restart after it, clear on request', async () => {
+      const key = `acct:${sfx}-rl`;
+      const t0 = Date.now();
+      assert.equal(await repo.getLoginFailures(key, t0), 0);
+      assert.equal(await repo.recordLoginFailure(key, 60_000, t0), 1);
+      assert.equal(await repo.recordLoginFailure(key, 60_000, t0 + 1000), 2);
+      assert.equal(await repo.getLoginFailures(key, t0 + 2000), 2);
+      // The window ended: the count is gone and a new failure starts at 1.
+      assert.equal(await repo.getLoginFailures(key, t0 + 61_000), 0);
+      assert.equal(await repo.recordLoginFailure(key, 60_000, t0 + 61_000), 1);
+      await repo.clearLoginFailures(key);
+      assert.equal(await repo.getLoginFailures(key, t0 + 62_000), 0);
+    });
+
     test('getSessionWithUser — returns null for unknown hash', async () => {
       const result = await repo.getSessionWithUser('0000000000000000000000000000000000000000');
       assert.equal(result, null);
