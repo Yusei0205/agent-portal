@@ -15,6 +15,7 @@ import { Icon } from '../../components/Icon.jsx';
 import { formatRelative } from '../../lib/util.js';
 import { TicketPreview } from '../../components/TicketPreview.jsx';
 
+import { safeUrl } from '../../lib/safeUrl.js';
 // ── Activity tab ──────────────────────────────────────────────────────────────
 
 function ActivityPanel({ workflowId, projectId }) {
@@ -617,7 +618,7 @@ function JiraSection({ workflow }) {
         )}
         {workflow.jira_url && (
           <a
-            href={workflow.jira_url}
+            href={safeUrl(workflow.jira_url)}
             target="_blank"
             rel="noopener noreferrer"
             className="btn-icon"

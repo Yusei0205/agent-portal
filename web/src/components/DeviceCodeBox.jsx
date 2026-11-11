@@ -19,6 +19,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon.jsx';
 
+import { safeUrl } from '../lib/safeUrl.js';
 export function DeviceCodeBox({
   challenge,
   pollStatus,
@@ -88,7 +89,7 @@ export function DeviceCodeBox({
           </p>
 
           <div className="device-code-url">
-            <a href={href} target="_blank" rel="noopener noreferrer">
+            <a href={safeUrl(href)} target="_blank" rel="noopener noreferrer">
               {challenge?.verificationUri}
             </a>
           </div>
