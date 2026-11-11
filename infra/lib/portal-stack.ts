@@ -476,6 +476,17 @@ export class AgentPortalCloudStack extends cdk.Stack {
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          // The server needs the real connecting address for sign-in limits and the audit log. X-Forwarded-For starts
+          // with whatever the client wrote, so this sets a header of our own (replacing any the client sent).
+          functionAssociations: [{
+            eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+            function: new cloudfront.Function(this, 'ClientIp', {
+              code: cloudfront.FunctionCode.fromInline(
+                "function handler(event) { var r = event.request; r.headers['x-portal-client-ip'] = { value: event.viewer.ip }; return r; }",
+              ),
+              runtime: cloudfront.FunctionRuntime.JS_2_0,
+            }),
+          }],
         },
       },
     });
