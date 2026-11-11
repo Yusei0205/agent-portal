@@ -485,7 +485,8 @@ export function registerOutputFileRoutes(): void {
       const workDir = await resolveWorkDir(wf);
       if (workDir) {
         const candidate = path.resolve(workDir, file.path);
-        if (candidate.startsWith(path.resolve(workDir)) && fs.existsSync(candidate)) absPath = candidate;
+        // The run may have been on another machine (the job runtime), so fetch the file from storage when it is not here.
+        if (candidate.startsWith(path.resolve(workDir)) && (await restoreFile(candidate))) absPath = candidate;
       }
       if (!absPath) { sendJson(res, 410, { error: 'The file is no longer available in the session' }); return; }
 
@@ -575,7 +576,7 @@ export function registerOutputFileRoutes(): void {
       const workDir = await resolveWorkDir(wf);
       if (workDir) {
         const candidate = path.resolve(workDir, file.path);
-        if (candidate.startsWith(path.resolve(workDir)) && fs.existsSync(candidate)) {
+        if (candidate.startsWith(path.resolve(workDir)) && (await restoreFile(candidate))) {
           absPath = candidate;
         }
       }
