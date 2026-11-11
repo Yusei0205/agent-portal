@@ -139,8 +139,27 @@ function isPrivateIpv4(ip: string): boolean {
   return (
     inCidr4(ip, '10.0.0.0/8') ||
     inCidr4(ip, '172.16.0.0/12') ||
-    inCidr4(ip, '192.168.0.0/16')
+    inCidr4(ip, '192.168.0.0/16') ||
+    inCidr4(ip, '100.64.0.0/10') || // carrier-grade NAT
+    inCidr4(ip, '0.0.0.0/8')        // "this host": connects to the local machine on Linux
   );
+}
+
+/** fc00::/7: IPv6 private (unique local) addresses. */
+function isPrivateIpv6(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  return lower.startsWith('fc') || lower.startsWith('fd') || lower === '::';
+}
+
+/**
+ * Whether test runs and API calls may reach loopback and private addresses.
+ * On the cloud portal that means the portal itself and its network, so it is off unless PORTAL_ALLOW_PRIVATE_NETWORKS=1.
+ * Elsewhere it follows the settings key test.allowPrivateNetworks (default on, for local development).
+ */
+export function privateNetworksAllowed(setting: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.PORTAL_ALLOW_PRIVATE_NETWORKS === '1') return true;
+  if (env.DEPLOY_TARGET === 'cloud') return false;
+  return setting !== 'false';
 }
 
 function isLoopbackIpv4(ip: string): boolean {
@@ -206,8 +225,8 @@ export async function checkSsrf(
     const v6 = await dns.resolve6(hostname).catch(() => [] as string[]);
     addrs = [...v4, ...v6];
     if (addrs.length === 0) {
-      // DNS failed to resolve — allow (the subsequent request will just fail)
-      return { blocked: false };
+      // Unresolvable now does not mean unresolvable when the request is made (a name can answer only the second time).
+      return { blocked: true, reason: `Hostname "${hostname}" could not be resolved` };
     }
   }
 
@@ -230,8 +249,11 @@ export async function checkSsrf(
       if (isLoopbackIpv4(addr)) {
         return { blocked: true, reason: `Address ${addr} is loopback (test.allowPrivateNetworks=false)` };
       }
-      if (isLoopbackIpv6(addr)) {
-        return { blocked: true, reason: `Address ${addr} is loopback (test.allowPrivateNetworks=false)` };
+      if (isLoopbackIpv6(addr) || isPrivateIpv6(addr)) {
+        return { blocked: true, reason: `Address ${addr} is loopback or private (test.allowPrivateNetworks=false)` };
+      }
+      if (mappedV4 && (isLoopbackIpv4(mappedV4) || isPrivateIpv4(mappedV4))) {
+        return { blocked: true, reason: `Address ${addr} is an IPv4-mapped IPv6 private address (test.allowPrivateNetworks=false)` };
       }
       if (isPrivateIpv4(addr)) {
         return { blocked: true, reason: `Address ${addr} is in a private RFC-1918 range (test.allowPrivateNetworks=false)` };
