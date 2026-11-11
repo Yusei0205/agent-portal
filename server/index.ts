@@ -79,6 +79,7 @@ import { registerJiraRoutes } from './jira.ts';
 import { registerBrowserLiveRoutes, handleBrowserLiveUpgrade } from './browser-live.ts';
 import { shutdownAllBrowsers } from './agent/browser-manager.ts';
 import './review-lifecycle.ts'; // Register review lifecycle hook (wires run stats → review row)
+import { isServableStoragePath } from './storage-path.ts';
 
 // Track whether routes have been registered (they're global, so only once per process)
 
@@ -213,6 +214,7 @@ export async function startServer(
   // Static-file proxy for local storage backend
   // GET /api/storage-file?path=<encoded-logical-path>
   router.get('/api/storage-file', (req: PortalRequest, res: PortalResponse): void => {
+    if (!req.user) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Sign in to continue' })); return; }
     const rawPath = req.query.get('path') ?? '';
     if (!rawPath) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -222,7 +224,7 @@ export async function startServer(
     // Resolve against dataDir and serve
     const abs = path.resolve(config.dataDir, rawPath);
     // Security: ensure the resolved path is within dataDir
-    if (!abs.startsWith(path.resolve(config.dataDir))) {
+    if (!isServableStoragePath(abs)) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'forbidden' }));
       return;
@@ -234,7 +236,7 @@ export async function startServer(
         return;
       }
       const stream = fs.createReadStream(abs);
-      res.writeHead(200);
+      res.writeHead(200, { 'Content-Security-Policy': "sandbox; default-src 'none'", 'Cache-Control': 'private, no-store' });
       stream.pipe(res as unknown as NodeJS.WritableStream);
       stream.on('error', () => {
         res.end();

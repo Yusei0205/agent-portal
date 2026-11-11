@@ -231,6 +231,19 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
+/**
+ * Whether a browser page at `origin` may call the API with the person's cookie: the portal's own address
+ * (PORTAL_PUBLIC_URL), any address listed in PORTAL_ALLOWED_ORIGINS, or the host the request arrived on.
+ */
+export function isAllowedOrigin(origin: string, host: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const allowed = new Set<string>();
+  for (const o of String(env.PORTAL_ALLOWED_ORIGINS ?? '').split(',')) if (o.trim()) allowed.add(o.trim().replace(/\/+$/, ''));
+  const pub = env.PORTAL_PUBLIC_URL?.trim();
+  if (pub) allowed.add(pub.replace(/\/+$/, ''));
+  if (allowed.has(origin)) return true;
+  try { return host !== '' && new URL(origin).host === host; } catch { return false; }
+}
+
 export function setCookie(
   res: ServerResponse,
   name: string,
@@ -438,7 +451,7 @@ export function createRequestHandler(): (
 
       // ── CORS headers ──────────────────────────────────────────────────────
       const origin = String(rawReq.headers.origin ?? '');
-      if (origin) {
+      if (origin && isAllowedOrigin(origin, String(rawReq.headers.host ?? ''))) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Vary', 'Origin');

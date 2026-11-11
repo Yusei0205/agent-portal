@@ -424,10 +424,47 @@ export class AgentPortalCloudStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
+    // Security headers. The page (S3) gets the full set; the API keeps the ones that cannot break its own embedded
+    // previews (those set their own CSP and are framed by the page). AWS hosts are listed for live updates (AppSync),
+    // direct uploads (S3) and the browser Live View (AgentCore).
+    const pageCsp = [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com",
+      "frame-src 'self' https://embed.diagrams.net",
+      "worker-src 'self' blob:",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join('; ');
+    const pageHeaders = new cloudfront.ResponseHeadersPolicy(this, 'PageSecurityHeaders', {
+      securityHeadersBehavior: {
+        contentSecurityPolicy: { contentSecurityPolicy: pageCsp, override: true },
+        strictTransportSecurity: { accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true },
+        contentTypeOptions: { override: true },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
+        referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.SAME_ORIGIN, override: true },
+      },
+      customHeadersBehavior: {
+        customHeaders: [{ header: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()', override: true }],
+      },
+    });
+    const apiHeaders = new cloudfront.ResponseHeadersPolicy(this, 'ApiSecurityHeaders', {
+      securityHeadersBehavior: {
+        strictTransportSecurity: { accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true },
+        contentTypeOptions: { override: false },
+        referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.SAME_ORIGIN, override: false },
+      },
+    });
     const dist = new cloudfront.Distribution(this, 'Cdn', {
       defaultRootObject: 'index.html',
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(webBucket),
+        responseHeadersPolicy: pageHeaders,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         // Single-page app: paths without a file extension serve index.html. This only applies to the web
         // files; a distribution-wide error response would also turn API 404s into the HTML page.
@@ -450,6 +487,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
             // CloudFront allows without a quota increase.
             readTimeout: cdk.Duration.seconds(60),
           }),
+          responseHeadersPolicy: apiHeaders,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
