@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
+import { QrCode } from './QrCode.jsx';
 
 export function MfaSettings() {
   const [status, setStatus] = useState(/** @type {null | {available: boolean, enabled: boolean, recoveryLeft: number}} */ (null));
@@ -63,9 +64,13 @@ export function MfaSettings() {
 
       {setup && (
         <form onSubmit={enable} className="stack">
-          <p className="small">1. In your authenticator app choose “enter a setup key” and type this key (account: your email, type: time-based):</p>
-          <p><code style={{ fontSize: '1.05rem', letterSpacing: '0.08em', userSelect: 'all' }}>{setup.secret}</code></p>
-          <p className="muted small">Or paste this link into an app that reads it: <code style={{ wordBreak: 'break-all', userSelect: 'all' }}>{setup.otpauthUrl}</code></p>
+          <p className="small">1. Open your authenticator app and scan this code with it:</p>
+          <div><QrCode text={setup.otpauthUrl} label="QR code for your authenticator app" /></div>
+          <details>
+            <summary className="muted small" style={{ cursor: 'pointer' }}>Cannot scan it? Enter the key by hand</summary>
+            <p className="small">Choose “enter a setup key” in the app (account: your email, type: time-based) and type:</p>
+            <p><code style={{ fontSize: '1.05rem', letterSpacing: '0.08em', userSelect: 'all' }}>{setup.secret}</code></p>
+          </details>
           <div className="field">
             <label htmlFor="mfa-code">2. Enter the 6-digit code the app shows</label>
             <input id="mfa-code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} required />
