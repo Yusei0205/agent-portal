@@ -527,9 +527,90 @@ export async function listInboxSince(userId: string, sinceSec: number, limit = 5
   return out;
 }
 
-export async function gmailAccount(userId: string): Promise<{ connected: boolean; email: string }> {
+export async function gmailAccount(userId: string): Promise<{ connected: boolean; email: string; allowSend: boolean }> {
   const c = await loadConnection(userId);
-  return { connected: Boolean(c), email: c?.email ?? '' };
+  return { connected: Boolean(c), email: c?.email ?? '', allowSend: c?.allowSend === true };
+}
+
+// ── Drafts the person reviews on the Mail page (the agent saves them, the person sends) ──
+
+export interface DraftItem {
+  id: string; threadId: string;
+  to: string; cc: string; bcc: string; subject: string; body: string;
+  /** The message this replies to, when the draft sits in a thread. */
+  replyingTo: { from: string; subject: string } | null;
+}
+
+interface RawDraft { id: string; message?: { threadId?: string; payload?: Part } }
+
+function toDraftItem(d: RawDraft): DraftItem {
+  const h = d.message?.payload?.headers;
+  return {
+    id: d.id, threadId: d.message?.threadId ?? '',
+    to: headerValue(h, 'To'), cc: headerValue(h, 'Cc'), bcc: headerValue(h, 'Bcc'),
+    subject: headerValue(h, 'Subject'),
+    body: messageText(d.message?.payload).slice(0, 50_000),
+    replyingTo: null,
+  };
+}
+
+async function requireSendAllowed(userId: string): Promise<void> {
+  const c = await loadConnection(userId);
+  if (!c?.allowSend) throw new Error('Drafting and sending are switched off. Allow it under Connect › Tools & services › Gmail.');
+}
+
+const DRAFT_ID = /^[A-Za-z0-9_-]{3,100}$/;
+function checkDraftId(id: string): void { if (!DRAFT_ID.test(id)) throw new Error('Invalid draft id'); }
+
+/** The newest drafts (up to 20), with the sender and subject of the message each one answers. */
+export async function listDrafts(userId: string): Promise<DraftItem[]> {
+  await requireSendAllowed(userId);
+  const list = await gfetch(userId, '/drafts?maxResults=20') as { drafts?: { id: string }[] };
+  const out: DraftItem[] = [];
+  for (const { id } of list.drafts ?? []) {
+    const d = toDraftItem(await gfetch(userId, `/drafts/${encodeURIComponent(id)}?format=full`) as RawDraft);
+    if (d.threadId) {
+      try {
+        const t = await gfetch(userId, `/threads/${d.threadId}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`) as { messages?: { id: string; payload?: Part }[] };
+        const orig = (t.messages ?? []).find((m) => headerValue(m.payload?.headers, 'From') !== '');
+        if (orig) d.replyingTo = { from: headerValue(orig.payload?.headers, 'From'), subject: headerValue(orig.payload?.headers, 'Subject') };
+      } catch { /* the original is only context */ }
+    }
+    out.push(d);
+  }
+  return out;
+}
+
+/** Save the person's edits (recipients, subject, text) to a draft, keeping its thread. */
+export async function updateDraft(
+  userId: string, draftId: string,
+  edit: { to: string; cc?: string; bcc?: string; subject: string; body: string },
+): Promise<void> {
+  await requireSendAllowed(userId);
+  checkDraftId(draftId);
+  const cur = await gfetch(userId, `/drafts/${encodeURIComponent(draftId)}?format=metadata&metadataHeaders=In-Reply-To`) as RawDraft;
+  const inReplyTo = headerValue(cur.message?.payload?.headers, 'In-Reply-To') || undefined;
+  const raw = buildRawMessage({ ...edit, inReplyTo });
+  const threadId = cur.message?.threadId;
+  await gfetch(userId, `/drafts/${encodeURIComponent(draftId)}`, { method: 'PUT', body: { message: { raw, ...(threadId ? { threadId } : {}) } } });
+  auditLog(userId, 'gmail.edit_draft', edit.to.slice(0, 80));
+}
+
+/** Send a draft the person reviewed. */
+export async function sendDraft(userId: string, draftId: string): Promise<void> {
+  await requireSendAllowed(userId);
+  checkDraftId(draftId);
+  const cur = toDraftItem(await gfetch(userId, `/drafts/${encodeURIComponent(draftId)}?format=metadata&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc`) as RawDraft);
+  if (!cleanAddresses(cur.to, 'to')) throw new Error('Add at least one recipient before sending.');
+  await gfetch(userId, '/drafts/send', { method: 'POST', body: { id: draftId } });
+  auditLog(userId, 'gmail.send_reviewed', cur.to.slice(0, 80));
+}
+
+export async function deleteDraft(userId: string, draftId: string): Promise<void> {
+  await requireSendAllowed(userId);
+  checkDraftId(draftId);
+  await gfetch(userId, `/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' });
+  auditLog(userId, 'gmail.discard_draft', draftId);
 }
 
 /** One message in full, for the Mail page. */

@@ -1,13 +1,15 @@
 /**
  * Mail: today's inbox from the mail accounts the person connected (Connect › Tools & services), a message opens in
  * full when its row is clicked, and a button starts an agent session to summarise the day's mail. The agent reads the
- * mail through the same mail tools; nothing is sent.
+ * mail through the same mail tools. When the person allows drafting, the agent also saves reply drafts, which the person
+ * reviews, edits (recipients included) and sends from this page; the agent never sends.
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api.js';
 import { PageHeader } from '../components/PageHeader.jsx';
 import { NewSessionDialog } from './sessions/NewSessionDialog.jsx';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
 /** Local midnight of today. */
 export function startOfToday(now = new Date()) {
@@ -17,14 +19,121 @@ export function startOfToday(now = new Date()) {
 }
 
 /** What the agent is asked to do (exported so the wording is tested). */
-export function summaryGoal(since, providers) {
+export function summaryGoal(since, providers, allowDrafts = false) {
   const where = providers.length ? providers.join(' and ') : 'mail';
   return [
     `Summarise the email I received in my ${where} inbox since ${since.toLocaleString()} (today).`,
     'Use the mail tools to list those messages and read the ones that matter.',
     'Give: (1) a three-line overview, (2) messages that need a reply or action, with sender, subject and any deadline, (3) the rest grouped by topic or sender.',
-    'This is read only: do not send, draft, delete or move anything.',
+    ...(allowDrafts
+      ? [
+        'For each message that needs a follow-up reply, save a reply draft with create_draft: put the sender in to, copy Message-ID into inReplyTo and the Thread value into threadId (both from read_message), keep the subject as "Re: …", and write the reply in my voice.',
+        'Never call send_mail: I review every draft on the Mail page, adjust the recipients, and send it myself. Mention each draft you saved in the summary. Do not delete or move anything.',
+      ]
+      : ['This is read only: do not send, draft, delete or move anything.']),
   ].join('\n');
+}
+
+/** "A <a@b.c>, d@e.f" → ["A <a@b.c>", "d@e.f"] (commas inside quotes do not split). */
+export function splitAddresses(list) {
+  return (list || '').split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((a) => a.trim()).filter(Boolean);
+}
+
+const EMAIL = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
+/** True for a bare address or "Name <address>". */
+export function isAddress(v) {
+  const m = v.match(/<([^<>]+)>\s*$/);
+  return EMAIL.test((m ? m[1] : v).trim());
+}
+
+function Recipients({ label, value, onChange }) {
+  const [text, setText] = useState('');
+  const [bad, setBad] = useState(false);
+  const add = () => {
+    const parts = text.split(/[;,]/).map((a) => a.trim()).filter(Boolean);
+    if (!parts.length) return;
+    if (!parts.every(isAddress)) { setBad(true); return; }
+    setBad(false);
+    onChange([...value, ...parts.filter((p) => !value.includes(p))]);
+    setText('');
+  };
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '2.5rem minmax(0, 1fr)', gap: 8, alignItems: 'start', marginBottom: 6 }}>
+      <span className="muted small" style={{ paddingTop: 6 }}>{label}</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', minWidth: 0 }}>
+        {value.map((r) => (
+          <span key={r} className="small" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--line-2)', borderRadius: 999, padding: '2px 4px 2px 10px', overflowWrap: 'anywhere' }}>
+            {r}
+            <button type="button" aria-label={`Remove ${r}`} onClick={() => onChange(value.filter((x) => x !== r))}
+              style={{ background: 'none', border: 0, color: 'inherit', cursor: 'pointer', padding: '0 6px', font: 'inherit' }}>×</button>
+          </span>
+        ))}
+        <input
+          value={text}
+          onChange={(e) => { setText(e.target.value); setBad(false); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add(); } }}
+          onBlur={add}
+          placeholder="Add address"
+          aria-label={`Add to ${label}`}
+          aria-invalid={bad}
+          style={{ flex: '1 1 160px', minWidth: 0 }}
+        />
+        {bad && <span className="error-note small" role="alert">Not an email address</span>}
+      </div>
+    </div>
+  );
+}
+
+function DraftCard({ draft, onChanged, requestConfirm }) {
+  const [to, setTo] = useState(() => splitAddresses(draft.to));
+  const [cc, setCc] = useState(() => splitAddresses(draft.cc));
+  const [bcc, setBcc] = useState(() => splitAddresses(draft.bcc));
+  const [subject, setSubject] = useState(draft.subject);
+  const [body, setBody] = useState(draft.body);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+
+  const edit = () => ({ to: to.join(', '), cc: cc.join(', '), bcc: bcc.join(', '), subject, body });
+  const run = async (fn) => {
+    setBusy(true); setNote(null);
+    try { await fn(); } catch (e) { setNote(e.message || 'Something went wrong'); } finally { setBusy(false); }
+  };
+  const url = `/api/mail/drafts/${encodeURIComponent(draft.id)}`;
+  const save = () => run(async () => { await api.put(url, edit()); setNote('Saved'); });
+  const send = () => run(async () => {
+    if (!to.length) { setNote('Add at least one recipient before sending.'); return; }
+    const all = [...to.map((r) => `To: ${r}`), ...cc.map((r) => `Cc: ${r}`), ...bcc.map((r) => `Bcc: ${r}`)].join('\n');
+    if (!await requestConfirm(`Send this email now?\n\n${all}\n\nSubject: ${subject}`, 'Send', 'primary')) return;
+    await api.put(url, edit());
+    await api.post(`${url}/send`);
+    onChanged();
+  });
+  const discard = () => run(async () => {
+    if (!await requestConfirm('Discard this draft? It is deleted from Gmail.', 'Discard', 'danger')) return;
+    await api.delete(url);
+    onChanged();
+  });
+
+  return (
+    <div style={{ background: 'var(--panel)', border: '1px solid var(--line-2)', borderRadius: 10, padding: '14px 16px', marginBottom: 12 }}>
+      {draft.replyingTo && (
+        <p className="muted small" style={{ margin: '0 0 10px', overflowWrap: 'anywhere' }}>
+          Reply to <strong>{senderName(draft.replyingTo.from)}</strong> — {draft.replyingTo.subject}
+        </p>
+      )}
+      <Recipients label="To" value={to} onChange={setTo} />
+      <Recipients label="Cc" value={cc} onChange={setCc} />
+      <Recipients label="Bcc" value={bcc} onChange={setBcc} />
+      <input value={subject} onChange={(e) => setSubject(e.target.value)} aria-label="Subject" style={{ width: '100%', margin: '6px 0' }} />
+      <textarea value={body} onChange={(e) => setBody(e.target.value)} aria-label="Message" rows={8} style={{ width: '100%', resize: 'vertical' }} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+        <button type="button" className="btn btn-primary" onClick={send} disabled={busy}>Send</button>
+        <button type="button" className="btn" onClick={save} disabled={busy}>Save changes</button>
+        <button type="button" className="btn" onClick={discard} disabled={busy}>Discard</button>
+        {note && <span className="muted small" role="status">{note}</span>}
+      </div>
+    </div>
+  );
 }
 
 function when(value) {
@@ -82,6 +191,9 @@ export default function Mail({ projectId }) {
   const [project, setProject] = useState({ id: projectId, name: '' });
   const [repos, setRepos] = useState([]);
   const [workspaces, setWorkspaces] = useState([]);
+  const [drafts, setDrafts] = useState([]);
+  const [draftError, setDraftError] = useState(null);
+  const { confirmState, requestConfirm } = useConfirm();
   const since = startOfToday();
 
   const load = useCallback(async () => {
@@ -96,7 +208,16 @@ export default function Mail({ projectId }) {
     }
   }, []);
 
+  const allowSend = data?.allowSend === true;
+
+  const loadDrafts = useCallback(async () => {
+    setDraftError(null);
+    try { setDrafts((await api.get('/api/mail/drafts')).drafts ?? []); }
+    catch (e) { setDraftError(e.message || 'Could not load drafts'); }
+  }, []);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (allowSend) loadDrafts(); else setDrafts([]); }, [allowSend, loadDrafts]);
 
   const openSummary = async () => {
     // The session dialog needs the project's repositories and workspaces.
@@ -116,8 +237,8 @@ export default function Mail({ projectId }) {
 
   return (
     <div className="page">
-      <PageHeader title="Mail" description="Today's inbox from the mail accounts you connected. Click a message to read it. Read only.">
-        <button type="button" className="btn" onClick={load} disabled={loading}>Refresh</button>
+      <PageHeader title="Mail" description="Today's inbox from the mail accounts you connected. Click a message to read it. Nothing is sent without your review.">
+        <button type="button" className="btn" onClick={() => { load(); if (allowSend) loadDrafts(); }} disabled={loading}>Refresh</button>
         <button type="button" className="btn btn-primary" onClick={openSummary} disabled={loading || accounts.length === 0}>
           Summarise mail
         </button>
@@ -182,6 +303,22 @@ export default function Mail({ projectId }) {
           </section>
         ))
       )}
+      {!loading && accounts.length > 0 && (
+        <section aria-label="Follow-up drafts" style={{ marginTop: 20 }}>
+          <h2 style={{ marginBottom: 6 }}>Follow-up drafts</h2>
+          {!allowSend ? (
+            <p className="muted small">
+              Turn on “Let agents draft and send email as me” under <a href="#/connect/tools">Connect › Tools &amp; services</a> and the summary will also draft replies here for you to review.
+            </p>
+          ) : draftError ? (
+            <p className="error-note" role="alert">{draftError}</p>
+          ) : drafts.length === 0 ? (
+            <p className="muted small">No drafts yet. Summarise mail and any reply the agent drafts shows up here. Nothing is sent until you press Send.</p>
+          ) : (
+            drafts.map((d) => <DraftCard key={d.id} draft={d} onChanged={loadDrafts} requestConfirm={requestConfirm} />)
+          )}
+        </section>
+      )}
       {!loading && accounts.length > 0 && <p className="muted small">{total} message{total === 1 ? '' : 's'} today (up to 50 per account).</p>}
 
       {dialog && (
@@ -190,9 +327,10 @@ export default function Mail({ projectId }) {
           repos={repos}
           workspaces={workspaces}
           onClose={() => setDialog(false)}
-          initialGoal={summaryGoal(since, accounts.map((a) => a.provider))}
+          initialGoal={summaryGoal(since, accounts.map((a) => a.provider), allowSend)}
         />
       )}
+      <ConfirmDialog state={confirmState} />
     </div>
   );
 }

@@ -410,8 +410,10 @@ export const HELP_TOPICS = [
         steps: true,
         items: [
           'Connect Gmail once under **Connect › Tools & services**.',
-          'The page lists the mail you received today. It is read only.',
+          'The page lists the mail you received today. Click a message to read it.',
           'Click **Summarise mail**: the new session dialog opens with the request filled in. Start it and the agent reads your inbox through the mail tools and reports what needs a reply.',
+          'To have the agent also draft replies, tick **Let agents draft and send email as me** under **Connect › Tools & services**. The drafts appear under **Follow-up drafts** (press **Refresh** once the session finishes).',
+          'Check each draft: add or remove people in To, Cc and Bcc, edit the text, then press **Send**. You confirm the recipients first, and the agent never sends mail itself.',
         ],
       },
     ],
