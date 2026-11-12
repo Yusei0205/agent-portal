@@ -28,6 +28,7 @@ import { getOutputFilesRepository } from './repositories/output-files.ts';
 import { persistFile, restoreFile } from './durable-files.ts';
 import { RUNNER_CODE_EXTS, isCodeOutputFile } from './agent/runner-files.ts';
 
+import { isInsideOrSame } from './storage-path.ts';
 // ── Extension allow-list ──────────────────────────────────────────────────────
 
 const ALLOWED_EXTS = new Set([
@@ -494,7 +495,7 @@ export function registerOutputFileRoutes(): void {
       if (workDir) {
         const candidate = path.resolve(workDir, file.path);
         // The run may have been on another machine (the job runtime), so fetch the file from storage when it is not here.
-        if (candidate.startsWith(path.resolve(workDir)) && (await restoreFile(candidate))) absPath = candidate;
+        if (isInsideOrSame(workDir, candidate) && (await restoreFile(candidate))) absPath = candidate;
       }
       if (!absPath) { sendJson(res, 410, { error: 'The file is no longer available in the session' }); return; }
 
@@ -550,7 +551,7 @@ export function registerOutputFileRoutes(): void {
 
       if (workDir) {
         const absPath = path.resolve(workDir, file.path);
-        if (!absPath.startsWith(path.resolve(workDir))) {
+        if (!isInsideOrSame(workDir, absPath)) {
           sendJson(res, 403, { error: 'Path traversal detected' });
           return;
         }
@@ -584,7 +585,7 @@ export function registerOutputFileRoutes(): void {
       const workDir = await resolveWorkDir(wf);
       if (workDir) {
         const candidate = path.resolve(workDir, file.path);
-        if (candidate.startsWith(path.resolve(workDir)) && (await restoreFile(candidate))) {
+        if (isInsideOrSame(workDir, candidate) && (await restoreFile(candidate))) {
           absPath = candidate;
         }
       }
@@ -662,7 +663,7 @@ export function registerOutputFileRoutes(): void {
         let content: Buffer | null = null;
         if (workDir) {
           const absPath = path.resolve(workDir, f.path);
-          if (absPath.startsWith(path.resolve(workDir)) && fs.existsSync(absPath)) {
+          if (isInsideOrSame(workDir, absPath) && fs.existsSync(absPath)) {
             try { content = fs.readFileSync(absPath); } catch { /* skip */ }
           }
         }

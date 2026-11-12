@@ -20,6 +20,7 @@ import type { RunEventRow } from './events.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
 import type { EventRecord, RunRecord } from './repositories/sessions.ts';
 
+import { isInsideOrSame } from './storage-path.ts';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function runView(r: Row | RunRecord) {
@@ -273,7 +274,7 @@ export function registerRunRoutes(): void {
 
     // Resolve and verify the path is inside workDir (path traversal guard)
     const resolved = path.resolve(workDir, filePath);
-    if (!resolved.startsWith(path.resolve(workDir))) {
+    if (!isInsideOrSame(workDir, resolved)) {
       sendJson(res, 403, { error: 'Path is outside the run work directory' });
       return;
     }
