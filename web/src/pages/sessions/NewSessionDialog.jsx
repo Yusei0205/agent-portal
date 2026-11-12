@@ -264,7 +264,7 @@ export function CredentialPicker({ engine, credentials, value, onChange }) {
  *   initialTicket?: { key: string, summary?: string, status?: any, priority?: string, url?: string } | null,
  * }} props
  */
-export function NewSessionDialog({ project, repos = [], workspaces = [], onClose, onCreated, initialTicket = null, initialGoal = '', initialRepoIds = [] }) {
+export function NewSessionDialog({ project, repos = [], workspaces = [], onClose, onCreated, initialTicket = null, initialGoal = '', initialRepoIds = [], goalAsDraft = false }) {
   const [goal, setGoal] = useState(
     initialTicket
       ? `Investigate and resolve ${initialTicket.key}: ${initialTicket.summary || initialTicket.key}`
@@ -440,8 +440,10 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
           return;
         }
       }
+      // goalAsDraft: the session opens and checks out its repositories first; the goal waits, unsent, in its message box.
+      const draft = goalAsDraft && !ticket ? goal.trim() : '';
       const payload = {
-        goal: goal.trim(),
+        goal: draft ? '' : goal.trim(),
         engine,
         trustTools: engine !== 'demo' ? trustTools : false,
         leadAgent: leadAgent.trim() || undefined,
@@ -457,7 +459,9 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
       }
 
       const { workflow } = await api.post(`/api/projects/${project.id}/workflows`, payload);
-      if (goal.trim() || ticket) await api.post(`/api/projects/${project.id}/workflows/${workflow.id}/start`);
+      if (draft) {
+        try { sessionStorage.setItem(`session-draft:${workflow.id}`, draft); } catch { /* the box simply starts empty */ }
+      } else if (goal.trim() || ticket) await api.post(`/api/projects/${project.id}/workflows/${workflow.id}/start`);
       if (onCreated) onCreated(workflow.id);
       navigate(href(project.id, 'sessions', workflow.id));
       onClose();
