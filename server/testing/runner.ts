@@ -34,6 +34,7 @@ import { validateSteps } from './types.ts';
 import type { Step, LocatorShape } from './types.ts';
 import { resolveVaultRefs } from './vault.ts';
 import { assertNotBlocked, privateNetworksAllowed } from './ssrf.ts';
+import { guardedFetch } from './guarded-fetch.ts';
 import { callTextModel } from './model-provider.ts';
 
 // ── In-memory concurrency + cancellation tracking ─────────────────────────────
@@ -278,13 +279,13 @@ export async function fetchWithSsrfCheck(
   let currentBody: string | undefined = body;
 
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-    const resp = await fetch(currentUrl, {
+    const resp = await guardedFetch(currentUrl, {
       method: currentMethod,
       headers,
       body: currentBody,
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
-    });
+    }, allowPrivateNetworks);
 
     if (resp.status >= 300 && resp.status < 400) {
       if (hop === MAX_REDIRECT_HOPS) {
