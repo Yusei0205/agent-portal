@@ -98,7 +98,9 @@
         "test/session-policy.test.ts",
         "test/login-limiter.test.ts",
         "test/client-ip.test.ts",
-        "test/step-up.test.ts"
+        "test/step-up.test.ts",
+        "test/totp.test.ts",
+        "test/mfa.test.ts"
       ],
       "smokeIds": [
         "auth"

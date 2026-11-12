@@ -82,6 +82,7 @@ function itemToUser(item: Record<string, AttributeValue>): UserRecord {
     is_admin:      getNumber(item, 'isAdmin'),
     disabled:      getNumber(item, 'disabled'),
     google_sub:    getString(item, 'googleSub'),
+    mfa:           getString(item, 'mfa') || null,
     created_at:    getString(item, 'createdAt') ?? '',
   };
 }
@@ -379,6 +380,7 @@ export class DynamoDbAuthRepository implements AuthRepository {
       is_admin:     input.is_admin,
       disabled:     input.disabled,
       google_sub:   null,
+      mfa:          null,
       created_at:   input.created_at,
     };
   }
@@ -967,6 +969,7 @@ export class DynamoDbAuthRepository implements AuthRepository {
       is_admin:     input.is_admin,
       disabled:     input.disabled,
       google_sub:   null,
+      mfa:          null,
       created_at:   input.created_at,
     };
   }

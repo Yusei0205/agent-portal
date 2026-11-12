@@ -30,6 +30,7 @@ function toUserRecord(row: Row): UserRecord {
     is_admin: Number(row.is_admin ?? 0),
     disabled: Number(row.disabled ?? 0),
     google_sub: row.google_sub != null ? String(row.google_sub) : null,
+    mfa: row.mfa != null && String(row.mfa) !== '' ? String(row.mfa) : null,
     created_at: String(row.created_at),
   };
 }
@@ -134,7 +135,7 @@ export class SqliteAuthRepository implements AuthRepository {
   async listUsersWithLastActive(): Promise<UserWithLastActive[]> {
     const rows = all<Row>(
       `SELECT u.id, u.email, u.name, u.password_hash, u.is_admin, u.disabled,
-              u.google_sub, u.created_at,
+              u.google_sub, u.mfa, u.created_at,
               MAX(s.created_at) AS last_active_at
          FROM users u
          LEFT JOIN sessions s ON s.user_id = u.id

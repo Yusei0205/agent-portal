@@ -25,6 +25,7 @@ import { appendAudit } from './audit.ts';
 import { config } from './config.ts';
 import { absoluteMs, nextExpiry, sessionExpiry } from './session-policy.ts';
 import { clearLoginFailures, loginBlocked, recordLoginFailure } from './login-limiter.ts';
+import { checkSecondFactor, mfaEnabled } from './mfa.ts';
 import { requireStepUp } from './step-up.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -269,6 +270,21 @@ export function registerAuthRoutes(): void {
       await recordLoginFailure(email, req.ip);
       sendJson(res, 401, { error: 'Email or password is incorrect' });
       return;
+    }
+
+    // Two-step sign-in: with it on, the password alone is not enough.
+    if (mfaEnabled(user)) {
+      const code = String(body.code ?? '').trim();
+      if (!code) {
+        // The password was right and nothing was guessed yet, so this is not counted as a failure.
+        sendJson(res, 401, { error: 'Enter the code from your authenticator app', mfaRequired: true });
+        return;
+      }
+      if (!await checkSecondFactor(user, code)) {
+        await recordLoginFailure(email, req.ip);
+        sendJson(res, 401, { error: 'That code is not right', mfaRequired: true });
+        return;
+      }
     }
 
     await clearLoginFailures(email);
