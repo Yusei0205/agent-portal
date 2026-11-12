@@ -118,6 +118,8 @@ interface FetchOptions {
   body?: unknown;
   headers?: Record<string, string>;
   cookie?: string;
+  /** Do not confirm the password on a 403 reauth_required (for tests of that response). */
+  noAutoConfirm?: boolean;
 }
 
 export interface FetchResult {
@@ -128,7 +130,36 @@ export interface FetchResult {
 }
 
 /** Fetch a JSON endpoint on the test server. */
+/** Session cookie -> the password it signed in with, so sensitive routes can be confirmed on the test's behalf. */
+const passwordBySession = new Map<string, string>();
+
+/**
+ * Fetch a JSON endpoint on the test server. Sensitive routes answer 403 reauth_required until the password is
+ * confirmed; like the page does, this confirms with the password the session signed in with and repeats the call.
+ * Pass noAutoConfirm to see the 403 itself.
+ */
 export async function fetchJson(
+  baseUrl: string,
+  urlPath: string,
+  opts: FetchOptions = {},
+): Promise<FetchResult> {
+  const r = await fetchJsonOnce(baseUrl, urlPath, opts);
+  if (r.status === 403 && (r.body as { code?: string } | null)?.code === 'reauth_required' && !opts.noAutoConfirm && opts.cookie) {
+    const sessionCookie = opts.cookie.split('; ').find((c) => c.startsWith('portal_session='));
+    const password = sessionCookie ? passwordBySession.get(sessionCookie) : undefined;
+    if (password) {
+      const c = await fetchJsonOnce(baseUrl, '/api/auth/confirm', { method: 'POST', body: { password }, cookie: sessionCookie });
+      if (c.status === 200 && c.cookie) return fetchJsonOnce(baseUrl, urlPath, { ...opts, cookie: `${opts.cookie}; ${c.cookie}` });
+    }
+  }
+  const body = opts.body as { password?: unknown } | undefined;
+  if ((urlPath === '/api/auth/login' || urlPath === '/api/auth/setup') && r.status === 200 && r.cookie && typeof body?.password === 'string') {
+    passwordBySession.set(r.cookie, body.password);
+  }
+  return r;
+}
+
+async function fetchJsonOnce(
   baseUrl: string,
   urlPath: string,
   opts: FetchOptions = {},
@@ -164,4 +195,14 @@ export async function fetchJson(
   const cookie = setCookieHeader ? setCookieHeader.split(';')[0] : undefined;
 
   return { status: res.status, body, headers: res.headers, cookie };
+}
+
+/**
+ * Confirm the password for sensitive actions (credentials, users, project deletion) and return the cookie header to
+ * send with them: the session cookie plus the confirmation cookie.
+ */
+export async function withPasswordConfirmed(baseUrl: string, sessionCookie: string, password: string): Promise<string> {
+  const r = await fetchJson(baseUrl, '/api/auth/confirm', { method: 'POST', body: { password }, cookie: sessionCookie });
+  if (r.status !== 200 || !r.cookie) throw new Error(`password confirmation failed: ${r.status} ${JSON.stringify(r.body)}`);
+  return `${sessionCookie}; ${r.cookie}`;
 }

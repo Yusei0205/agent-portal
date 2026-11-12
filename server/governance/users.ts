@@ -21,6 +21,7 @@ import { getAuthRepository } from '../repositories/auth.ts';
 import { getSetting, setSetting } from '../settings.ts';
 import { getProjectRepository } from '../repositories/projects.ts';
 
+import { requireStepUp } from '../step-up.ts';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sha256(s: string): string {
@@ -63,6 +64,7 @@ export function registerUserRoutes(): void {
   // PUT /api/governance/users/:id — update user (admin only)
   router.put('/api/governance/users/:id', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
+    if (!await requireStepUp(req, res)) return;
 
     const userId = req.params.id;
     const body = req.body as Record<string, unknown>;
@@ -116,6 +118,7 @@ export function registerUserRoutes(): void {
   // POST /api/governance/users/:id/reset-link — an admin issues a one-time link to set a new password (shared by hand, like an invitation)
   router.post('/api/governance/users/:id/reset-link', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
+    if (!await requireStepUp(req, res)) return;
     const user = await getAuthRepository().getUserById(req.params.id);
     if (!user) { sendJson(res, 404, { error: 'User not found' }); return; }
     if (user.disabled) { sendJson(res, 400, { error: 'This user is deactivated. Reactivate them first.' }); return; }
@@ -172,6 +175,7 @@ export function registerUserRoutes(): void {
   // POST /api/governance/invitations — create invitation
   router.post('/api/governance/invitations', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     if (!requireAdmin(req, res)) return;
+    if (!await requireStepUp(req, res)) return;
 
     const body = req.body as Record<string, unknown>;
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';

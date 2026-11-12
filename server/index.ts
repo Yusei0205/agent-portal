@@ -10,6 +10,7 @@ import { openDb, closeDb, isDbOpen } from './db.ts';
 import { createServer, clearRoutes, router, setWsUpgradeHandler } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { registerAuthRoutes, createUser, cleanupSessions, hashPassword } from './auth.ts';
+import { registerStepUpRoutes } from './step-up.ts';
 import { getAuthRepository } from './repositories/auth.ts';import { registerHealthRoutes } from './health.ts';
 import { initStorage } from './storage-instance.ts';
 import { initApiTokenRepository } from './repositories/api-tokens.ts';
@@ -209,6 +210,7 @@ export async function startServer(
   // 5. Register routes (clear any previously registered routes first for test isolation)
   clearRoutes();
   registerAuthRoutes();
+  registerStepUpRoutes();
   registerHealthRoutes();
 
   // Static-file proxy for local storage backend

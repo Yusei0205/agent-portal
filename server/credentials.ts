@@ -25,6 +25,7 @@ import { pollAgentCoreLoginShared } from './agent/kiro-agentcore.ts';
 import { findUserCredential } from './credential-default.ts';
 import { claudeLoginSupport, startClaudeLogin, submitClaudeLoginCode, cancelClaudeLogin, getClaudeLoginState } from './claude-login.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
+import { requireStepUp } from './step-up.ts';
 import type { CredentialRecord } from './repositories/credentials.ts';
 
 // Re-export the profiles fetcher override so tests can mock the API.
@@ -979,6 +980,7 @@ export function registerCredentialRoutes(): void {
   // POST /api/credentials — create (browser only)
   router.post('/api/credentials', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
+    if (!await requireStepUp(req, res)) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const engineStr = str(body.engine as string, 'engine');
@@ -1097,6 +1099,7 @@ export function registerCredentialRoutes(): void {
   // PUT /api/credentials/:id — update name or secret (browser only)
   router.put('/api/credentials/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
+    if (!await requireStepUp(req, res)) return;
     const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
@@ -1142,6 +1145,7 @@ export function registerCredentialRoutes(): void {
   // DELETE /api/credentials/:id (browser only)
   router.delete('/api/credentials/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
+    if (!await requireStepUp(req, res)) return;
     const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
 
