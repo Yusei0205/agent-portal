@@ -106,12 +106,12 @@ function DraftCard({ draft, onChanged, requestConfirm }) {
     if (!await requestConfirm(`Send this email now?\n\n${all}\n\nSubject: ${subject}`, 'Send', 'primary')) return;
     await api.put(url, edit());
     await api.post(`${url}/send`);
-    onChanged();
+    onChanged(draft.id, 'Email sent.');
   });
   const discard = () => run(async () => {
     if (!await requestConfirm('Discard this draft? It is deleted from Gmail.', 'Discard', 'danger')) return;
     await api.delete(url);
-    onChanged();
+    onChanged(draft.id, 'Draft discarded (deleted from Gmail).');
   });
 
   return (
@@ -136,7 +136,7 @@ function DraftCard({ draft, onChanged, requestConfirm }) {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
         <button type="button" className="btn btn-primary" onClick={send} disabled={busy}>Send</button>
         <button type="button" className="btn" onClick={save} disabled={busy}>Save changes</button>
-        <button type="button" className="btn" onClick={discard} disabled={busy}>Discard</button>
+        <button type="button" className="btn btn-danger" onClick={discard} disabled={busy}>Discard</button>
         {note && <span className="muted small" role="status">{note}</span>}
       </div>
     </div>
@@ -200,6 +200,7 @@ export default function Mail({ projectId }) {
   const [workspaces, setWorkspaces] = useState([]);
   const [drafts, setDrafts] = useState([]);
   const [draftError, setDraftError] = useState(null);
+  const [draftNotice, setDraftNotice] = useState(null);
   const { confirmState, requestConfirm } = useConfirm();
   const since = startOfToday();
 
@@ -222,6 +223,12 @@ export default function Mail({ projectId }) {
     try { setDrafts((await api.get('/api/mail/drafts')).drafts ?? []); }
     catch (e) { setDraftError(e.message || 'Could not load drafts'); }
   }, []);
+
+  const draftGone = useCallback((id, message) => {
+    setDrafts((list) => list.filter((d) => d.id !== id)); // gone at once; the list is re-read below
+    setDraftNotice(message);
+    loadDrafts();
+  }, [loadDrafts]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (allowSend) loadDrafts(); else setDrafts([]); }, [allowSend, loadDrafts]);
@@ -313,6 +320,7 @@ export default function Mail({ projectId }) {
       {!loading && accounts.length > 0 && (
         <section aria-label="Follow-up drafts" style={{ marginTop: 20 }}>
           <h2 style={{ marginBottom: 6 }}>Follow-up drafts</h2>
+          {draftNotice && <p className="muted small" role="status">{draftNotice}</p>}
           {!allowSend ? (
             <p className="muted small">
               Turn on “Let agents draft and send email as me” under <a href="#/connect/tools">Connect › Tools &amp; services</a> and the summary will also draft replies here for you to review.
@@ -322,7 +330,7 @@ export default function Mail({ projectId }) {
           ) : drafts.length === 0 ? (
             <p className="muted small">No drafts yet. Summarise mail and any reply the agent drafts shows up here. Nothing is sent until you press Send.</p>
           ) : (
-            drafts.map((d) => <DraftCard key={d.id} draft={d} onChanged={loadDrafts} requestConfirm={requestConfirm} />)
+            drafts.map((d) => <DraftCard key={d.id} draft={d} onChanged={draftGone} requestConfirm={requestConfirm} />)
           )}
         </section>
       )}
