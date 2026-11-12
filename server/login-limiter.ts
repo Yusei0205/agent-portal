@@ -6,6 +6,7 @@
  */
 import { createHash } from 'node:crypto';
 import { getAuthRepository } from './repositories/auth.ts';
+import { securityLog } from './security-log.ts';
 
 export const LOGIN_WINDOW_MS = 15 * 60_000;
 export const ACCOUNT_LIMIT = 10;
@@ -22,11 +23,14 @@ export async function loginBlocked(email: string, ip: string, nowMs = Date.now()
     repo.getLoginFailures(accountKey(email), nowMs),
     repo.getLoginFailures(addressKey(ip), nowMs),
   ]);
-  return acct >= ACCOUNT_LIMIT || addr >= IP_LIMIT;
+  const blocked = acct >= ACCOUNT_LIMIT || addr >= IP_LIMIT;
+  if (blocked) securityLog('login_blocked', { ip, reason: acct >= ACCOUNT_LIMIT ? 'account' : 'address' });
+  return blocked;
 }
 
 export async function recordLoginFailure(email: string, ip: string, nowMs = Date.now()): Promise<void> {
   const repo = getAuthRepository();
+  securityLog('login_failed', { ip });
   await Promise.all([
     repo.recordLoginFailure(accountKey(email), LOGIN_WINDOW_MS, nowMs),
     repo.recordLoginFailure(addressKey(ip), LOGIN_WINDOW_MS, nowMs),
