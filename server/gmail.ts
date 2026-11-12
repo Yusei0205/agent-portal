@@ -231,8 +231,11 @@ export function cleanAddresses(v: string, field: string): string {
   return s;
 }
 
+/** Marks a draft an agent saved, so the Mail page lists those and not the person's own drafts. */
+export const AGENT_DRAFT_HEADER = 'X-Portal-Agent-Draft';
+
 /** The raw message Gmail wants (base64url of an RFC 2822 message). */
-export function buildRawMessage(m: { to: string; cc?: string; bcc?: string; subject: string; body: string; inReplyTo?: string }): string {
+export function buildRawMessage(m: { to: string; cc?: string; bcc?: string; subject: string; body: string; inReplyTo?: string; agentDraft?: boolean }): string {
   const to = cleanAddresses(m.to, 'to');
   if (!to) throw new Error('to is required.');
   const cc = cleanAddresses(m.cc ?? '', 'cc');
@@ -245,6 +248,7 @@ export function buildRawMessage(m: { to: string; cc?: string; bcc?: string; subj
     ...(cc ? [`Cc: ${cc}`] : []),
     ...(bcc ? [`Bcc: ${bcc}`] : []),
     `Subject: ${subject}`,
+    ...(m.agentDraft ? [`${AGENT_DRAFT_HEADER}: 1`] : []),
     ...(m.inReplyTo ? [`In-Reply-To: ${m.inReplyTo}`, `References: ${m.inReplyTo}`] : []),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',
@@ -343,7 +347,7 @@ export function createGmailMcpServer(userId: string): McpServer {
   }, async (a) => {
     try {
       await sendAllowed();
-      const raw = buildRawMessage(a);
+      const raw = buildRawMessage({ ...a, agentDraft: true });
       const r = await gfetch(userId, '/drafts', { method: 'POST', body: { message: { raw, ...(a.threadId ? { threadId: a.threadId } : {}) } } }) as { id?: string };
       audit('create_draft', a.to.slice(0, 80));
       return ok(`Draft saved (id ${r.id ?? '?'}). It is in the Drafts folder, not sent.`);
@@ -538,7 +542,7 @@ export interface DraftItem {
   id: string; threadId: string;
   to: string; cc: string; bcc: string; subject: string; body: string;
   /** The message this replies to, when the draft sits in a thread. */
-  replyingTo: { from: string; subject: string } | null;
+  replyingTo: { id: string; from: string; subject: string; date: string; snippet: string } | null;
 }
 
 interface RawDraft { id: string; message?: { threadId?: string; payload?: Part } }
@@ -562,20 +566,44 @@ async function requireSendAllowed(userId: string): Promise<void> {
 const DRAFT_ID = /^[A-Za-z0-9_-]{3,100}$/;
 function checkDraftId(id: string): void { if (!DRAFT_ID.test(id)) throw new Error('Invalid draft id'); }
 
-/** The newest drafts (up to 20), with the sender and subject of the message each one answers. */
+/** The message a draft answers: the newest non-draft message of its thread, else the one its In-Reply-To names. */
+async function originalOf(userId: string, threadId: string, inReplyTo: string): Promise<DraftItem['replyingTo']> {
+  const q = '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date';
+  type Msg = { id: string; snippet?: string; labelIds?: string[]; payload?: Part };
+  const pick = (m: Msg | undefined): DraftItem['replyingTo'] => m ? {
+    id: m.id,
+    from: headerValue(m.payload?.headers, 'From'),
+    subject: headerValue(m.payload?.headers, 'Subject') || '(no subject)',
+    date: headerValue(m.payload?.headers, 'Date'),
+    snippet: decodeEntities(m.snippet ?? ''),
+  } : null;
+  try {
+    if (threadId) {
+      const t = await gfetch(userId, `/threads/${threadId}${q}`) as { messages?: Msg[] };
+      const real = (t.messages ?? []).filter((m) => !(m.labelIds ?? []).includes('DRAFT'));
+      if (real.length) return pick(real[real.length - 1]);
+    }
+    const mid = inReplyTo.trim();
+    if (/^<[^<>\s]+>$/.test(mid)) {
+      const r = await gfetch(userId, `/messages?maxResults=1&q=${encodeURIComponent(`rfc822msgid:${mid}`)}`) as { messages?: { id: string }[] };
+      if (r.messages?.[0]) return pick(await gfetch(userId, `/messages/${r.messages[0].id}${q}`) as Msg);
+    }
+  } catch { /* the original is only context */ }
+  return null;
+}
+
+/** The reply drafts an agent saved (up to 20 of the newest), with the sender and subject of the message each one answers.
+ *  Drafts the person wrote themselves in Gmail are not listed: only those carrying the agent marker header. */
 export async function listDrafts(userId: string): Promise<DraftItem[]> {
   await requireSendAllowed(userId);
-  const list = await gfetch(userId, '/drafts?maxResults=20') as { drafts?: { id: string }[] };
+  const list = await gfetch(userId, '/drafts?maxResults=50') as { drafts?: { id: string }[] };
   const out: DraftItem[] = [];
   for (const { id } of list.drafts ?? []) {
+    if (out.length >= 20) break;
+    const head = await gfetch(userId, `/drafts/${encodeURIComponent(id)}?format=metadata&metadataHeaders=${AGENT_DRAFT_HEADER}&metadataHeaders=In-Reply-To`) as RawDraft;
+    if (!headerValue(head.message?.payload?.headers, AGENT_DRAFT_HEADER)) continue;
     const d = toDraftItem(await gfetch(userId, `/drafts/${encodeURIComponent(id)}?format=full`) as RawDraft);
-    if (d.threadId) {
-      try {
-        const t = await gfetch(userId, `/threads/${d.threadId}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`) as { messages?: { id: string; payload?: Part }[] };
-        const orig = (t.messages ?? []).find((m) => headerValue(m.payload?.headers, 'From') !== '');
-        if (orig) d.replyingTo = { from: headerValue(orig.payload?.headers, 'From'), subject: headerValue(orig.payload?.headers, 'Subject') };
-      } catch { /* the original is only context */ }
-    }
+    d.replyingTo = await originalOf(userId, d.threadId, headerValue(head.message?.payload?.headers, 'In-Reply-To'));
     out.push(d);
   }
   return out;
@@ -590,7 +618,7 @@ export async function updateDraft(
   checkDraftId(draftId);
   const cur = await gfetch(userId, `/drafts/${encodeURIComponent(draftId)}?format=metadata&metadataHeaders=In-Reply-To`) as RawDraft;
   const inReplyTo = headerValue(cur.message?.payload?.headers, 'In-Reply-To') || undefined;
-  const raw = buildRawMessage({ ...edit, inReplyTo });
+  const raw = buildRawMessage({ ...edit, inReplyTo, agentDraft: true }); // only agent drafts are listed, so edits keep the marker
   const threadId = cur.message?.threadId;
   await gfetch(userId, `/drafts/${encodeURIComponent(draftId)}`, { method: 'PUT', body: { message: { raw, ...(threadId ? { threadId } : {}) } } });
   auditLog(userId, 'gmail.edit_draft', edit.to.slice(0, 80));

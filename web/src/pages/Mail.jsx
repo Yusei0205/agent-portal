@@ -116,11 +116,18 @@ function DraftCard({ draft, onChanged, requestConfirm }) {
 
   return (
     <div style={{ background: 'var(--panel)', border: '1px solid var(--line-2)', borderRadius: 10, padding: '14px 16px', marginBottom: 12 }}>
-      {draft.replyingTo && (
-        <p className="muted small" style={{ margin: '0 0 10px', overflowWrap: 'anywhere' }}>
-          Reply to <strong>{senderName(draft.replyingTo.from)}</strong> — {draft.replyingTo.subject}
-        </p>
-      )}
+      <div style={{ margin: '0 0 12px', padding: '8px 12px', borderLeft: '3px solid var(--line-2)', overflowWrap: 'anywhere' }}>
+        <div className="muted small">Replying to</div>
+        {draft.replyingTo ? (
+          <>
+            <div><strong>{draft.replyingTo.subject}</strong></div>
+            <div className="muted small">{senderName(draft.replyingTo.from)}{draft.replyingTo.date ? ` · ${draft.replyingTo.date}` : ''}</div>
+            {draft.replyingTo.snippet && <div className="muted small" style={{ marginTop: 4 }}>{draft.replyingTo.snippet}</div>}
+          </>
+        ) : (
+          <div className="muted small">The original message could not be found (the agent did not link this draft to one).</div>
+        )}
+      </div>
       <Recipients label="To" value={to} onChange={setTo} />
       <Recipients label="Cc" value={cc} onChange={setCc} />
       <Recipients label="Bcc" value={bcc} onChange={setBcc} />
