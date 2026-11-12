@@ -25,10 +25,11 @@ import { appendAudit } from './audit.ts';
 import { config } from './config.ts';
 import { absoluteMs, nextExpiry, sessionExpiry } from './session-policy.ts';
 import { clearLoginFailures, loginBlocked, recordLoginFailure } from './login-limiter.ts';
+import { requireStepUp } from './step-up.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const COOKIE_NAME = 'portal_session';
+export const COOKIE_NAME = 'portal_session';
 
 // ── Password hashing ──────────────────────────────────────────────────────────
 
@@ -417,6 +418,7 @@ export function registerAuthRoutes(): void {
   router.post('/api/users', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     if (!req.user.is_admin) { sendJson(res, 403, { error: 'Only admins can do this' }); return; }
+    if (!await requireStepUp(req, res)) return;
     const body = req.body as Record<string, unknown>;
     const user = await createUser({
       email: String(body.email ?? ''),
@@ -442,8 +444,15 @@ export function registerAuthRoutes(): void {
   router.post('/api/auth/password', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
     const body = req.body as Record<string, unknown>;
+    // Guessing the current password from a signed-in session is limited like sign-in is.
+    const limitEmail = req.user.email.trim().toLowerCase();
+    if (await loginBlocked(limitEmail, req.ip)) {
+      sendJson(res, 429, { error: 'Too many failed attempts. Wait 15 minutes and try again.' });
+      return;
+    }
     const user = await getAuthRepository().getUserById(req.user.id);
     if (!user || !verifyPassword(String(body.current ?? ''), user.password_hash)) {
+      await recordLoginFailure(limitEmail, req.ip);
       sendJson(res, 400, { error: 'Current password is incorrect' });
       return;
     }

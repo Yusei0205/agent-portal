@@ -36,6 +36,7 @@ import { Help } from './pages/Help.jsx';
 import { Tickets } from './pages/Tickets.jsx';
 import Mail from './pages/Mail.jsx';
 
+import { ReauthPrompt } from './components/ReauthPrompt.jsx';
 // ── Shortcut definitions (registered once at module load) ─────────────────────
 
 registerShortcuts([
@@ -470,6 +471,7 @@ function Shell({ user, onSignOut }) {
       <a className="skip" href="#main">
         Skip to content
       </a>
+      <ReauthPrompt />
 
       <Rail
         route={route}

@@ -56,13 +56,21 @@ function notifySignedOut(status, message, url) {
   window.dispatchEvent(new CustomEvent('portal:signed-out'));
 }
 
+/** Set by the password prompt (ReauthPrompt): asks the person for their password and resolves true once confirmed. */
+let askForPassword = /** @type {null | (() => Promise<boolean>)} */ (null);
+/** @param {null | (() => Promise<boolean>)} fn */
+export function setReauthHandler(fn) {
+  askForPassword = fn;
+}
+
 /**
  * @param {string} method
  * @param {string} url
  * @param {unknown} [body]
+ * @param {boolean} [retried] true on the repeat after a password confirmation
  * @returns {Promise<any>}
  */
-async function request(method, url, body) {
+async function request(method, url, body, retried = false) {
   /** @type {Record<string, string>} */
   const headers = { 'x-requested-with': 'agent-portal' };
   /** @type {BodyInit | undefined} */
@@ -91,6 +99,10 @@ async function request(method, url, body) {
       (data && typeof data === 'object' && data.error) ||
       `Request failed (${res.status})`;
     notifySignedOut(res.status, msg, url);
+    // Sensitive actions ask for the password again: confirm it, then repeat the action once.
+    if (res.status === 403 && data && typeof data === 'object' && data.code === 'reauth_required' && askForPassword && !retried) {
+      if (await askForPassword()) return request(method, url, body, true);
+    }
     throw new ApiError(res.status, msg, typeof data === 'object' && data !== null ? data : undefined);
   }
   return data;

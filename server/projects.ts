@@ -27,6 +27,7 @@ import { SUPERPOWERS_SKILLS } from './superpowers-skills.ts';
 import { getProjectRepository, SlugAlreadyTakenError } from './repositories/projects.ts';
 import { getAuthRepository } from './repositories/auth.ts';
 
+import { requireStepUp } from './step-up.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Project {
@@ -345,6 +346,7 @@ export function registerProjectRoutes(): void {
   // DELETE /api/projects/:id
   router.delete('/api/projects/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!await requireOwner(req, res, req.params.id)) return;
+    if (!await requireStepUp(req, res)) return;
     await getProjectRepository().archiveProject(req.params.id);
     sendJson(res, 200, { ok: true });
   });
