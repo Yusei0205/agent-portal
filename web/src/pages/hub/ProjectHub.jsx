@@ -1055,6 +1055,7 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
           workspaces={[]}
           onClose={() => setSyncing(null)}
           initialRepoIds={[syncing.repo.id]}
+          goalAsDraft
           initialGoal={syncGoal({ repoName: syncing.repo.name, branch: syncing.branch })}
         />
       )}

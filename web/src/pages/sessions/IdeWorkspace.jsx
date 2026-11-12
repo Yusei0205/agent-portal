@@ -221,6 +221,15 @@ export function ComposerBar({
   onCommandDone,
 }) {
   const [message, setMessage] = useState('');
+  // A draft left by the New session dialog (e.g. "Update docs & skills"): shown in the box, never sent for the person.
+  useEffect(() => {
+    if (!workflow?.id) return;
+    try {
+      const key = `session-draft:${workflow.id}`;
+      const draft = sessionStorage.getItem(key);
+      if (draft) { sessionStorage.removeItem(key); setMessage((m) => m || draft); }
+    } catch { /* storage unavailable: no draft */ }
+  }, [workflow?.id]);
   const [attachmentIds, setAttachmentIds] = useState([]);
   // 50 MB each on the cloud portal (files go straight to storage), 2 MB each on a local install; the portal says which.
   const attachLimits = useAttachmentLimits();
