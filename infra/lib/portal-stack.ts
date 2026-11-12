@@ -30,6 +30,11 @@ import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { Construct } from 'constructs';
 import tablesJson from '../tables.json';
 
@@ -296,6 +301,41 @@ export class AgentPortalCloudStack extends cdk.Stack {
       environment: portalEnv,
     });
     tables.forEach((t) => t.grantReadWriteData(fn));
+
+    // ── Security alarms ───────────────────────────────────────────────────────
+    // The server writes one "[security] <event>" line per failed sign-in and per sign-in refused by the limits
+    // (server/security-log.ts). Counting them tells the owner about guessing attempts as they happen. The email goes to the
+    // budget address and has to be confirmed once (AWS sends a confirmation mail when the stack is deployed).
+    const alerts = new sns.Topic(this, 'SecurityAlerts', { displayName: 'Agent Portal security alerts' });
+    alerts.addSubscription(new snsSubs.EmailSubscription(props.budgetEmail));
+    const alarmAction = new cwActions.SnsAction(alerts);
+    // The function's log group already exists (Lambda created it), so refer to it by name rather than create it.
+    const fnLogs = logs.LogGroup.fromLogGroupName(this, 'PortalFunctionLogs', `/aws/lambda/${PORTAL_FUNCTION_NAME}`);
+    const countLogLine = (id: string, line: string, metricName: string) => new logs.MetricFilter(this, id, {
+      logGroup: fnLogs,
+      filterPattern: logs.FilterPattern.literal(`"${line}"`),
+      metricNamespace: 'AgentPortal',
+      metricName,
+      metricValue: '1',
+      defaultValue: 0,
+    });
+    const failedSignIns = countLogLine('FailedSignInsFilter', '[security] login_failed', 'FailedSignIns');
+    const blockedSignIns = countLogLine('BlockedSignInsFilter', '[security] login_blocked', 'BlockedSignIns');
+    const alarms: Array<[string, cloudwatch.IMetric, number, string]> = [
+      ['FailedSignInsAlarm', failedSignIns.metric({ statistic: 'Sum', period: cdk.Duration.minutes(5) }), 20, 'More than 20 failed sign-ins in 5 minutes: someone may be guessing passwords.'],
+      ['BlockedSignInsAlarm', blockedSignIns.metric({ statistic: 'Sum', period: cdk.Duration.minutes(15) }), 3, 'Sign-ins were refused by the failure limits 3 or more times in 15 minutes.'],
+      ['PortalErrorsAlarm', fn.metricErrors({ statistic: 'Sum', period: cdk.Duration.minutes(5) }), 5, 'The portal function failed 5 or more times in 5 minutes.'],
+    ];
+    for (const [id, metric, threshold, description] of alarms) {
+      new cloudwatch.Alarm(this, id, {
+        metric,
+        threshold,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        alarmDescription: description,
+      }).addAlarmAction(alarmAction);
+    }
     // Durable visual workflow coordination. Agent turns remain on the existing runner path;
     // each tick only dispatches/polls a turn and persists one transition.
     const workflowBridge = new lambda.Function(this, 'AutomationBridge', {

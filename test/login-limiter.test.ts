@@ -1,4 +1,4 @@
-import { test, describe, before, after } from 'node:test';
+import { test, describe, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb } from './fixtures.ts';
 import { SqliteAuthRepository } from '../server/repositories/auth-sqlite.ts';
@@ -48,6 +48,21 @@ describe('login limiter', () => {
     for (let i = 0; i < IP_LIMIT; i++) await recordLoginFailure(`user${i}@x.com`, '192.0.2.7', t);
     assert.equal(await loginBlocked('brand-new@x.com', '192.0.2.7', t), true);
     assert.equal(await loginBlocked('brand-new@x.com', '192.0.2.8', t), false);
+  });
+
+  test('failures and blocks are logged in the shape the alarms count, without the email', async () => {
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const t = Date.now();
+      for (let i = 0; i < ACCOUNT_LIMIT; i++) await recordLoginFailure('logged@x.com', '203.0.113.50', t);
+      assert.equal(await loginBlocked('logged@x.com', '203.0.113.50', t), true);
+      const lines = warn.mock.calls.map((c) => String(c.arguments[0]));
+      assert.ok(lines.some((l) => l.startsWith('[security] login_failed ')));
+      assert.ok(lines.some((l) => l.startsWith('[security] login_blocked ')));
+      assert.ok(lines.every((l) => !l.includes('logged@x.com')));
+    } finally {
+      warn.mock.restore();
+    }
   });
 
   test('a correct sign-in clears the account counter', async () => {
