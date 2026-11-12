@@ -52,15 +52,21 @@ function MessageDetail({ provider, id }) {
   if (state.error) return <p className="error-note" role="alert">{state.error}</p>;
   const m = state.message;
   return (
-    <div className="mail-detail" style={{ padding: '10px 0 4px' }}>
-      <dl className="muted small" style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '2px 12px', margin: '0 0 10px' }}>
+    <div
+      className="mail-detail"
+      style={{
+        background: 'var(--panel)', border: '1px solid var(--line-2)', borderRadius: 10,
+        padding: '14px 16px', margin: '4px 0 12px', boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+      }}
+    >
+      <dl className="muted small" style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '2px 12px', margin: '0 0 12px', paddingBottom: 12, borderBottom: '1px solid var(--line-2)' }}>
         <dt>From</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{m.from}</dd>
         <dt>To</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{m.to}</dd>
         {m.cc && (<><dt>Cc</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{m.cc}</dd></>)}
         <dt>Date</dt><dd style={{ margin: 0 }}>{m.date}</dd>
         {m.attachments.length > 0 && (<><dt>Attachments</dt><dd style={{ margin: 0 }}>{m.attachments.join(', ')}</dd></>)}
       </dl>
-      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: 0, fontFamily: 'inherit', fontSize: '0.9rem', maxHeight: '60vh', overflow: 'auto' }}>
+      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: 0, fontFamily: 'inherit', fontSize: '0.9rem', lineHeight: 1.5, maxHeight: '60vh', overflow: 'auto' }}>
         {m.text || '(no text)'}
       </pre>
     </div>
