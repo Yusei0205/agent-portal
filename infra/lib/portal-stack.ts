@@ -409,15 +409,22 @@ export class AgentPortalCloudStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
     // Security headers. The page (S3) gets the full set; the API keeps the ones that cannot break its own embedded
-    // previews (those set their own CSP and are framed by the page). AWS hosts are listed for live updates (AppSync),
-    // direct uploads (S3) and the browser Live View (AgentCore).
+    // previews (those set their own CSP and are framed by the page).
     const pageCsp = [
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      "connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com",
+      // Only the AWS hosts the page really talks to: live updates (AppSync Events), direct uploads and downloads
+      // (the storage bucket, presigned links) and the browser Live View (AgentCore). Anything else is blocked, so a
+      // script that got into the page cannot send data to an attacker's AWS endpoint.
+      ["connect-src 'self'",
+        `wss://${eventsApi.attrDnsRealtime}`,
+        `https://bedrock-agentcore.${this.region}.amazonaws.com`,
+        `wss://bedrock-agentcore.${this.region}.amazonaws.com`,
+        ...(props.storageBucket ? [`https://${props.storageBucket}.s3.${this.region}.amazonaws.com`, `https://s3.${this.region}.amazonaws.com`] : []),
+      ].join(' '),
       "frame-src 'self' https://embed.diagrams.net",
       "worker-src 'self' blob:",
       "object-src 'none'",
