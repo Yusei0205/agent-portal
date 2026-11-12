@@ -294,6 +294,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.ts';
 
+import { isInsideOrSame } from './storage-path.ts';
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -329,7 +330,7 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string)
   }
   if (rel.includes('\0')) return false;
   let file = path.resolve(root, '.' + rel);
-  if (!file.startsWith(path.resolve(root))) return false;
+  if (!isInsideOrSame(root, file)) return false;
   let isIndex = false;
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     if (rel.startsWith('/assets/')) return false;

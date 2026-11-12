@@ -1097,6 +1097,7 @@
         "test/safe-url.test.ts",
         "test/sanitize-preview.test.ts",
         "test/security-p0.test.ts",
+        "test/path-inside.test.ts",
         "test/ssrf-defaults.test.ts",
         "test/guarded-fetch.test.ts"
       ],

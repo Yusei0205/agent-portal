@@ -29,6 +29,7 @@ import { getProjectRepository } from './repositories/projects.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import type { VaultFileRecord } from './repositories/vault-files.ts';
 
+import { requireStepUp } from './step-up.ts';
 // ── Multipart parser ──────────────────────────────────────────────────────────
 
 interface UploadedFile {
@@ -271,6 +272,7 @@ export function registerVaultRoutes(): void {
     async (req: PortalRequest, res: PortalResponse): Promise<void> => {
       const project = await requireMember(req, res, req.params.id);
       if (!project) return;
+      if (!await requireStepUp(req, res)) return;
 
       const vf = await getVaultFilesRepository().getById(req.params.fileId);
       if (!vf || vf.project_id !== req.params.id) {

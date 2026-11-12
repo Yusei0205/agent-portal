@@ -78,6 +78,9 @@ jobs:
       - name: Validate test module map
         run: npm run test:map:check
 
+      - name: Dependency advisories (production)
+        run: npm run audit:check
+
       - name: Build
         run: npm run build
 

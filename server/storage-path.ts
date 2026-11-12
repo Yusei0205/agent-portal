@@ -11,6 +11,13 @@ export function isInside(root: string, abs: string): boolean {
   return a !== r && a.startsWith(r + path.sep);
 }
 
+/** Like isInside, but the folder itself counts. Use this in place of `abs.startsWith(path.resolve(root))`, which also lets a sibling folder (`root-evil`) through. */
+export function isInsideOrSame(root: string, abs: string): boolean {
+  const r = path.resolve(root);
+  const a = path.resolve(abs);
+  return a === r || a.startsWith(r + path.sep);
+}
+
 /** Whether /api/storage-file may serve this absolute path: inside the data folder and not a database or key file. */
 export function isServableStoragePath(abs: string, dataDir: string = config.dataDir): boolean {
   return isInside(dataDir, abs) && !NEVER_SERVED.test(abs);
