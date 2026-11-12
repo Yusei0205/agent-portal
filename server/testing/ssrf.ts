@@ -231,36 +231,43 @@ export async function checkSsrf(
   }
 
   for (const addr of addrs) {
-    // Always block link-local IPv4 and IPv6
-    if (isAlwaysBlockedIpv4(addr)) {
-      return { blocked: true, reason: `Address ${addr} is in link-local range 169.254.0.0/16` };
-    }
-    if (isAlwaysBlockedIpv6(addr)) {
-      return { blocked: true, reason: `Address ${addr} is in link-local IPv6 range fe80::/10` };
-    }
-    // Check IPv4-mapped IPv6 (::ffff:169.254.x.x etc.)
-    const mappedV4 = extractMappedIpv4(addr);
-    if (mappedV4 && isAlwaysBlockedIpv4(mappedV4)) {
-      return { blocked: true, reason: `Address ${addr} is an IPv4-mapped IPv6 in link-local range` };
-    }
-
-    // If private networks are not allowed, also block loopback + RFC-1918
-    if (!allowPrivateNetworks) {
-      if (isLoopbackIpv4(addr)) {
-        return { blocked: true, reason: `Address ${addr} is loopback (test.allowPrivateNetworks=false)` };
-      }
-      if (isLoopbackIpv6(addr) || isPrivateIpv6(addr)) {
-        return { blocked: true, reason: `Address ${addr} is loopback or private (test.allowPrivateNetworks=false)` };
-      }
-      if (mappedV4 && (isLoopbackIpv4(mappedV4) || isPrivateIpv4(mappedV4))) {
-        return { blocked: true, reason: `Address ${addr} is an IPv4-mapped IPv6 private address (test.allowPrivateNetworks=false)` };
-      }
-      if (isPrivateIpv4(addr)) {
-        return { blocked: true, reason: `Address ${addr} is in a private RFC-1918 range (test.allowPrivateNetworks=false)` };
-      }
-    }
+    const verdict = checkAddress(addr, allowPrivateNetworks);
+    if (verdict.blocked) return verdict;
   }
 
+  return { blocked: false };
+}
+
+/** The rules for one resolved address. Used before a request (checkSsrf) and again when the connection is made. */
+export function checkAddress(addr: string, allowPrivateNetworks: boolean): SsrfCheckResult {
+  // Always block link-local IPv4 and IPv6
+  if (isAlwaysBlockedIpv4(addr)) {
+    return { blocked: true, reason: `Address ${addr} is in link-local range 169.254.0.0/16` };
+  }
+  if (isAlwaysBlockedIpv6(addr)) {
+    return { blocked: true, reason: `Address ${addr} is in link-local IPv6 range fe80::/10` };
+  }
+  // Check IPv4-mapped IPv6 (::ffff:169.254.x.x etc.)
+  const mappedV4 = extractMappedIpv4(addr);
+  if (mappedV4 && isAlwaysBlockedIpv4(mappedV4)) {
+    return { blocked: true, reason: `Address ${addr} is an IPv4-mapped IPv6 in link-local range` };
+  }
+
+  // If private networks are not allowed, also block loopback + RFC-1918
+  if (!allowPrivateNetworks) {
+    if (isLoopbackIpv4(addr)) {
+      return { blocked: true, reason: `Address ${addr} is loopback (test.allowPrivateNetworks=false)` };
+    }
+    if (isLoopbackIpv6(addr) || isPrivateIpv6(addr)) {
+      return { blocked: true, reason: `Address ${addr} is loopback or private (test.allowPrivateNetworks=false)` };
+    }
+    if (mappedV4 && (isLoopbackIpv4(mappedV4) || isPrivateIpv4(mappedV4))) {
+      return { blocked: true, reason: `Address ${addr} is an IPv4-mapped IPv6 private address (test.allowPrivateNetworks=false)` };
+    }
+    if (isPrivateIpv4(addr)) {
+      return { blocked: true, reason: `Address ${addr} is in a private RFC-1918 range (test.allowPrivateNetworks=false)` };
+    }
+  }
   return { blocked: false };
 }
 

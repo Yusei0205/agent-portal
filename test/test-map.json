@@ -1098,7 +1098,8 @@
         "test/sanitize-preview.test.ts",
         "test/security-p0.test.ts",
         "test/path-inside.test.ts",
-        "test/ssrf-defaults.test.ts"
+        "test/ssrf-defaults.test.ts",
+        "test/guarded-fetch.test.ts"
       ],
       "smokeIds": [],
       "note": "Tested code lives in server/http.ts (SSRF), server/auth.ts, and server/agent/* — all in the shared section. Changes to those shared files already mark this module affected."

@@ -7,6 +7,7 @@
  */
 
 import { assertNotBlocked } from '../testing/ssrf.ts';
+import { guardedFetch } from '../testing/guarded-fetch.ts';
 import type { SimApiRecord, SimVersionRecord } from '../repositories/simulation.ts';
 import { handleMockRequest, locateOperation } from './mock-engine.ts';
 import type { MockRule } from './types.ts';
@@ -57,13 +58,13 @@ export function _allowPrivateAddressesForTests(allow: boolean): void { allowPriv
 async function forwardLive(base: string, input: CallInput): Promise<{ status: number; type: string; text: string }> {
   const url = base.replace(/\/+$/, '') + input.path + input.search;
   await assertNotBlocked(url, allowPrivateAddresses);
-  const res = await fetch(url, {
+  const res = await guardedFetch(url, {
     method: input.method,
     headers: input.headers,
     body: input.rawBody.length > 0 && input.method !== 'GET' && input.method !== 'HEAD' ? new Uint8Array(input.rawBody) : undefined,
     signal: AbortSignal.timeout(30_000),
     redirect: 'error',
-  });
+  }, allowPrivateAddresses);
   return { status: res.status, type: res.headers.get('content-type') ?? 'application/json', text: await res.text() };
 }
 
