@@ -64,6 +64,9 @@ export function Login({ onDone, googleEnabled = false, expired = false }) {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // Two-step sign-in: the server asks for an authenticator (or recovery) code once the password is right.
+  const [needCode, setNeedCode] = useState(false);
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   // Google sign-in sends failures back as #/login?error=...
   const hashError = (() => {
@@ -80,10 +83,17 @@ export function Login({ onDone, googleEnabled = false, expired = false }) {
     setBusy(true);
     setError(null);
     try {
-      await api.post('/api/auth/login', { email, password });
+      await api.post('/api/auth/login', needCode ? { email, password, code } : { email, password });
       onDone();
     } catch (err) {
-      setError(err.message || 'Sign in failed');
+      if (err?.data?.mfaRequired) {
+        // First time: just ask. After a code was sent: it was wrong.
+        if (needCode) setError(err.message || 'That code is not right');
+        setNeedCode(true);
+        setCode('');
+      } else {
+        setError(err.message || 'Sign in failed');
+      }
     } finally {
       setBusy(false);
     }
@@ -152,8 +162,24 @@ export function Login({ onDone, googleEnabled = false, expired = false }) {
                   autoComplete="current-password"
                 />
               </div>
+              {needCode && (
+                <div className="field">
+                  <label htmlFor="login-code">Authenticator code</label>
+                  <input
+                    id="login-code"
+                    inputMode="text"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    required
+                    autoComplete="one-time-code"
+                    autoFocus
+                    placeholder="6 digits, or a recovery code"
+                  />
+                  <p className="muted small">Open your authenticator app and enter the code for this portal. Lost your phone? Use one of your recovery codes.</p>
+                </div>
+              )}
               <button type="submit" className="btn btn-primary" disabled={busy}>
-                {busy ? 'Signing in…' : 'Sign in'}
+                {busy ? 'Signing in…' : needCode ? 'Verify and sign in' : 'Sign in'}
               </button>
               <button type="button" className="login-alt" onClick={() => setForgot((v) => !v)} aria-expanded={forgot}>
                 Forgot password?

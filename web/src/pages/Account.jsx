@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../lib/api.js';
 
+import { MfaSettings } from '../components/MfaSettings.jsx';
 /**
  * The signed-in person's own account: who they are, their password, and signing out other devices.
  * @param {{ user: { id: string, name?: string, email: string, is_admin?: boolean } }} props
@@ -78,6 +79,8 @@ export function Account({ user }) {
         </form>
         <p className="muted small">Forgot it? Sign out and ask an admin for a reset link. If you only sign in with Google you have no portal password to change.</p>
       </section>
+
+      <MfaSettings />
 
       <section className="panel stack" aria-labelledby="acct-devices">
         <h2 id="acct-devices">Other devices</h2>

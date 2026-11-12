@@ -11,6 +11,7 @@ import { createServer, clearRoutes, router, setWsUpgradeHandler } from './http.t
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { registerAuthRoutes, createUser, cleanupSessions, hashPassword } from './auth.ts';
 import { registerStepUpRoutes } from './step-up.ts';
+import { registerMfaRoutes } from './mfa.ts';
 import { getAuthRepository } from './repositories/auth.ts';import { registerHealthRoutes } from './health.ts';
 import { initStorage } from './storage-instance.ts';
 import { initApiTokenRepository } from './repositories/api-tokens.ts';
@@ -211,6 +212,7 @@ export async function startServer(
   clearRoutes();
   registerAuthRoutes();
   registerStepUpRoutes();
+  registerMfaRoutes();
   registerHealthRoutes();
 
   // Static-file proxy for local storage backend

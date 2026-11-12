@@ -84,6 +84,8 @@ export function registerUserRoutes(): void {
     const patch: Record<string, string | number> = {};
     if (typeof body.disabled === 'boolean') patch.disabled = body.disabled ? 1 : 0;
     if (typeof body.is_admin === 'boolean') patch.is_admin = body.is_admin ? 1 : 0;
+    // A person who lost their authenticator and recovery codes: switch their two-step sign-in off so they can set it up again.
+    if (body.reset_mfa === true) patch.mfa = '';
 
     if (Object.keys(patch).length > 0) {
       await getAuthRepository().updateUserFields(userId, patch);

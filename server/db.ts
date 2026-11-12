@@ -2387,6 +2387,10 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
   }
 
   ensureApiSimSchema(db);
+  // Two-step sign-in state (mfa.ts). Checked on every start, like the schema above.
+  if (!(db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).some((c) => c.name === 'mfa')) {
+    db.exec('ALTER TABLE users ADD COLUMN mfa TEXT');
+  }
 
   // Startup recovery: any workflow or run that was left 'running' when the
   // previous process stopped (crash, SIGKILL, restart) will never complete.

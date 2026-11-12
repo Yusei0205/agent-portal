@@ -42,6 +42,8 @@ export interface UserRecord {
   is_admin: number;
   disabled: number;
   google_sub: string | null;
+  /** Two-step sign-in state as JSON (see mfa.ts); null or '' when never set up. */
+  mfa: string | null;
   created_at: string;
 }
 
