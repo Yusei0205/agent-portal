@@ -70,7 +70,7 @@
     "exceljs": "4.4.0",
     "jszip": "^3.10.1",
     "marked": "^18.0.0",
-    "mermaid": "^11.16.0",
+    "mermaid": "12.2.0",
     "pdfjs-dist": "^6.2.0",
     "playwright-core": "^1.64.1",
     "pptxgenjs": "4.0.1",
