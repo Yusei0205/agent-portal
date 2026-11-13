@@ -9,6 +9,7 @@ import { HubContext, PageHeader, SectionHead } from '../components/PageHeader.js
 import { navigate } from '../lib/router.js';
 import { ProjectRepositories } from './hub/ProjectHub.jsx';
 import { ProjectAws } from './ProjectAws.jsx';
+import { CodeMap } from './CodeMap.jsx';
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
@@ -448,6 +449,7 @@ function WorkspacesList({ projectId }) {
 const WORKSPACE_TABS = [
   { id: 'workspaces', label: 'Workspaces' },
   { id: 'repositories', label: 'Repositories' },
+  { id: 'code-map', label: 'Code map' },
   { id: 'aws', label: 'AWS' },
 ];
 
@@ -475,7 +477,7 @@ export function Workspaces({ projectId, tab }) {
       </div>
       <div className="connect-panel" role="tabpanel">
         <HubContext.Provider value>
-          {current.id === 'repositories' ? <ProjectRepositories projectId={projectId} /> : current.id === 'aws' ? <ProjectAws projectId={projectId} /> : <WorkspacesList projectId={projectId} />}
+          {current.id === 'repositories' ? <ProjectRepositories projectId={projectId} /> : current.id === 'code-map' ? <CodeMap projectId={projectId} /> : current.id === 'aws' ? <ProjectAws projectId={projectId} /> : <WorkspacesList projectId={projectId} />}
         </HubContext.Provider>
       </div>
     </div>

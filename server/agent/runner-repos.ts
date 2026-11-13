@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { buildRepoGraphs } from './runner-graph.ts';
+import { buildRepoGraphs, type GraphEvent } from './runner-graph.ts';
 
 export interface RunnerRepo {
   /** Folder name under repos/. */
@@ -259,7 +259,7 @@ function countTrackedFiles(cwd: string, trust: string[], env: NodeJS.ProcessEnv)
 export async function cloneRunnerRepos(
   repos: RunnerRepo[],
   workDir: string,
-  emit: (event: { type: 'status'; text: string }) => void,
+  emit: (event: GraphEvent) => void,
   opts: { persistRoot?: string | null; homeDir?: string | null; onProgress?: (u: { name: string; phase: string; percent: number; detail: string; done?: boolean }) => void } = {},
 ): Promise<string[]> {
   const done: string[] = [];

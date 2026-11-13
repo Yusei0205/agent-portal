@@ -35,6 +35,7 @@ import { registerKnowledgeSearchRoutes } from './knowledge-search.ts';
 import { registerVaultRoutes } from './vault.ts';
 import { registerOutputFileRoutes } from './output-files.ts';
 import { registerGeneratedDocRoutes } from './generated-docs.ts';
+import { registerCodeMapRoutes } from './code-map.ts';
 import { registerPresentationRoutes } from './presentations.ts';
 import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
@@ -264,6 +265,7 @@ export async function startServer(
   registerVaultRoutes();
   registerOutputFileRoutes();
   registerGeneratedDocRoutes();
+  registerCodeMapRoutes();
   registerPresentationRoutes();
   registerDocTemplateRoutes();
   registerReviewRoutes();

@@ -323,7 +323,7 @@ export const HELP_TOPICS = [
       ] },
       { heading: 'Read the graph', rows: [
         ['Search', 'Matches names and file paths. Results show the kind, the file and the line.'],
-        ['Graph view', 'Shows the chosen item in the middle with what it calls, what calls it and what it imports. Press **Expand** on a neighbour to grow the view; drag to move, scroll to zoom.'],
+        ['Graph view', 'Shows the chosen item in the middle with what it calls, what calls it and what it imports. Click a neighbour to move to it (**Back** and **Overview** in the side panel return); drag to move, scroll to zoom.'],
         ['Colours', 'One colour per community, so files that work together share a colour.'],
         ['Details', 'The side panel lists the connections of the selected item (calls, imports, contains) and the file and line to open.'],
       ] },
