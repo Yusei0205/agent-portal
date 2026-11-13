@@ -148,6 +148,23 @@ async function collectFromRepo(repoDir: string): Promise<string[]> {
   return [...new Set([...fromStatus, ...fromLog])];
 }
 
+/** Document files under a repository folder that holds only what a cloud runner sent back. */
+export function collectReceivedRepoDocs(repoDir: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isSymbolicLink() || e.name.startsWith('.') || EXCLUDED_WORK_DIRS.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile() && ALLOWED_EXTS.has(path.extname(e.name).toLowerCase())) out.push(full);
+    }
+  };
+  walk(repoDir);
+  return out;
+}
+
 function collectFromWorkDir(workDir: string, cutoffMs: number): string[] {
   const results: string[] = [];
   const walk = (dir: string): void => {
@@ -298,6 +315,10 @@ export async function collectOutputFiles(
         if (fs.existsSync(path.join(repoDir, '.git'))) {
           const repoFiles = await collectFromRepo(repoDir);
           allCandidates.push(...repoFiles);
+        } else {
+          // A cloud run: the runner cloned the repository and sent back only the documents the agent wrote in it
+          // (see collectRepoDocuments), so everything in this folder is one of those.
+          allCandidates.push(...collectReceivedRepoDocs(repoDir));
         }
       }
     } catch { /* skip */ }

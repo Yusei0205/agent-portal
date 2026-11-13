@@ -12,6 +12,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
@@ -107,6 +108,7 @@ export function collectRunnerFiles(workDir: string, sinceMs = 0): { files: Runne
     }
   };
   walk(workDir, '');
+  for (const f of collectRepoDocuments(workDir, sinceMs)) found.push(f);
   // Newest first so the limits drop the oldest files.
   found.sort((a, b) => fs.statSync(b.abs).mtimeMs - fs.statSync(a.abs).mtimeMs);
   const files: RunnerFile[] = [];
@@ -117,6 +119,63 @@ export function collectRunnerFiles(workDir: string, sinceMs = 0): { files: Runne
     total += f.size;
   }
   return { files, skipped };
+}
+
+/** Documents per repository the runner sends back (a repository can change a great deal; these are the agent's written results). */
+export const REPO_DOC_LIMIT = 20;
+
+/** Paths git reports as added or changed (not deleted) in `repoDir`: the working tree, plus commits not yet on the remote. Never throws. */
+export function changedRepoPaths(repoDir: string): string[] {
+  const git = (args: string[]): string => {
+    try { return execFileSync('git', args, { cwd: repoDir, encoding: 'utf8', timeout: 20_000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }); } catch { return ''; }
+  };
+  const out = new Set<string>();
+  const entries = git(['status', '--porcelain', '-z', '--untracked-files=all']).split('\0');
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.length < 4) continue;
+    const xy = e.slice(0, 2);
+    if (xy[0] === 'R' || xy[0] === 'C') i++;
+    if (xy === '!!' || xy[0] === 'D' || xy[1] === 'D') continue;
+    const f = e.slice(3);
+    if (f && !f.endsWith('/')) out.add(f);
+  }
+  for (const line of git(['log', '--pretty=format:', '--name-only', 'origin/HEAD..HEAD']).split('\n')) {
+    const f = line.trim();
+    if (f) out.add(f);
+  }
+  return [...out];
+}
+
+/**
+ * Documents (Markdown, Word, PDF, ...) the agent created or changed inside the cloned repositories, as `repos/<name>/<path>`,
+ * so they show with the session's outputs. Only what git says changed, only document types, never source code: the repositories
+ * themselves are not sent (see RUNNER_EXCLUDED_DIRS).
+ */
+export function collectRepoDocuments(workDir: string, sinceMs = 0): RunnerFile[] {
+  const out: RunnerFile[] = [];
+  const reposDir = path.join(workDir, 'repos');
+  let names: fs.Dirent[];
+  try { names = fs.readdirSync(reposDir, { withFileTypes: true }); } catch { return out; }
+  for (const d of names) {
+    if (!d.isDirectory() || d.name.startsWith('.') || !fs.existsSync(path.join(reposDir, d.name, '.git'))) continue;
+    let kept = 0;
+    for (const f of changedRepoPaths(path.join(reposDir, d.name))) {
+      if (kept >= REPO_DOC_LIMIT) break;
+      const parts = f.split('/');
+      if (!RUNNER_FILE_EXTS.has(path.extname(f).toLowerCase())) continue;
+      if (parts.some((s) => s.startsWith('.') || CODE_NOISE_DIRS.has(s) || RUNNER_EXCLUDED_DIRS.has(s))) continue;
+      const rel = `repos/${d.name}/${f}`;
+      if (rel.length > RUNNER_FILE_LIMITS.pathChars) continue;
+      const abs = path.join(reposDir, d.name, ...parts);
+      let st: fs.Stats;
+      try { st = fs.lstatSync(abs); } catch { continue; }
+      if (!st.isFile() || st.mtimeMs < sinceMs || st.size === 0 || st.size > RUNNER_FILE_LIMITS.fileBytes) continue;
+      out.push({ rel, abs, size: st.size });
+      kept++;
+    }
+  }
+  return out;
 }
 
 /** Emit every collected file as chunked 'file' events (plus a status line). Returns how many files were sent. */
@@ -151,6 +210,14 @@ export function safeRelPath(p: unknown): string | null {
   const norm = path.posix.normalize(p);
   if (norm === '.' || norm.startsWith('/')) return null;
   const parts = norm.split('/');
+  // A document the agent wrote inside a cloned repository: repos/<name>/<path>, documents only (never source files).
+  if (parts[0] === 'repos') {
+    if (parts.length < 3 || !RUNNER_FILE_EXTS.has(path.extname(norm).toLowerCase())) return null;
+    if (parts[1].startsWith('.') || RUNNER_EXCLUDED_DIRS.has(parts[1])) return null;
+    const inner = parts.slice(2);
+    if (inner.some((s) => RUNNER_EXCLUDED_DIRS.has(s) || CODE_NOISE_DIRS.has(s)) || inner.some((s) => s.startsWith('.'))) return null;
+    return norm;
+  }
   if (parts.some((s) => RUNNER_EXCLUDED_DIRS.has(s) && s !== parts[parts.length - 1])) return null;
   if (!allowedRunnerFile(norm)) return null;
   return norm;
