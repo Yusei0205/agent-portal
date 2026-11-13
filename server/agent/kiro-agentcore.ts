@@ -439,6 +439,8 @@ export async function* invokeAgentCore(
     try {
       for await (const ev of invoker(runtimeArn, sessionId, payload, signal)) {
         delivered = true;
+        // A repository's code graph goes to the portal's Code map, not to whoever is reading the run.
+        if ((ev as { type?: string }).type === 'code-graph') { await (await import('../code-map.ts')).takeRunnerEvent(payload, ev); continue; }
         yield ev;
       }
       return;

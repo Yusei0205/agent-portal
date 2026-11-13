@@ -70,7 +70,7 @@ describe('cloneRunnerRepos', () => {
     const done = await cloneRunnerRepos(
       [{ name: 'proj', url: pathToFileUrl(src) }, { name: 'missing', url: pathToFileUrl(path.join(tmp, 'nope')) }],
       work,
-      (e) => msgs.push(e.text),
+      (e) => { if (e.type === 'status') msgs.push(e.text); },
     );
     assert.deepEqual(done, ['proj']);
     assert.equal(fs.readFileSync(path.join(work, 'repos', 'proj', 'hello.txt'), 'utf8'), 'hi');
@@ -109,7 +109,7 @@ describe('cloneRunnerRepos with persistent storage', () => {
     const work1 = path.join(tmp, 'work1');
     fs.mkdirSync(work1);
     const m1: string[] = [];
-    await cloneRunnerRepos([repo], work1, (e) => m1.push(e.text), { persistRoot: persist });
+    await cloneRunnerRepos([repo], work1, (e) => { if (e.type === 'status') m1.push(e.text); }, { persistRoot: persist });
     assert.ok(m1.some((m) => m.startsWith('Cloning proj')));
     assert.ok(fs.existsSync(path.join(persist, 'repos', 'proj', 'a.txt')));
 
@@ -120,7 +120,7 @@ describe('cloneRunnerRepos with persistent storage', () => {
     const work2 = path.join(tmp, 'work2');
     fs.mkdirSync(work2);
     const m2: string[] = [];
-    await cloneRunnerRepos([repo], work2, (e) => m2.push(e.text), { persistRoot: persist });
+    await cloneRunnerRepos([repo], work2, (e) => { if (e.type === 'status') m2.push(e.text); }, { persistRoot: persist });
     assert.ok(!m2.some((m) => m.startsWith('Cloning')), m2.join(' | '));
     assert.ok(m2.some((m) => m.includes('up to date')), m2.join(' | '));
     assert.ok(fs.existsSync(path.join(persist, 'repos', 'proj', 'b.txt')));
@@ -133,7 +133,7 @@ describe('cloneRunnerRepos with persistent storage', () => {
     const work3 = path.join(tmp, 'work3');
     fs.mkdirSync(work3);
     const m3: string[] = [];
-    await cloneRunnerRepos([repo], work3, (e) => m3.push(e.text), { persistRoot: persist });
+    await cloneRunnerRepos([repo], work3, (e) => { if (e.type === 'status') m3.push(e.text); }, { persistRoot: persist });
     assert.ok(m3.some((m) => m.includes("already has your session's changes")), m3.join(' | '));
     assert.equal(fs.readFileSync(path.join(persist, 'repos', 'proj', 'a.txt'), 'utf8'), 'edited');
     assert.ok(!fs.existsSync(path.join(persist, 'repos', 'proj', 'c.txt')));

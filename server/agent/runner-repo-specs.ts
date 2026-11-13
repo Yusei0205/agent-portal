@@ -6,6 +6,7 @@
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { _getCloneEnv } from '../repos.ts';
 import type { RunnerRepo } from './runner-repos.ts';
+import { rememberRunnerRepo } from '../code-map.ts';
 
 const GIT_ENV_KEY = /^(GIT_TERMINAL_PROMPT|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d{1,2}|GIT_CONFIG_VALUE_\d{1,2})$/;
 
@@ -45,6 +46,7 @@ export async function buildRunnerRepos(
       notify(`Could not prepare access to repository "${repo.name}"; trying without sign-in.`);
     }
 
+    rememberRunnerRepo(name, url, { repoId: String(id), projectId, repoName: String(repo.name ?? name) });
     out.push({
       name,
       url,

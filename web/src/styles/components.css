@@ -2137,3 +2137,36 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
 .clone-bar{height:8px;max-width:none}
 .clone-bar-total{height:6px;margin-bottom:2px}
 .clone-panel-head{align-items:center}
+
+/* Code map */
+.cm-pick { max-width: 360px; }
+.cm-search { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); max-width: 560px; }
+.cm-search input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; min-width: 0; }
+.cm-search:focus-within { border-color: var(--accent); }
+.cm-body { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); gap: 14px; margin-top: 12px; align-items: start; }
+@media (max-width: 860px) { .cm-body { grid-template-columns: minmax(0, 1fr); } }
+.cm-side { max-height: 620px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px; }
+.cm-side h4 { margin: 10px 4px 4px; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); }
+.cm-row { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 6px; cursor: pointer; color: inherit; font: inherit; }
+.cm-row:hover, .cm-row.is-active { background: var(--accent-wash); }
+.cm-row-main { display: flex; flex-direction: column; min-width: 0; }
+.cm-row-name { font-weight: 600; overflow-wrap: anywhere; }
+.cm-row-meta { font-size: 0.76rem; color: var(--ink-3); overflow-wrap: anywhere; margin: 0; }
+.cm-rel { display: block; margin: -2px 0 2px 24px; font-size: 0.72rem; color: var(--ink-3); }
+.cm-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; margin-top: 5px; display: inline-block; }
+.cm-detail { padding: 4px; }
+.cm-detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cm-detail-head .cm-dot { margin-top: 0; }
+.cm-actions { display: flex; gap: 6px; margin-top: 8px; }
+.cm-community { margin-bottom: 8px; }
+.cm-canvas { min-width: 0; }
+.cm-busy { opacity: 0.55; transition: opacity 0.15s; }
+.cm-svg { display: block; background: var(--panel); }
+.cm-edge { stroke: var(--ink-3); stroke-width: 1.2; opacity: 0.55; }
+.cm-edge.is-dim { opacity: 0.08; }
+.cm-arrow { fill: var(--ink-3); }
+.cm-node { cursor: pointer; outline: none; }
+.cm-node.is-dim { opacity: 0.25; }
+.cm-node:focus-visible .cm-shape, .cm-node:hover .cm-shape { stroke: var(--ink); stroke-width: 2; }
+.cm-node.is-center .cm-shape { stroke: var(--ink); stroke-width: 3; }
+.cm-label { font-size: 11px; fill: var(--ink); paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
