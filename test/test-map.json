@@ -431,7 +431,8 @@
         "web/src/pages/Create.jsx"
       ],
       "tests": [
-        "test/create-repos.test.ts"
+        "test/create-repos.test.ts",
+        "test/create-clone-first.test.ts"
       ],
       "smokeIds": [
         "create"
@@ -487,7 +488,8 @@
       ],
       "tests": [
         "test/generated-docs.test.ts",
-        "test/resume-retry.test.ts"
+        "test/resume-retry.test.ts",
+        "test/create-clone-first.test.ts"
       ],
       "smokeIds": [
         "create"
