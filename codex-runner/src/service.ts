@@ -98,9 +98,9 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
       active.controller.abort(); reply({ type: 'cancelled' }); return;
     }
     if (active || terminal.preparing()) { json(409, { error: 'The session is busy preparing or running work' }); return; }
-    if (!['codex-run', 'codex-text', 'codex-models', 'prepare-repos', 'inspect', 'finalize', 'flush-workspace'].includes(body.mode)) { json(400, { error: 'Unsupported mode' }); return; }
+    if (!['codex-run', 'codex-text', 'codex-models', 'codex-limits', 'prepare-repos', 'inspect', 'finalize', 'flush-workspace'].includes(body.mode)) { json(400, { error: 'Unsupported mode' }); return; }
     if ('refreshToken' in body || 'refresh_token' in body || 'clientSecret' in body) { json(400, { error: 'Renewable credentials must stay in the portal' }); return; }
-    if (['codex-run', 'codex-text', 'codex-models'].includes(body.mode) && (body.chatgptAuthTokens
+    if (['codex-run', 'codex-text', 'codex-models', 'codex-limits'].includes(body.mode) && (body.chatgptAuthTokens
       ? !validChatgptTokens(body.chatgptAuthTokens) || Boolean(body.accessToken)
       : typeof body.accessToken !== 'string' || !body.accessToken || body.accessToken.length > 64_000 || /[\r\n\0]/.test(body.accessToken))) {
       json(400, { error: 'A short-lived OAuth access token is required' }); return;
@@ -178,6 +178,9 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         }, { managedAuth: false, openClient: () => open(home, environment(), workDir, auth), refreshAuth,
           config: { 'features.shell_tool': false, 'features.multi_agent': false } });
         send({ type: 'result', exitCode: 0, text: result.text });
+      } else if (body.mode === 'codex-limits') {
+        client = await open(home, environment(), workDir, auth);
+        send({ type: 'limits', limits: await client.request('account/rateLimits/read') });
       } else if (body.mode === 'codex-models') {
         client = await open(home, environment(), workDir, auth);
         const models: Event[] = []; let cursor: string | null = null;
