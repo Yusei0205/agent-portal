@@ -15,7 +15,7 @@ import { getDb, one } from '../server/db.ts';
 import { now, generateId } from '../server/util.ts';
 import { setConfig, type Config } from '../server/config.ts';
 import { _setAgentCoreInvokerOverride, runKiroViaAgentCore } from '../server/agent/kiro-agentcore.ts';
-import { runClaudeViaAgentCore, bedrockModelFor, RUNTIME_BEDROCK_MODELS, _setCancelGraceMs, LOST_RUN_MESSAGE } from '../server/agent/claude-agentcore-bedrock.ts';
+import { runClaudeViaAgentCore, bedrockModelFor, RUNTIME_BEDROCK_MODELS, _setCancelGraceMs, LOST_RUN_MESSAGE, runMinutesWithin } from '../server/agent/claude-agentcore-bedrock.ts';
 import { runClaudeViaAgentCore as runUserCredential, submitRepoChanges } from '../server/agent/claude-agentcore.ts';
 import { _setSessionPrDeps } from '../server/session-pr.ts';
 import { setPullRequestSettings } from '../server/project-settings-pr.ts';
@@ -320,6 +320,64 @@ describe('Claude on AgentCore — harness parity', () => {
     await runClaudeViaAgentCore(ctx, ARN);
     const spend = one<{ n: number; usd: number }>('SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM budget_usage WHERE workflow_id = ?', ids.workflowId)!;
     assert.deepEqual([spend.n, spend.usd], [1, 0.02]);
+  });
+
+  it('a run\'s time limit stays within the host\'s limit, counted from the run\'s start', () => {
+    const t0 = Date.parse('2026-11-13T00:00:00Z');
+    const min = 60_000;
+    assert.deepEqual(runMinutesWithin(60, 0, t0, t0), { minutes: 60, byHost: false }, 'no host limit: the run\'s own');
+    assert.deepEqual(runMinutesWithin(null, 0, t0, t0), { minutes: undefined, byHost: false }, 'neither: no limit');
+    assert.deepEqual(runMinutesWithin(60, 14 * min, t0, t0), { minutes: 14, byHost: true }, 'the host\'s 14 minutes win');
+    assert.deepEqual(runMinutesWithin(5, 14 * min, t0, t0), { minutes: 5, byHost: false }, 'a shorter own limit stays');
+    assert.deepEqual(runMinutesWithin(null, 14 * min, t0, t0), { minutes: 14, byHost: true });
+    assert.deepEqual(runMinutesWithin(60, 14 * min, t0, t0 + 3.5 * min), { minutes: 10, byHost: true }, 'time already spent counts');
+    assert.deepEqual(runMinutesWithin(60, 14 * min, t0, t0 + 20 * min), { minutes: 1, byHost: true }, 'never less than a minute');
+  });
+
+  it('on the cloud portal the runner gets at most the 14-minute limit, and a turn that reaches it says how to go on', async () => {
+    const saved = process.env.PORTAL_RUN_TIMEOUT_MS;
+    process.env.PORTAL_RUN_TIMEOUT_MS = String(14 * 60_000);
+    try {
+      // The session's own limit (the portal's 60 minutes) is longer than a Lambda invocation allows.
+      const ids = makeRun('claude-code');
+      const { ctx, events } = makeCtx(ids, { engine: 'claude-code' });
+      const rt = fakeRuntime({
+        result: {
+          type: 'result', stop_reason: 'time_limit', subtype: 'success', costUsd: 0.02, costEstimated: false,
+          model: 'global.anthropic.claude-haiku-4-5-20251001-v1:0', metrics: { inputTokens: 500, outputTokens: 50 },
+        },
+      });
+      await runClaudeViaAgentCore(ctx, ARN);
+      assert.equal(rt.calls.find((c) => c.payload.mode === 'run')?.payload.maxMinutes, 14, 'the runner stops the run before Lambda does');
+      const row = one<{ stop_reason: string; cost_usd: number }>('SELECT stop_reason, cost_usd FROM p6_runs WHERE id = ?', ids.runId)!;
+      assert.equal(row.stop_reason, 'time limit reached (14 minutes)');
+      assert.ok(row.cost_usd > 0, 'the spend is recorded');
+      assert.ok(events.some((e) => e.type === 'status' && /at most 14 minutes\. Send another message to continue/.test(String(e.payload.text))),
+        `the session says why and how to go on: ${JSON.stringify(events.filter((e) => e.type === 'status'))}`);
+
+      // A session with a shorter limit of its own keeps it.
+      const short = makeRun('claude-code');
+      getDb().prepare('UPDATE p6_workflows SET run_timeout_minutes = 5 WHERE id = ?').run(short.workflowId);
+      const rt2 = fakeRuntime({});
+      await runClaudeViaAgentCore(makeCtx(short, { engine: 'claude-code' }).ctx, ARN);
+      assert.equal(rt2.calls.find((c) => c.payload.mode === 'run')?.payload.maxMinutes, 5);
+    } finally {
+      if (saved === undefined) delete process.env.PORTAL_RUN_TIMEOUT_MS;
+      else process.env.PORTAL_RUN_TIMEOUT_MS = saved;
+    }
+  });
+
+  it('without a host limit the runner gets the session\'s own limit, as before', async () => {
+    const saved = process.env.PORTAL_RUN_TIMEOUT_MS;
+    delete process.env.PORTAL_RUN_TIMEOUT_MS;
+    try {
+      const ids = makeRun('claude-code');
+      const rt = fakeRuntime({});
+      await runClaudeViaAgentCore(makeCtx(ids, { engine: 'claude-code' }).ctx, ARN);
+      assert.equal(rt.calls.find((c) => c.payload.mode === 'run')?.payload.maxMinutes, 60);
+    } finally {
+      if (saved !== undefined) process.env.PORTAL_RUN_TIMEOUT_MS = saved;
+    }
   });
 
   it('maps model names to Bedrock IDs', () => {

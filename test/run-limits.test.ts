@@ -20,6 +20,8 @@ import { generateId, now } from '../server/util.ts';
 import { encrypt } from '../server/secrets.ts';
 import { config } from '../server/config.ts';
 import { estimateCost } from '../server/agent/pricing.ts';
+import { abortAllRuns } from '../server/workflows/controls.ts';
+import { shutdownStopReason, shutdownMessage } from '../server/agent/runner.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_SDK = path.resolve(__dirname, 'fake-sdk.mjs');
@@ -319,5 +321,63 @@ describe('p6_runs.stop_reason exposed via GET /api/runs/:id', () => {
     assert.equal(r.status, 200, `Expected 200, got ${r.status}`);
     const run = (r.body as Record<string, unknown>).run as Record<string, unknown>;
     assert.equal(run.stop_reason, 'spend cap reached ($5)');
+  });
+});
+
+describe('a run the portal\'s shutdown stops says so (it is not a person\'s Stop)', () => {
+  let baseUrl: string;
+  let cookie: string;
+  let projectId: string;
+
+  before(async () => {
+    createTestDb();
+    const ts = await createTestServer();
+    baseUrl = ts.baseUrl;
+    cookie = await setupAdmin(baseUrl);
+    const pR = await fetchJson(baseUrl, '/api/projects', { method: 'POST', body: { name: `RunLimits-Shutdown-${Date.now()}` }, cookie });
+    projectId = ((pR.body as Record<string, unknown>).project as Record<string, unknown>).id as string;
+    await fetchJson(baseUrl, '/api/settings', { method: 'PUT', body: { agents: { runTimeoutMinutes: 60 } }, cookie });
+    const db = getDb();
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('provider.mode', 'anthropic')").run();
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('anthropic.key.enc', ?)").run(encrypt('sk-ant-fake', config.secretKey));
+    process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
+    process.env.PORTAL_FAKE_SDK_SCENARIO = 'spend-then-hang';
+  });
+
+  after(async () => {
+    delete process.env.PORTAL_SDK_MODULE;
+    delete process.env.PORTAL_FAKE_SDK_SCENARIO;
+    await cleanup();
+  });
+
+  it('records why the run stopped and tells the person to send another message', async () => {
+    const wfR = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, { method: 'POST', body: { goal: 'A long task', engine: 'claude-code' }, cookie });
+    const workflowId = ((wfR.body as Record<string, unknown>).workflow as Record<string, unknown>).id as string;
+    const runR = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${workflowId}/start`, { method: 'POST', body: {}, cookie });
+    const runId = ((runR.body as Record<string, unknown>).run as Record<string, unknown>).id as string;
+    await waitForRunStatus(baseUrl, cookie, projectId, workflowId, runId, 'running', 8_000);
+    await new Promise((r) => setTimeout(r, 500)); // the engine has started and spent, then waits
+
+    // What closeDb() does when the process gets SIGTERM (a restart, or the end of a Lambda invocation).
+    abortAllRuns();
+    await waitForRunStatus(baseUrl, cookie, projectId, workflowId, runId, 'cancelled', 8_000);
+
+    const row = one<{ stop_reason: string | null; input_tokens: number }>('SELECT stop_reason, input_tokens FROM p6_runs WHERE id = ?', runId)!;
+    assert.equal(row.stop_reason, shutdownStopReason(), 'the reason is recorded');
+    assert.equal(row.input_tokens, 50, 'the spend up to the stop is kept');
+    const failed = one<{ payload: string }>("SELECT payload FROM p6_events WHERE run_id = ? AND type = 'run-failed'", runId)!;
+    assert.equal(JSON.parse(failed.payload).error, shutdownMessage(), 'the session shows why, not a bare "Cancelled"');
+    assert.match(shutdownMessage(), /Send another message to continue/);
+
+    // On Lambda the reason names the 15-minute limit of a cloud turn.
+    const saved = process.env.AWS_LAMBDA_FUNCTION_NAME;
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'agent-portal';
+    try {
+      assert.match(shutdownStopReason(), /at most 15 minutes/);
+      assert.match(shutdownMessage(), /at most 15 minutes/);
+    } finally {
+      if (saved === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+      else process.env.AWS_LAMBDA_FUNCTION_NAME = saved;
+    }
   });
 });

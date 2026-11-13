@@ -78,6 +78,24 @@ export function bedrockModelFor(model: string | null | undefined): string | unde
   return undefined;
 }
 
+/**
+ * The run's time limit in minutes for the runner: its own limit (`own`, the session's or the portal's setting), within
+ * what is left of the host's limit (`hostLimitMs`, PORTAL_RUN_TIMEOUT_MS, counted from the run's start). `byHost`: the
+ * host's limit is the one that applies. No host limit: the run's own limit, or none.
+ */
+export function runMinutesWithin(
+  own: number | null | undefined,
+  hostLimitMs: number,
+  startedAtMs: number,
+  nowMs: number,
+): { minutes: number | undefined; byHost: boolean } {
+  const ownMinutes = own != null && own > 0 ? own : undefined;
+  if (!(hostLimitMs > 0)) return { minutes: ownMinutes, byHost: false };
+  const leftMinutes = Math.max(1, Math.floor((hostLimitMs - Math.max(0, nowMs - startedAtMs)) / 60_000));
+  if (ownMinutes != null && ownMinutes <= leftMinutes) return { minutes: ownMinutes, byHost: false };
+  return { minutes: leftMinutes, byHost: true };
+}
+
 /** A subagent's model as the runner can use it: an alias it maps to Bedrock, or a Bedrock ID. */
 export function agentModelFor(model: string): string | undefined {
   const m = model.trim().toLowerCase();
@@ -170,6 +188,14 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
   // Limits: the workflow's own, else the portal's (same as the local engine and runner.ts).
   const budget = wf?.budget_usd != null ? Number(wf.budget_usd) : settings.agents.maxBudgetUsdPerRun;
   const minutes = wf?.run_timeout_minutes != null ? Number(wf.run_timeout_minutes) : settings.agents.runTimeoutMinutes;
+  // On the cloud portal a run lives inside one Lambda invocation, which ends after 15 minutes. The portal's limit
+  // (PORTAL_RUN_TIMEOUT_MS, 14 minutes there) counts from the run's start, so the runner ends the run cleanly first:
+  // its spend and the reason are recorded and the session can go on. Without it Lambda stops the process mid-run.
+  const hostLimitMs = Number(process.env.PORTAL_RUN_TIMEOUT_MS) || 0;
+  const startedAt = await repo.getRunById(run.runId)
+    .then((r) => (r?.started_at ? Date.parse(String(r.started_at)) : NaN))
+    .catch(() => NaN);
+  const limit = runMinutesWithin(minutes, hostLimitMs, Number.isFinite(startedAt) ? startedAt : Date.now(), Date.now());
   const model = bedrockModelFor(run.model) ?? bedrockModelFor(settings.defaultModel);
 
   // Each AgentCore run is a new engine session: give it the earlier turns as a recap.
@@ -201,7 +227,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
     // The person's own AWS access for the model calls (never logged or echoed).
     ...(Object.keys(bedrockEnv).length ? { bedrockEnv } : {}),
     ...(budget != null && budget > 0 ? { maxBudgetUsd: Math.min(budget, 100) } : {}),
-    ...(minutes != null && minutes > 0 ? { maxMinutes: Math.min(minutes, 480) } : {}),
+    ...(limit.minutes != null && limit.minutes > 0 ? { maxMinutes: Math.min(limit.minutes, 480) } : {}),
     policy: { trusted: run.trusted, rules: toPolicyRules(run.permissions.rules) },
     approvals: runnerApprovals(),
     ...(Object.keys(agents).length ? { agents } : {}),
@@ -396,6 +422,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
     emit('status', { text: `Spend cap reached${cap}. Run stopped cleanly.` });
   } else if (r.stop_reason === 'time_limit') {
     await repo.updateRun(run.runId, { stop_reason: `time limit reached (${payload.maxMinutes} minutes)` });
+    emit('status', {
+      text: limit.byHost
+        ? `Time limit reached: on this portal one turn can run for at most ${Math.floor(hostLimitMs / 60_000)} minutes. Send another message to continue.`
+        : `Time limit reached (${payload.maxMinutes} minutes). Run stopped cleanly.`,
+    });
   } else if (r.stop_reason === 'max_turns') {
     await repo.updateRun(run.runId, { stop_reason: 'turn limit reached' });
   }

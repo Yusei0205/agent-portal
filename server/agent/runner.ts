@@ -32,7 +32,7 @@ import { loadRunPermissions, evaluateCommand } from '../guardrails.ts';
 import { getSettings } from '../settings.ts';
 import { createWorkDir, checkoutRepoToWorkDir } from '../workflows/working-copies.ts';
 import { repoRefDir } from '../repos.ts';
-import { registerRun, deregisterRun } from '../workflows/controls.ts';
+import { registerRun, deregisterRun, abortedByShutdown } from '../workflows/controls.ts';
 import { createInboxItem } from '../inbox.ts';
 import { config } from '../config.ts';
 import type { AgentRun, RunContext } from './types.ts';
@@ -82,6 +82,27 @@ export function notifyDashboard(_projectId: string | null): void {
   // Allow the Node.js process to exit even while the timer is pending
   if (typeof t === 'object' && t !== null && 'unref' in t) (t as { unref(): void }).unref();
   _dashPending.set(_DASH_KEY, t);
+}
+
+// ── A run stopped by the portal shutting down ──────────────────────────────────
+
+/** On AWS Lambda, a run lives inside one invocation, which ends after 15 minutes. */
+function onLambda(): boolean {
+  return Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+/** The run's stop reason when the portal process ended during it (abortAllRuns). */
+export function shutdownStopReason(): string {
+  return onLambda()
+    ? 'the portal shut down during the run (a cloud portal turn can run for at most 15 minutes)'
+    : 'the portal shut down during the run';
+}
+
+/** What the session shows when the portal process ended during the run. */
+export function shutdownMessage(): string {
+  return onLambda()
+    ? 'Stopped: the portal shut down during this run. On the cloud portal one turn can run for at most 15 minutes. Send another message to continue.'
+    : 'Stopped: the portal shut down during this run. Send another message to continue.';
 }
 
 // ── Run lifecycle hook ────────────────────────────────────────────────────────
@@ -608,7 +629,13 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     }
   } catch (e: unknown) {
     const aborted = (e as { name?: string })?.name === 'AbortError' || ctrl.signal.aborted;
-    const msg = aborted ? 'Cancelled' : String((e as { message?: string })?.message ?? e);
+    // Nobody pressed Stop: the portal process ended under the run (a restart, or on Lambda the end of the
+    // invocation the run lives in). Say so, instead of a bare "Cancelled".
+    const byShutdown = aborted && abortedByShutdown(ctrl.signal);
+    if (byShutdown && !_stopReason) _stopReason = shutdownStopReason();
+    const msg = aborted
+      ? (byShutdown ? shutdownMessage() : 'Cancelled')
+      : String((e as { message?: string })?.message ?? e);
 
     // Guard: if the run no longer exists, skip all DB writes to avoid constraint errors.
     const runStillExists = await (async () => {

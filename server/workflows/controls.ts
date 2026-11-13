@@ -41,12 +41,23 @@ export function activeRunCount(): number {
 }
 
 /**
- * Abort every active run. Called by closeDb() to prevent background runs from
- * inserting into a replaced in-memory database (FK violations in test isolation).
+ * The abort reason of runs stopped by abortAllRuns, so the runner can say why the run stopped: no person pressed
+ * Stop, the portal process ended (a restart or, on Lambda, the end of the invocation the run lives in).
+ */
+const PORTAL_SHUTDOWN = new DOMException('The portal stopped while this run was going.', 'AbortError');
+
+/** True when the run's signal was aborted by abortAllRuns (the portal shutting down), not by a person or a limit. */
+export function abortedByShutdown(signal: AbortSignal): boolean {
+  return signal.aborted && signal.reason === PORTAL_SHUTDOWN;
+}
+
+/**
+ * Abort every active run. Called by closeDb(): on shutdown (SIGTERM: a restart, or the end of a Lambda invocation),
+ * and in tests to prevent background runs from inserting into a replaced in-memory database.
  */
 export function abortAllRuns(): void {
   for (const ctrl of controllers.values()) {
-    try { ctrl.abort(); } catch { /* ignore */ }
+    try { ctrl.abort(PORTAL_SHUTDOWN); } catch { /* ignore */ }
   }
   controllers.clear();
 }
