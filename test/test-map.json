@@ -487,6 +487,7 @@
       ],
       "tests": [
         "test/generated-docs.test.ts",
+        "test/create-clone-first.test.ts",
         "test/resume-retry.test.ts"
       ],
       "smokeIds": [
