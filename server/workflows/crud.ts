@@ -1208,6 +1208,23 @@ export function registerWorkflowRoutes(): void {
     sendJson(res, 200, { prep: getRepoPrep(w.id) });
   });
 
+  // POST /api/projects/:id/workflows/:wid/repo-prep — try getting the session's repositories ready again (after the person
+  // fixed a refused sign-in, for example updated the project's AWS keys)
+  router.post('/api/projects/:id/workflows/:wid/repo-prep', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const w = await getSessionsRepository().getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    const current = getRepoPrep(w.id);
+    if (current?.state === 'running' && Date.now() - new Date(current.at).getTime() < 17 * 60_000) {
+      sendJson(res, 200, { prep: current, alreadyRunning: true });
+      return;
+    }
+    await requestRepoPrep(w.id);
+    sendJson(res, 202, { prep: getRepoPrep(w.id) });
+  });
+
   // GET /api/projects/:id/workflows/:wid/transcript  — newest-first, cursor-based paging
   //
   //   Merges two sources into one chronological stream:

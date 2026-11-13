@@ -29,6 +29,38 @@ export interface RepoPrepState {
   repos?: string[];
   /** One row per repository, for the progress panel. */
   items?: RepoPrepItem[];
+  /** Set when a clone failed for a reason the person can fix (refused sign-in), so the page can say what to do. */
+  problem?: RepoPrepProblem;
+}
+
+export interface RepoPrepProblem {
+  kind: 'aws-keys' | 'git-access';
+  /** What happened and what to do, in plain words. */
+  text: string;
+  /** Which settings page fixes it: the project's AWS tab or its repositories. */
+  fix: 'aws' | 'repositories';
+}
+
+/**
+ * Turns "git exited with code 128 … 403" into what the person must do. A refused sign-in (401/403) on a CodeCommit address means
+ * the AWS keys saved for the project are expired or lack access (they are temporary keys, so this is the usual cause).
+ * Returns null for any other failure (network, missing repository, disk), which keeps its own message.
+ */
+export function explainCloneFailure(message: string, urls: string[]): RepoPrepProblem | null {
+  const refused = /returned error: (401|403)\b|Authentication failed|could not read (Username|Password)|Access denied|not authorized|ExpiredToken|token (is )?expired/i.test(message);
+  if (!refused) return null;
+  if (urls.some((u) => /git-codecommit(-fips)?\.[^.]+\.(vpce\.)?amazonaws\.com/.test(u))) {
+    return {
+      kind: 'aws-keys',
+      fix: 'aws',
+      text: 'CodeCommit refused the AWS keys saved for this project (403). They have most likely expired, or they cannot read this repository. Update the keys in Workspaces → AWS, then try again.',
+    };
+  }
+  return {
+    kind: 'git-access',
+    fix: 'repositories',
+    text: 'The git host refused the saved sign-in for this repository. Update its Git connection or token in Workspaces → Repositories, then try again.',
+  };
 }
 
 export interface RepoPrepItem {
@@ -182,7 +214,10 @@ async function prepare(workflowId: string): Promise<void> {
   }
 
   const message = (problems.length ? problems.join(' ') : (failed ?? last ?? 'Repositories are ready.')).replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 300);
+  const anyFailed = Boolean(failed) || items.some((i) => i.state === 'failed') || problems.length > 0;
+  const problem = anyFailed ? explainCloneFailure([...problems, failed ?? '', last].join(' '), repos.map((r) => String((r as { url?: string }).url ?? ''))) : null;
   await save(workflowId, {
+    ...(problem ? { problem } : {}),
     state: failed ? 'failed' : 'done',
     at: now(),
     message: [...notes, message].filter(Boolean).join(' ').slice(0, 300),
@@ -212,6 +247,7 @@ export async function prepareReposBeforeRun(workflowId: string): Promise<string 
   if (!st) return 'Could not get the repositories ready.';
   const bad = (st.items ?? []).filter((i) => i.state === 'failed');
   if (st.state === 'failed' || bad.length > 0) {
+    if (st.problem) return `Could not clone ${bad.length ? bad.map((i) => i.name).join(', ') : 'the repositories'}. ${st.problem.text}`.slice(0, 500);
     return `Could not clone ${bad.length ? bad.map((i) => i.name).join(', ') : 'the repositories'}: ${st.message}`.slice(0, 400);
   }
   if (!st.repos?.length && !(st.items?.length)) return st.message || 'No repository could be prepared.';

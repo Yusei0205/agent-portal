@@ -446,7 +446,11 @@ export function GeneratedDocs({ projectId }) {
                       </span>
                     )}
                     {d.status === 'failed' && d.error && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>{d.error}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>
+                        {d.error}
+                        {/Workspaces → AWS/.test(d.error) && <> <a href={`#/p/${projectId}/workspaces/aws`}>Update AWS keys</a></>}
+                        {/Workspaces → Repositories/.test(d.error) && <> <a href={`#/p/${projectId}/workspaces/repositories`}>Update repository sign-in</a></>}
+                      </div>
                     )}
                   </td>
                   <td><DocTypeBadge type={d.doc_type} /></td>

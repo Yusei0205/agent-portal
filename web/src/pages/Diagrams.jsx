@@ -410,7 +410,11 @@ function DiagramRow({ diagram, selected, onSelect, onRefreshWithAttachments, onD
           {diagram.cloud_label && <><span>·</span><span>{diagram.cloud_label}</span></>}
         </div>
         {diagram.status === 'error' && diagram.error && (
-          <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>{diagram.error}</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>
+            {diagram.error}
+            {/Workspaces → AWS/.test(diagram.error) && <> <a href={`#/p/${diagram.project_id}/workspaces/aws`}>Update AWS keys</a></>}
+            {/Workspaces → Repositories/.test(diagram.error) && <> <a href={`#/p/${diagram.project_id}/workspaces/repositories`}>Update repository sign-in</a></>}
+          </div>
         )}
       </td>
       <td>

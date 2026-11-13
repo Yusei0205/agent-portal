@@ -294,7 +294,19 @@ export function ComposerBar({
     ? Math.round(items.reduce((a, i) => a + (i.state === 'done' ? 100 : (typeof i.percent === 'number' ? i.percent : 0)), 0) / items.length)
     : 0;
   const recentlyFinished = prep && prep.state !== 'running' && Date.now() - new Date(prep.at).getTime() < 3 * 60_000;
-  const showPanel = !dismissed && (cloning || (recentlyFinished && (prep.state === 'done' || prep.state === 'failed') && items.length > 0));
+  // A failure stays on screen until it is dismissed or fixed: it needs the person to act.
+  const showPanel = !dismissed && (cloning || prep?.state === 'failed' || prep?.problem || (recentlyFinished && prep.state === 'done' && items.length > 0));
+  const [retrying, setRetrying] = useState(false);
+  const retryClone = async () => {
+    setRetrying(true);
+    try {
+      const d = await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/repo-prep`, {});
+      setPrep(d.prep ?? null);
+      setCloning(d.prep?.state === 'running');
+      setDismissed(false);
+    } catch { /* the panel keeps showing the failure */ }
+    finally { setRetrying(false); }
+  };
   useEffect(() => { setDismissed(false); }, [workflow?.id, cloning]);
   useEffect(() => {
     if (!prep || prep.state !== 'done' || cloning) return undefined;
@@ -715,7 +727,20 @@ export function ComposerBar({
               </div>
             </div>
           ))}
-          {!cloning && prep?.state === 'failed' && prep?.message && <div className="muted" style={{ fontSize: '0.76rem' }}>{prep.message}</div>}
+          {!cloning && prep?.problem && (
+            <div className="error-note" role="alert" style={{ fontSize: '0.8rem' }}>{prep.problem.text}</div>
+          )}
+          {!cloning && prep?.state === 'failed' && !prep?.problem && prep?.message && <div className="muted" style={{ fontSize: '0.76rem' }}>{prep.message}</div>}
+          {!cloning && (prep?.state === 'failed' || prep?.problem) && (
+            <div className="row" style={{ gap: 8, paddingTop: 4 }}>
+              {prep?.problem && (
+                <a className="btn btn-sm btn-primary" href={`#/p/${projectId}/workspaces/${prep.problem.fix === 'aws' ? 'aws' : 'repositories'}`}>
+                  {prep.problem.fix === 'aws' ? 'Update AWS keys' : 'Update repository sign-in'}
+                </a>
+              )}
+              <button type="button" className="btn btn-sm" onClick={retryClone} disabled={retrying}>{retrying ? 'Starting…' : 'Try again'}</button>
+            </div>
+          )}
           {cloning && <div className="muted" style={{ fontSize: '0.74rem', paddingTop: 2 }}>You can type once the repositories are ready. Git only reports the file total near the end (checking out files); before that the count is of objects.</div>}
         </div>
       )}

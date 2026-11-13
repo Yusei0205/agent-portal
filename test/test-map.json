@@ -278,6 +278,8 @@
         "web/src/styles/sessions.css"
       ],
       "tests": [
+        "test/clone-failure-explained.test.ts",
+        "test/create-clone-first.test.ts",
         "test/session-title.test.ts",
         "test/session-lifecycle.test.ts",
         "test/session-agent-events.test.ts",
