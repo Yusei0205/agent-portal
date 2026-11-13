@@ -1440,14 +1440,24 @@ function RepoCodeGraph({ projectId, repo, toast }) {
     }
   };
 
+  const running0 = state?.status?.state === 'running';
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!running0) return undefined;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [running0]);
+
   if (state === undefined) return null;
   const st = state.status;
   const running = st?.state === 'running';
   const canBuild = !state.unavailable;
+  const determinate = running && typeof st.percent === 'number';
   return (
-    <p className="small" style={{ marginTop: '0.25em' }}>
+    <div style={{ marginTop: '0.25em' }}>
+    <p className="small" style={{ margin: 0 }}>
       <span className="muted">Code graph: </span>
-      {running && <strong>building… <span className="muted">{st.message}</span></strong>}
+      {running && <strong>building{determinate ? ` ${Math.round(st.percent)}%` : '…'} <span className="muted">{formatElapsed(st.at)}</span></strong>}
       {!running && st?.state === 'ready' && (
         <strong>
           ready
@@ -1465,6 +1475,25 @@ function RepoCodeGraph({ projectId, repo, toast }) {
       )}
       {!canBuild && !st && <span className="muted small"> {state.unavailable}</span>}
     </p>
+    {running && (
+      <div className="repo-progress" style={{ marginTop: 6 }}>
+        <div
+          className="progress-track"
+          role="progressbar"
+          aria-label={`${repo.name} code graph progress`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          {...(determinate ? { 'aria-valuenow': Math.round(st.percent) } : {})}
+        >
+          <div className={`progress-fill${determinate ? '' : ' is-indeterminate'}`} style={determinate ? { width: `${Math.max(2, st.percent)}%` } : undefined} />
+        </div>
+        <div className="repo-progress-detail">
+          {st.detail || st.message || 'Starting…'}
+          {' · '}<span className="muted">A large repository can take 30 minutes or more. You can leave this page; the build carries on.</span>
+        </div>
+      </div>
+    )}
+    </div>
   );
 }
 

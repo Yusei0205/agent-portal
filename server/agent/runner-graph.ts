@@ -12,7 +12,7 @@
  * never shows in `git status`, so an agent cannot commit it into someone's pull request.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,6 +27,8 @@ export type GraphResult = 'built' | 'skipped' | 'failed';
 /** What the runner sends to the portal so people can search and view the graph (see server/code-map.ts). */
 export type GraphEvent =
   | { type: 'status'; text: string }
+  /** How far a stand-alone build has got, 0-100 over all its stages (see runner-graph-build.ts). */
+  | { type: 'graph-progress'; repo: string; stage: 'clone' | 'extract' | 'build' | 'save'; percent: number; detail: string }
   | { type: 'code-graph'; repo: string; encoding: 'gzip-base64'; data: string; nodes: number; links: number; truncated: boolean };
 type Emit = (event: GraphEvent) => void;
 
@@ -104,18 +106,70 @@ export function excludeGraphFromGit(repoDir: string): void {
 /** Only what graphify needs: it is a third-party program, so the runner's own variables (tokens, keys) are not passed on. */
 function graphEnv(): NodeJS.ProcessEnv {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'graphify-home-'));
-  return { PATH: process.env.PATH, HOME: home, TMPDIR: os.tmpdir(), LANG: 'C.UTF-8', PYTHONUTF8: '1', GRAPHIFY_BACKEND: 'none', GRAPHIFY_NO_UPDATE_CHECK: '1' };
+  return { PATH: process.env.PATH, HOME: home, TMPDIR: os.tmpdir(), LANG: 'C.UTF-8', PYTHONUTF8: '1', GRAPHIFY_BACKEND: 'none', GRAPHIFY_NO_UPDATE_CHECK: '1', PYTHONUNBUFFERED: '1' };
 }
 
-function runUpdate(bin: string, repoDir: string, timeoutMs: number): Promise<{ code: number | null; out: string }> {
+/** How far graphify has got: `percent` is 0-100 over its own work, `stage` what it is doing. */
+export interface UpdateProgress { stage: 'extract' | 'build'; percent: number; detail: string }
+
+/**
+ * Reads one line of graphify's output into progress, or null when the line says nothing about it. graphify reports the code
+ * extraction as "AST extraction: 200/542 uncached files (36%)"; the linking and grouping that follows reports nothing until it ends.
+ * Exported for tests.
+ */
+export function parseGraphifyLine(line: string): UpdateProgress | null {
+  const ext = /AST extraction:\s*(\d[\d,]*)\s*\/\s*(\d[\d,]*)/.exec(line);
+  if (ext) {
+    const done = Number(ext[1].replace(/,/g, ''));
+    const total = Math.max(1, Number(ext[2].replace(/,/g, '')));
+    if (done >= total) return { stage: 'build', percent: 70, detail: 'Linking the code and grouping it into communities…' };
+    return { stage: 'extract', percent: 5 + Math.min(1, done / total) * 65, detail: `Reading the code: ${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} files` };
+  }
+  const cache = /AST cache:\s*\d[\d,]*\s*\/\s*\d[\d,]*.*?;\s*(\d[\d,]*) to extract/.exec(line);
+  if (cache) return { stage: 'extract', percent: 5, detail: `Reading the code: ${cache[1]} files to read` };
+  if (/Graph has [\d,]+ nodes|Building aggregated|graph\.html written/.test(line)) return { stage: 'build', percent: 90, detail: 'Writing the graph…' };
+  if (/Rebuilt:|Code graph updated/.test(line)) return { stage: 'build', percent: 98, detail: 'Finishing…' };
+  return null;
+}
+
+function runUpdate(bin: string, repoDir: string, timeoutMs: number, onProgress?: (p: UpdateProgress) => void): Promise<{ code: number | null; out: string }> {
   return new Promise((resolve) => {
     const env = graphEnv();
-    const done = (code: number | null, out: string): void => {
+    let out = '';
+    let last: UpdateProgress = { stage: 'extract', percent: 2, detail: 'Starting graphify…' };
+    let settled = false;
+    let tail = '';
+    const report = (p: UpdateProgress): void => {
+      // Never goes backwards.
+      last = { ...p, percent: Math.max(last.percent, p.percent) };
+      onProgress?.(last);
+    };
+    const child = spawn(bin, ['update', '.'], { cwd: repoDir, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const feed = (chunk: Buffer): void => {
+      const text = chunk.toString('utf8');
+      if (out.length < 2 * 1024 * 1024) out += text;
+      const lines = (tail + text).split(/[\r\n]+/);
+      tail = lines.pop() ?? '';
+      for (const l of lines) { const p = parseGraphifyLine(l); if (p) report(p); }
+    };
+    child.stdout.on('data', feed);
+    child.stderr.on('data', feed);
+    // graphify says nothing while it links and groups a large graph: creep towards the end so the bar keeps moving.
+    const creep = onProgress ? setInterval(() => {
+      if (last.stage === 'build' && last.percent < 97) report({ stage: 'build', percent: last.percent + (97 - last.percent) * 0.03, detail: last.detail });
+      else if (last.stage === 'extract') onProgress(last);
+    }, 3000) : null;
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ended already */ } }, timeoutMs);
+    const done = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (creep) clearInterval(creep);
       try { fs.rmSync(String(env.HOME), { recursive: true, force: true }); } catch { /* ok */ }
       resolve({ code, out });
     };
-    execFile(bin, ['update', '.'], { cwd: repoDir, env, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024, windowsHide: true },
-      (err, stdout, stderr) => done(err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1) : 0, `${stdout}\n${stderr}`));
+    child.on('error', () => done(1));
+    child.on('close', (code, signal) => done(signal ? 1 : code));
   });
 }
 
@@ -163,7 +217,7 @@ export async function buildRepoGraph(
   repoDir: string,
   name: string,
   emit: Emit,
-  opts: { bin?: string | null; timeoutMs?: number } = {},
+  opts: { bin?: string | null; timeoutMs?: number; onProgress?: (p: UpdateProgress) => void } = {},
 ): Promise<GraphResult> {
   const bin = opts.bin === undefined ? graphifyCommand() : opts.bin;
   if (!bin) return 'skipped';
@@ -172,7 +226,7 @@ export async function buildRepoGraph(
     excludeGraphFromGit(repoDir);
     const existed = fs.existsSync(path.join(repoDir, GRAPH_DIR, 'graph.json'));
     emit({ type: 'status', text: `${existed ? 'Updating' : 'Building'} the code graph of ${name}…` });
-    const { code, out } = await runUpdate(bin, repoDir, opts.timeoutMs ?? GRAPH_LIMITS.repoMs);
+    const { code, out } = await runUpdate(bin, repoDir, opts.timeoutMs ?? GRAPH_LIMITS.repoMs, opts.onProgress);
     if (code !== 0 || !fs.existsSync(path.join(repoDir, GRAPH_DIR, 'graph.json'))) {
       emit({ type: 'status', text: `No code graph for ${name} (graphify did not finish); the agent reads the code as usual.` });
       return 'failed';

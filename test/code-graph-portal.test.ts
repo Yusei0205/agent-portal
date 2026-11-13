@@ -101,10 +101,21 @@ describe('Build code graph (portal)', () => {
     assert.equal(st?.version, '2026-11-01T00:00:00.000Z');
   });
 
-  it('a build that has not reported for 40 minutes is shown as lost', async () => {
-    await setSetting(getDb(), 'codegraph.gr_lost', JSON.stringify({ state: 'running', at: new Date(Date.now() - 41 * 60_000).toISOString(), message: 'Building…' }));
+  it('a build that never reports progress is shown as lost after the longest a build may take', async () => {
+    await setSetting(getDb(), 'codegraph.gr_lost', JSON.stringify({ state: 'running', at: new Date(Date.now() - 76 * 60_000).toISOString(), message: 'Building…' }));
     const st = getCodeGraphStatus('gr_lost');
     assert.equal(st?.state, 'failed');
     assert.match(String(st?.message), /did not finish/);
+    await setSetting(getDb(), 'codegraph.gr_slow', JSON.stringify({ state: 'running', at: new Date(Date.now() - 50 * 60_000).toISOString(), message: 'Building…' }));
+    assert.equal(getCodeGraphStatus('gr_slow')?.state, 'running');
   });
+
+  it('a build that reports progress stays running for an hour, and is lost 20 minutes after its last report', async () => {
+    const at = new Date(Date.now() - 60 * 60_000).toISOString();
+    await setSetting(getDb(), 'codegraph.gr_prog', JSON.stringify({ state: 'running', at, updated: new Date(Date.now() - 30_000).toISOString(), percent: 42, message: 'x' }));
+    assert.equal(getCodeGraphStatus('gr_prog')?.state, 'running');
+    await setSetting(getDb(), 'codegraph.gr_prog2', JSON.stringify({ state: 'running', at, updated: new Date(Date.now() - 21 * 60_000).toISOString(), percent: 42, message: 'x' }));
+    assert.equal(getCodeGraphStatus('gr_prog2')?.state, 'failed');
+  });
+
 });
