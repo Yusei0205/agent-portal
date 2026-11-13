@@ -128,6 +128,13 @@ How it works: with `PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN` set (deploy context `cl
 ### Claude session says a tool "needs approval"
 - A cloud run cannot stop and ask for approval mid-run. Without **Trust all tools** only read-only tools (Read, Glob, Grep, LS, WebSearch, WebFetch, TodoWrite) run. Turn on Trust all tools for sessions that must edit files or run commands.
 
+### A session "cancels itself" after about 15 minutes (2026-11-13)
+- **Symptom:** a long turn stops with status cancelled, the session is paused, and nobody pressed Stop.
+- **Cause:** a session turn (`execute-run`) runs inside one Lambda invocation, which ends after 15 minutes. `PORTAL_RUN_TIMEOUT_MS` (14 minutes on the portal function) ends runs before that on the Kiro path and the own-key Claude path, but the Bedrock path (`claude-agentcore-bedrock.ts`, Claude with the runtime's role) did not use it. Lambda then stopped the process mid-run; the portal's shutdown aborted every run (`abortAllRuns`), and each was recorded as cancelled with no reason.
+- **Fix:** the Bedrock path now gives the runner the time left of `PORTAL_RUN_TIMEOUT_MS` (counted from the run's start), so the turn ends cleanly at 14 minutes: the spend is recorded, the run shows "time limit reached (14 minutes)", and the session says to send another message to continue. A run that the portal's shutdown stops anyway now records "the portal shut down during the run" instead of a bare "Cancelled".
+- **Check:** in `/aws/lambda/agent-portal`, `Task timed out after 900` followed by `[SIGTERM] Graceful shutdown starting…` at the time of the cancel.
+- **Still true:** one turn cannot run for longer than about 14 minutes on the cloud portal. Running turns on the job runtime (`jobRuntime=true` with `jobRuntimeAgentRuns=true`) would lift that, but Stop does not reach a run on another machine yet (only automations poll a stop flag), so agent runs stay on Lambda.
+
 ### Claude runs but nothing changes / files missing afterwards
 - The agent works inside the AgentCore microVM (`/tmp/agent-sessions/<id>/work`), which is released after about 5 idle minutes. Files it writes there are not copied back to the portal yet; only the text, tool activity and cost come back.
 
