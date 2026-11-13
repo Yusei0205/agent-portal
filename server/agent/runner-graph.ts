@@ -17,6 +17,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 export const GRAPH_DIR = 'graphify-out';
 /** The longest one repository may take, and the longest all of a run's repositories may take together. */
@@ -182,7 +184,28 @@ export function headCommit(repoDir: string): Promise<string> {
 
 const GRAPH_VERSION_FILE = '.portal-graph-version';
 /** The largest saved graph a session downloads (as gzip) and unpacks. */
-export const STORED_GRAPH_LIMITS = { gzipBytes: 64 * 1024 * 1024, rawBytes: 256 * 1024 * 1024 } as const;
+export const STORED_GRAPH_LIMITS = { gzipBytes: 64 * 1024 * 1024, rawBytes: 1024 * 1024 * 1024 } as const;
+
+/** Unpacks a gzipped graph to `dest` without holding the unpacked text in memory (a big repository's graph is 300 MB+). Returns the unpacked size; throws when it is over `maxBytes` or is not JSON. */
+export async function gunzipToFile(packed: Buffer, dest: string, maxBytes: number): Promise<number> {
+  let size = 0;
+  let first = true;
+  const guard = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      if (first) { first = false; if (chunk[0] !== 0x7b) return cb(new Error('not a graph (it does not start with "{")')); }
+      size += chunk.length;
+      if (size > maxBytes) return cb(new Error(`unpacks to more than ${Math.round(maxBytes / 1048576)} MB`));
+      cb(null, chunk);
+    },
+  });
+  try {
+    await pipeline(Readable.from([packed]), zlib.createGunzip(), guard, fs.createWriteStream(dest));
+  } catch (err) {
+    try { fs.rmSync(dest, { force: true }); } catch { /* best effort */ }
+    throw err;
+  }
+  return size;
+}
 
 /**
  * Puts the repository's saved code graph (built from the Repositories page) at `graphify-out/graph.json`, so the agent can
@@ -200,15 +223,21 @@ export async function loadStoredGraph(repoDir: string, name: string, graph: { ur
     if (Number(res.headers.get('content-length') ?? 0) > STORED_GRAPH_LIMITS.gzipBytes) { emit({ type: 'status', text: `The saved code graph of ${name} is too large to load; the agent reads the code as usual.` }); return; }
     const packed = Buffer.from(await res.arrayBuffer());
     if (packed.length > STORED_GRAPH_LIMITS.gzipBytes) { emit({ type: 'status', text: `The saved code graph of ${name} is too large to load; the agent reads the code as usual.` }); return; }
-    const raw = zlib.gunzipSync(packed, { maxOutputLength: STORED_GRAPH_LIMITS.rawBytes });
-    if (raw[0] !== 0x7b) { emit({ type: 'status', text: `The saved code graph of ${name} is not readable; the agent reads the code as usual.` }); return; }
     excludeGraphFromGit(repoDir);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file, raw);
+    const tmp = `${file}.part`;
+    let size: number;
+    try {
+      size = await gunzipToFile(packed, tmp, STORED_GRAPH_LIMITS.rawBytes);
+    } catch (err) {
+      emit({ type: 'status', text: `The saved code graph of ${name} is not readable (${err instanceof Error ? err.message : String(err)}); the agent reads the code as usual.` });
+      return;
+    }
+    fs.renameSync(tmp, file);
     fs.writeFileSync(path.join(dir, GRAPH_VERSION_FILE), graph.version);
-    emit({ type: 'status', text: `Code graph of ${name} loaded (built ${graph.version.slice(0, 10)}): repos/${name}/${GRAPH_DIR}/` });
-  } catch {
-    emit({ type: 'status', text: `The saved code graph of ${name} could not be loaded; the agent reads the code as usual.` });
+    emit({ type: 'status', text: `Code graph of ${name} loaded (built ${graph.version.slice(0, 10)}, ${size >= 1048576 ? `${Math.round(size / 1048576)} MB` : `${Math.max(1, Math.round(size / 1024))} KB`}): repos/${name}/${GRAPH_DIR}/` });
+  } catch (err) {
+    emit({ type: 'status', text: `The saved code graph of ${name} could not be loaded (${err instanceof Error ? err.message : String(err)}); the agent reads the code as usual.` });
   }
 }
 

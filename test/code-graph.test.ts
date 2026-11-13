@@ -11,7 +11,7 @@ import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { parseRunnerRepos } from '../server/agent/runner-repos.ts';
-import { loadStoredGraph, GRAPH_DIR } from '../server/agent/runner-graph.ts';
+import { loadStoredGraph, gunzipToFile, GRAPH_DIR } from '../server/agent/runner-graph.ts';
 import { buildAndStoreGraph, graphCounts } from '../server/agent/runner-graph-build.ts';
 
 const GRAPH = { nodes: [{ id: 'a', label: 'a()', source_file: 'a.ts' }, { id: 'b', label: 'b()', source_file: 'b.ts' }], links: [{ source: 'a', target: 'b', relation: 'calls' }] };
@@ -80,7 +80,7 @@ describe('loadStoredGraph (a session loads the saved graph, builds nothing)', ()
       await loadStoredGraph(repoDir, 'repo', { url: `${srv.url}/g.gz`, version: '2026-11-13T07:00:00.000Z' }, (e) => { if (e.type === 'status') said.push(e.text); });
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(repoDir, GRAPH_DIR, 'graph.json'), 'utf8')), GRAPH);
       assert.match(fs.readFileSync(path.join(repoDir, '.git', 'info', 'exclude'), 'utf8'), /graphify-out\//);
-      assert.match(said.join('\n'), /Code graph of repo loaded \(built 2026-11-13\)/);
+      assert.match(said.join('\n'), /Code graph of repo loaded \(built 2026-11-13, \d+ KB\)/);
       await loadStoredGraph(repoDir, 'repo', { url: `${srv.url}/g.gz`, version: '2026-11-13T07:00:00.000Z' }, () => undefined);
       assert.equal(hits, 1, 'the same version is not downloaded again');
       await loadStoredGraph(repoDir, 'repo', { url: `${srv.url}/g.gz`, version: '2026-11-14T07:00:00.000Z' }, () => undefined);
@@ -101,6 +101,27 @@ describe('loadStoredGraph (a session loads the saved graph, builds nothing)', ()
       assert.match(said[1], /is not readable/);
       assert.equal(fs.existsSync(path.join(repoDir, GRAPH_DIR, 'graph.json')), false);
     } finally { gone.close(); junk.close(); }
+  });
+});
+
+describe('gunzipToFile (a big repository graph unpacks to hundreds of MB)', () => {
+  it('writes the unpacked graph to a file and returns its size', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gunzip-'));
+    try {
+      const body = JSON.stringify({ nodes: Array.from({ length: 2000 }, (_, i) => ({ id: `n${i}` })), links: [] });
+      const dest = path.join(tmp, 'graph.json');
+      const size = await gunzipToFile(zlib.gzipSync(body), dest, 10 * 1024 * 1024);
+      assert.equal(size, Buffer.byteLength(body));
+      assert.equal(fs.readFileSync(dest, 'utf8'), body);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  });
+  it('refuses a graph over the size cap, and leaves no partial file', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gunzip-'));
+    try {
+      const dest = path.join(tmp, 'graph.json');
+      await assert.rejects(gunzipToFile(zlib.gzipSync('{"a":"' + 'x'.repeat(100_000) + '"}'), dest, 1000), /unpacks to more than/);
+      assert.equal(fs.existsSync(dest), false);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   });
 });
 
