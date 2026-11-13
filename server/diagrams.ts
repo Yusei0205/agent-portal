@@ -25,6 +25,7 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import type { Row } from './db.ts';
 import { generateId, now, str, badRequest, notFound, parseJson, newId, slugify } from './util.ts';
+import { runnerRepoFolder } from './agent/runner-repo-specs.ts';
 import { config } from './config.ts';
 import { emit } from './events.ts';
 import {
@@ -226,7 +227,7 @@ export function buildDiagramPrompt(
   // so we derive one from the name for the prompt.
   const promptRepos = repos.map((r) => ({
     name: r.name,
-    slug: r.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+    slug: runnerRepoFolder(r.name),
     default_branch: r.default_branch ?? 'main',
   }));
 
@@ -317,6 +318,14 @@ async function startDiagramGeneration(
   // Kick off the workflow asynchronously
   setTimeout(async () => {
     try {
+      // Repositories first: the agent starts only once every chosen repository is on the runner.
+      const prepError = await (await import('./agent/repo-prep.ts')).prepareReposBeforeRun(workflowId);
+      if (prepError) {
+        await getDiagramRepository().update(String(d.id), { status: 'error', error: prepError, pending_workflow_id: null, updated_at: now() });
+        await sessions.updateWorkflow(workflowId, { status: 'failed', updated_at: now() });
+        notifyProject(String(d.project_id), 'diagrams.updated', { id: d.id });
+        return;
+      }
       const { startRun } = await import('./workflows/driver.ts');
       await startRun(workflowId);
     } catch {

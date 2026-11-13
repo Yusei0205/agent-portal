@@ -14,14 +14,16 @@ import { restoreFile } from './durable-files.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getKnowledgeRepository } from './repositories/knowledge.ts';
 import type { DocPromptRepo } from './generated-doc-text.ts';
+import { runnerRepoFolder } from './agent/runner-repo-specs.ts';
 
 export interface DocSources {
+  /** Free-text context from the requester (what the document is for, what to focus on). */
+  description?: string;
   repoIds?: string[];
   docIds?: string[];
   diagramIds?: string[];
 }
 
-const slugOf = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 /** The chosen repositories, checked to belong to the project, as the prompt names them. */
 export async function repoContext(projectId: string, repoIds: string[] | undefined, max: number): Promise<{ repoIds: string[]; promptRepos: DocPromptRepo[] }> {
@@ -31,7 +33,10 @@ export async function repoContext(projectId: string, repoIds: string[] | undefin
   for (const id of ids) {
     const r = (await getGitReposRepository().getById(id)) as unknown as { name: string; project_id?: string; default_branch?: string } | null;
     if (!r || (r.project_id && r.project_id !== projectId)) throw badRequest('A chosen repository is not in this project');
-    promptRepos.push({ name: r.name, slug: slugOf(r.name), branch: r.default_branch ?? 'main' });
+    // The folder the runner clones into (see buildRunnerRepos), so the prompt names a path that exists.
+    let slug = runnerRepoFolder(r.name);
+    while (promptRepos.some((p) => p.slug === slug)) slug = `${slug}_`;
+    promptRepos.push({ name: r.name, slug, branch: r.default_branch ?? 'main' });
   }
   return { repoIds: ids, promptRepos };
 }

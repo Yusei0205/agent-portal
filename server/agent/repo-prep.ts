@@ -192,6 +192,32 @@ async function prepare(workflowId: string): Promise<void> {
   });
 }
 
+/**
+ * For one-shot Create runs (document, diagram): puts the chosen repositories on the runner and waits for it, so the agent
+ * is only started once they are there. Returns null when the run may go on (nothing to prepare, not an AgentCore engine,
+ * or every repository is ready), or the reason it must not (a repository could not be cloned).
+ */
+export async function prepareReposBeforeRun(workflowId: string): Promise<string | null> {
+  const w = await getSessionsRepository().getWorkflowById(workflowId);
+  if (!w || !runtimeFor(String(w.engine))) return null;
+  let ids: string[] = [];
+  try { ids = JSON.parse(String(w.repo_ids ?? '[]')) as string[]; } catch { ids = []; }
+  if (ids.length === 0) return null;
+  try {
+    await prepare(workflowId);
+  } catch (e: unknown) {
+    return `Could not get the repositories ready: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`;
+  }
+  const st = getRepoPrep(workflowId);
+  if (!st) return 'Could not get the repositories ready.';
+  const bad = (st.items ?? []).filter((i) => i.state === 'failed');
+  if (st.state === 'failed' || bad.length > 0) {
+    return `Could not clone ${bad.length ? bad.map((i) => i.name).join(', ') : 'the repositories'}: ${st.message}`.slice(0, 400);
+  }
+  if (!st.repos?.length && !(st.items?.length)) return st.message || 'No repository could be prepared.';
+  return null;
+}
+
 registerBackgroundJob('prepare-repos', async (a) => {
   const id = String(a.workflowId);
   try {

@@ -9,6 +9,11 @@ import type { RunnerRepo } from './runner-repos.ts';
 
 const GIT_ENV_KEY = /^(GIT_TERMINAL_PROMPT|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d{1,2}|GIT_CONFIG_VALUE_\d{1,2})$/;
 
+/** The folder under repos/ a repository is cloned into (the prompts must name exactly this). */
+export function runnerRepoFolder(repoName: string): string {
+  return String(repoName ?? '').replace(/[^A-Za-z0-9._-]/g, '_').replace(/^[._-]+/, '').slice(0, 100) || 'repo';
+}
+
 export async function buildRunnerRepos(
   repoIds: string[],
   projectId: string | null,
@@ -28,7 +33,7 @@ export async function buildRunnerRepos(
       continue;
     }
 
-    let name = String(repo.name ?? '').replace(/[^A-Za-z0-9._-]/g, '_').replace(/^[._-]+/, '').slice(0, 100) || 'repo';
+    let name = runnerRepoFolder(String(repo.name ?? ''));
     while (used.has(name)) name = `${name}_`;
     used.add(name);
 

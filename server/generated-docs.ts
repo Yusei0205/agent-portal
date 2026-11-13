@@ -151,6 +151,7 @@ async function prepareDocRun(
     type: doc.type,
     title: doc.title,
     audience: doc.audience,
+    description: sources.description,
     repos: promptRepos,
     knowledge: stagedDocs > 0,
     decisions: false,
@@ -204,6 +205,14 @@ async function startDocRun(
 
   setTimeout(async () => {
     try {
+      // Repositories first: the agent starts only once every chosen repository is on the runner.
+      const prepError = await (await import('./agent/repo-prep.ts')).prepareReposBeforeRun(workflowId);
+      if (prepError) {
+        await getGeneratedDocRepository().update(docId, { status: 'failed', error: prepError });
+        await sessions.updateWorkflow(workflowId, { status: 'failed', updated_at: now() });
+        emit(projectId, { type: 'workflow.updated', workflowId, status: 'failed' });
+        return;
+      }
       const { startRun } = await import('./workflows/driver.ts');
       await startRun(workflowId);
     } catch (e) {
@@ -326,9 +335,12 @@ export function registerGeneratedDocRoutes(): void {
       throw badRequest(`doc_type must be one of: ${DOC_TYPES.join(', ')}`);
     }
 
-    const sources = (typeof body.sources === 'object' && body.sources !== null)
+    const rawSources = (typeof body.sources === 'object' && body.sources !== null)
       ? body.sources as { repoIds?: string[]; docIds?: string[]; diagramIds?: string[] }
       : {};
+    const description = str((body.description as string) ?? '', 'description', { max: DOC_LIMITS.descriptionChars, optional: true });
+    // Kept with the sources, so a refresh or retry writes from the same context.
+    const sources: DocSources = { ...rawSources, ...(description ? { description } : {}) };
     const diagramStyle = (body.diagramStyle as string) ?? 'mermaid';
     const diagramCloud = (body.diagramCloud as string | undefined) ?? null;
     const audience = str((body.audience as string) ?? '', 'audience', { max: DOC_LIMITS.audienceChars, optional: true });
