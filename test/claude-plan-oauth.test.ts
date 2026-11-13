@@ -28,7 +28,7 @@ describe('Claude plan sign-in', () => {
   it('start returns a claude.ai PKCE url with the inference-only scope', async () => {
     const u = new URL((await start()).url);
     assert.equal(u.hostname, 'claude.com');
-    assert.equal(u.searchParams.get('scope'), 'user:inference');
+    assert.equal(u.searchParams.get('scope'), 'user:inference user:profile');
     assert.equal(u.searchParams.get('code_challenge_method'), 'S256');
   });
 

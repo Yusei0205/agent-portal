@@ -2,7 +2,7 @@
  * "Claude plan (Pro / Max)" sign-in from the Add credential dialog.
  *
  * Does what `claude setup-token` does, without needing the CLI on the host: a PKCE sign-in at claude.ai with the
- * inference-only scope and a one-year lifetime. The person opens the returned URL, signs in, and pastes back the
+ * inference + profile scopes and a one-year lifetime. The person opens the returned URL, signs in, and pastes back the
  * code the page shows; the portal exchanges it and returns the long-lived token to fill into the credential form.
  *
  * Nothing is stored between the two calls. The PKCE verifier travels in `flow`, an encrypted blob bound to the
@@ -19,7 +19,8 @@ const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
-const SCOPE = 'user:inference';
+// user:profile is what lets the portal read the plan's 5-hour and weekly usage (the usage endpoint refuses a token without it).
+const SCOPE = 'user:inference user:profile';
 const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
 const FLOW_TTL_MS = 10 * 60_000;
 
