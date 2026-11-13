@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
-  collectRunnerFiles, emitRunnerFiles, createFileReceiver, safeRelPath, RUNNER_FILE_LIMITS,
+  collectRunnerFiles, collectRepoDocuments, emitRunnerFiles, createFileReceiver, safeRelPath, RUNNER_FILE_LIMITS,
 } from '../server/agent/runner-files.ts';
 import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts';
 import type { AgentCoreSSEEvent } from '../server/agent/kiro-agentcore.ts';
@@ -108,11 +109,11 @@ describe('receiver safety', () => {
 
   it('rejects traversal, absolute paths, tool folders and disallowed extensions', async () => {
     const rx = createFileReceiver(dst);
-    for (const p of ['../evil.md', 'a/../../evil.md', '/etc/passwd.md', 'C:/x.md', 'a' + String.fromCharCode(92) + 'b.md', '.git/x.md', 'repos/x/y.md', 'run.bat', 'x.exe', '']) {
+    for (const p of ['../evil.md', 'a/../../evil.md', '/etc/passwd.md', 'C:/x.md', 'a' + String.fromCharCode(92) + 'b.md', '.git/x.md', 'repos/y.md', 'repos/x/y.ts', 'repos/x/node_modules/y.md', 'repos/x/.github/y.md', 'repos/x/dist/y.md', 'repos/.git/y.md', 'run.bat', 'x.exe', '']) {
       await rx.handle(chunk({ path: p }));
     }
     assert.equal(rx.received.length, 0);
-    assert.equal(rx.rejected, 10);
+    assert.equal(rx.rejected, 15);
     assert.deepEqual(fs.readdirSync(dst), []);
   });
 
@@ -152,5 +153,65 @@ describe('Claude adapter receives files into the run work folder', () => {
     });
     assert.equal(fs.readFileSync(path.join(dst, 'result.md'), 'utf8'), '# done');
     assert.ok(emitted.some((e) => e.type === 'status' && /Received 1 file/.test(String(e.payload.text))));
+  });
+});
+
+describe('documents written inside a cloned repository', () => {
+  const run = (args: string[], cwd: string) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+  const mkRepo = () => {
+    const repo = path.join(src, 'repos', 'app');
+    fs.mkdirSync(repo, { recursive: true });
+    run(['init', '-q'], repo);
+    run(['config', 'user.email', 't@t.t'], repo); run(['config', 'user.name', 't'], repo);
+    fs.writeFileSync(path.join(repo, 'README.md'), 'old');
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'export {}');
+    run(['add', '.'], repo); run(['commit', '-q', '-m', 'init'], repo);
+    return repo;
+  };
+
+  it('sends new and changed documents, not source files, untouched files or tool folders', () => {
+    const repo = mkRepo();
+    fs.mkdirSync(path.join(repo, 'supporting_files', 'technical_doc'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'supporting_files', 'technical_doc', 'Guide.md'), '# guide');
+    fs.writeFileSync(path.join(repo, 'README.md'), 'changed');
+    fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'export const x = 1;');
+    fs.mkdirSync(path.join(repo, 'node_modules', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'node_modules', 'p', 'r.md'), 'x');
+    const rels = collectRepoDocuments(src).map((f) => f.rel).sort();
+    assert.deepEqual(rels, ['repos/app/README.md', 'repos/app/supporting_files/technical_doc/Guide.md']);
+    assert.deepEqual(collectRunnerFiles(src).files.map((f) => f.rel).sort(), rels);
+  });
+
+  it('ignores a repos/ folder that is not a git repository, and files older than the run', () => {
+    write('repos/plain/NOTES.md', 'x');
+    assert.deepEqual(collectRepoDocuments(src), []);
+    const repo = mkRepo();
+    fs.writeFileSync(path.join(repo, 'Doc.md'), 'x');
+    assert.deepEqual(collectRepoDocuments(src, Date.now() + 60_000), []);
+  });
+
+  it('arrives at the portal under repos/<name>/ and the receiver still refuses source files and tool folders there', async () => {
+    const repo = mkRepo();
+    fs.writeFileSync(path.join(repo, 'Guide.md'), '# guide');
+    const rx = createFileReceiver(dst);
+    emitRunnerFiles(src, (ev) => { void rx.handle(ev); });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(rx.received, ['repos/app/Guide.md']);
+    assert.equal(fs.readFileSync(path.join(dst, 'repos', 'app', 'Guide.md'), 'utf8'), '# guide');
+    assert.equal(safeRelPath('repos/app/src/a.ts'), null);
+  });
+});
+
+describe('portal side listing of repository documents', () => {
+  it('lists the documents a cloud runner sent for a repository, and nothing hidden or in tool folders', async () => {
+    const { collectReceivedRepoDocs } = await import('../server/output-files.ts');
+    write('repos/app/docs/Guide.md', '# g');
+    write('repos/app/diagram.drawio', '<mxfile/>');
+    write('repos/app/main.ts', 'x');
+    write('repos/app/.hidden/n.md', 'x');
+    write('repos/app/node_modules/p/r.md', 'x');
+    const rels = collectReceivedRepoDocs(path.join(src, 'repos', 'app')).map((f) => path.relative(src, f).split(path.sep).join('/')).sort();
+    assert.deepEqual(rels, ['repos/app/diagram.drawio', 'repos/app/docs/Guide.md']);
   });
 });
