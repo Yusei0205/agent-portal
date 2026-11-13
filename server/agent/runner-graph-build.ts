@@ -46,12 +46,27 @@ export async function buildAndStoreGraph(
   try {
     const { graph: _saved, ...plain } = repo;
     void _saved;
-    const names = await cloneRunnerRepos([plain], work, emit, { shallow: true });
+    // One bar over every stage: cloning 0-18%, graphify 18-92%, saving 92-100%. It never goes backwards.
+    let overall = 0;
+    let lastEmit = 0;
+    const progress = (stage: 'clone' | 'extract' | 'build' | 'save', pct: number, detail: string, force = false): void => {
+      overall = Math.max(overall, Math.min(100, pct));
+      const t = Date.now();
+      if (!force && t - lastEmit < 1000) return;
+      lastEmit = t;
+      emit({ type: 'graph-progress', repo: repo.name, stage, percent: Math.round(overall * 10) / 10, detail });
+    };
+    progress('clone', 0, 'Cloning the repository…', true);
+    const names = await cloneRunnerRepos([plain], work, emit, {
+      shallow: true,
+      onProgress: (u) => progress('clone', (Number(u.percent) || 0) * 0.18, `Cloning: ${u.phase}${u.detail ? ` · ${u.detail}` : ''}`),
+    });
     if (names.length === 0) return fail('The repository could not be cloned');
     const repoDir = path.join(work, 'repos', repo.name);
     const commit = await headCommit(repoDir);
 
-    const result = await buildRepoGraph(repoDir, repo.name, emit, { bin, timeoutMs: opts.maxMs });
+    progress('extract', 18, 'Starting graphify…', true);
+    const result = await buildRepoGraph(repoDir, repo.name, emit, { bin, timeoutMs: opts.maxMs, onProgress: (p) => progress(p.stage, 18 + p.percent * 0.74, p.detail) });
     const graphFile = path.join(repoDir, GRAPH_DIR, 'graph.json');
     if (result !== 'built' || !fs.existsSync(graphFile)) {
       return fail(`graphify did not finish within ${Math.round(opts.maxMs / 60_000)} minutes`, commit);
@@ -67,6 +82,7 @@ export async function buildAndStoreGraph(
     if (!opts.putUrl) return { success: true, commit, ...counts, bytes: packed.length, stored: false };
 
     emit({ type: 'status', text: `Saving the code graph of ${repo.name} (${(packed.length / 1048576).toFixed(1)} MB)…` });
+    progress('save', 92, `Saving the graph (${(packed.length / 1048576).toFixed(1)} MB)…`, true);
     const res = await fetch(opts.putUrl, {
       method: 'PUT',
       body: packed,
@@ -74,6 +90,7 @@ export async function buildAndStoreGraph(
       signal: AbortSignal.timeout(5 * 60_000),
     });
     if (!res.ok) return { success: true, commit, ...counts, bytes: packed.length, stored: false, error: `The graph could not be saved (HTTP ${res.status})` };
+    progress('save', 100, 'Done', true);
     return { success: true, commit, ...counts, bytes: packed.length, stored: true };
   } catch (e) {
     return fail(String((e as Error)?.message ?? e).slice(0, 300));

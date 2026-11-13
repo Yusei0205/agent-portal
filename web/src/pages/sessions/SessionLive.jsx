@@ -649,6 +649,100 @@ function ApprovalCard({ event, workflowId, projectId, runId, onResolved }) {
   );
 }
 
+// ── MCP sign-in card ──────────────────────────────────────────────────────────
+
+/**
+ * An MCP server (e.g. Atlassian) needs the person to sign in before its tools work. The run waits for it.
+ * Steps: open the sign-in page, approve, copy the 127.0.0.1 address the browser ends on (it does not load: the
+ * sign-in finishes inside the portal), paste it here.
+ */
+function McpSignInCard({ event, projectId, runId }) {
+  const { integrationId, name } = event.payload;
+  const { endedRuns } = useContext(ApprovalStateContext);
+  const base = `/api/projects/${projectId}/integrations/${integrationId}/oauth`;
+  const [flow, setFlow]     = useState('');
+  const [pasted, setPasted] = useState('');
+  const [busy, setBusy]     = useState(false);
+  const [error, setError]   = useState('');
+  const [state, setState]   = useState('checking'); // checking | open | done | skipped
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get(`/api/projects/${projectId}/integrations`)
+      .then((r) => {
+        const me = (r.integrations || []).find((i) => i.id === integrationId);
+        if (!cancelled) setState((prev) => (prev === 'checking' ? (me?.signedIn ? 'done' : 'open') : prev));
+      })
+      .catch(() => { if (!cancelled) setState((prev) => (prev === 'checking' ? 'open' : prev)); });
+    return () => { cancelled = true; };
+  }, [projectId, integrationId]);
+
+  const openSignIn = async () => {
+    setBusy(true); setError('');
+    try {
+      const r = await api.post(`${base}/start`, {});
+      setFlow(r.flow);
+      window.open(r.url, '_blank', 'noopener,noreferrer');
+    } catch (e) { setError(e?.message || 'Could not start sign-in.'); }
+    setBusy(false);
+  };
+
+  const finish = async () => {
+    setBusy(true); setError('');
+    try {
+      await api.post(`${base}/finish`, { flow, pasted });
+      setPasted('');
+      setState('done');
+    } catch (e) { setError(e?.message || 'Could not finish sign-in.'); }
+    setBusy(false);
+  };
+
+  const skip = async () => {
+    setBusy(true); setError('');
+    try { await api.post(`${base}/skip`, { runId }); setState('skipped'); }
+    catch (e) { setError(e?.message || 'Could not continue without it.'); }
+    setBusy(false);
+  };
+
+  if (state === 'checking') return null;
+  if (state === 'done' || state === 'skipped' || endedRuns.has(String(runId))) {
+    return (
+      <div className="live-event live-approval-resolved is-muted" aria-label="MCP sign-in">
+        <Icon name={state === 'done' ? 'check' : 'clock'} size={14} />
+        {state === 'done' ? `Signed in to ${name}` : state === 'skipped' ? `Continuing without ${name}` : `${name} sign-in is no longer needed`}
+      </div>
+    );
+  }
+
+  return (
+    <div className="live-event live-approval-card" role="group" aria-label={`Sign in to ${name}`}>
+      <div className="live-approval-desc">
+        <Icon name="warning" size={14} />
+        <strong>{name}</strong> needs you to sign in before its tools work.
+      </div>
+      <ol className="mcp-signin-steps">
+        <li><button type="button" className="btn btn-sm btn-primary" onClick={openSignIn} disabled={busy}>Open the sign-in page</button> and approve the access.</li>
+        <li>Your browser then opens an address starting with <code>http://127.0.0.1:38951/</code> that does not load. That is expected: the sign-in finishes here.</li>
+        <li>Copy that whole address from the address bar and paste it below.</li>
+      </ol>
+      <input
+        type="text"
+        className="input"
+        aria-label="Address from your browser"
+        placeholder="http://127.0.0.1:38951/oauth/callback?code=…"
+        value={pasted}
+        onChange={(e) => setPasted(e.target.value)}
+        disabled={busy}
+      />
+      {error && <div className="live-approval-error" role="alert">{error}</div>}
+      <div className="live-approval-actions">
+        <button type="button" className="btn btn-sm btn-primary" onClick={finish} disabled={busy || !flow || !pasted.trim()}>Finish sign-in</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={skip} disabled={busy}>Continue without it</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Event renderers ────────────────────────────────────────────────────────────
 
 /**
@@ -747,6 +841,11 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
       </div>
     );
   }
+
+  if (type === 'mcp-auth-required') {
+    return <McpSignInCard event={event} projectId={projectId} runId={runId} />;
+  }
+  if (type === 'mcp-auth-resolved') return null;
 
   // ── Approval request ─────────────────────────────────────────────────────
   if (type === 'approval-request') {

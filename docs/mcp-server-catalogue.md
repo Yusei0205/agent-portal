@@ -98,15 +98,18 @@ Well-maintained servers with official support. Junior developers: start here.
 **What the agent can do:** search issues, create/update Jira tickets, read Confluence pages,
 post comments, change issue status.
 
-**Connection type:** HTTP (Atlassian hosts the server)  
-**URL:** `https://mcp.atlassian.com/v1/mcp`  
-**Auth:** your Atlassian email + an API token from https://id.atlassian.com/manage-profile/security/api-tokens
+**Connection type:** HTTP (Atlassian hosts the server), sign-in with OAuth  
+**URL:** `https://mcp.atlassian.com/v2/mcp` (v1 is replaced by v2 on 1 March 2027)  
+**Auth:** you sign in with Atlassian; no token to create.
 
 **Setup (junior):**
-1. Go to **Integrations** → click the **Jira & Confluence** tile.
-2. Enter your Atlassian email and paste your API token.
-3. Click **Save**, then **Test** — you should see "Connected".
-4. Attach to a workspace under **Workspaces › Edit**.
+1. Go to **Integrations** → **New MCP server** → click the **Atlassian** preset, then **Save**.
+2. Start a session in the project. A card appears in the session: **"atlassian needs you to sign in"**.
+3. Click **Open the sign-in page** and approve the access on auth.atlassian.com.
+4. Your browser then opens an address starting with `http://127.0.0.1:38951/` that does not load. That is expected. Copy the whole address from the address bar and paste it into the card, then click **Finish sign-in**.
+5. The session continues with the Jira and Confluence tools. **Continue without it** starts the session without them.
+
+The portal keeps the sign-in (and refreshes it); the session only gets a short-lived token, so a run longer than about an hour may need a new session. The old **Atlassian v1** preset (email + API token, `Basic` header) still works until March 2027.
 
 **Setup (senior — team-wide):**
 - Use a service-account email and a long-lived token.

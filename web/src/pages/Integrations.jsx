@@ -227,6 +227,14 @@ export const MCP_PRESETS = [
     id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', header: 'Authorization',
     hint: 'Value: "Sentry-Bearer " followed by a Sentry User Auth Token (read scopes: org:read, project:read, event:read). Plain "Bearer" does not work on this server. Add /your-org to the URL to limit it to one organisation.',
   },
+  {
+    id: 'atlassian', name: 'Atlassian', url: 'https://mcp.atlassian.com/v2/mcp', auth: 'oauth',
+    hint: 'Jira and Confluence (Atlassian Rovo MCP v2). No token needed: you sign in with Atlassian when a session starts, from a card in the session. Leave "Allow writes" off for read-only search and reads.',
+  },
+  {
+    id: 'atlassian-v1', name: 'Atlassian v1', url: 'https://mcp.atlassian.com/v1/mcp', header: 'Authorization',
+    hint: 'Deprecated: Atlassian moves v1 to v2 on 1 March 2027. Value: "Basic " followed by base64 of "your-email:API-token". An Atlassian org admin must allow API-token authentication.',
+  },
 ];
 
 function IntegrationModal({ projectId, integration, onClose, onSave }) {
@@ -239,6 +247,7 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
       ? integration.headerNames.map((n) => ({ name: n, value: '', stored: true }))
       : [{ name: 'Authorization', value: '', stored: false }],
   );
+  const [auth, setAuth]                 = useState(integration?.auth ?? 'headers');
   const [personal, setPersonal]       = useState(integration?.personal ?? false);
   const [allowWrites, setAllowWrites] = useState(integration?.allowWrites ?? false);
   const [saving, setSaving]           = useState(false);
@@ -247,7 +256,8 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
   const usePreset = (p) => {
     setName(p.name);
     setUrl(p.url);
-    setHeaders([{ name: p.header, value: '', stored: false }]);
+    setAuth(p.auth === 'oauth' ? 'oauth' : 'headers');
+    setHeaders([{ name: p.header || 'Authorization', value: '', stored: false }]);
     setPresetHint(p.hint);
   };
 
@@ -259,7 +269,8 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
     if (!/^https:\/\//i.test(url.trim())) { setError('Server URL must start with https://'); return; }
     const cfg = {
       url: url.trim(),
-      headers: headers.filter((h) => h.name.trim() && (h.stored || h.value)).map((h) => ({ name: h.name.trim(), value: h.value })),
+      auth,
+      headers: auth === 'oauth' ? [] : headers.filter((h) => h.name.trim() && (h.stored || h.value)).map((h) => ({ name: h.name.trim(), value: h.value })),
       personal,
       allowWrites,
     };
@@ -311,6 +322,13 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
               <p className="field-hint">https:// only.</p>
             </div>
 
+            {auth === 'oauth' && (
+              <p className="field-hint" role="status">
+                No secret needed. You sign in when a session starts: a card in the session walks you through it.
+              </p>
+            )}
+
+            {auth !== 'oauth' && (
             <fieldset className="field">
               <legend>Secret headers</legend>
               <p className="field-hint">
@@ -346,6 +364,7 @@ function IntegrationModal({ projectId, integration, onClose, onSave }) {
                 </button>
               )}
             </fieldset>
+            )}
 
             <fieldset className="field">
               <legend>Who can use it</legend>

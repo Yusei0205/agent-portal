@@ -149,3 +149,17 @@ describe('code map routes', () => {
     } finally { await cleanup(); }
   });
 });
+
+describe('graphify progress', () => {
+  it('reads the extraction counts and the later stages from graphify output', async () => {
+    const { parseGraphifyLine } = await import('../server/agent/runner-graph.ts');
+    assert.deepEqual(parseGraphifyLine('  AST cache: 0/542 files served from cache (0%); 542 to extract'), { stage: 'extract', percent: 5, detail: 'Reading the code: 542 files to read' });
+    const mid = parseGraphifyLine('  AST extraction: 271/542 uncached files (50%) [12 workers]')!;
+    assert.equal(mid.stage, 'extract');
+    assert.equal(Math.round(mid.percent), 38);
+    assert.match(mid.detail, /271 of 542 files/);
+    assert.equal(parseGraphifyLine('  AST extraction: 542/542 uncached files (100%) [12 workers]')!.stage, 'build');
+    assert.equal(parseGraphifyLine('[graphify watch] Rebuilt: 7123 nodes, 23558 edges, 168 communities')!.percent, 98);
+    assert.equal(parseGraphifyLine('Updating code graph in . (no LLM needed)...'), null);
+  });
+});

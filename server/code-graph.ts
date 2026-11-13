@@ -39,13 +39,26 @@ export interface CodeGraphStatus {
   bytes?: number;
   /** True when the full graph is saved for sessions to download. */
   stored?: boolean;
+  /** While running: how far the build has got over all its stages (0-100), the stage and what it is doing. Older runners send none. */
+  percent?: number;
+  stage?: string;
+  detail?: string;
+  /** When the runner last reported; a build that stops reporting is given up as lost. */
+  updated?: string;
   /** When the saved graph was built; sessions compare it to know whether to download again. */
   version?: string;
 }
 
 const statusKey = (repoId: string): string => `codegraph.${repoId}`;
-/** A build is given up as lost when its job has not reported for this long (a Lambda ends after 15 minutes). */
-const STALE_MS = 40 * 60_000;
+/**
+ * A build is given up as lost when its job has stopped reporting. A runner that sends progress reports every few seconds, so
+ * 20 minutes of silence means it is gone; an older runner reports nothing during the build, so it is judged by how long the
+ * build may take at all (the job runtime's limit plus the time to clone and save).
+ */
+const STALE_REPORTING_MS = 20 * 60_000;
+const STALE_SILENT_MS = 75 * 60_000;
+/** On the job runtime a build may run this long (the runner accepts up to 60 minutes); on Lambda it must end within 15 minutes. */
+export const GRAPH_MAX_MS = { jobRuntime: 55 * 60_000, lambda: 10 * 60_000 } as const;
 const URL_LIFETIME_SECONDS = 2 * 60 * 60;
 
 export const graphObjectKey = (projectId: string, repoId: string): string => `code-graphs/${projectId}/${repoId.replace(/[^A-Za-z0-9_-]/g, '_')}.json.gz`;
@@ -55,7 +68,9 @@ export function getCodeGraphStatus(repoId: string): CodeGraphStatus | null {
   if (!raw) return null;
   try {
     const st = JSON.parse(raw) as CodeGraphStatus;
-    if (st.state === 'running' && Date.now() - new Date(st.at).getTime() > STALE_MS) {
+    const reporting = st.percent != null;
+    const since = reporting ? (st.updated ?? st.at) : st.at;
+    if (st.state === 'running' && Date.now() - new Date(since).getTime() > (reporting ? STALE_REPORTING_MS : STALE_SILENT_MS)) {
       return { ...st, state: 'failed', message: 'The build did not finish (its job was lost). Try again.' };
     }
     return st;
@@ -140,13 +155,18 @@ async function buildJob(projectId: string, repoId: string): Promise<void> {
   const p = presigner();
   const key = graphObjectKey(projectId, repoId);
   const putUrl = p ? await p.presign(key, 'put', URL_LIFETIME_SECONDS).catch(() => undefined) : undefined;
-  // On the job runtime a build may run as long as it needs (up to the runner's own limit); on Lambda it must end within 15 minutes.
-  const maxMs = isJobRunner() ? 25 * 60_000 : 10 * 60_000;
+  const maxMs = isJobRunner() ? GRAPH_MAX_MS.jobRuntime : GRAPH_MAX_MS.lambda;
   const payload: Record<string, unknown> = { mode: 'build-graph', runId: `graph-${randomUUID()}`, repos: [specs[0]], ...(putUrl ? { putUrl } : {}), maxMs };
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new Error('timed out')), maxMs + 5 * 60_000);
   let lastSave = 0;
+  let progress = null as { percent: number; stage: string; detail: string } | null;
+  const startedAt = before?.state === 'running' ? before.at : now();
+  const running = (message: string): CodeGraphStatus => ({
+    state: 'running', at: startedAt, updated: now(), message: message.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 200),
+    ...(progress ? { percent: progress.percent, stage: progress.stage, detail: progress.detail } : {}), ...keep,
+  });
   let result: Record<string, unknown> | null = null;
   let failedClone = '';
   let streamError = '';
@@ -157,7 +177,13 @@ async function buildJob(projectId: string, repoId: string): Promise<void> {
         if (ev.text.startsWith('Could not clone')) failedClone = ev.text;
         if (!ev.text.startsWith('Work dir:') && Date.now() - lastSave > 2000) {
           lastSave = Date.now();
-          await save(repoId, { state: 'running', at: before?.state === 'running' ? before.at : now(), message: ev.text.replace(/https?:\/\/[^@\s]*@/g, 'https://').slice(0, 200), ...keep });
+          await save(repoId, running(ev.text));
+        }
+      } else if (ev.type === 'graph-progress' && typeof ev.percent === 'number') {
+        progress = { percent: Math.max(progress?.percent ?? 0, Math.min(100, ev.percent)), stage: String(ev.stage ?? ''), detail: String(ev.detail ?? '').slice(0, 160) };
+        if (Date.now() - lastSave > 2000) {
+          lastSave = Date.now();
+          await save(repoId, running(progress.detail));
         }
       } else if (ev.type === 'result') {
         result = ev;
