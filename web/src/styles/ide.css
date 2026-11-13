@@ -382,10 +382,7 @@
 /* ── Status bar ──────────────────────────────────────── */
 .ide-status-bar {
   display: flex;
-  align-items: center;
-  gap: 0;
-  padding: 0 8px;
-  height: 26px;
+  flex-direction: column;
   background: var(--panel);
   border-top: 1px solid var(--line);
   color: var(--ink-2);
@@ -1412,7 +1409,8 @@
 .idb-live-shield { position: absolute; inset: 0; z-index: 5; cursor: not-allowed; }
 
 /* Status bar chips */
-.ide-status-bar { gap: 6px; padding: 0 10px; }
+.ide-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; padding: 0 10px; min-height: 26px; }
+.ide-status-row--usage { border-top: 1px solid var(--line); }
 .ide-status-engine {
   font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em;
   padding: 1px 6px; border-radius: 4px;

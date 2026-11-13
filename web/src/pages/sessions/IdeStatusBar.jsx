@@ -311,6 +311,7 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
 
   return (
     <div className="ide-status-bar" aria-label="Status bar" role="status">
+      <div className="ide-status-row">
       {engineLabel && <span className="ide-status-engine">{engineLabel}</span>}
       {bar?.signIn && (
         <span
@@ -362,12 +363,22 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
           {session?.credits > 0 && <> + {formatCreditsSmall(session.credits)} Kiro credits</>}
         </span>
       )}
+      <span className="ide-status-spacer" />
+      {approvalMode && (
+        <span className={`ide-status-pill${approvalMode === 'trust-all' ? ' ide-status-pill--warn' : ''}`}>
+          {approvalMode === 'trust-all' ? 'trust all tools' : 'ask before tool use'}
+        </span>
+      )}
+      </div>
+      {/* Plan limits and credits get a row of their own, so they are never cut off on a long first row. */}
+      {bar && (
+        <div className="ide-status-row ide-status-row--usage" aria-label="Usage">
       {limits?.available && limits.credits?.remaining != null && (
         <span className="ide-status-chip" title={`Credits left on your ${limits.plan ?? ''} account`.replace('  ', ' ')}>
           <span className="ide-status-key">left</span> {formatAmount(limits.credits.remaining)}{limits.credits.limit != null && <> / {formatAmount(limits.credits.limit)}</>}
         </span>
       )}
-      {limits?.available && limits.windows.slice(0, 2).map((w) => (
+      {limits?.available && limits.windows.slice(0, 4).map((w) => (
         <span
           key={w.id}
           className="ide-status-chip ide-status-ctx"
@@ -378,11 +389,7 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
         </span>
       ))}
       {bar && <UsageButton bar={bar} limits={limits} />}
-      <span className="ide-status-spacer" />
-      {approvalMode && (
-        <span className={`ide-status-pill${approvalMode === 'trust-all' ? ' ide-status-pill--warn' : ''}`}>
-          {approvalMode === 'trust-all' ? 'trust all tools' : 'ask before tool use'}
-        </span>
+        </div>
       )}
     </div>
   );
