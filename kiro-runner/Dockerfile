@@ -82,6 +82,11 @@ RUN curl -LsSf https://cli.kiro.dev/install > /tmp/kiro-install.sh && \
 # Python itself comes from the image too (UV_PYTHON_PREFERENCE=system), so uv does not fetch an interpreter.
 COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_PREFERENCE=system
+# graphify: a code knowledge graph of each cloned repository, built after the clone (server/agent/runner-graph.ts) and queried
+# by the agent with `graphify query|path|explain`. Pinned; installed into /opt so the non-root user can run it. Local only (no key, no network at run time).
+ENV UV_PYTHON_DOWNLOADS=never UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin
+RUN uv tool install graphifyy==0.9.108 && chmod -R a+rX /opt/uv-tools && command -v graphify
+
 
 # The draw.io MCP server (lookups for icon diagrams) and its shape index, pinned, so a run needs no network for them.
 # Same versions as the portal's Icon diagrams pack (server/drawio-pack.ts). Run as an integration named "drawio".
