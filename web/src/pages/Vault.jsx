@@ -425,6 +425,9 @@ function ProjectScopeTab({ projectId }) {
   const [error, setError] = useState(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [importProgress, setImportProgress] = useState(null);
 
   // Current folder path (null = root)
   const [currentFolder, setCurrentFolder] = useState(() => readFolderFromHash());
@@ -533,26 +536,30 @@ function ProjectScopeTab({ projectId }) {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
+  const uploadOne = async (file, folder) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('scope', 'project');
+    if (folder) fd.append('folder', folder);
+    const res = await fetch(`/api/projects/${projectId}/vault/upload`, {
+      method: 'POST',
+      headers: { 'x-requested-with': 'agent-portal' },
+      body: fd,
+      credentials: 'same-origin',
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Upload failed (${res.status})`);
+    }
+  };
+
   const upload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
     setError(null);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('scope', 'project');
-      if (currentFolder) fd.append('folder', currentFolder);
-      const res = await fetch(`/api/projects/${projectId}/vault/upload`, {
-        method: 'POST',
-        headers: { 'x-requested-with': 'agent-portal' },
-        body: fd,
-        credentials: 'same-origin',
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Upload failed (${res.status})`);
-      }
+      await uploadOne(file, currentFolder);
       fileRef.current.value = '';
       await load();
     } catch (err) {
@@ -560,6 +567,62 @@ function ProjectScopeTab({ projectId }) {
     } finally {
       setUploading(false);
     }
+  };
+
+  // Import a whole directory: each file keeps its relative path under the current folder.
+  const importFolder = async (e) => {
+    const picked = Array.from(e.target.files || []).filter((f) => f.name !== '.DS_Store' && f.name !== 'Thumbs.db');
+    e.target.value = '';
+    if (picked.length === 0) return;
+    setUploading(true);
+    setError(null);
+    let done = 0;
+    const failed = [];
+    setImportProgress({ done: 0, total: picked.length });
+    const queue = [...picked];
+    const worker = async () => {
+      while (queue.length) {
+        const f = queue.shift();
+        const rel = f.webkitRelativePath || f.name;
+        const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+        const folder = [currentFolder, dir].filter(Boolean).join('/') || null;
+        try {
+          await uploadOne(f, folder);
+        } catch {
+          failed.push(rel);
+        }
+        done += 1;
+        setImportProgress({ done, total: picked.length });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, picked.length) }, worker));
+    setImportProgress(null);
+    setUploading(false);
+    const ok = picked.length - failed.length;
+    toast(
+      failed.length
+        ? `Imported ${ok} of ${picked.length} files; ${failed.length} failed (first: ${failed[0]})`
+        : `Imported ${ok} file${ok === 1 ? '' : 's'}`,
+      failed.length ? 'error' : 'ok',
+    );
+    await load();
+  };
+
+  // A folder only exists in the vault once it holds a file, so a new one is opened empty, ready for uploads.
+  const createFolder = (e) => {
+    e.preventDefault();
+    const name = newFolderName
+      .split(/[\\/]+/)
+      .map((s) => s.replace(/[^\w\s.()-]/g, ' ').replace(/\s+/g, ' ').trim())
+      .filter((s) => s && s !== '.' && s !== '..')
+      .join('/');
+    if (!name) return;
+    const path = [currentFolder, name].filter(Boolean).join('/');
+    if (path.split('/').length > 8) { setError('Folders can be at most 8 levels deep.'); return; }
+    setNewFolderName('');
+    setShowNewFolder(false);
+    navigateToFolder(path);
+    toast('Folder opened — it is saved once you upload a file into it', 'info');
   };
 
   const downloadAll = () => {
@@ -717,6 +780,27 @@ function ProjectScopeTab({ projectId }) {
           />
         </label>
 
+        <label className={`btn btn-secondary${uploading ? ' disabled' : ''}`}>
+          <Icon name="folder" size={14} />
+          {importProgress ? `Importing ${importProgress.done}/${importProgress.total}…` : 'Import folder'}
+          <input
+            type="file"
+            style={{ display: 'none' }}
+            onChange={importFolder}
+            disabled={uploading}
+            aria-label="Import a folder into project vault"
+            // eslint-disable-next-line react/no-unknown-property
+            webkitdirectory=""
+            directory=""
+            multiple
+          />
+        </label>
+
+        <button type="button" className="btn btn-secondary" onClick={() => setShowNewFolder((v) => !v)} disabled={uploading}>
+          <Icon name="folder" size={14} />
+          New folder
+        </button>
+
         {(childFolders.length > 0 || filesHere.length > 0) && (
           <button type="button" className="btn btn-secondary" onClick={downloadAll}>
             <Icon name="zip-download" size={14} />
@@ -724,6 +808,23 @@ function ProjectScopeTab({ projectId }) {
           </button>
         )}
       </div>
+
+      {showNewFolder && (
+        <form className="actions-row" onSubmit={createFolder}>
+          <input
+            type="text"
+            className="input"
+            autoFocus
+            placeholder={currentFolder ? `New folder inside ${currentFolder}` : 'New folder name, e.g. Reports/2026'}
+            aria-label="New folder name"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            style={{ maxWidth: 320 }}
+          />
+          <button type="submit" className="btn btn-primary" disabled={!newFolderName.trim()}>Create</button>
+          <button type="button" className="btn btn-ghost" onClick={() => { setShowNewFolder(false); setNewFolderName(''); }}>Cancel</button>
+        </form>
+      )}
 
       {/* Empty state */}
       {childFolders.length === 0 && filesHere.length === 0 && (
