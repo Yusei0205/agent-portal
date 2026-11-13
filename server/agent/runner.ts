@@ -53,7 +53,8 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import type { RunFinalizeStats } from '../repositories/sessions.ts';
 import { usesDynamoDb } from '../repositories/backend.ts';
 import { registerBackgroundWrite } from '../http.ts';
-import { buildRunnerMcpServers, parseSessionIntegrations } from './runner-integrations.ts';
+import { buildRunnerMcpServers, parseSessionIntegrations, pendingMcpSignIns } from './runner-integrations.ts';
+import { mcpSignedIn, mcpSkippedForRun } from '../mcp-oauth.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
 import { eventPrompt, goalPrompt } from '../workflows/session-commands.ts';
 import { runCheckSteps } from './runner-checks.ts';
@@ -512,6 +513,19 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
       );
       if (loopState?.checks?.length) agentRun.runnerChecks = loopState.checks;
+      // MCP servers that need the person to sign in: show a card in the session and wait (up to 10 minutes) until they
+      // have, or choose to continue without it. The sign-in itself happens through /api/projects/:id/integrations/:iid/oauth/*.
+      for (const p of await pendingMcpSignIns(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null).catch(() => [])) {
+        emitRunEvent(runId, agentRun.projectId, workflowId, 'mcp-auth-required', { integrationId: p.id, name: p.name, projectId: agentRun.projectId, workflowId });
+        let outcome: 'signed-in' | 'skipped' | 'expired' = 'expired';
+        for (const deadline = Date.now() + 10 * 60_000; Date.now() < deadline && !ctrl.signal.aborted;) {
+          if (agentRun.credentialOwnerId && await mcpSignedIn(p.id, agentRun.credentialOwnerId).catch(() => false)) { outcome = 'signed-in'; break; }
+          if (await mcpSkippedForRun(runId, p.id).catch(() => false)) { outcome = 'skipped'; break; }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        if (ctrl.signal.aborted) throw new DOMException('Run cancelled', 'AbortError');
+        emitRunEvent(runId, agentRun.projectId, workflowId, 'mcp-auth-resolved', { integrationId: p.id, name: p.name, outcome });
+      }
       agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null)
         .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
       // Small files go inline; larger ones (up to 50 MB, cloud only) as download links the runner fetches.

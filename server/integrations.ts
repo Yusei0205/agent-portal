@@ -9,7 +9,7 @@
  *   POST   /api/projects/:id/integrations/:iid/test  — test connection
  */
 
-import { router, sendJson } from './http.ts';
+import { router, sendJson, requireCookieAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { one } from './db.ts';
 import { generateId, now, str } from './util.ts';
@@ -21,6 +21,7 @@ import { McpHttpClient, MCP_LIMITS, isReadOnlyTool } from './agent/runner-mcp.ts
 import { readHttpConfig } from './agent/runner-integrations.ts';
 import type { HttpIntegrationConfig } from './agent/runner-integrations.ts';
 import { assertNotBlocked } from './testing/ssrf.ts';
+import { startMcpSignIn, finishMcpSignIn, mcpSignedIn, mcpSignOut, skipMcpForRun } from './mcp-oauth.ts';
 
 import { getMemberRow, getProjectRow } from './project-access.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -49,6 +50,7 @@ function safeIntegration(i: IntegrationRecord) {
   return {
     ...base,
     url: cfg?.url ?? '',
+    auth: cfg?.auth === 'oauth' ? 'oauth' : 'headers',
     headerNames: Object.keys(cfg?.headers ?? {}),
     allowWrites: cfg?.allowWrites === true,
     personal: cfg?.personal === true,
@@ -78,8 +80,9 @@ function httpConfigFromBody(body: Record<string, unknown>, existing: HttpIntegra
   if (parsed.username || parsed.password) throw new Error('Put credentials in a secret header, not in the URL');
   if (url.length > 2000) throw new Error('Server URL is too long');
 
+  const auth = body.auth === undefined ? (existing?.auth ?? 'headers') : (body.auth === 'oauth' ? 'oauth' : 'headers');
   const headers: Record<string, string> = {};
-  const list = Array.isArray(body.headers) ? body.headers : [];
+  const list = auth === 'oauth' ? [] : Array.isArray(body.headers) ? body.headers : [];
   if (list.length > MCP_LIMITS.headers) throw new Error(`At most ${MCP_LIMITS.headers} headers`);
   for (const h of list as Array<Record<string, unknown>>) {
     const name = String(h?.name ?? '').trim();
@@ -93,6 +96,7 @@ function httpConfigFromBody(body: Record<string, unknown>, existing: HttpIntegra
   }
   return {
     url,
+    auth,
     headers,
     allowWrites: body.allowWrites === undefined ? existing?.allowWrites === true : body.allowWrites === true,
     personal: body.personal === undefined ? existing?.personal === true : body.personal === true,
@@ -104,6 +108,10 @@ type TestOutcome = NonNullable<HttpIntegrationConfig['lastTest']> & { total: num
 /** Connects to the server, lists its tools and says how many an agent would be offered. */
 async function testHttpIntegration(cfg: HttpIntegrationConfig): Promise<TestOutcome> {
   const at = new Date().toISOString();
+  if (cfg.auth === 'oauth') {
+    // Nothing to connect with until a person signs in (when a session starts, or from the card).
+    return { ok: true, message: 'Sign-in required. You will be asked to sign in when a session starts.', at, tools: 0, total: 0, offered: 0 };
+  }
   try {
     await assertNotBlocked(cfg.url, false);
     const tools = await new McpHttpClient(cfg.url, cfg.headers ?? {}).listTools();
@@ -131,7 +139,11 @@ export function registerIntegrationRoutes(): void {
   router.get('/api/projects/:id/integrations', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!await requireProjectAccess(req, res, req.params.id)) return;
     const items = await getIntegrationsRepository().listByProject(req.params.id);
-    sendJson(res, 200, { integrations: items.filter((i) => visibleTo(i, req.user!.id)).map(safeIntegration) });
+    const visible = items.filter((i) => visibleTo(i, req.user!.id)).map(safeIntegration);
+    const integrations = await Promise.all(visible.map(async (i) => (
+      'auth' in i && i.auth === 'oauth' ? { ...i, signedIn: await mcpSignedIn(i.id, req.user!.id).catch(() => false) } : i
+    )));
+    sendJson(res, 200, { integrations });
   });
 
   // POST /api/projects/:id/integrations
@@ -237,4 +249,48 @@ export function registerIntegrationRoutes(): void {
 
     sendJson(res, 200, { ok: true, note: 'Manual verification required' });
   });
+
+  // ── OAuth sign-in (integrations with auth = 'oauth') ─────────────────────────
+  async function oauthIntegration(req: PortalRequest, res: PortalResponse) {
+    if (!await requireProjectAccess(req, res, req.params.id)) return null;
+    const item = await getIntegrationsRepository().getByIdAndProject(req.params.iid, req.params.id);
+    const cfg = item?.type === 'http' ? readHttpConfig(item.config_enc) : null;
+    if (!item || !cfg || cfg.auth !== 'oauth' || !visibleTo(item, req.user!.id)) {
+      sendJson(res, 404, { error: 'This integration does not use sign-in.' });
+      return null;
+    }
+    return { item, cfg };
+  }
+
+  router.post('/api/projects/:id/integrations/:iid/oauth/start', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
+    const found = await oauthIntegration(req, res);
+    if (!found) return;
+    sendJson(res, 200, await startMcpSignIn(req.user!.id, found.item.id, found.cfg.url));
+  }));
+
+  router.post('/api/projects/:id/integrations/:iid/oauth/finish', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
+    const found = await oauthIntegration(req, res);
+    if (!found) return;
+    const body = (req.body ?? {}) as { flow?: unknown; pasted?: unknown };
+    res.setHeader('Cache-Control', 'no-store');
+    await finishMcpSignIn(req.user!.id, found.item.id, body.flow, body.pasted);
+    sendJson(res, 200, { ok: true });
+  }));
+
+  router.post('/api/projects/:id/integrations/:iid/oauth/sign-out', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
+    const found = await oauthIntegration(req, res);
+    if (!found) return;
+    await mcpSignOut(found.item.id, req.user!.id);
+    sendJson(res, 200, { ok: true });
+  }));
+
+  // "Continue without it": the run that is waiting for this sign-in starts without the server.
+  router.post('/api/projects/:id/integrations/:iid/oauth/skip', requireCookieAuth(async (req: PortalRequest, res: PortalResponse) => {
+    const found = await oauthIntegration(req, res);
+    if (!found) return;
+    const runId = String(((req.body ?? {}) as { runId?: unknown }).runId ?? '');
+    if (!/^[\w-]{1,80}$/.test(runId)) { sendJson(res, 400, { error: 'runId is required' }); return; }
+    await skipMcpForRun(runId, found.item.id);
+    sendJson(res, 200, { ok: true });
+  }));
 }

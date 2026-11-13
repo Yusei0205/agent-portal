@@ -13,10 +13,13 @@ import { getIntegrationsRepository } from '../repositories/integrations.ts';
 import { parseMcpServers, type McpServerSpec } from './runner-mcp.ts';
 import { workspaceMcpSpec } from '../google-workspace.ts';
 import { gmailMcpSpec } from '../gmail.ts';
+import { mcpAccessToken } from '../mcp-oauth.ts';
 
 /** What is stored (encrypted) for a remote MCP integration. */
 export interface HttpIntegrationConfig {
   url: string;
+  /** 'oauth' = the person signs in (server/mcp-oauth.ts); the run gets a short-lived bearer token. Default 'headers'. */
+  auth?: 'headers' | 'oauth';
   /** Secret headers, e.g. Authorization. Never sent back to a browser. */
   headers?: Record<string, string>;
   allowWrites?: boolean;
@@ -67,6 +70,25 @@ export function encodeSessionIntegrations(ids: string[] | null): string {
   return ids === null ? '[]' : JSON.stringify({ ids });
 }
 
+/** The OAuth integrations a run would use that this person has not signed in to yet. */
+export async function pendingMcpSignIns(
+  projectId: string | null,
+  userId: string | null,
+  selected: string[] | null = null,
+): Promise<Array<{ id: string; name: string }>> {
+  if (!projectId || !userId) return [];
+  const out: Array<{ id: string; name: string }> = [];
+  for (const it of await getIntegrationsRepository().listByProject(projectId)) {
+    if (it.enabled !== 1 || it.type !== 'http') continue;
+    if (selected && !selected.includes(it.id)) continue;
+    const cfg = readHttpConfig(it.config_enc);
+    if (!cfg || cfg.auth !== 'oauth') continue;
+    if (cfg.personal && it.created_by !== userId) continue;
+    if (!(await mcpAccessToken(it.id, userId).catch(() => null))) out.push({ id: it.id, name: it.name });
+  }
+  return out;
+}
+
 export async function buildRunnerMcpServers(
   projectId: string | null,
   userId: string | null,
@@ -83,7 +105,15 @@ export async function buildRunnerMcpServers(
     const cfg = readHttpConfig(it.config_enc);
     if (!cfg) continue;
     if (cfg.personal && it.created_by !== userId) continue;
-    specs.push({ name: serverName(it.name, taken), url: cfg.url, headers: cfg.headers ?? {}, allowWrites: cfg.allowWrites === true });
+    const name = serverName(it.name, taken);
+    let headers = cfg.headers ?? {};
+    if (cfg.auth === 'oauth') {
+      // Signed-in people get a fresh short-lived token; anyone else runs without this server.
+      const token = userId ? await mcpAccessToken(it.id, userId).catch(() => null) : null;
+      if (!token) continue;
+      headers = { ...headers, Authorization: `Bearer ${token}` };
+    }
+    specs.push({ name, url: cfg.url, headers, allowWrites: cfg.allowWrites === true });
   }
   // The person's own Google Drive, Docs, Sheets and Slides, when they have connected Google. The runner only gets a
   // short-lived token for this portal, never a Google credential.
