@@ -53,6 +53,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
   const [name, setName] = useState('');
   const [docType, setDocType] = useState('overview');
   const [audience, setAudience] = useState('');
+  const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [attachmentIds, setAttachmentIds] = useState([]);
@@ -74,6 +75,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
         name:          name.trim(),
         docType,
         audience:      audience.trim() || undefined,
+        description:   description.trim() || undefined,
         ...ai,
         sources:       ctx,
         attachmentIds: attachmentIds.length ? attachmentIds : undefined,
@@ -113,6 +115,18 @@ function NewDocModal({ projectId, onClose, onCreated }) {
                 <option key={t.id} value={t.id}>{t.label}</option>
               ))}
             </select>
+          </div>
+
+          <div className="field">
+            <label htmlFor="nd-desc">Description (optional)</label>
+            <textarea
+              id="nd-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={2000}
+              rows={4}
+              placeholder="Add context for the agent: what the document is for, what to focus on or leave out, anything it should know."
+            />
           </div>
 
           <div className="field">
