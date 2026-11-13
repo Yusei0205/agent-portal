@@ -152,7 +152,7 @@ export async function waitForRepoPrep(workflowId: string, maxMs = 90_000): Promi
   }
 }
 
-async function prepare(workflowId: string): Promise<void> {
+async function prepare(workflowId: string, onStatus?: (text: string) => void): Promise<void> {
   const w = await getSessionsRepository().getWorkflowById(workflowId);
   const rt = w ? runtimeFor(String(w.engine)) : null;
   if (!w || !rt) return;
@@ -188,7 +188,12 @@ async function prepare(workflowId: string): Promise<void> {
       if (ev.type === 'status' && typeof ev.text === 'string' && !ev.text.startsWith('Work dir:')) {
         last = ev.text;
         if (ev.text.startsWith('Could not')) problems.push(ev.text);
-        if (applyPrepStatus(items, ev.text)) await save(workflowId, { state: 'running', at: now(), message: 'Preparing repositories…', items });
+        const rowChanged = applyPrepStatus(items, ev.text);
+        // The steps after the clone (the code graph, which can take minutes on a big repository) leave every row at 100%:
+        // show what the runner is doing, so a long wait does not look stuck.
+        const stepText = /^(Building|Updating) the code graph of /.test(ev.text) ? ev.text : null;
+        if (stepText) onStatus?.(stepText);
+        if (rowChanged || stepText) await save(workflowId, { state: 'running', at: now(), message: stepText ?? 'Preparing repositories…', items });
       }
       if (ev.type === 'progress' && typeof ev.name === 'string') {
         const it = items.find((i) => i.name === ev.name);
@@ -297,7 +302,7 @@ export async function ensureReposPrepared(
 
   if (!reposAreReady(getRepoPrep(workflowId), names)) {
     say('Cloning the repositories before the run starts…');
-    try { await prepare(workflowId); } catch (e: unknown) { say(`Could not clone the repositories first: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`); }
+    try { await prepare(workflowId, say); } catch (e: unknown) { say(`Could not clone the repositories first: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`); }
   }
   st = getRepoPrep(workflowId);
   if (st?.problem) return st.problem;

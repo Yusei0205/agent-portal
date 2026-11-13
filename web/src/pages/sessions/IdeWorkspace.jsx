@@ -741,6 +741,7 @@ export function ComposerBar({
               <button type="button" className="btn btn-sm" onClick={retryClone} disabled={retrying}>{retrying ? 'Starting…' : 'Try again'}</button>
             </div>
           )}
+          {cloning && prep?.message && prep.message !== 'Preparing repositories…' && <div className="muted" style={{ fontSize: '0.78rem', paddingTop: 2 }}>{prep.message} (large repositories can take a few minutes)</div>}
           {cloning && <div className="muted" style={{ fontSize: '0.74rem', paddingTop: 2 }}>You can type once the repositories are ready. Git only reports the file total near the end (checking out files); before that the count is of objects.</div>}
         </div>
       )}
