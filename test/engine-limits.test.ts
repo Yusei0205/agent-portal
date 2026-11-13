@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCodexLimits, parseClaudeUsage, parseKiroUsage } from '../server/engine-limits.ts';
+import { parseCodexLimits, parseClaudeUsage, parseClaudeRateHeaders, parseKiroUsage } from '../server/engine-limits.ts';
 
 describe('parseCodexLimits', () => {
   it('reads the 5-hour and weekly windows and the plan', () => {
@@ -72,5 +72,21 @@ describe('parseKiroUsage', () => {
   it('never goes below zero credits remaining and tolerates an empty answer', () => {
     assert.equal(parseKiroUsage({ usageBreakdownList: [{ currentUsage: 1200, usageLimit: 1000 }] }).credits?.remaining, 0);
     assert.equal(parseKiroUsage({}).available, false);
+  });
+});
+
+describe('parseClaudeRateHeaders', () => {
+  it('reads the 5-hour and weekly windows from a Messages answer', () => {
+    const h = new Headers({
+      'anthropic-ratelimit-unified-5h-utilization': '0.42', 'anthropic-ratelimit-unified-5h-reset': '1800000000',
+      'anthropic-ratelimit-unified-7d-utilization': '0.1', 'anthropic-ratelimit-unified-7d-reset': '1800500000',
+      'anthropic-ratelimit-unified-status': 'allowed',
+    });
+    const out = parseClaudeRateHeaders(h);
+    assert.equal(out.available, true);
+    assert.deepEqual(out.windows.map((w) => [w.label, w.usedPercent, w.resetsAt]), [['5-hour', 42, 1800000000], ['Weekly', 10, 1800500000]]);
+  });
+  it('is unavailable when the headers are missing', () => {
+    assert.equal(parseClaudeRateHeaders(new Headers({ 'content-type': 'x' })).available, false);
   });
 });
