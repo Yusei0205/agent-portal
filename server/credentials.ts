@@ -1171,9 +1171,18 @@ export function registerCredentialRoutes(): void {
     if (credentialId && !isBedrockRuntimeChoice(engine, credentialId)) {
       const own = await getCredentialsRepository().getByIdAndUser(credentialId, req.user!.id);
       if (!own || own.engine !== engine) throw new HttpError(404, 'Sign-in not found');
-      // A Claude plan token cannot be checked without starting a run.
+      // A Claude plan token cannot list models, so it is checked with a real one-turn call.
       if (own.mode === 'subscription_token') {
-        sendJson(res, 200, { ok: true, checked: false, message: 'Saved. A Claude plan token can only be confirmed by a run, so the first session will tell.' });
+        let token = '';
+        try { token = own.secret_enc ? decrypt(String(own.secret_enc), config.secretKey) : ''; } catch { /* reported below */ }
+        if (!token) {
+          sendJson(res, 200, { ok: false, checked: true, message: 'This sign-in has no token stored. Add it again.' });
+          return;
+        }
+        const { checkClaudePlanToken } = await import('./claude-plan-check.ts');
+        const { planCheckModelIds } = await import('./models.ts');
+        const r = await checkClaudePlanToken(token, planCheckModelIds());
+        sendJson(res, 200, { ok: r.ok !== false, checked: r.ok !== null, message: r.message });
         return;
       }
     }

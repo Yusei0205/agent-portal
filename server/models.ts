@@ -391,6 +391,12 @@ const SUBSCRIPTION_MODELS: EngineModelEntry[] = [
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
 ];
 
+/** The plan's models, cheapest first (Haiku, then Sonnet, then Opus), for testing a plan token with the least spend. */
+export function planCheckModelIds(): string[] {
+  const rank = (id: string): number => (id.includes('haiku') ? 0 : id.includes('sonnet') ? 1 : 2);
+  return SUBSCRIPTION_MODELS.map((m, i) => ({ id: m.id, i })).sort((a, b) => rank(a.id) - rank(b.id) || a.i - b.i).map((m) => m.id);
+}
+
 // ── Core listing logic ────────────────────────────────────────────────────────
 
 /**

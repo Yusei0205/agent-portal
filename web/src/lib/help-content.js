@@ -534,7 +534,7 @@ export const HELP_TOPICS = [
       },
       {
         heading: 'Test a sign-in',
-        items: ['Press **Test** on a sign-in to make a real call with it. It says how many models it can use, or why it failed. A Claude plan token can only be confirmed by a run.'],
+        items: ['Press **Test** on a sign-in to make a real call with it. It says how many models it can use, or why it failed. A Claude plan token cannot list models, so Test sends it one tiny message to Claude (a few tokens from your plan) and says whether Claude answered.'],
       },
       {
         heading: 'Editing',
