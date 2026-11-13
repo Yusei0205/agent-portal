@@ -27,6 +27,7 @@ import { getSetting } from './settings.ts';
 import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
 import { sessionSignIn } from './session-sign-in.ts';
+import { getSessionLimits } from './engine-limits.ts';
 import { presignLiveViewUrl, setAutomationStream } from './browser-live-view.ts';
 
 // ── Idle stop ─────────────────────────────────────────────────────────────────
@@ -265,6 +266,18 @@ export function registerSessionLifecycleRoutes(): void {
         thisTurn,
         thisSession,
       });
+    },
+  );
+
+  // GET /api/projects/:id/workflows/:wid/limits
+  // What is left of the plan the session runs on (5-hour / weekly windows, Kiro credits). Separate from the status bar
+  // because it calls out to the engine's provider and is cached for a minute. { limits: EngineLimits | null }
+  router.get(
+    '/api/projects/:id/workflows/:wid/limits',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const w = await requireProjectAndWorkflow(req, res, req.params.id, req.params.wid);
+      if (!w) return;
+      sendJson(res, 200, { limits: await getSessionLimits(w) });
     },
   );
 

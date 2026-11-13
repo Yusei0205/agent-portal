@@ -27,6 +27,135 @@ function formatTokens(n) {
 
 const SWITCHABLE = new Set(['kiro', 'claude-code', 'codex']);
 
+const meterClass = (pct) => (pct >= 85 ? ' is-high' : pct >= 65 ? ' is-mid' : '');
+
+/** "in 2h 10m", "in 3d 4h", or "now" for a Unix-seconds reset time. */
+function formatReset(unixSeconds) {
+  if (!unixSeconds) return null;
+  const mins = Math.round((unixSeconds * 1000 - Date.now()) / 60000);
+  if (mins <= 0) return 'now';
+  if (mins < 60) return `in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `in ${hours}h ${mins % 60}m`;
+  return `in ${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+const formatAmount = (n) => (n == null ? '—' : Number.isInteger(n) ? String(n) : n.toFixed(2));
+
+function Meter({ pct }) {
+  return (
+    <span className="ide-status-meter" aria-hidden="true">
+      <span className={`ide-status-meter-fill${meterClass(pct)}`} style={{ width: `${Math.max(2, Math.min(100, pct))}%` }} />
+    </span>
+  );
+}
+
+/** One row of the usage panel: a label, a value and an optional meter. */
+function UsageRow({ label, value, pct, hint }) {
+  return (
+    <div className="ide-usage-row">
+      <span className="ide-usage-label">{label}</span>
+      <span className="ide-usage-value">{value}</span>
+      {typeof pct === 'number' && <Meter pct={pct} />}
+      {hint && <span className="ide-usage-hint">{hint}</span>}
+    </div>
+  );
+}
+
+/**
+ * The "usage" button and its panel: what this session has used (this turn, in total) and what is left of the plan it runs
+ * on (5-hour and weekly windows, Kiro credits). The plan part is omitted, with the reason, when the engine cannot report it.
+ */
+function UsageButton({ bar, limits }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const menuRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (!rootRef.current?.contains(e.target) && !menuRef.current?.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const r = rootRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 328)), bottom: Math.max(8, window.innerHeight - r.top + 6) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open]);
+
+  const credits = bar?.usageUnit === 'credits';
+  const turn = bar?.thisTurn;
+  const session = bar?.thisSession;
+  const fmt = credits ? formatCreditsSmall : formatCostSmall;
+  const pick = (u) => (credits ? u?.credits : u?.costUsd) ?? null;
+  const showTokens = bar?.engine !== 'kiro' && (session?.inputTokens || turn?.inputTokens);
+
+  return (
+    <span className="ide-status-pick" ref={rootRef}>
+      <button
+        type="button"
+        className="ide-status-chip ide-status-chip-btn"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title="Usage of this session and what is left of your plan"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="ide-status-key">usage</span> <span aria-hidden="true">▾</span>
+      </button>
+      {open && pos && createPortal(
+        <div className="ide-status-menu ide-usage-panel" ref={menuRef} role="dialog" aria-label="Usage" style={{ left: pos.left, bottom: pos.bottom }}>
+          <div className="ide-usage-head">This session</div>
+          <UsageRow label={credits ? 'Credits this turn' : 'Cost this turn'} value={fmt(pick(turn))} />
+          <UsageRow label={credits ? 'Credits in total' : 'Cost in total'} value={fmt(pick(session))} />
+          {showTokens && (
+            <UsageRow label="Tokens in total" value={`${formatTokens(session?.inputTokens ?? null)} in / ${formatTokens(session?.outputTokens ?? null)} out`} />
+          )}
+          {typeof bar?.contextPercent === 'number' && (
+            <UsageRow label="Context window" value={`${bar.contextPercent}% used`} pct={bar.contextPercent} />
+          )}
+
+          <div className="ide-usage-head">{limits?.plan ? `Your plan · ${limits.plan}` : 'Your plan'}</div>
+          {limits === undefined && <div className="ide-status-menu-note">Loading…</div>}
+          {limits === null && <div className="ide-status-menu-note">This session's sign-in has no plan limits.</div>}
+          {limits?.credits && (
+            <UsageRow
+              label="Credits left"
+              value={limits.credits.limit != null && limits.credits.remaining != null
+                ? `${formatAmount(limits.credits.remaining)} of ${formatAmount(limits.credits.limit)}`
+                : formatAmount(limits.credits.remaining)}
+              hint={limits.credits.resetsAt ? `resets ${formatReset(limits.credits.resetsAt)}` : null}
+            />
+          )}
+          {limits?.windows?.map((w) => (
+            <UsageRow
+              key={w.id}
+              label={`${w.label} limit`}
+              value={`${Math.round(100 - w.usedPercent)}% left`}
+              pct={w.usedPercent}
+              hint={`${Math.round(w.usedPercent)}% used${w.resetsAt ? ` · resets ${formatReset(w.resetsAt)}` : ''}`}
+            />
+          ))}
+          {limits && limits.note && (
+            <div className={`ide-status-menu-note${limits.available ? '' : ' ide-usage-unavailable'}`}>{limits.note}</div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </span>
+  );
+}
+
 /**
  * The model chip. In a Kiro, Claude Code or Codex session it opens a list of the models the session can use;
  * choosing one is the same as typing "/model <name>" (the portal checks access and records the change in the chat).
@@ -158,6 +287,20 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
     return () => clearInterval(t);
   }, [load]);
 
+  // What is left of the plan: undefined while loading, null when the engine has none. It is a call to the provider, so it
+  // is asked less often than the bar and again when the session is switched.
+  const [limits, setLimits] = useState(undefined);
+  useEffect(() => {
+    let live = true;
+    const loadLimits = () => api.get(`/api/projects/${projectId}/workflows/${workflowId}/limits`)
+      .then((d) => { if (live) setLimits(d.limits ?? null); })
+      .catch(() => { if (live) setLimits((prev) => (prev === undefined ? null : prev)); });
+    setLimits(undefined);
+    loadLimits();
+    const t = setInterval(loadLimits, 60_000);
+    return () => { live = false; clearInterval(t); };
+  }, [projectId, workflowId, engine]);
+
   const isKiro   = bar?.engine === 'kiro';
   const turn     = bar?.thisTurn;
   const session  = bar?.thisSession;
@@ -219,6 +362,22 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
           {session?.credits > 0 && <> + {formatCreditsSmall(session.credits)} Kiro credits</>}
         </span>
       )}
+      {limits?.available && limits.credits?.remaining != null && (
+        <span className="ide-status-chip" title={`Credits left on your ${limits.plan ?? ''} account`.replace('  ', ' ')}>
+          <span className="ide-status-key">left</span> {formatAmount(limits.credits.remaining)}{limits.credits.limit != null && <> / {formatAmount(limits.credits.limit)}</>}
+        </span>
+      )}
+      {limits?.available && limits.windows.slice(0, 2).map((w) => (
+        <span
+          key={w.id}
+          className="ide-status-chip ide-status-ctx"
+          title={`${Math.round(100 - w.usedPercent)}% of your ${w.label.toLowerCase()} limit is left${w.resetsAt ? `; resets ${formatReset(w.resetsAt)}` : ''}`}
+        >
+          <span className="ide-status-key">{w.label.toLowerCase()}</span> {Math.round(100 - w.usedPercent)}% left
+          <Meter pct={w.usedPercent} />
+        </span>
+      ))}
+      {bar && <UsageButton bar={bar} limits={limits} />}
       <span className="ide-status-spacer" />
       {approvalMode && (
         <span className={`ide-status-pill${approvalMode === 'trust-all' ? ' ide-status-pill--warn' : ''}`}>

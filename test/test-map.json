@@ -1591,6 +1591,17 @@
       ],
       "smokeIds": []
     },
+    "engine-limits": {
+      "description": "What is left of the plan a session runs on (Codex and Claude 5-hour and weekly windows, Kiro credits), shown in the session status bar.",
+      "sources": [
+        "server/engine-limits.ts",
+        "web/src/pages/sessions/IdeStatusBar.jsx"
+      ],
+      "tests": [
+        "test/engine-limits.test.ts"
+      ],
+      "smokeIds": []
+    },
     "slash-commands": {
       "description": "Slash commands in an engine session: the portal's own (/tools, /rename, /cost, /status, /help), /init and /review, and the owner's commands and skills from Agent setup.",
       "sources": [

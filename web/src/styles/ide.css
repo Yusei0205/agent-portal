@@ -1440,3 +1440,11 @@
 .ide-status-meter-fill { display: block; height: 100%; background: var(--ok); border-radius: 3px; }
 .ide-status-meter-fill.is-mid { background: var(--warn, #d9a441); }
 .ide-status-meter-fill.is-high { background: var(--danger); }
+.ide-usage-panel { min-width: 300px; padding: 6px 4px; }
+.ide-usage-head { padding: 6px 8px 2px; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
+.ide-usage-head:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ide-usage-row { display: grid; grid-template-columns: 1fr auto 46px; align-items: center; column-gap: 8px; row-gap: 1px; padding: 3px 8px; font-size: 0.8rem; }
+.ide-usage-label { color: var(--ink-2); }
+.ide-usage-value { color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+.ide-usage-hint { grid-column: 1 / -1; color: var(--ink-3); font-size: 0.7rem; }
+.ide-usage-unavailable { color: var(--ink-3); }
