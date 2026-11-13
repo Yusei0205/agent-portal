@@ -23,6 +23,7 @@ import { runKiroRun, kiroWorkspaceRoot } from './run.js';
 import { runKiroLogin } from './login.js';
 import { runKiroListModels } from './list-models.js';
 import { runPrepareRepos } from './prepare.js';
+import { runBuildGraph } from './graph-build.js';
 import { validateFinalizeRequest, runFinalize } from '../shared/runner-finalize-run.js';
 import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace, flushWorkspace } from '../shared/runner-snapshot.js';
 import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
@@ -273,6 +274,8 @@ const server = http.createServer(async (req, res) => {
         await runKiroListModels(payload, emit);
       } else if (payload.mode === 'prepare-repos') {
         await runPrepareRepos(payload, emit);
+      } else if (payload.mode === 'build-graph') {
+        await runBuildGraph(payload, emit);
       } else if (payload.mode === 'kiro-login') {
         loginOutcomes.set(payload.runId, { state: 'pending', at: Date.now() });
         const recording = (event: Record<string, unknown>): void => {

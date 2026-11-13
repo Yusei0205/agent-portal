@@ -1,7 +1,8 @@
 /**
  * Code map: a searchable, viewable graph of each repository's code.
  *
- * The runner builds the graph with graphify after every clone (see agent/runner-graph.ts) and sends it back as one
+ * The runner builds the graph with graphify when someone presses Build graph on the Repositories page (see code-graph.ts and
+ * agent/runner-graph-build.ts) and sends it back as one
  * `code-graph` event (gzip + base64). The portal keeps the latest graph per repository next to the project's other files
  * (durable, so it survives a restart) and answers searches and neighbourhood questions itself, so the browser never has
  * to download a whole graph.
@@ -24,6 +25,7 @@ import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getMemberRow, getProjectRow } from './project-access.ts';
 import { badRequest, notFound, now } from './util.ts';
 import type { CompactGraph, CompactNode } from './agent/runner-graph.ts';
+import { getCodeGraphStatus, graphBuildUnavailable } from './code-graph.ts';
 
 export const CODE_MAP_LIMITS = { nodes: 5000, links: 30_000, rawBytes: 32 * 1024 * 1024 } as const;
 
@@ -211,9 +213,9 @@ export function registerCodeMapRoutes(): void {
     const out = [];
     for (const r of repos) {
       const m = await load(projectId, String(r.id));
-      out.push({ id: r.id, name: r.name, hasMap: Boolean(m), builtAt: m?.meta.builtAt ?? null, nodes: m?.meta.nodes ?? 0, links: m?.meta.links ?? 0, truncated: m?.meta.truncated ?? false });
+      out.push({ id: r.id, name: r.name, hasMap: Boolean(m), builtAt: m?.meta.builtAt ?? null, nodes: m?.meta.nodes ?? 0, links: m?.meta.links ?? 0, truncated: m?.meta.truncated ?? false, graph: getCodeGraphStatus(String(r.id)) });
     }
-    sendJson(res, 200, { repos: out });
+    sendJson(res, 200, { repos: out, buildUnavailable: graphBuildUnavailable() });
   });
 
   router.get('/api/projects/:id/code-map/:repoId/overview', async (req: PortalRequest, res: PortalResponse) => {

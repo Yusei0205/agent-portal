@@ -986,6 +986,7 @@ function RepositoriesTab({ projectId, repos, setRepos, requestConfirm, toast }) 
               <strong>{repo.default_branch || 'not set'}</strong>
               <span className="muted"> — new sessions start from it. Open <em>Branches</em> to change it.</span>
             </p>
+            <RepoCodeGraph projectId={projectId} repo={repo} toast={toast} />
             {repo.progress ? (
               <RepoProgressBar repoName={repo.name} progress={repo.progress} />
             ) : (
@@ -1393,6 +1394,80 @@ const TABS = [
  * The project's repositories, as a panel of the Workspaces page: it loads its own list and brings its own
  * confirmation and toast shelf.
  */
+/**
+ * A repository's code graph: built once from here (the cloud runner clones the latest commit and runs graphify), then loaded
+ * by every session instead of each session building its own. See server/code-graph.ts.
+ * @param {{ projectId: string, repo: { id: string, name: string }, toast: Function }} props
+ */
+function RepoCodeGraph({ projectId, repo, toast }) {
+  const [state, setState] = useState(undefined); // undefined: loading; { status, unavailable }
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await api.get(`/api/projects/${projectId}/code-map/${repo.id}/graph-status`);
+      setState({ status: d.status ?? null, unavailable: d.unavailable ?? null });
+      return d.status ?? null;
+    } catch {
+      setState((prev) => prev ?? { status: null, unavailable: 'Could not read the code graph state.' });
+      return null;
+    }
+  }, [projectId, repo.id]);
+
+  useEffect(() => {
+    let live = true;
+    let timer = null;
+    const tick = async () => {
+      const st = await load();
+      if (live && st?.state === 'running') timer = setTimeout(tick, 4000);
+    };
+    tick();
+    return () => { live = false; if (timer) clearTimeout(timer); };
+  }, [load]);
+
+  const build = async () => {
+    setBusy(true);
+    try {
+      const d = await api.post(`/api/projects/${projectId}/code-map/${repo.id}/build`, {});
+      setState((prev) => ({ ...(prev ?? {}), status: d.status ?? null }));
+      // Poll while it runs.
+      const poll = async () => { const st = await load(); if (st?.state === 'running') setTimeout(poll, 4000); };
+      setTimeout(poll, 4000);
+    } catch (err) {
+      toast(err.message || 'Could not start the code graph build', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (state === undefined) return null;
+  const st = state.status;
+  const running = st?.state === 'running';
+  const canBuild = !state.unavailable;
+  return (
+    <p className="small" style={{ marginTop: '0.25em' }}>
+      <span className="muted">Code graph: </span>
+      {running && <strong>building… <span className="muted">{st.message}</span></strong>}
+      {!running && st?.state === 'ready' && (
+        <strong>
+          ready
+          <span className="muted"> · {Number(st.nodes ?? 0).toLocaleString('en-US')} items{st.version ? ` · built ${String(st.version).slice(0, 10)}` : ''}{st.commit ? ` · commit ${String(st.commit).slice(0, 7)}` : ''}</span>
+        </strong>
+      )}
+      {!running && st?.state === 'ready' && !st.stored && <span className="muted"> (in the Code map only: not saved for sessions{st.message ? `, ${st.message}` : ''})</span>}
+      {!running && st?.state === 'failed' && <span className="small" style={{ color: "var(--danger)" }}>failed: {st.message}</span>}
+      {!running && !st && <span className="muted">not built. Sessions read the code as usual.</span>}
+      {canBuild && (
+        <button type="button" className="btn btn-sm" style={{ marginLeft: '0.5em' }} onClick={build} disabled={busy || running}
+          aria-label={`${st?.state === 'ready' ? 'Update' : 'Build'} the code graph of ${repo.name}`}>
+          {running ? 'Building…' : st?.state === 'ready' ? 'Update graph' : st?.state === 'failed' ? 'Try again' : 'Build graph'}
+        </button>
+      )}
+      {!canBuild && !st && <span className="muted small"> {state.unavailable}</span>}
+    </p>
+  );
+}
+
 export function ProjectRepositories({ projectId }) {
   const [repos, setRepos] = useState(null);
   const [error, setError] = useState(null);

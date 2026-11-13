@@ -143,6 +143,14 @@ How it works: with `PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN` set (deploy context `cl
 - **Fix:** paste fresh keys in Workspaces → AWS (or update the Git connection under Workspaces → Repositories), then press **Try again** on the session, or retry the document or diagram. The reason is kept in the `repoprep.<workflowId>` setting (`problem` field).
 - **Check:** the setting's `items[].text` and `message`, and the runner's log `/aws/bedrock-agentcore/runtimes/agentPortal<Kiro|Claude>Harness-*`.
 
+### Code graphs: Build graph fails, or sessions have no graph
+- **How it works:** a repository's code graph is built once, from Workspaces → Repositories → **Build graph** (job `build-code-graph`, on the job runtime when it exists, else on Lambda with a 10-minute budget). The Kiro runner (`build-graph` mode) clones the latest commit, runs graphify for up to 25 minutes (10 on Lambda), saves the compact graph for the Code map and the full graph to S3 (`code-graphs/<projectId>/<repoId>.json.gz`). Sessions never build a graph: at clone time the portal gives the runner a presigned download link and the runner writes it to `repos/<name>/graphify-out/graph.json`.
+- **State:** the `codegraph.<repoId>` setting (`state`, `message`, `commit`, `nodes`, `version`). A build that has not reported for 40 minutes is shown as lost.
+- **"Code graphs are built by the cloud portal's runner":** `PORTAL_KIRO_AGENTCORE_RUNTIME_ARN` is not set (a local portal). **"need the portal's S3 storage":** the storage backend cannot make presigned links.
+- **Failed with "update the keys in Workspaces → AWS":** the clone was refused (expired AWS keys for a CodeCommit repository); fix the keys, press **Try again**.
+- **Failed with "graphify did not finish":** the repository is too big for the time budget. Sessions then read the code as usual. A failed build keeps the graph an earlier build saved.
+- **Needs the runner image:** the `build-graph` mode and the graph download are in the Kiro and Claude runner images (`node infra/scripts/deploy-harness.mjs`). A runner from before them answers `"mode" must be …` (build) or ignores the link (session).
+
 ### Claude runs but nothing changes / files missing afterwards
 - The agent works inside the AgentCore microVM (`/tmp/agent-sessions/<id>/work`), which is released after about 5 idle minutes. Files it writes there are not copied back to the portal yet; only the text, tool activity and cost come back.
 

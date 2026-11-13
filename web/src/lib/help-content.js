@@ -312,13 +312,13 @@ export const HELP_TOPICS = [
     summary: 'A searchable map of a repository\'s code: which functions, classes and files exist, and how they call and import each other. Agents use the same map to find the right code without reading everything.',
     sections: [
       { heading: 'What it is', items: [
-        'When a cloud session, a document or a diagram run clones a repository, the portal builds a **code graph** of it with graphify. It reads the code itself (no AI model, no network, nothing leaves the runner) and records every function, class and file as a point, and every call, import and inheritance as a line between two points. Points that belong together are grouped into **communities**.',
+        'The portal builds a **code graph** of a repository with graphify, when you press **Build graph** on the repository (**Workspaces › Repositories**). It reads the code itself (no AI model, no network, nothing leaves the runner) and records every function, class and file as a point, and every call, import and inheritance as a line between two points. Points that belong together are grouped into **communities**.',
         'Agents get the graph too: before searching they can run `graphify query "<question>"`, `graphify path "A" "B"` or `graphify explain "X"` inside the repository, and open only the files those point to. This makes answers faster and cheaper on large repositories.',
-        'The graph is rebuilt on every clone, so it follows the branch the run used. It is kept for the project so you can open it without starting a session.',
+        'It is built once, not in every session: a session just loads the saved graph, so it starts without waiting. A big repository can take several minutes to build. Press **Update graph** when the code has changed a lot; sessions use the new graph from their next clone.',
       ] },
       { heading: 'Open the Code map', steps: true, items: [
         'Open **Workspaces › Code map** (pick a project first) and choose a repository.',
-        'If the repository says **No code map yet**, start any session, document or diagram with that repository selected. The map appears after its clone finishes (usually within a minute or two).',
+        'If the repository says **No code map yet**, open **Workspaces › Repositories** and press **Build graph** on it. It shows **building…** with what it is doing, and **ready** when it is done (a few minutes for a big repository). Until then sessions read the code as usual.',
         'Type in the **search box** to find a function, class or file by name. Press a result to see it and what it connects to.',
       ] },
       { heading: 'Read the graph', rows: [
@@ -328,7 +328,7 @@ export const HELP_TOPICS = [
         ['Details', 'The side panel lists the connections of the selected item (calls, imports, contains) and the file and line to open.'],
       ] },
       { heading: 'Ask an agent to use it', items: [
-        'You do not need to do anything: sessions on a repository with a graph already tell the agent about it. You can also say it in a request, for example: "Use graphify to find where payments are refunded, then explain the flow."',
+        'You do not need to do anything: sessions on a repository with a saved graph already tell the agent about it. You can also say it in a request, for example: "Use graphify to find where payments are refunded, then explain the flow."',
         'Only code is mapped (functions, classes, imports, calls). Documents, comments and configuration are not part of it.',
       ] },
     ],

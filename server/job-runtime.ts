@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 /** Jobs that can outlast a Lambda invocation and need no person at the screen. Change with PORTAL_JOB_RUNTIME_JOBS. */
 export const DEFAULT_JOB_RUNTIME_JOBS = [
   'scan-estimate', 'scan-run', 'knowledge-process', 'knowledge-embed', 'test-run', 'test-generate',
-  'case-set-generate', 'case-set-generate-filtered', 'sim-ai-import',
+  'case-set-generate', 'case-set-generate-filtered', 'sim-ai-import', 'build-code-graph',
 ] as const;
 
 /** True inside the job runtime's container. */

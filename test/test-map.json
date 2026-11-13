@@ -472,11 +472,15 @@
       "description": "Code map — graphify code graph of each repository: runner build and upload, search, neighbourhood view",
       "sources": [
         "server/code-map.ts",
+        "server/code-graph.ts",
+        "server/agent/runner-graph-build.ts",
         "server/agent/runner-graph.ts",
         "web/src/pages/CodeMap.jsx",
         "web/src/lib/forceLayout.js"
       ],
       "tests": [
+        "test/code-graph.test.ts",
+        "test/code-graph-portal.test.ts",
         "test/code-map.test.ts",
         "test/runner-repos.test.ts"
       ],

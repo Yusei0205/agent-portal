@@ -36,6 +36,7 @@ import { registerVaultRoutes } from './vault.ts';
 import { registerOutputFileRoutes } from './output-files.ts';
 import { registerGeneratedDocRoutes } from './generated-docs.ts';
 import { registerCodeMapRoutes } from './code-map.ts';
+import { registerCodeGraphRoutes } from './code-graph.ts';
 import { registerPresentationRoutes } from './presentations.ts';
 import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
@@ -266,6 +267,7 @@ export async function startServer(
   registerOutputFileRoutes();
   registerGeneratedDocRoutes();
   registerCodeMapRoutes();
+  registerCodeGraphRoutes();
   registerPresentationRoutes();
   registerDocTemplateRoutes();
   registerReviewRoutes();

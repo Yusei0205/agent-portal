@@ -19,6 +19,8 @@ export async function buildRunnerRepos(
   repoIds: string[],
   projectId: string | null,
   notify: (text: string) => void,
+  /** `withGraph: false` leaves out the saved code graph (the build of that graph itself does not need it). */
+  opts: { withGraph?: boolean } = {},
 ): Promise<RunnerRepo[]> {
   if (!repoIds.length || !projectId) return [];
   const out: RunnerRepo[] = [];
@@ -47,11 +49,14 @@ export async function buildRunnerRepos(
     }
 
     rememberRunnerRepo(name, url, { repoId: String(id), projectId, repoName: String(repo.name ?? name) });
+    // The repository's saved code graph (built from the Repositories page), for the runner to load after the clone.
+    const graph = opts.withGraph === false ? null : await import('../code-graph.ts').then((m) => m.savedGraphFor(projectId, String(id))).catch(() => null);
     out.push({
       name,
       url,
       ...(repo.default_branch ? { branch: String(repo.default_branch) } : {}),
       env,
+      ...(graph ? { graph } : {}),
     });
   }
   return out;

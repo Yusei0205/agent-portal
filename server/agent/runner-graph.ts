@@ -119,6 +119,45 @@ function runUpdate(bin: string, repoDir: string, timeoutMs: number): Promise<{ c
   });
 }
 
+/** The commit a clone is at ('' when it cannot be read). */
+export function headCommit(repoDir: string): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', ['-c', `safe.directory=${repoDir}`, 'rev-parse', 'HEAD'], { cwd: repoDir, timeout: 10_000, windowsHide: true }, (err, stdout) => resolve(err ? '' : String(stdout).trim()));
+  });
+}
+
+const GRAPH_VERSION_FILE = '.portal-graph-version';
+/** The largest saved graph a session downloads (as gzip) and unpacks. */
+export const STORED_GRAPH_LIMITS = { gzipBytes: 64 * 1024 * 1024, rawBytes: 256 * 1024 * 1024 } as const;
+
+/**
+ * Puts the repository's saved code graph (built from the Repositories page) at `graphify-out/graph.json`, so the agent can
+ * query it. Nothing is built here. Skipped when that version is already in place. Never throws: without a graph the agent
+ * reads the code as usual.
+ */
+export async function loadStoredGraph(repoDir: string, name: string, graph: { url: string; version: string }, emit: Emit): Promise<void> {
+  try {
+    if (!fs.statSync(repoDir).isDirectory()) return;
+    const dir = path.join(repoDir, GRAPH_DIR);
+    const file = path.join(dir, 'graph.json');
+    try { if (fs.existsSync(file) && fs.readFileSync(path.join(dir, GRAPH_VERSION_FILE), 'utf8').trim() === graph.version) return; } catch { /* load it */ }
+    const res = await fetch(graph.url, { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) { emit({ type: 'status', text: `The saved code graph of ${name} could not be loaded (HTTP ${res.status}); the agent reads the code as usual.` }); return; }
+    if (Number(res.headers.get('content-length') ?? 0) > STORED_GRAPH_LIMITS.gzipBytes) { emit({ type: 'status', text: `The saved code graph of ${name} is too large to load; the agent reads the code as usual.` }); return; }
+    const packed = Buffer.from(await res.arrayBuffer());
+    if (packed.length > STORED_GRAPH_LIMITS.gzipBytes) { emit({ type: 'status', text: `The saved code graph of ${name} is too large to load; the agent reads the code as usual.` }); return; }
+    const raw = zlib.gunzipSync(packed, { maxOutputLength: STORED_GRAPH_LIMITS.rawBytes });
+    if (raw[0] !== 0x7b) { emit({ type: 'status', text: `The saved code graph of ${name} is not readable; the agent reads the code as usual.` }); return; }
+    excludeGraphFromGit(repoDir);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, raw);
+    fs.writeFileSync(path.join(dir, GRAPH_VERSION_FILE), graph.version);
+    emit({ type: 'status', text: `Code graph of ${name} loaded (built ${graph.version.slice(0, 10)}): repos/${name}/${GRAPH_DIR}/` });
+  } catch {
+    emit({ type: 'status', text: `The saved code graph of ${name} could not be loaded; the agent reads the code as usual.` });
+  }
+}
+
 /** Builds (or updates, which is quick when little changed) the graph of one cloned repository. Never throws. */
 export async function buildRepoGraph(
   repoDir: string,

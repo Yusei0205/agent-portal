@@ -93,7 +93,18 @@ export interface KiroPreparePayload {
   snapshot?: unknown;
 }
 
-export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload | KiroLoginStatusPayload | KiroPreparePayload;
+export interface KiroBuildGraphPayload {
+  mode: 'build-graph';
+  runId: string;
+  /** The one repository to build a code graph of (checked in graph-build.ts). */
+  repos: unknown[];
+  /** Where to save the full graph (a presigned URL); without it only the compact graph for the Code map is sent back. */
+  putUrl?: string;
+  /** Longest graphify may run, in milliseconds. */
+  maxMs?: number;
+}
+
+export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload | KiroLoginStatusPayload | KiroPreparePayload | KiroBuildGraphPayload;
 
 export type ValidationResult =
   | { ok: true; payload: KiroPayload }
@@ -114,8 +125,8 @@ export function validatePayload(raw: unknown): ValidationResult {
   const obj = raw as Record<string, unknown>;
 
   const mode = obj.mode;
-  if (mode !== 'kiro-run' && mode !== 'kiro-login' && mode !== 'kiro-list-models' && mode !== 'kiro-login-status' && mode !== 'prepare-repos') {
-    return err('"mode" must be "kiro-run", "kiro-login", "kiro-list-models", "kiro-login-status" or "prepare-repos"');
+  if (mode !== 'kiro-run' && mode !== 'kiro-login' && mode !== 'kiro-list-models' && mode !== 'kiro-login-status' && mode !== 'prepare-repos' && mode !== 'build-graph') {
+    return err('"mode" must be "kiro-run", "kiro-login", "kiro-list-models", "kiro-login-status", "prepare-repos" or "build-graph"');
   }
 
   if (typeof obj.runId !== 'string' || !obj.runId.trim()) {
@@ -127,6 +138,16 @@ export function validatePayload(raw: unknown): ValidationResult {
 
   if (mode === 'kiro-login-status') {
     return { ok: true, payload: { mode: 'kiro-login-status', runId: (obj.runId as string).trim() } };
+  }
+  if (mode === 'build-graph') {
+    if (!Array.isArray(obj.repos) || obj.repos.length !== 1) return err('"repos" must hold exactly one repository');
+    if (obj.putUrl !== undefined && (typeof obj.putUrl !== 'string' || !obj.putUrl.startsWith('https://') || obj.putUrl.length > 4096 || /\s/.test(obj.putUrl))) {
+      return err('"putUrl" must be an https URL');
+    }
+    if (obj.maxMs !== undefined && (typeof obj.maxMs !== 'number' || !Number.isFinite(obj.maxMs) || obj.maxMs < 10_000 || obj.maxMs > 60 * 60_000)) {
+      return err('"maxMs" must be between 10 seconds and 60 minutes');
+    }
+    return { ok: true, payload: { mode: 'build-graph', runId: (obj.runId as string).trim(), repos: obj.repos as unknown[], ...(obj.putUrl ? { putUrl: obj.putUrl as string } : {}), ...(obj.maxMs ? { maxMs: obj.maxMs as number } : {}) } };
   }
   if (mode === 'prepare-repos') {
     if (!Array.isArray(obj.repos)) return err('"repos" must be an array');

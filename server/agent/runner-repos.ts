@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { buildRepoGraphs, type GraphEvent } from './runner-graph.ts';
+import { loadStoredGraph, type GraphEvent } from './runner-graph.ts';
 
 export interface RunnerRepo {
   /** Folder name under repos/. */
@@ -24,6 +24,8 @@ export interface RunnerRepo {
   branch?: string;
   /** Git authentication settings, GIT_* variables only. */
   env?: Record<string, string>;
+  /** The repository's saved code graph (built from the Repositories page): a download link and its version. */
+  graph?: { url: string; version: string };
 }
 
 export const RUNNER_REPO_LIMITS = {
@@ -51,7 +53,7 @@ export function parseRunnerRepos(
     if (typeof item !== 'object' || item === null || Array.isArray(item)) return { ok: false, error: 'each repo must be an object' };
     const r = item as Record<string, unknown>;
     for (const key of Object.keys(r)) {
-      if (!['name', 'url', 'branch', 'env'].includes(key)) return { ok: false, error: `unknown field in repo: "${key}"` };
+      if (!['name', 'url', 'branch', 'env', 'graph'].includes(key)) return { ok: false, error: `unknown field in repo: "${key}"` };
     }
     const name = r.name;
     if (typeof name !== 'string' || !NAME_RE.test(name) || name.length > RUNNER_REPO_LIMITS.nameChars || name.includes('..')) {
@@ -92,7 +94,15 @@ export function parseRunnerRepos(
         if (!isHttp && !isEmptyHelper) return { ok: false, error: 'repo.env may only set http.* git options' };
       }
     }
-    repos.push({ name, url, ...(branch ? { branch } : {}), ...(env ? { env } : {}) });
+    let graph: { url: string; version: string } | undefined;
+    if (r.graph !== undefined && r.graph !== null) {
+      const g = r.graph as Record<string, unknown>;
+      if (typeof g !== 'object' || Array.isArray(g)) return { ok: false, error: 'repo.graph must be an object' };
+      if (typeof g.url !== 'string' || !g.url.startsWith('https://') || g.url.length > 4096 || /\s/.test(g.url)) return { ok: false, error: 'repo.graph.url must be an https URL' };
+      if (typeof g.version !== 'string' || g.version.length > 100) return { ok: false, error: 'repo.graph.version must be a short string' };
+      graph = { url: g.url, version: g.version };
+    }
+    repos.push({ name, url, ...(branch ? { branch } : {}), ...(env ? { env } : {}), ...(graph ? { graph } : {}) });
   }
   return { ok: true, repos };
 }
@@ -260,7 +270,13 @@ export async function cloneRunnerRepos(
   repos: RunnerRepo[],
   workDir: string,
   emit: (event: GraphEvent) => void,
-  opts: { persistRoot?: string | null; homeDir?: string | null; onProgress?: (u: { name: string; phase: string; percent: number; detail: string; done?: boolean }) => void } = {},
+  opts: {
+    persistRoot?: string | null;
+    homeDir?: string | null;
+    onProgress?: (u: { name: string; phase: string; percent: number; detail: string; done?: boolean }) => void;
+    /** Clone only the latest commit (a code graph needs no history). */
+    shallow?: boolean;
+  } = {},
 ): Promise<string[]> {
   const done: string[] = [];
   const reposDir = path.join(workDir, 'repos');
@@ -293,7 +309,7 @@ export async function cloneRunnerRepos(
     }
     fs.mkdirSync(reposDir, { recursive: true });
     emit({ type: 'status', text: `Cloning ${repo.name}${repo.branch ? ` @ ${repo.branch}` : ''}…` });
-    const args = ['clone', opts.onProgress ? '--progress' : '--quiet',
+    const args = ['clone', opts.onProgress ? '--progress' : '--quiet', ...(opts.shallow ? ['--depth', '1'] : []),
       ...(repo.branch ? ['--branch', repo.branch] : []), repo.url, dest];
     const onProgress = opts.onProgress;
     const reader = onProgress ? makeGitProgressReader((u) => onProgress({ name: repo.name, ...u })) : undefined;
@@ -349,7 +365,9 @@ export async function cloneRunnerRepos(
     try { trustFoldersForAgent(opts.homeDir, trusted); } catch { /* the agent can still read the files */ }
   }
   if (done.length > 0) emit({ type: 'status', text: `Repositories available at: ${done.map((n) => `repos/${n}/`).join(', ')}` });
-  // A code graph per repository for the agent to query (only when the image has graphify; see runner-graph.ts).
-  if (done.length > 0) await buildRepoGraphs(reposDir, done, emit);
+  // A session never builds a code graph (that can take minutes and is the same for every session). It uses the one saved
+  // from the Repositories page, when there is one (see runner-graph.ts and server/code-graph.ts).
+  const withGraph = repos.filter((r) => r.graph && ready.has(r.name));
+  if (withGraph.length > 0) await Promise.all(withGraph.map((r) => loadStoredGraph(path.join(reposDir, r.name), r.name, r.graph!, emit)));
   return done;
 }
