@@ -66,6 +66,22 @@ async function invokeSelf(payload: Record<string, unknown>): Promise<void> {
 }
 
 /**
+ * A run that may ask a person to approve a tool (the session is not set to trust all tools) has to stay where that
+ * person's answer can reach it: the approval is held in the memory of the process running the turn. Runs that need
+ * no approval (trusted sessions, and every Create document or diagram run) can go to the job runtime.
+ */
+async function needsPersonAtScreen(name: string, args: Record<string, unknown>): Promise<boolean> {
+  if (name !== 'execute-run') return false;
+  try {
+    const { getSessionsRepository } = await import('./repositories/sessions.ts');
+    const w = await getSessionsRepository().getWorkflowById(String(args.workflowId ?? ''));
+    return !(w && Number(w.trust_tools) === 1);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Start a registered job without waiting for it. On Lambda this makes a separate invocation; if that call
  * fails the job runs inline so the work is not lost (it then finishes within this request's lifetime).
  */
@@ -73,7 +89,7 @@ export async function runInBackground(name: string, args: Record<string, unknown
   if (!handlers.has(name)) throw new Error(`Unknown background job: ${name}`);
   // A long job goes to the job runtime (no 15-minute limit, no Lambda slot). If that cannot be reached, a Lambda
   // invocation below still runs it.
-  if (runsOnJobRuntime(name) && process.env.PORTAL_ORIGIN_SECRET) {
+  if (runsOnJobRuntime(name) && process.env.PORTAL_ORIGIN_SECRET && !(await needsPersonAtScreen(name, args))) {
     try {
       await startOnJobRuntime(name, args, process.env.PORTAL_ORIGIN_SECRET);
       return;

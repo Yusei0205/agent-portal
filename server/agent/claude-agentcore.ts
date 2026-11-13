@@ -21,6 +21,7 @@ import { persistFile } from '../durable-files.ts';
 import { snapshotAccess } from './runner-snapshot-access.ts';
 import { agentCoreSessionId } from './agentcore-session.ts';
 import { waitForRepoPrep } from './repo-prep.ts';
+import { recordHostTimeLimit } from './host-limit.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 
 export interface ClaudeAgentCoreOpts {
@@ -139,7 +140,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   const ac = new AbortController();
   const merged = signal ? mergeSignals([signal, ac.signal]) : ac.signal;
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; ac.abort(new Error('AgentCore run timed out')); }, timeoutMs);
+  const timer = setTimeout(() => {
+    timedOut = true;
+    // Record why first: the abort reaches the run as an error that would otherwise read as "Cancelled".
+    void recordHostTimeLimit(ctx, opts.runId, timeoutMs).finally(() => ac.abort(new Error('AgentCore run timed out')));
+  }, timeoutMs);
 
   let finalizeCheck = false;
   if (opts.repos?.length && ctx.run?.workflowId && ctx.run.projectId) {

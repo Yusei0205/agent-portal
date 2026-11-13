@@ -53,6 +53,7 @@ import { config } from '../config.ts';
 import type { RunContext } from './types.ts';
 import { getSettings } from '../settings.ts';
 import { ApprovalRelay, isApprovalRequest, type ControlSender } from './agentcore-bridge.ts';
+import { recordHostTimeLimit } from './host-limit.ts';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -649,7 +650,8 @@ export async function runKiroViaAgentCore(
   let timedOut = false;
   const timeoutTimer = setTimeout(() => {
     timedOut = true;
-    ac.abort(new Error('AgentCore run timed out'));
+    // Record why first: the abort below reaches the run as an error that would otherwise read as "Cancelled".
+    void recordHostTimeLimit(ctx, opts.runId, timeoutMs).finally(() => ac.abort(new Error('AgentCore run timed out')));
   }, timeoutMs);
   const repoChanges: Array<{ repo: string; base: string; commits: number; files: number }> = [];
 
@@ -836,6 +838,8 @@ export async function runKiroViaAgentCore(
     }
     } finally {
       signal?.removeEventListener('abort', onCancel);
+      // The portal's time limit ended the stream: tell the runner to stop too, so it does not keep working unseen.
+      if (timedOut) void send({ mode: 'cancel', runId: opts.runId }).catch(() => { /* the stream is closing anyway */ });
     }
   } finally {
     clearTimeout(timeoutTimer);

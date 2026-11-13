@@ -293,6 +293,19 @@ setRunLifecycleHook(async (workflowId, runId, event) => {
  * (diagram, generated_doc, presentation) that references this workflow.
  * This runs fire-and-forget so it never blocks the runner.
  */
+/** Why the latest run of a generated document, diagram or presentation did not finish, in a sentence the page can show. */
+export function describeRunFailure(run: { stop_reason?: unknown; error?: unknown } | null | undefined): string {
+  const stop = String(run?.stop_reason ?? '').trim();
+  const error = String(run?.error ?? '').trim();
+  if (stop) return `Generation stopped: ${stop}. Try again, or choose a smaller scope.`.slice(0, 400);
+  if (error) return `Generation failed: ${error}`.slice(0, 400);
+  return 'Generation failed';
+}
+
+async function failureReason(workflowId: string): Promise<string> {
+  try { return describeRunFailure(await getLatestRunRow(workflowId)); } catch { return 'Generation failed'; }
+}
+
 async function handleArtifactLifecycle(
   workflowId: string,
   event: 'start' | 'done' | 'failed' | 'cancelled',
@@ -340,16 +353,17 @@ async function handleArtifactLifecycle(
       }).catch(() => { /* best effort */ });
     }
   } else {
-    // failed or cancelled — mark artifacts as failed
+    // failed or cancelled — mark artifacts as failed, with the reason the run recorded (a time limit, for example)
     try {
+      const reason = await failureReason(workflowId);
       if (diagram) {
-        await getDiagramRepository().update(String(diagram.id), { status: 'error', error: 'Generation failed', pending_workflow_id: null });
+        await getDiagramRepository().update(String(diagram.id), { status: 'error', error: reason, pending_workflow_id: null });
       }
       if (gdoc) {
-        await getGeneratedDocRepository().update(String(gdoc.id), { status: 'failed', error: 'Generation failed' });
+        await getGeneratedDocRepository().update(String(gdoc.id), { status: 'failed', error: reason });
       }
       if (pres && pres.status === 'generating') {
-        await getPresentationRepository().update(String(pres.id), { status: 'failed', error: 'Generation failed' });
+        await getPresentationRepository().update(String(pres.id), { status: 'failed', error: reason });
       }
     } catch { /* best effort */ }
   }

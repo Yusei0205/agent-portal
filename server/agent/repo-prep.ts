@@ -254,6 +254,57 @@ export async function prepareReposBeforeRun(workflowId: string): Promise<string 
   return null;
 }
 
+/** True when the last preparation left every one of `names` ready on the runner. */
+export function reposAreReady(st: RepoPrepState | null, names: string[]): boolean {
+  if (!st || st.state !== 'done' || st.problem) return false;
+  const items = st.items ?? [];
+  return names.every((n) => items.some((i) => i.name === n && i.state === 'done'));
+}
+
+/**
+ * Before a cloud run starts: make sure the session's repositories are on the runner, cloning them now (and waiting for a
+ * clone already going) instead of inside the run. The run's clock then starts after the clone, a refused sign-in is
+ * reported up front, and the agent starts with the code in place. Returns the problem the person has to fix (a refused
+ * sign-in), or null when the run may go on (everything is ready, or a failure that the runner may still get past).
+ */
+export async function ensureReposPrepared(
+  workflowId: string,
+  names: string[],
+  say: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<RepoPrepProblem | null> {
+  const w = await getSessionsRepository().getWorkflowById(workflowId);
+  if (!w || !runtimeFor(String(w.engine)) || names.length === 0) return null;
+  if (reposAreReady(getRepoPrep(workflowId), names)) return null;
+
+  // A preparation already going (started when the repositories were attached): wait for it.
+  const until = Date.now() + 16 * 60_000;
+  let st = getRepoPrep(workflowId);
+  let waited = false;
+  if (st?.state === 'running' && Date.now() - new Date(st.at).getTime() < 17 * 60_000) {
+    waited = true;
+    say('Waiting for the repositories to finish cloning…');
+    while (Date.now() < until && !signal?.aborted) {
+      await new Promise((r) => setTimeout(r, 2_000));
+      st = getRepoPrep(workflowId);
+      if (!st || st.state !== 'running') break;
+    }
+  }
+  if (signal?.aborted) return null;
+  // The preparation we waited for ended on a refused sign-in: cloning again would be refused the same way.
+  // (An older failure is not reused: the person may have fixed the keys since, so that case clones again below.)
+  if (waited && getRepoPrep(workflowId)?.problem) return getRepoPrep(workflowId)!.problem!;
+
+  if (!reposAreReady(getRepoPrep(workflowId), names)) {
+    say('Cloning the repositories before the run starts…');
+    try { await prepare(workflowId); } catch (e: unknown) { say(`Could not clone the repositories first: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`); }
+  }
+  st = getRepoPrep(workflowId);
+  if (st?.problem) return st.problem;
+  if (st && !reposAreReady(st, names)) say(st.message || 'Some repositories could not be cloned first; the run will try again.');
+  return null;
+}
+
 registerBackgroundJob('prepare-repos', async (a) => {
   const id = String(a.workflowId);
   try {

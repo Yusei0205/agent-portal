@@ -258,6 +258,7 @@
         "server/repositories/vault-files-sqlite.ts",
         "server/repositories/vault-files-dynamodb.ts",
         "web/src/lib/session-title.js",
+        "server/agent/host-limit.ts",
         "web/src/pages/sessions/SessionList.jsx",
         "web/src/pages/sessions/SessionLive.jsx",
         "web/src/pages/sessions/SessionsShell.jsx",
@@ -278,6 +279,7 @@
         "web/src/styles/sessions.css"
       ],
       "tests": [
+        "test/run-limit-clone-first.test.ts",
         "test/clone-failure-explained.test.ts",
         "test/create-clone-first.test.ts",
         "test/session-title.test.ts",

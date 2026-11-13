@@ -26,7 +26,9 @@ import { one, insert } from '../db.ts';
 import type { Row } from '../db.ts';
 import { getProjectSlug } from '../project-access.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
-import { generateId, now } from '../util.ts';
+import { generateId, now, HttpError } from '../util.ts';
+import { isJobRunner } from '../job-runtime.ts';
+import { ensureReposPrepared } from './repo-prep.ts';
 import { emit, emitGlobal, publishRunEvent } from '../events.ts';
 import { loadRunPermissions, evaluateCommand } from '../guardrails.ts';
 import { getSettings } from '../settings.ts';
@@ -88,7 +90,8 @@ export function notifyDashboard(_projectId: string | null): void {
 
 /** On AWS Lambda, a run lives inside one invocation, which ends after 15 minutes. */
 function onLambda(): boolean {
-  return Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+  // The job runtime sets AWS_LAMBDA_FUNCTION_NAME only to take the cloud paths; it has no 15-minute limit.
+  return Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) && !isJobRunner();
 }
 
 /** The run's stop reason when the portal process ended during it (abortAllRuns). */
@@ -417,11 +420,14 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   const ctrl = registerRun(runId);
   // Visual automations can be cancelled by a different Lambda invocation.
   let checkingAutomationStop = false;
-  const automationStopTimer = workflow.kind === 'automation' ? setInterval(() => {
+  // A run on the job runtime lives on another machine than the request that presses Stop, so it watches the session's
+  // durable state too: Stop (POST .../cancel) pauses the session, and nothing else pauses it while a run is going.
+  const onJobRuntime = isJobRunner();
+  const automationStopTimer = (workflow.kind === 'automation' || onJobRuntime) ? setInterval(() => {
     if (checkingAutomationStop || ctrl.signal.aborted) return;
     checkingAutomationStop = true;
     void repo.getWorkflowById(workflowId).then((current) => {
-      if (!current || current.stop_reason === 'automation_stopped') ctrl.abort();
+      if (!current || current.stop_reason === 'automation_stopped' || (onJobRuntime && current.status === 'paused')) ctrl.abort();
     }).catch(() => { /* retry the durable flag on the next poll */ }).finally(() => { checkingAutomationStop = false; });
   }, 2000) : null;
   automationStopTimer?.unref();
@@ -515,6 +521,18 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       if (specs.length > 0) {
         agentRun.runnerRepos = specs;
         availableRepoNames = specs.map((s) => s.name);
+        // Clone them before the run's clock starts, so a long clone does not use up the turn's time (a 4-minute clone
+        // is 4 of the 14 minutes a cloud turn has), and a refused sign-in is reported instead of starting an agent
+        // that cannot see the code.
+        if (agentRun.engine !== 'codex') {
+          const problem = await ensureReposPrepared(
+            workflowId, specs.map((r) => r.name),
+            (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
+            ctrl.signal,
+          );
+          if (ctrl.signal.aborted) throw new DOMException('Run cancelled', 'AbortError');
+          if (problem) throw new HttpError(400, problem.text);
+        }
       }
     } else {
       availableRepoNames = await populateRepoWorkDirs(

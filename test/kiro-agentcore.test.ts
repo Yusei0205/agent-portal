@@ -560,6 +560,26 @@ describe('AgentCore — run timeout', () => {
     }
     assert.ok(threw, 'Expected timeout error');
   });
+
+  it('records "time limit reached" on the run and tells the session, instead of a bare cancel', async () => {
+    _setAgentCoreInvokerOverride(async function* (_arn, _sid, _payload, signal) {
+      // Like the real connection: the abort of the portal's timer reaches the run as an AbortError.
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+      yield { type: 'text', text: 'never' } as AgentCoreSSEEvent;
+    });
+
+    const td = makeTestData(cfg);
+    const { ctx, events } = await makeCtx(td.runId, td.workflowId, td.projectId, td.workDir, cfg);
+    await assert.rejects(() => runKiroViaAgentCore(ctx, { runtimeArn: FAKE_ARN, runId: td.runId, prompt: 'x', token: SAMPLE_TOKEN, credentialId: null, expectedCiphertext: null }));
+
+    const run = getDb().prepare('SELECT stop_reason FROM p6_runs WHERE id = ?').get(td.runId) as { stop_reason?: string } | undefined;
+    assert.match(String(run?.stop_reason), /^time limit reached \(\d+ minutes?\)$/);
+    const said = events.find((e) => e.type === 'status' && /Time limit reached/.test(String(e.payload.text)));
+    assert.ok(said, 'the session is told why it stopped');
+    assert.match(String(said!.payload.text), /Send another message to continue/);
+  });
 });
 
 // ── Token write-back ──────────────────────────────────────────────────────────
