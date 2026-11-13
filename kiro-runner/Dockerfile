@@ -41,6 +41,7 @@ COPY server/agent/runner-checks.ts ./shared/runner-checks.ts
 COPY server/agent/runner-finalize.ts ./shared/runner-finalize.ts
 COPY server/agent/runner-finalize-run.ts ./shared/runner-finalize-run.ts
 COPY server/agent/runner-memory.ts ./shared/runner-memory.ts
+COPY server/agent/runner-graph.ts ./shared/runner-graph.ts
 COPY agent-runner/src/browser-tools.ts ./shared/browser-tools.ts
 # Portal modules the runner shares with the portal (guard, approvals, env scrub), same layout as server/.
 COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/agentcore-approvals.ts server/agent/tool-policy.ts ./shared/agent/

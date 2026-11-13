@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { buildRepoGraphs } from './runner-graph.ts';
 
 export interface RunnerRepo {
   /** Folder name under repos/. */
@@ -348,5 +349,7 @@ export async function cloneRunnerRepos(
     try { trustFoldersForAgent(opts.homeDir, trusted); } catch { /* the agent can still read the files */ }
   }
   if (done.length > 0) emit({ type: 'status', text: `Repositories available at: ${done.map((n) => `repos/${n}/`).join(', ')}` });
+  // A code graph per repository for the agent to query (only when the image has graphify; see runner-graph.ts).
+  if (done.length > 0) await buildRepoGraphs(reposDir, done, emit);
   return done;
 }
