@@ -1069,7 +1069,7 @@ export function IdeWorkspace({ id, project }) {
   const workflow      = data?.workflow ?? null;
   const latestRun     = data?.latestRun ?? null;
   const latestRunId   = latestRun?.id ?? null;
-  const displayTitle  = title ?? workflow?.title ?? workflow?.goal ?? `Session ${id.slice(0, 8)}`;
+  const displayTitle  = title ?? workflow?.title ?? '';
 
   return (
     <div className="ide-workspace" aria-label="Session workspace">

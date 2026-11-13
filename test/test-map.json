@@ -257,6 +257,7 @@
         "server/repositories/vault-files.ts",
         "server/repositories/vault-files-sqlite.ts",
         "server/repositories/vault-files-dynamodb.ts",
+        "web/src/lib/session-title.js",
         "web/src/pages/sessions/SessionList.jsx",
         "web/src/pages/sessions/SessionLive.jsx",
         "web/src/pages/sessions/SessionsShell.jsx",
@@ -277,6 +278,7 @@
         "web/src/styles/sessions.css"
       ],
       "tests": [
+        "test/session-title.test.ts",
         "test/session-lifecycle.test.ts",
         "test/session-agent-events.test.ts",
         "test/session-context.test.ts",
@@ -678,6 +680,7 @@
         "server/credential-default.ts",
         "server/kiro-idc.ts",
         "server/claude-plan-oauth.ts",
+        "server/claude-plan-check.ts",
         "server/claude-login.ts",
         "server/repositories/credentials.ts",
         "server/repositories/credentials-sqlite.ts",
@@ -692,6 +695,7 @@
       "tests": [
         "test/credentials.test.ts",
         "test/claude-plan-oauth.test.ts",
+        "test/claude-plan-check.test.ts",
         "test/claude-login.test.ts",
         "test/kiro-credential-default.test.ts",
         "test/bedrock-sign-in.test.ts",

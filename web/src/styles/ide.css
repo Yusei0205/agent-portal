@@ -451,6 +451,28 @@
   color: var(--ink);
 }
 
+.ide-header-title-btn {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border-radius: 4px;
+  text-align: left;
+  cursor: text;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 620;
+}
+.ide-header-title-btn .ide-header-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ide-header-title-btn svg { flex: none; opacity: 0.35; }
+.ide-header-title-btn:hover svg, .ide-header-title-btn:focus-visible svg { opacity: 0.9; }
+.ide-header-title-btn:hover { background: var(--surface-2, rgba(127, 127, 127, 0.12)); }
+
 .ide-header-rename-form {
   flex: 1;
   display: flex;

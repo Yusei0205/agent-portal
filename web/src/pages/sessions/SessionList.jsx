@@ -5,6 +5,7 @@ import { useBulkSelect } from '../../lib/useBulkSelect.js';
 import { formatRelative, formatDate } from '../../lib/util.js';
 import { navigate, href } from '../../lib/router.js';
 import { Icon } from '../../components/Icon.jsx';
+import { sessionTitle, SHORT_TITLE_MAX } from '../../lib/session-title.js';
 import { BulkActionBar } from '../../components/BulkActionBar.jsx';
 import { NewSessionDialog } from './NewSessionDialog.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
@@ -84,8 +85,7 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename, select
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
 
-  const rawTitle = w.title || w.goal || '';
-  const title = rawTitle || `Session ${w.id.slice(0, 8)}`;
+  const title = sessionTitle(w);
 
   const engineBadgeClass =
     w.engine === 'kiro'
@@ -97,7 +97,7 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename, select
   const startRename = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setRenameValue(w.title || w.goal || '');
+    setRenameValue(sessionTitle(w));
     setRenaming(true);
   };
 
@@ -155,6 +155,7 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename, select
             onBlur={() => !renameBusy && setRenaming(false)}
             onKeyDown={(e) => { if (e.key === 'Escape') setRenaming(false); }}
             aria-label="Rename session"
+            maxLength={SHORT_TITLE_MAX}
             disabled={renameBusy}
           />
           <button type="submit" className="btn-icon" disabled={renameBusy} aria-label="Save name" style={{ width: 24, height: 24 }}>

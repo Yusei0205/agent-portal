@@ -7,6 +7,7 @@ import { Icon } from '../../components/Icon.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { SwitchEngineDialog } from './SwitchEngineDialog.jsx';
+import { sessionTitle, hasOwnTitle, SHORT_TITLE_MAX } from '../../lib/session-title.js';
 
 // ── Delegate-a-task dialog ────────────────────────────────────────────────────
 
@@ -206,6 +207,7 @@ export function IdeHeader({
   const [renaming, setRenaming]       = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy]   = useState(false);
+  const [renameError, setRenameError]   = useState('');
   const [stopping, setStopping]       = useState(false);
   const [menuOpen, setMenuOpen]       = useState(false);
   const [showDelegate, setShowDelegate] = useState(false);
@@ -223,7 +225,8 @@ export function IdeHeader({
   }, [menuOpen]);
 
   const startRename = () => {
-    setRenameValue(workflow?.title || workflow?.goal || '');
+    setRenameValue(sessionTitle(workflow));
+    setRenameError('');
     setRenaming(true);
     setMenuOpen(false);
     setTimeout(() => inputRef.current?.focus(), 0);
@@ -232,14 +235,15 @@ export function IdeHeader({
   const submitRename = async (e) => {
     e?.preventDefault();
     const title = renameValue.trim();
-    if (!title || !workflow) { setRenaming(false); return; }
+    if (!title || !workflow || title === sessionTitle(workflow)) { setRenaming(false); return; }
     setRenameBusy(true);
+    setRenameError('');
     try {
       await api.patch(`/api/projects/${projectId}/workflows/${workflow.id}`, { title });
       onRenamed(title);
       setRenaming(false);
-    } catch {
-      setRenaming(false);
+    } catch (err) {
+      setRenameError(err?.message || 'Could not save the title.');
     } finally {
       setRenameBusy(false);
     }
@@ -262,7 +266,8 @@ export function IdeHeader({
   };
 
   const isRunning    = workflow?.status === 'running' || workflow?.status === 'pending';
-  const title        = workflow?.title || workflow?.goal || `Session ${(workflow?.id ?? '').slice(0, 8)}`;
+  const title        = sessionTitle(workflow);
+  const ownTitle     = hasOwnTitle(workflow);
   const engineLabel  = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'kiro' ? 'kiro' : workflow?.engine === 'claude-code' ? 'claude' : workflow?.engine ?? 'demo';
   const engineClass  = workflow?.engine === 'kiro' ? 'badge badge-engine-kiro' : workflow?.engine === 'claude-code' ? 'badge badge-engine-claude' : 'badge';
 
@@ -280,9 +285,12 @@ export function IdeHeader({
                 onBlur={() => !renameBusy && setRenaming(false)}
                 onKeyDown={(e) => { if (e.key === 'Escape') setRenaming(false); }}
                 aria-label="Session title"
+                placeholder="Short title"
+                maxLength={SHORT_TITLE_MAX}
                 disabled={renameBusy}
               />
-              <button type="submit" className="btn btn-sm btn-primary" disabled={renameBusy} aria-label="Save name">
+              {renameError && <span className="error-note" role="alert" style={{ fontSize: '0.75rem' }}>{renameError}</span>}
+              <button type="submit" className="btn btn-sm btn-primary" disabled={renameBusy} aria-label="Save name" onMouseDown={(e) => e.preventDefault()}>
                 {renameBusy ? <span className="spinner" style={{ width: 12, height: 12 }} /> : <Icon name="check" size={12} />}
               </button>
               <button type="button" className="btn btn-sm btn-ghost" onClick={() => setRenaming(false)} aria-label="Cancel rename">
@@ -291,7 +299,17 @@ export function IdeHeader({
             </form>
           ) : (
             <>
-              <span className="ide-header-title" title={title}>{title}</span>
+              <button
+                type="button"
+                className="ide-header-title ide-header-title-btn"
+                onClick={startRename}
+                title={ownTitle ? `${title}
+Click to change the title` : 'Click to give this session a short title'}
+                aria-label={`Session title: ${title}. Click to change it`}
+              >
+                <span className="ide-header-title-text">{title}</span>
+                <Icon name="rename" size={12} />
+              </button>
               {workflow?.engine && <span className={engineClass} style={{ fontSize: '0.69rem' }}>{engineLabel}</span>}
             </>
           )}
