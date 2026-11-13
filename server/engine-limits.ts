@@ -5,8 +5,8 @@
  * Each engine reports it differently, and none of the three is a published, stable API for the portal's use, so every
  * reader fails soft: it answers `available: false` with a short reason instead of throwing, and the bar then just omits it.
  *   Codex   the Codex app-server's account/rateLimits/read (through the AgentCore runner in the cloud).
- *   Claude  Anthropic's OAuth usage endpoint, with the plan's token. A long-lived token made for inference only may be
- *           refused (it lacks the profile scope), which is reported as such.
+ *   Claude  Anthropic's OAuth usage endpoint, with the plan's token. A long-lived token made for inference only is
+ *           refused there (it lacks the profile scope), so the windows are read from the rate-limit headers of a one-token call.
  *   Kiro    the Kiro (CodeWhisperer) GetUsageLimits call with the Identity Center token. Company-managed profiles can
  *           answer FEATURE_NOT_SUPPORTED.
  * Answers are cached for a minute: the status bar asks every minute per open session, and these are not cheap calls.
@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 import { findUserCredential } from './credential-default.ts';
+import { planCheckModelIds } from './models.ts';
 import { isBedrockRuntimeChoice, resolveCredentialEnv, IDC_TOKEN_KEY, IDC_REGION_KEY, IDC_PROFILE_ARN_KEY } from './credentials.ts';
 
 export interface LimitWindow {
@@ -48,6 +49,8 @@ export interface EngineLimits {
 const unavailable = (engine: string, note: string): EngineLimits => ({ available: false, engine, plan: null, windows: [], credits: null, note });
 
 const CACHE_MS = 60_000;
+/** An answer read by a real (tiny) call is kept longer than one from a free lookup. */
+const FALLBACK_CACHE_MS = 5 * 60_000;
 const cache = new Map<string, { at: number; value: EngineLimits }>();
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
@@ -129,14 +132,54 @@ export function parseClaudeUsage(raw: unknown): EngineLimits {
   return { available: true, engine: 'claude-code', plan: null, windows, credits: null, note: null };
 }
 
+/**
+ * Reads the plan windows from the rate-limit headers of a Messages answer (`anthropic-ratelimit-unified-5h-utilization`, `...-5h-reset`,
+ * `...-7d-utilization`, ...). Utilization is a fraction (0-1); the reset is Unix seconds. Exported for tests.
+ */
+export function parseClaudeRateHeaders(headers: { forEach(cb: (value: string, key: string) => void): void }): EngineLimits {
+  const util = new Map<string, number>();
+  const reset = new Map<string, number | null>();
+  headers.forEach((value, key) => {
+    const m = /^anthropic-ratelimit-unified-([a-z0-9_]+?)-(utilization|reset)$/i.exec(key);
+    if (!m) return;
+    if (m[2].toLowerCase() === 'utilization') { const n = num(value); if (n != null) util.set(m[1].toLowerCase(), n); }
+    else reset.set(m[1].toLowerCase(), toUnixSeconds(value));
+  });
+  const labels: Record<string, [string, string]> = { '5h': ['hourly', '5-hour'], '7d': ['weekly', 'Weekly'], '7d_opus': ['weekly-opus', 'Weekly (Opus)'], '7d_sonnet': ['weekly-sonnet', 'Weekly (Sonnet)'] };
+  const windows: LimitWindow[] = [];
+  for (const [key, [id, label]] of Object.entries(labels)) {
+    const u = util.get(key);
+    if (u != null) windows.push({ id, label, usedPercent: clampPct(u * 100), resetsAt: reset.get(key) ?? null });
+  }
+  if (!windows.length) return unavailable('claude-code', 'Claude did not report plan usage for this sign-in.');
+  return { available: true, engine: 'claude-code', plan: null, windows, credits: null, note: null };
+}
+
+/**
+ * A token made with `claude setup-token` is for running Claude only: the usage endpoint refuses it. Any answer to a real call
+ * still carries the plan's windows in its headers (this is where Claude Code's own /usage looks too), so one tiny call on
+ * the cheapest model reads them. It costs a few tokens, so the answer is kept longer than the other engines' (see FALLBACK_CACHE_MS).
+ */
+async function claudeLimitsFromHeaders(token: string): Promise<EngineLimits> {
+  const model = planCheckModelIds()[0] ?? 'claude-haiku-4-5';
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'user-agent': 'agent-portal' },
+    body: JSON.stringify({ model, max_tokens: 1, system: "You are Claude Code, Anthropic's official CLI for Claude.", messages: [{ role: 'user', content: 'hi' }] }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  // A 429 still carries the windows (the plan is at its limit), which is exactly when the person wants to see them.
+  if (!res.ok && res.status !== 429) return unavailable('claude-code', "This Claude sign-in cannot read plan usage (its token is for running Claude only). Usage of this session is still shown.");
+  const out = parseClaudeRateHeaders(res.headers);
+  return out.available && res.status === 429 ? { ...out, note: 'A usage limit has been reached.' } : out;
+}
+
 async function claudeLimits(token: string): Promise<EngineLimits> {
   const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
     headers: { authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', accept: 'application/json', 'user-agent': 'agent-portal' },
     signal: AbortSignal.timeout(10_000),
   });
-  if (res.status === 401 || res.status === 403) {
-    return unavailable('claude-code', "This Claude sign-in cannot read plan usage (its token is for running Claude only). Usage of this session is still shown.");
-  }
+  if (res.status === 401 || res.status === 403) return claudeLimitsFromHeaders(token);
   if (!res.ok) return unavailable('claude-code', `Claude plan usage is unavailable right now (HTTP ${res.status}).`);
   return parseClaudeUsage(await res.json().catch(() => null));
 }
@@ -189,7 +232,7 @@ export async function getSessionLimits(w: { engine?: unknown; credential_id?: un
   const credentialId = w.credential_id ? String(w.credential_id) : null;
   const key = `${engine}:${owner ?? ''}:${credentialId ?? ''}`;
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  if (hit && Date.now() - hit.at < (hit.value.engine === 'claude-code' && hit.value.available ? FALLBACK_CACHE_MS : CACHE_MS)) return hit.value;
 
   let value: EngineLimits;
   try {
