@@ -257,12 +257,16 @@ export function CodeMap({ projectId }) {
         <select id="cm-repo" value={repo.id} onChange={(e) => { setRepoId(e.target.value); setBranchPick(''); }}>
           {repos.map((r) => <option key={r.id} value={r.id}>{r.name}{r.hasMap || (r.branches ?? []).some((b) => b.hasMap) ? '' : ' (no map yet)'}</option>)}
         </select>
-        {mapBranches.length > 1 && (
+        {mapBranches.length > 0 && (
           <>
             <label htmlFor="cm-branch" style={{ marginLeft: '1em' }}>Branch</label>
             <select id="cm-branch" value={branch} onChange={(e) => setBranchPick(e.target.value)}>
               {mapBranches.map((b) => <option key={b} value={b}>{b}{b === repo.defaultBranch ? ' (default)' : ''}</option>)}
             </select>
+            <span className="muted small">
+              {mapBranches.length === 1 ? 'Only this branch has a map. ' : ''}
+              <a href={`#/p/${projectId}/workspaces/repositories`}>Build another branch</a>
+            </span>
           </>
         )}
       </div>
