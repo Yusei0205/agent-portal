@@ -294,6 +294,7 @@ export const HELP_TOPICS = [
         rows: [
           ['Workspaces', 'Group repositories into named workspaces. Pick one when you start a session to check them all out together.'],
           ['Repositories', 'Add the project\'s repositories from a connected Git host. A repository must be ready before sessions can use it.'],
+          ['Code map', 'Search a repository\'s functions, classes and files and see how they connect (see Code map).'],
           ['AWS', 'AWS accounts for the project. The account marked **agents use this** is given to every cloud session, so the `aws` CLI and SDKs work in the agent\'s shell.'],
         ],
       },
@@ -303,6 +304,37 @@ export const HELP_TOPICS = [
           'From the project picker choose **Project settings** for **Overview**, **Team & members**, **Permissions** and **Pull requests**.',
         ],
       },
+    ],
+  },
+  {
+    id: 'code-map', group: 'work', title: 'Code map', icon: 'projects',
+    page: { tab: 'workspaces', sub: 'code-map', project: true },
+    summary: 'A searchable map of a repository\'s code: which functions, classes and files exist, and how they call and import each other. Agents use the same map to find the right code without reading everything.',
+    sections: [
+      { heading: 'What it is', items: [
+        'When a cloud session, a document or a diagram run clones a repository, the portal builds a **code graph** of it with graphify. It reads the code itself (no AI model, no network, nothing leaves the runner) and records every function, class and file as a point, and every call, import and inheritance as a line between two points. Points that belong together are grouped into **communities**.',
+        'Agents get the graph too: before searching they can run `graphify query "<question>"`, `graphify path "A" "B"` or `graphify explain "X"` inside the repository, and open only the files those point to. This makes answers faster and cheaper on large repositories.',
+        'The graph is rebuilt on every clone, so it follows the branch the run used. It is kept for the project so you can open it without starting a session.',
+      ] },
+      { heading: 'Open the Code map', steps: true, items: [
+        'Open **Workspaces › Code map** (pick a project first) and choose a repository.',
+        'If the repository says **No code map yet**, start any session, document or diagram with that repository selected. The map appears after its clone finishes (usually within a minute or two).',
+        'Type in the **search box** to find a function, class or file by name. Press a result to see it and what it connects to.',
+      ] },
+      { heading: 'Read the graph', rows: [
+        ['Search', 'Matches names and file paths. Results show the kind, the file and the line.'],
+        ['Graph view', 'Shows the chosen item in the middle with what it calls, what calls it and what it imports. Press **Expand** on a neighbour to grow the view; drag to move, scroll to zoom.'],
+        ['Colours', 'One colour per community, so files that work together share a colour.'],
+        ['Details', 'The side panel lists the connections of the selected item (calls, imports, contains) and the file and line to open.'],
+      ] },
+      { heading: 'Ask an agent to use it', items: [
+        'You do not need to do anything: sessions on a repository with a graph already tell the agent about it. You can also say it in a request, for example: "Use graphify to find where payments are refunded, then explain the flow."',
+        'Only code is mapped (functions, classes, imports, calls). Documents, comments and configuration are not part of it.',
+      ] },
+    ],
+    tips: [
+      'The map is as old as the last clone. If a repository changed a lot, start a short session on it to refresh the map.',
+      'Very large repositories are trimmed to their best-connected items so the page stays fast; search still covers every item that is kept.',
     ],
   },
   {
