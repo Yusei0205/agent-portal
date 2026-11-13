@@ -316,6 +316,11 @@ export const HELP_TOPICS = [
         'Agents get the graph too: before searching they can run `graphify query "<question>"`, `graphify path "A" "B"` or `graphify explain "X"` inside the repository, and open only the files those point to. This makes answers faster and cheaper on large repositories.',
         'It is built once, not in every session: a session just loads the saved graph, so it starts without waiting. A big repository can take several minutes to build. Press **Update graph** when the code has changed a lot; sessions use the new graph from their next clone.',
       ] },
+      { heading: 'Graphs per branch', items: [
+        'A repository has one graph **per branch**. On **Workspaces › Repositories**, pick the branch next to **Build graph** (**Other branch…** lists the repository\'s branches) and press the button: that branch\'s graph is built or updated. Up to 5 branches keep a graph; building a 6th drops the one built longest ago (never the default branch).',
+        'On the **Code map** page a **Branch** list appears when more than one branch has a map. The search and the graph then show that branch.',
+        'A session loads the graph of the branch it clones (the repository\'s default branch). If that branch has no graph, the session reads the code as usual: another branch\'s graph would describe other code.',
+      ] },
       { heading: 'Open the Code map', steps: true, items: [
         'Open **Workspaces › Code map** (pick a project first) and choose a repository.',
         'If the repository says **No code map yet**, open **Workspaces › Repositories** and press **Build graph** on it. It shows **building…** with what it is doing, and **ready** when it is done (a few minutes for a big repository). Until then sessions read the code as usual.',

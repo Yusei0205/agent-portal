@@ -10,9 +10,13 @@ import { setSetting } from '../server/settings.ts';
 import { getGitReposRepository } from '../server/repositories/git-repos.ts';
 import { runBackgroundJobNow } from '../server/background-jobs.ts';
 import { _setAgentCoreInvokerOverride, type AgentCoreSSEEvent } from '../server/agent/kiro-agentcore.ts';
-import { getCodeGraphStatus, savedGraphFor, graphBuildUnavailable } from '../server/code-graph.ts';
+import { getCodeGraphStatus, savedGraphFor, graphBuildUnavailable, resolveGraphId, listCodeGraphs, MAX_BRANCH_GRAPHS, graphObjectKey } from '../server/code-graph.ts';
+import { graphIdFor, parseGraphId, validBranch } from '../server/graph-id.ts';
 
 const ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/kiro-x';
+
+/** The state of a repository's graph of its default branch (the tests' repositories use 'main'). */
+const mainStatus = (repoId: string) => getCodeGraphStatus(resolveGraphId(repoId, 'main', 'main') ?? '');
 
 describe('Build code graph (portal)', () => {
   let baseUrl = '';
@@ -58,14 +62,14 @@ describe('Build code graph (portal)', () => {
     });
     await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_ok' });
 
-    const st = getCodeGraphStatus('gr_ok');
+    const st = mainStatus('gr_ok');
     assert.equal(st?.state, 'ready');
     assert.equal(st?.nodes, 120);
     assert.equal(st?.commit, 'abcdef1234567890');
     assert.equal(st?.stored, false, 'no S3 here, so nothing is saved for sessions');
     assert.equal((payload as unknown as { mode: string }).mode, 'build-graph');
     assert.equal(((payload as unknown as { repos: unknown[] }).repos).length, 1);
-    assert.equal(await savedGraphFor(projectId, 'gr_ok'), null, 'sessions get no link for a graph that was not saved');
+    assert.equal(await savedGraphFor(projectId, 'gr_ok', 'main'), null, 'sessions get no link for a graph that was not saved');
 
     const list = (await fetchJson(baseUrl, `/api/projects/${projectId}/code-map`, { cookie })).body as { repos: { id: string; graph: { state: string } | null }[] };
     assert.equal(list.repos.find((x) => x.id === 'gr_ok')?.graph?.state, 'ready');
@@ -81,7 +85,7 @@ describe('Build code graph (portal)', () => {
       yield { type: 'result', runId: 'r', success: false, error: 'The repository could not be cloned' } as unknown as AgentCoreSSEEvent;
     });
     await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_403' });
-    const st = getCodeGraphStatus('gr_403');
+    const st = mainStatus('gr_403');
     assert.equal(st?.state, 'failed');
     assert.match(String(st?.message), /Workspaces → AWS/);
   });
@@ -94,7 +98,7 @@ describe('Build code graph (portal)', () => {
       yield { type: 'result', runId: 'r', success: false, error: 'graphify did not finish within 25 minutes' } as unknown as AgentCoreSSEEvent;
     });
     await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_slow' });
-    const st = getCodeGraphStatus('gr_slow');
+    const st = mainStatus('gr_slow');
     assert.equal(st?.state, 'failed');
     assert.match(String(st?.message), /did not finish within 25 minutes/);
     assert.equal(st?.stored, true, 'the earlier graph stays available to sessions');
@@ -107,7 +111,7 @@ describe('Build code graph (portal)', () => {
     assert.equal(st?.state, 'failed');
     assert.match(String(st?.message), /did not finish/);
     await setSetting(getDb(), 'codegraph.gr_slow', JSON.stringify({ state: 'running', at: new Date(Date.now() - 50 * 60_000).toISOString(), message: 'Building…' }));
-    assert.equal(getCodeGraphStatus('gr_slow')?.state, 'running');
+    assert.equal(mainStatus('gr_slow')?.state, 'running');
   });
 
   it('a build that reports progress stays running for an hour, and is lost 20 minutes after its last report', async () => {
@@ -118,4 +122,78 @@ describe('Build code graph (portal)', () => {
     assert.equal(getCodeGraphStatus('gr_prog2')?.state, 'failed');
   });
 
+  it('builds a branch of its own, next to the default branch, and a session gets the graph of the branch it clones', async () => {
+    process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = ARN;
+    await addRepo('gr_br', 'https://example.com/br.git');
+    const payloads: Record<string, unknown>[] = [];
+    _setAgentCoreInvokerOverride(async function* (_arn, _sid, p) {
+      payloads.push(p);
+      yield { type: 'result', runId: 'r', success: true, commit: 'c1', nodes: 10, links: 20, bytes: 100, stored: true } as unknown as AgentCoreSSEEvent;
+    });
+    await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_br', branch: '' });
+    await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_br', branch: 'feature/login' });
+
+    const branchesBuilt = payloads.map((p) => ((p as { repos: { branch?: string }[] }).repos[0]).branch);
+    assert.deepEqual(branchesBuilt, ['main', 'feature/login'], 'each build clones its own branch');
+
+    const list = listCodeGraphs('gr_br', 'main');
+    assert.deepEqual(list.map((g) => g.branch), ['main', 'feature/login'], 'default branch first');
+    assert.equal(getCodeGraphStatus(graphIdFor('gr_br', 'feature/login'))?.branch, 'feature/login');
+    assert.deepEqual(parseGraphId(graphIdFor('gr_br', 'feature/login')), { repoId: 'gr_br', branch: 'feature/login' });
+    assert.notEqual(graphObjectKey(projectId, graphIdFor('gr_br', 'a/b')), graphObjectKey(projectId, graphIdFor('gr_br', 'a_b')), 'branches that look alike do not share a file');
+
+    // Sessions clone the default branch: they never get another branch's graph.
+    assert.equal(resolveGraphId('gr_br', 'main', 'main'), graphIdFor('gr_br', 'main'));
+    assert.equal(resolveGraphId('gr_br', 'other', 'main'), null);
+  });
+
+  it('a graph built before branches were told apart is the default branch graph, and a rebuild keeps using it', async () => {
+    process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = ARN;
+    await addRepo('gr_old', 'https://example.com/old.git');
+    await setSetting(getDb(), 'codegraph.gr_old', JSON.stringify({ state: 'ready', at: new Date().toISOString(), message: '', stored: true, version: '2026-11-01T00:00:00.000Z', nodes: 5 }));
+    assert.equal(resolveGraphId('gr_old', 'main', 'main'), 'gr_old');
+    assert.equal(resolveGraphId('gr_old', 'dev', 'main'), null);
+    _setAgentCoreInvokerOverride(async function* () {
+      yield { type: 'result', runId: 'r', success: true, commit: 'c2', nodes: 6, links: 1, bytes: 10, stored: true } as unknown as AgentCoreSSEEvent;
+    });
+    await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_old', branch: '' });
+    assert.equal(resolveGraphId('gr_old', 'main', 'main'), 'gr_old', 'the same graph is updated, not a second one made');
+    assert.equal(getCodeGraphStatus('gr_old')?.nodes, 6);
+    assert.equal(getCodeGraphStatus('gr_old')?.branch, 'main');
+    assert.equal(listCodeGraphs('gr_old', 'main').length, 1);
+  });
+
+  it('keeps at most five branch graphs per repository: the oldest goes, never the default branch', async () => {
+    process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = ARN;
+    await addRepo('gr_cap', 'https://example.com/cap.git');
+    _setAgentCoreInvokerOverride(async function* () {
+      yield { type: 'result', runId: 'r', success: true, commit: 'c3', nodes: 3, links: 1, bytes: 10, stored: true } as unknown as AgentCoreSSEEvent;
+    });
+    await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_cap', branch: '' });
+    for (let i = 1; i <= MAX_BRANCH_GRAPHS + 1; i++) await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_cap', branch: `b${i}` });
+    const branches = listCodeGraphs('gr_cap', 'main').map((g) => g.branch);
+    assert.equal(branches.length, MAX_BRANCH_GRAPHS);
+    assert.equal(branches[0], 'main', 'the default branch stays');
+    assert.ok(!branches.includes('b1') && !branches.includes('b2'), 'the oldest were dropped');
+    assert.ok(branches.includes(`b${MAX_BRANCH_GRAPHS + 1}`), 'the newest is kept');
+    assert.equal(getCodeGraphStatus(graphIdFor('gr_cap', 'b1')), null);
+  });
+
+  it('the build route takes a branch and refuses a name that is not one; graph-status lists the branches', async () => {
+    process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = ARN;
+    await addRepo('gr_route', 'https://example.com/route.git');
+    assert.equal(validBranch('release/1.0'), true);
+    for (const bad of ['../etc', '-x', 'a..b', 'a b', '', 'x'.repeat(201)]) assert.equal(validBranch(bad), false, `"${bad}" is not a branch name`);
+    _setAgentCoreInvokerOverride(async function* () {
+      yield { type: 'result', runId: 'r', success: true, commit: 'c4', nodes: 4, links: 1, bytes: 10, stored: true } as unknown as AgentCoreSSEEvent;
+    });
+    await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_route', branch: 'release/1.0' });
+    const r = (await fetchJson(baseUrl, `/api/projects/${projectId}/code-map/gr_route/graph-status?branch=release/1.0`, { cookie })).body as { status: { state: string; branch: string }; branches: { branch: string }[]; defaultBranch: string };
+    assert.equal(r.status.state, 'ready');
+    assert.equal(r.status.branch, 'release/1.0');
+    assert.equal(r.defaultBranch, 'main');
+    assert.deepEqual(r.branches.map((b) => b.branch), ['release/1.0']);
+    const none = (await fetchJson(baseUrl, `/api/projects/${projectId}/code-map/gr_route/graph-status`, { cookie })).body as { status: unknown };
+    assert.equal(none.status, null, 'the default branch has no graph yet');
+  });
 });

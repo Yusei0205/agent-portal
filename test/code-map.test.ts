@@ -148,6 +148,46 @@ describe('code map routes', () => {
       assert.equal((await fetchJson(ts.baseUrl, `/api/projects/${projectId}/code-map/${repoId}/search?q=`, { cookie })).status, 400);
     } finally { await cleanup(); }
   });
+
+  it('keeps a map per branch: the list names the branches that have one, and each route reads the branch asked for', async () => {
+    const { createTestServer, cleanup, fetchJson } = await import('./fixtures.ts');
+    const { getGitReposRepository } = await import('../server/repositories/git-repos.ts');
+    const { rememberRunnerRepo } = await import('../server/code-map.ts');
+    const { getDb } = await import('../server/db.ts');
+    const { setSetting } = await import('../server/settings.ts');
+    const { graphIdFor } = await import('../server/graph-id.ts');
+    const ts = await createTestServer();
+    try {
+      const setup = await fetchJson(ts.baseUrl, '/api/auth/setup', { method: 'POST', body: { email: `b-${Date.now()}@test.com`, name: 'A', password: 'password1234', provider: 'demo' } });
+      const cookie = setup.cookie ?? '';
+      const pr = await fetchJson(ts.baseUrl, '/api/projects', { method: 'POST', body: { name: `CMB ${Date.now()}` }, cookie });
+      const projectId = ((pr.body as any).project as any).id as string;
+      const repoId = 'gr_cmb';
+      await getGitReposRepository().create({ id: repoId, project_id: projectId, name: 'Branchy', url: 'https://example.com/b.git', provider: 'github', status: 'ready', default_branch: 'main', identity: null, last_synced_at: null, last_error: null, created_at: new Date().toISOString(), connection_id: null });
+
+      // A graph of the branch feature/x, built the way the build job does: the run was started with branch feature/x.
+      const id = graphIdFor(repoId, 'feature/x');
+      rememberRunnerRepo('Branchy', 'https://example.com/b.git', { repoId, projectId, repoName: 'Branchy', graphId: id }, 'feature/x');
+      const data = encodeGraph(compactGraph(raw)!);
+      await takeRunnerEvent({ repos: [{ name: 'Branchy', url: 'https://example.com/b.git', branch: 'feature/x' }] }, { type: 'code-graph', repo: 'Branchy', encoding: 'gzip-base64', data });
+      await setSetting(getDb(), `codegraph.${id}`, JSON.stringify({ state: 'ready', at: new Date().toISOString(), message: '', stored: true, version: 'v1', nodes: 5, branch: 'feature/x' }));
+      await setSetting(getDb(), `codegraph-index.${repoId}`, JSON.stringify(['feature/x']));
+
+      const q = (route: string) => fetchJson(ts.baseUrl, `/api/projects/${projectId}/code-map/${repoId}/${route}`, { cookie });
+      assert.equal((await q('overview?branch=feature/x')).status, 200);
+      assert.equal(((await q('search?q=refund&branch=feature/x')).body as any).results[0].i, 'a_refund');
+      assert.equal(((await q('node?id=a_pay&branch=feature/x')).body as any).centerId, 'a_pay');
+      assert.equal((await q('overview')).status, 404, 'the default branch has no map of its own');
+      assert.equal((await q('overview?branch=other')).status, 404);
+      assert.equal((await q('overview?branch=..%2Fx')).status, 400);
+
+      const list = (await fetchJson(ts.baseUrl, `/api/projects/${projectId}/code-map`, { cookie })).body as any;
+      const r = list.repos.find((x: any) => x.id === repoId);
+      assert.equal(r.defaultBranch, 'main');
+      assert.equal(r.hasMap, false, 'the default branch has none');
+      assert.deepEqual(r.branches.map((b: any) => [b.branch, b.hasMap, b.isDefault]), [['feature/x', true, false]]);
+    } finally { await cleanup(); }
+  });
 });
 
 describe('graphify progress', () => {

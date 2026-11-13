@@ -7,8 +7,11 @@
  * (durable, so it survives a restart) and answers searches and neighbourhood questions itself, so the browser never has
  * to download a whole graph.
  *
+ * A repository has a map per branch (see code-graph.ts). Every route below takes `?branch=`; without it the repository's
+ * default branch is meant.
+ *
  * Routes (viewer access):
- *   GET /api/projects/:id/code-map                              repositories and whether each has a map
+ *   GET /api/projects/:id/code-map                              repositories, whether each has a map, and the branches that have one
  *   GET /api/projects/:id/code-map/:repoId/overview             the biggest communities and best-connected items
  *   GET /api/projects/:id/code-map/:repoId/search?q=            items whose name or file matches
  *   GET /api/projects/:id/code-map/:repoId/node?id=             one item with its neighbours and the links among them
@@ -20,23 +23,25 @@ import zlib from 'node:zlib';
 import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { config } from './config.ts';
-import { persistFile, restoreFile } from './durable-files.ts';
+import { persistFile, restoreFile, forgetFile, existsDurable } from './durable-files.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getMemberRow, getProjectRow } from './project-access.ts';
 import { badRequest, notFound, now } from './util.ts';
 import type { CompactGraph, CompactNode } from './agent/runner-graph.ts';
-import { getCodeGraphStatus, graphBuildUnavailable } from './code-graph.ts';
+import { getCodeGraphStatus, graphBuildUnavailable, resolveGraphId, listCodeGraphs } from './code-graph.ts';
+import { graphStem, validBranch } from './graph-id.ts';
 
 export const CODE_MAP_LIMITS = { nodes: 5000, links: 30_000, rawBytes: 32 * 1024 * 1024 } as const;
 
 // ── Which repository a runner's folder name is ────────────────────────────────
 
-/** The runner names a repository by its folder; this remembers which repository (and project) each one was built for. */
-const owners = new Map<string, { repoId: string; projectId: string; repoName: string }>();
-const ownerKey = (name: string, url: string): string => `${name}\n${url}`;
+/** The runner names a repository by its folder; this remembers which repository (and project) each one was built for. `graphId` names the graph of the branch the run cloned (see graph-id.ts). */
+export interface RunnerRepoOwner { repoId: string; projectId: string; repoName: string; graphId?: string }
+const owners = new Map<string, RunnerRepoOwner>();
+const ownerKey = (name: string, url: string, branch?: string): string => `${name}\n${url}\n${branch ?? ''}`;
 
-export function rememberRunnerRepo(name: string, url: string, owner: { repoId: string; projectId: string; repoName: string }): void {
-  owners.set(ownerKey(name, url), owner);
+export function rememberRunnerRepo(name: string, url: string, owner: RunnerRepoOwner, branch?: string): void {
+  owners.set(ownerKey(name, url, branch), owner);
   if (owners.size > 5000) owners.delete(owners.keys().next().value as string);
 }
 
@@ -53,12 +58,21 @@ export interface CodeMapMeta {
 }
 interface StoredMap extends CodeMapMeta { graph: { nodes: CompactNode[]; links: { s: string; t: string; r: string }[] } }
 
-const safeId = (id: string): string => id.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120);
-
-async function mapFile(projectId: string, repoId: string): Promise<string | null> {
+/** The file a graph's map is kept in; `id` is a graph id (a repository id, or `<repoId>@<branch>`). */
+async function mapFile(projectId: string, id: string): Promise<string | null> {
   const project = await getProjectRow(projectId);
   if (!project) return null;
-  return path.join(config.dataDir, 'projects', String(project.slug), 'code-map', `${safeId(repoId)}.json`);
+  const { repo, branch } = graphStem(id);
+  return path.join(config.dataDir, 'projects', String(project.slug), 'code-map', `${repo}${branch ? `@${branch}` : ''}.json`);
+}
+
+/** Removes a graph's map (a branch graph that was dropped). */
+export async function forgetCodeMap(projectId: string, id: string): Promise<void> {
+  const file = await mapFile(projectId, id);
+  if (!file) return;
+  cache.delete(file);
+  try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
+  await forgetFile(file);
 }
 
 /** Checks the shape of a graph that came from a runner (an older or broken image must not be able to store rubbish). */
@@ -71,14 +85,14 @@ export function validateGraph(raw: unknown): CompactGraph | null {
   return { nodes: g.nodes, links: g.links, communities: g.communities && typeof g.communities === 'object' ? g.communities : {}, truncated: Boolean(g.truncated) };
 }
 
-export async function storeCodeGraph(owner: { repoId: string; projectId: string; repoName: string }, encoded: string): Promise<boolean> {
+export async function storeCodeGraph(owner: RunnerRepoOwner, encoded: string): Promise<boolean> {
   let raw: unknown;
   try {
     raw = JSON.parse(zlib.gunzipSync(Buffer.from(encoded, 'base64'), { maxOutputLength: CODE_MAP_LIMITS.rawBytes }).toString('utf8'));
   } catch { return false; }
   const graph = validateGraph(raw);
   if (!graph) return false;
-  const file = await mapFile(owner.projectId, owner.repoId);
+  const file = await mapFile(owner.projectId, owner.graphId ?? owner.repoId);
   if (!file) return false;
   const stored: StoredMap = {
     repoId: owner.repoId, repoName: owner.repoName, builtAt: now(), nodes: graph.nodes.length, links: graph.links.length,
@@ -100,9 +114,9 @@ export async function takeRunnerEvent(payload: Record<string, unknown>, ev: unkn
   if (e?.type !== 'code-graph') return false;
   try {
     if (e.encoding !== 'gzip-base64' || typeof e.data !== 'string' || typeof e.repo !== 'string') return true;
-    const list = Array.isArray(payload.repos) ? payload.repos as { name?: string; url?: string }[] : [];
+    const list = Array.isArray(payload.repos) ? payload.repos as { name?: string; url?: string; branch?: string }[] : [];
     const spec = list.find((r) => r?.name === e.repo);
-    const owner = spec ? owners.get(ownerKey(String(spec.name), String(spec.url ?? ''))) : undefined;
+    const owner = spec ? owners.get(ownerKey(String(spec.name), String(spec.url ?? ''), String((spec as { branch?: string }).branch ?? ''))) : undefined;
     if (owner) await storeCodeGraph(owner, e.data);
   } catch (err) {
     console.warn('[code-map] could not store a code graph:', err instanceof Error ? err.message : err);
@@ -121,8 +135,8 @@ interface Loaded {
 }
 const cache = new Map<string, { mtime: number; value: Loaded }>();
 
-async function load(projectId: string, repoId: string): Promise<Loaded | null> {
-  const file = await mapFile(projectId, repoId);
+async function load(projectId: string, id: string): Promise<Loaded | null> {
+  const file = await mapFile(projectId, id);
   if (!file) return null;
   if (!fs.existsSync(file)) await restoreFile(file).catch(() => false);
   let st: fs.Stats;
@@ -200,8 +214,13 @@ async function projectFor(req: PortalRequest, res: PortalResponse): Promise<stri
 async function loadFor(req: PortalRequest, projectId: string): Promise<Loaded> {
   const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, projectId);
   if (!repo) throw notFound('Repository not found');
-  const m = await load(projectId, req.params.repoId);
-  if (!m) throw notFound('No code map for this repository yet');
+  const def = repo.default_branch ? String(repo.default_branch) : '';
+  const asked = req.query.get('branch');
+  if (asked && !validBranch(asked)) throw badRequest('That is not a valid branch name.');
+  const branch = asked || def;
+  const id = resolveGraphId(req.params.repoId, branch, def) ?? (asked ? null : req.params.repoId);
+  const m = id ? await load(projectId, id) : null;
+  if (!m) throw notFound(asked ? `No code map for the branch ${asked} yet` : 'No code map for this repository yet');
   return m;
 }
 
@@ -212,8 +231,19 @@ export function registerCodeMapRoutes(): void {
     const repos = await getGitReposRepository().listByProject(projectId);
     const out = [];
     for (const r of repos) {
-      const m = await load(projectId, String(r.id));
-      out.push({ id: r.id, name: r.name, hasMap: Boolean(m), builtAt: m?.meta.builtAt ?? null, nodes: m?.meta.nodes ?? 0, links: m?.meta.links ?? 0, truncated: m?.meta.truncated ?? false, graph: getCodeGraphStatus(String(r.id)) });
+      const def = r.default_branch ? String(r.default_branch) : '';
+      const id = resolveGraphId(String(r.id), def, def) ?? String(r.id);
+      const m = await load(projectId, id);
+      // The branches that have a graph; whether each has a map is told from its file, without reading it.
+      const branches = [];
+      for (const g of listCodeGraphs(String(r.id), def)) {
+        const file = await mapFile(projectId, g.id);
+        branches.push({ branch: g.branch, state: g.status.state, nodes: g.status.nodes ?? 0, builtAt: g.status.state === 'ready' ? g.status.at : null, hasMap: file ? await existsDurable(file) : false, isDefault: g.branch === def });
+      }
+      out.push({
+        id: r.id, name: r.name, hasMap: Boolean(m), builtAt: m?.meta.builtAt ?? null, nodes: m?.meta.nodes ?? 0, links: m?.meta.links ?? 0, truncated: m?.meta.truncated ?? false,
+        graph: getCodeGraphStatus(id), defaultBranch: def, branches,
+      });
     }
     sendJson(res, 200, { repos: out, buildUnavailable: graphBuildUnavailable() });
   });

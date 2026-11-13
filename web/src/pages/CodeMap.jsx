@@ -82,8 +82,9 @@ function GraphView({ data, onPick }) {
   );
 }
 
-function RepoMap({ projectId, repo }) {
+function RepoMap({ projectId, repo, branch }) {
   const base = `/api/projects/${projectId}/code-map/${repo.id}`;
+  const branchQs = branch ? `branch=${encodeURIComponent(branch)}` : '';
   const [overview, setOverview] = useState(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState(null);
@@ -97,32 +98,32 @@ function RepoMap({ projectId, repo }) {
   useEffect(() => {
     let live = true;
     setOverview(null); setResults(null); setTrail([]); setGraph(null); setQuery(''); setError(null);
-    api.get(`${base}/overview`).then((r) => { if (live) setOverview(r); }).catch((e) => { if (live) setError(e.message || 'Could not load the code map'); });
+    api.get(`${base}/overview${branchQs ? `?${branchQs}` : ''}`).then((r) => { if (live) setOverview(r); }).catch((e) => { if (live) setError(e.message || 'Could not load the code map'); });
     return () => { live = false; };
-  }, [base]);
+  }, [base, branchQs]);
 
   useEffect(() => {
     const q = query.trim();
     if (!q) { setResults(null); return undefined; }
     const id = ++seq.current;
     const t = setTimeout(() => {
-      api.get(`${base}/search?q=${encodeURIComponent(q)}`)
+      api.get(`${base}/search?q=${encodeURIComponent(q)}${branchQs ? `&${branchQs}` : ''}`)
         .then((r) => { if (seq.current === id) setResults(r.results ?? []); })
         .catch((e) => { if (seq.current === id) setError(e.message || 'Search failed'); });
     }, 220);
     return () => clearTimeout(t);
-  }, [query, base]);
+  }, [query, base, branchQs]);
 
   useEffect(() => {
     if (!current) { setGraph(null); return undefined; }
     let live = true;
     setBusy(true);
-    api.get(`${base}/node?id=${encodeURIComponent(current)}`)
+    api.get(`${base}/node?id=${encodeURIComponent(current)}${branchQs ? `&${branchQs}` : ''}`)
       .then((r) => { if (live) { setGraph(r); setError(null); } })
       .catch((e) => { if (live) setError(e.message || 'Could not load that item'); })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
-  }, [current, base]);
+  }, [current, base, branchQs]);
 
   const pick = (id) => {
     setQuery('');
@@ -146,7 +147,7 @@ function RepoMap({ projectId, repo }) {
   return (
     <div className="cm">
       <p className="field-hint">
-        {overview.meta.nodes.toLocaleString()} items and {overview.meta.links.toLocaleString()} links, built {new Date(overview.meta.builtAt).toLocaleString()}
+        {branch ? <><strong>{branch}</strong>: </> : null}{overview.meta.nodes.toLocaleString()} items and {overview.meta.links.toLocaleString()} links, built {new Date(overview.meta.builtAt).toLocaleString()}
         {overview.meta.truncated ? '. This repository is large: only its best-connected items are kept.' : '.'}
       </p>
       <div className="cm-search">
@@ -216,7 +217,7 @@ function RepoMap({ projectId, repo }) {
 }
 
 /**
- * Code map: a searchable, visual graph of each repository's code (built from the repository after a cloud run clones it).
+ * Code map: a searchable, visual graph of each repository's code, per branch (built from the Repositories page).
  *
  * @param {{ projectId: string }} props
  */
@@ -224,6 +225,7 @@ export function CodeMap({ projectId }) {
   const [repos, setRepos] = useState(null);
   const [error, setError] = useState(null);
   const [repoId, setRepoId] = useState('');
+  const [branchPick, setBranchPick] = useState(''); // '' = the first branch that has a map (the default branch when it has one)
 
   useEffect(() => {
     let live = true;
@@ -243,19 +245,31 @@ export function CodeMap({ projectId }) {
     return <div className="empty-state"><p>This project has no repositories yet. <a href={`#/p/${projectId}/workspaces/repositories`}>Add repositories</a> to get a code map.</p></div>;
   }
   const repo = repos.find((r) => r.id === repoId) ?? repos[0];
+  // The branches of this repository that have a map. A map from before branches were told apart counts as the default branch's.
+  const mapBranches = (repo.branches ?? []).filter((b) => b.hasMap).map((b) => b.branch);
+  const branch = mapBranches.includes(branchPick) ? branchPick : (mapBranches.includes(repo.defaultBranch) ? repo.defaultBranch : (mapBranches[0] ?? ''));
+  const hasMap = mapBranches.length > 0 || repo.hasMap;
 
   return (
     <div className="stack">
       <div className="field cm-pick">
         <label htmlFor="cm-repo">Repository</label>
-        <select id="cm-repo" value={repo.id} onChange={(e) => setRepoId(e.target.value)}>
-          {repos.map((r) => <option key={r.id} value={r.id}>{r.name}{r.hasMap ? '' : ' (no map yet)'}</option>)}
+        <select id="cm-repo" value={repo.id} onChange={(e) => { setRepoId(e.target.value); setBranchPick(''); }}>
+          {repos.map((r) => <option key={r.id} value={r.id}>{r.name}{r.hasMap || (r.branches ?? []).some((b) => b.hasMap) ? '' : ' (no map yet)'}</option>)}
         </select>
+        {mapBranches.length > 1 && (
+          <>
+            <label htmlFor="cm-branch" style={{ marginLeft: '1em' }}>Branch</label>
+            <select id="cm-branch" value={branch} onChange={(e) => setBranchPick(e.target.value)}>
+              {mapBranches.map((b) => <option key={b} value={b}>{b}{b === repo.defaultBranch ? ' (default)' : ''}</option>)}
+            </select>
+          </>
+        )}
       </div>
-      {repo.hasMap ? <RepoMap key={repo.id} projectId={projectId} repo={repo} /> : (
+      {hasMap ? <RepoMap key={`${repo.id}@${branch}`} projectId={projectId} repo={repo} branch={mapBranches.length ? branch : ''} /> : (
         <div className="empty-state">
           <p><strong>No code map yet for {repo.name}.</strong></p>
-          <p className="muted">The map is built when a cloud session, document or diagram clones the repository. Start one with {repo.name} selected and the map appears here when the clone finishes.</p>
+          <p className="muted">Open <a href={`#/p/${projectId}/workspaces/repositories`}>Workspaces › Repositories</a> and press <strong>Build graph</strong> on {repo.name}. You can build a graph for any branch there; the map appears here when it is ready.</p>
         </div>
       )}
     </div>

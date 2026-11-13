@@ -1396,23 +1396,40 @@ const TABS = [
  */
 /**
  * A repository's code graph: built once from here (the cloud runner clones the latest commit and runs graphify), then loaded
- * by every session instead of each session building its own. See server/code-graph.ts.
+ * by every session instead of each session building its own. A repository has a graph per branch (up to 5); a session loads
+ * the graph of the branch it clones. See server/code-graph.ts.
  * @param {{ projectId: string, repo: { id: string, name: string }, toast: Function }} props
  */
 function RepoCodeGraph({ projectId, repo, toast }) {
-  const [state, setState] = useState(undefined); // undefined: loading; { status, unavailable }
+  const [state, setState] = useState(undefined); // undefined: loading; { status, unavailable, defaultBranch, built }
   const [busy, setBusy] = useState(false);
+  const [branch, setBranch] = useState(''); // '' = the repository's default branch
+  const [remote, setRemote] = useState(null); // the repository's branches, once asked for
+  const [asking, setAsking] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const d = await api.get(`/api/projects/${projectId}/code-map/${repo.id}/graph-status`);
-      setState({ status: d.status ?? null, unavailable: d.unavailable ?? null });
+      const d = await api.get(`/api/projects/${projectId}/code-map/${repo.id}/graph-status${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`);
+      setState({ status: d.status ?? null, unavailable: d.unavailable ?? null, defaultBranch: d.defaultBranch ?? '', built: d.branches ?? [] });
       return d.status ?? null;
     } catch {
-      setState((prev) => prev ?? { status: null, unavailable: 'Could not read the code graph state.' });
+      setState((prev) => prev ?? { status: null, unavailable: 'Could not read the code graph state.', defaultBranch: '', built: [] });
       return null;
     }
-  }, [projectId, repo.id]);
+  }, [projectId, repo.id, branch]);
+
+  const askBranches = async () => {
+    setAsking(true);
+    try {
+      const d = await api.get(`/api/projects/${projectId}/repos/${repo.id}/branches`);
+      if (d.error && !(d.branches ?? []).length) toast(`Could not list the branches: ${d.error}`, 'error');
+      setRemote(d.branches ?? []);
+    } catch (err) {
+      toast(err.message || 'Could not list the branches', 'error');
+    } finally {
+      setAsking(false);
+    }
+  };
 
   useEffect(() => {
     let live = true;
@@ -1428,7 +1445,7 @@ function RepoCodeGraph({ projectId, repo, toast }) {
   const build = async () => {
     setBusy(true);
     try {
-      const d = await api.post(`/api/projects/${projectId}/code-map/${repo.id}/build`, {});
+      const d = await api.post(`/api/projects/${projectId}/code-map/${repo.id}/build`, branch ? { branch } : {});
       setState((prev) => ({ ...(prev ?? {}), status: d.status ?? null }));
       // Poll while it runs.
       const poll = async () => { const st = await load(); if (st?.state === 'running') setTimeout(poll, 4000); };
@@ -1453,10 +1470,27 @@ function RepoCodeGraph({ projectId, repo, toast }) {
   const running = st?.state === 'running';
   const canBuild = !state.unavailable;
   const determinate = running && typeof st.percent === 'number';
+  const shown = branch || state.defaultBranch;
+  const builtSet = new Set((state.built ?? []).map((b) => b.branch));
+  const choices = [...new Set([state.defaultBranch, ...(state.built ?? []).map((b) => b.branch), ...(remote ?? []), branch].filter(Boolean))];
   return (
     <div style={{ marginTop: '0.25em' }}>
     <p className="small" style={{ margin: 0 }}>
-      <span className="muted">Code graph: </span>
+      <span className="muted">Code graph{choices.length > 1 || remote ? '' : shown ? ` of ${shown}` : ''}: </span>
+      {(choices.length > 1 || remote) && (
+        <select className="select-inline" value={shown} onChange={(e) => setBranch(e.target.value === state.defaultBranch ? '' : e.target.value)}
+          aria-label={`Branch of ${repo.name} to build or view the code graph of`} style={{ marginRight: '0.5em' }}>
+          {choices.map((b) => (
+            <option key={b} value={b}>{b}{b === state.defaultBranch ? ' (default)' : ''}{builtSet.has(b) ? ' · graph' : ''}</option>
+          ))}
+        </select>
+      )}
+      {!remote && canBuild && (
+        <button type="button" className="btn btn-sm btn-ghost" onClick={askBranches} disabled={asking} style={{ marginRight: '0.5em' }}
+          aria-label={`Choose another branch of ${repo.name}`}>
+          {asking ? 'Loading branches…' : 'Other branch…'}
+        </button>
+      )}
       {running && <strong>building{determinate ? ` ${Math.round(st.percent)}%` : '…'} <span className="muted">{formatElapsed(st.at)}</span></strong>}
       {!running && st?.state === 'ready' && (
         <strong>
@@ -1466,10 +1500,10 @@ function RepoCodeGraph({ projectId, repo, toast }) {
       )}
       {!running && st?.state === 'ready' && !st.stored && <span className="muted"> (in the Code map only: not saved for sessions{st.message ? `, ${st.message}` : ''})</span>}
       {!running && st?.state === 'failed' && <span className="small" style={{ color: "var(--danger)" }}>failed: {st.message}</span>}
-      {!running && !st && <span className="muted">not built. Sessions read the code as usual.</span>}
+      {!running && !st && <span className="muted">not built{shown ? ` for ${shown}` : ''}. Sessions read the code as usual.</span>}
       {canBuild && (
         <button type="button" className="btn btn-sm" style={{ marginLeft: '0.5em' }} onClick={build} disabled={busy || running}
-          aria-label={`${st?.state === 'ready' ? 'Update' : 'Build'} the code graph of ${repo.name}`}>
+          aria-label={`${st?.state === 'ready' ? 'Update' : 'Build'} the code graph of ${repo.name}${shown ? ` (${shown})` : ''}`}>
           {running ? 'Building…' : st?.state === 'ready' ? 'Update graph' : st?.state === 'failed' ? 'Try again' : 'Build graph'}
         </button>
       )}
