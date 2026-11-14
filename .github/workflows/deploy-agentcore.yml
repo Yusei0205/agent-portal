@@ -33,6 +33,7 @@ on:
       - server/agent/env-scrub.ts
       - server/agent/tool-policy.ts
       - server/agent/pricing.ts
+      - server/agent/runner-browser-capture.ts
       - server/agent/agentcore-approvals.ts
       - server/real-path.ts
       - server/agent/runner-files.ts
@@ -62,6 +63,7 @@ on:
       - server/agent/env-scrub.ts
       - server/agent/tool-policy.ts
       - server/agent/pricing.ts
+      - server/agent/runner-browser-capture.ts
       - server/agent/agentcore-approvals.ts
       - server/real-path.ts
       - server/agent/runner-files.ts
