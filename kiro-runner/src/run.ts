@@ -369,6 +369,11 @@ export function kiroWorkspaceRoot(): string | null {
   try { return warm && fs.existsSync(path.join(warm.workDir, 'repos')) ? warm.workDir : null; } catch { return null; }
 }
 
+/** Ends the kept kiro-cli, if there is one (for a test, and for a clean shutdown). */
+export async function disposeWarmKiro(): Promise<void> {
+  if (warm) await disposeKiro(warm);
+}
+
 async function disposeKiro(w: WarmKiro): Promise<void> {
   if (warm === w) warm = null;
   try { w.acp.close(); } catch { /* ok */ }
@@ -645,6 +650,12 @@ export async function runKiroRun(
       // The session may have run on Claude Code meanwhile (engine switch): bring in its newer saved workspace, unless
       // this machine has unsaved changes of its own (restoreWorkspace only replaces an unchanged, out-of-date copy).
       if (payload.repos?.length) await restoreWorkspace(parseSnapshot(payload.snapshot), w.workDir, (ev) => emit(ev));
+      // Files attached to this follow-up message: the prompt names them under attachments/, so they must be in this session's work
+      // folder too (they were only written when kiro-cli started fresh, so a file attached mid-session was never there).
+      if (payload.inputFiles?.length) {
+        const n = await writeInputFilesAsync(w.workDir, payload.inputFiles, emit);
+        emit({ type: 'status', text: `${n} input file${n === 1 ? '' : 's'} placed in the work folder` });
+      }
     }
 
     const run = w;
@@ -687,12 +698,33 @@ export async function runKiroRun(
     // A cancel from the portal stops kiro-cli and this run's pending approvals.
     const runAbort = new AbortController();
     let cancelled = false;
+    // Esc in the terminal ends only the current prompt and keeps the conversation. The same here: kiro-cli is asked to end this prompt
+    // (ACP session/cancel) and is kept for the next message. Only when it does not end the prompt in time is it stopped the hard way.
+    let promptEnded = false;
+    let hardStopped = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const hardStop = (): void => {
+      hardStopped = true;
+      try { run.child.kill('SIGTERM'); } catch { /* ok */ }
+      setTimeout(() => { try { run.child.kill('SIGKILL'); } catch { /* ok */ } }, 3_000).unref();
+    };
     const onStop = (): void => {
       cancelled = true;
       runAbort.abort();
+      const sid = run.acpSessionId;
+      if (sid && !run.exited && !timedOut) {
+        emit({ type: 'status', text: 'Interrupted. The session stays open for your next message.' });
+        try { acp.sendNotification('session/cancel', { sessionId: sid }); } catch { hardStop(); return; }
+        graceTimer = setTimeout(() => {
+          if (promptEnded) return;
+          emit({ type: 'status', text: 'kiro-cli did not stop in time. Restarting it; the next message continues from a recap.' });
+          hardStop();
+        }, 8_000);
+        graceTimer.unref();
+        return;
+      }
       emit({ type: 'status', text: 'Run cancelled. Stopping kiro-cli.' });
-      try { run.child.kill('SIGTERM'); } catch { /* ok */ }
-      setTimeout(() => { try { run.child.kill('SIGKILL'); } catch { /* ok */ } }, 3_000).unref();
+      hardStop();
     };
     if (stop?.aborted) onStop();
     else stop?.addEventListener('abort', onStop, { once: true });
@@ -789,9 +821,13 @@ export async function runKiroRun(
         }
       } finally {
         run.emit = baseEmit;
+        promptEnded = true;
+        if (graceTimer) clearTimeout(graceTimer);
       }
     } catch (e) {
       acpError = e as Error;
+      promptEnded = true;
+      if (graceTimer) clearTimeout(graceTimer);
     } finally {
       clearTimeout(timeoutTimer);
       if (frameTimer) clearInterval(frameTimer);
@@ -802,7 +838,8 @@ export async function runKiroRun(
     }
 
     // Keep kiro-cli for the next message only after a clean run without the browser.
-    const mustClose = Boolean(acpError) || timedOut || run.exited || cancelled;
+    // An interruption that kiro-cli ended itself (its prompt returned, the process is alive) leaves the session warm.
+    const mustClose = Boolean(acpError) || timedOut || run.exited || (cancelled && (hardStopped || !run.acpSessionId));
     let exitCode: number | null = 0;
     if (mustClose) {
       try { acp.close(); } catch { /* ok */ }

@@ -151,6 +151,8 @@ if (subCommand === 'acp') {
   let nextId = 1;
   // Session-resume tracking (for assertion in tests)
   let sessionNewCalled = false;
+  let promptsSeen = 0;
+  let cancelWaiter = null;
   let lastLoadedSessionId = null;
 
   function writeLine(obj) {
@@ -258,6 +260,22 @@ if (subCommand === 'acp') {
       const sessionId = msg.params?.sessionId ?? 'fake-session-001';
       // Capture prompt text for echo-prompt tests
       const promptText = msg.params?.prompt?.[0]?.text ?? '';
+
+      // A prompt that runs until the client sends session/cancel (the ACP way to interrupt one turn and keep the session). The
+      // answer to a later prompt names this process and how many prompts it has seen, so a test can tell the session was kept.
+      if (scenario === 'acp-interruptible') {
+        promptsSeen += 1;
+        const interruptMe = /WAIT/.test(promptText);
+        if (interruptMe) {
+          notification('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: 'working on it…' }] } });
+          const how = await new Promise((resolve) => { cancelWaiter = resolve; setTimeout(() => resolve('timeout'), 30_000); });
+          cancelWaiter = null;
+          if (how === 'cancel') { response(id, { stopReason: 'cancelled' }); return; }
+        }
+        notification('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `PID:${process.pid} PROMPTS:${promptsSeen}` }] } });
+        response(id, { stopReason: 'end_turn' });
+        return;
+      }
 
       // Emit updates based on scenario
       if (scenario === 'acp-slow') {
@@ -576,6 +594,7 @@ if (subCommand === 'acp') {
 
     // session/cancel: acknowledge gracefully
     if (method === 'session/cancel') {
+      if (cancelWaiter) cancelWaiter('cancel');
       if (id !== undefined) response(id, {});
       return;
     }
