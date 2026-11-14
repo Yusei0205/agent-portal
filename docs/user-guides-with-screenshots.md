@@ -25,6 +25,21 @@ The request is refused with the reason when either is missing.
 - A guide run stores only the **role names and hosts** it may use (`guide-run.<workflowId>`, and `sources.guide` of the document so a refresh or retry is the same). The accounts
   are read from the project's list when the run starts and sent to the runner in the invoke payload (`browserAccounts`, `browserHosts`), like MCP header secrets.
 
+## Signing in yourself (live browser)
+
+Tick **I will sign in myself in the live browser** when the guide needs a sign-in you do not want to store (or one that needs a code only you have). It can be used with
+or without stored accounts.
+
+1. The agent opens the system. At the sign-in page it calls `wait_for_sign_in` and waits (up to 10 minutes; the cloud browser's session is lengthened to 30 minutes for
+   such a run).
+2. The document's row shows **Watch browser** while it is being written. It opens the agent's cloud browser (AgentCore Live View) and, while the agent waits, a banner says so.
+3. Switch on **Remote control** (this pauses the agent's commands), sign in yourself, then switch it off. Your password goes from your browser straight to AWS and the
+   system; the portal and the model never see it.
+4. The agent notices that control is back (or that the sign-in page has gone, if you signed in without pausing it), checks the page and carries on.
+
+How it works: the runner reports `browser-waiting` (waiting/done) events; `GET /api/workflows/:wid/browser/live-view` returns `waiting: { message }` while one is open.
+If AgentCore drops the agent's connection while you have control, the runner reconnects to the same browser session (`GetBrowserSession`), so the sign-in is kept.
+
 ## The browser tools
 
 `server/agent/runner-browser-capture.ts` (shared into both runner images; tests in `test/browser-capture.test.ts` with a fake page and `test/browser-capture-real.test.ts`

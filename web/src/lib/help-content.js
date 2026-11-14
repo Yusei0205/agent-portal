@@ -505,6 +505,7 @@ export const HELP_TOPICS = [
           'Choose the **User guide** type, tick **Open the system in the cloud browser** and give the address of the system. It must be reachable from the internet (not localhost, an intranet or a VPN).',
           'The agent does each task in the browser and saves a screenshot of each screen. Every button or field you need to use gets a red box and a number (1, 2, 3 in the order of the steps), and the steps in the guide refer to those numbers.',
           'To show screens behind a sign-in, add **test accounts** with **Manage test accounts** (a role, username and password each, or import a CSV with the columns `role`, `username`, `password`, `notes`) and tick the ones to use. The agent never sees a password: it names the role and the password is typed into the sign-in page for it, and only on the system\'s own address. Use accounts made for testing.',
+          'Prefer to sign in yourself? Tick **I will sign in myself in the live browser**. While the guide is being written, click **Watch browser** on its row; when the agent reaches the sign-in page it waits, so switch on **Remote control**, sign in (or enter a code), then switch it off. Your password never goes through the portal.',
           'Needs a Kiro or Claude model and the cloud browser turned on for the portal. The Word file has the pictures; **Download ZIP** gives the Markdown, the Word file and the screenshots folder.',
         ],
       },
