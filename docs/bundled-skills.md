@@ -26,9 +26,9 @@ someone starts a session with its command. Nothing is applied to a plain session
 sessions answer unless it is asked for.
 
 **Terse replies for one session.** A Claude session loads no skills from disk, so the `caveman` skill is not enough on its own. The
-**New session** dialog has a **Terse replies (caveman)** option for Claude sessions: when ticked, the skill's instructions are added to
-the session's first message (and a one-line reminder to later turns of a continued session; on the cloud runner, where every turn
-starts a fresh Claude session, each turn carries the full instructions). It is stored as the setting `session.<id>.caveman`
+**New session** dialog has a **Terse replies (caveman)** option for Claude, Kiro and Codex sessions (any real engine; the instructions go into the prompt, so it works the same on each): when ticked, the skill's instructions are added to
+the session's first message (and a one-line reminder to later turns of a continued session; on the cloud runner, where every Claude and Kiro turn
+starts a fresh session, each turn carries the full instructions; a Codex thread is continued, so it gets the reminder). It is stored as the setting `session.<id>.caveman`
 (`server/agent/caveman-guidance.ts`). Saying "stop caveman" or "normal mode" in the chat switches it off, as the skill says. The choice
 is remembered in the browser for the next new session; nothing changes for a session that did not ask for it.
 

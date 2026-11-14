@@ -55,8 +55,14 @@ describe('starting a session with terse replies', () => {
     assert.equal(cavemanMode(id), true);
   });
 
-  it('does nothing for a Claude session that does not ask, or for another engine', async () => {
+  it('also works for Kiro and Codex sessions', async () => {
+    assert.equal(cavemanMode(await start({ engine: 'kiro', caveman: true })), true);
+    assert.equal(cavemanMode(await start({ engine: 'codex', caveman: true })), true);
+  });
+
+  it('does nothing for a session that does not ask, or for the demo engine', async () => {
     assert.equal(cavemanMode(await start({ engine: 'claude-code' })), false);
+    assert.equal(cavemanMode(await start({ engine: 'kiro' })), false);
     assert.equal(cavemanMode(await start({ engine: 'demo', caveman: true })), false);
   });
 

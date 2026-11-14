@@ -215,6 +215,37 @@ describe('Codex integration', () => {
     assert.equal((await fetchJson(baseUrl, '/api/projects/' + projectId + '/workflows/' + wid + '/engine', { method: 'POST', cookie, body: { engine: 'codex' } })).status, 200);
   });
 
+  it('adds the terse-reply instructions to a new Codex thread and a reminder to a continued one, only when asked', async () => {
+    const { setCavemanMode, CAVEMAN_REMINDER } = await import('../server/agent/caveman-guidance.ts');
+    const sent: string[] = [];
+    // Records what the Codex client is asked to do on a turn, then lets the fake finish it as usual.
+    setCodexClientFactoryForTests(async (home, env, cwd) => {
+      const client = await fakeFactory(home, env, cwd);
+      const request = client.request.bind(client);
+      client.request = ((method: string, params?: any) => {
+        if (method === 'turn/start') sent.push(String(params?.input?.[0]?.text ?? ''));
+        return request(method, params);
+      }) as typeof client.request;
+      return client;
+    });
+    try {
+      const off = await makeContext('Plain goal');
+      await setCavemanMode(off.run.workflowId, false);
+      await runCodex(off);
+      const on = await makeContext('Terse goal');
+      await setCavemanMode(on.run.workflowId, true);
+      await runCodex(on);
+      const cont = await makeContext('Follow up', 'thread-fixture');
+      await setCavemanMode(cont.run.workflowId, true);
+      await runCodex(cont);
+      assert.equal(sent.length, 3);
+      assert.doesNotMatch(sent[0], /caveman/i);
+      assert.match(sent[1], /Respond terse like smart caveman/);
+      assert.ok(sent[2].includes(CAVEMAN_REMINDER));
+      assert.doesNotMatch(sent[2], /Respond terse like smart caveman/);
+    } finally { setCodexClientFactoryForTests(fakeFactory); }
+  });
+
   it('streams text once, persists resume identity, and records token usage', async () => {
     const ctx = await makeContext();
     assert.equal(await runCodex(ctx), 'Hello from Codex');

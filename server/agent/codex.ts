@@ -7,6 +7,7 @@ import { buildConversationRecap } from './recap.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { getBudgetRepository } from '../repositories/budget.ts';
 import { now } from '../util.ts';
+import { cavemanMode, withCavemanGuidance } from './caveman-guidance.ts';
 export { approveCodexRequest } from './codex-session.ts';
 
 export async function runCodex(ctx: RunContext): Promise<string> {
@@ -15,6 +16,8 @@ export async function runCodex(ctx: RunContext): Promise<string> {
   if (run.credentialId) throw new Error('Codex uses your Codex sign-in. Clear the Kiro or Claude credential selection.');
   const repo = getSessionsRepository();
   const recap = run.engineSessionId ? '' : await buildConversationRecap(run.workflowId, run.runId);
+  // Terse replies, when the session was started with that option: the full instructions for a new Codex thread, a reminder when one continues.
+  const guide = (text: string): string => withCavemanGuidance(text, cavemanMode(run.workflowId), !run.engineSessionId);
   const record = async (usage: Omit<CodexTurnResult, 'text'>) => {
     await repo.updateRun(run.runId, { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens,
       cache_read_tokens: usage.cacheTokens, cost_usd: 0, model: usage.model });
@@ -27,13 +30,13 @@ export async function runCodex(ctx: RunContext): Promise<string> {
   let result: CodexTurnResult;
   if (process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN) {
     const { runCodexViaAgentCore } = await import('./codex-agentcore.ts');
-    result = await runCodexViaAgentCore(ctx, recap + run.goal, record);
+    result = await runCodexViaAgentCore(ctx, guide(recap + run.goal), record);
   } else {
     const setup = applyCodexConfig(codexHome(run.credentialOwnerId), await getCodexConfigFiles(run.credentialOwnerId), run.leadAgent);
     result = await driveCodexTurn(ctx, {
       config: setup.config, instructions: setup.instructions,
       openClient: () => openUserCodex(run.credentialOwnerId!, run.workDir), managedAuth: true,
-      prompt: recap + run.goal, onUsage: record,
+      prompt: guide(recap + run.goal), onUsage: record,
       onThread: async id => { await repo.updateWorkflow(run.workflowId, { engine_session_id: id, engine_session_engine: 'codex' }); },
     });
   }

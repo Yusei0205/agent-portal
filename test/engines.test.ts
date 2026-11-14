@@ -475,6 +475,44 @@ describe('Claude Code engine — credentials and cancellation', () => {
 
 // ── Kiro engine tests ─────────────────────────────────────────────────────────
 
+describe('Kiro engine — terse replies (caveman)', () => {
+  let t: TestData;
+
+  before(() => {
+    createTestDb();
+    t = makeTestData();
+    process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-echo-prompt';
+  });
+
+  after(async () => {
+    delete process.env.PORTAL_KIRO_FAKE;
+    delete process.env.PORTAL_FAKE_KIRO_SCENARIO;
+    await cleanup();
+  });
+
+  const promptSent = async (opts: Parameters<typeof makeRunContext>[1]): Promise<string> => {
+    const { ctx, events } = await makeRunContext(t, { engine: 'kiro', ...opts });
+    await runKiro(ctx);
+    const text = events.filter((e) => e.type === 'assistant-text').map((e) => String(e.payload.text ?? '')).join('');
+    return /PROMPT<<([\s\S]*)>>/.exec(text)?.[1] ?? '';
+  };
+
+  it('sends the prompt unchanged when the session did not ask for terse replies', async () => {
+    const { setCavemanMode } = await import('../server/agent/caveman-guidance.ts');
+    await setCavemanMode(t.workflowId, false);
+    const sent = await promptSent({});
+    assert.match(sent, /Test goal/, 'the echo reached the test');
+    assert.doesNotMatch(sent, /caveman/i);
+  });
+
+  it('adds the full instructions to a new Kiro session', async () => {
+    const { setCavemanMode } = await import('../server/agent/caveman-guidance.ts');
+    await setCavemanMode(t.workflowId, true);
+    assert.match(await promptSent({}), /Respond terse like smart caveman/);
+  });
+});
+
 describe('Kiro engine — text mode events', () => {
   let t: TestData;
 

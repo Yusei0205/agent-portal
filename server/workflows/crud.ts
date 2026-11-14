@@ -496,8 +496,8 @@ export function registerWorkflowRoutes(): void {
       wfRecord.loop_state = loopState;
     }
 
-    // Terse replies (caveman) for a Claude session that asked for them.
-    if (body.caveman === true && engine === 'claude-code') await setCavemanMode(id, true);
+    // Terse replies (caveman) for a Claude, Kiro or Codex session that asked for them.
+    if (body.caveman === true && (engine === 'claude-code' || engine === 'kiro' || engine === 'codex')) await setCavemanMode(id, true);
 
     // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });

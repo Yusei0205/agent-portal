@@ -70,6 +70,7 @@ import type { KiroTokenPayload } from './kiro-agentcore.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { withBrowserGuidance } from './browser-guidance.ts';
 import { withSkillsGuidance } from './skills-guidance.ts';
+import { cavemanMode, withCavemanGuidance } from './caveman-guidance.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -986,6 +987,8 @@ async function runKiroViaAgentCoreAdapter(
   prompt = withBrowserGuidance(prompt, browserOn);
   // A repository's agent skills (agent/skills/) are the way in to its code: read the index, not everything.
   prompt = withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length));
+  // Terse replies, when the session was started with that option. Every cloud turn starts a fresh Kiro session, so each carries the full instructions.
+  prompt = withCavemanGuidance(prompt, cavemanMode(run.workflowId), true);
 
   const token = kiroTokenFromEnv(childEnv);
 
@@ -1261,6 +1264,9 @@ export async function runKiro(ctx: RunContext): Promise<string> {
   if (run.kind === 'review') {
     prompt = `${run.goal}\n\n${REVIEW_INSTRUCTIONS}`;
   }
+
+  // Terse replies, when the session was started with that option: the full instructions for a new Kiro session, a reminder when one continues.
+  prompt = withCavemanGuidance(prompt, cavemanMode(run.workflowId), !run.engineSessionId);
 
   // ── Run (ACP or legacy) ────────────────────────────────────────────────────
   let textParts: string[];
