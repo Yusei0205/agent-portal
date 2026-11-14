@@ -7,6 +7,7 @@ import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { build } from 'esbuild';
+// @ts-expect-error — plain JS module without type declarations
 import { shouldStopOnKey } from '../web/src/lib/useStopShortcut.js';
 
 const key = (k: string, mods: Record<string, boolean> = {}) => ({ key: k, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, defaultPrevented: false, isComposing: false, repeat: false, ...mods });
