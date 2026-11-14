@@ -17,7 +17,7 @@
 #
 # The context values below are the account's current ones. Override any of them with a repository
 # variable of the same name (Settings › Variables) when the runtimes or bucket change; a value dropped
-# from `cdk deploy` removes the matching setting or resource, so keep the set complete.
+# from `cdk deploy` removes the matching setting or resource, so keep the set complete (jobRuntime and jobRuntimeAgentRuns included).
 #
 # The Codex runner is deployed here before the portal so the runtime ARN can be passed into Lambda.
 name: Deploy portal
@@ -123,6 +123,10 @@ jobs:
       CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'oauth' }}
       CODEX_OAUTH_CLIENT_ID: ${{ vars.CODEX_OAUTH_CLIENT_ID }}
       CODEX_OAUTH_CLIENT_SECRET_ARN: ${{ vars.CODEX_OAUTH_CLIENT_SECRET_ARN }}
+      # The long-job runtime and the runs that use it. Dropping these from `cdk deploy` deletes the runtime (and every deploy
+      # that left them out did exactly that), so they are on by default; a repository variable turns them off on purpose.
+      JOB_RUNTIME: ${{ vars.JOB_RUNTIME || 'true' }}
+      JOB_RUNTIME_AGENT_RUNS: ${{ vars.JOB_RUNTIME_AGENT_RUNS || 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -193,6 +197,8 @@ jobs:
             -c "codexAuthMode=$CODEX_AUTH_MODE"
             -c "codexOAuthClientId=$CODEX_OAUTH_CLIENT_ID"
             -c "codexOAuthRedirectUri=$CODEX_OAUTH_REDIRECT_URI"
+            -c "jobRuntime=$JOB_RUNTIME"
+            -c "jobRuntimeAgentRuns=$JOB_RUNTIME_AGENT_RUNS"
           )
           if [[ -n "$CODEX_OAUTH_CLIENT_SECRET_ARN" ]]; then
             args+=(-c "codexOAuthSecretArn=$CODEX_OAUTH_CLIENT_SECRET_ARN")
