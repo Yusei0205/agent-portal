@@ -205,12 +205,6 @@
       "sources": [
         "server/projects.ts",
         "server/project-settings-pr.ts",
-        "server/project-checklists.ts",
-        "server/project-checklist-analysis.ts",
-        "server/repositories/project-checklists.ts",
-        "server/repositories/project-checklists-dynamodb.ts",
-        "web/src/pages/hub/ProjectChecklists.jsx",
-        "web/src/pages/hub/project-checklists.css",
         "server/repositories/projects.ts",
         "server/repositories/projects-sqlite.ts",
         "server/repositories/projects-dynamodb.ts",
@@ -219,13 +213,27 @@
       "tests": [
         "test/projects.test.ts",
         "test/projects-repo.test.ts",
-        "test/project-pr-settings.test.ts",
-        "test/project-checklists.test.ts",
-        "test/web-project-checklists.test.ts"
+        "test/project-pr-settings.test.ts"
       ],
       "smokeIds": [
         "projects"
       ]
+    },
+    "project-checklists": {
+      "description": "Project deployment and security checklist analysis, editing, reviews, exports and storage",
+      "sources": [
+        "server/project-checklists.ts",
+        "server/project-checklist-analysis.ts",
+        "server/repositories/project-checklists.ts",
+        "server/repositories/project-checklists-dynamodb.ts",
+        "web/src/pages/hub/ProjectChecklists.jsx",
+        "web/src/pages/hub/project-checklists.css"
+      ],
+      "tests": [
+        "test/project-checklists.test.ts",
+        "test/web-project-checklists.test.ts"
+      ],
+      "smokeIds": []
     },
     "workspaces": {
       "description": "Workspace management per project",
