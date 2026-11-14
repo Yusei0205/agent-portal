@@ -13,10 +13,17 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { z } from 'zod';
 import { AgentCoreBrowser, browserToolSpecs } from '../shared/browser-tools.js';
+import { parseAccounts } from '../shared/runner-browser-capture.js';
 
 const region = process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'ap-southeast-1';
 const browser = new AgentCoreBrowser(() => { /* status events are not forwarded from here */ }, region);
-const tools = browserToolSpecs(browser);
+// Screenshots are saved in the run folder; the test accounts of a user guide run (and the hosts they may be typed on) come in the
+// environment and are read once, here, then removed from it.
+const readJson = (name: string): unknown => { try { return JSON.parse(process.env[name] ?? 'null'); } catch { return null; } };
+const guide = parseAccounts(readJson('BROWSER_ACCOUNTS_JSON'), readJson('BROWSER_HOSTS_JSON'));
+delete process.env.BROWSER_ACCOUNTS_JSON;
+delete process.env.BROWSER_HOSTS_JSON;
+const tools = browserToolSpecs(browser, { workDir: process.env.BROWSER_WORK_DIR || undefined, ...guide });
 
 // Live view: the runner (parent of kiro-cli) watches this folder and forwards each frame to the portal.
 const liveDir = process.env.BROWSER_LIVE_DIR;

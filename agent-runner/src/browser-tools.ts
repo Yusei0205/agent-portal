@@ -17,6 +17,7 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { z } from 'zod';
 import type { Browser, Page } from 'playwright-core';
+import { capture, captureSummary, signIn, type CapturePage, type GuideAccount } from '../shared/runner-browser-capture.js';
 
 export const BROWSER_SERVER_NAME = 'browser';
 /** Managed browser with no custom configuration. A custom browser (recording, VPC) can be set per runtime. */
@@ -181,9 +182,15 @@ export interface BrowserToolSpec {
   handler: (args: any) => Promise<ToolResult>;
 }
 
+/**
+ * What a run adds to the browser tools. `workDir` turns on `capture` (screenshots saved for a document); `accounts` turns on
+ * `sign_in` (the agent names a role, the runner types the test account's username and password, and only on `hosts`).
+ */
+export interface BrowserToolOptions { workDir?: string; accounts?: GuideAccount[]; hosts?: string[] }
+
 /** The browser tools, independent of how they are served (Claude SDK in-process MCP, or a stdio MCP for Kiro). */
-export function browserToolSpecs(browser: AgentCoreBrowser): BrowserToolSpec[] {
-  return [
+export function browserToolSpecs(browser: AgentCoreBrowser, options: BrowserToolOptions = {}): BrowserToolSpec[] {
+  const specs: BrowserToolSpec[] = [
     {
       name: 'goto', readOnly: true,
       description: 'Open a web page (http or https) in the cloud browser and return its title and address.',
@@ -271,15 +278,63 @@ ${await page.locator('body').ariaSnapshot()}`);
       }),
     },
   ];
+  const workDir = options.workDir;
+  if (workDir) {
+    specs.push({
+      name: 'capture', readOnly: false,
+      description: 'Take a screenshot of the current page and save it as a PNG under screenshots/ in the run folder, to put in a document. '
+        + 'To show the reader what to use, pass highlights: each is the CSS selector or the visible text of an element (plus an optional label), and gets a red box and a number (1, 2, 3 in the order given), so give them in the order of the steps. '
+        + 'Every highlight must be on the page, or nothing is saved. Returns the file name and what each number marks; insert the file with a Markdown image.',
+      shape: {
+        file: z.string().describe('File name, e.g. screenshots/03-add-user.png'),
+        highlights: z.array(z.object({
+          selector: z.string().optional().describe('CSS selector of the element'),
+          text: z.string().optional().describe('Visible text of the element, used when there is no selector'),
+          label: z.string().optional().describe('Short name of what the element is, e.g. "Save button"'),
+        })).optional().describe('Elements to box and number, in step order'),
+        full_page: z.boolean().optional().describe('Capture the whole scrollable page instead of the visible part'),
+      },
+      handler: (args: { file: string; highlights?: unknown; full_page?: boolean }) => guarded(async () => {
+        const page = await browser.getPage();
+        await settlePage(page);
+        const r = await capture(page as unknown as CapturePage, workDir, args);
+        if (!r.ok) throw new Error(r.error);
+        await browser.publishFrame();
+        return { content: [{ type: 'text', text: captureSummary(r) }, { type: 'image', data: r.png.toString('base64'), mimeType: 'image/png' }] };
+      }),
+    });
+  }
+  const accounts = options.accounts ?? [];
+  if (accounts.length) {
+    specs.push({
+      name: 'sign_in', readOnly: false,
+      description: `Sign in to the system with one of its test accounts. Open the system's sign-in page first, then name the role (${accounts.map((a) => a.role).join(', ')}); `
+        + 'the username and password are typed for you and you never see them. It works only on the system\'s own address. Check the page afterwards to see that you are signed in.',
+      shape: {
+        role: z.string().optional().describe(`The account to use: ${accounts.map((a) => a.role).join(', ')}`),
+        username_selector: z.string().optional().describe('CSS selector of the username field, if it is not found on its own'),
+        password_selector: z.string().optional().describe('CSS selector of the password field, if it is not found on its own'),
+        submit_selector: z.string().optional().describe('CSS selector of the sign-in button, if Enter does not submit'),
+      },
+      handler: (args: { role?: string; username_selector?: string; password_selector?: string; submit_selector?: string }) => guarded(async () => {
+        const page = await browser.getPage();
+        const r = await signIn(page as unknown as CapturePage, { accounts, hosts: options.hosts ?? [] }, args);
+        await browser.publishFrame();
+        if (!r.ok) throw new Error(r.message);
+        return text(r.message);
+      }),
+    });
+  }
+  return specs;
 }
 
 /** Builds the in-process MCP server config for sdk.query({ options: { mcpServers } }). */
-export function createBrowserMcpServer(sdk: SdkModule, browser: AgentCoreBrowser): unknown {
+export function createBrowserMcpServer(sdk: SdkModule, browser: AgentCoreBrowser, options: BrowserToolOptions = {}): unknown {
   const { tool, createSdkMcpServer } = sdk;
   return createSdkMcpServer({
     name: BROWSER_SERVER_NAME,
     version: '1.0.0',
-    tools: browserToolSpecs(browser).map((t) =>
+    tools: browserToolSpecs(browser, options).map((t) =>
       tool(t.name, t.description, t.shape, t.handler, t.readOnly ? { annotations: { readOnlyHint: true } } : undefined)),
   });
 }

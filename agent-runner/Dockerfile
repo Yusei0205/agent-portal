@@ -43,6 +43,7 @@ COPY server/agent/runner-finalize.ts ./shared/runner-finalize.ts
 COPY server/agent/runner-finalize-run.ts ./shared/runner-finalize-run.ts
 COPY server/agent/runner-memory.ts ./shared/runner-memory.ts
 COPY server/agent/runner-graph.ts ./shared/runner-graph.ts
+COPY server/agent/runner-browser-capture.ts ./shared/runner-browser-capture.ts
 
 # Compile + bundle → dist/index.mjs
 # @anthropic-ai/claude-agent-sdk stays external (installed in runtime stage)

@@ -35,6 +35,7 @@ const SHARED = [
   ['agent/runner-memory.ts', 'runner-memory.ts'],
   ['agent/runner-graph.ts', 'runner-graph.ts'],
   ['agent/runner-graph-build.ts', 'runner-graph-build.ts'],
+  ['agent/runner-browser-capture.ts', 'runner-browser-capture.ts'],
 ];
 const serverDir = path.join(root, '..', 'server');
 if (fs.existsSync(serverDir)) {

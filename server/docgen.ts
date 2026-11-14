@@ -27,29 +27,19 @@ export interface SlideData {
 }
 
 /**
- * Build a .docx from markdown content, optionally using a Word template.
- * Requires the docx package.
+ * Build a .docx from markdown content (headings, lists, tables, code, bold/italic, links and pictures: see markdown-docx.ts),
+ * optionally using a Word template. `baseDir` is the folder pictures in the Markdown are read from. Requires the docx package.
  */
-export async function buildDocx(content: string, templatePath?: string): Promise<Buffer> {
+export async function buildDocx(content: string, templatePath?: string, opts: { baseDir?: string } = {}): Promise<Buffer> {
+  return (await buildDocxReport(content, templatePath, opts)).buffer;
+}
+
+/** Like buildDocx, and says which pictures could not be used (each is also shown as a "[Image not included: ...]" line). */
+export async function buildDocxReport(content: string, templatePath?: string, opts: { baseDir?: string } = {}): Promise<{ buffer: Buffer; warnings: string[] }> {
   requireDocxCapability();
   try {
-    const { Document, Paragraph, TextRun, HeadingLevel, Packer } = await import('docx');
-    // Simple paragraph-per-line rendering for basic usage
-    const lines = content.split('\n');
-    const children: InstanceType<typeof Paragraph>[] = [];
-    for (const line of lines) {
-      if (line.startsWith('# ')) {
-        children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(line.slice(2))] }));
-      } else if (line.startsWith('## ')) {
-        children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun(line.slice(3))] }));
-      } else if (line.startsWith('### ')) {
-        children.push(new Paragraph({ heading: HeadingLevel.HEADING_3, children: [new TextRun(line.slice(4))] }));
-      } else {
-        children.push(new Paragraph({ children: [new TextRun(line)] }));
-      }
-    }
-    const doc = new Document({ sections: [{ children }] });
-    const buf = await Packer.toBuffer(doc);
+    const { markdownToDocx } = await import('./markdown-docx.ts');
+    const { buffer: buf, warnings } = await markdownToDocx(content, opts);
     if (templatePath) {
       // Template application via docx-template.ts
       const { openWordTemplate } = await import('./docx-template.ts');
@@ -57,9 +47,9 @@ export async function buildDocx(content: string, templatePath?: string): Promise
       const tplBuf = fs.readFileSync(templatePath);
       const tpl = await openWordTemplate(tplBuf);
       const result = await tpl.apply(buf, {});
-      return result.buffer;
+      return { buffer: result.buffer, warnings };
     }
-    return buf;
+    return { buffer: buf, warnings };
   } catch (e: any) {
     if (e instanceof DocError) throw e;
     throw new DocError(`Failed to build Word document: ${String(e?.message ?? e)}`);

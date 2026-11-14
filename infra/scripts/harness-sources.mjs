@@ -20,4 +20,5 @@ export const HARNESS_SERVER_FILES = [
   'agent/runner-memory.ts',
   'agent/runner-graph.ts',
   'agent/runner-graph-build.ts',
+  'agent/runner-browser-capture.ts',
 ];
