@@ -56,7 +56,7 @@ describe('/api/projects/:id/pull-request-settings', () => {
   it('returns the defaults for a project that never saved any', async () => {
     const r = await fetchJson(baseUrl, url(projectA), { cookie: adminCookie });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { openPullRequests: true, protectedBranches: ['main', 'master', 'develop', 'release/*'] });
+    assert.deepEqual(r.body, { openPullRequests: true, protectedBranches: ['main', 'master', 'develop', 'release/*'], reviewEngine: null, reviewModel: null });
   });
 
   it('requires sign-in', async () => {
@@ -67,12 +67,12 @@ describe('/api/projects/:id/pull-request-settings', () => {
   it('updates one field and keeps the other', async () => {
     const r = await put(projectA, { openPullRequests: false });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { openPullRequests: false, protectedBranches: ['main', 'master', 'develop', 'release/*'] });
+    assert.deepEqual(r.body, { openPullRequests: false, protectedBranches: ['main', 'master', 'develop', 'release/*'], reviewEngine: null, reviewModel: null });
     const r2 = await put(projectA, { protectedBranches: ['  prod ', 'staging/*', 'prod'] });
     assert.equal(r2.status, 200);
-    assert.deepEqual(r2.body, { openPullRequests: false, protectedBranches: ['prod', 'staging/*'] });
+    assert.deepEqual(r2.body, { openPullRequests: false, protectedBranches: ['prod', 'staging/*'], reviewEngine: null, reviewModel: null });
     const got = await fetchJson(baseUrl, url(projectA), { cookie: adminCookie });
-    assert.deepEqual(got.body, { openPullRequests: false, protectedBranches: ['prod', 'staging/*'] });
+    assert.deepEqual(got.body, { openPullRequests: false, protectedBranches: ['prod', 'staging/*'], reviewEngine: null, reviewModel: null });
   });
 
   it('allows an empty protected list', async () => {
@@ -92,7 +92,7 @@ describe('/api/projects/:id/pull-request-settings', () => {
       { protectedBranches: ['-leading-dash'] },
       { protectedBranches: ['a'.repeat(201)] },
       { protectedBranches: Array.from({ length: 51 }, (_, i) => `b${i}`) },
-      { openPullRequests: true, protectedBranches: ['bad name'] },
+      { openPullRequests: true, protectedBranches: ['bad name'], reviewEngine: null, reviewModel: null },
     ]) {
       const r = await put(projectA, body);
       assert.equal(r.status, 400, JSON.stringify(body).slice(0, 80));
@@ -116,6 +116,19 @@ describe('/api/projects/:id/pull-request-settings', () => {
     assert.equal(((await fetchJson(baseUrl, url(projectA), { cookie: adminCookie })).body as Json).openPullRequests, false);
   });
 
+  it('chooses the engine and model that review pull requests, validates them, and clears a model when the engine changes', async () => {
+    let r = await put(projectA, { reviewEngine: 'kiro', reviewModel: 'claude-sonnet-4-5' });
+    assert.equal(r.status, 200);
+    assert.equal((r.body as Json).reviewEngine, 'kiro');
+    assert.equal((r.body as Json).reviewModel, 'claude-sonnet-4-5');
+    assert.equal((await put(projectA, { reviewEngine: 'gpt' })).status, 400);
+    assert.equal((await put(projectA, { reviewModel: 'bad model!' })).status, 400);
+    r = await put(projectA, { reviewEngine: 'codex' });
+    assert.equal((r.body as Json).reviewModel, null, 'a model belongs to its engine');
+    r = await put(projectA, { reviewEngine: null });
+    assert.equal((r.body as Json).reviewEngine, null);
+  });
+
   it('hides the project from a non-member', async () => {
     assert.equal((await fetchJson(baseUrl, url(projectA), { cookie: outsiderCookie })).status, 404);
     assert.equal((await put(projectA, { openPullRequests: true }, outsiderCookie)).status, 404);
@@ -123,7 +136,7 @@ describe('/api/projects/:id/pull-request-settings', () => {
 
   it('keeps another project unaffected', async () => {
     const r = await fetchJson(baseUrl, url(projectB), { cookie: adminCookie });
-    assert.deepEqual(r.body, { openPullRequests: true, protectedBranches: ['main', 'master', 'develop', 'release/*'] });
+    assert.deepEqual(r.body, { openPullRequests: true, protectedBranches: ['main', 'master', 'develop', 'release/*'], reviewEngine: null, reviewModel: null });
     await put(projectB, { openPullRequests: false, protectedBranches: ['only-b'] });
     const a = (await fetchJson(baseUrl, url(projectA), { cookie: adminCookie })).body as Json;
     assert.equal(a.openPullRequests, false);

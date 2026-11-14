@@ -431,9 +431,18 @@ async function runPullRequest(
   try {
     const reviewer = who.userId || (w.created_by ? String(w.created_by) : '');
     if (!reviewer) throw new Error('No user to start the review as');
+    // The project may name the engine and model that review its pull requests; the reviewer's own sign-in for that engine is used.
+    const { reviewEngine, reviewModel } = getPullRequestSettings(projectId);
+    let credentialId: string | null = null;
+    if (reviewEngine) {
+      const { credentialIdForEngine } = await import('./create-ai.ts');
+      credentialId = await credentialIdForEngine(reviewer, reviewEngine);
+      if (!credentialId) throw new Error(`This project reviews pull requests with ${reviewEngine === 'claude-code' ? 'Claude' : reviewEngine === 'kiro' ? 'Kiro' : 'Codex'}, but you have no such sign-in (Agent setup › Sign-ins).`);
+    }
     const review = await createReview({
       projectId, userId: reviewer, repoId: String(repo.id), baseRef: baseBranch, headRef: branch,
       prNumber: created.number, jiraKey: ticket?.key ?? null, postMode: 'draft',
+      ...(credentialId ? { credentialId, model: reviewModel } : {}),
     });
     await emitEv({ state: 'review-started', branch, number: created.number, url: created.url, title, reviewId: review.id });
   } catch (e) {

@@ -26,6 +26,21 @@ export function runsInCloud(): boolean {
 }
 
 /**
+ * The sign-in of `userId` for one engine, as the id the model pickers use: their default one, else any they have; 'codex-account'
+ * for Codex. null when they have none. Used where a project names an engine and each person's own sign-in is found at run time.
+ */
+export async function credentialIdForEngine(userId: string, engine: 'claude-code' | 'kiro' | 'codex'): Promise<string | null> {
+  if (engine === 'codex') {
+    const { hasCodexLogin } = await import('./codex-auth.ts');
+    return (await hasCodexLogin(userId)) ? CODEX_ACCOUNT_ID : null;
+  }
+  const repo = getCredentialsRepository();
+  const d = await repo.getDefaultByUserAndEngine(userId, engine);
+  if (d) return d.id;
+  return (await repo.listByUser(userId)).find((c) => c.engine === engine)?.id ?? null;
+}
+
+/**
  * `body` may carry `credentialId` and `model` (what the picker in the dialog sends). Without a credential the
  * person's default sign-in is used. With no sign-in at all, a cloud portal asks for one; a local one keeps the
  * simulated engine so it can be tried without an account.
