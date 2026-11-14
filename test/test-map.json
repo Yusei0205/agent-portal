@@ -264,6 +264,7 @@
         "server/runs.ts",
         "server/portal-events.ts",
         "server/superpowers-skills.ts",
+        "server/bundled-skills.ts",
         "server/repositories/sessions.ts",
         "server/repositories/sessions-sqlite.ts",
         "server/repositories/sessions-dynamodb.ts",
@@ -295,6 +296,7 @@
         "web/src/styles/sessions.css"
       ],
       "tests": [
+        "test/bundled-skills.test.ts",
         "test/run-limit-clone-first.test.ts",
         "test/clone-failure-explained.test.ts",
         "test/create-clone-first.test.ts",

@@ -281,7 +281,7 @@ These require more setup and are aimed at senior developers or those with specif
 | **Filesystem** | stdio | `@modelcontextprotocol/server-filesystem` | Read/write specific directories on the portal server |
 | **Redis** | stdio | `@modelcontextprotocol/server-redis` | Read keys, inspect cache state |
 | **Elasticsearch** | stdio | community | Search and read ES indices |
-| **Linear** | HTTP | `https://mcp.linear.app/sse` | Linear issues, cycles, projects |
+| **Linear** | HTTP (OAuth) | `https://mcp.linear.app/mcp` | Linear issues, cycles, projects. One-click preset on Integrations; you sign in with Linear when a session starts (the old `/sse` address is deprecated) |
 | **PagerDuty** | stdio | `mcp-server-pagerduty` (uvx) | Read incidents, escalation policies |
 | **Sentry** | stdio | `mcp-server-sentry` | Read errors and traces |
 | **Datadog** | HTTP | `https://mcp.datadoghq.com/mcp` | Metrics, logs, dashboards |

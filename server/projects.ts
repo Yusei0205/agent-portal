@@ -24,6 +24,7 @@ import { generateId, now, str } from './util.ts';
 import { config } from './config.ts';
 import { subscribe, emit } from './events.ts';
 import { SUPERPOWERS_SKILLS } from './superpowers-skills.ts';
+import { ensureBundledSkills } from './bundled-skills.ts';
 import { getProjectRepository, SlugAlreadyTakenError } from './repositories/projects.ts';
 import { getAuthRepository } from './repositories/auth.ts';
 
@@ -106,10 +107,11 @@ function runGit(args: string[], cwd: string): Promise<string> {
   });
 }
 
-/** Seed the 9 built-in Superpowers skills into the project directory. */
+/** Seed the 9 built-in Superpowers skills (and the bundled frontend-design, caveman and security-guidance skills) into the project directory. */
 export async function ensureBuiltInSkills(projectDir: string): Promise<void> {
   const skillsDir = path.join(projectDir, '.claude', 'skills');
   await fsp.mkdir(skillsDir, { recursive: true });
+  await ensureBundledSkills(projectDir);
 
   for (const skill of SUPERPOWERS_SKILLS) {
     const skillDir = path.join(skillsDir, skill.name);

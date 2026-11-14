@@ -224,6 +224,10 @@ export const MCP_PRESETS = [
     hint: 'Current documentation for libraries. A key is optional but raises the rate limit: value "Bearer " followed by a key from context7.com/dashboard. You can remove the header row to use it without a key.',
   },
   {
+    id: 'linear', name: 'Linear', url: 'https://mcp.linear.app/mcp', auth: 'oauth',
+    hint: 'Linear issues, projects and cycles. No token needed: you sign in with Linear when a session starts, from a card in the session. Leave "Allow writes" off for read-only search and reads.',
+  },
+  {
     id: 'sentry', name: 'Sentry', url: 'https://mcp.sentry.dev/mcp', header: 'Authorization',
     hint: 'Value: "Sentry-Bearer " followed by a Sentry User Auth Token (read scopes: org:read, project:read, event:read). Plain "Bearer" does not work on this server. Add /your-org to the URL to limit it to one organisation.',
   },

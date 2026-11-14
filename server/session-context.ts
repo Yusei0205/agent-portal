@@ -17,6 +17,7 @@ import { router, sendJson } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 
 import { getMemberRow, getProjectRow, getRepoRow, getWorkflowRow } from './project-access.ts';
+import { ensureBundledSkills } from './bundled-skills.ts';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Repo {
@@ -80,7 +81,8 @@ export async function buildSessionContext(
     }
   }
 
-  // Skills under .claude/skills/
+  // Skills under .claude/skills/. Projects made before the bundled skills existed get them the first time a session starts.
+  await ensureBundledSkills(projectDir);
   const skillsDir = path.join(projectDir, '.claude', 'skills');
   const skills: Skill[] = [];
   if (fs.existsSync(skillsDir)) {
