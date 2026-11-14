@@ -57,6 +57,7 @@ import { registerControlPlaneRoutes } from './control-plane.ts';
 import { registerIntegrationRoutes } from './integrations.ts';
 import { registerSimulationRoutes } from './api-sim/routes.ts';
 import { registerProjectAwsRoutes } from './project-aws.ts';
+import { registerProjectChecklistRoutes } from './project-checklists.ts';
 import { registerProjectPullRequestSettingsRoutes } from './project-settings-pr.ts';
 import { registerSessionPullRequestRoutes } from './session-pr.ts';
 import { registerSessionFileRoutes } from './session-files.ts';
@@ -287,6 +288,7 @@ export async function startServer(
   registerIntegrationRoutes();
   registerSimulationRoutes();
   registerProjectAwsRoutes();
+  registerProjectChecklistRoutes();
   registerProjectPullRequestSettingsRoutes();
   registerSessionPullRequestRoutes();
   registerSessionFileRoutes();

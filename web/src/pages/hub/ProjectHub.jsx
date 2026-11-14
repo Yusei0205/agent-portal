@@ -9,6 +9,7 @@ import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
 import { NewSessionDialog, ModelPicker } from '../sessions/NewSessionDialog.jsx';
 import { syncGoal } from '../../lib/repoSync.js';
+import { ProjectChecklists } from './ProjectChecklists.jsx';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -1418,6 +1419,7 @@ const TABS = [
   { id: 'team', label: 'Team & members' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'pull-requests', label: 'Pull requests' },
+  { id: 'checklists', label: 'Checklists' },
 ];
 
 /**
@@ -1691,6 +1693,7 @@ export function ProjectHub({ projectId, user, initialTab }) {
         {activeTab === 'pull-requests' && (
           <PullRequestsTab projectId={projectId} canEdit={canEditPr} toast={toast} />
         )}
+        {activeTab === 'checklists' && <ProjectChecklists projectId={projectId} canEdit={canEditPr} />}
       </div>
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />

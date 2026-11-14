@@ -114,6 +114,16 @@ export function repoRefDir(projectSlug: string, repoName: string): string {
   return repoCloneDir(projectSlug, repoName);
 }
 
+async function refreshChecklistAfterSync(projectId: string, slug: string): Promise<void> {
+  try {
+    const { regenerateProjectChecklist } = await import('./project-checklists.ts');
+    await regenerateProjectChecklist(projectId, slug);
+  } catch (error) {
+    // A concurrent user edit wins. Checklist errors must not fail a successful clone.
+    console.warn('[checklists] Automatic analysis deferred:', (error as Error).message);
+  }
+}
+
 /**
  * The reference clone directory for a repository. Used by diagram and document agents
  * to find the checked-out source files.
@@ -459,6 +469,7 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
         defaultBranch: m ? m[1] : repo.default_branch,
         lastError: null,
       });
+      await refreshChecklistAfterSync(repo.project_id, slug);
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : String(e);
       await getGitReposRepository().updateStatus(repoId, 'error', {
@@ -509,6 +520,7 @@ async function performSync(repoId: string, projectId: string): Promise<void> {
       defaultBranch,
       lastError: null,
     });
+    await refreshChecklistAfterSync(repo.project_id, slug);
 
     // Keep progress visible at 100% briefly so pollers catch the finished state
     setTimeout(() => {
