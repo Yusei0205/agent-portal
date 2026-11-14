@@ -265,6 +265,16 @@ if (subCommand === 'acp') {
         await new Promise((r) => setTimeout(r, delayMs));
       }
 
+      // Hands the whole prompt back as the reply, so a test can see exactly what the model would have read.
+      if (scenario === 'acp-echo-prompt') {
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `PROMPT<<${promptText}>>` }] },
+        });
+        response(id, {});
+        return;
+      }
+
       // Session-resume scenario: emit whether session was loaded or new was used
       if (scenario === 'acp-session-resume' || scenario === 'acp-session-load-fail') {
         const marker = sessionNewCalled

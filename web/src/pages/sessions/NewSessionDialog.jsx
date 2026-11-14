@@ -272,7 +272,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   );
   const [engine, setEngine] = useState('demo');
   const [trustTools, setTrustTools] = useState(false);
-  // Terse (caveman) replies for a Claude session; the choice is remembered on this browser.
+  // Terse (caveman) replies for a Claude, Kiro or Codex session; the choice is remembered on this browser.
   const [caveman, setCaveman] = useState(() => { try { return localStorage.getItem('portal.newSession.caveman') === '1'; } catch { return false; } });
   const [leadAgent, setLeadAgent] = useState('');
   const [model, setModel] = useState('');
@@ -448,7 +448,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
         goal: draft ? '' : goal.trim(),
         engine,
         trustTools: engine !== 'demo' ? trustTools : false,
-        ...(engine === 'claude-code' && caveman ? { caveman: true } : {}),
+        ...(engine !== 'demo' && caveman ? { caveman: true } : {}),
         leadAgent: leadAgent.trim() || undefined,
         maxIterations: Number(maxIterations),
         repoIds: [...selectedRepos],
@@ -678,8 +678,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
             </div>
           )}
 
-          {/* Terse replies: Claude only */}
-          {engine === 'claude-code' && (
+          {/* Terse replies: every real engine (Claude, Kiro, Codex) */}
+          {engine !== 'demo' && (
             <div className="field">
               <label className="choice" style={{ cursor: 'pointer' }}>
                 <input
