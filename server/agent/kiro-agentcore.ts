@@ -592,6 +592,9 @@ export interface AgentCoreRunOpts {
   browserHosts?: string[];
   /** The person signs in through Live View: the runner offers wait_for_sign_in. */
   browserManualSignIn?: boolean;
+  /** Leave the cloud browser open after the turn (it ends after an hour or when the portal stops it), and reconnect to the one the last turn left. */
+  browserKeepOpen?: boolean;
+  browserResumeSession?: string;
   /** A loop session's check steps, run by the runner after kiro finishes. */
   checks?: import('./runner-checks.ts').CheckStep[];
   /** The model to use (a Kiro model id); kiro's own default when absent. */
@@ -672,6 +675,8 @@ export async function runKiroViaAgentCore(
       prompt: opts.prompt,
       token: opts.token,
       ...(opts.browser ? { browser: true } : {}),
+      ...(opts.browser && opts.browserKeepOpen ? { browserKeepOpen: true } : {}),
+      ...(opts.browser && opts.browserResumeSession ? { browserResumeSession: opts.browserResumeSession } : {}),
       ...(opts.browser && opts.browserManualSignIn ? { browserManualSignIn: true } : {}),
       ...(opts.browser && opts.browserAccounts?.length ? { browserAccounts: opts.browserAccounts, browserHosts: opts.browserHosts ?? [] } : {}),
       ...(opts.repos?.length ? { repos: opts.repos } : {}),

@@ -70,6 +70,13 @@ export class AgentCoreBrowser {
   onWaiting: ((w: { state: 'waiting' | 'done'; message: string }) => void) | null = null;
   /** How long the cloud browser may live. A run that waits for a person to sign in needs more than the default. */
   sessionTimeoutSeconds = 900;
+  /**
+   * Leave the cloud browser running when the run ends (only disconnect), so a person can keep using it between turns and the next
+   * turn can reconnect to it. It then ends when sessionTimeoutSeconds runs out or the portal stops it.
+   */
+  keepOpen = false;
+  /** A browser session an earlier turn left open: reconnect to it instead of starting a new one (a new one starts if it is gone). */
+  resumeSessionId: string | null = null;
 
   constructor(private emit: EmitFn, region: string, private browserId = DEFAULT_BROWSER_ID) {
     this.region = region;
@@ -96,21 +103,39 @@ export class AgentCoreBrowser {
     return signed.headers as Record<string, string>;
   }
 
+  /** The automation address of the session an earlier turn left open, or null when it is gone or not ready. */
+  private async resumable(): Promise<string | null> {
+    const id = this.resumeSessionId;
+    if (!id || !/^[A-Za-z0-9._-]{1,100}$/.test(id)) return null;
+    try {
+      const r = await this.client.send(new GetBrowserSessionCommand({ browserIdentifier: this.browserId, sessionId: id }));
+      const ws = r.streams?.automationStream?.streamEndpoint;
+      if (r.status === 'READY' && ws) { this.sessionId = id; return ws; }
+    } catch { /* gone: start a new one */ }
+    return null;
+  }
+
   private async start(): Promise<Page> {
     const { chromium } = await import('playwright-core');
-    const res = await this.client.send(new StartBrowserSessionCommand({
-      browserIdentifier: this.browserId,
-      name: 'agent-portal-run',
-      sessionTimeoutSeconds: this.sessionTimeoutSeconds,
-      viewPort: VIEWPORT,
-    }));
-    this.sessionId = res.sessionId ?? null;
-    const wsUrl = res.streams?.automationStream?.streamEndpoint;
-    if (!this.sessionId || !wsUrl) throw new Error('AgentCore did not return a browser automation endpoint');
-    this.emit({ type: 'status', text: 'Browser session started' });
-    try { this.onSession?.({ browserId: this.browserId, sessionId: this.sessionId, ...VIEWPORT }); } catch { /* optional */ }
+    let wsUrl: string | null = await this.resumable();
+    if (wsUrl) {
+      this.emit({ type: 'status', text: 'Reconnected to the open browser' });
+    } else {
+      const res = await this.client.send(new StartBrowserSessionCommand({
+        browserIdentifier: this.browserId,
+        name: 'agent-portal-run',
+        sessionTimeoutSeconds: this.sessionTimeoutSeconds,
+        viewPort: VIEWPORT,
+      }));
+      this.sessionId = res.sessionId ?? null;
+      wsUrl = res.streams?.automationStream?.streamEndpoint ?? null;
+      if (!this.sessionId || !wsUrl) throw new Error('AgentCore did not return a browser automation endpoint');
+      this.emit({ type: 'status', text: 'Browser session started' });
+    }
+    const sessionId = this.sessionId as string;
+    try { this.onSession?.({ browserId: this.browserId, sessionId, ...VIEWPORT }); } catch { /* optional */ }
 
-    this.browser = await chromium.connectOverCDP(wsUrl, { headers: await this.signedHeaders(wsUrl) });
+    this.browser = await chromium.connectOverCDP(wsUrl as string, { headers: await this.signedHeaders(wsUrl) });
     const ctx = this.browser.contexts()[0] ?? await this.browser.newContext();
     this.page = ctx.pages()[0] ?? await ctx.newPage();
     this.page.setDefaultTimeout(ACTION_TIMEOUT_MS);
@@ -166,7 +191,7 @@ export class AgentCoreBrowser {
     const sessionId = this.sessionId;
     this.browser = null; this.page = null; this.sessionId = null;
     try { await browser?.close(); } catch { /* already gone */ }
-    if (sessionId) {
+    if (sessionId && !this.keepOpen) {
       try {
         await this.client.send(new StopBrowserSessionCommand({ browserIdentifier: this.browserId, sessionId }));
       } catch { /* session may already have expired */ }

@@ -49,6 +49,7 @@ import { unpackInputZips } from './runner-files.ts';
 import { ensureAtlassianMcp, isAtlassianMcpUrl } from '../atlassian-mcp.ts';
 import { jiraConnected } from '../jira.ts';
 import { guideRunPayload } from '../guide-accounts.ts';
+import { resumableBrowserSession } from '../browser-session.ts';
 import { collectOutputFiles } from '../output-files.ts';
 import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
@@ -558,6 +559,13 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         const guide = await guideRunPayload(agentRun.projectId, workflowId).catch(() => null);
         if (guide?.accounts.length) { agentRun.runnerBrowserAccounts = guide.accounts; agentRun.runnerBrowserHosts = guide.hosts; }
         if (guide?.manualSignIn) agentRun.runnerBrowserManual = true;
+        // A session's cloud browser stays open between turns (a guide run's does not: it is a one-shot document run), and the
+        // next turn reconnects to the one the last turn left open.
+        if (!guide && process.env.PORTAL_AGENTCORE_BROWSER === '1') {
+          agentRun.runnerBrowserKeepOpen = true;
+          const resume = await resumableBrowserSession(workflowId).catch(() => null);
+          if (resume) agentRun.runnerBrowserResume = resume;
+        }
         if (guide?.missing.length) emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text: `Test account${guide.missing.length === 1 ? '' : 's'} not found in the project (removed since the guide was set up): ${guide.missing.join(', ')}` });
       }
       agentRun.runnerAwsEnv = (await projectAwsEnv(agentRun.projectId).catch((e) => { console.warn('[runner] AWS account skipped:', e); return null; })) ?? undefined;

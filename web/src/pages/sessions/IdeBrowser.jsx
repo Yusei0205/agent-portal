@@ -317,6 +317,17 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [cloudMode, workflowId]);
 
+  // The session's browser stays open between turns (up to an hour): this closes it now.
+  const [closing, setClosing] = useState(false);
+  const closeBrowser = useCallback(async () => {
+    setClosing(true);
+    try {
+      await api.post(`/api/workflows/${workflowId}/browser/close`, {});
+      setLive(null);
+      setControlEnabled(false);
+    } catch { /* it stays listed; the next poll shows what is left */ } finally { setClosing(false); }
+  }, [workflowId]);
+
   // ── Remote-control toggle ────────────────────────────────────────────────
   const handleControlToggle = useCallback(async () => {
     if (controlBusyRef.current) return;
@@ -554,6 +565,13 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
 
         {/* Status dot */}
         <StatusDot wsState={cloudMode ? (live ? 'connected' : 'disconnected') : wsState} running={cloudMode ? Boolean(live) : running} />
+
+        {cloudMode && live && (
+          <button
+            type="button" className="btn btn-sm btn-ghost" onClick={closeBrowser} disabled={closing}
+            title="Close the cloud browser now. Otherwise it stays open between turns for up to an hour."
+          >{closing ? 'Closing…' : 'Close browser'}</button>
+        )}
 
         {/* Remote control toggle */}
         <div className="idb-remote-wrap">

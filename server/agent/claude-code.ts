@@ -186,6 +186,8 @@ ${REVIEW_SYSTEM_APPEND}`;
     browserHosts: run.runnerBrowserHosts,
     // Every browser session can ask the person to sign in (wait_for_sign_in): ending the turn would close the browser.
     browserManualSignIn: run.runnerBrowserManual ?? browserOn,
+    browserKeepOpen: run.runnerBrowserKeepOpen,
+    browserResumeSession: run.runnerBrowserResume,
     checks: run.runnerChecks,
   });
 

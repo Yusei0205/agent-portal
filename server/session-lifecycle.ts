@@ -29,6 +29,7 @@ import { getSessionsRepository } from './repositories/sessions.ts';
 import { sessionSignIn } from './session-sign-in.ts';
 import { getSessionLimits } from './engine-limits.ts';
 import { presignLiveViewUrl, setAutomationStream } from './browser-live-view.ts';
+import { liveBrowserSession, closeSessionBrowser } from './browser-session.ts';
 
 // ── Idle stop ─────────────────────────────────────────────────────────────────
 
@@ -294,20 +295,18 @@ export function registerSessionLifecycleRoutes(): void {
       const wf = await requireWorkflowReadAccess(req, res, req.params.wid);
       if (!wf) return;
       const repo = getSessionsRepository();
-      const active = await repo.getActiveRun(String(wf.id));
-      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 500) : [];
-      // The browser is closed when the run ends, so only a session announced during the current run can be watched.
-      const since = String(active?.started_at ?? active?.created_at ?? '');
-      const latest = [...events].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= since);
-      if (!latest) { sendJson(res, 200, { available: false }); return; }
-      let info: { browserId?: string; sessionId?: string; width?: number; height?: number } = {};
-      try { info = JSON.parse(latest.payload ?? '{}'); } catch { /* none */ }
-      if (!info.sessionId) { sendJson(res, 200, { available: false }); return; }
+      // The session's browser stays open between turns, so it can be watched whenever AgentCore says it is open (not only during a run).
+      const live = await liveBrowserSession(String(wf.id));
+      if (!live) { sendJson(res, 200, { available: false }); return; }
+      const info = live;
+      const latest = { created_at: live.announcedAt };
       // Is the agent waiting for the person to use the browser (sign in)? The latest waiting/done note of this browser session.
       const waits = await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-waiting'], 200);
       const lastWait = [...waits].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= String(latest.created_at));
       let waiting: { message: string } | null = null;
-      try { const p = JSON.parse(lastWait?.payload ?? '{}'); if (p.state === 'waiting') waiting = { message: String(p.message ?? '').slice(0, 300) }; } catch { /* none */ }
+      // A wait only counts while a run is going: a turn that ended or was cancelled mid-wait leaves its note behind.
+      const running = await repo.getActiveRun(String(wf.id));
+      try { const p = JSON.parse(lastWait?.payload ?? '{}'); if (running && p.state === 'waiting') waiting = { message: String(p.message ?? '').slice(0, 300) }; } catch { /* none */ }
       try {
         const url = await presignLiveViewUrl(info.browserId || 'aws.browser.v1', info.sessionId, 300);
         sendJson(res, 200, { available: true, url, sessionId: info.sessionId, width: info.width || 1280, height: info.height || 800, expiresIn: 300, waiting });
@@ -332,13 +331,8 @@ export function registerSessionLifecycleRoutes(): void {
         if (!ok) { sendJson(res, 403, { error: 'Project editor access required' }); return; }
       }
       const takeOver = Boolean((req.body as Record<string, unknown> | undefined)?.enabled);
-      const repo = getSessionsRepository();
-      const active = await repo.getActiveRun(String(wf.id));
-      const events = active ? await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-session'], 500) : [];
-      const since = String(active?.started_at ?? active?.created_at ?? '');
-      const latest = [...events].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= since);
-      let info: { browserId?: string; sessionId?: string } = {};
-      try { info = JSON.parse(latest?.payload ?? '{}'); } catch { /* none */ }
+      const open = await liveBrowserSession(String(wf.id));
+      const info: { browserId?: string; sessionId?: string } = open ?? {};
       if (!info.sessionId) {
         // Nothing to hand back when the browser is already closed; only taking over needs one.
         if (!takeOver) { sendJson(res, 200, { ok: true, enabled: false }); return; }
@@ -351,6 +345,24 @@ export function registerSessionLifecycleRoutes(): void {
         console.error('[browser] stream update failed:', e);
         sendJson(res, 502, { error: e instanceof Error ? e.message : 'Could not change browser control' });
       }
+    },
+  );
+
+  // POST /api/workflows/:wid/browser/close
+  // Close the session's cloud browser now (it otherwise stays open between turns, for up to an hour). The next browser use starts a new one.
+  router.post(
+    '/api/workflows/:wid/browser/close',
+    async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+      const wf = await requireWorkflowReadAccess(req, res, req.params.wid);
+      if (!wf) return;
+      if (req.authViaToken) { sendJson(res, 403, { error: 'This endpoint requires browser authentication, not an API token' }); return; }
+      if (!req.user?.is_admin) {
+        const member = wf.project_id ? await getMembership(String(wf.project_id), req.user!.id) : null;
+        const ok = wf.project_id ? ['editor', 'owner'].includes(String(member?.access ?? '')) : String(wf.created_by ?? '') === req.user!.id;
+        if (!ok) { sendJson(res, 403, { error: 'Project editor access required' }); return; }
+      }
+      const closed = await closeSessionBrowser(String(wf.id));
+      sendJson(res, 200, { ok: true, closed });
     },
   );
 

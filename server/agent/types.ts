@@ -34,6 +34,9 @@ export interface AgentRun {
   runnerBrowserHosts?: string[];
   /** A user guide run where the person signs in through Live View (the runner's wait_for_sign_in tool). */
   runnerBrowserManual?: boolean;
+  /** A session's browser stays open between turns, and the id of the browser session the last turn left open (reconnected to when still there). */
+  runnerBrowserKeepOpen?: boolean;
+  runnerBrowserResume?: string;
   /** Set for a loop session's runs on an AgentCore runner: the check steps the runner runs after the agent finishes. */
   runnerChecks?: import('./runner-checks.ts').CheckStep[];
   leadAgent: string | null;

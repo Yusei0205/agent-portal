@@ -416,6 +416,9 @@ export async function runInvocation(
   const browser = payload.browser ? new AgentCoreBrowser(emit, region) : null;
   if (browser) {
     if (payload.browserManualSignIn) browser.sessionTimeoutSeconds = 1800;
+    // A session's browser stays open between turns (up to an hour) so the person can use it; the next turn reconnects to it.
+    if (payload.browserKeepOpen) { browser.keepOpen = true; browser.sessionTimeoutSeconds = 3600; }
+    if (payload.browserResumeSession) browser.resumeSessionId = payload.browserResumeSession;
     browser.onWaiting = (w) => emit({ type: 'browser-waiting', ...w });
     browser.onSession = (s) => emit({ type: 'browser-session', ...s });
     // Live Browser view in the portal (a small picture after each action; never shown to the model).

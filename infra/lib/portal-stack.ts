@@ -378,7 +378,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
     }));
     // Live View of the agent's cloud browser: the portal signs the stream address, the page connects to AWS.
     fn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:ConnectBrowserLiveViewStream', 'bedrock-agentcore:UpdateBrowserStream', 'bedrock-agentcore:GetBrowserSession'],
+      actions: ['bedrock-agentcore:ConnectBrowserLiveViewStream', 'bedrock-agentcore:UpdateBrowserStream', 'bedrock-agentcore:GetBrowserSession', 'bedrock-agentcore:StopBrowserSession'],
       resources: ['*'],
     }));
     // Settings › Model provider › Test connection, and the model pickers, list what Bedrock offers and which of it

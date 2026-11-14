@@ -543,6 +543,8 @@ export function registerWorkflowRoutes(): void {
 
     // Close the session's live browser
     shutdownSessionBrowser(w.id).catch(() => {/* non-fatal */});
+    // ...and the AgentCore cloud browser it left open (read from the session's events, so before they are deleted).
+    await import('../browser-session.ts').then((m) => m.closeSessionBrowser(w.id)).catch(() => {/* non-fatal */});
 
     // deleteWorkflow owns the child-count decrement internally (both backends).
     await repo.deleteWorkflow(w.id);

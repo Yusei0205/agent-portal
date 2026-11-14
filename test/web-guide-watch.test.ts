@@ -51,6 +51,8 @@ test('Watch browser opens the live browser and tells the person when the agent i
     }] } }));
     await page.route('**/api/workflows/w_fake/browser/live-view', (route) => route.fulfill({ json: { available: true, url: 'https://live.invalid/stream', sessionId: 's1', width: 1280, height: 800, waiting } }));
     await page.route('**/api/workflows/w_fake/browser/live-view/control', async (route) => { controlCalls.push(JSON.parse(route.request().postData() || '{}')); await route.fulfill({ json: { ok: true } }); });
+    const closeCalls: string[] = [];
+    await page.route('**/api/workflows/w_fake/browser/close', async (route) => { closeCalls.push(route.request().method()); await route.fulfill({ json: { ok: true, closed: true } }); });
     await page.route('**/api/workflows/w_fake/browser', (route) => route.fulfill({ json: {} }));
     await page.goto(`${baseUrl}/guide-fixture`);
 
@@ -71,6 +73,10 @@ test('Watch browser opens the live browser and tells the person when the agent i
     await page.getByText(/switch Remote control off to hand the browser back/).waitFor();
     assert.deepEqual(controlCalls, [{ enabled: true }]);
     assert.deepEqual(errors.filter((e) => !/live\.invalid|appsync|WebSocket|dcv/i.test(e)), []);
+    // The browser stays open between turns; the person can close it.
+    await page.getByRole('button', { name: 'Close browser' }).click();
+    await page.getByRole('button', { name: 'Close browser' }).waitFor({ state: 'detached', timeout: 10_000 });
+    assert.deepEqual(closeCalls, ['POST']);
     if (process.env.SHOT_DIR) await page.screenshot({ path: process.env.SHOT_DIR + '/watch-browser-waiting.png' });
   } finally {
     await browser?.close();

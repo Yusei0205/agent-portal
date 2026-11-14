@@ -25,6 +25,9 @@ delete process.env.BROWSER_ACCOUNTS_JSON;
 delete process.env.BROWSER_HOSTS_JSON;
 const manualSignIn = process.env.BROWSER_MANUAL_SIGNIN === '1';
 if (manualSignIn) browser.sessionTimeoutSeconds = 1800;
+// A session's browser stays open between turns; the next turn's child reconnects to it.
+if (process.env.BROWSER_KEEP_OPEN === '1') { browser.keepOpen = true; browser.sessionTimeoutSeconds = 3600; }
+if (process.env.BROWSER_RESUME_SESSION) browser.resumeSessionId = process.env.BROWSER_RESUME_SESSION;
 const tools = browserToolSpecs(browser, { workDir: process.env.BROWSER_WORK_DIR || undefined, manualSignIn, ...guide, kit: { capture, summary: captureSummary, signIn } });
 
 // Live view: the runner (parent of kiro-cli) watches this folder and forwards each frame to the portal.

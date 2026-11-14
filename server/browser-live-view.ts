@@ -62,3 +62,50 @@ export async function setAutomationStream(browserId: string, sessionId: string, 
   });
   if (!r.ok) throw new Error(`UpdateBrowserStream ${r.status}: ${(await r.text()).slice(0, 300)}`);
 }
+
+// ── Session status and stop (AgentCore GetBrowserSession / StopBrowserSession) ────────────────────────────────────────────
+
+async function signedBrowserCall(method: 'GET' | 'PUT', browserId: string, action: 'get' | 'stop', sessionId: string): Promise<Response> {
+  if (!BROWSER_ID_RE.test(browserId) || !SESSION_ID_RE.test(sessionId)) throw new Error('Invalid browser session');
+  const region = process.env.AWS_REGION ?? 'ap-southeast-1';
+  const host = `bedrock-agentcore.${region}.amazonaws.com`;
+  const path = `/browsers/${browserId}/sessions/${action}`;
+  const body = method === 'PUT' ? '{}' : undefined;
+  const { SignatureV4 } = await import('@smithy/signature-v4');
+  const { defaultProvider } = await import('@aws-sdk/credential-provider-node');
+  const signer = new SignatureV4({ credentials: defaultProvider(), region, service: 'bedrock-agentcore', sha256: Sha256 as never });
+  const signed = await signer.sign({
+    protocol: 'https:', hostname: host, method, path, query: { sessionId },
+    headers: { host, ...(body ? { 'content-type': 'application/json' } : {}) },
+    ...(body ? { body } : {}),
+  } as never);
+  return fetch(`https://${host}${path}?sessionId=${encodeURIComponent(sessionId)}`, {
+    method, headers: (signed as unknown as { headers: Record<string, string> }).headers, ...(body ? { body } : {}),
+  });
+}
+
+const statusCache = new Map<string, { at: number; status: string | null }>();
+
+/** `READY` while the browser session is open, another status or null once it has ended or does not exist. Cached for a few seconds. */
+export async function browserSessionStatus(browserId: string, sessionId: string): Promise<string | null> {
+  const key = `${browserId}/${sessionId}`;
+  const hit = statusCache.get(key);
+  if (hit && Date.now() - hit.at < 5_000) return hit.status;
+  let status: string | null = null;
+  try {
+    const r = await signedBrowserCall('GET', browserId, 'get', sessionId);
+    if (r.ok) status = String(((await r.json()) as { status?: string }).status ?? '') || null;
+  } catch { status = null; }
+  statusCache.set(key, { at: Date.now(), status });
+  if (statusCache.size > 200) statusCache.delete(statusCache.keys().next().value as string);
+  return status;
+}
+
+/** Stops the browser session (best effort: it may already be gone). */
+export async function stopBrowserSession(browserId: string, sessionId: string): Promise<boolean> {
+  try {
+    const r = await signedBrowserCall('PUT', browserId, 'stop', sessionId);
+    statusCache.delete(`${browserId}/${sessionId}`);
+    return r.ok;
+  } catch { return false; }
+}

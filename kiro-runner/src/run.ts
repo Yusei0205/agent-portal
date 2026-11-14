@@ -728,7 +728,7 @@ export async function runKiroRun(
               args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'browser-mcp.mjs')],
               // The run folder (screenshots are saved there) and, for a user guide, the test accounts and the hosts they may be typed on.
               env: [...(liveDir ? [{ name: 'BROWSER_LIVE_DIR', value: liveDir }] : []), ...(workDir ? [{ name: 'BROWSER_WORK_DIR', value: workDir }] : []),
-                ...(payload.browserManualSignIn ? [{ name: 'BROWSER_MANUAL_SIGNIN', value: '1' }] : []), ...(payload.browserAccounts?.length ? [{ name: 'BROWSER_ACCOUNTS_JSON', value: JSON.stringify(payload.browserAccounts) }, { name: 'BROWSER_HOSTS_JSON', value: JSON.stringify(payload.browserHosts ?? []) }] : []), ...['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+                ...(payload.browserManualSignIn ? [{ name: 'BROWSER_MANUAL_SIGNIN', value: '1' }] : []), ...(payload.browserKeepOpen ? [{ name: 'BROWSER_KEEP_OPEN', value: '1' }] : []), ...(payload.browserResumeSession ? [{ name: 'BROWSER_RESUME_SESSION', value: payload.browserResumeSession }] : []), ...(payload.browserAccounts?.length ? [{ name: 'BROWSER_ACCOUNTS_JSON', value: JSON.stringify(payload.browserAccounts) }, { name: 'BROWSER_HOSTS_JSON', value: JSON.stringify(payload.browserHosts ?? []) }] : []), ...['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
                 'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
                 .filter((k) => process.env[k])
                 .map((k) => ({ name: k, value: process.env[k] as string }))],
