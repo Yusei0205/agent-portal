@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { PanZoom } from '../components/PanZoom.jsx';
 import { forceLayout } from '../lib/forceLayout.js';
+import { GraphExcludes } from './hub/GraphExcludes.jsx';
 
 const W = 900;
 const H = 560;
@@ -270,6 +271,7 @@ export function CodeMap({ projectId }) {
           </>
         )}
       </div>
+      <GraphExcludes key={`gx-${repo.id}`} projectId={projectId} repoId={repo.id} repoName={repo.name} branch={mapBranches.length ? branch : ''} />
       {hasMap ? <RepoMap key={`${repo.id}@${branch}`} projectId={projectId} repo={repo} branch={mapBranches.length ? branch : ''} /> : (
         <div className="empty-state">
           <p><strong>No code map yet for {repo.name}.</strong></p>

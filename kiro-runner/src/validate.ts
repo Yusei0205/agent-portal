@@ -102,6 +102,8 @@ export interface KiroBuildGraphPayload {
   putUrl?: string;
   /** Longest graphify may run, in milliseconds. */
   maxMs?: number;
+  /** Folders and files to leave out of the graph (checked in graph-build.ts). */
+  exclude?: unknown;
 }
 
 export type KiroPayload = KiroRunPayload | KiroLoginPayload | KiroListModelsPayload | KiroLoginStatusPayload | KiroPreparePayload | KiroBuildGraphPayload;
@@ -147,7 +149,7 @@ export function validatePayload(raw: unknown): ValidationResult {
     if (obj.maxMs !== undefined && (typeof obj.maxMs !== 'number' || !Number.isFinite(obj.maxMs) || obj.maxMs < 10_000 || obj.maxMs > 60 * 60_000)) {
       return err('"maxMs" must be between 10 seconds and 60 minutes');
     }
-    return { ok: true, payload: { mode: 'build-graph', runId: (obj.runId as string).trim(), repos: obj.repos as unknown[], ...(obj.putUrl ? { putUrl: obj.putUrl as string } : {}), ...(obj.maxMs ? { maxMs: obj.maxMs as number } : {}) } };
+    return { ok: true, payload: { mode: 'build-graph', runId: (obj.runId as string).trim(), repos: obj.repos as unknown[], ...(obj.putUrl ? { putUrl: obj.putUrl as string } : {}), ...(obj.maxMs ? { maxMs: obj.maxMs as number } : {}), ...(obj.exclude !== undefined ? { exclude: obj.exclude } : {}) } };
   }
   if (mode === 'prepare-repos') {
     if (!Array.isArray(obj.repos)) return err('"repos" must be an array');

@@ -4,7 +4,7 @@
  */
 
 import { parseRunnerRepos } from '../shared/runner-repos.js';
-import { buildAndStoreGraph } from '../shared/runner-graph-build.js';
+import { buildAndStoreGraph, parseExcludes } from '../shared/runner-graph-build.js';
 import type { KiroBuildGraphPayload } from './validate.js';
 
 export type EmitFn = (event: Record<string, unknown>) => void;
@@ -18,8 +18,14 @@ export async function runBuildGraph(payload: KiroBuildGraphPayload, emit: EmitFn
     emit({ type: 'result', runId: payload.runId, success: false, error: parsed.ok ? 'Exactly one repository is needed' : parsed.error });
     return;
   }
+  const ex = parseExcludes(payload.exclude);
+  if (!ex.ok) {
+    emit({ type: 'result', runId: payload.runId, success: false, error: ex.error });
+    return;
+  }
   const r = await buildAndStoreGraph(parsed.repos[0], (ev) => emit(ev as unknown as Record<string, unknown>), {
     ...(payload.putUrl ? { putUrl: payload.putUrl } : {}),
+    ...(ex.patterns.length ? { exclude: ex.patterns } : {}),
     maxMs: payload.maxMs ?? DEFAULT_MAX_MS,
   });
   emit({ type: 'result', runId: payload.runId, ...r });

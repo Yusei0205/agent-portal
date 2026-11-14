@@ -10,6 +10,7 @@ import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
 import { NewSessionDialog, ModelPicker } from '../sessions/NewSessionDialog.jsx';
 import { syncGoal } from '../../lib/repoSync.js';
 import { ProjectChecklists } from './ProjectChecklists.jsx';
+import { GraphExcludes } from './GraphExcludes.jsx';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -1559,6 +1560,17 @@ function RepoCodeGraph({ projectId, repo, toast }) {
         </div>
       </div>
     )}
+    <GraphExcludes
+      projectId={projectId}
+      repoId={repo.id}
+      repoName={repo.name}
+      branch={branch}
+      refreshKey={`${st?.state ?? ''}:${st?.version ?? ''}`}
+      onRebuild={() => {
+        const poll = async () => { const next = await load(); if (next?.state === 'running') setTimeout(poll, 4000); };
+        setTimeout(poll, 1500);
+      }}
+    />
     </div>
   );
 }

@@ -321,6 +321,11 @@ export const HELP_TOPICS = [
         'On the **Code map** page a **Branch** list appears when more than one branch has a map. The search and the graph then show that branch.',
         'A session loads the graph of the branch it clones (the repository\'s default branch). If that branch has no graph, the session reads the code as usual: another branch\'s graph would describe other code.',
       ] },
+      { heading: 'Leave out folders or files', items: [
+        'A big repository can map to hundreds of thousands of points, most of them vendored or generated code. Under **Leave out folders or files** (on **Workspaces › Repositories** and on the **Code map** page) list what is not worth mapping, one per line, then press **Save and rebuild**.',
+        'Write them like a .gitignore: `node_modules/` leaves out that folder anywhere; `src/legacy/` only that path from the top; `*.min.js` files by name; `**` goes through folders. The list is the same for every branch of the repository.',
+        'After a build the page names the **biggest folders** in the graph; press one to add it to the list. Your code is not changed: only the graph is built without these paths, so the Code map and the sessions that load the graph do not see them (an agent can still open the files themselves).',
+      ] },
       { heading: 'Open the Code map', steps: true, items: [
         'Open **Workspaces › Code map** (pick a project first) and choose a repository.',
         'If the repository says **No code map yet**, open **Workspaces › Repositories** and press **Build graph** on it. It shows **building…** with what it is doing, and **ready** when it is done (a few minutes for a big repository). Until then sessions read the code as usual.',

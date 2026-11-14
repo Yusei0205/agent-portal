@@ -11,8 +11,13 @@
  * oldest is dropped for a new one). The state of a graph is kept in the setting `codegraph.<graph id>` (see graph-id.ts), and
  * the branches that have one in `codegraph-index.<repoId>`. A session loads the graph of the branch it clones.
  *
+ * A repository also has an exclude list (`codegraph-exclude.<repoId>`, the same for every branch): folders and files that are
+ * not worth mapping (vendored code, build output). The runner deletes them from its temporary clone before graphify runs, so
+ * they are not in the graph, the Code map or what sessions load. It applies from the next build.
+ *
  *   POST /api/projects/:id/code-map/:repoId/build        start a build; body { branch? } (editor)
- *   GET  /api/projects/:id/code-map/:repoId/graph-status  its state; ?branch= (viewer)
+ *   GET  /api/projects/:id/code-map/:repoId/graph-status  its state and the exclude list; ?branch= (viewer)
+ *   PUT  /api/projects/:id/code-map/:repoId/excludes     body { patterns: string[] } (editor)
  */
 
 import { randomUUID } from 'node:crypto';
@@ -28,6 +33,7 @@ import { getMemberRow, getProjectRow } from './project-access.ts';
 import { requireProjectEditor } from './testing/helpers.ts';
 import { badRequest, notFound, now } from './util.ts';
 import { graphIdFor, graphStem, parseGraphId, validBranch } from './graph-id.ts';
+import { parseExcludes } from './agent/runner-graph-build.ts';
 
 export interface CodeGraphStatus {
   state: 'running' | 'ready' | 'failed';
@@ -43,6 +49,12 @@ export interface CodeGraphStatus {
   bytes?: number;
   /** True when the full graph is saved for sessions to download. */
   stored?: boolean;
+  /** The exclude list this graph was built with. */
+  exclude?: string[];
+  /** What the exclude list removed from the clone. */
+  excluded?: { dirs: number; files: number };
+  /** The folders with the most items in this graph (what to consider leaving out), largest first. */
+  folders?: { path: string; nodes: number }[];
   /** While running: how far the build has got over all its stages (0-100), the stage and what it is doing. Older runners send none. */
   percent?: number;
   stage?: string;
@@ -75,6 +87,29 @@ export function graphObjectKey(projectId: string, id: string): string {
 }
 
 const indexKey = (repoId: string): string => `codegraph-index.${repoId}`;
+const excludeKey = (repoId: string): string => `codegraph-exclude.${repoId}`;
+
+/** The repository's exclude list (paths left out of every graph built from now on). */
+export function getExcludes(repoId: string): string[] {
+  try {
+    const r = parseExcludes(JSON.parse(getSetting(getDb(), excludeKey(repoId)) || '[]'));
+    return r.ok ? r.patterns : [];
+  } catch { return []; }
+}
+
+/** Saves the exclude list. Throws a message fit for the person when a pattern is not acceptable. */
+export async function setExcludes(repoId: string, raw: unknown): Promise<string[]> {
+  const r = parseExcludes(raw);
+  if (!r.ok) throw badRequest(r.error);
+  await setSetting(getDb(), excludeKey(repoId), JSON.stringify(r.patterns));
+  return r.patterns;
+}
+
+/** What a finished graph keeps while a newer build of it runs (sessions keep using it, the page keeps showing its hints). */
+function carry(st: CodeGraphStatus | null): Partial<CodeGraphStatus> {
+  if (!st?.stored) return {};
+  return { stored: true, version: st.version, commit: st.commit, nodes: st.nodes, links: st.links, bytes: st.bytes, ...(st.exclude ? { exclude: st.exclude } : {}), ...(st.folders ? { folders: st.folders } : {}), ...(st.excluded ? { excluded: st.excluded } : {}) };
+}
 function readIndex(repoId: string): string[] {
   try {
     const v = JSON.parse(getSetting(getDb(), indexKey(repoId)) || '[]') as unknown;
@@ -220,7 +255,7 @@ export async function requestCodeGraphBuild(projectId: string, repoId: string, a
   const st: CodeGraphStatus = {
     state: 'running', at: now(), message: 'Starting…', branch,
     // Keep what the last build left, so sessions keep using it while the new one is made.
-    ...(current?.stored ? { stored: true, version: current.version, commit: current.commit, nodes: current.nodes, links: current.links, bytes: current.bytes } : {}),
+    ...carry(current),
   };
   await save(id, st);
   await touchIndex(repoId, branch);
@@ -232,7 +267,7 @@ async function buildJob(projectId: string, repoId: string, askedBranch: string):
   const { repo, branch, id } = await targetFor(projectId, repoId, askedBranch);
   const defaultBranch = repo.default_branch ? String(repo.default_branch) : '';
   const before = getCodeGraphStatus(id);
-  const keep = before?.stored ? { stored: true, version: before.version, commit: before.commit, nodes: before.nodes, links: before.links, bytes: before.bytes } : {};
+  const keep = carry(before);
   const fail = async (message: string): Promise<void> => save(id, { state: 'failed', at: now(), message: message.slice(0, 400), branch, ...keep });
   const arn = graphRuntimeArn();
   if (!arn) { await fail('This portal has no cloud runner.'); return; }
@@ -250,7 +285,8 @@ async function buildJob(projectId: string, repoId: string, askedBranch: string):
   const key = graphObjectKey(projectId, id);
   const putUrl = p ? await p.presign(key, 'put', URL_LIFETIME_SECONDS).catch(() => undefined) : undefined;
   const maxMs = isJobRunner() ? GRAPH_MAX_MS.jobRuntime : GRAPH_MAX_MS.lambda;
-  const payload: Record<string, unknown> = { mode: 'build-graph', runId: `graph-${randomUUID()}`, repos: [specs[0]], ...(putUrl ? { putUrl } : {}), maxMs };
+  const exclude = getExcludes(repoId);
+  const payload: Record<string, unknown> = { mode: 'build-graph', runId: `graph-${randomUUID()}`, repos: [specs[0]], ...(putUrl ? { putUrl } : {}), ...(exclude.length ? { exclude } : {}), maxMs };
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new Error('timed out')), maxMs + 5 * 60_000);
@@ -308,6 +344,9 @@ async function buildJob(projectId: string, repoId: string, askedBranch: string):
     bytes: Number(result.bytes ?? 0),
     stored,
     version: now(),
+    exclude,
+    ...(Array.isArray(result.folders) ? { folders: (result.folders as { path?: unknown; nodes?: unknown }[]).filter((f) => typeof f?.path === 'string').slice(0, 12).map((f) => ({ path: String(f.path).slice(0, 200), nodes: Number(f.nodes ?? 0) })) } : {}),
+    ...(result.excluded && typeof result.excluded === 'object' ? { excluded: { dirs: Number((result.excluded as { dirs?: unknown }).dirs ?? 0), files: Number((result.excluded as { files?: unknown }).files ?? 0) } } : {}),
   });
   await touchIndex(repoId, branch);
   await enforceBranchLimit(projectId, repoId, defaultBranch, branch).catch((e) => console.warn('[code-graph] could not trim old branch graphs:', e instanceof Error ? e.message : e));
@@ -353,7 +392,16 @@ export function registerCodeGraphRoutes(): void {
       branch,
       defaultBranch,
       branches: listCodeGraphs(req.params.repoId, defaultBranch).map((g) => ({ branch: g.branch, status: g.status })),
+      excludes: getExcludes(req.params.repoId),
       unavailable: graphBuildUnavailable(),
     });
+  });
+
+  router.put('/api/projects/:id/code-map/:repoId/excludes', async (req: PortalRequest, res: PortalResponse) => {
+    if (!(await requireProjectEditor(req, res, req.params.id))) return;
+    const repo = await getGitReposRepository().getByIdForProject(req.params.repoId, req.params.id);
+    if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    sendJson(res, 200, { patterns: await setExcludes(req.params.repoId, body.patterns) });
   });
 }

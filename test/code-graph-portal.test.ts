@@ -196,4 +196,42 @@ describe('Build code graph (portal)', () => {
     const none = (await fetchJson(baseUrl, `/api/projects/${projectId}/code-map/gr_route/graph-status`, { cookie })).body as { status: unknown };
     assert.equal(none.status, null, 'the default branch has no graph yet');
   });
+
+  it('the exclude list is saved per repository, sent with every build, and the runner\'s folder hints are kept', async () => {
+    process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN = ARN;
+    await addRepo('gr_ex', 'https://example.com/ex.git');
+    const url = (r = '') => `/api/projects/${projectId}/code-map/gr_ex/${r}`;
+
+    const none = (await fetchJson(baseUrl, url('graph-status'), { cookie })).body as { excludes: string[] };
+    assert.deepEqual(none.excludes, []);
+
+    const saved = await fetchJson(baseUrl, url('excludes'), { method: 'PUT', body: { patterns: ['  node_modules/ ', 'dist\\', '', 'node_modules/', '*.min.js'] }, cookie });
+    assert.equal(saved.status, 200);
+    assert.deepEqual((saved.body as { patterns: string[] }).patterns, ['node_modules/', 'dist/', '*.min.js']);
+
+    for (const bad of [['../etc'], ['*'], 'node_modules', [1]]) {
+      const r = await fetchJson(baseUrl, url('excludes'), { method: 'PUT', body: { patterns: bad }, cookie });
+      assert.equal(r.status, 400, `${JSON.stringify(bad)} is refused`);
+    }
+    assert.deepEqual(((await fetchJson(baseUrl, url('graph-status'), { cookie })).body as { excludes: string[] }).excludes, ['node_modules/', 'dist/', '*.min.js'], 'a refused save changes nothing');
+    assert.equal((await fetchJson(baseUrl, `/api/projects/${projectId}/code-map/nope/excludes`, { method: 'PUT', body: { patterns: [] }, cookie })).status, 404);
+
+    let payload: Record<string, unknown> | null = null;
+    _setAgentCoreInvokerOverride(async function* (_arn, _sid, p) {
+      payload = p;
+      yield { type: 'result', runId: 'r', success: true, commit: 'c5', nodes: 7, links: 2, bytes: 10, stored: true, excluded: { dirs: 3, files: 1 }, folders: [{ path: 'vendor/lib', nodes: 5 }, { path: 'src/app', nodes: 2 }, { nope: true }] } as unknown as AgentCoreSSEEvent;
+    });
+    await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_ex', branch: '' });
+    assert.deepEqual((payload as unknown as { exclude: string[] }).exclude, ['node_modules/', 'dist/', '*.min.js']);
+    const st = mainStatus('gr_ex');
+    assert.deepEqual(st?.exclude, ['node_modules/', 'dist/', '*.min.js'], 'the graph remembers what it was built without');
+    assert.deepEqual(st?.excluded, { dirs: 3, files: 1 });
+    assert.deepEqual(st?.folders, [{ path: 'vendor/lib', nodes: 5 }, { path: 'src/app', nodes: 2 }]);
+
+    // Emptying the list: the next build sends none.
+    await fetchJson(baseUrl, url('excludes'), { method: 'PUT', body: { patterns: [] }, cookie });
+    await runBackgroundJobNow('build-code-graph', { projectId, repoId: 'gr_ex', branch: '' });
+    assert.equal('exclude' in (payload as unknown as Record<string, unknown>), false);
+    assert.deepEqual(mainStatus('gr_ex')?.exclude, []);
+  });
 });

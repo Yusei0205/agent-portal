@@ -491,11 +491,14 @@
         "server/code-graph.ts",
         "server/agent/runner-graph-build.ts",
         "server/agent/runner-graph.ts",
+        "server/graph-id.ts",
+        "web/src/pages/hub/GraphExcludes.jsx",
         "web/src/pages/CodeMap.jsx",
         "web/src/lib/forceLayout.js"
       ],
       "tests": [
         "test/code-graph.test.ts",
+        "test/graph-exclude.test.ts",
         "test/code-graph-portal.test.ts",
         "test/code-map.test.ts",
         "test/runner-repos.test.ts"
