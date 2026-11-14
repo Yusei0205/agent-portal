@@ -817,7 +817,7 @@ export function ComposerBar({
         </div>
       )}
       <AttachmentPicker key={workflow?.id + '-' + attachmentReset} projectId={projectId}
-        fileInputRef={attachmentInputRef} hideTrigger onAttachmentsChange={attachmentsChanged}
+        fileInputRef={attachmentInputRef} dropTargetRef={composerRef} hideTrigger onAttachmentsChange={attachmentsChanged}
         disabled={busy || !workflow || cloning} purpose="chat" maxFileBytes={attachLimits.fileBytes} maxTotalBytes={attachLimits.totalBytes} />
       {attachmentIds.length > 0 && <span className="field-hint">{limitsHint(attachLimits)}</span>}
       <div className={`ws-composer-row${composerH !== null && composerH <= 56 ? ' ws-composer-row--compact' : ''}`} ref={rowRef} style={composerH !== null ? { height: composerH } : undefined}>

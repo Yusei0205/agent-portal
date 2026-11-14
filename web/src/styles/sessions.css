@@ -497,6 +497,15 @@
 }
 
 /* ── Composer bar ────────────────────────────────────────────── */
+.ws-composer { position: relative; }
+/* Files are being dragged over the message box: say it will take them. */
+.ws-composer.is-drop-target { outline: 2px dashed var(--accent, #4f7cff); outline-offset: -3px; }
+.ws-composer.is-drop-target::after {
+  content: 'Drop files to attach';
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg, #0b1020) 82%, transparent); color: var(--accent, #4f7cff);
+  font-weight: 600; pointer-events: none; z-index: 5;
+}
 .ws-composer {
   padding: 8px 10px;
   border-top: 1px solid var(--line);

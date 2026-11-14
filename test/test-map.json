@@ -321,6 +321,7 @@
         "test/web-stop-shortcut.test.ts",
         "test/web-message-history.test.ts",
         "test/web-clear-view.test.ts",
+        "test/web-chat-attach-drop-paste.test.ts",
         "test/web-pull-request-card.test.ts",
         "test/sessions-repo.test.ts",
         "test/engine-switch.test.ts",

@@ -90,6 +90,7 @@ export function AttachmentPicker({
   maxFileBytes = null,
   maxTotalBytes = null,
   purpose = 'default',
+  dropTargetRef = null,
 }) {
   const [items, setItems] = useState(() =>
     initialAttachments.map((att) => ({
@@ -122,6 +123,33 @@ export function AttachmentPicker({
     onAttachmentsChange(readyIds, busy);
   }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Dropping files anywhere on a larger area (the chat's message box), not only on the drop zone: the area is given as dropTargetRef.
+  useEffect(() => {
+    const el = dropTargetRef?.current;
+    if (!el || disabled) return undefined;
+    let depth = 0;
+    const hasFiles = (e) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const clear = () => { depth = 0; el.classList.remove('is-drop-target'); };
+    const onEnter = (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; el.classList.add('is-drop-target'); };
+    const onOver = (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; };
+    const onLeave = (e) => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (depth === 0) clear(); };
+    const onDrop = (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      clear();
+      if (e.dataTransfer?.files?.length && processRef.current) processRef.current(e.dataTransfer.files);
+    };
+    el.addEventListener('dragenter', onEnter);
+    el.addEventListener('dragover', onOver);
+    el.addEventListener('dragleave', onLeave);
+    el.addEventListener('drop', onDrop);
+    return () => {
+      el.removeEventListener('dragenter', onEnter); el.removeEventListener('dragover', onOver);
+      el.removeEventListener('dragleave', onLeave); el.removeEventListener('drop', onDrop);
+      clear();
+    };
+  }, [disabled, dropTargetRef]);
+
   // Clipboard paste — images only; never intercept paste in text inputs/textareas
   useEffect(() => {
     if (disabled) return;
@@ -150,7 +178,8 @@ export function AttachmentPicker({
           const ext = '.' + (f.type.split('/')[1] ?? 'png').replace('jpeg', 'jpg');
           f = new File([f], `pasted-image${ext}`, { type: f.type });
         }
-        if (isImg(f.name)) files.push(f);
+        // A file copied in the file manager (a zip, a PDF) is also taken, but only into a message box that opted in.
+        if (isImg(f.name) || (optedIn && ALLOWED_EXTS.includes(getExt(f.name)))) files.push(f);
       }
       if (!files.length) return;
       e.preventDefault();
