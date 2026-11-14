@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { PanZoom } from '../components/PanZoom.jsx';
-import { radialLayout } from '../lib/forceLayout.js';
+import { mindmapLayout } from '../lib/mindmapLayout.js';
 import { GraphExcludes } from './hub/GraphExcludes.jsx';
 
 const KIND_LABEL = { function: 'Function', class: 'Class', file: 'File', other: 'Item', external: 'External' };
@@ -11,7 +11,7 @@ const KIND_LABEL = { function: 'Function', class: 'Class', file: 'File', other: 
 const hue = (c) => (Number(c) * 47) % 360;
 const fill = (c) => `hsl(${hue(c)} 62% 46%)`;
 const radius = (d) => 7 + Math.min(14, Math.sqrt(d) * 2.2);
-const shortLabel = (l) => (l.length > 24 ? `${l.slice(0, 23)}…` : l);
+const shortLabel = (l) => (l.length > 20 ? `${l.slice(0, 19)}…` : l);
 const where = (n) => (n.f ? `${n.f}${n.n ? `:${n.n}` : ''}` : '');
 
 function NodeRow({ n, onPick, active }) {
@@ -26,131 +26,237 @@ function NodeRow({ n, onPick, active }) {
   );
 }
 
-const EDGE_COLOR = { calls: '#5eead4', indirect_call: '#5eead4', imports: '#a78bfa', imports_from: '#a78bfa', dynamic_import: '#a78bfa', re_exports: '#a78bfa', references: '#fbbf24' };
-const edgeColor = (r) => EDGE_COLOR[r] ?? '#7c8aa5';
-/** `a/b/Thing.tsx` -> `Thing.tsx`: the folder is in the tooltip and the side panel, the label has room for the name only. */
+/** `a/b/Thing.tsx` -> `Thing.tsx`: the folder is in the tooltip and the side panel, the card has room for the name only. */
 const baseName = (l) => String(l).replace(/^.*[\\/]/, '');
-const nodeRadius = (d, scale) => (10 + Math.min(11, Math.sqrt(d) * 1.7)) * scale;
 
-/** A point and the direction of travel on a quadratic curve, for the arrowhead. */
-function along(a, c, b, t) {
-  const x = (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * c.x + t * t * b.x;
-  const y = (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * c.y + t * t * b.y;
-  const dx = 2 * (1 - t) * (c.x - a.x) + 2 * t * (b.x - c.x);
-  const dy = 2 * (1 - t) * (c.y - a.y) + 2 * t * (b.y - c.y);
-  const len = Math.hypot(dx, dy) || 1;
-  return { x, y, ux: dx / len, uy: dy / len };
+/** Line icons (24 x 24), one per kind of item. */
+const KIND_ICON = {
+  function: 'M9 4c-2 0-3 1-3 3v2c0 1.2-1 2.2-2 3 1 .8 2 1.8 2 3v2c0 2 1 3 3 3M15 4c2 0 3 1 3 3v2c0 1.2 1 2.2 2 3-1 .8-2 1.8-2 3v2c0 2-1 3-3 3',
+  class: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5',
+  file: 'M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6',
+  other: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+};
+const iconFor = (k) => KIND_ICON[k] ?? KIND_ICON.other;
+
+function KindIcon({ kind, size, x = 0, y = 0, color }) {
+  return (
+    <g transform={`translate(${x - size / 2},${y - size / 2}) scale(${size / 24})`} aria-hidden="true">
+      <path d={iconFor(kind)} fill="none" stroke={color} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </g>
+  );
 }
 
-const LABEL_MODES = [['key', 'Key items'], ['all', 'All'], ['none', 'None']];
+/** A smooth S-shaped connector that leaves and arrives horizontally (`h`) or vertically (`v`). */
+function curve(sx, sy, ex, ey, dir) {
+  if (dir === 'v') {
+    const d = (ey - sy) * 0.55;
+    return `M${sx},${sy} C${sx},${sy + d} ${ex},${ey - d} ${ex},${ey}`;
+  }
+  const d = (ex - sx) * 0.55;
+  return `M${sx},${sy} C${sx + d},${sy} ${ex - d},${ey} ${ex},${ey}`;
+}
 
-/** The neighbourhood of one item, drawn as a graph of glowing spheres. Click an item to move to it. */
-function GraphView({ data, onPick }) {
-  const [hover, setHover] = useState(null);
-  const [labels, setLabels] = useState('key');
-  const { pos: layout, width: W, height: H } = useMemo(
-    () => radialLayout(data.nodes.map((n) => ({ id: n.i, c: n.c, d: n.d })), data.centerId),
-    [data],
-  );
-  // The drawing grows with the number of items; sizes grow with it so items look the same size on screen.
-  const scale = Math.max(1, W / 1000);
-  const byId = useMemo(() => new Map(data.nodes.map((n) => [n.i, n])), [data]);
-  const groups = useMemo(() => [...new Set(data.nodes.map((n) => n.c))], [data]);
-  const near = useMemo(() => {
-    if (!hover) return null;
-    const s = new Set([hover]);
-    for (const l of data.links) { if (l.s === hover) s.add(l.t); if (l.t === hover) s.add(l.s); }
-    return s;
-  }, [hover, data]);
-  const key = useMemo(() => {
-    const top = [...data.nodes].sort((a, b) => (b.d ?? 0) - (a.d ?? 0)).slice(0, data.nodes.length <= 16 ? 16 : 12).map((n) => n.i);
-    return new Set([data.centerId, ...top]);
+/** How many main neighbours the map can show at most; the side list has every one. */
+const SHOW_MAX = 36;
+const SHOW_STEPS = [12, 24, SHOW_MAX];
+const reduceMotion = () => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; } };
+
+/**
+ * The neighbourhood of one item as a mind map: the item in a glowing card, its main neighbours as pill cards on either side,
+ * and each one's own neighbours as small squares fanning out beyond it. Click anything to move there.
+ */
+function GraphView({ data, onPick, wide, onToggleWide }) {
+  const [hover, setHover] = useState(null); // an item id
+  const [show, setShow] = useState(SHOW_STEPS[0]);
+  const [names, setNames] = useState('main');
+  const center = useMemo(() => data.nodes.find((n) => n.i === data.centerId), [data]);
+  const allMains = useMemo(() => data.nodes.filter((n) => n.i !== data.centerId), [data]);
+  const mains = useMemo(() => allMains.slice(0, show), [allMains, show]);
+  const kidsOf = (id) => data.children?.[id]?.nodes ?? [];
+
+  const lay = useMemo(() => mindmapLayout(
+    mains.map((n) => ({ id: n.i, w: Math.max(112, Math.min(190, shortLabel(baseName(n.l)).length * 6.8 + 62)), kids: kidsOf(n.i).length })),
+  ), [mains, data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { width: W, height: H, center: C } = lay;
+  // A tall map (many neighbours) opens on the middle card at a readable size; the rest is drawn above and below and a drag away.
+  const tall = H > W * 0.78;
+  const viewH = tall ? Math.round(W * 0.78) : H;
+  const viewTop = tall ? Math.round(C.y - viewH / 2) : 0;
+
+  // Which way each main neighbour is used: the centre uses it (out), or it uses the centre (in).
+  const direction = useMemo(() => {
+    const d = new Map();
+    for (const l of data.links) {
+      if (l.s === data.centerId) d.set(l.t, 'out');
+      else if (l.t === data.centerId && !d.has(l.s)) d.set(l.s, 'in');
+    }
+    return d;
   }, [data]);
-  const showLabel = (id) => labels === 'all' || (labels === 'key' && (key.has(id) || (near && near.has(id)))) || (labels === 'none' && hover === id);
+
+  // What is lit while something is hovered: the centre, that main neighbour, and its small squares.
+  const focusMain = useMemo(() => {
+    if (!hover) return null;
+    if (lay.mains.has(hover)) return hover;
+    for (const [mid, list] of Object.entries(data.children ?? {})) if (list.nodes.some((k) => k.i === hover)) return mid;
+    return null;
+  }, [hover, lay, data]);
+  const motion = useMemo(() => !reduceMotion(), []);
+  const hue1 = (c) => hue(c);
 
   return (
     <div className="cm-graph">
       <div className="cm-toolbar" role="group" aria-label="Graph options">
         <span className="cm-legend" aria-label="Legend">
-          <span><i className="cm-lg cm-lg-fn" /> Function</span>
-          <span><i className="cm-lg cm-lg-cls" /> Class</span>
-          <span><i className="cm-lg cm-lg-file" /> File</span>
-          <span className="cm-legend-note">Colour = group</span>
-        </span>
-        <span className="cm-seg" role="radiogroup" aria-label="Labels">
-          <span className="cm-seg-title">Labels</span>
-          {LABEL_MODES.map(([id, text]) => (
-            <button key={id} type="button" role="radio" aria-checked={labels === id} className={`cm-seg-btn${labels === id ? ' is-on' : ''}`} onClick={() => setLabels(id)}>{text}</button>
+          {['function', 'class', 'file'].map((k) => (
+            <span key={k}>
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d={iconFor(k)} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> {KIND_LABEL[k]}
+            </span>
           ))}
+          <span className="cm-legend-note">Colour = group · the dot moves from the caller to what it uses</span>
+        </span>
+        <span className="cm-controls">
+          {allMains.length > SHOW_STEPS[0] && (
+            <span className="cm-seg" role="radiogroup" aria-label="How many neighbours">
+              <span className="cm-seg-title">Show</span>
+              {[...new Set(SHOW_STEPS.map((n) => Math.min(n, allMains.length)))].map((n) => (
+                <button key={n} type="button" role="radio" aria-checked={Math.min(show, allMains.length) === n} className={`cm-seg-btn${Math.min(show, allMains.length) === n ? ' is-on' : ''}`} onClick={() => setShow(n)}>{n}</button>
+              ))}
+              <span className="cm-seg-title cm-seg-after">of {allMains.length}</span>
+            </span>
+          )}
+          <span className="cm-seg" role="radiogroup" aria-label="Names">
+            <span className="cm-seg-title">Names</span>
+            {[['main', 'Main'], ['all', 'All']].map(([id, text]) => (
+              <button key={id} type="button" role="radio" aria-checked={names === id} className={`cm-seg-btn${names === id ? ' is-on' : ''}`} onClick={() => setNames(id)}>{text}</button>
+            ))}
+          </span>
+          <button type="button" className="cm-seg-btn cm-wide-btn" aria-pressed={wide} onClick={onToggleWide} title="Hide the list to give the graph the full width">{wide ? 'Show list' : 'Wide view'}</button>
         </span>
       </div>
+
       <PanZoom height="660px" label="Code graph" className="cm-stage">
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }} role="img" aria-label="Code graph" className="cm-svg">
+        <svg viewBox={`0 ${viewTop} ${W} ${viewH}`} style={{ width: '100%', height: tall ? 'auto' : '636px', overflow: 'visible' }} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Code graph" className="cm-svg">
           <defs>
-            {groups.map((c) => (
-              <radialGradient key={c} id={`cmg-${c}`} cx="34%" cy="28%" r="78%">
-                <stop offset="0%" stopColor={`hsl(${hue(c)} 95% 82%)`} />
-                <stop offset="42%" stopColor={`hsl(${hue(c)} 82% 58%)`} />
-                <stop offset="100%" stopColor={`hsl(${hue(c)} 72% 26%)`} />
-              </radialGradient>
-            ))}
-            <radialGradient id="cm-spec" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#fff" stopOpacity="0.9" />
-              <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+            <linearGradient id="cm-ring" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#22d3ee" />
+              <stop offset="55%" stopColor="#6d8bff" />
+              <stop offset="100%" stopColor="#c084fc" />
+            </linearGradient>
+            <linearGradient id="cm-glass" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#1b2748" stopOpacity="0.95" />
+              <stop offset="100%" stopColor="#0d1530" stopOpacity="0.95" />
+            </linearGradient>
+            <radialGradient id="cm-core-glow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.55" />
+              <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
             </radialGradient>
           </defs>
 
-          {data.links.map((l, i) => {
-            const a = layout.get(l.s); const b = layout.get(l.t);
-            if (!a || !b) return null;
-            const hot = hover && (l.s === hover || l.t === hover);
-            const dim = hover && !hot;
-            // Curve towards the middle so edges between neighbours do not cut across the other items.
-            const mx = (a.x + b.x) / 2; const my = (a.y + b.y) / 2;
-            const c = { x: mx + (W / 2 - mx) * 0.22, y: my + (H / 2 - my) * 0.22 };
-            const rb = nodeRadius(byId.get(l.t)?.d ?? 1, scale) + 3 * scale;
-            const end = along(a, c, b, 1);
-            const stop = { x: b.x - end.ux * rb, y: b.y - end.uy * rb };
-            const tip = along(a, c, stop, 1);
-            const col = edgeColor(l.r);
-            const s = (hot ? 7 : 5) * scale;
+          <circle cx={C.x} cy={C.y} r={Math.min(W, H) * 0.46} className="cm-orbit" />
+          <circle cx={C.x} cy={C.y} r={Math.min(W, H) * 0.3} className="cm-orbit cm-orbit-inner" />
+
+          {mains.map((n) => {
+            const p = lay.mains.get(n.i);
+            if (!p) return null;
+            const col = `hsl(${hue1(n.c)} 92% 64%)`;
+            const half = C.size / 2;
+            const lit = !focusMain || focusMain === n.i;
+            let sx; let sy; let ex; let ey; let dir = 'h';
+            if (p.side === 'right' || p.side === 'left') {
+              const sgn = p.side === 'right' ? 1 : -1;
+              sx = C.x + sgn * half; sy = C.y + Math.max(-half * 0.55, Math.min(half * 0.55, (p.y - C.y) * 0.25));
+              ex = p.x - sgn * p.w / 2; ey = p.y;
+            } else {
+              dir = 'v';
+              const sgn = p.side === 'bottom' ? 1 : -1;
+              sx = C.x; sy = C.y + sgn * half; ex = p.x; ey = p.y - sgn * p.h / 2;
+            }
+            const d = curve(sx, sy, ex, ey, dir);
+            const way = direction.get(n.i) ?? 'out';
+            const pathId = `cmp-${n.i.replace(/[^A-Za-z0-9_-]/g, '_')}`;
             return (
-              <g key={`${l.s}>${l.t}>${i}`} className={`cm-edge${hot ? ' is-hot' : ''}${dim ? ' is-dim' : ''}`} style={{ color: col }}>
-                <path d={`M${a.x},${a.y} Q${c.x},${c.y} ${stop.x},${stop.y}`} fill="none" stroke="currentColor" strokeWidth={(hot ? 2.4 : 1.3) * scale} strokeLinecap="round" />
-                <path d={`M${stop.x},${stop.y} l${-tip.ux * s * 1.6 - tip.uy * s},${-tip.uy * s * 1.6 + tip.ux * s} l${tip.uy * s * 2},${-tip.ux * s * 2} z`} fill="currentColor" />
-                <title>{l.r.replace(/_/g, ' ')}</title>
+              <g key={`e-${n.i}`} className={`cm-link${lit ? '' : ' is-dim'}${focusMain === n.i ? ' is-hot' : ''}`} style={{ color: col }}>
+                <path id={pathId} d={d} className="cm-line" fill="none" />
+                <circle cx={sx} cy={sy} r="3.4" className="cm-end" />
+                {motion && (
+                  <circle r="3.2" className="cm-travel">
+                    <animateMotion dur="3.4s" repeatCount="indefinite" calcMode="linear" keyPoints={way === 'out' ? '0;1' : '1;0'} keyTimes="0;1"><mpath href={`#${pathId}`} /></animateMotion>
+                  </circle>
+                )}
+                {(kidsOf(n.i)).map((k, j) => {
+                  const kp = lay.kids.get(n.i)?.[j];
+                  if (!kp) return null;
+                  let a; let b; let kdir = 'h';
+                  if (p.side === 'right') { a = [p.x + p.w / 2, p.y]; b = [kp.x - kp.size / 2, kp.y]; }
+                  else if (p.side === 'left') { a = [p.x - p.w / 2, p.y]; b = [kp.x + kp.size / 2, kp.y]; }
+                  else if (p.side === 'top') { kdir = 'v'; a = [p.x, p.y - p.h / 2]; b = [kp.x, kp.y + kp.size / 2]; }
+                  else { kdir = 'v'; a = [p.x, p.y + p.h / 2]; b = [kp.x, kp.y - kp.size / 2]; }
+                  return <path key={k.i} d={curve(a[0], a[1], b[0], b[1], kdir)} className="cm-line cm-line-kid" fill="none" />;
+                })}
+                <circle cx={p.side === 'right' ? p.x + p.w / 2 : p.side === 'left' ? p.x - p.w / 2 : p.x} cy={p.side === 'top' ? p.y - p.h / 2 : p.side === 'bottom' ? p.y + p.h / 2 : p.y} r="3.4" className="cm-end" />
               </g>
             );
           })}
 
-          {data.nodes.map((n) => {
-            const p = layout.get(n.i);
+          {mains.map((n) => {
+            const p = lay.mains.get(n.i);
             if (!p) return null;
-            const isCenter = n.i === data.centerId;
-            const dim = near && !near.has(n.i);
-            const r = nodeRadius(n.d, scale) * (isCenter ? 1.5 : 1);
-            const h = hue(n.c);
-            const labelOn = showLabel(n.i);
-            const fs = (isCenter ? 15 : 12.5) * scale;
+            const col = `hsl(${hue1(n.c)} 92% 64%)`;
+            const lit = !focusMain || focusMain === n.i;
+            const kids = kidsOf(n.i);
+            const spots = lay.kids.get(n.i) ?? [];
+            const label = shortLabel(baseName(n.l));
             return (
-              <g key={n.i} transform={`translate(${p.x},${p.y})`} className={`cm-node${isCenter ? ' is-center' : ''}${dim ? ' is-dim' : ''}${hover === n.i ? ' is-hover' : ''}`}
-                style={{ '--glow': `hsl(${h} 95% 62%)` }}
-                tabIndex={0} role="button" aria-label={`${n.l}, ${KIND_LABEL[n.k] ?? 'item'}${where(n) ? `, ${where(n)}` : ''}`}
-                onClick={() => onPick(n.i)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(n.i); } }}
-                onMouseEnter={() => setHover(n.i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(n.i)} onBlur={() => setHover(null)}>
-                <title>{`${n.l}\n${KIND_LABEL[n.k] ?? 'Item'}${where(n) ? ` · ${where(n)}` : ''}`}</title>
-                {isCenter && <circle r={r * 1.55} className="cm-halo" />}
-                <ellipse cx={r * 0.12} cy={r * 1.02} rx={r * 0.95} ry={r * 0.26} className="cm-ground" />
-                {n.k === 'file'
-                  ? <rect x={-r * 1.05} y={-r * 0.78} width={r * 2.1} height={r * 1.56} rx={r * 0.32} fill={`url(#cmg-${n.c})`} className="cm-shape" />
-                  : n.k === 'class'
-                    ? <rect x={-r} y={-r} width={r * 2} height={r * 2} rx={r * 0.42} fill={`url(#cmg-${n.c})`} className="cm-shape" />
-                    : <circle r={r} fill={`url(#cmg-${n.c})`} className="cm-shape" />}
-                <ellipse cx={-r * 0.3} cy={-r * 0.42} rx={r * 0.46} ry={r * 0.28} fill="url(#cm-spec)" className="cm-spec" />
-                {labelOn && <text y={r + fs + 4 * scale} textAnchor="middle" className="cm-label" style={{ fontSize: fs }}>{shortLabel(baseName(n.l))}</text>}
+              <g key={`n-${n.i}`} className={`cm-cluster${lit ? '' : ' is-dim'}`}>
+                <g transform={`translate(${p.x},${p.y})`} className={`cm-pill${hover === n.i ? ' is-hover' : ''}`} style={{ '--glow': col }}
+                  tabIndex={0} role="button" aria-label={`${n.l}, ${KIND_LABEL[n.k] ?? 'item'}${where(n) ? `, ${where(n)}` : ''}`}
+                  onClick={() => onPick(n.i)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(n.i); } }}
+                  onMouseEnter={() => setHover(n.i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(n.i)} onBlur={() => setHover(null)}>
+                  <title>{`${n.l}\n${KIND_LABEL[n.k] ?? 'Item'}${where(n) ? ` · ${where(n)}` : ''}`}</title>
+                  <rect x={-p.w / 2} y={-p.h / 2} width={p.w} height={p.h} rx={p.h / 2} className="cm-pill-bg" />
+                  <rect x={-p.w / 2} y={-p.h / 2} width={p.w} height={p.h} rx={p.h / 2} className="cm-pill-ring" stroke={col} />
+                  <KindIcon kind={n.k} size={19} x={-p.w / 2 + 25} color={col} />
+                  <text x={-p.w / 2 + 43} y="4.6" className="cm-pill-text">{label}</text>
+                </g>
+                {kids.map((k, j) => {
+                  const kp = spots[j];
+                  if (!kp) return null;
+                  const kc = `hsl(${hue1(k.c)} 85% 66%)`;
+                  const showName = names === 'all' || hover === k.i;
+                  const anchor = kp.side === 'left' ? 'end' : kp.side === 'right' ? 'start' : 'middle';
+                  const tx = kp.side === 'left' ? -kp.size / 2 - 7 : kp.side === 'right' ? kp.size / 2 + 7 : 0;
+                  const ty = kp.side === 'top' ? -kp.size / 2 - 8 : kp.side === 'bottom' ? kp.size / 2 + 15 : 4;
+                  return (
+                    <g key={k.i} transform={`translate(${kp.x},${kp.y})`} className={`cm-kid${hover === k.i ? ' is-hover' : ''}`} style={{ '--glow': kc }}
+                      tabIndex={0} role="button" aria-label={`${k.l}, ${KIND_LABEL[k.k] ?? 'item'}${where(k) ? `, ${where(k)}` : ''}`}
+                      onClick={() => onPick(k.i)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(k.i); } }}
+                      onMouseEnter={() => setHover(k.i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(k.i)} onBlur={() => setHover(null)}>
+                      <title>{`${k.l}\n${KIND_LABEL[k.k] ?? 'Item'}${where(k) ? ` · ${where(k)}` : ''}`}</title>
+                      <rect x={-kp.size / 2} y={-kp.size / 2} width={kp.size} height={kp.size} rx="8" className="cm-kid-bg" />
+                      <KindIcon kind={k.k} size={14} color={kc} />
+                      {showName && <text x={tx} y={ty} textAnchor={anchor} className="cm-kid-text">{shortLabel(baseName(k.l))}</text>}
+                    </g>
+                  );
+                })}
+                {(data.children?.[n.i]?.more ?? 0) > 0 && spots.length > 0 && (() => {
+                  const last = spots[spots.length - 1];
+                  // Under the last small square of the fan (above it for the item on top).
+                  const mx = last.x;
+                  const my = last.side === 'top' ? last.y - last.size / 2 - 6 : last.y + last.size / 2 + 14;
+                  return <text x={mx} y={my} textAnchor="middle" className="cm-more">{`+${data.children[n.i].more}`}</text>;
+                })()}
               </g>
             );
           })}
+
+          <g transform={`translate(${C.x},${C.y})`} className="cm-core" tabIndex={0} role="img" aria-label={`${center?.l ?? ''}, the item shown`}>
+            <title>{`${center?.l ?? ''}\n${KIND_LABEL[center?.k] ?? 'Item'}${center ? ` · ${where(center)}` : ''}`}</title>
+            <circle r={C.size * 0.95} fill="url(#cm-core-glow)" className="cm-core-aura" />
+            <rect x={-C.size / 2} y={-C.size / 2} width={C.size} height={C.size} rx="30" className="cm-core-bg" />
+            <rect x={-C.size / 2} y={-C.size / 2} width={C.size} height={C.size} rx="30" className="cm-core-ring" />
+            <KindIcon kind={center?.k} size={40} y={-16} color="#7dd3fc" />
+            <text y="36" textAnchor="middle" className="cm-core-text">{shortLabel(baseName(center?.l ?? ''))}</text>
+          </g>
         </svg>
       </PanZoom>
     </div>
@@ -168,6 +274,7 @@ function RepoMap({ projectId, repo, branch }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
+  const [wide, setWide] = useState(false);
   const current = trail[trail.length - 1] ?? null;
 
   useEffect(() => {
@@ -231,7 +338,7 @@ function RepoMap({ projectId, repo, branch }) {
       </div>
       {error && <p className="error-msg" role="alert">{error}</p>}
 
-      <div className="cm-body">
+      <div className={`cm-body${wide ? ' is-wide' : ''}`}>
         <div className="cm-side" aria-live="polite">
           {query.trim() ? (
             results == null ? <p className="muted">Searching…</p>
@@ -281,7 +388,7 @@ function RepoMap({ projectId, repo, branch }) {
 
         <div className="cm-canvas">
           {current && graph ? (
-            <div className={busy ? 'cm-busy' : ''}><GraphView data={graph} onPick={pick} /></div>
+            <div className={busy ? 'cm-busy' : ''}><GraphView data={graph} onPick={pick} wide={wide} onToggleWide={() => setWide((w) => !w)} /></div>
           ) : (
             <div className="empty-state"><p>Search for a function, class or file, or pick one from the list, to see what it uses and what uses it.</p></div>
           )}

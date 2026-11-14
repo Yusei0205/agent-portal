@@ -499,7 +499,7 @@
         "server/graph-id.ts",
         "web/src/pages/hub/GraphExcludes.jsx",
         "web/src/pages/CodeMap.jsx",
-        "web/src/lib/forceLayout.js"
+        "web/src/lib/mindmapLayout.js"
       ],
       "tests": [
         "test/code-graph.test.ts",

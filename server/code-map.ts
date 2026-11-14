@@ -180,8 +180,15 @@ export function searchNodes(nodes: Iterable<CompactNode>, degree: Map<string, nu
   return scored.sort((a, b) => b.score - a.score).slice(0, limit).map((s) => s.n);
 }
 
-/** One item, its neighbours (most connected first) and the links among all of them. Exported for tests. */
-export function neighbourhood(m: Pick<Loaded, 'byId' | 'adj' | 'degree' | 'links'>, id: string, max = 60): { nodes: (CompactNode & { d: number })[]; links: { s: string; t: string; r: string }[]; more: number } | null {
+/** An item's own neighbours as the Code map shows them beside it: the few best connected, and how many more there are. */
+export interface NodeKids { nodes: (CompactNode & { d: number; r: string; dir: 'out' | 'in' })[]; more: number }
+
+/**
+ * One item, its neighbours (most connected first), the links among all of them, and for each neighbour up to `kids` of its own
+ * neighbours (the small items drawn beside it). An item that is already shown as a neighbour, or as the middle one, is not repeated
+ * as somebody's kid, and different neighbours prefer different kids. Exported for tests.
+ */
+export function neighbourhood(m: Pick<Loaded, 'byId' | 'adj' | 'degree' | 'links'>, id: string, max = 60, kids = 3): { nodes: (CompactNode & { d: number })[]; links: { s: string; t: string; r: string }[]; more: number; children: Record<string, NodeKids> } | null {
   const center = m.byId.get(id);
   if (!center) return null;
   const all = m.adj.get(id) ?? [];
@@ -198,7 +205,24 @@ export function neighbourhood(m: Pick<Loaded, 'byId' | 'adj' | 'degree' | 'links
     for (const a of m.adj.get(k) ?? []) if (a.dir === 'out' && keep.has(a.other)) links.push({ s: k, t: a.other, r: a.r });
   }
   const nodes = [...keep].map((k) => { const n = m.byId.get(k)!; return { ...n, d: m.degree.get(k) ?? 0 }; });
-  return { nodes, links: links.slice(0, 400), more: Math.max(0, seen.size - 1 - picked.length) };
+
+  const children: Record<string, NodeKids> = {};
+  const taken = new Set<string>();
+  for (const p of picked) {
+    const options: NodeKids['nodes'] = [];
+    const once = new Set<string>();
+    for (const a of m.adj.get(p) ?? []) {
+      const n = m.byId.get(a.other);
+      if (!n || keep.has(a.other) || once.has(a.other) || n.k === 'external') continue;
+      once.add(a.other);
+      options.push({ ...n, d: m.degree.get(a.other) ?? 0, r: a.r, dir: a.dir });
+    }
+    options.sort((x, y) => (taken.has(x.i) ? 1 : 0) - (taken.has(y.i) ? 1 : 0) || y.d - x.d);
+    const chosen = options.slice(0, kids);
+    for (const c of chosen) taken.add(c.i);
+    children[p] = { nodes: chosen, more: Math.max(0, options.length - chosen.length) };
+  }
+  return { nodes, links: links.slice(0, 400), more: Math.max(0, seen.size - 1 - picked.length), children };
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────

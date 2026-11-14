@@ -2174,6 +2174,7 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
 .cm-lg-file { border-radius: 4px; width: 17px; height: 12px; }
 .cm-seg { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
 .cm-seg-title { padding: 4px 8px; border-right: 1px solid var(--line); }
+.cm-seg-after { border-right: 0; border-left: 1px solid var(--line); }
 .cm-seg-btn { border: 0; background: transparent; color: inherit; font: inherit; padding: 4px 10px; cursor: pointer; }
 .cm-seg-btn:hover { background: var(--accent-wash); }
 .cm-seg-btn.is-on { background: var(--accent); color: var(--accent-ink); }
@@ -2194,25 +2195,48 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
 .cm-stage .panzoom-bar .btn-icon:hover { background: rgba(120, 140, 255, 0.22); }
 .cm-svg { display: block; background: transparent; }
 
-.cm-edge { opacity: 0.55; transition: opacity 0.15s; }
-.cm-edge.is-dim { opacity: 0.07; }
-.cm-edge.is-hot { opacity: 1; filter: drop-shadow(0 0 4px currentColor); }
-.cm-edge.is-hot path:first-child { stroke-dasharray: 9 7; animation: cm-flow 0.9s linear infinite; }
-@keyframes cm-flow { to { stroke-dashoffset: -16; } }
+/* Code map mind map: glass cards and glowing connectors on the dark stage. */
+.cm-controls { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cm-wide-btn { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.cm-wide-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.cm-body.is-wide { grid-template-columns: minmax(0, 1fr); }
+.cm-body.is-wide .cm-side { display: none; }
 
-.cm-node { cursor: pointer; outline: none; transition: opacity 0.15s; filter: drop-shadow(0 0 7px var(--glow)); }
-.cm-node.is-dim { opacity: 0.22; filter: none; }
-.cm-node .cm-shape { stroke: rgba(255, 255, 255, 0.38); stroke-width: 1.2; transition: transform 0.15s; transform-box: fill-box; transform-origin: center; }
-.cm-node:hover .cm-shape, .cm-node:focus-visible .cm-shape, .cm-node.is-hover .cm-shape { transform: scale(1.14); stroke: #fff; stroke-width: 2; }
-.cm-node:hover, .cm-node:focus-visible, .cm-node.is-hover { filter: drop-shadow(0 0 14px var(--glow)) drop-shadow(0 0 4px var(--glow)); }
-.cm-node.is-center .cm-shape { stroke: #fff; stroke-width: 2.4; }
-.cm-node.is-center { filter: drop-shadow(0 0 16px var(--glow)) drop-shadow(0 0 5px var(--glow)); }
-.cm-ground { fill: rgba(0, 0, 0, 0.45); }
-.cm-spec { pointer-events: none; }
-.cm-halo { fill: none; stroke: var(--glow); stroke-width: 1.5; opacity: 0.55; animation: cm-pulse 2.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
-@keyframes cm-pulse { 0%, 100% { opacity: 0.25; transform: scale(0.94); } 50% { opacity: 0.7; transform: scale(1.06); } }
-.cm-label { fill: #eef1ff; paint-order: stroke; stroke: #070a18; stroke-width: 4px; stroke-linejoin: round; pointer-events: none; font-weight: 600; }
+.cm-orbit { fill: none; stroke: rgba(120, 160, 255, 0.13); stroke-width: 1.2; stroke-dasharray: 2 7; }
+.cm-orbit-inner { stroke: rgba(120, 160, 255, 0.08); }
+
+.cm-link { color: #67e8f9; transition: opacity 0.18s; }
+.cm-link.is-dim { opacity: 0.16; }
+.cm-line { stroke: currentColor; stroke-width: 2; opacity: 0.78; stroke-linecap: round; filter: drop-shadow(0 0 3px currentColor); }
+.cm-line-kid { stroke-width: 1.3; opacity: 0.42; filter: none; }
+.cm-link.is-hot .cm-line { stroke-width: 2.8; opacity: 1; filter: drop-shadow(0 0 6px currentColor); }
+.cm-link.is-hot .cm-line-kid { opacity: 0.85; stroke-width: 1.8; }
+.cm-end { fill: currentColor; filter: drop-shadow(0 0 4px currentColor); }
+.cm-travel { fill: #fff; filter: drop-shadow(0 0 5px currentColor) drop-shadow(0 0 2px #fff); }
+
+.cm-cluster { transition: opacity 0.18s; }
+.cm-cluster.is-dim { opacity: 0.2; }
+
+.cm-pill { cursor: pointer; outline: none; }
+.cm-pill-bg { fill: url(#cm-glass); }
+.cm-pill-ring { fill: none; stroke-width: 1.6; opacity: 0.9; filter: drop-shadow(0 0 5px var(--glow)); transition: stroke-width 0.15s; }
+.cm-pill-text { fill: #eaf0ff; font-size: 13px; font-weight: 600; letter-spacing: 0.01em; pointer-events: none; }
+.cm-pill:hover .cm-pill-ring, .cm-pill:focus-visible .cm-pill-ring, .cm-pill.is-hover .cm-pill-ring { stroke-width: 2.6; opacity: 1; filter: drop-shadow(0 0 11px var(--glow)) drop-shadow(0 0 3px var(--glow)); }
+.cm-pill:focus-visible .cm-pill-bg { stroke: #fff; stroke-width: 1.5; }
+
+.cm-kid { cursor: pointer; outline: none; }
+.cm-kid-bg { fill: rgba(17, 24, 48, 0.92); stroke: rgba(150, 170, 220, 0.38); stroke-width: 1.2; transition: stroke 0.15s; }
+.cm-kid:hover .cm-kid-bg, .cm-kid:focus-visible .cm-kid-bg, .cm-kid.is-hover .cm-kid-bg { stroke: var(--glow); stroke-width: 1.8; filter: drop-shadow(0 0 7px var(--glow)); }
+.cm-kid-text { fill: #cfd9ff; font-size: 11px; font-weight: 600; paint-order: stroke; stroke: #070a18; stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
+.cm-more { fill: #8ea2d6; font-size: 11px; font-weight: 700; pointer-events: none; }
+
+.cm-core { outline: none; }
+.cm-core-bg { fill: url(#cm-glass); }
+.cm-core-ring { fill: none; stroke: url(#cm-ring); stroke-width: 2.6; filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.8)) drop-shadow(0 0 3px rgba(167, 139, 250, 0.8)); }
+.cm-core-aura { pointer-events: none; animation: cm-aura 3.2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.cm-core-text { fill: #fff; font-size: 16px; font-weight: 700; paint-order: stroke; stroke: #0a1226; stroke-width: 3px; stroke-linejoin: round; }
+@keyframes cm-aura { 0%, 100% { opacity: 0.55; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.06); } }
 @media (prefers-reduced-motion: reduce) {
-  .cm-halo, .cm-edge.is-hot path:first-child { animation: none; }
-  .cm-node, .cm-node .cm-shape, .cm-edge { transition: none; }
+  .cm-core-aura { animation: none; }
+  .cm-link, .cm-cluster, .cm-pill-ring, .cm-kid-bg { transition: none; }
 }
