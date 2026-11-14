@@ -272,7 +272,9 @@ if (subCommand === 'acp') {
           cancelWaiter = null;
           if (how === 'cancel') { response(id, { stopReason: 'cancelled' }); return; }
         }
-        notification('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `PID:${process.pid} PROMPTS:${promptsSeen}` }] } });
+        const fsm = await import('node:fs');
+        const attached = (() => { try { return fsm.readdirSync('attachments').join(','); } catch { return ''; } })();
+        notification('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: `PID:${process.pid} PROMPTS:${promptsSeen} ATTACHED:[${attached}]` }] } });
         response(id, { stopReason: 'end_turn' });
         return;
       }

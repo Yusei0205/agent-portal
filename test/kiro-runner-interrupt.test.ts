@@ -70,4 +70,18 @@ describe('Kiro runner: Esc ends the turn and keeps the session', { skip }, () =>
     assert.match(text(second), /PROMPTS:1/);
     await disposeWarmKiro();
   });
+
+  it('a file attached to a follow-up message is in the work folder of the session that carries on (not only on its first turn)', async () => {
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-interruptible';
+    const first: Array<Record<string, unknown>> = [];
+    await runKiroRun(payload('hello', 'r5') as never, (e) => { first.push(e); }, Date.now());
+    assert.match(text(first), /ATTACHED:\[\]/, 'nothing attached yet');
+    const second: Array<Record<string, unknown>> = [];
+    const withFile = { ...payload('read the zip I attached', 'r6'), inputFiles: [{ path: 'attachments/sonarscan.zip.txt', data: Buffer.from('findings').toString('base64') }] };
+    await runKiroRun(withFile as never, (e) => { second.push(e); }, Date.now());
+    assert.match(text(second), /Continuing in the same kiro-cli session/);
+    assert.match(text(second), /1 input file placed in the work folder/);
+    assert.match(text(second), /ATTACHED:\[sonarscan\.zip\.txt\]/, 'the agent can see the file');
+    await disposeWarmKiro();
+  });
 });

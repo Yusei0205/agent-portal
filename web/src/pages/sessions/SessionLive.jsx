@@ -1015,6 +1015,14 @@ function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName =
   // ── Run failed ────────────────────────────────────────────────────────────
   if (type === 'run-failed') {
     const msg = payload.error || payload.message || 'Run failed';
+    // The person pressed Esc, Ctrl+C or Stop: not an error. The conversation is kept; the next message goes on.
+    if (msg === 'Cancelled') {
+      return (
+        <div className="live-event live-run-interrupted muted" role="status" aria-label="Interrupted" style={{ fontSize: '0.82rem', padding: '4px 0' }}>
+          <Icon name="stop" size={12} /> Interrupted. Send a message to go on from here.
+        </div>
+      );
+    }
     return (
       <div className="live-event live-run-failed" role="alert" aria-label="Run failed">
         <Icon name="warning" size={16} />

@@ -126,7 +126,8 @@ async function enrichWorkflowRow(w: Row | WorkflowRecord): Promise<WorkflowRecor
   const lastRunStatus = latestRun?.status ?? null;
   const resumableStatuses = new Set(['failed', 'paused', 'stopped', 'cancelled']);
   const resumableRunStatuses = new Set(['failed', 'cancelled']);
-  const resumable = w.stop_reason !== 'awaiting_message' && (
+  // Reopened (awaiting a message) or interrupted by the person (Esc, Ctrl+C, Stop): the next message simply goes on, there is nothing to reopen.
+  const resumable = w.stop_reason !== 'awaiting_message' && w.stop_reason !== 'interrupted' && (
     resumableStatuses.has(wfStatus) ||
     (lastRunStatus !== null && resumableRunStatuses.has(lastRunStatus)));
 
@@ -798,7 +799,8 @@ export function registerWorkflowRoutes(): void {
     if (activeRun) cancelRun(activeRun.id);
 
     const ts = now();
-    await repo.updateWorkflow(w.id, { status: 'paused', updated_at: ts });
+    // 'interrupted': the person ended this turn (Esc, Ctrl+C, Stop). The conversation is kept as it is and the next message carries on.
+    await repo.updateWorkflow(w.id, { status: 'paused', stop_reason: 'interrupted', updated_at: ts });
 
     if (w.project_id) {
       emit(w.project_id, { type: 'workflow.updated', workflowId: w.id, status: 'paused' });

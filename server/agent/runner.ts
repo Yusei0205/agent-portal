@@ -778,6 +778,12 @@ ${agentRun.goal}`;
       }
     }
 
+    // The person interrupted this turn (Esc, Ctrl+C, Stop) and sent a message while it was ending: that message starts the next turn now,
+    // not when they send another. (Not for a portal shutdown: nothing may start then.)
+    if (aborted && !byShutdown) {
+      await import('../workflows/driver.ts').then((d) => d.continueWithQueuedMessages(workflowId)).catch(() => undefined);
+    }
+
     if (!aborted) {
       console.error(`[runner] Run ${runId} failed:`, e);
       if (loopState) {

@@ -149,6 +149,8 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
     const heartbeat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': working\n\n'); }, 15_000);
     let client: CodexClient | undefined;
     let usage: Event | undefined;
+    // What an interrupted turn needs to be continued: the thread (a resumed one is known, a new one once it starts) and where its state is saved.
+    let resumeInfo: { snapshot: ReturnType<typeof parseSnapshot>; stateSnapshot: ReturnType<typeof parseSnapshot>; threadId: string } | null = null;
     let prTool: Awaited<ReturnType<typeof openCodexPrTool>> | undefined;
     try {
       await fs.mkdir(workDir, { recursive: true, mode: 0o700 });
@@ -191,6 +193,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         if (body.stateSnapshot && !stateSnapshot) throw new Error('Invalid Codex conversation snapshot capability');
         const restored = await (options.restoreState ?? restoreCodexState)(home, stateSnapshot);
         if (body.threadId && !restored) throw new Error('Codex conversation state is missing. Restore the state snapshot or start a fresh thread with /compact.');
+        resumeInfo = { snapshot, stateSnapshot, threadId: body.threadId || '' };
         await restoreWorkspace(snapshot, workDir, send);
         const parsed = parseRunnerRepos(body.repos);
         if (!parsed.ok) throw new Error(parsed.error);
@@ -206,6 +209,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
           run: { workDir, goal: body.prompt, model: body.model || null, engineSessionId: body.threadId || null,
             trusted: body.trusted === true, permissions: { rules: toPolicyRules(Array.isArray(body.rules) ? body.rules : []) } },
           signal: controller.signal, allowed: new Set(), emit: (eventType, payload) => send({ type: 'portal-event', eventType, payload }),
+          onThread: (id) => { if (resumeInfo) resumeInfo.threadId = id; },
           awaitInput: (toolName, input) => {
             const inputHash = inputFingerprint(toolName, input);
             const minutes = Number.isFinite(body.approvals?.expiryMinutes) ? Math.min(1440, Math.max(0.1, body.approvals.expiryMinutes)) : 60;
@@ -239,8 +243,17 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
       }
     } catch (error) {
       const aborted = controller.signal.aborted || (error as Error).name === 'AbortError';
+      // Esc or Stop: the turn is ended (turn/interrupt) but the conversation is kept, as in the terminal: what was said and done in it is
+      // saved with the thread, so the next message goes on from there and knows what was asked.
+      let kept: { stateSaved: boolean; threadId: string } | null = null;
+      if (aborted && resumeInfo?.threadId) {
+        try {
+          await flushWorkspace(resumeInfo.snapshot, workDir);
+          kept = { stateSaved: await (options.saveState ?? saveCodexState)(home, resumeInfo.stateSnapshot), threadId: resumeInfo.threadId };
+        } catch { kept = null; }
+      }
       send({ type: 'error', message: aborted ? 'Codex run cancelled' : 'Codex runner failed: ' + String((error as Error).message).slice(0, 500) });
-      send({ type: 'result', exitCode: aborted ? 130 : 1, cancelled: aborted, ...(usage ? { usage } : {}) });
+      send({ type: 'result', exitCode: aborted ? 130 : 1, cancelled: aborted, ...(kept ?? {}), ...(usage ? { usage } : {}) });
     } finally {
       clearInterval(heartbeat);
       broker.closeRun(active?.runId || '', 'The run ended');

@@ -169,6 +169,32 @@ describe('Codex AgentCore runner HTTP contract', () => {
     const output = await events(response);
     assert.equal(output.find(e => e.type === 'result').cancelled, true);
   });
+  it('keeps the conversation when a turn is interrupted: state saved, thread reported, and the next turn resumes on it', async () => {
+    const saved: unknown[] = [];
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    server = createCodexRunnerServer({ root, restoreState: async () => true, saveState: async (_home, snapshot) => { saved.push(snapshot); return true; },
+      openClient: async (home, env, cwd, options) => {
+        const client = new CodexClient(spawn(process.execPath, [path.resolve('test/fake-codex.mjs')], {
+          cwd, env: { ...env, CODEX_HOME: home, ACCESS_TOKEN: options?.accessToken, ...options?.extraEnv }, stdio: 'pipe', windowsHide: true,
+        }));
+        await client.request('initialize', { clientInfo: { name: 'runner-test', version: '1' } }); return client;
+      } });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    base = 'http://127.0.0.1:' + (server.address() as { port: number }).port;
+
+    const running = post(payload('HANG_FOREVER'));
+    const response = await running;
+    await new Promise(r => setTimeout(r, 400)); // the thread has started
+    assert.equal((await post({ mode: 'cancel', runId: 'run-fixture' })).status, 200);
+    const result = (await events(response)).find(e => e.type === 'result');
+    assert.equal(result.cancelled, true);
+    assert.equal(result.stateSaved, true, 'the conversation, with the interrupted turn in it, is saved');
+    assert.ok(result.threadId, 'and its thread is reported, so the portal can continue it');
+    assert.equal(saved.length, 1);
+    const next = (await events(await post({ ...payload('Carry on'), threadId: result.threadId }))).find(e => e.type === 'result');
+    assert.equal(next.exitCode, 0);
+    assert.equal(next.threadId, result.threadId, 'the next message continues the same thread');
+  });
   it('returns failure instead of a successful result when the agent turn fails', async () => {
     const output = await events(await post(payload('FAIL_TURN')));
     assert.equal(output.find(e => e.type === 'result').exitCode, 1);

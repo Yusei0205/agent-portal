@@ -10,6 +10,8 @@ export interface CodexSessionContext {
   emit(type: string, payload: object): void;
   awaitInput(tool: string, input: Record<string, unknown>): Promise<{ decision: 'allow' | 'deny'; remember: boolean; message: string }>;
   allowed: Set<string>;
+  /** Called when the turn's thread id is known (a new thread's id is not known before): an interrupted turn must still be continued. */
+  onThread?(threadId: string): void;
 }
 
 const abortError = () => new DOMException('Run cancelled', 'AbortError');
@@ -198,6 +200,7 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
     const result = await client.request(run.engineSessionId ? 'thread/resume' : 'thread/start',
       { ...threadOptions, ...(run.engineSessionId ? { threadId: run.engineSessionId } : {}) });
     threadId = result.thread.id;
+    ctx.onThread?.(threadId);
     usageBaseline = initialUsage.get(threadId) ?? usageBaseline;
     model = result.model ?? model;
     await options.onThread?.(threadId);

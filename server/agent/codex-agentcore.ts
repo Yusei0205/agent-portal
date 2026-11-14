@@ -82,7 +82,13 @@ export async function runCodexViaAgentCore(
       else if (event.type === 'error') failure = String(event.message || 'Codex runner failed');
       else if (event.type === 'result') {
         latest = usageFrom(event.usage ?? event);
-        if (event.cancelled) throw new DOMException('Run cancelled', 'AbortError');
+        if (event.cancelled) {
+          // The turn was ended by the person, but the runner kept the conversation: the next message goes on from it.
+          if (event.stateSaved === true && typeof event.threadId === 'string' && event.threadId) {
+            await getSessionsRepository().updateWorkflow(ctx.run.workflowId, { engine_session_id: event.threadId, engine_session_engine: 'codex' }).catch(() => undefined);
+          }
+          throw new DOMException('Run cancelled', 'AbortError');
+        }
         if (event.exitCode !== 0) throw new HttpError(502, failure || 'Codex runner failed.');
         if (event.stateSaved !== true || !latest.threadId || typeof event.text !== 'string') throw new HttpError(502, 'Codex did not confirm durable conversation state.');
         result = { ...latest, text: event.text };
