@@ -6,10 +6,12 @@
 import { useState } from 'react';
 import { Icon } from '../../components/Icon.jsx';
 import { api } from '../../lib/api.js';
-import { sessionPullRequestCards, describePullRequest } from '../../lib/pullRequestCard.js';
+import {
+  sessionPullRequestCards, describePullRequest, prCardKey, canDismissPullRequestCard, readDismissedCards, saveDismissedCards,
+} from '../../lib/pullRequestCard.js';
 
 import { safeUrl } from '../../lib/safeUrl.js';
-function Card({ event, workflowId, projectId }) {
+function Card({ event, workflowId, projectId, onDismiss }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const d = describePullRequest(event, { projectId });
@@ -45,6 +47,13 @@ function Card({ event, workflowId, projectId }) {
         <Icon name="file" size={13} aria-hidden="true" />
         <span>{d.title}</span>
         <span className={`badge badge-${d.tone}`} style={{ marginLeft: 'auto' }}>{event.state}</span>
+        {onDismiss && canDismissPullRequestCard(event) && (
+          <button
+            type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}
+            aria-label={`Dismiss the pull request card for ${event.repo ?? 'this repository'}`}
+            title="Hide this card. It comes back if something new happens for this repository."
+          >Dismiss</button>
+        )}
       </div>
       {(d.detail || msg) && (
         <div style={{ padding: '8px 12px', display: 'grid', gap: 4, overflowWrap: 'anywhere' }}>
@@ -76,9 +85,16 @@ function Card({ event, workflowId, projectId }) {
 }
 
 export function PullRequestCards({ events, workflowId, projectId }) {
-  const states = sessionPullRequestCards(events);
+  // Dismissed per state: what the person hid stays hidden on this browser, and a newer event for the repository shows again.
+  const [dismissed, setDismissed] = useState(readDismissedCards);
+  const dismiss = (event) => setDismissed((cur) => {
+    const next = [...cur, prCardKey(event, workflowId)];
+    saveDismissedCards(next);
+    return next;
+  });
+  const states = sessionPullRequestCards(events).filter((ev) => !dismissed.includes(prCardKey(ev, workflowId)));
   if (!states.length) return null;
   return states.map((ev) => (
-    <Card key={ev.repo ?? ev.repoId} event={ev} workflowId={workflowId} projectId={projectId} />
+    <Card key={ev.repo ?? ev.repoId} event={ev} workflowId={workflowId} projectId={projectId} onDismiss={() => dismiss(ev)} />
   ));
 }

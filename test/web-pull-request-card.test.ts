@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 // @ts-expect-error — plain JS module without type declarations
-import { latestPullRequestStates, describePullRequest, reviewHandoffHref, sessionPullRequestCards } from '../web/src/lib/pullRequestCard.js';
+import { latestPullRequestStates, describePullRequest, reviewHandoffHref, sessionPullRequestCards, prCardKey, canDismissPullRequestCard } from '../web/src/lib/pullRequestCard.js';
 
 const base = { type: 'pull-request', repo: 'shop', repoId: 'r1' };
 const d = (o: object, ctx?: object) => describePullRequest({ ...base, ...o }, ctx);
@@ -150,5 +150,20 @@ describe('session pull request cards', () => {
       assert.equal(cards.length, 1);
       assert.equal(cards[0].state, state);
     }
+  });
+});
+
+describe('dismissing a card', () => {
+  const ev = { type: 'pull-request', repo: 'shop', repoId: 'r1', state: 'declined', created_at: '2026-11-14T09:48:58Z' };
+  it('the key names the state of the repository, so a newer event is not hidden by an old dismissal', () => {
+    assert.equal(prCardKey(ev, 'w1'), 'w1|r1|declined|2026-11-14T09:48:58Z');
+    assert.notEqual(prCardKey({ ...ev, created_at: '2026-11-14T12:34:18Z' }, 'w1'), prCardKey(ev, 'w1'));
+    assert.notEqual(prCardKey({ ...ev, state: 'asked' }, 'w1'), prCardKey(ev, 'w1'));
+    assert.notEqual(prCardKey(ev, 'w2'), prCardKey(ev, 'w1'), 'another session');
+    assert.equal(prCardKey({ payload: { ...ev } }, 'w1'), prCardKey(ev, 'w1'), 'fields inside payload count too');
+  });
+  it('a card that is still pushing cannot be dismissed; the others can', () => {
+    assert.equal(canDismissPullRequestCard({ ...ev, state: 'pushing' }), false);
+    for (const state of ['asked', 'declined', 'available', 'pushed', 'opened', 'review-started', 'review-failed', 'failed']) assert.equal(canDismissPullRequestCard({ ...ev, state }), true, state);
   });
 });

@@ -99,6 +99,35 @@ export function describePullRequest(event, ctx = {}) {
   }
 }
 
+/**
+ * Identifies one state of a repository's card, so that dismissing it hides that state only: a newer event for the repository (a new
+ * question, a push, a failure) has another key and shows again.
+ */
+export function prCardKey(event, workflowId) {
+  const ev = flat(event);
+  return [workflowId ?? '', ev.repoId ?? ev.repo ?? '', ev.state ?? '', ev.created_at ?? ev.id ?? ev.number ?? ''].join('|');
+}
+
+/** A card that is still working has nothing to dismiss yet. */
+export function canDismissPullRequestCard(event) {
+  return flat(event).state !== 'pushing';
+}
+
+const DISMISSED_KEY = 'portal.pr-cards.dismissed';
+const DISMISSED_MAX = 200;
+
+/** The keys the person dismissed on this browser (best effort: storage may be unavailable). */
+export function readDismissedCards() {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem(DISMISSED_KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter((k) => typeof k === 'string') : [];
+  } catch { return []; }
+}
+
+export function saveDismissedCards(keys) {
+  try { globalThis.localStorage?.setItem(DISMISSED_KEY, JSON.stringify(keys.slice(-DISMISSED_MAX))); } catch { /* storage unavailable: it stays hidden until the page reloads */ }
+}
+
 /** Only project live events trigger a handoff; stored/replayed run history never does. */
 export function reviewHandoffHref(event, workflowId, projectId) {
   if (!projectId || !workflowId || event?.type !== 'run.event' ||
