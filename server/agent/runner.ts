@@ -701,6 +701,9 @@ ${agentRun.goal}`;
     // A loop session decides here whether to go on: the next run is started, or the session stops with the reason.
     if (runFinished && loopState) {
       try { await loopAfterRun(workflowId, { result, failed: false, runId }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+    } else if (runFinished) {
+      // A message the person sent while this turn was running was not part of it: read it now, in the next turn.
+      await import('../workflows/driver.ts').then((d) => d.continueWithQueuedMessages(workflowId)).catch(() => undefined);
     }
   } catch (e: unknown) {
     const aborted = (e as { name?: string })?.name === 'AbortError' || ctrl.signal.aborted;

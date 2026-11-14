@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useStopShortcut } from '../../lib/useStopShortcut.js';
 import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
 import { navigate } from '../../lib/router.js';
@@ -243,6 +244,9 @@ export function ComposerBar({
   // Resume state — shown when workflow.resumable and not running
   const [resuming, setResuming]       = useState(false);
   const [resumeError, setResumeError] = useState(null);
+  // A message sent while the agent is mid-turn is read when that turn ends (the agent does not see it before).
+  const [queuedNote, setQueuedNote] = useState(false);
+  const [stoppingNow, setStoppingNow] = useState(false);
   // null = auto-grow with content; number = manually set height in pixels
   const [composerH, setComposerH] = useState(() => loadComposerH());
   const textareaRef = useRef(null);
@@ -253,6 +257,18 @@ export function ComposerBar({
   const dragStartH  = useRef(0);
 
   const isRunning = workflow?.status === 'running' || workflow?.status === 'pending';
+  useEffect(() => { if (!isRunning) { setQueuedNote(false); setStoppingNow(false); } }, [isRunning]);
+
+  // Esc or Ctrl+C stops the current turn, as in the terminal agents (Ctrl+C still copies when text is selected).
+  const [stopHint, setStopHint] = useState('');
+  const stopTurn = useCallback(async () => {
+    if (!workflow?.id) return;
+    setStopHint('Stopping…');
+    try { await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`); setStopHint('Stopped'); }
+    catch (e) { setStopHint(''); setResumeError(e?.message || 'Could not stop the current turn.'); }
+  }, [projectId, workflow?.id]);
+  useStopShortcut(isRunning, stopTurn);
+  useEffect(() => { if (!isRunning && stopHint === 'Stopping…') setStopHint('Stopped'); if (isRunning && stopHint === 'Stopped') setStopHint(''); }, [isRunning, stopHint]);
 
   // The repositories are cloned into the session's storage in the background: say so, and hold the message box until
   // that is done (a message sent meanwhile would only wait for it). A preparation stuck for over 6 minutes is ignored.
@@ -525,11 +541,14 @@ export function ComposerBar({
       // Always ask the server to start: it does nothing when a run is already going. The page's own idea of
       // "running" can be out of date right after a run ends, and skipping the start left the message unanswered.
       if (!res?.resumed) {
-        await api.post(
+        const started = await api.post(
           `/api/projects/${projectId}/workflows/${workflow.id}/start`,
         ).catch((e) => {
           if (e?.status !== 409 && !isRunning) setResumeError(`Your message was saved, but the run did not start: ${e?.message || 'unknown error'}`);
+          return null;
         });
+        // A turn is already going: it started before this message, so it will not see it. It is read when the turn ends.
+        if (started?.alreadyRunning && !isSlash) setQueuedNote(true);
       }
       if (onSendSuccess) onSendSuccess(clientId);
       if (onSent) onSent();
@@ -620,6 +639,22 @@ export function ComposerBar({
           >
             <Icon name="x" size={13} />
           </button>
+        </div>
+      )}
+      {queuedNote && isRunning && (
+        <div className="info-note" role="status" data-testid="queued-note" style={{ margin: '4px 8px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>Your message is saved, but the agent is still on its current turn and has not seen it. It reads it when this turn ends.</span>
+          <button
+            type="button" className="btn btn-sm" disabled={stoppingNow}
+            onClick={async () => {
+              setStoppingNow(true);
+              try {
+                await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`);
+                // Stopped: the saved message starts the next turn.
+                await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/start`).catch(() => undefined);
+              } catch (e) { setResumeError(e?.message || 'Could not stop the current turn.'); } finally { setStoppingNow(false); }
+            }}
+          >{stoppingNow ? 'Stopping…' : 'Stop this turn and send now'}</button>
         </div>
       )}
       {resumeError && !(workflow?.resumable && !isRunning) && (
@@ -792,6 +827,7 @@ export function ComposerBar({
         <span><kbd>↵</kbd> send</span>
         <span><kbd>⇧</kbd><kbd>↵</kbd> new line</span>
         <span><kbd>/</kbd> commands</span>
+        {isRunning && <span><kbd>Esc</kbd> or <kbd>Ctrl</kbd><kbd>C</kbd> {stopHint === 'Stopping…' ? 'stopping…' : 'stop the turn'}</span>}
       </div>
     </div>
   );
