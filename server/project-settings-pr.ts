@@ -4,6 +4,7 @@
  *   GET /api/projects/:id/pull-request-settings   { openPullRequests, protectedBranches }   (project members)
  *   PUT /api/projects/:id/pull-request-settings   a partial update of the same two fields    (project editors)
  *
+ * `reviewEngine` / `reviewModel` choose which engine and model review the pull requests a session opens (default: the portal's provider).
  * `openPullRequests` turns on opening a pull request when a session fixes code. `protectedBranches` lists the
  * branch names (a trailing * matches a prefix, as in release/*) the portal never pushes to. The repository's own
  * default branch is always protected as well; that is decided where the push happens, not stored here.
@@ -19,7 +20,14 @@ import { getMemberRow, getProjectRow } from './project-access.ts';
 export interface PullRequestSettings {
   openPullRequests: boolean;
   protectedBranches: string[];
+  /** The engine that reviews pull requests a session opens (null: the portal's provider), and its model (null: the engine's default). */
+  reviewEngine: ReviewEngine | null;
+  reviewModel: string | null;
 }
+
+export const REVIEW_ENGINES = ['claude-code', 'kiro', 'codex'] as const;
+export type ReviewEngine = (typeof REVIEW_ENGINES)[number];
+const MODEL_RE = /^[A-Za-z0-9._:/@-]{1,120}$/;
 
 export const DEFAULT_PROTECTED_BRANCHES: readonly string[] = ['main', 'master', 'develop', 'release/*'];
 export const MAX_PROTECTED_BRANCHES = 50;
@@ -27,6 +35,8 @@ const BRANCH_RE = /^[A-Za-z0-9*][A-Za-z0-9._/*-]{0,199}$/;
 
 const openKey = (projectId: string): string => `project:${projectId}:openPullRequests`;
 const protectedKey = (projectId: string): string => `project:${projectId}:protectedBranches`;
+const reviewEngineKey = (projectId: string): string => `project:${projectId}:reviewEngine`;
+const reviewModelKey = (projectId: string): string => `project:${projectId}:reviewModel`;
 
 function readJson(key: string): unknown {
   try {
@@ -41,7 +51,11 @@ function readJson(key: string): unknown {
 export function getPullRequestSettings(projectId: string): PullRequestSettings {
   const open = readJson(openKey(projectId));
   const branches = readJson(protectedKey(projectId));
+  const engine = readJson(reviewEngineKey(projectId));
+  const model = readJson(reviewModelKey(projectId));
   return {
+    reviewEngine: typeof engine === 'string' && (REVIEW_ENGINES as readonly string[]).includes(engine) ? engine as ReviewEngine : null,
+    reviewModel: typeof model === 'string' && MODEL_RE.test(model) ? model : null,
     openPullRequests: typeof open === 'boolean' ? open : true,
     protectedBranches: Array.isArray(branches) && branches.every((b) => typeof b === 'string')
       ? (branches as string[])
@@ -72,17 +86,33 @@ function cleanBranches(v: unknown): string[] {
  */
 export async function setPullRequestSettings(
   projectId: string,
-  patch: { openPullRequests?: unknown; protectedBranches?: unknown },
+  patch: { openPullRequests?: unknown; protectedBranches?: unknown; reviewEngine?: unknown; reviewModel?: unknown },
 ): Promise<PullRequestSettings> {
   let open: boolean | undefined;
   let branches: string[] | undefined;
+  let engine: ReviewEngine | null | undefined;
+  let model: string | null | undefined;
   if (patch.openPullRequests !== undefined) {
     if (typeof patch.openPullRequests !== 'boolean') throw new Error('openPullRequests must be true or false');
     open = patch.openPullRequests;
   }
   if (patch.protectedBranches !== undefined) branches = cleanBranches(patch.protectedBranches);
+  if (patch.reviewEngine !== undefined) {
+    if (patch.reviewEngine === null || patch.reviewEngine === '') engine = null;
+    else if (typeof patch.reviewEngine === 'string' && (REVIEW_ENGINES as readonly string[]).includes(patch.reviewEngine)) engine = patch.reviewEngine as ReviewEngine;
+    else throw new Error(`reviewEngine must be one of: ${REVIEW_ENGINES.join(', ')}, or empty for the portal's provider`);
+  }
+  if (patch.reviewModel !== undefined) {
+    if (patch.reviewModel === null || patch.reviewModel === '') model = null;
+    else if (typeof patch.reviewModel === 'string' && MODEL_RE.test(patch.reviewModel.trim())) model = patch.reviewModel.trim();
+    else throw new Error('reviewModel is not a valid model id');
+  }
+  // A model belongs to an engine: choosing the portal's provider (or another engine) clears the old one unless a new one is sent.
+  if (engine !== undefined && model === undefined && engine !== getPullRequestSettings(projectId).reviewEngine) model = null;
   if (open !== undefined) await setSetting(getDb(), openKey(projectId), JSON.stringify(open));
   if (branches !== undefined) await setSetting(getDb(), protectedKey(projectId), JSON.stringify(branches));
+  if (engine !== undefined) await setSetting(getDb(), reviewEngineKey(projectId), JSON.stringify(engine));
+  if (model !== undefined) await setSetting(getDb(), reviewModelKey(projectId), JSON.stringify(model));
   return getPullRequestSettings(projectId);
 }
 

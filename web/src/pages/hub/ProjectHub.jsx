@@ -7,7 +7,7 @@ import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
-import { NewSessionDialog } from '../sessions/NewSessionDialog.jsx';
+import { NewSessionDialog, ModelPicker } from '../sessions/NewSessionDialog.jsx';
 import { syncGoal } from '../../lib/repoSync.js';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -1220,6 +1220,36 @@ function PullRequestsTab({ projectId, canEdit, toast }) {
         />
         Open a pull request when a session fixes code
       </label>
+
+      <div>
+        <h3>Who reviews them</h3>
+        <p className="muted small">The review of a pull request a session opens runs on the engine and model chosen here, using the sign-in of the person whose session opened it. Portal default uses the portal&rsquo;s own provider.</p>
+        <div className="row wrap gap-sm">
+          <div className="field">
+            <label htmlFor="pr-review-engine">Engine</label>
+            <select
+              id="pr-review-engine"
+              value={settings.reviewEngine ?? ''}
+              disabled={!canEdit || busy}
+              onChange={(e) => save({ reviewEngine: e.target.value || null })}
+            >
+              <option value="">Portal default</option>
+              <option value="claude-code">Claude</option>
+              <option value="kiro">Kiro</option>
+              <option value="codex">Codex</option>
+            </select>
+          </div>
+          {settings.reviewEngine && canEdit && (
+            <ModelPicker
+              engine={settings.reviewEngine}
+              credentialId=""
+              value={settings.reviewModel ?? ''}
+              onChange={(m) => save({ reviewModel: m || null })}
+            />
+          )}
+        </div>
+        {settings.reviewEngine && !canEdit && <p className="small">Model: {settings.reviewModel ?? 'engine default'}</p>}
+      </div>
 
       <div>
         <h3>Branches that are never pushed to</h3>

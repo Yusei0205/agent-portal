@@ -132,6 +132,29 @@ describe('session pull requests', () => {
     assert.equal(review.head_ref, 'portal/RLP-12-fix-login-redirect');
   });
 
+  it('reviews with the engine and model the project chose, on the sign-in of whoever opens it; says so when they have none', async () => {
+    const { setPullRequestSettings } = await import('../server/project-settings-pr.ts');
+    const { getCredentialsRepository } = await import('../server/repositories/credentials.ts');
+    const s = makeSession({ jiraKey: 'RLP-30', summary: 'Pick engine' });
+    await setPullRequestSettings(s.projectId, { reviewEngine: 'kiro', reviewModel: 'claude-sonnet-4-5' });
+    await handleRepoChanges(ctxOf(s), [change]);
+    assert.deepEqual(states(s), ['pushing', 'pushed', 'opened', 'review-failed']);
+    assert.match(String(prEvents(s).at(-1)!.error), /reviews pull requests with Kiro, but you have no such sign-in/);
+
+    const credId = generateId();
+    await getCredentialsRepository().create({ id: credId, user_id: userId, engine: 'kiro', name: 'My Kiro', mode: 'api_key', secret_enc: null, extra_config: '{}', is_default: 1, last4: '', created_at: now(), updated_at: now() } as never);
+    const s2 = makeSession({ jiraKey: 'RLP-31', summary: 'Pick engine again' });
+    await setPullRequestSettings(s2.projectId, { reviewEngine: 'kiro', reviewModel: 'claude-sonnet-4-5' });
+    await handleRepoChanges(ctxOf(s2), [change]);
+    const last = prEvents(s2).at(-1)!;
+    assert.equal(last.state, 'review-started');
+    const review = one<Record<string, any>>('SELECT * FROM p10_reviews WHERE id = ?', last.reviewId)!;
+    assert.equal(review.provider_id, 'kiro');
+    assert.equal(review.model_id, 'claude-sonnet-4-5');
+    const wf = one<Record<string, any>>('SELECT engine, credential_id, model FROM p6_workflows WHERE id = ?', review.workflow_id)!;
+    assert.deepEqual([wf.engine, wf.credential_id, wf.model], ['kiro', credId, 'claude-sonnet-4-5']);
+  });
+
   it('a session without a ticket creates one Inbox item and nothing else', async () => {
     const s = makeSession();
     await handleRepoChanges(ctxOf(s), [change]);
