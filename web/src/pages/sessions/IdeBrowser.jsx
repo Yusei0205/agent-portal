@@ -294,7 +294,9 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
 
   // While a cloud browser is open, ask the portal for a signed Live View address (and notice when it closes).
   useEffect(() => {
-    if (cloudMode !== true) return undefined;
+    // Not only in cloud mode: the realtime settings are asked for once, and one failed or slow answer would leave the panel in
+    // local mode (screenshots only) for good. The answer here is what decides: when the cloud browser is open, this is the cloud portal.
+    if (cloudMode === null) return undefined;
     let cancelled = false;
     let timer = null;
     const tick = async () => {
@@ -303,6 +305,7 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
         if (cancelled) return;
         setWaiting(r?.available && r.waiting ? r.waiting : null);
         if (r?.available && r.url) {
+          setCloudMode((m) => (m === true ? m : true));
           // A new address is signed on every call, so keep the first one for as long as it is the same browser session.
           // A new browser session starts with the agent in control, so the switch starts off again.
           setLive((cur) => { if (!cur || cur.sessionId !== r.sessionId) setControlEnabled(false); return cur && cur.sessionId === r.sessionId ? cur : { url: r.url, sessionId: r.sessionId, width: r.width, height: r.height }; });

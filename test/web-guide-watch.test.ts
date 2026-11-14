@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 import { build } from 'esbuild';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 
-test('Watch browser opens the live browser and tells the person when the agent is waiting for them to sign in', async () => {
+for (const realtime of ['answers', 'fails'] as const) test(`Watch browser opens the live browser and tells the person when the agent is waiting for them to sign in (the realtime settings request ${realtime})`, async () => {
   const { baseUrl } = await createTestServer();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
@@ -44,7 +44,8 @@ test('Watch browser opens the live browser and tells the person when the agent i
     });
     let waiting: { message: string } | null = null;
     const controlCalls: unknown[] = [];
-    await page.route('**/api/realtime/config', (route) => route.fulfill({ json: { enabled: true, httpDomain: 'appsync.invalid', realtimeDomain: 'appsync.invalid', token: 't', expiresIn: 3600 } }));
+    // 'fails': the one request for the realtime settings fails when the page opens. The live browser must still be found.
+    await page.route('**/api/realtime/config', (route) => (realtime === 'fails' ? route.fulfill({ status: 500, json: { error: 'try later' } }) : route.fulfill({ json: { enabled: true, httpDomain: 'appsync.invalid', realtimeDomain: 'appsync.invalid', token: 't', expiresIn: 3600 } })));
     await page.route(`**/api/projects/${id}/generated-docs`, (route) => route.fulfill({ json: { docs: [{
       id: 'd1', name: 'Clerk guide', doc_type: 'user-guide', status: 'generating', workflow_id: 'w_fake', created_at: '2026-11-14T10:00:00Z',
       sources: { guide: { screenshots: true, url: 'https://app.example.com/', roles: [], hosts: ['app.example.com'], manualSignIn: true } }, latest_version: null, attachments: [],
