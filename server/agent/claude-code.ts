@@ -46,6 +46,7 @@ import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from '
 import { loadRunAgents, leadAgentFor, anthropicAgentModel } from './run-agents.ts';
 import { resolveAnthropicModel } from './anthropic-models.ts';
 import { withBrowserGuidance } from './browser-guidance.ts';
+import { agentcoreSkillBody } from './builtin-skills.ts';
 import { withSkillsGuidance } from './skills-guidance.ts';
 import { cavemanMode, withCavemanGuidance } from './caveman-guidance.ts';
 
@@ -155,7 +156,7 @@ ${REVIEW_SYSTEM_APPEND}`;
 
   // The cloud browser is the browser to use (not Playwright): the agent is told so when the run has it.
   const browserOn = process.env.PORTAL_AGENTCORE_BROWSER === '1';
-  prompt = withBrowserGuidance(prompt, browserOn);
+  prompt = withBrowserGuidance(prompt, browserOn, agentcoreSkillBody());
   // A repository's agent skills (agent/skills/) are the way in to its code: read the index, not everything.
   prompt = withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length));
   // Terse replies, when the session was started with that option. Every cloud turn starts a fresh Claude session (earlier turns come as a recap), so each carries the full instructions.

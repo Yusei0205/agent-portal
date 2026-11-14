@@ -855,6 +855,7 @@
         "test/kiro-win-env.test.ts",
         "test/kiro-agentcore.test.ts",
         "test/kiro-subagents.test.ts",
+        "test/builtin-skills.test.ts",
         "test/browser-guidance.test.ts",
         "test/agentcore-portal.test.ts",
         "test/agentcore-login-repo.test.ts",
