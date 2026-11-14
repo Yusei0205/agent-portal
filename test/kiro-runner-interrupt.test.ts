@@ -9,10 +9,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 // The runner imports files that its build copies into kiro-runner/shared, which a clean checkout does not have when the portal's typecheck
 // runs: load it by path at run time (the test job builds the runner first).
-const runnerModule = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'kiro-runner', 'src', 'run.ts')).href;
+const runnerDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'kiro-runner');
+// A clean checkout (CI runs the tests before the build step) has no shared/ folder yet: the runner's own build creates it.
+if (process.platform !== 'win32' && !fs.existsSync(path.join(runnerDir, 'shared', 'runner-files.ts'))) {
+  execFileSync(process.execPath, ['build.mjs'], { cwd: runnerDir, stdio: 'inherit' });
+}
+const runnerModule = pathToFileURL(path.join(runnerDir, 'src', 'run.ts')).href;
 const { runKiroRun, disposeWarmKiro } = await import(runnerModule) as {
   runKiroRun(payload: unknown, emit: (e: Record<string, unknown>) => void, startMs: number, broker?: unknown, stop?: AbortSignal): Promise<void>;
   disposeWarmKiro(): Promise<void>;
