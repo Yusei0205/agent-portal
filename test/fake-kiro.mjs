@@ -265,7 +265,7 @@ if (subCommand === 'acp') {
       // answer to a later prompt names this process and how many prompts it has seen, so a test can tell the session was kept.
       if (scenario === 'acp-interruptible') {
         promptsSeen += 1;
-        const interruptMe = /WAIT/.test(promptText);
+        const interruptMe = promptText.includes('WAIT');
         if (interruptMe) {
           notification('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: 'working on it…' }] } });
           const how = await new Promise((resolve) => { cancelWaiter = resolve; setTimeout(() => resolve('timeout'), 30_000); });
