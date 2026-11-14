@@ -1,0 +1,77 @@
+/**
+ * Which engine, sign-in and model the Create modules (diagrams, documents, presentations) run with.
+ *
+ * They used to start every run on the simulated "demo" engine, which writes no files, so a diagram or document
+ * never appeared. A run now uses one of the person's own Kiro or Claude sign-ins (the one they pick, else their
+ * default), exactly like a session.
+ */
+
+import { badRequest } from './util.ts';
+import { getCredentialsRepository } from './repositories/credentials.ts';
+
+export interface CreateAi {
+  engine: 'kiro' | 'claude-code' | 'codex' | 'demo';
+  credential_id: string | null;
+  model: string;
+}
+
+/** What the model picker sends for the person's own ChatGPT account (Codex has no stored sign-in record). */
+export const CODEX_ACCOUNT_ID = 'codex-account';
+
+const MODEL_RE = /^[A-Za-z0-9._:/@-]{1,120}$/;
+
+/** True when agents run in the cloud (AgentCore), where the simulated engine is never what anyone wants. */
+export function runsInCloud(): boolean {
+  return Boolean(process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN || process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN);
+}
+
+/**
+ * The sign-in of `userId` for one engine, as the id the model pickers use: their default one, else any they have; 'codex-account'
+ * for Codex. null when they have none. Used where a project names an engine and each person's own sign-in is found at run time.
+ */
+export async function credentialIdForEngine(userId: string, engine: 'claude-code' | 'kiro' | 'codex'): Promise<string | null> {
+  if (engine === 'codex') {
+    const { hasCodexLogin } = await import('./codex-auth.ts');
+    return (await hasCodexLogin(userId)) ? CODEX_ACCOUNT_ID : null;
+  }
+  const repo = getCredentialsRepository();
+  const d = await repo.getDefaultByUserAndEngine(userId, engine);
+  if (d) return d.id;
+  return (await repo.listByUser(userId)).find((c) => c.engine === engine)?.id ?? null;
+}
+
+/**
+ * `body` may carry `credentialId` and `model` (what the picker in the dialog sends). Without a credential the
+ * person's default sign-in is used. With no sign-in at all, a cloud portal asks for one; a local one keeps the
+ * simulated engine so it can be tried without an account.
+ */
+export async function resolveCreateAi(userId: string, body: Record<string, unknown> = {}): Promise<CreateAi> {
+  const repo = getCredentialsRepository();
+  const requestedModel = typeof body.model === 'string' ? body.model.trim() : '';
+  if (requestedModel && !MODEL_RE.test(requestedModel)) throw badRequest('model is not a valid model id');
+
+  const credentialId = typeof body.credentialId === 'string' ? body.credentialId.trim() : '';
+  if (credentialId === CODEX_ACCOUNT_ID) {
+    const { hasCodexLogin } = await import('./codex-auth.ts');
+    if (!(await hasCodexLogin(userId))) throw badRequest('Sign in to Codex first under Agent setup › Sign-ins, or pick another sign-in.');
+    return { engine: 'codex', credential_id: null, model: requestedModel };
+  }
+  if (credentialId) {
+    const c = await repo.getByIdAndUser(credentialId, userId);
+    if (!c || (c.engine !== 'kiro' && c.engine !== 'claude-code')) throw badRequest('That sign-in was not found. Pick one of your Kiro, Claude or Codex sign-ins.');
+    return { engine: c.engine, credential_id: c.id, model: requestedModel };
+  }
+
+  for (const engine of ['claude-code', 'kiro'] as const) {
+    const d = await repo.getDefaultByUserAndEngine(userId, engine);
+    if (d) return { engine, credential_id: d.id, model: requestedModel };
+  }
+  const own = (await repo.listByUser(userId)).filter((c) => c.engine === 'claude-code' || c.engine === 'kiro');
+  const first = own.find((c) => c.engine === 'claude-code') ?? own[0];
+  if (first) return { engine: first.engine as 'kiro' | 'claude-code', credential_id: first.id, model: requestedModel };
+
+  if (runsInCloud()) {
+    throw badRequest('Add a Kiro or Claude sign-in under Connect › Agent sign-ins first. An agent has to write the file, and it needs a sign-in to run.');
+  }
+  return { engine: 'demo', credential_id: null, model: '' };
+}

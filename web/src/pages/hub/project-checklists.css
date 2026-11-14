@@ -1,0 +1,11 @@
+.project-checklists { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; overflow-wrap: anywhere; }
+.project-checklists h2, .project-checklists p { margin: 0 0 8px; }
+.checklist-toolbar, .checklist-actions, .checklist-provider { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.checklist-toolbar { justify-content: space-between; }
+.checklist-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.project-checklists .checklist-item, .checklist-providers { border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.project-checklists label { display: grid; gap: 5px; flex: 1; min-width: 180px; }
+.project-checklists input, .project-checklists select, .project-checklists textarea { width: 100%; box-sizing: border-box; }
+.project-checklists textarea { resize: vertical; }
+.project-checklists legend { padding: 0 6px; font-weight: 600; overflow-wrap: anywhere; max-width: 100%; }
+.project-checklists fieldset:disabled { opacity: .85; }

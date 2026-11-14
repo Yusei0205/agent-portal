@@ -1,0 +1,10 @@
+[
+  {
+    "id": "GHSA-5p2g-fcmc-qvqq",
+    "reason": "image-size (JXL/HEIF parsers) via pptxgenjs 3.x; pptxgenjs is only loaded when a slide deck is generated, and the parsers run on images embedded in that deck. An attacker-crafted image can hang that one generation (denial of service); it does not give access to data. No 1.x fix exists; the fix is pptxgenjs 4 (breaking). Revisit when upgrading pptxgenjs."
+  },
+  {
+    "id": "GHSA-w3rx-r6r6-pgpr",
+    "reason": "image-size (ICNS parser) via pptxgenjs 3.x; same as above."
+  }
+]

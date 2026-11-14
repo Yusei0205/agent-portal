@@ -1,0 +1,208 @@
+# Deploy the harness AgentCore runners (Claude and Kiro) to AWS.
+#
+#   verify  — on pull requests and before every deploy: runner tests, the portal's AgentCore
+#             tests, both runner builds, and an end-to-end run of the real runner and
+#             Claude Code engine against a stand-in model API (no AWS, no keys).
+#   wait-for-ci — alongside verify, on the same pushes and manual runs as deploy: waits for CI
+#             (ci.yml) on this commit and fails unless it passed (scripts/wait-for-ci.mjs).
+#   deploy  — on pushes to main_v3 that touch the runners, or when started by hand on main_v3, once
+#             verify and CI have passed: infra/scripts/deploy-harness.mjs (ECR + arm64 CodeBuild
+#             images + AgentCore runtimes).
+#
+# When CI fails on a flaky test, re-run CI's failed jobs, and once they pass, re-run this workflow's
+# failed jobs: the CI check then sees the passing run and the deploy goes ahead.
+#
+# AWS access: GitHub OIDC, no stored keys. The job assumes agent-portal-github-deploy, which
+# trusts only this repository's jobs in the "aws-prod" environment
+# (infra/lib/github-deploy-stack.ts; an account admin deploys it once). Pull requests never
+# get AWS access. Repository admins: give "aws-prod" required reviewers and limit it to main_v3
+# (Settings › Environments) so every deploy waits for an approval.
+#
+# Only the harness stacks (AgentPortalHarnessBuild, AgentPortalHarness) are deployed. The cloud
+# portal stack and the spike stacks are not touched.
+name: Deploy AgentCore runners
+
+on:
+  push:
+    branches: [main_v3]
+    paths:
+      - agent-runner/**
+      - kiro-runner/**
+      - infra/**
+      - server/agent/guard.ts
+      - server/agent/env-scrub.ts
+      - server/agent/tool-policy.ts
+      - server/agent/pricing.ts
+      - server/agent/agentcore-approvals.ts
+      - server/real-path.ts
+      - server/agent/runner-files.ts
+      - server/agent/runner-inspect.ts
+      - server/agent/runner-repos.ts
+      - server/agent/runner-snapshot.ts
+      - server/agent/runner-terminal.ts
+      - server/agent/runner-terminal-auth.ts
+      - server/agent/runner-mcp.ts
+      - server/agent/runner-checks.ts
+      - server/agent/runner-finalize.ts
+      - server/agent/runner-finalize-run.ts
+      - server/agent/runner-memory.ts
+      - server/agent/runner-graph.ts
+      - server/agent/runner-graph-build.ts
+      - server/agent/agentcore-bridge.ts
+      - server/agent/claude-agentcore.ts
+      - server/agent/kiro-agentcore.ts
+      - test/engine/**
+      - .github/workflows/deploy-agentcore.yml
+  pull_request:
+    paths:
+      - agent-runner/**
+      - kiro-runner/**
+      - infra/**
+      - server/agent/guard.ts
+      - server/agent/env-scrub.ts
+      - server/agent/tool-policy.ts
+      - server/agent/pricing.ts
+      - server/agent/agentcore-approvals.ts
+      - server/real-path.ts
+      - server/agent/runner-files.ts
+      - server/agent/runner-inspect.ts
+      - server/agent/runner-repos.ts
+      - server/agent/runner-snapshot.ts
+      - server/agent/runner-terminal.ts
+      - server/agent/runner-terminal-auth.ts
+      - server/agent/runner-mcp.ts
+      - server/agent/runner-checks.ts
+      - server/agent/runner-finalize.ts
+      - server/agent/runner-finalize-run.ts
+      - server/agent/runner-memory.ts
+      - server/agent/runner-graph.ts
+      - server/agent/runner-graph-build.ts
+      - server/agent/agentcore-bridge.ts
+      - server/agent/claude-agentcore.ts
+      - server/agent/kiro-agentcore.ts
+      - test/engine/**
+      - .github/workflows/deploy-agentcore.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-agentcore-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Runner tests and builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install portal dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install runner dependencies
+        run: |
+          (cd agent-runner && npm ci --no-audit --no-fund)
+          (cd kiro-runner && npm ci --no-audit --no-fund)
+
+      - name: Build and type-check the runners
+        # build.mjs copies the shared portal modules into shared/ first.
+        run: |
+          (cd agent-runner && node build.mjs && npx tsc --noEmit)
+          (cd kiro-runner && node build.mjs && npx tsc --noEmit)
+
+      - name: Runner and AgentCore tests
+        run: >-
+          node --disable-warning=ExperimentalWarning --import tsx --test --test-timeout=300000
+          test/agent-runner-validation.test.ts test/agentcore-harness.test.ts test/agentcore-portal.test.ts
+          test/kiro-agentcore.test.ts test/runner-terminal.test.ts test/runner-snapshot.test.ts test/runner-memory.test.ts
+
+      - name: End to end with the real Claude Code engine
+        run: npm run test:engine
+        timeout-minutes: 15
+
+      - name: Type-check the infrastructure
+        run: |
+          cd infra
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+
+  wait-for-ci:
+    name: Wait for CI to pass
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main_v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read # list CI's runs on this commit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Wait for CI on this commit
+        run: node scripts/wait-for-ci.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  deploy:
+    name: Deploy to AgentCore (ap-southeast-1)
+    needs: [verify, wait-for-ci]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main_v3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: aws-prod
+    env:
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC → AWS
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Sign in to AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::366019841051:role/agent-portal-github-deploy' }}
+          role-session-name: agent-portal-deploy-${{ github.run_id }}
+          aws-region: ap-southeast-1
+
+      - name: Install CDK dependencies
+        working-directory: infra
+        run: npm ci --no-audit --no-fund
+
+      - name: Build images and deploy the runtimes
+        working-directory: infra
+        run: node scripts/deploy-harness.mjs
+
+      - name: Summary
+        if: always()
+        working-directory: infra
+        run: |
+          {
+            echo "### AgentCore runners"
+            if [ -f cdk.out/harness-outputs.json ]; then
+              echo '```json'
+              cat cdk.out/harness-outputs.json
+              echo '```'
+              echo "Set \`PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN\` / \`PORTAL_KIRO_AGENTCORE_RUNTIME_ARN\` on the portal to these ARNs to use them."
+            else
+              echo "No outputs: the deploy did not finish. See the step above."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

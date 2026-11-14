@@ -1,58 +1,77 @@
-export function cx(...xs) {
-  return xs.filter(Boolean).join(' ');
-}
-
-export function timeAgo(iso) {
+/**
+ * Format an ISO date string as a locale date.
+ * @param {string | null | undefined} iso
+ * @returns {string}
+ */
+export function formatDate(iso) {
   if (!iso) return '';
-  const s = (Date.now() - Date.parse(iso)) / 1000;
-  if (s < 45) return 'just now';
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  if (s < 7 * 86400) return `${Math.round(s / 86400)} d ago`;
-  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
-export function dateTime(iso) {
+/**
+ * Format an ISO date string as a relative time ("3m ago", "2h ago", "3d").
+ * Falls back to formatDate for older items.
+ * @param {string | null | undefined} iso
+ * @returns {string}
+ */
+export function formatRelative(iso) {
   if (!iso) return '';
-  return new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const secs = (Date.now() - Date.parse(iso)) / 1000;
+  if (secs < 60)          return 'just now';
+  if (secs < 3600)        return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400)       return `${Math.round(secs / 3600)}h ago`;
+  if (secs < 7 * 86400)   return `${Math.round(secs / 86400)}d`;
+  return formatDate(iso);
 }
 
-export function duration(a, b) {
-  if (!a) return '';
-  const ms = (b ? Date.parse(b) : Date.now()) - Date.parse(a);
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+/**
+ * Truncate a string to at most n characters, appending "…".
+ * @param {string | null | undefined} str
+ * @param {number} n
+ * @returns {string}
+ */
+export function truncate(str, n) {
+  if (!str) return '';
+  return str.length <= n ? str : str.slice(0, n - 1) + '…';
 }
 
-export function money(usd, digits) {
+/**
+ * Format a USD amount as a cost string.
+ * @param {number | null | undefined} usd
+ * @returns {string}
+ */
+export function formatCost(usd) {
   if (usd === null || usd === undefined) return '';
-  const d = digits ?? (usd !== 0 && Math.abs(usd) < 0.1 ? 4 : 2);
-  return `$${Number(usd).toFixed(d)}`;
+  const digits = usd !== 0 && Math.abs(usd) < 0.1 ? 4 : 3;
+  return `$${Number(usd).toFixed(digits)}`;
 }
 
-export function tokens(n) {
-  if (!n) return '0';
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
+/**
+ * Format Kiro credits. Kiro bills in credits, not dollars, so they are never shown with a $ sign.
+ * @param {number | null | undefined} credits
+ * @returns {string} e.g. "1.25 credits", "1 credit", "<0.01 credits"
+ */
+export function formatCredits(credits) {
+  if (credits === null || credits === undefined) return '';
+  const n = Number(credits);
+  if (n > 0 && n < 0.01) return '<0.01 credits';
+  const text = String(Number(n.toFixed(2)));
+  return `${text} ${text === '1' ? 'credit' : 'credits'}`;
 }
 
-export function bytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** Stable colour for a name, picked from a palette that reads on light and dark backgrounds. */
-const ROLE_HUES = [174, 212, 262, 36, 140, 196, 288, 228, 96, 312];
-export function hueFor(name) {
-  let h = 0;
-  for (const ch of String(name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return ROLE_HUES[h % ROLE_HUES.length];
-}
-
-export function plural(n, word, pl) {
-  return `${n} ${n === 1 ? word : pl || word + 's'}`;
+/**
+ * What a run or session used: dollars, Kiro credits, or both (an agent can run on either engine).
+ * @param {number | null | undefined} usd
+ * @param {number | null | undefined} credits
+ * @param {string} [empty] - returned when nothing was used
+ */
+export function formatUsage(usd, credits, empty = '—') {
+  const parts = [];
+  if (usd) parts.push(formatCost(usd));
+  if (credits) parts.push(formatCredits(credits));
+  return parts.length ? parts.join(' + ') : empty;
 }

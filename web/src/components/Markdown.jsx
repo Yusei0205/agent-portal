@@ -1,107 +1,78 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { Marked } from 'marked';
-import DOMPurify from 'dompurify';
-import { cx } from '../lib/util.js';
+/**
+ * Safe Markdown renderer.
+ *
+ * Uses `marked` to convert Markdown → HTML, then `DOMPurify` to sanitise
+ * the result before injecting it via dangerouslySetInnerHTML.
+ *
+ * This satisfies the "no dangerouslySetInnerHTML of raw HTML" requirement:
+ * every string that reaches innerHTML has been through DOMPurify first.
+ *
+ * Falls back to a <pre> block while the libraries are still loading or if
+ * parsing throws.
+ */
+import { useEffect, useState } from 'react';
 
-export function slugify(s, max = 60) {
-  const slug = String(s)
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, max)
-    .replace(/-+$/g, '');
-  return slug || 'item';
-}
+// Module-level library cache so each is fetched at most once.
+let _marked = null;
+let _DOMPurify = null;
+let _loadPromise = null;
 
-function makeMarked() {
-  const used = new Map();
-  const m = new Marked({
-    gfm: true,
-    breaks: false,
-    renderer: {
-      heading(token) {
-        const text = this.parser.parseInline(token.tokens);
-        const plain = token.text.replace(/<[^>]+>/g, '');
-        let id = slugify(plain);
-        const n = used.get(id) || 0;
-        used.set(id, n + 1);
-        if (n) id = `${slugify(plain, 56)}-${n + 1}`;
-        return `<h${token.depth} id="sec-${id}">${text}</h${token.depth}>\n`;
-      },
-      code(token) {
-        const esc = token.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        if (token.lang === 'mermaid') return `<div class="mermaid-src" data-src="${encodeURIComponent(token.text)}"><pre><code>${esc}</code></pre></div>`;
-        return `<pre><code${token.lang ? ` class="language-${token.lang.replace(/[^\w-]/g, '')}"` : ''}>${esc}</code></pre>`;
-      },
-      link(token) {
-        const text = this.parser.parseInline(token.tokens);
-        const external = /^https?:/i.test(token.href);
-        return `<a href="${token.href}"${external ? ' target="_blank" rel="noreferrer noopener"' : ''}>${text}</a>`;
-      },
+function loadDeps() {
+  if (_marked && _DOMPurify) return Promise.resolve();
+  if (_loadPromise) return _loadPromise;
+  _loadPromise = Promise.all([import('marked'), import('dompurify')]).then(
+    ([markedMod, dpMod]) => {
+      _marked = markedMod.marked ?? markedMod.default;
+      _DOMPurify = dpMod.default ?? dpMod;
     },
-  });
-  return m;
+  );
+  return _loadPromise;
 }
 
-let mermaidPromise = null;
-let mermaidCount = 0;
-function loadMermaid() {
-  if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then((m) => {
-      const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-      m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'neutral', fontFamily: 'inherit' });
-      return m.default;
-    });
-  }
-  return mermaidPromise;
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
-export function Markdown({ text, className, onCite, transform }) {
-  const ref = useRef(null);
-  const html = useMemo(() => {
-    const src = transform ? transform(text || '') : text || '';
-    const raw = makeMarked().parse(src);
-    return DOMPurify.sanitize(raw, { ADD_ATTR: ['target', 'data-src', 'data-n'], ADD_TAGS: ['sup'] });
-  }, [text, transform]);
+/**
+ * @param {{ text: string, className?: string }} props
+ */
+export function Markdown({ text, className }) {
+  const [html, setHtml] = useState('');
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const blocks = [...el.querySelectorAll('.mermaid-src')];
-    if (!blocks.length) return;
+    if (!text) { setHtml(''); return; }
     let cancelled = false;
-    loadMermaid()
-      .then(async (mermaid) => {
-        for (const b of blocks) {
-          if (cancelled) return;
-          try {
-            const { svg } = await mermaid.render(`mmd-${++mermaidCount}`, decodeURIComponent(b.dataset.src));
-            b.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['foreignObject'] });
-            b.classList.add('mermaid-ok');
-          } catch {
-            b.classList.add('mermaid-failed');
-          }
+
+    loadDeps()
+      .then(() => {
+        if (cancelled) return;
+        try {
+          const raw =
+            typeof _marked === 'function'
+              ? _marked(text, { gfm: true, breaks: true })
+              : _marked.parse(text, { gfm: true, breaks: true });
+          setHtml(_DOMPurify.sanitize(String(raw)));
+        } catch {
+          setHtml(`<pre style="white-space:pre-wrap">${escapeHtml(text)}</pre>`);
         }
       })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [html]);
+      .catch(() => {
+        if (!cancelled)
+          setHtml(`<pre style="white-space:pre-wrap">${escapeHtml(text)}</pre>`);
+      });
+
+    return () => { cancelled = true; };
+  }, [text]);
+
+  if (!html) return null;
 
   return (
+    // eslint-disable-next-line react/no-danger
     <div
-      ref={ref}
-      className={cx('md', className)}
-      onClick={(e) => {
-        const cite = e.target.closest?.('.cite');
-        if (cite && onCite) {
-          e.preventDefault();
-          onCite(Number(cite.dataset.n));
-        }
-      }}
+      className={`markdown-body${className ? ` ${className}` : ''}`}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

@@ -1,367 +1,764 @@
-import { useEffect, useState } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 import { api } from '../lib/api.js';
-import { useProject } from '../lib/context.js';
-import { useProjectEvents } from '../lib/events.js';
-import { go, href } from '../lib/router.js';
-import { useLoad } from '../lib/useAsync.js';
-import { cx, timeAgo } from '../lib/util.js';
-import { DiffView } from '../components/DiffView.jsx';
+import { navigate, href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
-import { Badge, Button, Empty, ErrorNote, Field, Modal, PageHeader, Segmented, Spinner, Toggle, useUi } from '../components/ui.jsx';
+import { BranchSelect } from '../components/BranchSelect.jsx';
+import { useFocusTrap } from '../lib/useFocusTrap.js';
+import { useToast, ToastShelf } from '../components/Toast.jsx';
+import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
+import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 
-const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
+// ── URL hash query helpers ────────────────────────────────────────────────────
 
-export function Review({ route }) {
-  const id = route.rest[0];
-  return id ? <ReviewDetail id={id} /> : <ReviewList />;
+function parseHashQuery() {
+  const hash = window.location.hash;
+  const qIdx = hash.indexOf('?');
+  if (qIdx < 0) return new URLSearchParams();
+  return new URLSearchParams(hash.slice(qIdx + 1));
 }
 
-function ReviewList() {
-  const { project, canEdit } = useProject();
-  const reviews = useLoad(() => api.get(`/api/projects/${project.id}/reviews`), [project.id]);
-  useProjectEvents(['review.updated'], () => reviews.reload(true));
-  const [creating, setCreating] = useState(false);
-  const list = reviews.data?.reviews || [];
+// ── Status / severity badge helpers ──────────────────────────────────────────
+
+const STATUS_BADGE_CLASS = {
+  pending: 'badge badge-warn',
+  running: 'badge badge-info',
+  done:    'badge badge-ok',
+  failed:  'badge badge-danger',
+};
+
+function StatusBadge({ status }) {
   return (
-    <div className="page">
-      <PageHeader
-        title="Code review"
-        sub="Agents review a branch or pull request against the project documents, security and testing checklists."
-        actions={canEdit ? <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>New review</Button> : null}
+    <span className={STATUS_BADGE_CLASS[status] ?? 'badge badge-neutral'}>
+      {status}
+    </span>
+  );
+}
+
+function SeverityBadge({ severity }) {
+  return (
+    <span className={`badge badge-sev-${severity ?? 'info'}`} style={{ textTransform: 'uppercase', fontSize: 12, fontWeight: 600, letterSpacing: '0.04em' }}>
+      {severity}
+    </span>
+  );
+}
+
+function formatDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// ── Review filters bar ────────────────────────────────────────────────────────
+
+function ReviewFiltersBar({ filters, repos, onChange }) {
+  const hasActiveFilters = filters.q || filters.status || filters.repository ||
+    filters.dateFrom || filters.dateTo || filters.type || filters.runBy !== 'everyone';
+
+  return (
+    <div role="search" aria-label="Code review filters" className="filter-bar">
+      {/* Search */}
+      <input
+        type="search"
+        placeholder="Search branch or ref…"
+        value={filters.q}
+        onChange={(e) => onChange({ ...filters, q: e.target.value })}
+        aria-label="Search reviews"
       />
-      {reviews.loading && !reviews.data ? (
-        <Spinner />
-      ) : list.length === 0 ? (
-        <Empty icon="review" title="No reviews yet" action={canEdit ? <Button variant="primary" onClick={() => setCreating(true)}>Review a branch</Button> : null}>
-          Pick two branches, or a GitHub pull request. Findings show up next to the changed lines.
-        </Empty>
-      ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Change</th>
-              <th>Repository</th>
-              <th>Status</th>
-              <th className="num">Open findings</th>
-              <th>Started</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <a className="strong-link" href={href(project.id, 'review', r.id)}>
-                    {r.pr_number ? `Pull request #${r.pr_number}` : <><code>{r.head}</code> into <code>{r.base}</code></>}
-                  </a>
-                  {r.deep ? <span className="muted small"> with deep look</span> : null}
-                </td>
-                <td>{r.repo_name}</td>
-                <td>
-                  <Badge status={r.status} />
-                </td>
-                <td className="num">
-                  {r.open_findings}
-                  {r.serious ? <Badge tone="danger">{r.serious} serious</Badge> : null}
-                </td>
-                <td className="muted">
-                  {timeAgo(r.created_at)}, {r.created_by_name}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      {/* Run by */}
+      <select
+        value={filters.runBy}
+        onChange={(e) => onChange({ ...filters, runBy: e.target.value })}
+        aria-label="Filter by who ran the review"
+      >
+        <option value="everyone">Everyone</option>
+        <option value="me">Me</option>
+      </select>
+
+      {/* Status */}
+      <select
+        value={filters.status}
+        onChange={(e) => onChange({ ...filters, status: e.target.value })}
+        aria-label="Filter by review status"
+      >
+        <option value="">All statuses</option>
+        <option value="pending">Pending</option>
+        <option value="running">Running</option>
+        <option value="done">Done</option>
+        <option value="failed">Failed</option>
+      </select>
+
+      {/* Type */}
+      <select
+        value={filters.type}
+        onChange={(e) => onChange({ ...filters, type: e.target.value })}
+        aria-label="Filter by review type"
+      >
+        <option value="">All types</option>
+        <option value="pr">PR review</option>
+        <option value="scan">Full scan</option>
+      </select>
+
+      {/* Repository */}
+      {repos.length > 0 && (
+        <select
+          value={filters.repository}
+          onChange={(e) => onChange({ ...filters, repository: e.target.value })}
+          aria-label="Filter by repository"
+        >
+          <option value="">All repositories</option>
+          {repos.map((r) => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+        </select>
       )}
-      {creating ? <NewReview onClose={() => setCreating(false)} /> : null}
+
+      {/* Date range */}
+      <span aria-hidden="true" className="muted" style={{ alignSelf: 'center', fontSize: '0.84rem', whiteSpace: 'nowrap' }}>From</span>
+      <input
+        type="date"
+        value={filters.dateFrom}
+        onChange={(e) => onChange({ ...filters, dateFrom: e.target.value })}
+        aria-label="Filter from date"
+      />
+      <span aria-hidden="true" className="muted" style={{ alignSelf: 'center', fontSize: '0.84rem' }}>to</span>
+      <input
+        type="date"
+        value={filters.dateTo}
+        onChange={(e) => onChange({ ...filters, dateTo: e.target.value })}
+        aria-label="Filter to date"
+      />
+
+      {/* Clear */}
+      {hasActiveFilters && (
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={() => onChange({ q: '', runBy: 'everyone', status: '', type: '', repository: '', dateFrom: '', dateTo: '' })}
+          aria-label="Clear all filters"
+        >
+          Clear filters
+        </button>
+      )}
     </div>
   );
 }
 
-function NewReview({ onClose }) {
-  const { project } = useProject();
-  const repos = useLoad(() => api.get(`/api/projects/${project.id}/repos`), [project.id]);
-  const ready = (repos.data?.repos || []).filter((r) => r.status === 'ready');
-  const [repoId, setRepoId] = useState('');
-  const [mode, setMode] = useState('branches');
-  const [branches, setBranches] = useState([]);
-  const [pulls, setPulls] = useState(null);
-  const [form, setForm] = useState({ base: '', head: '', prNumber: '', deep: false });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const repo = ready.find((r) => r.id === repoId);
-  useEffect(() => {
-    if (!repoId && ready[0]) setRepoId(ready[0].id);
-  }, [ready, repoId]);
-  useEffect(() => {
-    if (!repoId) return;
-    api.get(`/api/repos/${repoId}/branches`).then((r) => {
-      setBranches(r.branches);
-      setForm((f) => ({ ...f, base: r.defaultBranch, head: r.branches.find((b) => b.name !== r.defaultBranch)?.name || '' }));
-    });
-    setPulls(null);
-  }, [repoId]);
-  useEffect(() => {
-    if (mode === 'pr' && repo?.provider === 'github' && !pulls) {
-      api.get(`/api/repos/${repoId}/pulls`).then((r) => setPulls(r.pulls)).catch((e) => setError(e));
-    }
-  }, [mode, repo, repoId, pulls]);
+// ── New Review Modal ──────────────────────────────────────────────────────────
 
-  const start = async () => {
-    setBusy(true);
+function NewReviewModal({ projectId, repos, onClose, onCreated }) {
+  const [form, setForm] = useState({
+    repoId: repos[0]?.id ?? '',
+    baseRef: 'main',
+    headRef: '',
+    prNumber: '',
+    postMode: 'draft',
+    minSeverity: 'medium',
+    jiraKey: '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [ai, setAi] = useState({});
+  const trapRef = useFocusTrap();
+
+  // Load branches for visible selectors; custom refs are an explicit alternative.
+  const [branchInfo, setBranchInfo] = useState({ state: 'idle', branches: [], defaultBranch: null, error: null });
+  const baseTouched = useRef(false);
+  const branchRequest = useRef(0);
+
+  const loadBranches = useCallback(async (repoId, refresh = false) => {
+    const request = ++branchRequest.current;
+    if (!repoId) { setBranchInfo({ state: 'idle', branches: [], defaultBranch: null, error: null }); return; }
+    setBranchInfo({ state: 'loading', branches: [], defaultBranch: null, error: null });
+    try {
+      const r = await api.get(`/api/projects/${projectId}/repos/${repoId}/branches${refresh ? '?refresh=1' : ''}`);
+      if (request !== branchRequest.current) return;
+      setBranchInfo({
+        state: r.source === 'none' ? 'failed' : 'ready',
+        branches: r.branches ?? [],
+        defaultBranch: r.defaultBranch ?? null,
+        error: r.error ?? null,
+        source: r.source,
+      });
+      // Base follows the repository's default branch until the person types their own.
+      if (r.defaultBranch && !baseTouched.current) setForm((f) => ({ ...f, baseRef: r.defaultBranch }));
+    } catch (e) {
+      if (request !== branchRequest.current) return;
+      setBranchInfo({ state: 'failed', branches: [], defaultBranch: null, error: e.message });
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    loadBranches(form.repoId);
+    return () => { branchRequest.current++; };
+  }, [form.repoId, loadBranches]);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !loading) onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, loading]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
     setError(null);
     try {
-      const body = mode === 'pr' ? { repoId, prNumber: Number(form.prNumber), deep: form.deep } : { repoId, base: form.base, head: form.head, deep: form.deep };
-      const { review } = await api.post(`/api/projects/${project.id}/reviews`, body);
-      go(project.id, 'review', review.id);
+      const body = {
+        repoId: form.repoId || undefined,
+        baseRef: form.baseRef,
+        headRef: form.headRef || form.prNumber,
+        postMode: form.postMode,
+        minSeverity: form.minSeverity,
+      };
+      if (form.prNumber) body.prNumber = Number(form.prNumber);
+      if (form.jiraKey.trim()) body.jiraKey = form.jiraKey.trim();
+      if (ai.credentialId) { body.credentialId = ai.credentialId; if (ai.model) body.model = ai.model; }
+      const r = await api.post(`/api/projects/${projectId}/reviews`, body);
+      onCreated(r.review);
     } catch (e) {
-      setError(e);
-      setBusy(false);
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
   };
 
+  const overlayDismiss = useOverlayDismiss(onClose, { disabled: loading });
+
   return (
-    <Modal
-      title="New review"
-      onClose={onClose}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} onClick={start} disabled={!repoId || (mode === 'pr' ? !form.prNumber : !form.base || !form.head)}>
-            Start review
-          </Button>
-        </>
-      }
+    <div
+      className="dialog-overlay"
+      role="presentation"
+      onMouseDown={overlayDismiss.onMouseDown}
+      onClick={overlayDismiss.onClick}
     >
-      {repos.data && !ready.length ? (
-        <p>
-          Connect a repository first on the <a href={href(project.id, 'repos')}>Repositories</a> page.
-        </p>
-      ) : (
-        <div className="stack">
-          <Field label="Repository">
-            {(id) => (
-              <select id={id} className="input" value={repoId} onChange={(e) => setRepoId(e.target.value)}>
-                {ready.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-          {repo?.provider === 'github' ? (
-            <Segmented value={mode} onChange={setMode} label="What to review" options={[{ value: 'branches', label: 'Two branches' }, { value: 'pr', label: 'Pull request' }]} />
-          ) : null}
-          {mode === 'pr' ? (
-            <Field label="Pull request">
-              {(id) =>
-                pulls ? (
-                  <select id={id} className="input" value={form.prNumber} onChange={(e) => setForm({ ...form, prNumber: e.target.value })}>
-                    <option value="">Choose an open pull request</option>
-                    {pulls.map((p) => (
-                      <option key={p.number} value={p.number}>
-                        #{p.number} {p.title} ({p.head} into {p.base})
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <Spinner small />
-                )
-              }
-            </Field>
-          ) : (
-            <div className="row">
-              <Field label="Changes on">
-                {(id) => (
-                  <select id={id} className="input" value={form.head} onChange={(e) => setForm({ ...form, head: e.target.value })}>
-                    <option value="">Choose a branch</option>
-                    {branches.map((b) => (
-                      <option key={b.name} value={b.name}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-              <Field label="Compared with">
-                {(id) => (
-                  <select id={id} className="input" value={form.base} onChange={(e) => setForm({ ...form, base: e.target.value })}>
-                    {branches.map((b) => (
-                      <option key={b.name} value={b.name}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-            </div>
-          )}
-          <Toggle checked={form.deep} onChange={(deep) => setForm({ ...form, deep })} label="Deep look at risky files" />
-          <p className="muted small">
-            Haiku reviews the whole change. With a deep look, Sonnet re-checks files that have medium or more serious findings. Costs a little more, finds subtler problems.
-          </p>
-          <ErrorNote error={error} />
+      <div
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="New code review"
+        ref={trapRef}
+      >
+        <div className="dialog-head">
+          <h2 className="dialog-title">New code review</h2>
+          <button type="button" className="btn-icon" onClick={onClose} disabled={loading} aria-label="Close">
+            <Icon name="x" size={16} />
+          </button>
         </div>
-      )}
-    </Modal>
+        <form onSubmit={submit} noValidate style={{ display: 'contents' }}>
+          <div className="dialog-body stack">
+            {repos.length > 0 && (
+              <div className="field">
+                <label htmlFor="nr-repo">Repository</label>
+                <select
+                  id="nr-repo"
+                  value={form.repoId}
+                  onChange={(e) => {
+                    baseTouched.current = false;
+                    const repoId = e.target.value;
+                    branchRequest.current++;
+                    setBranchInfo({ state: 'loading', branches: [], defaultBranch: null, error: null });
+                    setForm((f) => ({ ...f, repoId, baseRef: repos.find((r) => r.id === repoId)?.default_branch || '', headRef: '' }));
+                  }}
+                >
+                  <option value="">None</option>
+                  {repos.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="field">
+              <label htmlFor="nr-base">Base branch / ref</label>
+              <BranchSelect key={form.repoId + '-base'} id="nr-base" value={form.baseRef}
+                branches={branchInfo.branches} loading={branchInfo.state === 'loading'} required
+                onChange={(value) => { baseTouched.current = true; setForm((f) => ({ ...f, baseRef: value })); }} />
+            </div>
+
+            <div className="field">
+              <label htmlFor="nr-head">Head branch / ref</label>
+              <BranchSelect key={form.repoId + '-head'} id="nr-head" value={form.headRef}
+                branches={branchInfo.branches} loading={branchInfo.state === 'loading'} describedBy="nr-branches-hint"
+                onChange={(value) => setForm((f) => ({ ...f, headRef: value }))} />
+              <span id="nr-branches-hint" className="field-hint" role="status">
+                {!form.repoId && 'Choose a repository to pick from its branches.'}
+                {form.repoId && branchInfo.state === 'loading' && 'Loading branches…'}
+                {form.repoId && branchInfo.state === 'ready' && (
+                  <>
+                    {branchInfo.branches.length} branch{branchInfo.branches.length === 1 ? '' : 'es'}
+                    {branchInfo.source === 'clone' ? ' (from the local copy; the host could not be reached)' : ''}
+                    {' · '}
+                    <button type="button" className="btn-link" onClick={() => loadBranches(form.repoId, true)}>Refresh</button>
+                  </>
+                )}
+                {form.repoId && branchInfo.state === 'failed' && (
+                  <>
+                    Could not list branches{branchInfo.error ? `: ${branchInfo.error}` : ''}. Choose “Enter a ref instead” to enter it manually.
+                    {' '}
+                    <button type="button" className="btn-link" onClick={() => loadBranches(form.repoId, true)}>Try again</button>
+                  </>
+                )}
+              </span>
+            </div>
+
+            <div className="field">
+              <label htmlFor="nr-pr">PR number <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+              <input
+                id="nr-pr"
+                type="number"
+                value={form.prNumber}
+                onChange={(e) => setForm((f) => ({ ...f, prNumber: e.target.value }))}
+                placeholder="123"
+                min="1"
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="nr-jira">Jira ticket key <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+              <input
+                id="nr-jira"
+                type="text"
+                value={form.jiraKey}
+                onChange={(e) => setForm((f) => ({ ...f, jiraKey: e.target.value }))}
+                placeholder="e.g. PROJ-123 — auto-detected from branch when blank"
+                aria-describedby="jira-key-hint"
+              />
+              <span id="jira-key-hint" className="field-hint">
+                Leave blank to auto-detect from the branch name (e.g. feature/PROJ-123-my-feature).
+              </span>
+            </div>
+
+            <div className="row wrap">
+              <div className="field">
+                <label htmlFor="nr-post">Post mode</label>
+                <select
+                  id="nr-post"
+                  value={form.postMode}
+                  onChange={(e) => setForm((f) => ({ ...f, postMode: e.target.value }))}
+                >
+                  <option value="draft">Draft (approve before posting)</option>
+                  <option value="auto">Auto (post immediately)</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="nr-sev">Min severity</label>
+                <select
+                  id="nr-sev"
+                  value={form.minSeverity}
+                  onChange={(e) => setForm((f) => ({ ...f, minSeverity: e.target.value }))}
+                >
+                  <option value="info">Info</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="row wrap">
+              <AiChoicePicker onChange={setAi} disabled={loading} idPrefix="nr-ai" allowPortalDefault />
+            </div>
+            <p className="field-hint">Which engine and model review the change, as in a new session. Portal default uses the portal's own provider.</p>
+
+            {error && <p className="error-note" role="alert">{error}</p>}
+          </div>
+
+          <div className="dialog-foot">
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={loading}>Cancel</button>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={loading || (!form.headRef && !form.prNumber)}
+            >
+              {loading ? 'Creating…' : 'Create review'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
-function ReviewDetail({ id }) {
-  const { project, canEdit } = useProject();
-  const { toast, confirm } = useUi();
-  const r = useLoad(() => api.get(`/api/reviews/${id}`), [id]);
-  useProjectEvents(['review.updated'], (_e, d) => d?.id === id && r.reload(true));
-  const [sevFilter, setSevFilter] = useState(new Set(SEVERITIES));
-  const [showDismissed, setShowDismissed] = useState(false);
-  const [focus, setFocus] = useState(null);
+// ── Findings panel ────────────────────────────────────────────────────────────
+
+export function FindingsPanel({ projectId, review, isAdmin, onPostSuccess }) {
+  const [findings, setFindings] = useState([]);
+  const [search, setSearch] = useState('');
+  const [severity, setSeverity] = useState('all');
+  const [showDismissed, setShowDismissed] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
+  const [error, setError] = useState(null);
+  const { toast, toasts, removeToast } = useToast();
 
-  if (r.error) return <div className="page"><ErrorNote error={r.error} /></div>;
-  if (!r.data) return <div className="page"><Spinner /></div>;
-  const { review, diff, findings, run } = r.data;
-  const visible = findings.filter((f) => sevFilter.has(f.severity) && (showDismissed || f.status !== 'dismissed'));
-  const counts = Object.fromEntries(SEVERITIES.map((s) => [s, findings.filter((f) => f.severity === s && f.status !== 'dismissed').length]));
-
-  const setStatus = async (f, status) => {
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
-      await api.patch(`/api/findings/${f.id}`, { status });
-      r.reload(true);
+      const r = await api.get(`/api/projects/${projectId}/reviews/${review.id}/findings`);
+      setFindings(r.findings || []);
     } catch (e) {
-      toast(e.message, 'danger');
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, review.id]);
+
+  useEffect(() => {
+    load();
+    if (!['pending', 'running'].includes(review.status)) return;
+    const timer = setInterval(() => load(true), 3000);
+    return () => clearInterval(timer);
+  }, [load, review.status]);
+
+  const accept = async (fid, accepted) => {
+    try {
+      await api.put(`/api/projects/${projectId}/reviews/${review.id}/findings/${fid}`, { accepted });
+      setFindings((prev) => prev.map((f) => f.id === fid ? { ...f, accepted } : f));
+    } catch (e) {
+      toast(e.message, 'error');
     }
   };
 
-  const renderFinding = (f) => (
-    <div className={cx('finding', `sev-${f.severity}`, f.status !== 'open' && `is-${f.status}`)}>
-      <div className="finding-head">
-        <Badge status={f.severity} />
-        <span className="muted small">{f.category}</span>
-        {f.source === 'deep' ? <span className="muted small">deep look</span> : null}
-        {f.line ? <span className="muted small">line {f.line}</span> : null}
-        {f.status !== 'open' ? <Badge status={f.status} /> : null}
-      </div>
-      <p>{f.message}</p>
-      {f.suggestion ? (
-        <p className="finding-fix">
-          <strong>Fix:</strong> {f.suggestion}
-        </p>
-      ) : null}
-      {canEdit ? (
-        <div className="row tight">
-          {f.status !== 'accepted' ? <Button size="sm" icon="check" onClick={() => setStatus(f, 'accepted')}>Accept</Button> : null}
-          {f.status !== 'dismissed' ? <Button size="sm" variant="ghost" onClick={() => setStatus(f, 'dismissed')}>Dismiss</Button> : null}
-          {f.status !== 'open' ? <Button size="sm" variant="ghost" onClick={() => setStatus(f, 'open')}>Reopen</Button> : null}
-        </div>
-      ) : null}
-    </div>
-  );
+  const postToGithub = async () => {
+    setPosting(true);
+    setError(null);
+    try {
+      const r = await api.post(`/api/projects/${projectId}/reviews/${review.id}/post`, {});
+      onPostSuccess?.(r);
+      toast(r.message, 'ok');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  if (loading) return <div style={{ padding: 12 }}><span className="spinner" aria-label="Loading findings…" /></div>;
+
+  const canPost = isAdmin && review.post_mode === 'draft' && review.status === 'done';
+  const query = search.trim().toLowerCase();
+  const visible = findings.filter(f => (severity === 'all' || f.severity === severity)
+    && (showDismissed || f.accepted !== -1)
+    && (!query || [f.file_path, f.title, f.body].some(value => String(value ?? '').toLowerCase().includes(query))));
+  const active = ['pending', 'running'].includes(review.status);
 
   return (
-    <div className="page wide">
-      <a className="back" href={href(project.id, 'review')}>
-        ← All reviews
-      </a>
-      <PageHeader
-        title={review.pr_number ? `Pull request #${review.pr_number}` : `${review.head} into ${review.base}`}
-        sub={`${review.repo_name}, started ${timeAgo(review.created_at)}`}
-        actions={
-          <>
-            {run ? (
-              <a className="btn btn-default" href={href(project.id, 'runs', run.id)}>
-                <Icon name="runs" size={17} />
-                <span>Watch the reviewer</span>
-              </a>
-            ) : null}
-            {canEdit && review.pr_number && review.status === 'done' ? (
-              <Button
-                icon="external"
-                busy={posting}
-                onClick={async () => {
-                  setPosting(true);
-                  try {
-                    const out = await api.post(`/api/reviews/${review.id}/post-github`);
-                    toast(`Posted ${out.posted} findings to GitHub`);
-                    r.reload(true);
-                  } catch (e) {
-                    toast(e.message, 'danger');
-                  } finally {
-                    setPosting(false);
-                  }
-                }}
-              >
-                {review.posted_at ? 'Post again to GitHub' : 'Post to GitHub'}
-              </Button>
-            ) : null}
-            {canEdit && review.status !== 'running' ? (
-              <Button
-                variant="ghost"
-                icon="trash"
-                onClick={async () => {
-                  if (!(await confirm({ title: 'Delete review', message: 'Delete this review and its findings?', confirmLabel: 'Delete', danger: true }))) return;
-                  await api.del(`/api/reviews/${review.id}`);
-                  go(project.id, 'review');
-                }}
-              >
-                Delete
-              </Button>
-            ) : null}
-          </>
-        }
-      />
-      {review.status === 'running' ? (
-        <div className="note note-info">
-          <Spinner small /> <span>Reviewing {diff.length} changed files. Findings appear here when the agent finishes.</span>
-        </div>
-      ) : null}
-      {review.error ? <ErrorNote error={new Error(review.error)} /> : null}
-      {review.summary ? <p className="lead">{review.summary}</p> : null}
+    <>
+    <div style={{ padding: '12px 0' }}>
+      {error && <p className="error-note" role="alert" style={{ marginBottom: 8 }}>{error}</p>}
 
-      {review.status !== 'running' ? (
-        <div className="sev-bar" role="group" aria-label="Filter by severity">
-          {SEVERITIES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              className={cx('sev-chip', `sev-${s}`, sevFilter.has(s) && 'is-on')}
-              aria-pressed={sevFilter.has(s)}
-              onClick={() => {
-                const next = new Set(sevFilter);
-                next.has(s) ? next.delete(s) : next.add(s);
-                setSevFilter(next);
-              }}
+      {canPost && (
+        <div className="row" style={{ marginBottom: 12 }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={postToGithub}
+            disabled={posting}
+          >
+            {posting ? 'Posting…' : '📤 Post to GitHub'}
+          </button>
+          <span className="muted" style={{ fontSize: '0.84rem' }}>
+            {findings.filter((f) => !f.posted_at && f.accepted !== -1).length} findings eligible
+          </span>
+        </div>
+      )}
+
+      <section aria-label="Findings filters" className="row wrap" style={{ gap: 12, marginBottom: 12 }}>
+        <label>Search findings<input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="File, description or fix" /></label>
+        <label>Severity<select aria-label="Severity" className="input" value={severity} onChange={e => setSeverity(e.target.value)}><option value="all">All severities</option>{['critical', 'high', 'medium', 'low', 'info'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label><input type="checkbox" checked={showDismissed} onChange={e => setShowDismissed(e.target.checked)} /> Show dismissed</label>
+      </section>
+      <p className="muted">Showing {visible.length} of {findings.length} findings</p>
+      {active && <p role="status">Review in progress. Findings shown so far are partial results.</p>}
+      {review.status === 'failed' && <p role="status">The assessment did not finish. Any findings shown are partial results; open the reviewer session for details.</p>}
+      {visible.length === 0 ? (
+        <p className="muted" style={{ fontSize: '0.88rem' }}>{findings.length ? 'No findings match these filters.' : active ? 'Waiting for findings.' : review.status === 'done' ? 'The reviewer reported no findings.' : 'No findings available from this incomplete assessment.'}</p>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {visible.map((f) => (
+            <li
+              key={f.id}
+              className={`finding-item finding-item-${f.severity ?? 'info'}${f.accepted === -1 ? ' is-dismissed' : ''}`}
             >
-              <span className="sev-n">{counts[s]}</span> {s}
-            </button>
-          ))}
-          <Toggle checked={showDismissed} onChange={setShowDismissed} label="Show dismissed" />
-        </div>
-      ) : null}
-
-      <div className="review-layout">
-        <nav className="review-files" aria-label="Changed files">
-          <ol>
-            {diff.map((f) => {
-              const n = visible.filter((x) => x.file === f.newPath).length;
-              return (
-                <li key={f.newPath}>
+              <div className="row wrap" style={{ gap: 8, marginBottom: 4 }}>
+                <SeverityBadge severity={f.severity} />
+                <code style={{ fontSize: 13, color: 'var(--ink-2)' }}>
+                  {f.file_path}{f.line_number ? `:${f.line_number}` : ''}
+                </code>
+                {f.posted_at && (
+                  <span className="badge badge-ok" style={{ fontSize: '0.72rem' }}>posted</span>
+                )}
+              </div>
+              <p style={{ margin: '4px 0', fontWeight: 600, fontSize: '0.9rem' }}>{f.title}</p>
+              <p style={{ margin: '4px 0', fontSize: '0.84rem', color: 'var(--ink-2)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{f.body}</p>
+              {f.confidence != null && (
+                <p className="muted" style={{ margin: '2px 0', fontSize: '0.8rem' }}>
+                  Confidence: {Math.round(f.confidence * 100)}%
+                </p>
+              )}
+              <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                {f.accepted !== 1 && (
                   <button
                     type="button"
-                    className={cx('linkish', focus === f.newPath && 'is-active')}
-                    onClick={() => {
-                      setFocus(f.newPath);
-                      document.getElementById(`file-${f.newPath}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-                    }}
+                    className="btn btn-sm"
+                    style={{ background: 'var(--ok-wash)', borderColor: 'color-mix(in srgb, var(--ok) 35%, transparent)' }}
+                    onClick={() => accept(f.id, 1)}
+                    aria-label="Accept finding"
                   >
-                    <span className="file-name">{f.newPath}</span>
-                    {n ? <span className="file-count">{n}</span> : null}
+                    ✓ Accept
                   </button>
-                </li>
-              );
-            })}
-          </ol>
-        </nav>
-        <DiffView files={diff} findings={visible} renderFinding={renderFinding} focusFile={focus} />
-      </div>
+                )}
+                {f.accepted !== -1 && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ background: 'var(--danger-wash)', borderColor: 'color-mix(in srgb, var(--danger) 35%, transparent)' }}
+                    onClick={() => accept(f.id, -1)}
+                    aria-label="Dismiss finding"
+                  >
+                    ✕ Dismiss
+                  </button>
+                )}
+                {f.accepted !== 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => accept(f.id, 0)}
+                    aria-label="Reset finding status"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
+    <ToastShelf toasts={toasts} onRemove={removeToast} />
+    </>
+  );
+}
+
+// ── Review row ─────────────────────────────────────────────────────────────────
+
+function ReviewRow({ review, projectId, isAdmin, onDelete }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <li style={{ borderBottom: '1px solid var(--line-2)', padding: '12px 0' }}>
+      <div className="row wrap" style={{ gap: 12 }}>
+        <StatusBadge status={review.status} />
+        <span style={{ fontWeight: 500, fontSize: '0.9rem' }}>
+          {review.repo_name ? `${review.repo_name}: ` : ''}
+          <code style={{ background: 'var(--raised)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
+            {review.base_ref}
+          </code>
+          {' → '}
+          <code style={{ background: 'var(--raised)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
+            {review.head_ref}
+          </code>
+          {review.pr_number ? ` (PR #${review.pr_number})` : ''}
+        </span>
+        {review.finding_count > 0 && (
+          <span className="muted" style={{ fontSize: '0.84rem' }}>
+            {review.finding_count} finding{review.finding_count !== 1 ? 's' : ''}
+          </span>
+        )}
+        <span className="muted push" style={{ fontSize: '0.8rem' }}>
+          {formatDate(review.created_at)}
+        </span>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+        >
+          {expanded ? 'Hide findings' : 'View findings'}
+        </button>
+        <a
+          href={href(projectId, 'reviews', 'code', review.id)}
+          className="btn btn-sm"
+          aria-label={`Open full detail for review ${review.head_ref}`}
+        >
+          Open
+        </a>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={() => onDelete(review)}
+          disabled={review.status === 'running'}
+          title={review.status === 'running' ? 'Wait for the review to finish' : 'Delete this review'}
+          aria-label={`Delete review ${review.head_ref}`}
+        >
+          <Icon name="trash" size={14} />
+        </button>
+      </div>
+      {review.summary && (
+        <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.84rem' }}>{review.summary}</p>
+      )}
+      {expanded && (
+        <FindingsPanel
+          projectId={projectId}
+          review={review}
+          isAdmin={isAdmin}
+        />
+      )}
+    </li>
+  );
+}
+
+// ── Main Review page ──────────────────────────────────────────────────────────
+
+export default function Review({ projectId, user }) {
+  const [reviews, setReviews] = useState([]);
+  const [repos, setRepos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+
+  // Read initial filters from URL hash query
+  const [filters, setFilters] = useState(() => {
+    const q = parseHashQuery();
+    return {
+      q: q.get('q') ?? '',
+      runBy: q.get('runBy') ?? 'everyone',
+      status: q.get('status') ?? '',
+      type: q.get('type') ?? '',
+      repository: q.get('repository') ?? '',
+      dateFrom: q.get('dateFrom') ?? '',
+      dateTo: q.get('dateTo') ?? '',
+    };
+  });
+
+  // Sync filters → URL hash query
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set('q', filters.q);
+    if (filters.runBy !== 'everyone') params.set('runBy', filters.runBy);
+    if (filters.status) params.set('status', filters.status);
+    if (filters.type) params.set('type', filters.type);
+    if (filters.repository) params.set('repository', filters.repository);
+    if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
+    if (filters.dateTo) params.set('dateTo', filters.dateTo);
+    const hash = window.location.hash;
+    const qIdx = hash.indexOf('?');
+    const base = qIdx >= 0 ? hash.slice(0, qIdx) : hash;
+    const qs = params.toString();
+    const newHash = qs ? `${base}?${qs}` : base;
+    if (window.location.hash !== newHash) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search + newHash);
+    }
+  }, [filters]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (filters.q) params.set('q', filters.q);
+      if (filters.runBy !== 'everyone') params.set('runBy', filters.runBy);
+      if (filters.status) params.set('status', filters.status);
+      if (filters.type) params.set('type', filters.type);
+      if (filters.repository) params.set('repository', filters.repository);
+      if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
+      if (filters.dateTo) params.set('dateTo', filters.dateTo);
+      const qs = params.toString();
+
+      const [rr, repoRes] = await Promise.all([
+        api.get(`/api/projects/${projectId}/reviews${qs ? `?${qs}` : ''}`),
+        api.get(`/api/projects/${projectId}/repos`).catch(() => ({ repos: [] })),
+      ]);
+      setReviews(rr.reviews || []);
+      setRepos(repoRes.repos || []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, filters]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const isAdmin = user?.is_admin;
+  const { confirmState, requestConfirm } = useConfirm();
+  const { toast, toasts, removeToast } = useToast();
+
+  const deleteReview = async (review) => {
+    const ok = await requestConfirm(
+      `Delete the review of ${review.head_ref}${review.pr_number ? ` (PR #${review.pr_number})` : ''} and its findings? This cannot be undone.`,
+      'Delete', 'danger');
+    if (!ok) return;
+    try {
+      await api.delete(`/api/projects/${projectId}/reviews/${review.id}`);
+      setReviews((prev) => prev.filter((r) => r.id !== review.id));
+      toast('Review deleted', 'ok');
+    } catch (e) {
+      toast(e.message || 'Could not delete the review', 'error');
+    }
+  };
+
+  return (
+    <>
+      <ConfirmDialog state={confirmState} />
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
+      {/* Toolbar row — "+ New review" aligned right, matching Tests page pattern */}
+      <div className="actions-row" style={{ justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setShowModal(true)}
+        >
+          + New review
+        </button>
+      </div>
+
+      <ReviewFiltersBar filters={filters} repos={repos} onChange={setFilters} />
+
+      {error && (
+        <div role="alert" className="error-note" style={{ marginBottom: 16 }}>
+          {error}
+          <button type="button" className="btn btn-sm" onClick={load} style={{ marginLeft: 8 }}>Retry</button>
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ padding: '48px 0', textAlign: 'center' }}>
+          <div className="spinner" aria-label="Loading reviews…" />
+        </div>
+      ) : reviews.length === 0 ? (
+        <div className="empty-state">
+          <p>No reviews yet.</p>
+          <p className="muted" style={{ marginTop: 6, fontSize: '0.84rem' }}>Click &quot;+ New review&quot; to start a code review.</p>
+        </div>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {reviews.map((r) => (
+            <ReviewRow
+              key={r.id}
+              review={r}
+              projectId={projectId}
+              isAdmin={isAdmin}
+              onDelete={deleteReview}
+            />
+          ))}
+        </ul>
+      )}
+
+      {showModal && (
+        <NewReviewModal
+          projectId={projectId}
+          repos={repos}
+          onClose={() => setShowModal(false)}
+          onCreated={(review) => {
+            setShowModal(false);
+            setReviews((prev) => [review, ...prev]);
+          }}
+        />
+      )}
+    </>
   );
 }

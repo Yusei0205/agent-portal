@@ -1,0 +1,120 @@
+/* ── Agents panel: orbit, tree, timeline, transcript ─── */
+/* However narrow the pane, the panel never takes more than 60% of the screen: it scrolls inside itself, so the conversation stays in view. */
+.agents-strip { max-height: 60vh; overflow-y: auto; }
+.agents-panel { container-type: inline-size; display: flex; flex-direction: column; background: var(--surface-1, var(--panel)); }
+.agents-panel-head { display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: 0.8rem; flex-wrap: wrap; }
+.agents-panel-count { color: var(--ink-3); }
+.agents-panel-done { color: var(--ink-3); margin-left: auto; font-size: 0.75rem; }
+.agents-panel-tabs, .agents-panel-sub { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; }
+.agents-panel-tabs { margin-left: auto; }
+.agents-panel-done + .agents-panel-tabs { margin-left: 0; }
+.agents-panel-sub { margin: 0 12px 6px; align-self: flex-start; }
+.agents-panel-tabs button, .agents-panel-sub button { border: 0; background: transparent; color: var(--ink-3); font-size: 0.74rem; padding: 3px 10px; border-radius: 5px; cursor: pointer; }
+.agents-panel-tabs button.is-on, .agents-panel-sub button.is-on { background: var(--accent); color: #fff; }
+.agents-panel-close { border: 0; background: transparent; color: var(--ink-3); font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 0 4px; }
+.agents-panel-body { display: flex; flex-wrap: nowrap; height: var(--panel-h, 420px); overflow: hidden; border-top: 1px solid var(--line-2); }
+.agents-panel-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: auto; }
+.agents-panel-flow { flex: 1; min-height: 260px; }
+.agents-panel-side { flex: 0 1 320px; min-height: 0; max-width: 100%; max-height: 100%; border-left: 1px solid var(--line-2); overflow: auto; display: flex; flex-direction: column; }
+.agents-panel-side .agent-detail { border-top: 0; max-height: none; }
+.agents-panel-hint { margin: 0; padding: 5px 12px; font-size: 0.7rem; color: var(--ink-3); border-top: 1px solid var(--line-2); }
+@container (max-width: 760px) { .agents-panel-body { flex-direction: column; height: auto; min-height: var(--panel-h, 420px); overflow: visible; } .agents-panel-main { flex: 1 0 380px; } .agents-panel-side { flex: 0 0 auto; max-height: 420px; border-left: 0; border-top: 1px solid var(--line-2); } }
+
+.orbit { position: relative; flex: 1; min-height: 260px; overflow: hidden; outline: none; cursor: grab; touch-action: none;
+  background-color: #090d1a;
+  background-image: radial-gradient(1px 1px at 12% 22%, #7f8bb5 50%, transparent 51%), radial-gradient(1px 1px at 78% 14%, #7f8bb5 50%, transparent 51%),
+    radial-gradient(1px 1px at 34% 78%, #7f8bb5 50%, transparent 51%), radial-gradient(1.5px 1.5px at 90% 70%, #9aa7d4 50%, transparent 51%),
+    radial-gradient(1px 1px at 55% 40%, #6a76a0 50%, transparent 51%), radial-gradient(1px 1px at 5% 88%, #6a76a0 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 66% 90%, #9aa7d4 50%, transparent 51%), radial-gradient(1px 1px at 45% 8%, #7f8bb5 50%, transparent 51%);
+  background-size: 260px 220px; }
+.orbit:active { cursor: grabbing; }
+.orbit:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.orbit-svg { display: block; }
+.orbit-ring { stroke: #2b3558; stroke-width: 1; stroke-dasharray: 3 7; }
+/* The links between agents are fibres: a faint glowing curve, with signals travelling along it (drawn in the component). */
+.orbit-nerve-line { stroke: #3b4a8a; stroke-width: 1.6; stroke-linecap: round; }
+.orbit-nerve-glow { stroke: #5b8cff; stroke-width: 6; opacity: 0.08; stroke-linecap: round; }
+.orbit-nerve.is-live .orbit-nerve-line { stroke: #7da2ff; stroke-width: 2; stroke-dasharray: 1 7; animation: orbit-flow 1.1s linear infinite; }
+.orbit-nerve.is-live .orbit-nerve-glow { opacity: 0.28; animation: orbit-glow 2.2s ease-in-out infinite; }
+.orbit-nerve.is-failed .orbit-nerve-line { stroke: #7a3a45; }
+.orbit-nerve.is-failed .orbit-nerve-glow { stroke: #ff6b6b; opacity: 0.1; }
+.orbit-signal { fill: #dbe7ff; filter: drop-shadow(0 0 5px #7da2ff) drop-shadow(0 0 10px #5b8cff); pointer-events: none; }
+.orbit-signal.is-ambient { fill: #9fe8c2; filter: drop-shadow(0 0 4px #3fbf7f); }
+.orbit-node { cursor: pointer; }
+.orbit-core { fill: #101a38; stroke: #5b8cff; stroke-width: 2; }
+.orbit-dot { fill: #8fb0ff; }
+.orbit-dash { stroke: #35417a; stroke-width: 1; stroke-dasharray: 3 4; }
+.orbit-node.is-done .orbit-core { stroke: #3fbf7f; }
+.orbit-node.is-done .orbit-dot { fill: #6fe3a5; }
+.orbit-node.is-failed .orbit-core { stroke: #ff6b6b; }
+.orbit-node.is-failed .orbit-dot { fill: #ff9a9a; }
+.orbit-pulse { fill: none; stroke: #5b8cff; stroke-width: 1.5; opacity: 0.6; transform-box: fill-box; transform-origin: center; animation: orbit-pulse 2.4s ease-out infinite; }
+.orbit-pulse-2 { animation-delay: 1.2s; }
+.orbit-select { stroke: #fff; stroke-width: 1.5; stroke-dasharray: 2 4; }
+.orbit-badge circle { fill: #0b0f1e; stroke: #cdd6ff; stroke-width: 1.2; }
+.orbit-badge text { fill: #e8edff; font-size: 9px; font-weight: 700; }
+.orbit-name { fill: #f2f5ff; font-size: 13px; font-weight: 700; }
+.orbit-current { fill: #8a96c7; font-size: 11px; }
+.orbit-halo { pointer-events: none; }
+.orbit-zoom { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; gap: 4px; background: rgba(12, 17, 36, 0.85); border: 1px solid #2b3558; border-radius: 8px; padding: 2px 4px; }
+.orbit-zoom button { border: 0; background: transparent; color: #cdd6ff; width: 26px; height: 24px; cursor: pointer; font-size: 1rem; }
+.orbit-zoom span { color: #cdd6ff; font-size: 0.72rem; min-width: 34px; text-align: center; }
+@keyframes orbit-flow { to { stroke-dashoffset: -11; } }
+@keyframes orbit-pulse { 0% { transform: scale(0.8); opacity: 0.7; } 100% { transform: scale(1.9); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .orbit-pulse { animation: none; } }
+
+.agent-tree { list-style: none; margin: 0; padding: 6px 0; }
+.agent-tree-row { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 6px 12px; color: inherit; font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; }
+.agent-tree-row:hover, .agent-tree-row.is-selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.agent-tree-row.is-selected { box-shadow: inset 3px 0 0 var(--accent); }
+.agent-tree-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--ink-3); }
+.agent-tree-dot.is-running { background: var(--accent); animation: orbit-pulse-dot 1.6s ease-in-out infinite; }
+.agent-tree-dot.is-done { background: var(--ok); }
+.agent-tree-dot.is-failed { background: var(--danger); }
+.agent-tree-now { flex: 1; min-width: 0; color: var(--ink-3); font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-tree-count { font-size: 0.68rem; font-weight: 700; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--ink-3); }
+@keyframes orbit-pulse-dot { 50% { opacity: 0.4; } }
+
+.agent-timeline { padding: 8px 12px; display: grid; gap: 14px; }
+.agent-timeline-burst { display: grid; gap: 2px; }
+.agent-timeline-pause { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--ink-3); font-size: 0.7rem; }
+.agent-timeline-pause::before, .agent-timeline-pause::after { content: ""; flex: 1; border-top: 1px dashed color-mix(in srgb, var(--ink-3) 45%, transparent); }
+.agent-timeline-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 2px; }
+.agent-timeline-head strong { font-size: 0.8rem; color: var(--ink); }
+.agent-timeline-head span { font-size: 0.72rem; color: var(--ink-3); }
+.agent-timeline-axis { display: flex; justify-content: space-between; font-size: 0.66rem; color: var(--ink-3); padding-left: 164px; padding-right: 76px; font-variant-numeric: tabular-nums; }
+.agent-timeline-row { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.agent-timeline-row:hover .agent-timeline-track { background-color: color-mix(in srgb, var(--ink-3) 22%, transparent); }
+.agent-timeline-row.is-selected .agent-timeline-name { color: var(--accent); font-weight: 700; }
+.agent-timeline-name { flex: 0 0 156px; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-timeline-track { position: relative; flex: 1; height: 14px; border-radius: 4px; background-color: color-mix(in srgb, var(--ink-3) 14%, transparent);
+  background-image: linear-gradient(to right, color-mix(in srgb, var(--ink-3) 35%, transparent) 1px, transparent 1px); background-size: 25% 100%; }
+.agent-timeline-bar { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 4px; background: var(--ink-3); }
+.agent-timeline-took { flex: 0 0 68px; text-align: right; font-size: 0.74rem; font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap; }
+.agent-timeline-took.is-running { color: var(--accent); }
+.agent-timeline-took.is-failed { color: var(--danger); }
+.agent-timeline-bar.is-running { background: var(--accent); }
+.agent-timeline-bar.is-done { background: var(--ok); }
+.agent-timeline-bar.is-failed { background: var(--danger); }
+
+.agent-transcript { list-style: none; margin: 0; padding: 6px 8px; max-height: 190px; overflow: auto; background: color-mix(in srgb, var(--ink) 5%, transparent); border-radius: 6px; font-size: 0.76rem; }
+.agent-transcript-line { white-space: pre-wrap; overflow-wrap: anywhere; padding: 2px 0; }
+.agent-transcript-line.is-tool { color: var(--ink-3); font-family: var(--mono, ui-monospace, monospace); font-size: 0.72rem; }
+
+/* Glow and life: nodes glow in their status colour, the centre breathes, and a node ripples each time its agent makes a tool call. */
+.orbit-node.is-running .orbit-core { filter: drop-shadow(0 0 7px #5b8cff); }
+.orbit-node.is-done .orbit-core { filter: drop-shadow(0 0 5px #3fbf7f); }
+.orbit-node.is-failed .orbit-core { filter: drop-shadow(0 0 5px #ff6b6b); }
+.orbit-node.is-running .orbit-dot { animation: orbit-beat 1.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.orbit-halo { transform-box: fill-box; transform-origin: center; animation: orbit-breathe 5s ease-in-out infinite; }
+.orbit-fire { fill: none; stroke: #ffffff; stroke-width: 2.4; opacity: 0; transform-box: fill-box; transform-origin: center; animation: orbit-fire 1.1s ease-out 1; filter: drop-shadow(0 0 8px #9fc0ff); pointer-events: none; }
+@keyframes orbit-glow { 50% { opacity: 0.5; } }
+@keyframes orbit-beat { 50% { transform: scale(1.5); } }
+@keyframes orbit-breathe { 50% { transform: scale(1.08); opacity: 0.85; } }
+@keyframes orbit-fire { 0% { transform: scale(0.8); opacity: 0.95; } 100% { transform: scale(2.4); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .orbit-nerve.is-live .orbit-nerve-line, .orbit-nerve.is-live .orbit-nerve-glow, .orbit-node.is-running .orbit-dot, .orbit-halo, .orbit-fire { animation: none; }
+}
+.agents-panel-resize { height: 10px; cursor: ns-resize; border-top: 1px solid var(--line-2); background: transparent; position: relative; touch-action: none; }
+.agents-panel-resize::after { content: ''; position: absolute; left: 50%; top: 3px; width: 36px; height: 3px; margin-left: -18px; border-radius: 2px; background: var(--ink-3); opacity: 0.5; }
+.agents-panel-resize:hover::after, .agents-panel-resize:focus-visible::after { opacity: 1; background: var(--accent); }
