@@ -17,7 +17,6 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { z } from 'zod';
 import type { Browser, Page } from 'playwright-core';
-import { capture, captureSummary, signIn, type CapturePage, type GuideAccount } from '../shared/runner-browser-capture.js';
 
 export const BROWSER_SERVER_NAME = 'browser';
 /** Managed browser with no custom configuration. A custom browser (recording, VPC) can be set per runtime. */
@@ -186,7 +185,22 @@ export interface BrowserToolSpec {
  * What a run adds to the browser tools. `workDir` turns on `capture` (screenshots saved for a document); `accounts` turns on
  * `sign_in` (the agent names a role, the runner types the test account's username and password, and only on `hosts`).
  */
-export interface BrowserToolOptions { workDir?: string; accounts?: GuideAccount[]; hosts?: string[] }
+export interface BrowserToolOptions {
+  workDir?: string;
+  accounts?: Array<{ role: string; username: string; password: string }>;
+  hosts?: string[];
+  /**
+   * The capture and sign-in code (shared/runner-browser-capture.ts), passed in by the runner entry point that has that folder: this
+   * file is also type-checked on its own by the portal's tests, where the copy does not exist.
+   */
+  kit?: GuideKit;
+}
+
+export interface GuideKit {
+  capture(page: unknown, workDir: string, args: { file?: unknown; highlights?: unknown; full_page?: unknown }): Promise<{ ok: true; png: Buffer } | { ok: false; error: string }>;
+  summary(result: any): string;
+  signIn(page: unknown, state: { accounts: Array<{ role: string; username: string; password: string }>; hosts: string[] }, args: unknown): Promise<{ ok: boolean; message: string }>;
+}
 
 /** The browser tools, independent of how they are served (Claude SDK in-process MCP, or a stdio MCP for Kiro). */
 export function browserToolSpecs(browser: AgentCoreBrowser, options: BrowserToolOptions = {}): BrowserToolSpec[] {
@@ -279,7 +293,8 @@ ${await page.locator('body').ariaSnapshot()}`);
     },
   ];
   const workDir = options.workDir;
-  if (workDir) {
+  const kit = options.kit;
+  if (workDir && kit) {
     specs.push({
       name: 'capture', readOnly: false,
       description: 'Take a screenshot of the current page and save it as a PNG under screenshots/ in the run folder, to put in a document. '
@@ -297,15 +312,15 @@ ${await page.locator('body').ariaSnapshot()}`);
       handler: (args: { file: string; highlights?: unknown; full_page?: boolean }) => guarded(async () => {
         const page = await browser.getPage();
         await settlePage(page);
-        const r = await capture(page as unknown as CapturePage, workDir, args);
+        const r = await kit.capture(page, workDir, args);
         if (!r.ok) throw new Error(r.error);
         await browser.publishFrame();
-        return { content: [{ type: 'text', text: captureSummary(r) }, { type: 'image', data: r.png.toString('base64'), mimeType: 'image/png' }] };
+        return { content: [{ type: 'text', text: kit.summary(r) }, { type: 'image', data: r.png.toString('base64'), mimeType: 'image/png' }] };
       }),
     });
   }
   const accounts = options.accounts ?? [];
-  if (accounts.length) {
+  if (kit && accounts.length) {
     specs.push({
       name: 'sign_in', readOnly: false,
       description: `Sign in to the system with one of its test accounts. Open the system's sign-in page first, then name the role (${accounts.map((a) => a.role).join(', ')}); `
@@ -318,7 +333,7 @@ ${await page.locator('body').ariaSnapshot()}`);
       },
       handler: (args: { role?: string; username_selector?: string; password_selector?: string; submit_selector?: string }) => guarded(async () => {
         const page = await browser.getPage();
-        const r = await signIn(page as unknown as CapturePage, { accounts, hosts: options.hosts ?? [] }, args);
+        const r = await kit.signIn(page, { accounts, hosts: options.hosts ?? [] }, args);
         await browser.publishFrame();
         if (!r.ok) throw new Error(r.message);
         return text(r.message);

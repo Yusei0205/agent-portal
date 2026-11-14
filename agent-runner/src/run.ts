@@ -57,7 +57,7 @@ import { decideToolCall, inputFingerprint } from '../shared/agent/tool-policy.ts
 import { estimateCost } from '../shared/agent/pricing.ts';
 import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
-import { parseAccounts } from '../shared/runner-browser-capture.js';
+import { parseAccounts, capture, captureSummary, signIn } from '../shared/runner-browser-capture.js';
 import { emitRunnerFiles, writeInputFilesAsync } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
@@ -556,7 +556,7 @@ export async function runInvocation(
         // The session's lead agent runs the main conversation (its prompt, tools and preloaded skills).
         ...(payload.agent ? { agent: payload.agent } : {}),
         // Browser tools, project integrations and (when the portal allows child sessions) delegate_session.
-        ...(browser || integrations.length || mcpServers ? { mcpServers: { ...(browser ? { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser, { workDir, ...parseAccounts(payload.browserAccounts, payload.browserHosts) }) } : {}), ...integrationServers, ...(mcpServers ?? {}) } } : {}),
+        ...(browser || integrations.length || mcpServers ? { mcpServers: { ...(browser ? { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser, { workDir, ...parseAccounts(payload.browserAccounts, payload.browserHosts), kit: { capture, summary: captureSummary, signIn } }) } : {}), ...integrationServers, ...(mcpServers ?? {}) } } : {}),
         // After a tool call during which the memory guard (or the kernel) stopped a command, tell the agent why it
         // ended, so it uses less memory instead of running the same command again.
         ...(memoryNote ? { hooks: claudeCodeMemoryHooks(memoryNote) } : {}),
