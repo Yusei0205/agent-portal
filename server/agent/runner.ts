@@ -46,6 +46,8 @@ import { materialiseForRun, cleanupRunHome } from '../user-config.ts';
 import { projectAwsEnv } from '../project-aws.ts';
 import { collectInputFilesWithUrls } from './input-file-urls.ts';
 import { unpackInputZips } from './runner-files.ts';
+import { ensureAtlassianMcp, isAtlassianMcpUrl } from '../atlassian-mcp.ts';
+import { jiraConnected } from '../jira.ts';
 import { collectOutputFiles } from '../output-files.ts';
 import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
@@ -515,6 +517,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       || (agentRun.engine === 'claude-code' && Boolean(process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN))
       || (agentRun.engine === 'codex' && Boolean(process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN));
     let availableRepoNames: string[] = [];
+    let jiraHint = '';
     if (runsOnAgentCore) {
       const specs = await buildRunnerRepos(
         agentRun.repoIds,
@@ -524,6 +527,11 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       if (loopState?.checks?.length) agentRun.runnerChecks = loopState.checks;
       // MCP servers that need the person to sign in: show a card in the session and wait (up to 10 minutes) until they
       // have, or choose to continue without it. The sign-in itself happens through /api/projects/:id/integrations/:iid/oauth/*.
+      // Atlassian MCP v2: an integration still on v1 is moved, and a project connected to Jira gets the integration once, so the
+      // sign-in card below asks the person to sign in to Atlassian and the session can read Jira.
+      const atlassian = await ensureAtlassianMcp(agentRun.projectId, agentRun.credentialOwnerId);
+      if (atlassian.migrated.length) emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text: `Atlassian MCP moved to v2 (${atlassian.migrated.join(', ')}): sign in to Atlassian again` });
+      if (atlassian.added) emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text: 'Added the Atlassian MCP (v2) so the sessions of this project can read Jira: sign in to Atlassian when asked' });
       for (const p of await pendingMcpSignIns(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null).catch(() => [])) {
         emitRunEvent(runId, agentRun.projectId, workflowId, 'mcp-auth-required', { integrationId: p.id, name: p.name, projectId: agentRun.projectId, workflowId });
         let outcome: 'signed-in' | 'skipped' | 'expired' = 'expired';
@@ -537,6 +545,10 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       }
       agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null)
         .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
+      // Say how to reach Jira, so the agent does not try the browser (which has no Jira login).
+      const atlassianServer = (agentRun.runnerMcpServers ?? []).find((s) => isAtlassianMcpUrl(s.url));
+      if (atlassianServer) jiraHint = `Jira and Confluence: use the ${atlassianServer.name} MCP tools to read tickets and pages. Do not open Jira in the browser: it has no Jira login.`;
+      else if (agentRun.projectId && await jiraConnected(agentRun.projectId)) jiraHint = 'Jira is not available in this session (Atlassian sign-in was skipped or has not been done). Say so if a task needs Jira tickets; do not try to open Jira in the browser, it has no Jira login.';
       // Small files go inline; larger ones (up to 50 MB, cloud only) as download links the runner fetches.
       const inputFiles = await collectInputFilesWithUrls(workDir, chatAttachments.map(a => 'attachments/' + a.path));
       if (inputFiles.length) agentRun.runnerInputFiles = inputFiles;
@@ -576,6 +588,10 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         : `Repository code is available at: ${availableRepoNames.map((n) => `repos/${n}/`).join(', ')}`;
       agentRun.goal = `${reposLine}\n\n${agentRun.goal}`;
     }
+
+    if (jiraHint) agentRun.goal = `${jiraHint}
+
+${agentRun.goal}`;
 
     // ── Run-time limit (FR-GUARD-10) ────────────────────────────────────────
     // Apply the per-workflow override or the global setting. The timer fires on the

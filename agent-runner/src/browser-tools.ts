@@ -149,6 +149,20 @@ export class AgentCoreBrowser {
 
 /** One page, so calls run one at a time even when the model issues several in parallel. */
 let queue: Promise<unknown> = Promise.resolve();
+/**
+ * Let a page finish loading and painting before it is read or photographed. A page that renders with JavaScript (a sign-in page, an
+ * app) is empty at `domcontentloaded`, so a screenshot taken right after opening it was a blank white image. Each wait is best effort
+ * and short: a page that never goes quiet (a stream, a poll) is used as it is.
+ */
+export async function settlePage(page: Page): Promise<void> {
+  await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => {});
+  await page.waitForTimeout(400).catch(() => {});
+}
+
+/** A PNG this small is a blank page (a full-size white page is about 5 KB; a page with content is far larger). */
+const BLANK_PNG_BYTES = 12_000;
+
 function guarded(fn: () => Promise<ToolResult>): Promise<ToolResult> {
   const run = queue.then(async () => {
     try { return await fn(); } catch (e) { return fail(e); }
@@ -177,6 +191,7 @@ export function browserToolSpecs(browser: AgentCoreBrowser): BrowserToolSpec[] {
       handler: ({ url }: { url: string }) => guarded(async () => {
         const page = await browser.getPage();
         await page.goto(assertWebUrl(url), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        await settlePage(page);
         await browser.publishFrame();
         return text(`Opened ${page.url()}
 Title: ${await page.title()}`);
@@ -207,7 +222,13 @@ ${await page.locator('body').ariaSnapshot()}`);
       shape: { full_page: z.boolean().optional().describe('Capture the whole scrollable page') },
       handler: ({ full_page }: { full_page?: boolean }) => guarded(async () => {
         const page = await browser.getPage();
-        const png = await page.screenshot({ fullPage: !!full_page, type: 'png' });
+        await settlePage(page);
+        let png = await page.screenshot({ fullPage: !!full_page, type: 'png' });
+        // Still blank: the page paints late. Give it more time once, then take what is there.
+        if (png.length < BLANK_PNG_BYTES) {
+          await page.waitForTimeout(2_000).catch(() => {});
+          png = await page.screenshot({ fullPage: !!full_page, type: 'png' });
+        }
         return { content: [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }] };
       }),
     },
@@ -223,6 +244,7 @@ ${await page.locator('body').ariaSnapshot()}`);
         const page = await browser.getPage();
         await (selector ? page.locator(selector) : page.getByText(label!, { exact: false })).first().click();
         await page.waitForLoadState('domcontentloaded').catch(() => {});
+        await settlePage(page);
         await browser.publishFrame();
         return text(`Clicked. Now at ${page.url()}`);
       }),
@@ -242,6 +264,7 @@ ${await page.locator('body').ariaSnapshot()}`);
         if (submit) {
           await el.press('Enter');
           await page.waitForLoadState('domcontentloaded').catch(() => {});
+          await settlePage(page);
         }
         await browser.publishFrame();
         return text(`Typed into ${selector}${submit ? ' and submitted' : ''}. Now at ${page.url()}`);

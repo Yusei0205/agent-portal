@@ -243,6 +243,11 @@ export async function mcpSignedIn(integration: string, userId: string): Promise<
   return (await mcpAccessToken(integration, userId)) !== null;
 }
 
+/** Forget the client registered for an integration (its server address changed, so it has to register again). */
+export async function forgetMcpClient(integration: string): Promise<void> {
+  await deleteSecret(clientKey(integration));
+}
+
 export async function mcpSignOut(integration: string, userId: string): Promise<void> {
   await deleteSecret(tokenKey(integration, userId));
 }

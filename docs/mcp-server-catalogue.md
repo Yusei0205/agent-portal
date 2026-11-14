@@ -102,8 +102,10 @@ post comments, change issue status.
 **URL:** `https://mcp.atlassian.com/v2/mcp` (v1 is replaced by v2 on 1 March 2027)  
 **Auth:** you sign in with Atlassian; no token to create.
 
+**Automatic setup:** a project that is connected to Jira (Tickets page) gets this integration the first time a cloud session starts in it (read-only, OAuth; `server/atlassian-mcp.ts`). The session shows the sign-in card straight away. If you delete the integration it is not added again. An Atlassian integration that still points at v1 (`/v1/mcp`, `/v1/mcp/authv2`, `/v1/sse`) and signs in with OAuth is moved to v2 at the same moment: Atlassian treats v2 as a separate OAuth resource, so its cached client and your token are dropped and you sign in again. Integrations that use a token header stay on v1 (Atlassian documents token authentication for v1 only). The session's prompt tells the agent to use the Atlassian MCP tools and not to open Jira in the browser, which has no Jira login. Migration guide: https://support.atlassian.com/atlassian-ai-gateway/docs/how-to-upgrade-from-atlassian-mcp-v1-to-atlassian-mcp-v2/
+
 **Setup (junior):**
-1. Go to **Integrations** → **New MCP server** → click the **Atlassian** preset, then **Save**.
+1. Go to **Integrations** → **New MCP server** → click the **Atlassian** preset, then **Save** (not needed for a project connected to Jira: it is added for you).
 2. Start a session in the project. A card appears in the session: **"atlassian needs you to sign in"**.
 3. Click **Open the sign-in page** and approve the access on auth.atlassian.com.
 4. Your browser then opens an address starting with `http://127.0.0.1:38951/` that does not load. That is expected. Copy the whole address from the address bar and paste it into the card, then click **Finish sign-in**.
