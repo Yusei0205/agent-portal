@@ -105,7 +105,10 @@ describe('portal deploy workflow', () => {
 
   it('deploys the Codex runner only when its image changed, and otherwise reads the running one', () => {
     assert.match(wf, /if: steps\.scope\.outputs\.codex == 'true'/);
-    assert.match(wf, /describe-stacks --stack-name AgentPortalCodexRunner/);
+    // The deploy role may only assume the CDK roles (infra/lib/github-deploy-stack.ts), so it cannot ask CloudFormation for the ARN.
+    assert.doesNotMatch(wf, /aws cloudformation/);
+    assert.match(wf, /CODEX_RUNTIME_ARN: \$\{\{ vars\.CODEX_RUNTIME_ARN \|\| 'arn:aws:bedrock-agentcore:[^']+agentPortalCodexRunner-[^']+' \}\}/);
+    assert.match(wf, /Codex runtime changed/);
   });
 
   it('builds the portal Lambda for arm64 like the other images', () => {

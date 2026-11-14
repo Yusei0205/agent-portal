@@ -19,7 +19,9 @@ Both deploy workflows wait for CI on the same commit and deploy only when it pas
   `scripts/deploy-scope.mjs` starts a runner deploy when one of them changes. `deploy-agentcore.yml` must list the same paths (GitHub needs them written out);
   `test/deploy-scope.test.ts` fails when the two differ. A new module for the runner images is added to `harness-sources.mjs` only.
 - **The Codex runner is rebuilt only when it changed.** Its image is the esbuild bundle of `codex-runner/src/index.ts` and `mcp-proxy.ts`, so the files it is made of are read
-  from that bundle (plus its Dockerfile, the lockfile and its stack). A push that changes none of them keeps the running Codex runner and links it to the portal.
+  from that bundle (plus its Dockerfile, the lockfile and its stack). A push that changes none of them keeps the running Codex runner and links it to the portal, using the
+  runtime ARN in the repository variable `CODEX_RUNTIME_ARN` (the workflow has the current one as its default). The deploy role may only assume the CDK roles, so it cannot ask
+  CloudFormation for the ARN. When a push does deploy the Codex runner and its ARN has changed, the run shows a warning: set the variable to the new ARN.
 - **The long-job runtime stays.** The portal deploy passes `-c jobRuntime=true -c jobRuntimeAgentRuns=true` (repository variables `JOB_RUNTIME` and `JOB_RUNTIME_AGENT_RUNS`
   turn them off on purpose). A `cdk deploy` without them deletes the job runtime, and agent runs and long jobs fall back to the Lambda's 15-minute limit.
 
