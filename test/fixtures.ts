@@ -12,6 +12,7 @@ import { openDb, closeDb, isDbOpen } from '../server/db.ts';
 import { setConfig } from '../server/config.ts';
 import type { Config } from '../server/config.ts';
 import { startServer } from '../server/index.ts';
+import { projectDirsReady } from '../server/projects.ts';
 import type http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -95,6 +96,8 @@ export async function createTestServer(): Promise<TestServer> {
 
 /** Closes all test servers and the database. */
 export async function cleanup(): Promise<void> {
+  // A project's folder is set up in the background: removing the data directory under it only produces errors.
+  await projectDirsReady().catch(() => undefined);
   for (const server of activeServers.splice(0)) {
     await new Promise<void>((resolve) => {
       server.closeAllConnections?.();

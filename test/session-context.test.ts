@@ -18,6 +18,7 @@ import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { run as dbRun } from '../server/db.ts';
 import { now, generateId } from '../server/util.ts';
 import { config } from '../server/config.ts';
+import { projectDirsReady } from '../server/projects.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,8 @@ describe('GET /api/workflows/:id/context — response shape', () => {
   });
 
   it('includes a CLAUDE.md item when the file exists', async () => {
+    // The project's own set-up writes CLAUDE.md too (and truncates it first): wait for it, or a read can see an empty file.
+    await projectDirsReady();
     // Write a CLAUDE.md into the test project dir
     const projectDir = path.join(config.dataDir, 'projects', projectSlug);
     fs.mkdirSync(projectDir, { recursive: true });

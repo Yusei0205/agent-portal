@@ -125,6 +125,24 @@ export async function ensureBuiltInSkills(projectDir: string): Promise<void> {
 }
 
 /** Create the project directory on disk, initialise git, and write CLAUDE.md. */
+/**
+ * Project folders being set up in the background: a new project is returned before its folder is ready. Anything that reads or
+ * removes the folder right after (a test, a clean-up) waits with projectDirsReady().
+ */
+const settingUp = new Set<Promise<void>>();
+
+function inBackground(setup: Promise<void>): Promise<void> {
+  settingUp.add(setup);
+  const done = (): void => { settingUp.delete(setup); };
+  setup.then(done, done);
+  return setup;
+}
+
+/** Resolves when no project folder is being set up (a failed set-up counts as finished). */
+export async function projectDirsReady(): Promise<void> {
+  while (settingUp.size) await Promise.allSettled([...settingUp]);
+}
+
 export async function initProjectDir(slug: string, dataDir: string, project: Project): Promise<void> {
   const dir = path.join(dataDir, 'projects', slug);
   await fsp.mkdir(dir, { recursive: true });
@@ -283,7 +301,7 @@ export function registerProjectRoutes(): void {
     }
 
     // Create project directory (async, non-blocking)
-    initProjectDir(project!.slug, config.dataDir, project! as Project).catch((e: unknown) => {
+    inBackground(initProjectDir(project!.slug, config.dataDir, project! as Project)).catch((e: unknown) => {
       console.error(`[projects] Failed to init project dir for ${project!.slug}:`, e);
     });
 
