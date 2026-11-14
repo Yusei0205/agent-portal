@@ -8,8 +8,9 @@
  */
 
 export const BROWSER_GUIDANCE = [
-  'Browser: this session has a cloud browser, available as the browser tools (goto, snapshot, get_text, screenshot, click, type).',
+  'Browser: this session has a cloud browser, available as the browser tools (goto, snapshot, get_text, screenshot, click, type, wait_for_sign_in).',
   'Use them whenever you need to open a web page, check a site or test a web UI.',
+  'If a page needs the person to sign in (a password, a one-time code, an approval) and you have no account for it, call wait_for_sign_in with a short message saying what to do, instead of ending your turn: the cloud browser is closed when your turn ends, so the person could not sign in. They see the browser in the portal, sign in themselves and hand it back; never ask for or type their password. When it returns, check the page and carry on.',
   'Do not use Playwright, Puppeteer or Selenium and do not install or launch a browser yourself: none is available here, and the portal\'s live view only shows the browser tools.',
 ].join(' ');
 

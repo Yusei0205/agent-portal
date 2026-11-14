@@ -1014,7 +1014,8 @@ async function runKiroViaAgentCoreAdapter(
     inputFiles: run.runnerInputFiles,
     browserAccounts: run.runnerBrowserAccounts,
     browserHosts: run.runnerBrowserHosts,
-    browserManualSignIn: run.runnerBrowserManual,
+    // Every browser session can ask the person to sign in (wait_for_sign_in): ending the turn would close the browser.
+    browserManualSignIn: run.runnerBrowserManual ?? browserOn,
     checks: run.runnerChecks,
     model: run.model || null,
   });

@@ -18,7 +18,13 @@ describe('browser guidance', () => {
   });
 
   it('names the browser tools and rules out Playwright', () => {
-    for (const tool of ['goto', 'snapshot', 'get_text', 'screenshot', 'click', 'type']) assert.ok(BROWSER_GUIDANCE.includes(tool), tool);
+    for (const tool of ['goto', 'snapshot', 'get_text', 'screenshot', 'click', 'type', 'wait_for_sign_in']) assert.ok(BROWSER_GUIDANCE.includes(tool), tool);
     assert.match(BROWSER_GUIDANCE, /Do not use Playwright/);
+  });
+
+  it('tells the agent to wait for the person to sign in instead of ending its turn (the browser closes with the turn)', () => {
+    assert.match(BROWSER_GUIDANCE, /call wait_for_sign_in/);
+    assert.match(BROWSER_GUIDANCE, /instead of ending your turn/);
+    assert.match(BROWSER_GUIDANCE, /never ask for or type their password/);
   });
 });
