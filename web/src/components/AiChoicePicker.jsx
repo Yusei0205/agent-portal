@@ -8,8 +8,11 @@ import ModelOptions from './ModelOptions.jsx';
  * Lists the person's own Claude Code credentials and the models they can use, and reports { credentialId, model }
  * through onChange. With no credential of their own the portal's provider is used, and the picker says so.
  * "Portal default" for the model leaves it to the portal setting.
+ *
+ * With `allowPortalDefault` the first choice is "Portal default" (no sign-in of the person's own), and it stays selected until
+ * they pick one: for features that already work without a choice (code review) and must not change for people who do not care.
  */
-export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) {
+export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai', allowPortalDefault = false }) {
   const [creds, setCreds] = useState(null);       // null while loading
   const [credentialId, setCredentialId] = useState('');
   const [model, setModel] = useState('');
@@ -33,7 +36,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
         if ((cs.summary || []).some(e => e.engine === 'codex' && e.configured)) list.push({ id: 'codex-account', name: 'My ChatGPT account', engine: 'codex' });
         setCreds(list);
         const def = list.find((c) => c.engine === 'claude-code' && c.isDefault) || list[0];
-        if (def) setCredentialId(def.id);
+        if (def && !allowPortalDefault) setCredentialId(def.id);
       });
     return () => { cancelled = true; };
   }, []);
@@ -82,13 +85,14 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
             onChange={(e) => { setCredentialId(e.target.value); setModel(''); }}
             disabled={disabled}
           >
+            {allowPortalDefault && <option value="">Portal default</option>}
             {creds.map((c) => (
               <option key={c.id} value={c.id}>{c.name} ({c.engine === 'kiro' ? 'Kiro' : c.engine === 'codex' ? 'Codex' : 'Claude'}){c.isDefault ? ' (default)' : ''}</option>
             ))}
           </select>
         )}
       </div>
-      <div className="field">
+      {(!allowPortalDefault || credentialId) && <div className="field">
         <label htmlFor={`${idPrefix}-model`}>Model</label>
         {modelsLoading ? (
           <div className="spinner" style={{ width: 16, height: 16 }} aria-label="Loading models…" />
@@ -104,7 +108,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai' }) 
           </select>
         )}
         {modelError && <p className="field-hint" style={{ color: 'var(--danger)' }}>{modelError}</p>}
-      </div>
+      </div>}
     </>
   );
 }

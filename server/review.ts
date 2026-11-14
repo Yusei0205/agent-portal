@@ -21,6 +21,7 @@
  *   PUT    /api/settings/review                     (R1/R3, admin)
  */
 
+import { resolveCreateAi } from './create-ai.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
 import { getGitConnectionsRepository } from './repositories/git-connections.ts';
 import { getAwsAccountsRepository } from './repositories/aws-accounts.ts';
@@ -1231,6 +1232,9 @@ export interface CreateReviewParams {
   providerId?: string | null;
   modelId?: string | null;
   leadAgent?: string | null;
+  /** The person's own sign-in (or 'codex-account') and model for the review, like a session's; without them the portal's provider is used. */
+  credentialId?: string | null;
+  model?: string | null;
 }
 
 /** Validate, resolve context, and create a review (and its workflow). Shared by the route and automatic pull requests. */
@@ -1319,6 +1323,11 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
   }
   goal += `\n\n${REVIEW_REPORT_INSTRUCTIONS}`;
 
+  // A sign-in and model chosen for this review (the engine follows the sign-in, as in a session). Checked before anything is created.
+  const chosenAi = input.credentialId || input.model
+    ? await resolveCreateAi(userId, { credentialId: input.credentialId ?? undefined, model: input.model ?? undefined })
+    : null;
+
   let workflowId: string | null = null;
   try {
     const wid = generateId();
@@ -1329,11 +1338,12 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
     // kiro → kiro, demo → demo).
     const portalMode = getSettings().provider.mode;
     const effectiveProvider = providerId ?? portalMode;
-    const reviewEngine =
+    const portalEngine =
       effectiveProvider === 'litellm' ? 'litellm'
       : (effectiveProvider === 'anthropic' || effectiveProvider === 'bedrock') ? 'claude-code'
       : effectiveProvider === 'kiro' ? 'kiro'
       : 'demo';
+    const reviewEngine: string = chosenAi?.engine ?? portalEngine;
     await getSessionsRepository().createWorkflow({
       id: wid,
       project_id: projectId,
@@ -1347,8 +1357,8 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
       repo_ids: repoId ? JSON.stringify([repoId]) : '[]',
       iteration_count: 0,
       max_iterations: 1,
-      credential_id: null,
-      model: '',
+      credential_id: chosenAi?.credential_id ?? null,
+      model: chosenAi?.model ?? '',
       kind: 'review',
       created_by: userId,
       created_at: ts0,
@@ -1368,7 +1378,7 @@ export async function createReview(input: CreateReviewParams): Promise<ReviewRec
     summary: null, raw_output: null, created_by: userId, created_at: ts,
     parent_review_id: null, source_sha: resolvedSourceSha, dest_sha: resolvedDestSha,
     head_commit_sha: headCommitSha ?? resolvedSourceSha,
-    provider_id: providerId, model_id: modelId, jira_context: JSON.stringify(jiraCtx),
+    provider_id: chosenAi ? chosenAi.engine : providerId, model_id: chosenAi?.model || modelId, jira_context: JSON.stringify(jiraCtx),
     run_log: '[]', input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0,
     output_tokens: 0, llm_requests: 0, retry_count: 0, tool_calls: 0,
     files_reviewed: 0, duration_ms: null, started_at: null,
@@ -1646,6 +1656,8 @@ export function registerReviewRoutes(): void {
         providerId: body.providerId != null ? String(body.providerId).slice(0, 100) : null,
         modelId: body.modelId != null ? String(body.modelId).slice(0, 200) : null,
         leadAgent: body.leadAgent != null ? String(body.leadAgent) : null,
+        credentialId: typeof body.credentialId === 'string' && body.credentialId.trim() ? body.credentialId.trim().slice(0, 200) : null,
+        model: typeof body.model === 'string' && body.model.trim() ? body.model.trim().slice(0, 200) : null,
       });
       sendJson(res, 201, { review });
     } catch (err) {

@@ -95,4 +95,33 @@ describe('createReview', () => {
         && e.message === 'That repository belongs to another project',
     );
   });
+
+  it('runs on the chosen sign-in and model, and records them; without a choice it keeps the portal provider', async () => {
+    const { getCredentialsRepository } = await import('../server/repositories/credentials.ts');
+    const credId = generateId();
+    await getCredentialsRepository().create({
+      id: credId, user_id: userId, engine: 'claude-code', name: 'Mine', mode: 'api_key', secret_enc: null, extra_config: '{}',
+      is_default: 0, last4: '', created_at: now(), updated_at: now(),
+    } as never);
+    const chosen = await createReview({ projectId, userId, repoId, baseRef: 'main', headRef: 'feature/chosen', credentialId: credId, model: 'claude-sonnet-4-5' });
+    const wf = await getSessionsRepository().getWorkflowById(String(chosen.workflow_id));
+    assert.equal(wf?.engine, 'claude-code');
+    assert.equal(wf?.credential_id, credId);
+    assert.equal(wf?.model, 'claude-sonnet-4-5');
+    assert.equal(chosen.provider_id, 'claude-code');
+    assert.equal(chosen.model_id, 'claude-sonnet-4-5');
+
+    const plain = await createReview({ projectId, userId, repoId, baseRef: 'main', headRef: 'feature/plain' });
+    const wf2 = await getSessionsRepository().getWorkflowById(String(plain.workflow_id));
+    assert.equal(wf2?.credential_id, null);
+    assert.equal(wf2?.model, '');
+  });
+
+  it('the ChatGPT (Codex) choice asks for a Codex sign-in when there is none', async () => {
+    await assert.rejects(createReview({ projectId, userId, repoId, baseRef: 'main', headRef: 'feature/codex', credentialId: 'codex-account', model: 'gpt-5' }), /Sign in to Codex/);
+  });
+
+  it('refuses a sign-in that is not the reviewers, before creating anything', async () => {
+    await assert.rejects(createReview({ projectId, userId, repoId, baseRef: 'main', headRef: 'feature/nope', credentialId: 'someone-elses' }), /sign-in was not found/);
+  });
 });

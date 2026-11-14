@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 import { api } from '../lib/api.js';
 import { navigate, href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
@@ -158,6 +159,7 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [ai, setAi] = useState({});
   const trapRef = useFocusTrap();
 
   // Load branches for visible selectors; custom refs are an explicit alternative.
@@ -212,6 +214,7 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
       };
       if (form.prNumber) body.prNumber = Number(form.prNumber);
       if (form.jiraKey.trim()) body.jiraKey = form.jiraKey.trim();
+      if (ai.credentialId) { body.credentialId = ai.credentialId; if (ai.model) body.model = ai.model; }
       const r = await api.post(`/api/projects/${projectId}/reviews`, body);
       onCreated(r.review);
     } catch (e) {
@@ -354,6 +357,11 @@ function NewReviewModal({ projectId, repos, onClose, onCreated }) {
                 </select>
               </div>
             </div>
+
+            <div className="row wrap">
+              <AiChoicePicker onChange={setAi} disabled={loading} idPrefix="nr-ai" allowPortalDefault />
+            </div>
+            <p className="field-hint">Which engine and model review the change, as in a new session. Portal default uses the portal's own provider.</p>
 
             {error && <p className="error-note" role="alert">{error}</p>}
           </div>
