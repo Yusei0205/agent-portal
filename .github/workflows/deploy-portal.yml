@@ -105,6 +105,8 @@ jobs:
       CLAUDE_RUNTIME_ARN: ${{ vars.CLAUDE_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalClaudeHarness-BW7D1pFqIl' }}
       STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET || 'cy-ai-bucket' }}
       PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
+      # The running Codex runtime. A push that changes its image deploys it again and reads the ARN from that deploy; any other push keeps this one.
+      CODEX_RUNTIME_ARN: ${{ vars.CODEX_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalCodexRunner-zv1jk79Zxs' }}
       CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'oauth' }}
       CODEX_OAUTH_CLIENT_ID: ${{ vars.CODEX_OAUTH_CLIENT_ID }}
       CODEX_OAUTH_CLIENT_SECRET_ARN: ${{ vars.CODEX_OAUTH_CLIENT_SECRET_ARN }}
@@ -178,13 +180,17 @@ jobs:
       - name: Find the Codex AgentCore runtime
         shell: bash
         run: |
+          arn="$CODEX_RUNTIME_ARN"
           if [[ -f "$RUNNER_TEMP/codex-runner-outputs.json" ]]; then
-            arn=$(node -e "const o=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(o.AgentPortalCodexRunner?.CodexRuntimeArn||'')" "$RUNNER_TEMP/codex-runner-outputs.json")
+            deployed=$(node -e "const o=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(o.AgentPortalCodexRunner?.CodexRuntimeArn||'')" "$RUNNER_TEMP/codex-runner-outputs.json")
+            if [[ -z "$deployed" ]]; then echo "CDK did not return the CodexRuntimeArn output" >&2; exit 1; fi
+            if [[ "$deployed" != "$arn" ]]; then
+              echo "::warning title=Codex runtime changed::The Codex runtime is now $deployed. Set the repository variable CODEX_RUNTIME_ARN to it, or the next push that does not deploy the Codex runner links the old one."
+            fi
+            arn="$deployed"
           else
-            echo "The Codex runner image is unchanged: keeping the running one."
-            arn=$(aws cloudformation describe-stacks --stack-name AgentPortalCodexRunner --query "Stacks[0].Outputs[?OutputKey=='CodexRuntimeArn'].OutputValue" --output text)
+            echo "The Codex runner image is unchanged: keeping the running one ($arn)."
           fi
-          if [[ -z "$arn" || "$arn" == "None" ]]; then echo "No Codex runtime ARN found" >&2; exit 1; fi
           callback="${PUBLIC_URL%/}/api/codex/oauth/callback"
           echo "CODEX_RUNTIME_ARN=$arn" >> "$GITHUB_ENV"
           echo "CODEX_OAUTH_REDIRECT_URI=$callback" >> "$GITHUB_ENV"
