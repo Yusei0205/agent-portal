@@ -203,3 +203,32 @@ describe('graphify progress', () => {
     assert.equal(parseGraphifyLine('Updating code graph in . (no LLM needed)...'), null);
   });
 });
+
+describe('radialLayout', () => {
+  it('keeps every item apart and inside the frame at any size, and grows the canvas instead of cramming', async () => {
+    // @ts-ignore: a plain JS module of the web app, which has no declaration file
+    const { radialLayout } = await import('../web/src/lib/forceLayout.js');
+    let lastWidth = 0;
+    for (const n of [1, 6, 24, 60]) {
+      const nodes = [{ id: 'c', d: 40 }, ...Array.from({ length: n }, (_: unknown, i: number) => ({ id: `n${i}`, c: i % 5, d: (i * 7) % 30 }))];
+      const { pos, width, height } = radialLayout(nodes, 'c');
+      assert.deepEqual(pos.get('c'), { x: width / 2, y: height / 2 }, 'the chosen item is in the middle');
+      const pts = [...pos.values()] as { x: number; y: number }[];
+      assert.ok(pts.every((p) => p.x >= 0 && p.x <= width && p.y >= 0 && p.y <= height), `all inside at ${n}`);
+      let closest = Infinity;
+      for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) closest = Math.min(closest, Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y));
+      if (pts.length > 1) assert.ok(closest >= 70, `closest pair ${closest.toFixed(1)} at ${n}`);
+      assert.ok(width >= lastWidth, 'more items never make the canvas smaller');
+      lastWidth = width;
+    }
+  });
+  it('is deterministic, and puts the best connected items on the inner ring', async () => {
+    // @ts-ignore
+    const { radialLayout } = await import('../web/src/lib/forceLayout.js');
+    const nodes = [{ id: 'c' }, ...Array.from({ length: 30 }, (_: unknown, i: number) => ({ id: `n${i}`, c: i % 3, d: i }))];
+    const a = radialLayout(nodes, 'c');
+    assert.deepEqual([...a.pos.entries()], [...radialLayout(nodes, 'c').pos.entries()]);
+    const dist = (id: string) => Math.hypot((a.pos.get(id).x - a.width / 2) / 1.45, a.pos.get(id).y - a.height / 2);
+    assert.ok(dist('n29') < dist('n0'), 'a well connected item sits closer to the middle than a poorly connected one');
+  });
+});

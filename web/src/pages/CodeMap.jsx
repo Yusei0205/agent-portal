@@ -2,18 +2,16 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { PanZoom } from '../components/PanZoom.jsx';
-import { forceLayout } from '../lib/forceLayout.js';
+import { radialLayout } from '../lib/forceLayout.js';
 import { GraphExcludes } from './hub/GraphExcludes.jsx';
 
-const W = 900;
-const H = 560;
 const KIND_LABEL = { function: 'Function', class: 'Class', file: 'File', other: 'Item', external: 'External' };
 
 /** One colour per community, spread around the colour wheel so neighbours differ. */
 const hue = (c) => (Number(c) * 47) % 360;
 const fill = (c) => `hsl(${hue(c)} 62% 46%)`;
 const radius = (d) => 7 + Math.min(14, Math.sqrt(d) * 2.2);
-const shortLabel = (l) => (l.length > 26 ? `${l.slice(0, 25)}…` : l);
+const shortLabel = (l) => (l.length > 24 ? `${l.slice(0, 23)}…` : l);
 const where = (n) => (n.f ? `${n.f}${n.n ? `:${n.n}` : ''}` : '');
 
 function NodeRow({ n, onPick, active }) {
@@ -28,58 +26,134 @@ function NodeRow({ n, onPick, active }) {
   );
 }
 
-/** The neighbourhood of one item, drawn as a graph. Click an item to move to it. */
+const EDGE_COLOR = { calls: '#5eead4', indirect_call: '#5eead4', imports: '#a78bfa', imports_from: '#a78bfa', dynamic_import: '#a78bfa', re_exports: '#a78bfa', references: '#fbbf24' };
+const edgeColor = (r) => EDGE_COLOR[r] ?? '#7c8aa5';
+/** `a/b/Thing.tsx` -> `Thing.tsx`: the folder is in the tooltip and the side panel, the label has room for the name only. */
+const baseName = (l) => String(l).replace(/^.*[\\/]/, '');
+const nodeRadius = (d, scale) => (10 + Math.min(11, Math.sqrt(d) * 1.7)) * scale;
+
+/** A point and the direction of travel on a quadratic curve, for the arrowhead. */
+function along(a, c, b, t) {
+  const x = (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * c.x + t * t * b.x;
+  const y = (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * c.y + t * t * b.y;
+  const dx = 2 * (1 - t) * (c.x - a.x) + 2 * t * (b.x - c.x);
+  const dy = 2 * (1 - t) * (c.y - a.y) + 2 * t * (b.y - c.y);
+  const len = Math.hypot(dx, dy) || 1;
+  return { x, y, ux: dx / len, uy: dy / len };
+}
+
+const LABEL_MODES = [['key', 'Key items'], ['all', 'All'], ['none', 'None']];
+
+/** The neighbourhood of one item, drawn as a graph of glowing spheres. Click an item to move to it. */
 function GraphView({ data, onPick }) {
   const [hover, setHover] = useState(null);
-  const layout = useMemo(() => forceLayout(data.nodes.map((n) => ({ id: n.i })), data.links, data.centerId, { width: W, height: H }), [data]);
+  const [labels, setLabels] = useState('key');
+  const { pos: layout, width: W, height: H } = useMemo(
+    () => radialLayout(data.nodes.map((n) => ({ id: n.i, c: n.c, d: n.d })), data.centerId),
+    [data],
+  );
+  // The drawing grows with the number of items; sizes grow with it so items look the same size on screen.
+  const scale = Math.max(1, W / 1000);
   const byId = useMemo(() => new Map(data.nodes.map((n) => [n.i, n])), [data]);
+  const groups = useMemo(() => [...new Set(data.nodes.map((n) => n.c))], [data]);
   const near = useMemo(() => {
     if (!hover) return null;
     const s = new Set([hover]);
     for (const l of data.links) { if (l.s === hover) s.add(l.t); if (l.t === hover) s.add(l.s); }
     return s;
   }, [hover, data]);
+  const key = useMemo(() => {
+    const top = [...data.nodes].sort((a, b) => (b.d ?? 0) - (a.d ?? 0)).slice(0, data.nodes.length <= 16 ? 16 : 12).map((n) => n.i);
+    return new Set([data.centerId, ...top]);
+  }, [data]);
+  const showLabel = (id) => labels === 'all' || (labels === 'key' && (key.has(id) || (near && near.has(id)))) || (labels === 'none' && hover === id);
+
   return (
-    <PanZoom height="560px" label="Code graph">
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }} role="img" aria-label="Code graph" className="cm-svg">
-        <defs>
-          <marker id="cm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M0 0 L10 5 L0 10 z" className="cm-arrow" />
-          </marker>
-        </defs>
-        {data.links.map((l, i) => {
-          const a = layout.get(l.s); const b = layout.get(l.t);
-          if (!a || !b) return null;
-          const dim = near && !(l.s === hover || l.t === hover);
-          const rb = radius(byId.get(l.t)?.d ?? 1) + 2;
-          const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-          const ex = b.x - ((b.x - a.x) / len) * rb;
-          const ey = b.y - ((b.y - a.y) / len) * rb;
-          return <line key={`${l.s}>${l.t}>${i}`} x1={a.x} y1={a.y} x2={ex} y2={ey} className={`cm-edge${dim ? ' is-dim' : ''}`} markerEnd="url(#cm-arrow)"><title>{l.r.replace(/_/g, ' ')}</title></line>;
-        })}
-        {data.nodes.map((n) => {
-          const p = layout.get(n.i);
-          if (!p) return null;
-          const isCenter = n.i === data.centerId;
-          const dim = near && !near.has(n.i);
-          const r = radius(n.d);
-          return (
-            <g key={n.i} transform={`translate(${p.x},${p.y})`} className={`cm-node${isCenter ? ' is-center' : ''}${dim ? ' is-dim' : ''}`}
-              tabIndex={0} role="button" aria-label={`${n.l}, ${KIND_LABEL[n.k] ?? 'item'}${where(n) ? `, ${where(n)}` : ''}`}
-              onClick={() => onPick(n.i)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(n.i); } }}
-              onMouseEnter={() => setHover(n.i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(n.i)} onBlur={() => setHover(null)}>
-              <title>{`${n.l}\n${KIND_LABEL[n.k] ?? 'Item'}${where(n) ? ` · ${where(n)}` : ''}`}</title>
-              {n.k === 'file'
-                ? <rect x={-r} y={-r * 0.75} width={r * 2} height={r * 1.5} rx="3" fill={fill(n.c)} className="cm-shape" />
-                : n.k === 'class'
-                  ? <rect x={-r} y={-r} width={r * 2} height={r * 2} rx="5" fill={fill(n.c)} className="cm-shape" />
-                  : <circle r={r} fill={fill(n.c)} className="cm-shape" />}
-              <text y={r + 13} textAnchor="middle" className="cm-label">{shortLabel(n.l)}</text>
-            </g>
-          );
-        })}
-      </svg>
-    </PanZoom>
+    <div className="cm-graph">
+      <div className="cm-toolbar" role="group" aria-label="Graph options">
+        <span className="cm-legend" aria-label="Legend">
+          <span><i className="cm-lg cm-lg-fn" /> Function</span>
+          <span><i className="cm-lg cm-lg-cls" /> Class</span>
+          <span><i className="cm-lg cm-lg-file" /> File</span>
+          <span className="cm-legend-note">Colour = group</span>
+        </span>
+        <span className="cm-seg" role="radiogroup" aria-label="Labels">
+          <span className="cm-seg-title">Labels</span>
+          {LABEL_MODES.map(([id, text]) => (
+            <button key={id} type="button" role="radio" aria-checked={labels === id} className={`cm-seg-btn${labels === id ? ' is-on' : ''}`} onClick={() => setLabels(id)}>{text}</button>
+          ))}
+        </span>
+      </div>
+      <PanZoom height="660px" label="Code graph" className="cm-stage">
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }} role="img" aria-label="Code graph" className="cm-svg">
+          <defs>
+            {groups.map((c) => (
+              <radialGradient key={c} id={`cmg-${c}`} cx="34%" cy="28%" r="78%">
+                <stop offset="0%" stopColor={`hsl(${hue(c)} 95% 82%)`} />
+                <stop offset="42%" stopColor={`hsl(${hue(c)} 82% 58%)`} />
+                <stop offset="100%" stopColor={`hsl(${hue(c)} 72% 26%)`} />
+              </radialGradient>
+            ))}
+            <radialGradient id="cm-spec" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#fff" stopOpacity="0.9" />
+              <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+
+          {data.links.map((l, i) => {
+            const a = layout.get(l.s); const b = layout.get(l.t);
+            if (!a || !b) return null;
+            const hot = hover && (l.s === hover || l.t === hover);
+            const dim = hover && !hot;
+            // Curve towards the middle so edges between neighbours do not cut across the other items.
+            const mx = (a.x + b.x) / 2; const my = (a.y + b.y) / 2;
+            const c = { x: mx + (W / 2 - mx) * 0.22, y: my + (H / 2 - my) * 0.22 };
+            const rb = nodeRadius(byId.get(l.t)?.d ?? 1, scale) + 3 * scale;
+            const end = along(a, c, b, 1);
+            const stop = { x: b.x - end.ux * rb, y: b.y - end.uy * rb };
+            const tip = along(a, c, stop, 1);
+            const col = edgeColor(l.r);
+            const s = (hot ? 7 : 5) * scale;
+            return (
+              <g key={`${l.s}>${l.t}>${i}`} className={`cm-edge${hot ? ' is-hot' : ''}${dim ? ' is-dim' : ''}`} style={{ color: col }}>
+                <path d={`M${a.x},${a.y} Q${c.x},${c.y} ${stop.x},${stop.y}`} fill="none" stroke="currentColor" strokeWidth={(hot ? 2.4 : 1.3) * scale} strokeLinecap="round" />
+                <path d={`M${stop.x},${stop.y} l${-tip.ux * s * 1.6 - tip.uy * s},${-tip.uy * s * 1.6 + tip.ux * s} l${tip.uy * s * 2},${-tip.ux * s * 2} z`} fill="currentColor" />
+                <title>{l.r.replace(/_/g, ' ')}</title>
+              </g>
+            );
+          })}
+
+          {data.nodes.map((n) => {
+            const p = layout.get(n.i);
+            if (!p) return null;
+            const isCenter = n.i === data.centerId;
+            const dim = near && !near.has(n.i);
+            const r = nodeRadius(n.d, scale) * (isCenter ? 1.5 : 1);
+            const h = hue(n.c);
+            const labelOn = showLabel(n.i);
+            const fs = (isCenter ? 15 : 12.5) * scale;
+            return (
+              <g key={n.i} transform={`translate(${p.x},${p.y})`} className={`cm-node${isCenter ? ' is-center' : ''}${dim ? ' is-dim' : ''}${hover === n.i ? ' is-hover' : ''}`}
+                style={{ '--glow': `hsl(${h} 95% 62%)` }}
+                tabIndex={0} role="button" aria-label={`${n.l}, ${KIND_LABEL[n.k] ?? 'item'}${where(n) ? `, ${where(n)}` : ''}`}
+                onClick={() => onPick(n.i)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(n.i); } }}
+                onMouseEnter={() => setHover(n.i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(n.i)} onBlur={() => setHover(null)}>
+                <title>{`${n.l}\n${KIND_LABEL[n.k] ?? 'Item'}${where(n) ? ` · ${where(n)}` : ''}`}</title>
+                {isCenter && <circle r={r * 1.55} className="cm-halo" />}
+                <ellipse cx={r * 0.12} cy={r * 1.02} rx={r * 0.95} ry={r * 0.26} className="cm-ground" />
+                {n.k === 'file'
+                  ? <rect x={-r * 1.05} y={-r * 0.78} width={r * 2.1} height={r * 1.56} rx={r * 0.32} fill={`url(#cmg-${n.c})`} className="cm-shape" />
+                  : n.k === 'class'
+                    ? <rect x={-r} y={-r} width={r * 2} height={r * 2} rx={r * 0.42} fill={`url(#cmg-${n.c})`} className="cm-shape" />
+                    : <circle r={r} fill={`url(#cmg-${n.c})`} className="cm-shape" />}
+                <ellipse cx={-r * 0.3} cy={-r * 0.42} rx={r * 0.46} ry={r * 0.28} fill="url(#cm-spec)" className="cm-spec" />
+                {labelOn && <text y={r + fs + 4 * scale} textAnchor="middle" className="cm-label" style={{ fontSize: fs }}>{shortLabel(baseName(n.l))}</text>}
+              </g>
+            );
+          })}
+        </svg>
+      </PanZoom>
+    </div>
   );
 }
 
