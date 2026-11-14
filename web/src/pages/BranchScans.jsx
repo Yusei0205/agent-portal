@@ -10,6 +10,7 @@ import { api } from '../lib/api.js';
 import { navigate } from '../lib/router.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
@@ -163,6 +164,7 @@ function NewScanDialog({ projectId, repos, onClose, onCreated }) {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [ai, setAi] = useState({});
   const trapRef = useFocusTrap();
 
   useEffect(() => {
@@ -186,6 +188,7 @@ function NewScanDialog({ projectId, repos, onClose, onCreated }) {
         excludePaths,
         modelRole: form.modelRole.trim() || undefined,
       };
+      if (ai.credentialId) { body.credentialId = ai.credentialId; if (ai.model) body.model = ai.model; }
       const r = await api.post(`/api/projects/${projectId}/scans`, body);
       onCreated(r.scan);
     } catch (e) {
@@ -307,6 +310,11 @@ function NewScanDialog({ projectId, repos, onClose, onCreated }) {
               />
               <p className="field-hint" id="scan-model-role-hint">Custom instruction prepended to the model's system prompt for this scan.</p>
             </div>
+
+            <div className="row wrap">
+              <AiChoicePicker onChange={setAi} disabled={loading} idPrefix="scan-ai" allowPortalDefault />
+            </div>
+            <p className="field-hint">Which engine and model review each file, as in a new session. Portal default uses the portal's provider (LiteLLM, Anthropic or Bedrock), or your own sign-in when the portal has none.</p>
 
             {error && <p className="error-note" role="alert">{error}</p>}
           </div>

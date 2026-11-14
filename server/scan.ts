@@ -559,6 +559,35 @@ async function _doFetchFileContent(
   return '';
 }
 
+/** The reviewer's instructions and the file, as every provider is asked (the same for LiteLLM, Anthropic and a person's own engine). */
+export function buildScanPrompts(filePath: string, fileContent: string, backgroundText: string): { system: string; user: string } {
+  const system = [
+    'You are a senior code reviewer. Review the provided code file and identify security vulnerabilities, bugs, and code quality issues.',
+    'Return findings ONLY as a JSON array with objects: { file, line, severity, title, body }.',
+    'severity must be one of: critical, high, medium, low, info.',
+    backgroundText ? `\n\nBackground context:\n${backgroundText.slice(0, 12000)}` : '',
+  ].join('');
+  const user = `Review this file: ${filePath}\n\n\`\`\`\n${fileContent.slice(0, 60000)}\n\`\`\`\n\nReturn findings as JSON array only.`;
+  return { system, user };
+}
+
+/**
+ * Review one file with the person's own sign-in (Claude, Kiro or their ChatGPT account) and the model they chose, the way a
+ * session would, instead of the portal's LiteLLM or Anthropic setting. The engines report no token counts for a one-shot call, so
+ * the usage is estimated from the text.
+ */
+async function _doEngineReview(
+  fileContent: string,
+  filePath: string,
+  backgroundText: string,
+  opts: { userId: string; credentialId: string | null; model: string | null },
+): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  const { system, user } = buildScanPrompts(filePath, fileContent, backgroundText);
+  const { callTextModel } = await import('./testing/model-provider.ts');
+  const text = await callTextModel(system, user, { createdBy: opts.userId, credentialId: opts.credentialId, model: opts.model, maxTokens: 4096 });
+  return { text, inputTokens: Math.ceil((system.length + user.length) / CHARS_PER_TOKEN), outputTokens: Math.ceil(text.length / CHARS_PER_TOKEN) };
+}
+
 /** Call LiteLLM-compatible OpenAI chat API; returns text and real token counts. */
 async function _doLiteLLMReview(
   fileContent: string,
@@ -567,14 +596,7 @@ async function _doLiteLLMReview(
   liteLLM: { baseUrl: string; keyEnc: string; model: string },
 ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
   const apiKey = liteLLM.keyEnc ? decrypt(liteLLM.keyEnc, config.secretKey) : '';
-  const systemPrompt = [
-    'You are a senior code reviewer. Review the provided code file and identify security vulnerabilities, bugs, and code quality issues.',
-    'Return findings ONLY as a JSON array with objects: { file, line, severity, title, body }.',
-    'severity must be one of: critical, high, medium, low, info.',
-    backgroundText ? `\n\nBackground context:\n${backgroundText.slice(0, 12000)}` : '',
-  ].join('');
-
-  const userPrompt = `Review this file: ${filePath}\n\n\`\`\`\n${fileContent.slice(0, 60000)}\n\`\`\`\n\nReturn findings as JSON array only.`;
+  const { system: systemPrompt, user: userPrompt } = buildScanPrompts(filePath, fileContent, backgroundText);
 
   const resp = await fetch(`${liteLLM.baseUrl}/chat/completions`, {
     method: 'POST',
@@ -683,6 +705,13 @@ export const _scanProviders = {
     liteLLM: { baseUrl: string; keyEnc: string; model: string },
   ) => Promise<{ text: string; inputTokens: number; outputTokens: number }>,
 
+  engineReview: _doEngineReview as (
+    fileContent: string,
+    filePath: string,
+    backgroundText: string,
+    opts: { userId: string; credentialId: string | null; model: string | null },
+  ) => Promise<{ text: string; inputTokens: number; outputTokens: number }>,
+
   anthropicReview: _doAnthropicReview as (
     fileContent: string,
     filePath: string,
@@ -725,7 +754,16 @@ async function resolveBackgroundText(
 
 // ── Provider resolution helpers ───────────────────────────────────────────────
 
-type ScanProviderName = 'litellm' | 'anthropic' | 'bedrock';
+type ScanProviderName = 'litellm' | 'anthropic' | 'bedrock' | 'engine';
+
+/**
+ * A scan reviewed with the person's own engine keeps `provider_id` = "engine:<sign-in id>" ("engine:" alone: their default
+ * sign-in; "engine:codex-account": their ChatGPT account). The sign-in is checked when the scan is created.
+ */
+export const ENGINE_PROVIDER_PREFIX = 'engine:';
+export function engineCredentialOf(providerId: string | null): string | null {
+  return providerId?.startsWith(ENGINE_PROVIDER_PREFIX) ? providerId.slice(ENGINE_PROVIDER_PREFIX.length) || null : null;
+}
 
 /**
  * Determine which provider to use for a scan, given the scan's explicit
@@ -736,6 +774,7 @@ function resolveScanProvider(
   scanProviderId: string | null,
 ): ScanProviderName | null {
   // Explicit override wins
+  if (scanProviderId?.startsWith(ENGINE_PROVIDER_PREFIX)) return 'engine';
   if (scanProviderId === 'litellm') return 'litellm';
   if (scanProviderId === 'anthropic') return 'anthropic';
   if (scanProviderId === 'bedrock') return 'bedrock';
@@ -953,7 +992,13 @@ async function runScan(scanId: string): Promise<void> {
     let fileTokens = estimatedFileTokens;
 
     try {
-      if (providerName === 'litellm') {
+      if (providerName === 'engine') {
+        const result = await _scanProviders.engineReview(fileContent, file.file_path, backgroundText, {
+          userId: actorId, credentialId: engineCredentialOf(scan.provider_id), model: scan.model_id,
+        });
+        reviewText = result.text;
+        fileTokens = (result.inputTokens + result.outputTokens) || estimatedFileTokens;
+      } else if (providerName === 'litellm') {
         const result = await _scanProviders.liteLLMReview(fileContent, file.file_path, backgroundText, liteLLMCfg);
         reviewText = result.text;
         fileTokens = (result.inputTokens + result.outputTokens) || estimatedFileTokens;
@@ -1241,8 +1286,16 @@ export function registerScanRoutes(): void {
       : [];
 
     const modelRole = body.modelRole != null ? String(body.modelRole).slice(0, 500) : null;
-    const providerId = body.providerId != null ? String(body.providerId).slice(0, 100) : null;
-    const modelId = body.modelId != null ? String(body.modelId).slice(0, 200) : null;
+    let providerId = body.providerId != null ? String(body.providerId).slice(0, 100) : null;
+    let modelId = body.modelId != null ? String(body.modelId).slice(0, 200) : null;
+    // The person's own sign-in and model, as for a session: the portal's LiteLLM or Anthropic setting is then not used.
+    const chosenCredential = typeof body.credentialId === 'string' ? body.credentialId.trim() : '';
+    if (chosenCredential) {
+      const { resolveCreateAi } = await import('./create-ai.ts');
+      const ai = await resolveCreateAi(req.user!.id, { credentialId: chosenCredential, model: body.model });
+      providerId = `${ENGINE_PROVIDER_PREFIX}${chosenCredential}`.slice(0, 100);
+      modelId = ai.model || null;
+    }
 
     const id = generateId();
     const ts = now();
@@ -1335,11 +1388,19 @@ export function registerScanRoutes(): void {
 
     // F9: Fail early if no review provider is configured — don't queue a scan
     // that will silently produce no findings.
-    const effectiveProvider = resolveScanProvider(scan.provider_id);
+    let effectiveProvider = resolveScanProvider(scan.provider_id);
+    if (!effectiveProvider && scan.created_by) {
+      // No portal provider for scans: the creator's own sign-in (their default Claude, else Kiro) reviews instead.
+      const { pickTextEngine } = await import('./testing/model-provider.ts');
+      if (await pickTextEngine(scan.created_by, null).catch(() => null)) {
+        await getScansRepository().update(scan.id, { provider_id: ENGINE_PROVIDER_PREFIX });
+        effectiveProvider = 'engine';
+      }
+    }
     if (!effectiveProvider) {
       const mode = getSettings().provider.mode;
       sendJson(res, 400, {
-        error: `No review provider is configured for scans. The current portal provider ("${mode}") does not support code review. Configure Anthropic, Bedrock, or LiteLLM in Settings › Provider.`,
+        error: `No review provider is configured for scans. The current portal provider ("${mode}") does not support code review. Add your own Claude, Kiro or Codex sign-in (Agent setup › Sign-ins), or configure Anthropic, Bedrock or LiteLLM in Settings › Provider.`,
         reason: 'no_provider',
       });
       return;
