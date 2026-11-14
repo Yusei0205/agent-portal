@@ -34,12 +34,22 @@ describe('latestPullRequestStates', () => {
 });
 
 describe('describePullRequest', () => {
-  it('asked: Inbox question and link', () => {
+  it('asked: the question with answer buttons, and the Inbox link', () => {
     const r = d({ state: 'asked', files: 5, commits: 2, inboxId: 'i' });
     assert.equal(r.tone, 'info');
     assert.equal(r.title, 'Open a pull request for shop?');
     assert.equal(r.detail, '5 files changed in 2 commit(s) in shop. Approve to push a new branch and open a pull request.');
-    assert.deepEqual(r.actions, [{ kind: 'link', label: 'Open Inbox', href: '#/inbox' }]);
+    assert.deepEqual(r.actions, [
+      { kind: 'button', id: 'approve', label: 'Open pull request' },
+      { kind: 'button', id: 'decline', label: 'Not now' },
+      { kind: 'link', label: 'Open Inbox', href: '#/inbox' },
+    ]);
+    assert.deepEqual(d({ state: 'asked', files: 1, commits: 0 }).actions, [{ kind: 'link', label: 'Open Inbox', href: '#/inbox' }], 'no inbox item to answer: only the link');
+  });
+  it('declined says it was dismissed in the Inbox, not that it expired', () => {
+    const r = d({ state: 'declined' });
+    assert.match(r.detail, /declined or dismissed in the Inbox/);
+    assert.doesNotMatch(r.detail, /expired/);
   });
   it('declined and available offer Create pull request', () => {
     for (const state of ['declined', 'available']) {
@@ -124,11 +134,15 @@ describe('live PR review handoff', () => {
 
 
 describe('session pull request cards', () => {
-  it('omits Inbox approval questions without showing stale states', () => {
-    assert.deepEqual(sessionPullRequestCards([
-      { ...base, state: 'available' },
+  it('shows the pending question, and only the latest state: an older declined card does not stay behind', () => {
+    const cards = sessionPullRequestCards([
+      { ...base, state: 'asked', inboxId: 'inbox0' },
+      { ...base, state: 'declined' },
       { ...base, state: 'asked', inboxId: 'inbox1' },
-    ]), []);
+    ]);
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].state, 'asked');
+    assert.equal(cards[0].inboxId, 'inbox1');
   });
   it('keeps progress, PR links and review results visible', () => {
     for (const state of ['pushing', 'opened', 'review-started', 'review-failed', 'failed']) {

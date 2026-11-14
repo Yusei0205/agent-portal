@@ -26,6 +26,19 @@ function Card({ event, workflowId, projectId }) {
     }
   };
 
+  // Answer the pending question from here (the same answer as in the Inbox).
+  const answer = async (response) => {
+    setBusy(true);
+    setMsg('');
+    try {
+      await api.post(`/api/inbox/${encodeURIComponent(event.inboxId)}/resolve`, { response });
+    } catch (err) {
+      setMsg(err?.message || 'Could not send the answer.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="run-outputs-card" role="region" aria-label={`Pull request: ${event.repo ?? ''}`}>
       <div className="run-outputs-card-header">
@@ -49,7 +62,10 @@ function Card({ event, workflowId, projectId }) {
               {...(/^https?:/i.test(a.href) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
             >{a.label}</a>
           ) : (
-            <button key={a.label} type="button" className="btn btn-sm" onClick={create} disabled={busy}>
+            <button
+              key={a.label} type="button" className={`btn btn-sm${a.id === 'decline' ? ' btn-ghost' : ''}`} disabled={busy}
+              onClick={a.id === 'approve' ? () => answer('approve') : a.id === 'decline' ? () => answer('decline') : create}
+            >
               {busy ? 'Working…' : a.label}
             </button>
           )))}

@@ -46,9 +46,11 @@ export function describePullRequest(event, ctx = {}) {
     case 'asked':
       return out('info', `Open a pull request for ${repo}?`,
         `${ev.files} files changed in ${ev.commits} commit(s) in ${repo}. Approve to push a new branch and open a pull request.`,
-        [{ kind: 'link', label: 'Open Inbox', href: '#/inbox' }]);
+        ev.inboxId
+          ? [{ kind: 'button', id: 'approve', label: 'Open pull request' }, { kind: 'button', id: 'decline', label: 'Not now' }, { kind: 'link', label: 'Open Inbox', href: '#/inbox' }]
+          : [{ kind: 'link', label: 'Open Inbox', href: '#/inbox' }]);
     case 'declined':
-      return out('info', `No pull request for ${repo}`, 'The request to open a pull request was declined or expired.', [createBtn()]);
+      return out('info', `No pull request for ${repo}`, 'The question was declined or dismissed in the Inbox, so nothing was pushed. You can still open one now.', [createBtn()]);
     case 'available':
       return out('info', `Changes in ${repo}`, 'Changes are ready. Automatic pull requests are off for this project.', [createBtn()]);
     case 'pushing':
@@ -106,7 +108,10 @@ export function reviewHandoffHref(event, workflowId, projectId) {
   return href(projectId, 'reviews', 'code', pr.reviewId);
 }
 
-/** Approval questions live in Inbox; the session shows PR progress and results. */
+/**
+ * What the session shows for each repository: the pending question (answerable here and in the Inbox), progress, PR links
+ * and results. Only the latest state per repository counts, so an answered question never leaves an old card behind.
+ */
 export function sessionPullRequestCards(events) {
-  return latestPullRequestStates(events).filter(event => event.state !== 'asked');
+  return latestPullRequestStates(events);
 }
