@@ -29,6 +29,9 @@ export interface AgentRun {
   runnerAwsEnv?: Record<string, string>;
   /** Files staged in the run folder (attachments, chosen project documents) to hand to the runner. */
   runnerInputFiles?: import('./runner-files.ts').InputFile[];
+  /** A user guide run's test accounts (role, username, password) for the browser's sign_in tool, and the hosts they may be typed on. */
+  runnerBrowserAccounts?: Array<{ role: string; username: string; password: string }>;
+  runnerBrowserHosts?: string[];
   /** Set for a loop session's runs on an AgentCore runner: the check steps the runner runs after the agent finishes. */
   runnerChecks?: import('./runner-checks.ts').CheckStep[];
   leadAgent: string | null;

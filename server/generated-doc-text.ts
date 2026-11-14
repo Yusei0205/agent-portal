@@ -43,6 +43,42 @@ const GUIDE: Record<DocType, string> = {
     'A user guide for the people who use the system, not for developers: what it is for, how to get started, each task step by step in plain words (what to click or send, what they will see), what the rules and limits mean for them, and answers to common problems. No code and no file paths in the body text. Sections: Introduction, Getting started, one section per task, Rules and limits, Troubleshooting, Glossary. Still cite where each fact comes from, in a short "Sources" line at the end of each section.',
 };
 
+/** A user guide that is written by using the running system: where it is, which test accounts the agent may sign in with, and the hosts they may be typed on. */
+export interface DocGuide {
+  url: string;
+  screenshots: boolean;
+  /** Roles of the project's test accounts (guide-accounts.ts) this guide may use. */
+  roles: string[];
+  /** The address's host and any others the sign-in uses. */
+  hosts: string[];
+}
+
+export const GUIDE_LIMITS = { screenshots: 40, roles: 20, hosts: 10, urlChars: 500 };
+
+/** What the agent is told when a user guide is made by walking through the system in the browser. */
+export function guideBlock(g: DocGuide): string[] {
+  const accounts = g.roles.length
+    ? [
+        `Test accounts: you can sign in as ${g.roles.map((r) => `"${r}"`).join(', ')}. Open the system's sign-in page, then call sign_in with the role (the username and password are typed for you; you never see them, and never write them in the guide). Sign in as each role to show what that kind of user sees, and say in the guide which role a task is for.`,
+        'sign_in only works on the system\'s own address. Do not follow links to other sites and do not type the credentials with the type tool.',
+      ]
+    : ['Test accounts: none were given. Document only what can be opened without signing in (a public site, the sign-in page itself), and say in the guide which parts need a sign-in that you could not show.'];
+  return [
+    `Screenshots: this guide is written by using the running system at ${g.url}.`,
+    `You have a browser (tools: goto, snapshot, get_text, click, type, screenshot, capture${g.roles.length ? ', sign_in' : ''}). ${accounts[0]}`,
+    ...accounts.slice(1),
+    'How to capture:',
+    `- Plan first: list the tasks a user does (from the project documents and repositories if given, and from what you see in the system), then do each task yourself in the browser, step by step. At most ${GUIDE_LIMITS.screenshots} screenshots in all; one per screen, not one per click.`,
+    '- Before a step that needs a click or typing, call capture with highlights: each highlight is the CSS selector (or the visible text) of an element the reader must use on that screen, with a short label. Each gets a red box and a number: 1, 2, 3 in the order given, so give them in the order of the steps. Use snapshot or get_text to find the selectors and labels. Capture again after the page changes.',
+    '- Save each file as screenshots/NN-short-name.png (NN counts up: 01, 02, ...). capture tells you where the file is and what each number marks; look at the picture it returns and check the boxes are on the right elements.',
+    '- Use only test data. Do not click anything that deletes, pays, sends or changes real data: show that button in a screenshot and describe it, but do not press it.',
+    'How to write it:',
+    '- For each task: a "##" section with a short purpose line, then a numbered list of steps. Each step says exactly what to do and refers to the number on the picture, for example "Click **Add user** (1), type the name in **Name** (2), then click **Save** (3).". Use the labels you see on screen, in bold.',
+    '- Put the screenshot right after the steps it belongs to, alone on a line: ![Add a user: 1 Add user, 2 Name, 3 Save](screenshots/03-add-user.png). The caption names the numbers. Never refer to a number the picture does not show.',
+    '- Where the same screen is used by several steps, use one screenshot and say "see the picture above".',
+  ];
+}
+
 export interface DocPromptRepo {
   name: string;
   slug: string;
@@ -68,10 +104,13 @@ export interface DocPrompt {
   diagrams: DocPromptDiagram[];
   /** Text for diagrams the agent draws itself as icon diagrams (draw.io); without it the agent may add small Mermaid diagrams. */
   iconBlock?: string;
+  /** A user guide written by using the running system, with screenshots (only for the user guide type). */
+  guide?: DocGuide;
 }
 
 /** The first line is a marker the demo provider recognises; the rest is what a real agent follows. */
 export function composeDocPrompt(p: DocPrompt): string {
+  const screenshots = p.type === 'user-guide' && p.guide?.screenshots ? p.guide : null;
   const sources: string[] = [];
   if (p.repos.length) {
     sources.push(
@@ -105,9 +144,10 @@ export function composeDocPrompt(p: DocPrompt): string {
     ...sources.map((s) => `- ${s}`),
     `- ${diagrams.replace(/\n/g, '\n  ')}`,
     '',
+    ...(screenshots ? [...guideBlock(screenshots), ''] : []),
     'How to work:',
     '1. Explore cheaply first: README, build and deploy files, entry points (use the document-code skill if it is available), then read only what you need. Skip generated code, build output and lockfiles.',
-    '2. Write the document as Markdown and save it as document.md in your run folder (the folder you were told to put files in). Start with one line "# <title>", use "##" for sections and "###" for subsections, and keep paragraphs short. Use tables for fields, endpoints and settings. No HTML' + (p.iconBlock ? ', and no images except the icon diagrams described above.' : ', no images.'),
+    '2. Write the document as Markdown and save it as document.md in your run folder (the folder you were told to put files in). Start with one line "# <title>", use "##" for sections and "###" for subsections, and keep paragraphs short. Use tables for fields, endpoints and settings. No HTML' + (screenshots ? ', and no images except the screenshots you capture (see Screenshots above).' : p.iconBlock ? ', and no images except the icon diagrams described above.' : ', no images.'),
     '3. Cite your sources. Every statement about the code names where it comes from, as an inline code span: `<repository folder>/<path>:<line>` or `<repository folder>/<path>:<first line>-<last line>` (for example `payments/src/app.py:42` or `payments/src/app.py:10-30`), where the repository folder is the name after repos/. Cite project documents as `docs/md/<file>.md › <heading>`. Cite only files you actually opened or listed; never guess a path or a line number.',
     '4. Never invent names, figures, endpoints or dates. Where the sources do not say, write "Open question: ..." in the text and list it in the closing section. Never copy secrets, tokens, passwords or keys into the document; name the variable or secret store instead.',
     '5. Do not build a Word file; the portal does that from your Markdown with the project template.',

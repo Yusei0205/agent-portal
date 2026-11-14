@@ -45,6 +45,9 @@ export interface ClaudeAgentCoreOpts {
   awsEnv?: Record<string, string>;
   /** Staged files (attachments, project documents) the runner writes into the work folder first. */
   inputFiles?: import('./runner-files.ts').InputFile[];
+  /** A user guide run's test accounts for the browser's sign_in tool (the runner types them; the model never sees them) and the hosts they may be typed on. */
+  browserAccounts?: Array<{ role: string; username: string; password: string }>;
+  browserHosts?: string[];
   /** A loop session's check steps, run by the runner after the agent finishes. */
   checks?: import('./runner-checks.ts').CheckStep[];
   /** The owner's and project's Claude agents (the Agent tool can start them by name). */
@@ -160,6 +163,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     auth: opts.auth,
     trustTools: opts.trustTools,
     ...(opts.browser ? { browser: true } : {}),
+    ...(opts.browser && opts.browserAccounts?.length ? { browserAccounts: opts.browserAccounts, browserHosts: opts.browserHosts ?? [] } : {}),
     ...(opts.repos?.length ? { repos: opts.repos } : {}),
     ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
     ...(opts.awsEnv && Object.keys(opts.awsEnv).length ? { awsEnv: opts.awsEnv } : {}),

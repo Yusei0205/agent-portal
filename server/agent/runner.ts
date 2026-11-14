@@ -48,6 +48,7 @@ import { collectInputFilesWithUrls } from './input-file-urls.ts';
 import { unpackInputZips } from './runner-files.ts';
 import { ensureAtlassianMcp, isAtlassianMcpUrl } from '../atlassian-mcp.ts';
 import { jiraConnected } from '../jira.ts';
+import { guideRunPayload } from '../guide-accounts.ts';
 import { collectOutputFiles } from '../output-files.ts';
 import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
@@ -552,6 +553,12 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       // Small files go inline; larger ones (up to 50 MB, cloud only) as download links the runner fetches.
       const inputFiles = await collectInputFilesWithUrls(workDir, chatAttachments.map(a => 'attachments/' + a.path));
       if (inputFiles.length) agentRun.runnerInputFiles = inputFiles;
+      // A user guide run: the test accounts it may use for the browser's sign_in tool (the runner types them in, the model never sees them).
+      if (agentRun.projectId) {
+        const guide = await guideRunPayload(agentRun.projectId, workflowId).catch(() => null);
+        if (guide?.accounts.length) { agentRun.runnerBrowserAccounts = guide.accounts; agentRun.runnerBrowserHosts = guide.hosts; }
+        if (guide?.missing.length) emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text: `Test account${guide.missing.length === 1 ? '' : 's'} not found in the project (removed since the guide was set up): ${guide.missing.join(', ')}` });
+      }
       agentRun.runnerAwsEnv = (await projectAwsEnv(agentRun.projectId).catch((e) => { console.warn('[runner] AWS account skipped:', e); return null; })) ?? undefined;
       if (specs.length > 0) {
         agentRun.runnerRepos = specs;

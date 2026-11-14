@@ -182,6 +182,8 @@ ${REVIEW_SYSTEM_APPEND}`;
     mcpServers: run.runnerMcpServers,
     awsEnv: run.runnerAwsEnv,
     inputFiles: run.runnerInputFiles,
+    browserAccounts: run.runnerBrowserAccounts,
+    browserHosts: run.runnerBrowserHosts,
     checks: run.runnerChecks,
   });
 

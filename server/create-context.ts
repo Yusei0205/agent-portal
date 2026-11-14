@@ -13,7 +13,7 @@ import { config } from './config.ts';
 import { restoreFile } from './durable-files.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getKnowledgeRepository } from './repositories/knowledge.ts';
-import type { DocPromptRepo } from './generated-doc-text.ts';
+import type { DocPromptRepo, DocGuide } from './generated-doc-text.ts';
 import { runnerRepoFolder } from './agent/runner-repo-specs.ts';
 
 export interface DocSources {
@@ -22,6 +22,8 @@ export interface DocSources {
   repoIds?: string[];
   docIds?: string[];
   diagramIds?: string[];
+  /** A user guide written by using the running system (generated-docs.ts: parseGuide). Roles and hosts only, never a password. */
+  guide?: DocGuide;
 }
 
 

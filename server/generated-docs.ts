@@ -26,7 +26,9 @@ import {
   DOC_TYPE_LABELS,
   DOC_LIMITS,
   composeDocPrompt,
+  GUIDE_LIMITS,
   type DocType,
+  type DocGuide,
 } from './generated-doc-text.ts';
 import {
   validateAttachmentIds,
@@ -37,7 +39,9 @@ import {
   getAttachmentsView,
 } from './ai-attachments.ts';
 import { createWorkDir } from './workflows/working-copies.ts';
-import { buildDocx } from './docgen.ts';
+import { buildDocxReport } from './docgen.ts';
+import { loadGuideAccounts, setGuideRun } from './guide-accounts.ts';
+import { assertNotBlocked } from './testing/ssrf.ts';
 import { resolveCreateAi, type CreateAi } from './create-ai.ts';
 import { repoContext, stageKnowledgeDocs, type DocSources } from './create-context.ts';
 
@@ -45,6 +49,49 @@ import { getMemberRow, getProjectRow } from './project-access.ts';
 export { DOC_TYPES, DOC_TYPE_LABELS, DOC_LIMITS, type DocType };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * The user guide options of a request: the address of the system, the test account roles to sign in with and any extra hosts the
+ * sign-in uses. Only for the user guide type, and only when the person asked for screenshots. Checked here (the address is a public
+ * web address, the roles exist in the project, the engine has the browser); nothing secret is kept, only role names and hosts.
+ */
+export async function parseGuide(raw: unknown, docType: string, projectId: string, engine: string): Promise<DocGuide | undefined> {
+  if (docType !== 'user-guide' || !raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  if (o.screenshots !== true) return undefined;
+
+  const address = typeof o.url === 'string' ? o.url.trim() : '';
+  let url: URL;
+  try { url = new URL(address); } catch { throw badRequest('Give the address of the system, for example https://app.example.com'); }
+  if (!/^https?:$/.test(url.protocol) || address.length > GUIDE_LIMITS.urlChars || url.username || url.password) throw badRequest('The address must be a web address (https://...) without a user name or password in it');
+  // The browser runs in AWS and reaches the internet only: a private or local address would never open.
+  try { await assertNotBlocked(url.href, false); } catch { throw badRequest('That address cannot be reached from the cloud browser (it is a local, private or blocked address). Use an address on the internet.'); }
+
+  const known = await loadGuideAccounts(projectId);
+  const roles: string[] = [];
+  for (const r of Array.isArray(o.roles) ? o.roles : []) {
+    const match = typeof r === 'string' ? known.find((a) => a.role.toLowerCase() === r.trim().toLowerCase()) : undefined;
+    if (!match) throw badRequest(`The test account "${String(r).slice(0, 60)}" does not exist in this project. Add it under Test accounts first.`);
+    if (!roles.includes(match.role)) roles.push(match.role);
+  }
+  if (roles.length > GUIDE_LIMITS.roles) throw badRequest(`Choose at most ${GUIDE_LIMITS.roles} test accounts`);
+
+  const hosts = [url.hostname.toLowerCase()];
+  for (const h of Array.isArray(o.hosts) ? o.hosts : []) {
+    const host = typeof h === 'string' ? h.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '') : '';
+    if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(host) || host.length > 253) throw badRequest(`"${String(h).slice(0, 80)}" is not a host name (for example login.example.com)`);
+    if (!hosts.includes(host)) hosts.push(host);
+  }
+  if (hosts.length > GUIDE_LIMITS.hosts) throw badRequest(`At most ${GUIDE_LIMITS.hosts} hosts`);
+
+  // The screenshots need the AgentCore browser, which only the Kiro and Claude cloud runners have (and only when the deployment turned it on).
+  if (engine !== 'demo' && (process.env.PORTAL_AGENTCORE_BROWSER !== '1' || (engine !== 'kiro' && engine !== 'claude-code'))) {
+    throw badRequest(process.env.PORTAL_AGENTCORE_BROWSER !== '1'
+      ? 'Screenshots need the cloud browser, which is not turned on in this portal (deploy with -c agentcoreBrowser=true).'
+      : 'Screenshots need a Kiro or Claude model: only those have the cloud browser. Choose one, or turn screenshots off.');
+  }
+  return { url: url.href, screenshots: true, roles, hosts };
+}
 
 async function requireProjectAccess(
   req: PortalRequest,
@@ -114,6 +161,23 @@ function versionView(v: Row) {
   };
 }
 
+/** The pictures under screenshots/ next to a document (a user guide's screenshots), at most 200. */
+function listScreenshots(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string, depth: number): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= 200 || e.isSymbolicLink()) continue;
+      const abs = path.join(d, e.name);
+      if (e.isDirectory() && depth < 3) walk(abs, depth + 1);
+      else if (e.isFile() && /\.(png|jpe?g)$/i.test(e.name)) out.push(abs);
+    }
+  };
+  walk(path.join(dir, 'screenshots'), 0);
+  return out;
+}
+
 async function getDoc(docId: string, projectId: string): Promise<Row> {
   const d = (await getGeneratedDocRepository().getById(docId, projectId)) as unknown as Row | null;
   if (!d) throw notFound('Document not found');
@@ -133,7 +197,7 @@ async function prepareDocRun(
   doc: { type: DocType; title: string; audience: string },
   sources: DocSources,
   attachmentRows: Row[],
-): Promise<{ goal: string; preWorkflowId?: string; preWorkDir: string | null; repoIds: string[] }> {
+): Promise<{ goal: string; preWorkflowId?: string; preWorkDir: string | null; repoIds: string[]; guide?: DocGuide }> {
   const { repoIds, promptRepos } = await repoContext(String(project.id), sources.repoIds, DOC_LIMITS.repos);
   const wantDocs = (sources.docIds?.length ?? 0) > 0;
   let preWorkflowId: string | undefined;
@@ -156,9 +220,10 @@ async function prepareDocRun(
     knowledge: stagedDocs > 0,
     decisions: false,
     diagrams: [],
+    guide: sources.guide,
   });
   if (stagedAttachments.length) goal += buildAttachmentPromptBlock(stagedAttachments);
-  return { goal, preWorkflowId, preWorkDir, repoIds };
+  return { goal, preWorkflowId, preWorkDir, repoIds, guide: sources.guide?.screenshots ? sources.guide : undefined };
 }
 
 async function startDocRun(
@@ -168,7 +233,7 @@ async function startDocRun(
   userId: string,
   leadAgent?: string | null,
   trustAllTools?: boolean,
-  preconfig?: { workflowId?: string; workDir?: string | null; repoIds?: string[] },
+  preconfig?: { workflowId?: string; workDir?: string | null; repoIds?: string[]; guide?: DocGuide },
   ai?: CreateAi,
 ): Promise<string> {
   const workflowId = preconfig?.workflowId ?? newId('w_');
@@ -197,6 +262,8 @@ async function startDocRun(
     updated_at: ts,
   });
   if (preconfig?.workDir) await sessions.updateWorkflow(workflowId, { work_dir: preconfig.workDir });
+  // A user guide with screenshots: which test account roles this run may sign in with (the runner gets the accounts when it starts).
+  if (preconfig?.guide?.screenshots) await setGuideRun(workflowId, { roles: preconfig.guide.roles, hosts: preconfig.guide.hosts });
 
   // Mark the doc as generating so startup recovery can flip it to failed on crash
   await getGeneratedDocRepository().update(docId, { status: 'generating', error: null, workflow_id: workflowId });
@@ -255,9 +322,11 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
   let warnings: string | null = null;
   if (mdPath && !docxPath) {
     try {
-      const buf = await buildDocx(fs.readFileSync(mdPath, 'utf8'));
+      // Pictures (a user guide's screenshots) are read from the folder of the Markdown file.
+      const built = await buildDocxReport(fs.readFileSync(mdPath, 'utf8'), undefined, { baseDir: path.dirname(mdPath) });
       docxPath = path.join(path.dirname(mdPath), 'document.docx');
-      fs.writeFileSync(docxPath, buf);
+      fs.writeFileSync(docxPath, built.buffer);
+      if (built.warnings.length) warnings = built.warnings.slice(0, 5).join(' ') + (built.warnings.length > 5 ? ` (${built.warnings.length - 5} more)` : '');
     } catch (e) {
       warnings = `The Word file could not be built (${String((e as { message?: string })?.message ?? e).slice(0, 200)}). The Markdown is available.`;
     }
@@ -272,6 +341,8 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
   }
 
   if (mdPath) await persistFile(mdPath, 'text/markdown');
+  // The screenshots of a user guide stay with the document, for the Word file's pictures and for the zip download.
+  for (const shot of listScreenshots(path.dirname(mdPath))) await persistFile(shot, 'image/png');
   if (docxPath) await persistFile(docxPath);
 
   // Get next version number
@@ -364,6 +435,8 @@ export function registerGeneratedDocRoutes(): void {
 
     // Which sign-in and model run it (checked before anything is created), then the prompt and the staged inputs.
     const ai = await resolveCreateAi(req.user!.id, body);
+    const guide = await parseGuide(body.guide, docType, String(project.id), ai.engine);
+    if (guide) sources.guide = guide;
     const { goal, preWorkflowId, preWorkDir, repoIds } = await prepareDocRun(
       project,
       { type: docType as DocType, title: name, audience: audience ?? '' },
@@ -399,7 +472,7 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       leadAgent,
       trustAllTools,
-      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds },
+      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds, guide },
       ai,
     );
 
@@ -466,7 +539,7 @@ export function registerGeneratedDocRoutes(): void {
 
     const sources = parseJson<DocSources>(String(d.sources_json ?? '{}'), {});
     const ai = await resolveCreateAi(req.user!.id, body);
-    const { goal, preWorkflowId, preWorkDir, repoIds } = await prepareDocRun(
+    const { goal, preWorkflowId, preWorkDir, repoIds, guide } = await prepareDocRun(
       project,
       { type: String(d.doc_type) as DocType, title: String(d.name), audience: String(d.audience ?? '') },
       sources,
@@ -480,7 +553,7 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       d.lead_agent ? String(d.lead_agent) : null,
       Boolean(d.trust_all_tools),
-      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds },
+      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds, guide },
       ai,
     );
 
@@ -513,7 +586,7 @@ export function registerGeneratedDocRoutes(): void {
 
     const sources = parseJson<DocSources>(String(d.sources_json ?? '{}'), {});
     const ai = await resolveCreateAi(req.user!.id, ((req.body ?? {}) as Record<string, unknown>));
-    const { goal, preWorkflowId, preWorkDir, repoIds } = await prepareDocRun(
+    const { goal, preWorkflowId, preWorkDir, repoIds, guide } = await prepareDocRun(
       project,
       { type: String(d.doc_type) as DocType, title: String(d.name), audience: String(d.audience ?? '') },
       sources,
@@ -527,7 +600,7 @@ export function registerGeneratedDocRoutes(): void {
       req.user!.id,
       d.lead_agent ? String(d.lead_agent) : null,
       Boolean(d.trust_all_tools),
-      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds },
+      { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds, guide },
       ai,
     );
 
@@ -557,7 +630,7 @@ export function registerGeneratedDocRoutes(): void {
     if (!project) return;
 
     const d = await getDoc(req.params.docId, String(project.id));
-    const format = (req.query.get('format') ?? 'md') as 'md' | 'docx';
+    const format = (req.query.get('format') ?? 'md') as 'md' | 'docx' | 'zip';
 
     if (!d.latest_version_id) {
       sendJson(res, 404, { error: 'No version available yet' });
@@ -567,6 +640,32 @@ export function registerGeneratedDocRoutes(): void {
     const v = await latestVersion(String(d.id));
     if (!v) {
       sendJson(res, 404, { error: 'Version not found' });
+      return;
+    }
+
+    if (format === 'zip') {
+      // The Markdown with the screenshots it shows (and the Word file): a bare .md would lose its pictures.
+      const mdFile = v.md_path ? String(v.md_path) : '';
+      if (!mdFile || !(await restoreFile(mdFile))) { sendJson(res, 404, { error: 'No Markdown file available' }); return; }
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      const md = fs.readFileSync(mdFile, 'utf8');
+      const dir = path.dirname(mdFile);
+      zip.file('document.md', md);
+      if (v.docx_path && (await restoreFile(String(v.docx_path)))) zip.file('document.docx', fs.readFileSync(String(v.docx_path)));
+      for (const ref of new Set([...md.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => path.posix.normalize(m[1])))) {
+        if (!/^screenshots\/.+\.(png|jpe?g)$/i.test(ref) || ref.split('/').includes('..')) continue;
+        const abs = path.resolve(dir, ...ref.split('/'));
+        if (!abs.startsWith(path.resolve(dir) + path.sep) || !(await restoreFile(abs))) continue;
+        zip.file(ref, fs.readFileSync(abs), { createFolders: false });
+      }
+      const out = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+      (res as any).writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="${String(d.name).replace(/[^a-z0-9_-]/gi, '_')}.zip"`,
+        'Content-Length': out.length,
+      });
+      (res as any).end(out);
       return;
     }
 
