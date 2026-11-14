@@ -25,6 +25,13 @@ Like the Superpowers skills, a skill is used when an agent that lists it in its 
 someone starts a session with its command. Nothing is applied to a plain session by default, so `caveman` never changes how
 sessions answer unless it is asked for.
 
+**Terse replies for one session.** A Claude session loads no skills from disk, so the `caveman` skill is not enough on its own. The
+**New session** dialog has a **Terse replies (caveman)** option for Claude sessions: when ticked, the skill's instructions are added to
+the session's first message (and a one-line reminder to later turns of a continued session; on the cloud runner, where every turn
+starts a fresh Claude session, each turn carries the full instructions). It is stored as the setting `session.<id>.caveman`
+(`server/agent/caveman-guidance.ts`). Saying "stop caveman" or "normal mode" in the chat switches it off, as the skill says. The choice
+is remembered in the browser for the next new session; nothing changes for a session that did not ask for it.
+
 To change a skill for one project, edit its `SKILL.md` under that project's `.claude/skills`. To update the bundled text for
 everyone, change the originals and regenerate `server/bundled-skills.ts`.
 
