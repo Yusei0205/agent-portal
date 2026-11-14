@@ -11,6 +11,7 @@ import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { GuideAccountsModal } from '../components/GuideAccounts.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -58,15 +59,31 @@ function NewDocModal({ projectId, onClose, onCreated }) {
   const [error, setError] = useState(null);
   const [attachmentIds, setAttachmentIds] = useState([]);
   const [uploadsBusy, setUploadsBusy]     = useState(false);
+  // User guide made from the running system, with numbered screenshots.
+  const [shots, setShots]         = useState(false);
+  const [guideUrl, setGuideUrl]   = useState('');
+  const [guideHosts, setGuideHosts] = useState('');
+  const [accounts, setAccounts]   = useState([]);
+  const [roles, setRoles]         = useState([]);
+  const [manage, setManage]       = useState(false);
 
   const handleAttachments = (ids, uploading) => {
     setAttachmentIds(ids);
     setUploadsBusy(uploading);
   };
 
+  const isGuide = docType === 'user-guide';
+  useEffect(() => {
+    if (!isGuide || !shots) return undefined;
+    let live = true;
+    api.get(`/api/projects/${projectId}/guide-accounts`).then((r) => { if (live) setAccounts(r.accounts || []); }).catch(() => {});
+    return () => { live = false; };
+  }, [isGuide, shots, projectId]);
+
   const submit = async (e) => {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
+    if (isGuide && shots && !guideUrl.trim()) { setError('Give the address of the system to capture'); return; }
     if (uploadsBusy) return;
     setBusy(true);
     setError(null);
@@ -79,6 +96,9 @@ function NewDocModal({ projectId, onClose, onCreated }) {
         ...ai,
         sources:       ctx,
         attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+        guide: isGuide && shots
+          ? { screenshots: true, url: guideUrl.trim(), roles, hosts: guideHosts.split(/[\s,]+/).filter(Boolean) }
+          : undefined,
       });
       onCreated(r);
     } catch (err) {
@@ -116,6 +136,50 @@ function NewDocModal({ projectId, onClose, onCreated }) {
               ))}
             </select>
           </div>
+
+          {isGuide && (
+            <fieldset className="field" style={{ border: '1px solid var(--line, #ddd)', borderRadius: 8, padding: 12 }}>
+              <legend>Screenshots from the running system</legend>
+              <label className="checkbox-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input type="checkbox" checked={shots} onChange={(e) => setShots(e.target.checked)} disabled={busy} />
+                Open the system in the cloud browser and capture screenshots, with numbered boxes on what to click
+              </label>
+              {shots && (
+                <div className="stack" style={{ marginTop: 10 }}>
+                  <div className="field">
+                    <label htmlFor="nd-guide-url">Address of the system <span aria-hidden>*</span></label>
+                    <input id="nd-guide-url" type="url" value={guideUrl} onChange={(e) => setGuideUrl(e.target.value)} maxLength={500} placeholder="https://app.example.com" disabled={busy} />
+                    <p className="field-hint">The browser runs in the cloud, so the system must be reachable from the internet (not localhost, an intranet or a VPN).</p>
+                  </div>
+                  <div className="field">
+                    <span className="label">Sign in as</span>
+                    {accounts.length === 0 ? (
+                      <p className="field-hint">No test accounts yet: the guide covers only what can be opened without signing in.</p>
+                    ) : (
+                      <div className="checkbox-group" role="group" aria-label="Test accounts">
+                        {accounts.map((a) => (
+                          <label key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <input
+                              type="checkbox" checked={roles.includes(a.role)} disabled={busy}
+                              onChange={(e) => setRoles((rs) => (e.target.checked ? [...rs, a.role] : rs.filter((x) => x !== a.role)))}
+                            />
+                            <span>{a.role}</span> <span className="muted">{a.username}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    <button type="button" className="btn btn-sm btn-ghost" onClick={() => setManage(true)} disabled={busy}>Manage test accounts…</button>
+                    <p className="field-hint">The agent never sees the passwords: they are typed into the sign-in page for it. Use test accounts only.</p>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="nd-guide-hosts">Other hosts used to sign in (optional)</label>
+                    <input id="nd-guide-hosts" type="text" value={guideHosts} onChange={(e) => setGuideHosts(e.target.value)} maxLength={300} placeholder="login.example.com" disabled={busy} />
+                    <p className="field-hint">Only the system's own address (and these) may receive a sign-in.</p>
+                  </div>
+                </div>
+              )}
+            </fieldset>
+          )}
 
           <div className="field">
             <label htmlFor="nd-desc">Description (optional)</label>
@@ -164,6 +228,13 @@ function NewDocModal({ projectId, onClose, onCreated }) {
           </div>
         </form>
       </div>
+      {manage && (
+        <GuideAccountsModal
+          projectId={projectId}
+          onClose={() => setManage(false)}
+          onChanged={(list) => { setAccounts(list); setRoles((rs) => rs.filter((r) => list.some((a) => a.role === r))); }}
+        />
+      )}
     </div>
   );
 }
@@ -476,6 +547,16 @@ export function GeneratedDocs({ projectId }) {
                           >
                             Download Word
                           </a>
+                          {d.sources?.guide?.screenshots && (
+                            <a
+                              href={`/api/projects/${projectId}/generated-docs/${d.id}/download?format=zip`}
+                              className="btn btn-sm btn-ghost"
+                              download
+                              title="The Markdown, the Word file and the screenshots"
+                            >
+                              Download ZIP
+                            </a>
+                          )}
                         </>
                       )}
                       {d.status === 'failed' && d.retryable && (

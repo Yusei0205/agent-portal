@@ -530,10 +530,17 @@
         "server/ooxml.ts",
         "server/template-check.ts",
         "server/convert.ts",
-        "web/src/pages/GeneratedDocs.jsx"
+        "server/markdown-docx.ts",
+        "server/guide-accounts.ts",
+        "web/src/pages/GeneratedDocs.jsx",
+        "web/src/components/GuideAccounts.jsx"
       ],
       "tests": [
         "test/generated-docs.test.ts",
+        "test/markdown-docx.test.ts",
+        "test/guide-accounts.test.ts",
+        "test/user-guide-screenshots.test.ts",
+        "test/web-guide-accounts.test.ts",
         "test/create-clone-first.test.ts",
         "test/resume-retry.test.ts"
       ],
@@ -1266,7 +1273,8 @@
         "server/agent/agentcore-approvals.ts",
         "server/agent/runner-finalize.ts",
         "server/agent/runner-finalize-run.ts",
-        "agent-runner/src/finalize.ts"
+        "agent-runner/src/finalize.ts",
+        "server/agent/runner-browser-capture.ts"
       ],
       "tests": [
         "test/agent-runner-validation.test.ts",
@@ -1274,7 +1282,9 @@
         "test/runner-finalize.test.ts",
         "test/kiro-runner-finalize.test.ts",
         "test/agentcore-harness.test.ts",
-        "test/pricing.test.ts"
+        "test/pricing.test.ts",
+        "test/browser-capture.test.ts",
+        "test/browser-capture-real.test.ts"
       ],
       "smokeIds": [],
       "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."
