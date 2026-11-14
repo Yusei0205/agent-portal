@@ -219,6 +219,22 @@
         "projects"
       ]
     },
+    "project-checklists": {
+      "description": "Project deployment and security checklist analysis, editing, reviews, exports and storage",
+      "sources": [
+        "server/project-checklists.ts",
+        "server/project-checklist-analysis.ts",
+        "server/repositories/project-checklists.ts",
+        "server/repositories/project-checklists-dynamodb.ts",
+        "web/src/pages/hub/ProjectChecklists.jsx",
+        "web/src/pages/hub/project-checklists.css"
+      ],
+      "tests": [
+        "test/project-checklists.test.ts",
+        "test/web-project-checklists.test.ts"
+      ],
+      "smokeIds": []
+    },
     "workspaces": {
       "description": "Workspace management per project",
       "sources": [
