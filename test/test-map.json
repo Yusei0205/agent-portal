@@ -71,12 +71,15 @@
       "description": "Deploy workflows wait for CI to pass on the commit they deploy",
       "sources": [
         "scripts/wait-for-ci.mjs",
+        "scripts/deploy-scope.mjs",
+        "infra/scripts/harness-sources.mjs",
         "infra/scripts/apply-upload-bucket-config.mjs",
         ".github/workflows/deploy-portal.yml",
         ".github/workflows/deploy-agentcore.yml"
       ],
       "tests": [
         "test/wait-for-ci.test.ts",
+        "test/deploy-scope.test.ts",
         "test/upload-bucket-config.test.ts"
       ],
       "smokeIds": []

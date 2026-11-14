@@ -15,6 +15,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { HARNESS_SERVER_FILES } from './harness-sources.mjs';
 
 const CDK = 'aws-cdk@2.1147.0';
 const REGION = 'ap-southeast-1';
@@ -55,9 +56,7 @@ function copyDir(from, to) {
 }
 copyDir(path.join(root, 'agent-runner'), path.join(stage, 'agent-runner'));
 copyDir(path.join(root, 'kiro-runner'), path.join(stage, 'kiro-runner'));
-for (const f of ['agent/guard.ts', 'agent/env-scrub.ts', 'agent/tool-policy.ts', 'agent/pricing.ts', 'agent/agentcore-approvals.ts', 'real-path.ts',
-  // The runners' own pure modules (files, repositories, snapshots, MCP proxies, checks).
-  'agent/runner-files.ts', 'agent/runner-inspect.ts', 'agent/runner-repos.ts', 'agent/runner-snapshot.ts', 'agent/runner-terminal.ts', 'agent/runner-terminal-auth.ts', 'agent/runner-mcp.ts', 'agent/runner-checks.ts', 'agent/runner-finalize.ts', 'agent/runner-finalize-run.ts', 'agent/runner-memory.ts', 'agent/runner-graph.ts', 'agent/runner-graph-build.ts']) {
+for (const f of HARNESS_SERVER_FILES) {
   const to = path.join(stage, 'server', f);
   fs.mkdirSync(path.dirname(to), { recursive: true });
   fs.copyFileSync(path.join(root, 'server', f), to);

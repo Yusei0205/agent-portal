@@ -34,14 +34,23 @@ on:
       - server/agent/tool-policy.ts
       - server/agent/pricing.ts
       - server/agent/agentcore-approvals.ts
-      - server/agent/agentcore-bridge.ts
+      - server/real-path.ts
+      - server/agent/runner-files.ts
+      - server/agent/runner-inspect.ts
+      - server/agent/runner-repos.ts
+      - server/agent/runner-snapshot.ts
       - server/agent/runner-terminal.ts
       - server/agent/runner-terminal-auth.ts
-      - server/agent/runner-snapshot.ts
+      - server/agent/runner-mcp.ts
+      - server/agent/runner-checks.ts
+      - server/agent/runner-finalize.ts
+      - server/agent/runner-finalize-run.ts
       - server/agent/runner-memory.ts
+      - server/agent/runner-graph.ts
+      - server/agent/runner-graph-build.ts
+      - server/agent/agentcore-bridge.ts
       - server/agent/claude-agentcore.ts
       - server/agent/kiro-agentcore.ts
-      - server/real-path.ts
       - test/engine/**
       - .github/workflows/deploy-agentcore.yml
   pull_request:
@@ -54,14 +63,23 @@ on:
       - server/agent/tool-policy.ts
       - server/agent/pricing.ts
       - server/agent/agentcore-approvals.ts
-      - server/agent/agentcore-bridge.ts
+      - server/real-path.ts
+      - server/agent/runner-files.ts
+      - server/agent/runner-inspect.ts
+      - server/agent/runner-repos.ts
+      - server/agent/runner-snapshot.ts
       - server/agent/runner-terminal.ts
       - server/agent/runner-terminal-auth.ts
-      - server/agent/runner-snapshot.ts
+      - server/agent/runner-mcp.ts
+      - server/agent/runner-checks.ts
+      - server/agent/runner-finalize.ts
+      - server/agent/runner-finalize-run.ts
       - server/agent/runner-memory.ts
+      - server/agent/runner-graph.ts
+      - server/agent/runner-graph-build.ts
+      - server/agent/agentcore-bridge.ts
       - server/agent/claude-agentcore.ts
       - server/agent/kiro-agentcore.ts
-      - server/real-path.ts
       - test/engine/**
       - .github/workflows/deploy-agentcore.yml
   workflow_dispatch:

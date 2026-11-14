@@ -287,11 +287,14 @@ export class AgentPortalCloudStack extends cdk.Stack {
       ...kbEnv,
     };
 
+    // arm64 (Graviton): the same architecture as the job runtime and the runner images, so the deploy builds every image
+    // natively on one arm64 runner instead of emulating one of them, and the function costs less per millisecond.
     const fn = new lambda.DockerImageFunction(this, 'Portal', {
       functionName: PORTAL_FUNCTION_NAME,
+      architecture: lambda.Architecture.ARM_64,
       code: lambda.DockerImageCode.fromImageAsset(props.repoRoot, {
         file: 'Dockerfile.lambda',
-        platform: ecrAssets.Platform.LINUX_AMD64,
+        platform: ecrAssets.Platform.LINUX_ARM64,
         ignoreMode: cdk.IgnoreMode.DOCKER,
       }),
       memorySize: 1024,
